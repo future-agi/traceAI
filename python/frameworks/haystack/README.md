@@ -12,7 +12,7 @@ pip install traceAI-haystack
 ```
 
 ### Set Environment Variables
-Set up your environment variables to authenticate with both FutureAGI.
+Set up your environment variables to authenticate with FutureAGI
 
 ```python
 import os
