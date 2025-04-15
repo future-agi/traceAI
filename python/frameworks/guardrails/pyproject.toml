@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "traceAI-guardrails"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Guardrails"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+
+packages = [
+    { include = "traceai_guardrails" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.9, <3.13"
+packaging = "*"
+guardrails-ai = ">=0.4.5,<0.5.1"
+fi-instrumentation-otel = "0.1.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

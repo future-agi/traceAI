@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "traceAI-vertexai"
+version = "0.1.3"
+description = "OpenTelemetry instrumentation for Vertex AI"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+
+packages = [
+    { include = "traceai_vertexai" },
+]
+
+[tool.poetry.dependencies]
+python = ">3.9, <4.0"
+fi-instrumentation-otel = "0.1.3"
+google-cloud-aiplatform = ">= 1.49.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

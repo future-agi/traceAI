@@ -1,0 +1,6 @@
+langchain >=0.2.11
+langchain-experimental >=0.0.63
+langchain_community >=0.2.10
+langchain-openai >=0.1.19
+langchain-google-vertexai >=1.0.7
+langgraph >=0.1.16

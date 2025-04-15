@@ -1,0 +1,59 @@
+*.py[cod]
+
+# C extensions
+*.so
+
+# IDEs
+.idea/
+.vscode/
+
+# Packages
+*.egg
+*.egg-info
+.eggs/
+# build
+parts
+bin
+var
+sdist
+dist
+develop-eggs
+.installed.cfg
+lib
+lib64
+
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage reports
+.coverage
+.tox
+nosetests.xml
+
+# Complexity
+output/*.html
+output/*/index.html
+
+# Sphinx
+docs/_build
+
+# Cookiecutter
+output/
+
+.workon
+
+**.wav
+**.joblib
+
+**/__pycache__
+
+#Excel files
+*.xlsx
+#csv files
+*.csv
+#virtual environments
+**/venv
+**/env
+**/.env
+*.DS_Store
+*.pdf

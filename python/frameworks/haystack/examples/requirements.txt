@@ -1,0 +1,4 @@
+datasets
+haystack-ai
+sentence-transformers
+cohere-haystack

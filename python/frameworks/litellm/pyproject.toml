@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "traceAI-litellm"
+version = "0.1.3"
+description = "OpenTelemetry instrumentation for LiteLLM"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+
+packages = [
+    { include = "traceai_litellm" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.9, <4.0"
+litellm = ">=1.43.0"
+fi-instrumentation-otel = "0.1.3"
+
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
