@@ -477,6 +477,10 @@ class EvalName(Enum):
     AUDIO_TRANSCRIPTION = "Audio Transcription"
     EVAL_AUDIO_DESCRIPTION = "Eval Audio Description"
     AUDIO_QUALITY = "Audio Quality"
+    JSON_SCHEMA_VALIDATION = "Json Scheme Validation"
+    CHUNK_ATTRIBUTION = "Chunk Attribution"
+    CHUNK_UTILIZATION = "Chunk Utilization"
+    EVAL_RANKING = "Eval Ranking"
 
 
 @dataclass
@@ -587,9 +591,7 @@ class EvalConfig:
                 "case_sensitive": ConfigField(type=bool, default=True),
                 "keywords": ConfigField(type=list, default=[]),
             },
-            EvalName.GROUNDEDNESS: {
-                "model": ConfigField(type=str, default="gpt-4o-mini")
-            },
+            EvalName.GROUNDEDNESS: {},
             EvalName.ANSWER_SIMILARITY: {
                 "comparator": ConfigField(type=str, default="CosineSimilarity"),
                 "failure_threshold": ConfigField(type=float, default=0.5),
@@ -607,9 +609,6 @@ class EvalConfig:
                     default="Evaluate if the context is relevant and sufficient to support the output.",
                 )
             },
-            # EvalName.EVAL_RANKING: {
-            #     "criteria": ConfigField(type=str, default="Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content.")
-            # },
             EvalName.EVAL_IMAGE_INSTRUCTION: {
                 "criteria": ConfigField(
                     type=str,
@@ -682,6 +681,17 @@ class EvalConfig:
                     default="determine the quality of the given audio",
                 ),
                 "model": ConfigField(type=str, default="gemini-2.0-flash"),
+            },
+            EvalName.JSON_SCHEMA_VALIDATION: {
+                "validations": ConfigField(type=list, default=[]),
+            },
+            EvalName.CHUNK_ATTRIBUTION: {},
+            EvalName.CHUNK_UTILIZATION: {},
+            EvalName.EVAL_RANKING: {
+                "criteria": ConfigField(
+                    type=str,
+                    default="Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content."
+                ),
             },
         }
 
@@ -772,7 +782,7 @@ class EvalMappingConfig:
             EvalName.CONTAINS: {"text": ConfigField(type=str, required=True)},
             EvalName.CONTAINS_ANY: {"text": ConfigField(type=str, required=True)},
             EvalName.GROUNDEDNESS: {
-                "context": ConfigField(type=str, required=True),
+                "output": ConfigField(type=str, required=True),
                 "input": ConfigField(type=str, required=True),
             },
             EvalName.ANSWER_SIMILARITY: {
@@ -828,6 +838,24 @@ class EvalMappingConfig:
             },
             EvalName.AUDIO_QUALITY: {
                 "input audio": ConfigField(type=str, required=True)
+            },
+            EvalName.JSON_SCHEMA_VALIDATION: {
+                "actual_json": ConfigField(type=dict, required=True),
+                "expected_json": ConfigField(type=str, required=True),
+            },
+            EvalName.CHUNK_ATTRIBUTION: {
+                "input": ConfigField(type=str),
+                "output": ConfigField(type=str, required=True),
+                "context": ConfigField(type=str, required=True),
+            },
+            EvalName.CHUNK_UTILIZATION: {
+                "input": ConfigField(type=str),
+                "output": ConfigField(type=str, required=True),
+                "context": ConfigField(type=str, required=True),
+            },
+            EvalName.EVAL_RANKING: {
+                "input": ConfigField(type=str, required=True),
+                "context" : ConfigField(type=str, required=True),
             },
         }
 
