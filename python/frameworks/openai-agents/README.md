@@ -33,9 +33,7 @@ from fi_instrumentation.fi_types import ProjectType
 
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="openai_agents_app",
-    project_version_name="v1",
-    session_name="chat-bot"
+    project_name="openai_agents_app"
 )
 ```
 
