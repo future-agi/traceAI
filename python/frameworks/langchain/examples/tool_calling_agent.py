@@ -21,7 +21,9 @@ from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from fi.evals import ProtectClient, EvalClient
 from traceai_langchain import LangChainInstrumentor
+import opentelemetry.trace as trace_api
 
 # Configure trace provider with custom evaluation tags
 eval_tags = [
@@ -41,13 +43,17 @@ eval_tags = [
 def setup_instrumentation():
     """Configure and initialize OpenTelemetry instrumentation."""
     trace_provider = register(
-        project_name="LANGCHAIN_TOOL_CALLING_OBSERVE_NEW",
+        project_name="LANGCHAIN_TOOL_CALLING_OBSERVE_V3",
         project_type=ProjectType.OBSERVE,
-        project_version_name="V2",
+        session_name="V2",
+        # project_version_name="V2",
         # eval_tags=eval_tags,
     )
-    LangChainInstrumentor().instrument(tracer_provider=trace_provider)
-    return trace_provider
+    instrumentor = LangChainInstrumentor()
+    instrumentor.instrument(tracer_provider=trace_provider)
+
+    # Return the specific FITracer instance used by the instrumentor
+    return instrumentor.fi_tracer
 
 
 @tool
@@ -256,14 +262,15 @@ def create_agent(tools: list) -> agents.AgentExecutor:
     Returns:
         agents.AgentExecutor: Configured agent executor
     """
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(model_name="gpt-4.1-nano", temperature=0)
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                "You are a helpful AI assistant with access to various tools. Use them when needed to provide accurate information.",
+                "You are a helpful AI assistant. Get information using tools. "
+                "Before providing a final answer, run the run_guardrail_check tool on your proposed answer.",
             ),
             ("human", "{input}"),
             ("human", "Chat history: {chat_history}"),
@@ -276,7 +283,10 @@ def create_agent(tools: list) -> agents.AgentExecutor:
 
 def main():
     """Main execution function."""
-    setup_instrumentation()
+    # Get the specific FITracer instance from setup
+    tracer = setup_instrumentation() 
+    evaluator = EvalClient(fi_api_key=os.environ.get("FI_API_KEY"), fi_secret_key=os.environ.get("FI_SECRET_KEY"), fi_base_url=os.environ.get("FI_BASE_URL"))
+    protector = ProtectClient(evaluator=evaluator)
     tools = [get_weather_info, get_stock_info, get_document_qa]
     agent_executor = create_agent(tools)
 
@@ -287,11 +297,32 @@ def main():
         "What's the latest stock price for AAPL?",
         "And how about MSFT?",
     ]
-
+    rules = [
+    {
+        "metric": "Tone",
+        "contains": ["anger", "fear"],
+        "type": "any"
+    },
+    {
+        "metric": "Toxicity"
+    }
+]
     results = []
     for query in queries:
-        result = agent_executor.invoke({"input": query})
-        results.append(result)
+        # Create a parent span for each query processing step using the correct tracer
+        with tracer.start_as_current_span(f"Process Query: {query[:50]}...") as parent_span: # Limit query length for span name
+            # Agent execution should now inherit context from parent_span
+            agent_result = agent_executor.invoke({"input": query})
+            
+            # Guardrail execution should also inherit context from parent_span
+            protect_result = protector.protect(inputs=query, protect_rules=rules) # Protecting original query for now
+            
+            # Add attributes to the parent span
+            parent_span.set_attribute("agent.output", str(agent_result.get('output', '')))
+            parent_span.set_attribute("guardrail.status", protect_result.get('status', ''))
+            parent_span.set_attribute("guardrail.failed_rule", protect_result.get('failed_rule', ''))
+
+            results.append(protect_result) # Or maybe agent_result?
 
     return results
 

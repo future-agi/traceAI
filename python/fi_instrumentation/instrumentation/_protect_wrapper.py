@@ -83,11 +83,18 @@ class GuardrailProtectWrapper:
     ) -> Iterator[trace_api.Span]:
         """Creates and manages a span with proper context handling."""
         try:
-            span = self._tracer.start_span(
-                name=span_name,
-                kind=SpanKind.INTERNAL,
-                attributes=attributes,
-            )
+            if hasattr(self._tracer, '_tracer'):
+                span = self._tracer._tracer.start_span(
+                    name=span_name,
+                    kind=SpanKind.INTERNAL,
+                    attributes=attributes,
+                )
+            else:
+                span = self._tracer.start_span(
+                    name=span_name,
+                    kind=SpanKind.INTERNAL,
+                    attributes=attributes,
+                )
         except Exception as e:
             logger.error(f"Error creating span: {e}", exc_info=True)
             span = trace_api.INVALID_SPAN
