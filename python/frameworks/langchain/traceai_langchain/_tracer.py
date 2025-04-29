@@ -994,7 +994,7 @@ def _get_attributes_from_message_content(
         yield f"{MESSAGE_CONTENT_TYPE}", "image"
         if image_url := content.pop("image_url", None):
             # Handle direct URL string for input_image type
-            yield f"{MESSAGE_CONTENT_IMAGE}.{IMAGE_URL}", image_url
+            yield f"{MESSAGE_CONTENT_IMAGE}", image_url
     elif type_ == "input_audio":
         if audio := content.pop("input_audio"):
             yield f"{MESSAGE_CONTENT_TYPE}", "audio"
