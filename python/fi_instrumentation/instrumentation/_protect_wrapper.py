@@ -13,30 +13,29 @@ from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 logger = logging.getLogger(__name__)
 
 # Constants for Guardrail span attributes
-GUARDRAIL_TYPE = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.type"
-GUARDRAIL_RULES = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.rules"
-GUARDRAIL_STATUS = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.status"
-GUARDRAIL_FAILED_RULE = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.failed_rule"
-GUARDRAIL_REASONS = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.reasons"
-GUARDRAIL_TIME_TAKEN = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.time_taken"
-GUARDRAIL_COMPLETED_RULES = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.completed_rules"
-GUARDRAIL_UNCOMPLETED_RULES = f"{SpanAttributes.FI_SPAN_KIND}.guardrail.uncompleted_rules"
+GUARDRAIL_TYPE = "guardrail.type"
+GUARDRAIL_RULES = "guardrail.rules"
+GUARDRAIL_STATUS = "guardrail.status"
+GUARDRAIL_FAILED_RULE = "guardrail.failed_rule"
+GUARDRAIL_REASONS = "guardrail.reasons"
+GUARDRAIL_TIME_TAKEN = "guardrail.time_taken"
+GUARDRAIL_COMPLETED_RULES = "guardrail.completed_rules"
+GUARDRAIL_UNCOMPLETED_RULES = "guardrail.uncompleted_rules"
+GUARDRAIL_ACTION = "guardrail.action"
+GUARDRAIL_REASON_FLAG = "guardrail.reason_flag"
 
 def _get_raw_input(inputs: Any) -> Iterator[Tuple[str, Any]]:
-    """Generates raw input attributes for the protect span."""
     try:
         yield SpanAttributes.RAW_INPUT, safe_json_dumps(inputs)
     except Exception as e:
         logger.warning(f"Failed to serialize raw guardrail inputs: {e}", exc_info=True)
 def _get_raw_output(result: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
-    """Generates raw output attributes for the protect span."""
     try:
         yield SpanAttributes.RAW_OUTPUT, safe_json_dumps(result)
     except Exception as e:
         logger.warning(f"Failed to serialize raw guardrail output: {e}", exc_info=True)
 
 def _get_protect_input(inputs: Any) -> Iterator[Tuple[str, Any]]:
-    """Generates input attributes for the protect span."""
     try:
         yield SpanAttributes.INPUT_VALUE, safe_json_dumps(inputs)
         yield SpanAttributes.INPUT_MIME_TYPE, "text/plain"
@@ -44,14 +43,12 @@ def _get_protect_input(inputs: Any) -> Iterator[Tuple[str, Any]]:
         logger.warning(f"Failed to serialize guardrail inputs: {e}", exc_info=True)
 
 def _get_protect_rules(rules: List[Dict[str, Any]]) -> Iterator[Tuple[str, Any]]:
-    """Generates rule attributes for the protect span."""
     try:
         yield GUARDRAIL_RULES, safe_json_dumps(rules)
     except Exception as e:
         logger.warning(f"Failed to serialize guardrail rules: {e}", exc_info=True)
 
 def _get_protect_output(result: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
-    """Generates output attributes for the protect span."""
     try:
         yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(result)
         yield SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
@@ -120,6 +117,8 @@ class GuardrailProtectWrapper:
 
         inputs = kwargs.get("inputs") or (args[0] if args else None)
         protect_rules = kwargs.get("protect_rules") or (args[1] if len(args) > 1 else None)
+        action = kwargs.get("action")
+        reason_flag = kwargs.get("reason")
 
         if not inputs or not protect_rules:
             logger.debug("Guardrail protect called without inputs or rules. Skipping tracing.")
@@ -134,7 +133,9 @@ class GuardrailProtectWrapper:
                     [(GUARDRAIL_TYPE, "protect")],
                     _get_protect_input(inputs),
                     _get_protect_rules(protect_rules),
-                    _get_raw_input(inputs),
+                    _get_raw_input(kwargs),
+                    ([(GUARDRAIL_ACTION, action)] if action is not None else []),
+                    ([(GUARDRAIL_REASON_FLAG, reason_flag)] if reason_flag is not None else []),
                 )
             ),
         ) as span:
