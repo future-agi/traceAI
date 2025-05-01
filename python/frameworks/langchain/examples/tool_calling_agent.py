@@ -43,9 +43,9 @@ eval_tags = [
 def setup_instrumentation():
     """Configure and initialize OpenTelemetry instrumentation."""
     trace_provider = register(
-        project_name="LANGCHAIN_TOOL_CALLING_OBSERVE_V3",
+        project_name="GUARDRAILSPAN2",
         project_type=ProjectType.OBSERVE,
-        session_name="V2",
+        session_name="GUARDRAILSPAN2",
         # project_version_name="V2",
         # eval_tags=eval_tags,
     )
@@ -305,7 +305,11 @@ def main():
     },
     {
         "metric": "Toxicity"
-    }
+    },
+    {
+        "metric": "Prompt Injection",
+    },
+
 ]
     results = []
     for query in queries:
@@ -315,7 +319,7 @@ def main():
             agent_result = agent_executor.invoke({"input": query})
             
             # Guardrail execution should also inherit context from parent_span
-            protect_result = protector.protect(inputs=query, protect_rules=rules) # Protecting original query for now
+            protect_result = protector.protect(inputs=query, protect_rules=rules, action="block", reason=True) # Protecting original query for now
             
             # Add attributes to the parent span
             parent_span.set_attribute("agent.output", str(agent_result.get('output', '')))
