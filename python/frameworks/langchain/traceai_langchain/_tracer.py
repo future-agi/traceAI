@@ -606,7 +606,7 @@ def _output_messages(
 
 @stop_on_exception
 def _parse_message_data(
-    message_data: Optional[Mapping[str, Any]],
+    message_data: Optional[Mapping[str, Any]]
 ) -> Iterator[Tuple[str, Any]]:
     """Parses message data to grab message role, content, etc."""
     if not message_data:
