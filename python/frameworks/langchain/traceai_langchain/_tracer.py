@@ -613,7 +613,7 @@ def _parse_message_data(
         return
     assert hasattr(message_data, "get"), f"expected Mapping, found {type(message_data)}"
     id_ = message_data.get("id")
-    assert isinstance(id_, List), f"expected list, found {type(id_)}"
+    assert isinstance(id_, List), f"expected list, found {type(id_)}" 
     message_class_name = id_[-1]
     if message_class_name.startswith("HumanMessage"):
         role = "user"
@@ -666,6 +666,13 @@ def _parse_message_data(
                         message_tool_calls.append(message_tool_call)
                 if message_tool_calls:
                     yield MESSAGE_TOOL_CALLS, message_tool_calls
+
+            # Add handling for tool_outputs
+            if tool_outputs := additional_kwargs.get("tool_outputs"):
+                assert isinstance(
+                    tool_outputs, Iterable
+                ), f"expected Iterable, found {type(tool_outputs)}"
+                yield "tool_outputs", safe_json_dumps(tool_outputs)
 
             if audio := additional_kwargs.get("audio"):
                 yield MessageContentAttributes.MESSAGE_CONTENT_TYPE, "audio"
@@ -983,6 +990,11 @@ def _get_attributes_from_message_content(
         if image := content.pop("image_url"):
             for key, value in _get_attributes_from_image(image):
                 yield f"{MESSAGE_CONTENT_IMAGE}.{key}", value
+    elif type_ == "input_image":
+        yield f"{MESSAGE_CONTENT_TYPE}", "image"
+        if image_url := content.pop("image_url", None):
+            # Handle direct URL string for input_image type
+            yield f"{MESSAGE_CONTENT_IMAGE}", image_url
     elif type_ == "input_audio":
         if audio := content.pop("input_audio"):
             yield f"{MESSAGE_CONTENT_TYPE}", "audio"
