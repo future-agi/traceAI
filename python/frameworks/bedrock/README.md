@@ -40,9 +40,7 @@ from fi_instrumentation.fi_types import ProjectType
 
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="bedrock_app",
-    project_version_name="v1",
-    session_name="s1"
+    project_name="bedrock_app"
 )
 ```
 
