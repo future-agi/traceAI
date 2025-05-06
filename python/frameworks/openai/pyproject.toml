@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-openai"
-version = "0.1.3"
+version = "0.1.4"
 description = "OpenTelemetry instrumentation for OpenAI"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -10,7 +10,7 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
-fi-instrumentation-otel = "0.1.3"
+fi-instrumentation-otel = "0.1.4"
 openai = "^1.57.1"
 
 [build-system]
