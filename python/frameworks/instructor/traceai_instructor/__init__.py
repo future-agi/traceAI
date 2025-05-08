@@ -7,8 +7,10 @@ from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type:
 from traceai_instructor._wrappers import _HandleResponseWrapper, _PatchWrapper
 from traceai_instructor.version import __version__
 from wrapt import wrap_function_wrapper
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+from fi.evals import ProtectClient
 
-_instruments = ("instructor >= 0.0.1",)
+_instruments = ("instructor >= 0.0.1", "futureagi >= 0.0.1")
 
 
 class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
@@ -45,6 +47,12 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
             "instructor.patch", "handle_response_model", process_resp_wrapper
         )
 
+        self._original_protect = ProtectClient.protect
+        wrap_function_wrapper(
+            module="fi.evals",
+            name="ProtectClient.protect",
+            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+        )
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._original_patch is not None:
             instructor_module = import_module("instructor")

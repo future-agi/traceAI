@@ -47,6 +47,8 @@ from traceai_bedrock.package import _instruments
 from traceai_bedrock.utils.anthropic import _extract_image_data
 from traceai_bedrock.version import __version__
 from wrapt import wrap_function_wrapper
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+from fi.evals import ProtectClient
 
 ClientCreator = TypeVar("ClientCreator", bound=Callable[..., BaseClient])
 
@@ -417,6 +419,13 @@ class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
             wrapper=_client_creation_wrapper(
                 tracer=self._tracer, module_version=botocore.__version__
             ),
+        )
+
+        self._original_protect = ProtectClient.protect
+        wrap_function_wrapper(
+            module="fi.evals",
+            name="ProtectClient.protect",
+            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:

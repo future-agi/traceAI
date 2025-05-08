@@ -3,6 +3,7 @@ from typing import Any, Collection
 
 from fi_instrumentation.instrumentation.config import TraceConfig
 from fi_instrumentation import FITracer
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import (  # type: ignore[attr-defined]
     BaseInstrumentor,
@@ -19,7 +20,7 @@ from wrapt import wrap_function_wrapper
 
 logger = logging.getLogger(__name__)
 
-_instruments = ("anthropic >= 0.30.0",)
+_instruments = ("anthropic >= 0.30.0", "futureagi")
 
 
 class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
@@ -30,6 +31,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         "_original_async_completions_create",
         "_original_messages_create",
         "_original_async_messages_create",
+        "_original_protect",
         "_instruments",
         "_tracer",
     )
@@ -40,7 +42,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     def _instrument(self, **kwargs: Any) -> None:
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
-
+        from fi.evals import ProtectClient
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):
@@ -87,9 +89,16 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             wrapper=_MessagesCountTokensWrapper(tracer=self._tracer),
         )
 
+        self._original_protect = ProtectClient.protect
+        wrap_function_wrapper(
+                module="fi.evals",
+                name="ProtectClient.protect",
+                wrapper=GuardrailProtectWrapper(tracer=self._tracer)
+        )
     def _uninstrument(self, **kwargs: Any) -> None:
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
+        from fi.evals import ProtectClient 
 
         if self._original_completions_create is not None:
             Completions.create = self._original_completions_create  # type: ignore[method-assign]
@@ -100,3 +109,6 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             Messages.create = self._original_messages_create  # type: ignore[method-assign]
         if self._original_async_messages_create is not None:
             AsyncMessages.create = self._original_async_messages_create  # type: ignore[method-assign]
+
+        if self._original_protect is not None:
+            ProtectClient.protect = self._original_protect

@@ -9,11 +9,13 @@ from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type:
 from traceai_groq._wrappers import _AsyncCompletionsWrapper, _CompletionsWrapper
 from traceai_groq.version import __version__
 from wrapt import wrap_function_wrapper
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+from fi.evals import ProtectClient
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_instruments = ("groq >= 0.9.0",)
+_instruments = ("groq >= 0.9.0", "futureagi >= 0.0.1")
 
 
 class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
@@ -54,6 +56,12 @@ class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
         )
 
+        self._original_protect = ProtectClient.protect
+        wrap_function_wrapper(
+            module="fi.evals",
+            name="ProtectClient.protect",
+            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+        )
     def _uninstrument(self, **kwargs: Any) -> None:
         groq_module = import_module("groq.resources.chat.completions")
         if self._original_completions_create is not None:

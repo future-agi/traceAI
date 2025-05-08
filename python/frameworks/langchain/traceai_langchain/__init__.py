@@ -13,7 +13,7 @@ from traceai_langchain._tracer import FiTracer
 from traceai_langchain.package import _instruments
 from traceai_langchain.version import __version__
 from wrapt import wrap_function_wrapper  # type: ignore
-
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -36,24 +36,34 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
         else:
             assert isinstance(config, TraceConfig)
 
-        from traceai_langchain._tracer import FiTracer
+        from traceai_langchain._tracer import FiTracer as LangChainFiTracer
+        from fi.evals import ProtectClient
+        from fi_instrumentation.instrumentation._tracers import FITracer
 
-        tracer = FITracer(
+        self.fi_tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
-        self._tracer: Optional[FiTracer] = FiTracer(tracer)
+        self._tracer: Optional[LangChainFiTracer] = LangChainFiTracer(self.fi_tracer)
         self._original_callback_manager_init = BaseCallbackManager.__init__
         wrap_function_wrapper(
             module="langchain_core.callbacks",
             name="BaseCallbackManager.__init__",
             wrapper=_BaseCallbackManagerInit(self._tracer),
         )
+        self._original_protect = ProtectClient.protect
+        wrap_function_wrapper(
+            module="fi.evals",
+            name="ProtectClient.protect",
+            wrapper=GuardrailProtectWrapper(self._tracer),
+        )
+
 
     def _uninstrument(self, **kwargs: Any) -> None:
         langchain_core.callbacks.BaseCallbackManager.__init__ = self._original_callback_manager_init  # type: ignore
         self._original_callback_manager_init = None  # type: ignore
         self._tracer = None
+        self.fi_tracer = None
 
     def get_span(self, run_id: UUID) -> Optional[Span]:
         return self._tracer.get_span(run_id) if self._tracer else None
