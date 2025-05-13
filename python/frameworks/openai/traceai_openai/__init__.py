@@ -9,6 +9,8 @@ from traceai_openai._request import _AsyncRequest, _Request
 from traceai_openai.package import _instruments
 from traceai_openai.version import __version__
 from wrapt import wrap_function_wrapper
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+from fi.evals import ProtectClient
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -52,6 +54,12 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
             module=_MODULE,
             name="AsyncOpenAI.request",
             wrapper=_AsyncRequest(tracer=tracer, openai=openai),
+        )
+        self._original_protect = ProtectClient.protect
+        wrap_function_wrapper(
+            module="fi.evals",
+            name="ProtectClient.protect",
+            wrapper=GuardrailProtectWrapper(tracer),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:

@@ -38,6 +38,10 @@ from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type:
 from opentelemetry.util.types import AttributeValue
 from traceai_litellm.package import _instruments
 from traceai_litellm.version import __version__
+from wrapt import wrap_function_wrapper
+
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+from fi.evals import ProtectClient
 
 
 # Helper functions to set span attributes
@@ -265,6 +269,12 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             "image_generation": self._image_generation_wrapper,
             "aimage_generation": self._aimage_generation_wrapper,
         }
+        self._original_protect = ProtectClient.protect
+        wrap_function_wrapper(
+            module="fi.evals",
+            name="ProtectClient.protect",
+            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+        )
 
         for func_name, func_wrapper in functions_to_instrument.items():
             if hasattr(litellm, func_name):
