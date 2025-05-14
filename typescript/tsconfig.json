@@ -10,7 +10,8 @@
       "esModuleInterop": true,
       "skipLibCheck": true,
       "forceConsistentCasingInFileNames": true,
-      "moduleResolution": "node"
+      "moduleResolution": "node",
+      "composite": true
     },
     "include": ["packages/**/*"],
     "exclude": ["node_modules", "dist"]
