@@ -1,0 +1,19 @@
+{
+  "name": "fi-instrumentation-otel-ts",
+  "version": "0.1.0",
+  "description": "OpenTelemetry instrumentation for TypeScript",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint . --ext .ts",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "opentelemetry",
+    "instrumentation",
+    "typescript"
+  ],
+  "author": "Future AGI <no-reply@futureagi.com>"
+}
