@@ -167,6 +167,10 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
         ) {
           const body = args[0];
           const { messages: _messages, ...invocationParameters } = body;
+
+          // --- ADD LOG ---
+          diag.debug("@traceai/openai: ChatCompletion patch CALLED. Starting span...");
+
           const span = instrumentation.fiTracer.startSpan(
             `OpenAI Chat Completions`,
             {
@@ -186,6 +190,10 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
               },
             },
           );
+
+          // --- ADD LOG ---
+          diag.debug(`@traceai/openai: ChatCompletion span STARTED: ${span.spanContext().spanId}`);
+
           const execContext = getExecContext(span);
           const execPromise = safeExecuteInTheMiddle<
             ReturnType<ChatCompletionCreateType>
@@ -196,20 +204,25 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
               });
             },
             (error) => {
-              // Push the error to the span
               if (error) {
+                // --- ADD LOG ---
+                diag.error(`@traceai/openai: ChatCompletion error in safeExecuteInTheMiddle: ${error}`);
                 span.recordException(error);
-                span.setStatus({
-                  code: SpanStatusCode.ERROR,
-                  message: error.message,
-                });
+                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
                 span.end();
+                // --- ADD LOG ---
+                diag.debug(`@traceai/openai: ChatCompletion span ENDED due to error: ${span.spanContext().spanId}`);
               }
             },
           );
+
           const wrappedPromise = execPromise.then((result) => {
+            // --- ADD LOG ---
+            diag.debug(`@traceai/openai: ChatCompletion promise resolved. Result type: ${typeof result}`);
+
             if (isChatCompletionResponse(result)) {
-              // Record the results
+              // --- ADD LOG ---
+              diag.debug(`@traceai/openai: ChatCompletion is NON-STREAM. Ending span: ${span.spanContext().spanId}`);
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -219,16 +232,16 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                 ...getUsageAttributes(result),
               });
               span.setStatus({ code: SpanStatusCode.OK });
-              span.end();
+              span.end(); // Non-streaming end
+              // --- ADD LOG ---
+              diag.debug(`@traceai/openai: ChatCompletion NON-STREAM span ENDED: ${span.spanContext().spanId}`);
             } else {
-              // This is a streaming response
-              // handle the chunks and add them to the span
-              // First split the stream via tee
+              // --- ADD LOG ---
+              diag.debug(`@traceai/openai: ChatCompletion IS STREAM. Consuming stream for span: ${span.spanContext().spanId}`);
               const [leftStream, rightStream] = result.tee();
-              consumeChatCompletionStreamChunks(rightStream, span);
+              consumeChatCompletionStreamChunks(rightStream, span); // This function now MUST ensure span.end() is called
               result = leftStream;
             }
-
             return result;
           });
           return context.bind(execContext, wrappedPromise);
@@ -837,6 +850,8 @@ async function consumeChatCompletionStreamChunks(
   stream: Stream<ChatCompletionChunk>,
   span: Span,
 ) {
+  // --- ADD LOG ---
+  diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks CALLED for span: ${span.spanContext().spanId}`);
   let streamResponse = "";
   // Tool and function call attributes can also arrive in the stream
   // NB: the tools and function calls arrive in partial diffs
@@ -880,7 +895,9 @@ async function consumeChatCompletionStreamChunks(
     attributes[`${messageIndexPrefix}${key}`] = value;
   }
   span.setAttributes(attributes);
-  span.end();
+  span.end(); // Streaming end
+  // --- ADD LOG ---
+  diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks span ENDED: ${span.spanContext().spanId}`);
 }
 
 /**
