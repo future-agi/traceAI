@@ -164,29 +164,38 @@ async function main() {
     let accumulatedTextTC5 = "";
     let finalInputTokensTC5: number | undefined = undefined;
     let currentOutputTokensTC5 = 0;
-    const detectedToolUsesTC5: AnthropicSDK.ToolUseBlock[] = [];
+    const detectedToolUsesTC5: Array<AnthropicSDK.ToolUseBlock & { accumulatedInputJson?: string }> = [];
+    let currentToolUseIndexTC5: number | null = null;
 
     for await (const event of streamTC5) {
         if (event.type === "message_start" && event.message.usage) {
             finalInputTokensTC5 = event.message.usage.input_tokens;
         } else if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
-            // Initialize tool_use block
-            detectedToolUsesTC5.push({
+            currentToolUseIndexTC5 = event.index;
+            detectedToolUsesTC5[currentToolUseIndexTC5] = {
                 id: event.content_block.id,
                 input: {},
                 name: event.content_block.name,
                 type: "tool_use",
-            });
-            console.log(`\nStream event: content_block_start (tool_use) detected. Name: ${event.content_block.name}, ID: ${event.content_block.id}`);
+                accumulatedInputJson: "", // Initialize accumulator
+            };
+            console.log(`\nStream event: content_block_start (tool_use) detected. Name: ${event.content_block.name}, ID: ${event.content_block.id}, Index: ${event.index}`);
         } else if (event.type === "content_block_delta" && event.delta.type === "input_json_delta") {
-            // Append to the input of the last detected tool_use block
-            const currentTool = detectedToolUsesTC5[detectedToolUsesTC5.length - 1];
-            if (currentTool) {
-                // This is a simplified accumulation; proper JSON delta parsing might be needed for complex inputs
-                currentTool.input = { ...(currentTool.input || {}), ...JSON.parse(event.delta.partial_json || "{}") }; 
-                // A more robust way for partial_json is to accumulate the string and parse once at content_block_stop
-                // For now, this just prints the delta
-                 process.stdout.write(event.delta.partial_json);
+            if (event.index === currentToolUseIndexTC5 && detectedToolUsesTC5[currentToolUseIndexTC5]) {
+                detectedToolUsesTC5[currentToolUseIndexTC5].accumulatedInputJson += event.delta.partial_json;
+                // process.stdout.write(event.delta.partial_json); // Log raw partial json if needed for debugging
+            } 
+        } else if (event.type === "content_block_stop") {
+            if (event.index === currentToolUseIndexTC5 && detectedToolUsesTC5[currentToolUseIndexTC5]) {
+                const toolInfo = detectedToolUsesTC5[currentToolUseIndexTC5];
+                console.log(`\nStream event: content_block_stop for tool_use at index ${event.index}. Accumulated JSON: ${toolInfo.accumulatedInputJson}`);
+                try {
+                    toolInfo.input = JSON.parse(toolInfo.accumulatedInputJson || "{}");
+                } catch (e) {
+                    console.error(`Error parsing accumulated JSON for tool ${toolInfo.name}:`, e, `Raw JSON: ${toolInfo.accumulatedInputJson}`);
+                    toolInfo.input = { error: "Failed to parse input JSON" }; 
+                }
+                currentToolUseIndexTC5 = null; // Reset for next tool_use block if any
             }
         } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
             process.stdout.write(event.delta.text);
@@ -195,6 +204,37 @@ async function main() {
             currentOutputTokensTC5 += event.usage.output_tokens;
         } else if (event.type === "message_stop") {
             console.log("\n--- Stream ended (TC5 message_stop event) ---");
+            // Final parse for any lingering tool if message_stop arrives before content_block_stop for the last tool
+            if (currentToolUseIndexTC5 !== null && detectedToolUsesTC5[currentToolUseIndexTC5] && detectedToolUsesTC5[currentToolUseIndexTC5].accumulatedInputJson) {
+                const toolInfo = detectedToolUsesTC5[currentToolUseIndexTC5];
+                
+                const inputField = toolInfo.input;
+                let needsReparsing = false;
+                if (typeof inputField === 'object' && inputField !== null) {
+                    // Check if it's our specific error object from a previous failed parse
+                    if ((inputField as { error?: string }).error) { 
+                        needsReparsing = true;
+                    // Check if it's an empty object (e.g. from parsing "{}" or an empty string via || "{}")
+                    } else if (Object.keys(inputField).length === 0) { 
+                        needsReparsing = true;
+                    }
+                    // If it's a non-empty object without an error field, assume it was successfully parsed earlier.
+                } else { 
+                    // Input is not an object (e.g. null, undefined, or not yet parsed meaningfully by content_block_stop)
+                    needsReparsing = true;
+                }
+
+                if(needsReparsing) { 
+                    console.log(`\nStream event: Attempting final parse for tool_use at index ${currentToolUseIndexTC5} on message_stop. Accumulated JSON: ${toolInfo.accumulatedInputJson}`);
+                    try {
+                        toolInfo.input = JSON.parse(toolInfo.accumulatedInputJson || "{}");
+                    } catch (e) {
+                        console.error(`Error parsing accumulated JSON for tool ${toolInfo.name} at message_stop:`, e, `Raw JSON: ${toolInfo.accumulatedInputJson}`);
+                        toolInfo.input = { error: "Failed to parse input JSON at message_stop" }; 
+                    }
+                }
+            }
+
             if (finalInputTokensTC5 !== undefined) {
                  console.log(`Usage (streaming TC5): Input: ${finalInputTokensTC5}, Output: ${currentOutputTokensTC5}`);
             } else {
@@ -203,10 +243,13 @@ async function main() {
         }
     }
     console.log("Final accumulated text (TC5):", accumulatedTextTC5);
-    if (detectedToolUsesTC5.length > 0) {
+    // Filter out any potentially undefined entries if not all indices were filled (should not happen with current logic)
+    const validToolUses = detectedToolUsesTC5.filter(tool => tool !== undefined && tool !== null);
+    if (validToolUses.length > 0) {
         console.log("Detected tool uses in stream (TC5):");
-        detectedToolUsesTC5.forEach(tool => {
-            console.log(`  Tool: ID=${tool.id}, Name=${tool.name}, Input:`, tool.input);
+        validToolUses.forEach(tool => {
+            const { accumulatedInputJson, ...toolToLog } = tool; // Exclude accumulator from log
+            console.log(`  Tool: ID=${toolToLog.id}, Name=${toolToLog.name}, Input:`, toolToLog.input);
         });
     }
 
