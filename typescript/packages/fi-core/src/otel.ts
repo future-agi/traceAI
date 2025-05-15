@@ -62,7 +62,7 @@ interface HTTPSpanExporterOptions {
 }
 
 // --- Custom ID Generator (using UUIDs) ---
-export class UuidIdGenerator implements IdGenerator {
+class UuidIdGenerator implements IdGenerator {
   generateTraceId(): string {
     return uuidv4().replace(/-/g, "");
   }
@@ -72,7 +72,7 @@ export class UuidIdGenerator implements IdGenerator {
 }
 
 // --- Custom HTTPSpanExporter ---
-export class HTTPSpanExporter implements SpanExporter {
+class HTTPSpanExporter implements SpanExporter {
   private readonly endpoint: string;
   private readonly headers: FIHeaders;
   private _isShutdown = false;
@@ -119,9 +119,6 @@ export class HTTPSpanExporter implements SpanExporter {
     spans: ReadableSpan[],
     resultCallback: (result: ExportResult) => void,
   ): void {
-    // UNCONDITIONAL LOG HERE
-    console.log("\n!!! HTTPSpanExporter.export() METHOD CALLED !!!\n"); 
-
     if (this._isShutdown) {
       resultCallback({ code: ExportResultCode.FAILED });
       return;
@@ -162,9 +159,8 @@ export class HTTPSpanExporter implements SpanExporter {
       };
     });
 
-    // Log the exact payload for debugging
     if (this._verbose) {
-        console.log("HTTPSpanExporter: Sending payload:", JSON.stringify(spansData, null, 2));
+        diag.info("HTTPSpanExporter: Sending payload:", JSON.stringify(spansData, null, 2));
     }
 
     fetch(this.endpoint, {
@@ -202,6 +198,14 @@ export class HTTPSpanExporter implements SpanExporter {
 // --- Helper Functions ---
 function _getEnv(key: string, defaultValue?: string): string | undefined {
   return process.env[key] ?? defaultValue;
+}
+
+function _getEnvVerbose(): boolean | undefined {
+  const envVar = _getEnv("FI_VERBOSE_EXPORTER");
+  if (envVar) {
+    return envVar.toLowerCase() === "true" || envVar === "1";
+  }
+  return undefined;
 }
 
 function _getEnvFiAuthHeader(): FIHeaders | undefined {
@@ -268,7 +272,7 @@ interface FITracerProviderOptions {
   headers?: FIHeaders;
 }
 
-export class FITracerProvider extends BasicTracerProvider {
+class FITracerProvider extends BasicTracerProvider {
   private _defaultProcessorAttached: boolean = false;
   private _verbose: boolean;
   private _endpoint: string; // This will store the fully constructed endpoint
@@ -277,23 +281,26 @@ export class FITracerProvider extends BasicTracerProvider {
   constructor(config: FITracerProviderOptions = {}) {
     const idGenerator = config.idGenerator ?? new UuidIdGenerator();
     super({ resource: config.resource, idGenerator });
-    this._verbose = config.verbose ?? true;
+    this._verbose = config.verbose ?? _getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false; // Allow provider verbosity via env
     // Construct the full endpoint using the new logic
-    this._endpoint = _constructFullEndpoint(config.endpoint); 
+    this._endpoint = _constructFullEndpoint(config.endpoint);
     this._headers = config.headers ?? _getEnvFiAuthHeader();
 
     if (this._verbose) {
-      console.log(`FITracerProvider: Using full exporter endpoint: ${this._endpoint}`);
+      diag.info(`FITracerProvider: Using full exporter endpoint: ${this._endpoint}`); // Use diag.info
     }
 
-    const exporter = new HTTPSpanExporter({ endpoint: this._endpoint, headers: this._headers, verbose: this._verbose });
+    // Pass the provider's verbosity to the exporter if not explicitly set for exporter
+    const exporterVerbose = config.verbose; // We won't directly use FI_VERBOSE_EXPORTER here, HTTPSpanExporter handles its own env var.
+                                         // If FITracerProvider is verbose, its default exporter will be too, unless HTTPSpanExporter's option/env says otherwise.
+
+    const exporter = new HTTPSpanExporter({ endpoint: this._endpoint, headers: this._headers, verbose: exporterVerbose });
     const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
     super.addSpanProcessor(defaultProcessor);
     this._defaultProcessorAttached = true;
     // Log to confirm processor and exporter details
     if (this._verbose) {
-      console.log(`FITracerProvider: Default SimpleSpanProcessor added with HTTPSpanExporter targeting: ${this._endpoint}`);
-      console.log(`FITracerProvider: Exporter instance verbose flag: ${exporter['_verbose']}`); // Accessing private for debug
+      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with HTTPSpanExporter targeting: ${this._endpoint}`);
     }
 
     if (this._verbose) {
@@ -342,19 +349,17 @@ export class FITracerProvider extends BasicTracerProvider {
     if (this._defaultProcessorAttached) {
       detailsMsg += "|  Using a default SpanProcessor. `addSpanProcessor` will overwrite this default.\n";
     }
-    console.log(detailsMsg);
   }
-
   async shutdown(): Promise<void> {
     if (this._verbose) {
-      console.log("Shutting down FI TracerProvider...");
+      diag.info("Shutting down FI TracerProvider...");
     }
     return super.shutdown();
   }
 }
 
-export class SimpleSpanProcessor extends OTelSimpleSpanProcessor {}
-export class BatchSpanProcessor extends OTelBatchSpanProcessor {}
+class SimpleSpanProcessor extends OTelSimpleSpanProcessor {}
+class BatchSpanProcessor extends OTelBatchSpanProcessor {}
 
 export interface RegisterOptions {
   projectName?: string;
@@ -371,7 +376,7 @@ export interface RegisterOptions {
   idGenerator?: IdGenerator;
 }
 
-export function register(options: RegisterOptions = {}): FITracerProvider {
+function register(options: RegisterOptions = {}): FITracerProvider {
   const {
     projectName: optProjectName,
     projectType = ProjectType.EXPERIMENT,
@@ -382,7 +387,7 @@ export function register(options: RegisterOptions = {}): FITracerProvider {
     batch = false,
     setGlobalTracerProvider = false,
     headers: optHeaders,
-    verbose = true,
+    verbose = false,
     endpoint: optEndpoint, // This is passed to _constructFullEndpoint
     idGenerator = new UuidIdGenerator(),
   } = options;
@@ -458,7 +463,7 @@ export function register(options: RegisterOptions = {}): FITracerProvider {
   if (setGlobalTracerProvider) {
     trace.setGlobalTracerProvider(tracerProvider);
     if (verbose) {
-      console.log(
+      diag.info( // Use diag.info
         "|  \n" +
         "|  `register` has set this TracerProvider as the global OpenTelemetry default.\n" +
         "|  To disable this behavior, call `register` with " +
@@ -469,6 +474,16 @@ export function register(options: RegisterOptions = {}): FITracerProvider {
   
   return tracerProvider;
 }
+
+export {
+  register,
+  FITracerProvider,
+  SimpleSpanProcessor,
+  BatchSpanProcessor,
+  HTTPSpanExporter,
+  UuidIdGenerator,
+}
+
 
 // TODO:
 // - Implement prepareEvalTags (similar to Python)

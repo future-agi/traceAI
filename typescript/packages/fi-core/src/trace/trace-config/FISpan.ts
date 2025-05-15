@@ -25,9 +25,9 @@ import {
       this.config = config;
       const wrappedSpanContext = span.spanContext();
       const isNoOp = wrappedSpanContext.traceFlags === 0 && wrappedSpanContext.spanId === '0000000000000000';
-      diag.debug(
-          `FISpan CONSTRUCTOR: Wrapping span. ID: ${wrappedSpanContext.spanId}, TraceID: ${wrappedSpanContext.traceId}, TraceFlags: ${wrappedSpanContext.traceFlags}, Is NoOp: ${isNoOp}`
-      );
+      // diag.debug(
+      //     `FISpan CONSTRUCTOR: Wrapping span. ID: ${wrappedSpanContext.spanId}, TraceID: ${wrappedSpanContext.traceId}, TraceFlags: ${wrappedSpanContext.traceFlags}, Is NoOp: ${isNoOp}`
+      // );
     }
   
     setAttribute(key: string, value: AttributeValue): this {
@@ -90,9 +90,9 @@ import {
       }
       this.span.end(endTime);
       this.isEnded = true;
-      diag.debug(
-          `FISpan.end CALLED for span ID: ${this.span.spanContext().spanId}`
-      );
+      // diag.debug(
+      //     `FISpan.end CALLED for span ID: ${this.span.spanContext().spanId}`
+      // );
     }
   
     isRecording(): boolean {

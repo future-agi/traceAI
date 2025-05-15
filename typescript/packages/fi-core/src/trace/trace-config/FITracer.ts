@@ -74,9 +74,9 @@ import {
       this.tracer = tracer;
       this.config = generateTraceConfig(traceConfig);
       // ADDED LOG
-      diag.debug(
-        `FITracer CONSTRUCTOR: Received tracer type: ${tracer?.constructor?.name}. TraceConfig provided: ${!!traceConfig}`
-      );
+      // diag.debug(
+      //   `FITracer CONSTRUCTOR: Received tracer type: ${tracer?.constructor?.name}. TraceConfig provided: ${!!traceConfig}`
+      // );
     }
     startActiveSpan<F extends (span: FISpan) => unknown>(
       name: string,
@@ -124,9 +124,9 @@ import {
   
     startSpan(name: string, options?: SpanOptions, context?: Context): FISpan {
       // ADDED LOG
-      diag.debug(
-          `FITracer.startSpan CALLED for name: "${name}". Internal this.tracer type: ${this.tracer?.constructor?.name}`
-      );
+        // diag.debug(
+        //     `FITracer.startSpan CALLED for name: "${name}". Internal this.tracer type: ${this.tracer?.constructor?.name}`
+        // );
 
       if (!this.tracer || this.tracer.constructor.name === "NoopTracer") {
         diag.warn(
@@ -148,9 +148,9 @@ import {
       // ADDED LOGS - CRITICAL
       const spanContext = span.spanContext();
       const isNoOp = spanContext.traceFlags === 0 && spanContext.spanId === '0000000000000000';
-      diag.debug(
-        `FITracer.startSpan: OTel tracer (${this.tracer?.constructor?.name}) created span. ID: ${spanContext.spanId}, TraceID: ${spanContext.traceId}, TraceFlags: ${spanContext.traceFlags}, Is NoOp: ${isNoOp}`
-      );
+      // diag.debug(
+      //   `FITracer.startSpan: OTel tracer (${this.tracer?.constructor?.name}) created span. ID: ${spanContext.spanId}, TraceID: ${spanContext.traceId}, TraceFlags: ${spanContext.traceFlags}, Is NoOp: ${isNoOp}`
+      // );
       
       return new FISpan({ span, config: this.config });
     }

@@ -141,7 +141,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
    * @param {openai} module
    */
   manuallyInstrument(module: typeof openai) {
-    diag.debug(`Manually instrumenting ${MODULE_NAME}`);
+    // diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
   }
 
@@ -152,7 +152,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
     module: typeof openai & { fiPatched?: boolean },
     moduleVersion?: string,
   ) {
-    diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
+    // diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
     if (module?.fiPatched || _isFIPatched) {
       return module;
     }
@@ -167,15 +167,15 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
     // Accessing FITracer's internal tracer `tracer` for comparison.
     // This assumes FITracer has an internal property named `tracer`.
     if (!(instrumentation.fiTracer as any).tracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
-        diag.debug(
-            `OpenAIInstrumentation.patch: fiTracer's internal tracer (${(instrumentation.fiTracer as any).tracer?.constructor?.name}) ` +
-            `differs from current base tracer (${instrumentation.tracer?.constructor?.name}) or is not set. Re-initializing fiTracer.`
-        );
+        // diag.debug(
+        //     `OpenAIInstrumentation.patch: fiTracer's internal tracer (${(instrumentation.fiTracer as any).tracer?.constructor?.name}) ` +
+        //     `differs from current base tracer (${instrumentation.tracer?.constructor?.name}) or is not set. Re-initializing fiTracer.`
+        // );
         instrumentation.fiTracer = new FITracer({ tracer: instrumentation.tracer, traceConfig: instrumentation._traceConfig });
     } else {
-        diag.debug(
-            `OpenAIInstrumentation.patch: fiTracer already using current base tracer (${instrumentation.tracer?.constructor?.name}). No re-initialization needed.`
-        );
+        // diag.debug(
+        //     `OpenAIInstrumentation.patch: fiTracer already using current base tracer (${instrumentation.tracer?.constructor?.name}). No re-initialization needed.`
+        // );
     }
 
     // Patch create chat completions
@@ -194,14 +194,14 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
           const body = args[0];
           const { messages: _messages, ...invocationParameters } = body;
 
-          diag.debug("@traceai/openai: ChatCompletion patch CALLED. Starting span...");
+          // diag.debug("@traceai/openai: ChatCompletion patch CALLED. Starting span...");
           
           // --- ADD LOGS FOR TRACER AND CONTEXT ---
-          const activeContextForSuppressionCheck = context.active();
-          const isSuppressed = isTracingSuppressed(activeContextForSuppressionCheck);
-          diag.debug(`@traceai/openai: Is tracing suppressed? ${isSuppressed}`);
-          diag.debug(`@traceai/openai: this.tracer type: ${instrumentation.tracer?.constructor?.name}`); // Accessing the base tracer
-          diag.debug(`@traceai/openai: this.fiTracer type: ${instrumentation.fiTracer?.constructor?.name}`);
+          // const activeContextForSuppressionCheck = context.active();
+          // const isSuppressed = isTracingSuppressed(activeContextForSuppressionCheck);
+          // diag.debug(`@traceai/openai: Is tracing suppressed? ${isSuppressed}`);
+          // diag.debug(`@traceai/openai: this.tracer type: ${instrumentation.tracer?.constructor?.name}`); // Accessing the base tracer
+          // diag.debug(`@traceai/openai: this.fiTracer type: ${instrumentation.fiTracer?.constructor?.name}`);
           // --- END ADDED LOGS ---
 
           const span = instrumentation.fiTracer.startSpan(
@@ -225,7 +225,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
           );
 
           // --- ADD LOG ---
-          diag.debug(`@traceai/openai: ChatCompletion span STARTED: ${span.spanContext().spanId}`);
+          // diag.debug(`@traceai/openai: ChatCompletion span STARTED: ${span.spanContext().spanId}`);
 
           const execContext = getExecContext(span);
           const execPromise = safeExecuteInTheMiddle<
@@ -244,18 +244,18 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                 span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
                 span.end();
                 // --- ADD LOG ---
-                diag.debug(`@traceai/openai: ChatCompletion span ENDED due to error: ${span.spanContext().spanId}`);
+                // diag.debug(`@traceai/openai: ChatCompletion span ENDED due to error: ${span.spanContext().spanId}`);
               }
             },
           );
 
           const wrappedPromise = execPromise.then((result) => {
             // --- ADD LOG ---
-            diag.debug(`@traceai/openai: ChatCompletion promise resolved. Result type: ${typeof result}`);
+            // diag.debug(`@traceai/openai: ChatCompletion promise resolved. Result type: ${typeof result}`);
 
             if (isChatCompletionResponse(result)) {
               // --- ADD LOG ---
-              diag.debug(`@traceai/openai: ChatCompletion is NON-STREAM. Ending span: ${span.spanContext().spanId}`);
+              // diag.debug(`@traceai/openai: ChatCompletion is NON-STREAM. Ending span: ${span.spanContext().spanId}`);
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -267,10 +267,10 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
               span.setStatus({ code: SpanStatusCode.OK });
               span.end(); // Non-streaming end
               // --- ADD LOG ---
-              diag.debug(`@traceai/openai: ChatCompletion NON-STREAM span ENDED: ${span.spanContext().spanId}`);
+              // diag.debug(`@traceai/openai: ChatCompletion NON-STREAM span ENDED: ${span.spanContext().spanId}`);
             } else {
               // --- ADD LOG ---
-              diag.debug(`@traceai/openai: ChatCompletion IS STREAM. Consuming stream for span: ${span.spanContext().spanId}`);
+              // diag.debug(`@traceai/openai: ChatCompletion IS STREAM. Consuming stream for span: ${span.spanContext().spanId}`);
               const [leftStream, rightStream] = result.tee();
               consumeChatCompletionStreamChunks(rightStream, span); // This function now MUST ensure span.end() is called
               result = leftStream;
@@ -525,7 +525,8 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
       // This can fail if the module is made immutable via the runtime or bundler
       module.fiPatched = true;
     } catch (e) {
-      diag.debug(`Failed to set ${MODULE_NAME} patched flag on the module`, e);
+      // diag.debug(`Failed to set ${MODULE_NAME} patched flag on the module`, e);
+      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
     }
 
     return module;
@@ -537,7 +538,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
     moduleExports: typeof openai & { fiPatched?: boolean },
     moduleVersion?: string,
   ) {
-    diag.debug(`Removing patch for ${MODULE_NAME}@${moduleVersion}`);
+    // diag.debug(`Removing patch for ${MODULE_NAME}@${moduleVersion}`);
     this._unwrap(moduleExports.OpenAI.Chat.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Completions.prototype, "create");
     this._unwrap(moduleExports.OpenAI.Embeddings.prototype, "create");
@@ -547,7 +548,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
       // This can fail if the module is made immutable via the runtime or bundler
       moduleExports.fiPatched = false;
     } catch (e) {
-      diag.warn(`Failed to unset ${MODULE_NAME} patched flag on the module`, e);
+      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
     }
   }
 }
@@ -884,7 +885,7 @@ async function consumeChatCompletionStreamChunks(
   span: Span,
 ) {
   // --- ADD LOG ---
-  diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks CALLED for span: ${span.spanContext().spanId}`);
+  // diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks CALLED for span: ${span.spanContext().spanId}`);
   let streamResponse = "";
   // Tool and function call attributes can also arrive in the stream
   // NB: the tools and function calls arrive in partial diffs
@@ -930,7 +931,7 @@ async function consumeChatCompletionStreamChunks(
   span.setAttributes(attributes);
   span.end(); // Streaming end
   // --- ADD LOG ---
-  diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks span ENDED: ${span.spanContext().spanId}`);
+  // diag.debug(`@traceai/openai: consumeChatCompletionStreamChunks span ENDED: ${span.spanContext().spanId}`);
 }
 
 /**
