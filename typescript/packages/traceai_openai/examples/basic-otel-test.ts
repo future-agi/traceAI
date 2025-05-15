@@ -32,9 +32,9 @@ async function main() {
 
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
-    projectName: "openai-ts-chat-test",
+    projectName: "ts-observability-suite-v1",
     projectType: ProjectType.OBSERVE,
-    projectVersionName: "1.0.1",
+    // projectVersionName: "1.0.1",
     verbose: true,
     ...(fiBaseUrl && { endpoint: fiBaseUrl }),
     batch: false, // Send spans immediately for testing

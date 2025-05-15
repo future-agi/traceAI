@@ -5,6 +5,8 @@ import {
     Span,
     SpanOptions,
     Tracer,
+    diag,
+    trace,
   } from "@opentelemetry/api";
   import {
     FIActiveSpanCallback,
@@ -14,6 +16,10 @@ import {
   import { FISpan } from "./FISpan";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext } from "../contextAttributes";
+  // Removed unused imports that were causing linter errors
+  // import { INPUT_ATTRIBUTES, ... } from "./constants";
+  // import { applyAttributeRulesToTarget, ... } from "./maskingRules";
+  // import { MessageDirection } from "./types"; // REMOVING THIS LINE
   
   /**
    * Formats the params for the startActiveSpan method
@@ -67,6 +73,10 @@ import {
     }) {
       this.tracer = tracer;
       this.config = generateTraceConfig(traceConfig);
+      // ADDED LOG
+      diag.debug(
+        `FITracer CONSTRUCTOR: Received tracer type: ${tracer?.constructor?.name}. TraceConfig provided: ${!!traceConfig}`
+      );
     }
     startActiveSpan<F extends (span: FISpan) => unknown>(
       name: string,
@@ -113,19 +123,35 @@ import {
     }
   
     startSpan(name: string, options?: SpanOptions, context?: Context): FISpan {
-      const attributes = options?.attributes;
-      const ctx = context ?? apiContext.active();
-      const contextAttributes = getAttributesFromContext(ctx);
-      const mergedAttributes = { ...contextAttributes, ...attributes };
-      const span = new FISpan({
-        span: this.tracer.startSpan(
-          name,
-          { ...options, attributes: undefined },
-          ctx,
-        ),
-        config: this.config,
-      });
-      span.setAttributes(mergedAttributes);
-      return span;
+      // ADDED LOG
+      diag.debug(
+          `FITracer.startSpan CALLED for name: "${name}". Internal this.tracer type: ${this.tracer?.constructor?.name}`
+      );
+
+      if (!this.tracer || this.tracer.constructor.name === "NoopTracer") {
+        diag.warn(
+          `FITracer.startSpan: Internal tracer is NoopTracer or null. Returning NoopSpan for "${name}".`
+        );
+        // Return an actual NoopSpan from the API to avoid downstream errors if this path is taken.
+        const noopOtelSpan = trace.getTracer("fi-noop-tracer-internal").startSpan(name, options, context);
+        return new FISpan({ span: noopOtelSpan, config: this.config });
+      }
+      
+      const { attributes: originalAttributes, ...otherOptions } = options ?? {};
+
+      const span = this.tracer.startSpan(
+        name,
+        { ...otherOptions, attributes: originalAttributes },
+        context,
+      );
+
+      // ADDED LOGS - CRITICAL
+      const spanContext = span.spanContext();
+      const isNoOp = spanContext.traceFlags === 0 && spanContext.spanId === '0000000000000000';
+      diag.debug(
+        `FITracer.startSpan: OTel tracer (${this.tracer?.constructor?.name}) created span. ID: ${spanContext.spanId}, TraceID: ${spanContext.traceId}, TraceFlags: ${spanContext.traceFlags}, Is NoOp: ${isNoOp}`
+      );
+      
+      return new FISpan({ span, config: this.config });
     }
   }

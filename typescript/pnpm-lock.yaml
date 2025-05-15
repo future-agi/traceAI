@@ -8,6 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@traceai/fi-core':
+        specifier: workspace:*
+        version: link:packages/fi-core
+      '@traceai/fi-semantic-conventions':
+        specifier: workspace:*
+        version: link:packages/fi-semantic-conventions
+      '@traceai/openai':
+        specifier: workspace:*
+        version: link:packages/traceai_openai
       uuid:
         specifier: ^11.1.0
         version: 11.1.0

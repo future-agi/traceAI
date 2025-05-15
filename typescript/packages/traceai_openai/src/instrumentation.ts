@@ -95,7 +95,9 @@ function getExecContext(span: Span) {
  * @param traceConfig The FI trace configuration. Can be used to mask or redact sensitive information on spans. @see {@link TraceConfigOptions}
  */
 export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
-  private fiTracer: FITracer;
+  private fiTracer!: FITracer;
+  private _traceConfig?: TraceConfigOptions;
+
   constructor({
     instrumentationConfig,
     traceConfig,
@@ -116,7 +118,12 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
       VERSION,
       Object.assign({}, instrumentationConfig),
     );
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
+    this._traceConfig = traceConfig;
+  }
+
+  public override enable(): void {
+    super.enable();
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
   protected init(): InstrumentationModuleDefinition<typeof openai> {
@@ -152,6 +159,25 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const instrumentation: OpenAIInstrumentation = this;
 
+    // ADDED: Ensure fiTracer uses the most up-to-date tracer from InstrumentationBase
+    // The `tracer` property in `InstrumentationBase` (accessed via `instrumentation.tracer`)
+    // is initialized as a ProxyTracer and then updated to the actual Tracer.
+    // FITracer might have been initialized with the ProxyTracer in `enable()`.
+    // Here, we ensure it uses the (potentially updated) Tracer.
+    // Accessing FITracer's internal tracer `tracer` for comparison.
+    // This assumes FITracer has an internal property named `tracer`.
+    if (!(instrumentation.fiTracer as any).tracer || (instrumentation.fiTracer as any).tracer !== instrumentation.tracer) {
+        diag.debug(
+            `OpenAIInstrumentation.patch: fiTracer's internal tracer (${(instrumentation.fiTracer as any).tracer?.constructor?.name}) ` +
+            `differs from current base tracer (${instrumentation.tracer?.constructor?.name}) or is not set. Re-initializing fiTracer.`
+        );
+        instrumentation.fiTracer = new FITracer({ tracer: instrumentation.tracer, traceConfig: instrumentation._traceConfig });
+    } else {
+        diag.debug(
+            `OpenAIInstrumentation.patch: fiTracer already using current base tracer (${instrumentation.tracer?.constructor?.name}). No re-initialization needed.`
+        );
+    }
+
     // Patch create chat completions
     type ChatCompletionCreateType =
       typeof module.OpenAI.Chat.Completions.prototype.create;
@@ -168,8 +194,15 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
           const body = args[0];
           const { messages: _messages, ...invocationParameters } = body;
 
-          // --- ADD LOG ---
           diag.debug("@traceai/openai: ChatCompletion patch CALLED. Starting span...");
+          
+          // --- ADD LOGS FOR TRACER AND CONTEXT ---
+          const activeContextForSuppressionCheck = context.active();
+          const isSuppressed = isTracingSuppressed(activeContextForSuppressionCheck);
+          diag.debug(`@traceai/openai: Is tracing suppressed? ${isSuppressed}`);
+          diag.debug(`@traceai/openai: this.tracer type: ${instrumentation.tracer?.constructor?.name}`); // Accessing the base tracer
+          diag.debug(`@traceai/openai: this.fiTracer type: ${instrumentation.fiTracer?.constructor?.name}`);
+          // --- END ADDED LOGS ---
 
           const span = instrumentation.fiTracer.startSpan(
             `OpenAI Chat Completions`,
