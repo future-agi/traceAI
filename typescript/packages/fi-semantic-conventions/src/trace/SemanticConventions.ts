@@ -564,6 +564,8 @@ export const SemanticAttributePrefixes = {
     PROMPT_VENDOR,
     PROMPT_ID,
     PROMPT_URL,
+    RAW_INPUT: "raw.input",
+    RAW_OUTPUT: "raw.output",
   } as const;
   
   export enum FISpanKind {

@@ -220,6 +220,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                 [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
                 ...getLLMInputMessagesAttributes(body),
                 ...getLLMToolsJSONSchema(body),
+                [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
               },
             },
           );
@@ -263,6 +264,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                 [SemanticConventions.LLM_MODEL_NAME]: result.model,
                 ...getChatCompletionLLMOutputMessagesAttributes(result),
                 ...getUsageAttributes(result),
+                [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
               });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end(); // Non-streaming end
@@ -310,6 +312,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                 [SemanticConventions.LLM_SYSTEM]: LLMSystem.OPENAI,
                 [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
                 ...getCompletionInputValueAndMimeType(body),
+                [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
               },
             },
           );
@@ -345,6 +348,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                 [SemanticConventions.LLM_MODEL_NAME]: result.model,
                 ...getCompletionOutputValueAndMimeType(result),
                 ...getUsageAttributes(result),
+                [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
               });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
@@ -384,6 +388,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                 ? MimeType.TEXT
                 : MimeType.JSON,
               ...getEmbeddingTextAttributes(body),
+              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           });
           const execContext = getExecContext(span);
@@ -413,6 +418,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
               span.setAttributes({
                 // Do not record the output data as it can be large
                 ...getEmbeddingEmbeddingsAttributes(result),
+                [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
               });
             }
             span.setStatus({ code: SpanStatusCode.OK });
@@ -456,6 +462,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
                   ...getResponsesInputMessagesAttributes(body),
                   ...getLLMToolsJSONSchema(body),
+                  [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
                 },
               },
             );
@@ -494,6 +501,7 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
                   [SemanticConventions.LLM_MODEL_NAME]: result.model,
                   ...getResponsesOutputMessagesAttributes(result),
                   ...getResponsesUsageAttributes(result),
+                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
                 });
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
@@ -893,7 +901,9 @@ async function consumeChatCompletionStreamChunks(
   // across chunks
   const toolAndFunctionCallAttributes: Attributes = {};
   // The first message is for the assistant response so we start at 1
+  const allChunks: ChatCompletionChunk[] = [];
   for await (const chunk of stream) {
+    allChunks.push(chunk); // Store all chunks
     if (chunk.choices.length <= 0) {
       continue;
     }
@@ -923,6 +933,7 @@ async function consumeChatCompletionStreamChunks(
     [`${messageIndexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]:
       streamResponse,
     [`${messageIndexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: "assistant",
+    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "", // Store stringified all chunks
   };
   // Add the tool and function call attributes
   for (const [key, value] of Object.entries(toolAndFunctionCallAttributes)) {
