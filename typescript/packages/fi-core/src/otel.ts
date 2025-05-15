@@ -34,8 +34,8 @@ export const SESSION_NAME = "session_name";
 
 // --- Enums ---
 export enum ProjectType {
-  EXPERIMENT = "EXPERIMENT",
-  OBSERVE = "OBSERVE",
+  EXPERIMENT = "experiment",
+  OBSERVE = "observe",
 }
 
 // Default base URL if not overridden by environment or direct config

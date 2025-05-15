@@ -33,8 +33,8 @@ async function main() {
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
     projectName: "ts-observability-suite-v1",
-    projectType: ProjectType.OBSERVE,
-    // projectVersionName: "1.0.1",
+    projectType: ProjectType.EXPERIMENT,
+    projectVersionName: "1.0.1",
     verbose: true,
     ...(fiBaseUrl && { endpoint: fiBaseUrl }),
     batch: false, // Send spans immediately for testing
