@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@traceai/anthropic':
+        specifier: workspace:*
+        version: link:packages/traceai_anthropic
       '@traceai/fi-core':
         specifier: workspace:*
         version: link:packages/fi-core
@@ -63,6 +66,31 @@ importers:
         specifier: ^5.0.0
         version: 5.8.3
 
+  packages/traceai_anthropic:
+    dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.27.3
+        version: 0.27.3
+      '@opentelemetry/api':
+        specifier: ^1.7.0
+        version: 1.9.0
+      '@opentelemetry/instrumentation':
+        specifier: ^0.48.0
+        version: 0.48.0(@opentelemetry/api@1.9.0)
+      '@traceai/fi-core':
+        specifier: workspace:*
+        version: link:../fi-core
+      '@traceai/fi-semantic-conventions':
+        specifier: workspace:*
+        version: link:../fi-semantic-conventions
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.17.47
+      typescript:
+        specifier: ^5.0.0
+        version: 5.8.3
+
   packages/traceai_openai:
     dependencies:
       '@opentelemetry/api':
@@ -89,6 +117,9 @@ importers:
         version: 5.8.3
 
 packages:
+
+  '@anthropic-ai/sdk@0.27.3':
+    resolution: {integrity: sha512-IjLt0gd3L4jlOfilxVXTifn42FnVffMgDC04RJK1KDZpmkBWLv0XC92MVVmkxrFZNS/7l3xWgP/I3nqtX1sQHw==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -628,6 +659,18 @@ packages:
     engines: {node: '>=6'}
 
 snapshots:
+
+  '@anthropic-ai/sdk@0.27.3':
+    dependencies:
+      '@types/node': 18.19.100
+      '@types/node-fetch': 2.6.12
+      abort-controller: 3.0.0
+      agentkeepalive: 4.6.0
+      form-data-encoder: 1.7.2
+      formdata-node: 4.4.1
+      node-fetch: 2.7.0
+    transitivePeerDependencies:
+      - encoding
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
