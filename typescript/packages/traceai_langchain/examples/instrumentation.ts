@@ -34,7 +34,7 @@ const lcInstrumentation = new LangChainInstrumentation();
 // LangChain must be manually instrumented as it doesn't have a traditional module structure
 lcInstrumentation.manuallyInstrument(CallbackManagerModule);
 
-provider.register();
+// provider.register();
 
 // eslint-disable-next-line no-console
 console.log("👀 OpenInference initialized");

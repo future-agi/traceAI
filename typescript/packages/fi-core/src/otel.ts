@@ -385,7 +385,7 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     sessionName,
     metadata = {},
     batch = false,
-    setGlobalTracerProvider = false,
+    setGlobalTracerProvider = true,
     headers: optHeaders,
     verbose = false,
     endpoint: optEndpoint, // This is passed to _constructFullEndpoint
