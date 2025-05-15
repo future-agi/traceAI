@@ -25,19 +25,14 @@ const main = async () => {
   console.log("Environment variables:");
   console.log("FI_BASE_URL:", process.env.FI_BASE_URL);
   console.log("FI_COLLECTOR_ENDPOINT:", process.env.FI_COLLECTOR_ENDPOINT);
+  console.log("FI_API_KEY:", fiApiKey);
+  console.log("FI_SECRET_KEY:", fiSecretKey);
 
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
     projectName: "langchain-chat-example",
     projectType: ProjectType.OBSERVE,
-    sessionName: "langchain-chat-session-" + Date.now(),
-    // Add configuration for the TraceAI endpoint
-    endpoint: process.env.FI_BASE_URL || "https://api.trace.ai", // Use production endpoint by default
-    headers: {
-      "x-api-key": fiApiKey,
-      "x-secret-key": fiSecretKey,
-    },
-    verbose: true, // Enable verbose mode to see endpoint construction
+    sessionName: "langchain-chat-session-" + Date.now()
   });
 
   // 2. Register LangChain Instrumentation
