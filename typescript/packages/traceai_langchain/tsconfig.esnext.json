@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.esnext.json",
+  "compilerOptions": {
+    "outDir": "dist/esnext",
+    "rootDir": "./src",
+    "tsBuildInfoFile": "dist/esnext/tsconfig.esnext.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../fi-core" },
+    { "path": "../fi-semantic-conventions" }
+  ],
+  "paths": {
+    "langchainV0.1/*": ["node_modules/langchainV0.1/*"],
+    "@langchain/coreV0.1/*": ["node_modules/@langchain/coreV0.1/*"],
+    "@langchain/openaiV0.1/*": ["node_modules/@langchain/openaiV0.1/*"]
+  }
+}
