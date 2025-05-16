@@ -1,3 +1,5 @@
+import signal
+import sys
 from typing import Any, Callable, Collection, Optional
 
 from opentelemetry import trace as trace_api
@@ -88,6 +90,15 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             name="Tool.__call__",
             wrapper=tool_call_wrapper,
         )
+
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         from smolagents import MultiStepAgent, Tool

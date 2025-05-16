@@ -1,6 +1,8 @@
 import contextvars
 import logging
+import sys
 from importlib import import_module, metadata
+import signal
 from typing import Any, Collection
 
 from opentelemetry import trace as trace_api
@@ -106,10 +108,20 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
                 name="ValidatorServiceBase.after_run_validator",
                 wrapper=post_validator_wrapper,
             )
+
+            signal.signal(signal.SIGINT, self._handle_shutdown)
+            signal.signal(signal.SIGTERM, self._handle_shutdown)
+
         except Exception as e:
             logger.exception(f"Failed to instrument Guardrails: {e}", exc_info=True)
             self._uninstrument()
             raise
+
+    def _handle_shutdown(self, signum, frame):
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         try:
