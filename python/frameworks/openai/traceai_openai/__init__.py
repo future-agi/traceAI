@@ -1,4 +1,6 @@
 import logging
+import sys
+import signal
 from importlib import import_module
 from typing import Any, Collection
 
@@ -61,6 +63,15 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
             name="ProtectClient.protect",
             wrapper=GuardrailProtectWrapper(tracer),
         )
+
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         openai = import_module(_MODULE)
