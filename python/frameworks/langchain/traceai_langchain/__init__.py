@@ -1,4 +1,6 @@
 import logging
+import signal
+import sys
 from typing import Any, Callable, Collection, List, Optional
 from uuid import UUID
 
@@ -58,6 +60,16 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             wrapper=GuardrailProtectWrapper(self._tracer),
         )
 
+        # Set up signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        print("Gracefully shutting down...")
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         langchain_core.callbacks.BaseCallbackManager.__init__ = self._original_callback_manager_init  # type: ignore
