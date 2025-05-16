@@ -1,0 +1,35 @@
+{
+  "name": "@traceai/anthropic",
+  "version": "0.1.0",
+  "description": "OpenTelemetry instrumentation for Anthropic",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint . --ext .ts",
+    "prepare": "pnpm run build"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.7.0",
+    "@opentelemetry/instrumentation": "^0.48.0",
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/fi-semantic-conventions": "workspace:*",
+    "@anthropic-ai/sdk": "^0.27.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "keywords": [
+    "opentelemetry",
+    "instrumentation",
+    "typescript",
+    "anthropic"
+  ],
+  "author": "Future AGI <no-reply@futureagi.com>",
+  "license": "ISC",
+  "publishConfig": {
+    "access": "public"
+  }
+} 

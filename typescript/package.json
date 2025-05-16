@@ -21,8 +21,9 @@
   },
   "dependencies": {
     "@traceai/fi-semantic-conventions": "workspace:*",
-    "@traceai/openai": "workspace:*",
     "@traceai/fi-core": "workspace:*",
+    "@traceai/openai": "workspace:*",
+    "@traceai/anthropic": "workspace:*",
     "@traceai/langchain": "workspace:*",
     "uuid": "^11.1.0"
   }
