@@ -1,5 +1,7 @@
 import json
 import logging
+import signal
+import sys
 from importlib import import_module
 from typing import Any, Callable, Collection, Dict, Optional, Union
 
@@ -264,6 +266,17 @@ class AutogenInstrumentor(BaseInstrumentor):
         ConversableAgent.generate_reply = wrapped_generate
         ConversableAgent.initiate_chat = wrapped_initiate_chat
         ConversableAgent.execute_function = wrapped_execute_function
+
+        # Set up signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        print("Gracefully shutting down...")
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Restore original behavior."""
