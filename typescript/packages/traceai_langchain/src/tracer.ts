@@ -7,7 +7,7 @@ import {
   SpanStatusCode,
 } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
-import { SemanticConventions } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind } from "@traceai/fi-semantic-conventions";
 import {
   safelyFlattenAttributes,
   safelyFormatFunctionCalls,
@@ -24,6 +24,7 @@ import {
   safelyGetFISpanKindFromRunType,
 } from "./utils";
 import { FITracer } from "@traceai/fi-core";
+import { diag } from "@opentelemetry/api";
 
 type RunWithSpan = {
   run: Run;
@@ -88,14 +89,23 @@ export class LangChainTracer extends BaseTracer {
       activeContext = trace.setSpanContext(context.active(), parentCtx);
     }
 
+    let fiSpanKindResolved: FISpanKind | undefined = safelyGetFISpanKindFromRunType(run.run_type) ?? undefined;
+
+    // Check if run.name contains "agent" (case-insensitive)
+    if (run.name && run.name.toLowerCase().includes("agent")) {
+      fiSpanKindResolved = FISpanKind.AGENT;
+    } 
+    // Fallback to UNKNOWN if no specific kind was resolved
+    else if (fiSpanKindResolved === undefined) {
+      fiSpanKindResolved = FISpanKind.UNKNOWN; // Assuming UNKNOWN is added to FISpanKind enum
+    }
+
     const span = this.tracer.startSpan(
       run.name,
       {
         kind: SpanKind.INTERNAL,
         attributes: {
-          [SemanticConventions.FI_SPAN_KIND]:
-            safelyGetFISpanKindFromRunType(run.run_type) ??
-            undefined,
+          [SemanticConventions.FI_SPAN_KIND]: fiSpanKindResolved as string,
         },
       },
       activeContext,
@@ -152,6 +162,7 @@ export class LangChainTracer extends BaseTracer {
     }
     const maybeParent = this.runs[run.parent_run_id];
     if (maybeParent == null) {
+      diag.warn(`Parent run with ID ${run.parent_run_id} not found for run ${run.id}. Span will not be parented.`);
       return;
     }
 

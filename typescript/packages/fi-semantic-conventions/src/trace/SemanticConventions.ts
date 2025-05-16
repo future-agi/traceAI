@@ -578,6 +578,7 @@ export const SemanticAttributePrefixes = {
     AGENT = "AGENT",
     GUARDRAIL = "GUARDRAIL",
     EVALUATOR = "EVALUATOR",
+    UNKNOWN = "UNKNOWN",
   }
   
   /**

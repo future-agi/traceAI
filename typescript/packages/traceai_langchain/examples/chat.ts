@@ -2,7 +2,7 @@ import { register, ProjectType } from "@traceai/fi-core";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 import { LangChainInstrumentation } from "../src";
-import "./instrumentation";
+import "./instrumentationchat";
 import "dotenv/config";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage } from "@langchain/core/messages";

@@ -1,4 +1,4 @@
-import "./instrumentation";
+import "./instrumentationchat";
 import "dotenv/config";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage } from "@langchain/core/messages";
