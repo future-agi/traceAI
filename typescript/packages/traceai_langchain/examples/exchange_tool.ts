@@ -3,6 +3,7 @@ import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import { LangChainInstrumentation } from "../src";
 import "./instrumentation";
 import "dotenv/config";
+import "punycode/";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { AgentExecutor, createToolCallingAgent } from "langchain/agents";
@@ -71,12 +72,12 @@ const main = async () => {
     process.exit(1);
   }
 
-  // Log environment variables for debugging
-  console.log("Environment variables:");
-  console.log("FI_BASE_URL:", process.env.FI_BASE_URL);
-  console.log("FI_COLLECTOR_ENDPOINT:", process.env.FI_COLLECTOR_ENDPOINT);
-  console.log("FI_API_KEY exists:", !!fiApiKey);
-  console.log("FI_SECRET_KEY exists:", !!fiSecretKey);
+  // // Log environment variables for debugging
+  // console.log("Environment variables:");
+  // console.log("FI_BASE_URL:", process.env.FI_BASE_URL);
+  // console.log("FI_COLLECTOR_ENDPOINT:", process.env.FI_COLLECTOR_ENDPOINT);
+  // console.log("FI_API_KEY exists:", !!fiApiKey);
+  // console.log("FI_SECRET_KEY exists:", !!fiSecretKey);
 
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
@@ -108,7 +109,7 @@ const main = async () => {
     // 5. Shutdown the provider to ensure spans are flushed
     try {
       await tracerProvider.shutdown();
-      console.log("Tracer provider shut down successfully.");
+      // console.log("Tracer provider shut down successfully.");
     } catch (error) {
       console.error("Error shutting down tracer provider:", error);
     }

@@ -63,7 +63,6 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
   }
 
   manuallyInstrument(module: CallbackManagerModule) {
-    diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
   }
 
@@ -84,11 +83,6 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
     },
     moduleVersion?: string,
   ) {
-    diag.debug(
-      `Applying patch for ${MODULE_NAME}${
-        moduleVersion != null ? `@${moduleVersion}` : ""
-      }`,
-    );
     if (module?.openInferencePatched || _isOpenInferencePatched) {
       return module;
     }
@@ -142,11 +136,6 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
     if (module == null) {
       return;
     }
-    diag.debug(
-      `Removing patch for ${MODULE_NAME}${
-        moduleVersion != null ? `@${moduleVersion}` : ""
-      }`,
-    );
     if (isWrapped(module.CallbackManager.configure)) {
       this._unwrap(module.CallbackManager, "configure");
     }

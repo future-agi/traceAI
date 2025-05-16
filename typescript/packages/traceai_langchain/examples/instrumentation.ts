@@ -37,4 +37,3 @@ lcInstrumentation.manuallyInstrument(CallbackManagerModule);
 // provider.register();
 
 // eslint-disable-next-line no-console
-console.log("👀 OpenInference initialized");
