@@ -1,4 +1,6 @@
 import logging
+import signal
+import sys
 from typing import Any, Collection, cast
 
 from opentelemetry import trace as trace_api
@@ -40,9 +42,20 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):  # type: ignore
             )
 
             add_trace_processor(FiTracingProcessor(cast(Tracer, tracer)))
+
+            signal.signal(signal.SIGINT, self._handle_shutdown)
+            signal.signal(signal.SIGTERM, self._handle_shutdown)
+
         except Exception as e:
             logger.exception(f"Failed to instrument OpenAI Agents: {e}")
             raise
+
+    def _handle_shutdown(self, signum, frame):
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
+
 
     def _uninstrument(self, **kwargs: Any) -> None:
         # TODO : OpenAI Agents does not support uninstrumentation currently
