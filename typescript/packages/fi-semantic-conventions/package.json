@@ -1,0 +1,23 @@
+{
+  "name": "@traceai/fi-semantic-conventions",
+  "version": "0.1.0",
+  "description": "Semantic conventions for OpenTelemetry instrumentation",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint . --ext .ts",
+    "prepare": "pnpm run build"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

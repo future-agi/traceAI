@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "./src",
+    "types": ["node"]
+  },
+  "files": [],
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../fi-core" },
+    { "path": "../fi-semantic-conventions" }
+  ],
+  "paths": {
+    "langchainV0.1/*": ["node_modules/langchainV0.1/*"],
+    "@langchain/coreV0.1/*": ["node_modules/@langchain/coreV0.1/*"],
+    "@langchain/openaiV0.1/*": ["node_modules/@langchain/openaiV0.1/*"]
+  }
+}

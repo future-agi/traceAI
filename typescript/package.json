@@ -1,0 +1,30 @@
+{
+  "name": "fi-instrumentation-otel-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenTelemetry instrumentation for TypeScript",
+  "scripts": {
+    "build": "pnpm run -r build",
+    "test": "pnpm run -r test",
+    "lint": "eslint . --ext .ts"
+  },
+  "keywords": [
+    "opentelemetry",
+    "instrumentation",
+    "typescript"
+  ],
+  "author": "Future AGI <no-reply@futureagi.com>",
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@traceai/fi-semantic-conventions": "workspace:*",
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/openai": "workspace:*",
+    "@traceai/anthropic": "workspace:*",
+    "@traceai/langchain": "workspace:*",
+    "uuid": "^11.1.0"
+  }
+}
