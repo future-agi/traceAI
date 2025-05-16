@@ -65,7 +65,6 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
         signal.signal(signal.SIGTERM, self._handle_shutdown)
 
     def _handle_shutdown(self, signum, frame):
-        print("Gracefully shutting down...")
         tracer_provider = trace_api.get_tracer_provider()
         if hasattr(tracer_provider, 'shutdown'):
             tracer_provider.shutdown()

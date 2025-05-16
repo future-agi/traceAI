@@ -77,7 +77,6 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
 
 
     def _handle_shutdown(self, signum, frame):
-        print("Gracefully shutting down...")
         tracer_provider = trace_api.get_tracer_provider()
         if hasattr(tracer_provider, 'shutdown'):
             tracer_provider.shutdown()

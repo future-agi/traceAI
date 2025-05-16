@@ -1,4 +1,6 @@
 import json
+import signal
+import sys
 from abc import ABC
 from copy import copy, deepcopy
 from enum import Enum
@@ -143,6 +145,15 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
             factory=CopyableFunctionWrapper,
             args=(_EmbedderCallWrapper(self._tracer),),
         )
+
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         # Restore DSPy constructs
