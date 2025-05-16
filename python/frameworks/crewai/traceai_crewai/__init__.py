@@ -1,4 +1,6 @@
 import logging
+import signal
+import sys
 from importlib import import_module
 from typing import Any, Collection
 
@@ -68,6 +70,19 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
             name="ToolUsage._use",
             wrapper=use_wrapper,
         )
+
+        # Set up signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+
+    def _handle_shutdown(self, signum, frame):
+        print("Gracefully shutting down...")
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
+
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._original_execute_core is not None:

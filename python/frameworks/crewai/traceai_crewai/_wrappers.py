@@ -246,11 +246,7 @@ class _KickoffWrapper:
                             "human_input?": task.human_input,
                             "agent_role": task.agent.role if task.agent else "None",
                             "agent_key": task.agent.key if task.agent else None,
-                            "context": (
-                                [task.description for task in task.context]
-                                if task.context
-                                else None
-                            ),
+                            "context": _process_task_context(task.context),
                             "tools_names": [
                                 tool.name.casefold() for tool in task.tools or []
                             ],
@@ -392,6 +388,23 @@ def _prepare_args_kwargs(args: Tuple[Any, ...], **kwargs: Any) -> dict:
         "args": processed_args,
         **processed_kwargs,  # Unpacks the processed kwargs directly
     }
+
+
+def _process_task_context(context):
+    """
+    Process task context of various types:
+    """
+    try:
+        if context is None:
+            return None
+        if hasattr(context, "__iter__") and not isinstance(context, (str, bytes, dict)):
+            return [getattr(task, "description", str(task)) for task in context]
+        if hasattr(context, "description"):
+            return [context.description]
+        
+        return str(context) if context else None
+    except Exception:
+        return None
 
 
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
