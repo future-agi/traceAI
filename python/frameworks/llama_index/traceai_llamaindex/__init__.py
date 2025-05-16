@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Collection, Optional
-
+import sys 
+import signal
 from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
@@ -92,6 +93,16 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             name="ProtectClient.protect",
             wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
+
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        tracer_provider = trace_api.get_tracer_provider()
+        if hasattr(tracer_provider, 'shutdown'):
+            tracer_provider.shutdown()
+        sys.exit(0)
+
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._use_legacy_callback_handler:
             import llama_index.core
