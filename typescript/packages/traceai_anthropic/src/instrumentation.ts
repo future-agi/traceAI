@@ -79,12 +79,10 @@ export class AnthropicInstrumentation extends InstrumentationBase<typeof Anthrop
   }
 
   manuallyInstrument(module: typeof Anthropic) {
-    diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
   }
 
   private patch(moduleExports: typeof Anthropic, moduleVersion?: string) {
-    diag.debug(`Applying patch for ${MODULE_NAME}@${moduleVersion}`);
     if ((moduleExports as any).fiPatched || _isFIPatched) {
       return moduleExports;
     }
@@ -232,7 +230,6 @@ export class AnthropicInstrumentation extends InstrumentationBase<typeof Anthrop
   }
 
   private unpatch(moduleExports: typeof Anthropic & { fiPatched?: boolean }) {
-    diag.debug(`Removing patch for ${MODULE_NAME}`);
     const messagesPrototype = moduleExports.Messages?.prototype;
     if (messagesPrototype) {
       this._unwrap(messagesPrototype, "create");
