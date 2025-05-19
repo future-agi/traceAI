@@ -7,6 +7,7 @@ import {
   SpanStatus,
   SpanStatusCode,
 } from "@opentelemetry/api";
+import { ProjectType, EvalTag, prepareEvalTags } from "./fi_types";
 import { ExportResult, ExportResultCode } from "@opentelemetry/core";
 import {
   ReadableSpan,
@@ -32,24 +33,14 @@ export const EVAL_TAGS = "eval_tags";
 export const METADATA = "metadata";
 export const SESSION_NAME = "session_name";
 
-// --- Enums ---
-export enum ProjectType {
-  EXPERIMENT = "experiment",
-  OBSERVE = "observe",
-}
+
 
 // Default base URL if not overridden by environment or direct config
 const DEFAULT_FI_COLLECTOR_BASE_URL = "https://api.futureagi.com";
 const FI_COLLECTOR_PATH = "/tracer/observation-span/create_otel_span/";
+const FI_CUSTOM_EVAL_CONFIG_CHECK_PATH = "/tracer/custom-eval-config/check_exists/";
 
-// --- Interfaces ---
-export interface EvalTag {
-  custom_eval_name: string;
-  score?: number;
-  value?: string | number | boolean | null;
-  rationale?: string | null;
-  metadata?: Record<string, any> | null;
-}
+
 
 interface FIHeaders {
   [key: string]: string;
@@ -391,19 +382,21 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     projectName: optProjectName,
     projectType = ProjectType.EXPERIMENT,
     projectVersionName: optProjectVersionName,
-    evalTags = [],
+    evalTags: optEvalTags = [],
     sessionName,
     metadata = {},
     batch = false,
     setGlobalTracerProvider = true,
     headers: optHeaders,
     verbose = false,
-    endpoint: optEndpoint, // This is passed to _constructFullEndpoint
+    endpoint: optEndpoint,
     idGenerator = new UuidIdGenerator(),
   } = options;
 
+  const preparedEvalTags = prepareEvalTags(optEvalTags);
+
   if (projectType === ProjectType.OBSERVE) {
-    if (evalTags.length > 0) {
+    if (preparedEvalTags.length > 0) {
       throw new Error("Eval tags are not allowed for project type OBSERVE");
     }
     if (optProjectVersionName) {
@@ -421,17 +414,45 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     }
   }
 
-  const projectName = optProjectName ?? getEnv("FI_PROJECT_NAME") ?? "default-project";
-  const projectVersionName = optProjectVersionName ?? getEnv("FI_PROJECT_VERSION_NAME") ?? "0.0.0";
-  const projectVersionId = uuidv4(); 
+  const projectName = optProjectName ?? _getEnv("FI_PROJECT_NAME") ?? "default-project";
+  const projectVersionName = optProjectVersionName ?? _getEnv("FI_PROJECT_VERSION_NAME") ?? "0.0.0";
+  const projectVersionId = uuidv4();
+
+  const customEvalNames = preparedEvalTags.map(tag => tag.custom_eval_name).filter(name => name && name.length > 0);
+  if (customEvalNames.length !== new Set(customEvalNames).size) {
+    throw new Error("Duplicate custom eval names are not allowed");
+  }
+
+  // Call checkCustomEvalConfigExists without await (fire-and-forget)
+  // It will log an error internally if a config exists.
+  if (preparedEvalTags.length > 0) {
+    checkCustomEvalConfigExists(
+      projectName,
+      preparedEvalTags,
+      optEndpoint,
+      verbose
+    ).then(customEvalConfigExists => {
+      if (customEvalConfigExists) {
+        // Log an error instead of throwing, as register has already returned.
+        diag.error(
+          `register: Custom eval configuration already exists for project '${projectName}'. ` +
+          "The SDK will continue to initialize, but this may lead to unexpected behavior or duplicate configurations. " +
+          "Please use a different project name or disable/modify the existing custom eval configuration."
+        );
+      }
+    }).catch(error => {
+        // Log any error from the check itself
+        diag.error(`register: Error during background checkCustomEvalConfigExists for project '${projectName}': ${error}`);
+    });
+  }
 
   const resourceAttributes: Attributes = {
-    [SemanticResourceAttributes.SERVICE_NAME]: projectName, 
+    [SemanticResourceAttributes.SERVICE_NAME]: projectName,
     [PROJECT_NAME]: projectName,
     [PROJECT_TYPE]: projectType,
     [PROJECT_VERSION_NAME]: projectVersionName,
     [PROJECT_VERSION_ID]: projectVersionId,
-    [EVAL_TAGS]: JSON.stringify(evalTags),
+    [EVAL_TAGS]: JSON.stringify(preparedEvalTags),
     [METADATA]: JSON.stringify(metadata),
   };
 
@@ -440,32 +461,26 @@ function register(options: RegisterOptions = {}): FITracerProvider {
   }
 
   const resource = Resource.default().merge(new Resource(resourceAttributes));
-  
-  // Headers for the exporter
-  const exporterHeaders = optHeaders ?? getEnvFiAuthHeader();
-  // Endpoint for the exporter is now determined by FITracerProvider's constructor
-  // using _constructFullEndpoint, which considers optEndpoint and env vars.
+
+  const exporterHeaders = optHeaders ?? _getEnvFiAuthHeader();
 
   const tracerProvider = new FITracerProvider({
     resource,
     verbose,
     idGenerator,
-    endpoint: optEndpoint, // Pass the direct endpoint option here
-    headers: exporterHeaders, 
+    endpoint: optEndpoint,
+    headers: exporterHeaders,
   });
 
   if (batch) {
-    // If batching, we need to create a new exporter and processor,
-    // as the FITracerProvider created a SimpleSpanProcessor by default.
-    // The endpoint used by FITracerProvider's default exporter is tracerProvider._endpoint
-    const batchExporter = new HTTPSpanExporter({ 
-        endpoint: (tracerProvider as any)._endpoint, // Use the fully resolved endpoint
+    const batchExporter = new HTTPSpanExporter({
+        endpoint: (tracerProvider as any)._endpoint,
         headers: exporterHeaders,
         verbose: verbose
     });
     const batchProcessor = new OTelBatchSpanProcessor(batchExporter);
-    
-    (tracerProvider as any)._registeredSpanProcessors = []; 
+
+    (tracerProvider as any)._registeredSpanProcessors = [];
     (tracerProvider as any)._defaultProcessorAttached = false;
     tracerProvider.addSpanProcessor(batchProcessor);
   }
@@ -473,7 +488,7 @@ function register(options: RegisterOptions = {}): FITracerProvider {
   if (setGlobalTracerProvider) {
     trace.setGlobalTracerProvider(tracerProvider);
     if (verbose) {
-      diag.info( // Use diag.info
+      diag.info(
         "|  \n" +
         "|  `register` has set this TracerProvider as the global OpenTelemetry default.\n" +
         "|  To disable this behavior, call `register` with " +
@@ -481,8 +496,90 @@ function register(options: RegisterOptions = {}): FITracerProvider {
       );
     }
   }
-  
+
   return tracerProvider;
+}
+
+interface CheckExistsResponse {
+  result?: {
+    exists?: boolean;
+  };
+  // Add other fields if the API returns more
+}
+
+async function checkCustomEvalConfigExists(
+  projectName: string,
+  evalTags: any[], // Expects result of prepareEvalTags
+  customEndpoint?: string, // Can be base or full URL for the API call itself
+  verbose?: boolean
+): Promise<boolean> {
+  if (!evalTags || evalTags.length === 0) {
+    return false;
+  }
+
+  let apiBaseUrl: string;
+  if (customEndpoint) {
+    try {
+      const parsedCustom = new URL(customEndpoint);
+      if (parsedCustom.pathname.endsWith(FI_CUSTOM_EVAL_CONFIG_CHECK_PATH)) {
+        if (verbose) diag.info(`checkCustomEvalConfigExists: Using custom full endpoint: ${customEndpoint}`);
+        apiBaseUrl = customEndpoint.substring(0, customEndpoint.lastIndexOf(FI_CUSTOM_EVAL_CONFIG_CHECK_PATH));
+      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") { 
+         apiBaseUrl = `${parsedCustom.protocol}//${parsedCustom.host}`;
+      } else { 
+         apiBaseUrl = customEndpoint; 
+      }
+    } catch (e) {
+      if (verbose) diag.warn(`checkCustomEvalConfigExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
+      apiBaseUrl = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    }
+  } else {
+    apiBaseUrl = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+  }
+
+  if (apiBaseUrl.endsWith('/')) {
+    apiBaseUrl = apiBaseUrl.slice(0, -1);
+  }
+  const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_CONFIG_CHECK_PATH}`;
+
+  const headers: FIHeaders = {
+    "Content-Type": "application/json",
+    ...(_getEnvFiAuthHeader() || {}),
+  };
+
+  const payload = {
+    project_name: projectName,
+    eval_tags: evalTags,
+  };
+
+  if (verbose) {
+    diag.info(`checkCustomEvalConfigExists: Checking custom eval config at ${url} with payload:`, JSON.stringify(payload, null, 2));
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      diag.error(
+        `checkCustomEvalConfigExists: Failed to check custom eval config: ${response.status} ${response.statusText} - ${errorText}`,
+      );
+      return false; 
+    }
+
+    const result = await response.json() as CheckExistsResponse;
+    if (verbose) {
+        diag.info("checkCustomEvalConfigExists: Response from server:", JSON.stringify(result, null, 2));
+    }
+    return result?.result?.exists === true;
+  } catch (error) {
+    diag.error(`checkCustomEvalConfigExists: Error checking custom eval config: ${error}`);
+    return false;
+  }
 }
 
 export {
@@ -492,6 +589,7 @@ export {
   BatchSpanProcessor,
   HTTPSpanExporter,
   UuidIdGenerator,
+  checkCustomEvalConfigExists
 }
 
 
