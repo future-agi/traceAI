@@ -159,10 +159,10 @@ class HTTPSpanExporter implements SpanExporter {
         })),
         status: this._getSpanStatusName(span.status),
         parent_id: parentSpanId,
-        project_name: span.resource?.attributes[PROJECT_NAME] || "unknown-project",
-        project_type: span.resource?.attributes[PROJECT_TYPE] || "unknown-type",
-        project_version_name: span.resource?.attributes[PROJECT_VERSION_NAME] || "unknown-version",
-        project_version_id: span.resource?.attributes[PROJECT_VERSION_ID] || "unknown-id",
+        project_name: span.resource?.attributes[PROJECT_NAME],
+        project_type: span.resource?.attributes[PROJECT_TYPE],
+        project_version_name: span.resource?.attributes[PROJECT_VERSION_NAME],
+        project_version_id: span.resource?.attributes[PROJECT_VERSION_ID],
         latency: Math.floor(
           (span.endTime[0] * 1e9 +
             span.endTime[1] -
