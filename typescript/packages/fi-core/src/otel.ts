@@ -414,9 +414,9 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     }
   }
 
-  const projectName = optProjectName ?? _getEnv("FI_PROJECT_NAME") ?? "default-project";
-  const projectVersionName = optProjectVersionName ?? _getEnv("FI_PROJECT_VERSION_NAME") ?? "0.0.0";
-  const projectVersionId = uuidv4();
+const projectName = optProjectName ?? getEnv("FI_PROJECT_NAME") ?? "default-project";
+const projectVersionName = optProjectVersionName ?? getEnv("FI_PROJECT_VERSION_NAME") ?? "0.0.0";
+const projectVersionId = uuidv4(); 
 
   const customEvalNames = preparedEvalTags.map(tag => tag.custom_eval_name).filter(name => name && name.length > 0);
   if (customEvalNames.length !== new Set(customEvalNames).size) {
@@ -461,8 +461,11 @@ function register(options: RegisterOptions = {}): FITracerProvider {
   }
 
   const resource = Resource.default().merge(new Resource(resourceAttributes));
-
-  const exporterHeaders = optHeaders ?? _getEnvFiAuthHeader();
+  
+  // Headers for the exporter
+  const exporterHeaders = optHeaders ?? getEnvFiAuthHeader();
+  // Endpoint for the exporter is now determined by FITracerProvider's constructor
+  // using _constructFullEndpoint, which considers optEndpoint and env vars.
 
   const tracerProvider = new FITracerProvider({
     resource,
@@ -531,10 +534,10 @@ async function checkCustomEvalConfigExists(
       }
     } catch (e) {
       if (verbose) diag.warn(`checkCustomEvalConfigExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      apiBaseUrl = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
   } else {
-    apiBaseUrl = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
   }
 
   if (apiBaseUrl.endsWith('/')) {
@@ -544,7 +547,7 @@ async function checkCustomEvalConfigExists(
 
   const headers: FIHeaders = {
     "Content-Type": "application/json",
-    ...(_getEnvFiAuthHeader() || {}),
+    ...(getEnvFiAuthHeader() || {}),
   };
 
   const payload = {
