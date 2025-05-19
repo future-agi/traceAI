@@ -51,7 +51,8 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         span = cast(Span, self.__wrapped__)
         for k, v in reversed(self._self_important_attributes.items()):
             span.set_attribute(k, v)
-        span.end(end_time)
+        if hasattr(span, 'is_recording') and span.is_recording():
+            span.end(end_time)
 
     def set_input(
         self,
