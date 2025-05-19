@@ -16,10 +16,6 @@ import {
   import { FISpan } from "./FISpan";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext } from "../contextAttributes";
-  // Removed unused imports that were causing linter errors
-  // import { INPUT_ATTRIBUTES, ... } from "./constants";
-  // import { applyAttributeRulesToTarget, ... } from "./maskingRules";
-  // import { MessageDirection } from "./types"; // REMOVING THIS LINE
   
   /**
    * Formats the params for the startActiveSpan method
