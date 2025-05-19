@@ -99,7 +99,12 @@ class HTTPSpanExporter implements SpanExporter {
     if (!attributes) {
       return {};
     }
-    return JSON.parse(JSON.stringify(attributes));
+    try {
+      return JSON.parse(JSON.stringify(attributes));
+    } catch (e) {
+      diag.error(`HTTPSpanExporter: Error converting attributes: ${e}`);
+      return {};
+    }
   }
 
   private _getSpanStatusName(status: SpanStatus): string {
@@ -119,22 +124,33 @@ class HTTPSpanExporter implements SpanExporter {
     spans: ReadableSpan[],
     resultCallback: (result: ExportResult) => void,
   ): void {
+    if (!spans || !resultCallback) {
+      resultCallback?.({ code: ExportResultCode.FAILED });
+      return;
+    }
     if (this._isShutdown) {
       resultCallback({ code: ExportResultCode.FAILED });
       return;
     }
 
     const spansData = spans.map((span) => {
+      if (!span) {
+        return null;
+      }
+      const spanContext = span.spanContext();
+      if (!spanContext) {
+        return null;
+      }
       const parentSpanId = span.parentSpanId
         ? this._formatSpanId(span.parentSpanId)
         : undefined;
 
       return {
-        trace_id: this._formatTraceId(span.spanContext().traceId),
-        span_id: this._formatSpanId(span.spanContext().spanId),
-        name: span.name,
-        start_time: span.startTime[0] * 1e9 + span.startTime[1], 
-        end_time: span.endTime[0] * 1e9 + span.endTime[1], 
+        trace_id: this._formatTraceId(spanContext.traceId),
+        span_id: this._formatSpanId(spanContext.spanId),
+        name: span.name || "unknown-span",
+        start_time: span.startTime?.[0] * 1e9 + span.startTime?.[1] || 0,
+        end_time: span.endTime?.[0] * 1e9 + span.endTime?.[1] || 0,
         attributes: this._convertAttributes(span.attributes),
         events: span.events.map((event) => ({
           name: event.name,
@@ -143,10 +159,10 @@ class HTTPSpanExporter implements SpanExporter {
         })),
         status: this._getSpanStatusName(span.status),
         parent_id: parentSpanId,
-        project_name: span.resource.attributes[PROJECT_NAME],
-        project_type: span.resource.attributes[PROJECT_TYPE],
-        project_version_name: span.resource.attributes[PROJECT_VERSION_NAME],
-        project_version_id: span.resource.attributes[PROJECT_VERSION_ID],
+        project_name: span.resource?.attributes[PROJECT_NAME] || "unknown-project",
+        project_type: span.resource?.attributes[PROJECT_TYPE] || "unknown-type",
+        project_version_name: span.resource?.attributes[PROJECT_VERSION_NAME] || "unknown-version",
+        project_version_id: span.resource?.attributes[PROJECT_VERSION_ID] || "unknown-id",
         latency: Math.floor(
           (span.endTime[0] * 1e9 +
             span.endTime[1] -
@@ -157,7 +173,7 @@ class HTTPSpanExporter implements SpanExporter {
         metadata: span.resource.attributes[METADATA], 
         session_name: span.resource.attributes[SESSION_NAME],
       };
-    });
+    }).filter(Boolean); 
 
     if (this._verbose) {
         diag.info("HTTPSpanExporter: Sending payload:", JSON.stringify(spansData, null, 2));
@@ -231,26 +247,22 @@ function _constructFullEndpoint(customEndpoint?: string): string {
   let baseUrlToUse: string;
 
   if (customEndpoint) {
-    // If an endpoint is directly passed (e.g. to register function),
-    // it might be a full URL or just a base. We need to be careful.
-    // For now, let's assume if it's passed, it's intended as the base or full path.
-    // A more robust logic might check if it already contains the FI_COLLECTOR_PATH.
     try {
       const parsedCustom = new URL(customEndpoint);
-      if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
-        // If it has a path that isn't just '/' and isn't already the target path, use as is (assume full URL)
-         diag.warn(`Using custom endpoint as full URL: ${customEndpoint}`);
+      if (!parsedCustom.protocol || !parsedCustom.host) {
+        diag.warn(`Custom endpoint '${customEndpoint}' is missing protocol or host. Falling back to environment or default.`);
+        baseUrlToUse = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+      } else if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
+        diag.warn(`Using custom endpoint as full URL: ${customEndpoint}`);
         return customEndpoint;
       } else {
-        // It's a base URL or a URL ending in '/' or the exact collector path
         baseUrlToUse = `${parsedCustom.protocol}//${parsedCustom.host}`;
       }
     } catch (e) {
-      diag.warn(`Custom endpoint \'${customEndpoint}\' is not a valid URL. Falling back to environment or default.`);
+      diag.warn(`Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
       baseUrlToUse = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
   } else {
-    // No custom endpoint passed, use environment variable or default
     baseUrlToUse = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
   }
   
@@ -321,6 +333,11 @@ class FITracerProvider extends BasicTracerProvider {
 
   private _printTracingDetails(): void {
     const resource = this.resource;
+    if (!resource) {
+      diag.warn("No resource available for tracing details");
+      return;
+    }
+
     const projectName = resource.attributes[PROJECT_NAME] || "N/A";
     const projectType = resource.attributes[PROJECT_TYPE] || "N/A";
     const projectVersionName = resource.attributes[PROJECT_VERSION_NAME] || "N/A";
@@ -487,6 +504,6 @@ export {
 
 // TODO:
 // - Implement prepareEvalTags (similar to Python)
-// - Implement checkCustomEvalConfigExists (async, needs careful integration)
+// - Implement checkCustomEvalConfigExists
 // - Refine error handling and logging
 // - Add tests 
