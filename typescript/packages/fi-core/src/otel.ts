@@ -75,8 +75,8 @@ class UuidIdGenerator implements IdGenerator {
 class HTTPSpanExporter implements SpanExporter {
   private readonly endpoint: string;
   private readonly headers: FIHeaders;
-  private _isShutdown = false;
-  private _verbose: boolean;
+  private isShutdown = false;
+  private verbose: boolean;
 
   constructor(options: HTTPSpanExporterOptions) {
     this.endpoint = options.endpoint; // Expects full endpoint from _normalizedEndpoint
@@ -84,18 +84,18 @@ class HTTPSpanExporter implements SpanExporter {
       "Content-Type": "application/json",
       ...options.headers,
     };
-    this._verbose = options.verbose ?? false;
+    this.verbose = options.verbose ?? false;
   }
 
-  private _formatTraceId(traceId: string): string {
+  private formatTraceId(traceId: string): string {
     return traceId; 
   }
 
-  private _formatSpanId(spanId: string): string {
+  private formatSpanId(spanId: string): string {
     return spanId; 
   }
 
-  private _convertAttributes(attributes: Attributes | undefined): Record<string, any> {
+  private convertAttributes(attributes: Attributes | undefined): Record<string, any> {
     if (!attributes) {
       return {};
     }
@@ -107,7 +107,7 @@ class HTTPSpanExporter implements SpanExporter {
     }
   }
 
-  private _getSpanStatusName(status: SpanStatus): string {
+  private getSpanStatusName(status: SpanStatus): string {
     switch (status.code) {
       case SpanStatusCode.UNSET:
         return "UNSET";
@@ -128,7 +128,7 @@ class HTTPSpanExporter implements SpanExporter {
       resultCallback?.({ code: ExportResultCode.FAILED });
       return;
     }
-    if (this._isShutdown) {
+    if (this.isShutdown) {
       resultCallback({ code: ExportResultCode.FAILED });
       return;
     }
@@ -142,22 +142,22 @@ class HTTPSpanExporter implements SpanExporter {
         return null;
       }
       const parentSpanId = span.parentSpanId
-        ? this._formatSpanId(span.parentSpanId)
+        ? this.formatSpanId(span.parentSpanId)
         : undefined;
 
       return {
-        trace_id: this._formatTraceId(spanContext.traceId),
-        span_id: this._formatSpanId(spanContext.spanId),
+        trace_id: this.formatTraceId(spanContext.traceId),
+        span_id: this.formatSpanId(spanContext.spanId),
         name: span.name || "unknown-span",
         start_time: span.startTime?.[0] * 1e9 + span.startTime?.[1] || 0,
         end_time: span.endTime?.[0] * 1e9 + span.endTime?.[1] || 0,
-        attributes: this._convertAttributes(span.attributes),
+        attributes: this.convertAttributes(span.attributes),
         events: span.events.map((event) => ({
           name: event.name,
-          attributes: this._convertAttributes(event.attributes),
+          attributes: this.convertAttributes(event.attributes),
           timestamp: event.time[0] * 1e9 + event.time[1], 
         })),
-        status: this._getSpanStatusName(span.status),
+        status: this.getSpanStatusName(span.status),
         parent_id: parentSpanId,
         project_name: span.resource?.attributes[PROJECT_NAME],
         project_type: span.resource?.attributes[PROJECT_TYPE],
@@ -175,7 +175,7 @@ class HTTPSpanExporter implements SpanExporter {
       };
     }).filter(Boolean); 
 
-    if (this._verbose) {
+    if (this.verbose) {
         diag.info("HTTPSpanExporter: Sending payload:", JSON.stringify(spansData, null, 2));
     }
 
@@ -202,7 +202,7 @@ class HTTPSpanExporter implements SpanExporter {
   }
 
   async shutdown(): Promise<void> {
-    this._isShutdown = true;
+    this.isShutdown = true;
     return Promise.resolve();
   }
 
@@ -212,21 +212,21 @@ class HTTPSpanExporter implements SpanExporter {
 }
 
 // --- Helper Functions ---
-function _getEnv(key: string, defaultValue?: string): string | undefined {
+function getEnv(key: string, defaultValue?: string): string | undefined {
   return process.env[key] ?? defaultValue;
 }
 
-function _getEnvVerbose(): boolean | undefined {
-  const envVar = _getEnv("FI_VERBOSE_EXPORTER");
+function getEnvVerbose(): boolean | undefined {
+  const envVar = getEnv("FI_VERBOSE_EXPORTER");
   if (envVar) {
     return envVar.toLowerCase() === "true" || envVar === "1";
   }
   return undefined;
 }
 
-function _getEnvFiAuthHeader(): FIHeaders | undefined {
-  const apiKey = _getEnv("FI_API_KEY");
-  const secretKey = _getEnv("FI_SECRET_KEY");
+function getEnvFiAuthHeader(): FIHeaders | undefined {
+  const apiKey = getEnv("FI_API_KEY");
+  const secretKey = getEnv("FI_SECRET_KEY");
   if (apiKey && secretKey) {
     // Match Python SDK: use X-Api-Key and X-Secret-Key headers
     return { "X-Api-Key": apiKey, "X-Secret-Key": secretKey };
@@ -243,7 +243,7 @@ function _getEnvFiAuthHeader(): FIHeaders | undefined {
 // It prioritizes the endpoint passed directly to `register` (if any),
 // then checks FI_BASE_URL (or a more specific FI_COLLECTOR_ENDPOINT env var),
 // and finally falls back to a default base URL.
-function _constructFullEndpoint(customEndpoint?: string): string {
+function constructFullEndpoint(customEndpoint?: string): string {
   let baseUrlToUse: string;
 
   if (customEndpoint) {
@@ -251,7 +251,7 @@ function _constructFullEndpoint(customEndpoint?: string): string {
       const parsedCustom = new URL(customEndpoint);
       if (!parsedCustom.protocol || !parsedCustom.host) {
         diag.warn(`Custom endpoint '${customEndpoint}' is missing protocol or host. Falling back to environment or default.`);
-        baseUrlToUse = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+        baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
       } else if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
         diag.warn(`Using custom endpoint as full URL: ${customEndpoint}`);
         return customEndpoint;
@@ -260,10 +260,10 @@ function _constructFullEndpoint(customEndpoint?: string): string {
       }
     } catch (e) {
       diag.warn(`Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      baseUrlToUse = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+      baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
   } else {
-    baseUrlToUse = _getEnv("FI_BASE_URL") ?? _getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
   }
   
   // Ensure no trailing slash from baseUrl before appending path
@@ -285,53 +285,53 @@ interface FITracerProviderOptions {
 }
 
 class FITracerProvider extends BasicTracerProvider {
-  private _defaultProcessorAttached: boolean = false;
-  private _verbose: boolean;
-  private _endpoint: string; // This will store the fully constructed endpoint
-  private _headers?: FIHeaders;
+  private defaultProcessorAttached: boolean = false;
+  private verbose: boolean;
+  private endpoint: string; // This will store the fully constructed endpoint
+  private headers?: FIHeaders;
 
   constructor(config: FITracerProviderOptions = {}) {
     const idGenerator = config.idGenerator ?? new UuidIdGenerator();
     super({ resource: config.resource, idGenerator });
-    this._verbose = config.verbose ?? _getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false; // Allow provider verbosity via env
+    this.verbose = config.verbose ?? getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false; // Allow provider verbosity via env
     // Construct the full endpoint using the new logic
-    this._endpoint = _constructFullEndpoint(config.endpoint);
-    this._headers = config.headers ?? _getEnvFiAuthHeader();
+    this.endpoint = constructFullEndpoint(config.endpoint);
+    this.headers = config.headers ?? getEnvFiAuthHeader();
 
-    if (this._verbose) {
-      diag.info(`FITracerProvider: Using full exporter endpoint: ${this._endpoint}`); // Use diag.info
+    if (this.verbose) {
+      diag.info(`FITracerProvider: Using full exporter endpoint: ${this.endpoint}`); // Use diag.info
     }
 
     // Pass the provider's verbosity to the exporter if not explicitly set for exporter
     const exporterVerbose = config.verbose; // We won't directly use FI_VERBOSE_EXPORTER here, HTTPSpanExporter handles its own env var.
                                          // If FITracerProvider is verbose, its default exporter will be too, unless HTTPSpanExporter's option/env says otherwise.
 
-    const exporter = new HTTPSpanExporter({ endpoint: this._endpoint, headers: this._headers, verbose: exporterVerbose });
+    const exporter = new HTTPSpanExporter({ endpoint: this.endpoint, headers: this.headers, verbose: exporterVerbose });
     const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
     super.addSpanProcessor(defaultProcessor);
-    this._defaultProcessorAttached = true;
+    this.defaultProcessorAttached = true;
     // Log to confirm processor and exporter details
-    if (this._verbose) {
-      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with HTTPSpanExporter targeting: ${this._endpoint}`);
+    if (this.verbose) {
+      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with HTTPSpanExporter targeting: ${this.endpoint}`);
     }
 
-    if (this._verbose) {
-      this._printTracingDetails();
+    if (this.verbose) {
+      this.printTracingDetails();
     }
   }
 
   addSpanProcessor(spanProcessor: SpanProcessor): void {
-    if (this._defaultProcessorAttached) {
+    if (this.defaultProcessorAttached) {
       diag.warn(
         "Adding a new SpanProcessor. The default SimpleSpanProcessor will be replaced.",
       );
       (this as any)._registeredSpanProcessors = []; 
-      this._defaultProcessorAttached = false; 
+      this.defaultProcessorAttached = false; 
     }
     super.addSpanProcessor(spanProcessor);
   }
 
-  private _printTracingDetails(): void {
+  private printTracingDetails(): void {
     const resource = this.resource;
     if (!resource) {
       diag.warn("No resource available for tracing details");
@@ -344,7 +344,7 @@ class FITracerProvider extends BasicTracerProvider {
     const evalTags = resource.attributes[EVAL_TAGS] || "N/A";
     const sessionName = resource.attributes[SESSION_NAME] || "N/A";
 
-    const processorName = this._defaultProcessorAttached ? "SimpleSpanProcessor (default)" : "Custom/Multiple";
+    const processorName = this.defaultProcessorAttached ? "SimpleSpanProcessor (default)" : "Custom/Multiple";
     const transport = "HTTP"; 
 
     const detailsHeader =
@@ -357,18 +357,18 @@ class FITracerProvider extends BasicTracerProvider {
     detailsMsg += `|  FI Project Type: ${projectType}\n`;
     detailsMsg += `|  FI Project Version Name: ${projectVersionName}\n`;
     detailsMsg += `|  Span Processor: ${processorName}\n`;
-    detailsMsg += `|  Collector Endpoint: ${this._endpoint}\n`; // Now shows the full endpoint
+    detailsMsg += `|  Collector Endpoint: ${this.endpoint}\n`; // Now shows the full endpoint
     detailsMsg += `|  Transport: ${transport}\n`;
-    detailsMsg += `|  Transport Headers: ${this._headers ? Object.keys(this._headers).map(h => `${h}: ****`).join(', ') : 'None'}\n`;
+    detailsMsg += `|  Transport Headers: ${this.headers ? Object.keys(this.headers).map(h => `${h}: ****`).join(', ') : 'None'}\n`;
     detailsMsg += `|  Eval Tags: ${typeof evalTags === 'string' ? evalTags : JSON.stringify(evalTags)}\n`;
     detailsMsg += `|  Session Name: ${sessionName}\n`;
     detailsMsg += "|  \n";
-    if (this._defaultProcessorAttached) {
+    if (this.defaultProcessorAttached) {
       detailsMsg += "|  Using a default SpanProcessor. `addSpanProcessor` will overwrite this default.\n";
     }
   }
   async shutdown(): Promise<void> {
-    if (this._verbose) {
+    if (this.verbose) {
       diag.info("Shutting down FI TracerProvider...");
     }
     return super.shutdown();
@@ -428,8 +428,8 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     }
   }
 
-  const projectName = optProjectName ?? _getEnv("FI_PROJECT_NAME") ?? "default-project";
-  const projectVersionName = optProjectVersionName ?? _getEnv("FI_PROJECT_VERSION_NAME") ?? "0.0.0";
+  const projectName = optProjectName ?? getEnv("FI_PROJECT_NAME") ?? "default-project";
+  const projectVersionName = optProjectVersionName ?? getEnv("FI_PROJECT_VERSION_NAME") ?? "0.0.0";
   const projectVersionId = uuidv4(); 
 
   const resourceAttributes: Attributes = {
@@ -449,7 +449,7 @@ function register(options: RegisterOptions = {}): FITracerProvider {
   const resource = Resource.default().merge(new Resource(resourceAttributes));
   
   // Headers for the exporter
-  const exporterHeaders = optHeaders ?? _getEnvFiAuthHeader();
+  const exporterHeaders = optHeaders ?? getEnvFiAuthHeader();
   // Endpoint for the exporter is now determined by FITracerProvider's constructor
   // using _constructFullEndpoint, which considers optEndpoint and env vars.
 
