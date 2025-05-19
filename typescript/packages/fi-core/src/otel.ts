@@ -229,11 +229,6 @@ function getEnvFiAuthHeader(): FIHeaders | undefined {
     // Match Python SDK: use X-Api-Key and X-Secret-Key headers
     return { "X-Api-Key": apiKey, "X-Secret-Key": secretKey };
   }
-  // Remove the FI_TOKEN logic for now, as it's not in the Python snippet provided
-  // const token = _getEnv("FI_TOKEN");
-  // if (token) {
-  //   return { Authorization: `Bearer ${token}` };
-  // }
   return undefined;
 }
 
@@ -337,9 +332,9 @@ class FITracerProvider extends BasicTracerProvider {
     }
 
     const projectName = resource.attributes[PROJECT_NAME] || "N/A";
-    const projectType = resource.attributes[PROJECT_TYPE] || "N/A";
-    const projectVersionName = resource.attributes[PROJECT_VERSION_NAME] || "N/A";
-    const evalTags = resource.attributes[EVAL_TAGS] || "N/A";
+    const projectType = resource.attributes[PROJECT_TYPE];
+    const projectVersionName = resource.attributes[PROJECT_VERSION_NAME] || "default";
+    const evalTags = resource.attributes[EVAL_TAGS] || [];
     const sessionName = resource.attributes[SESSION_NAME] || "N/A";
 
     const processorName = this.defaultProcessorAttached ? "SimpleSpanProcessor (default)" : "Custom/Multiple";
