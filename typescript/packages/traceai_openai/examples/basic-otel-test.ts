@@ -1,4 +1,4 @@
-import { register, ProjectType } from "@traceai/fi-core";
+import { register, ProjectType, EvalSpanKind, EvalName, EvalTag, EvalTagType } from "@traceai/fi-core";
 import { OpenAIInstrumentation } from "@traceai/openai";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
@@ -33,15 +33,39 @@ async function main() {
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
     projectName: "ts-observability-suite-v3",
-    projectType: ProjectType.OBSERVE,
-    sessionName: "basic-otel-test-session-" + Date.now(),
+    projectType: ProjectType.EXPERIMENT,
+    // sessionName: "basic-otel-test-session-" + Date.now(), // OBSERVE only
+    evalTags: [
+      new EvalTag({
+        type: EvalTagType.OBSERVATION_SPAN,
+        value: EvalSpanKind.LLM,
+        eval_name: EvalName.CHUNK_ATTRIBUTION,
+        config: {},
+        custom_eval_name: "Chunk_Attribution",
+        mapping: {
+          "context": "raw.input",
+          "output": "raw.output"
+        }
+      }),
+      new EvalTag({
+        type: EvalTagType.OBSERVATION_SPAN,
+        value: EvalSpanKind.LLM,
+        eval_name: EvalName.SUMMARY_QUALITY,
+        config: {},
+        custom_eval_name: "Summary_Quality",
+        mapping: {
+          "context": "raw.input",
+          "output": "raw.output"
+        }
+      })
+    ]
   });
 
   // 2. Register OpenAI Instrumentation *BEFORE* importing/using OpenAI client
   // console.log("Registering OpenAI Instrumentation...");
   registerInstrumentations({
     tracerProvider: tracerProvider,
-    instrumentations: [new OpenAIInstrumentation()], // Using default config for OpenAIInstrumentation
+    instrumentations: [new OpenAIInstrumentation()],
   });
 
   // 3. NOW Import and Initialize OpenAI Client
