@@ -125,9 +125,7 @@ class HTTPSpanExporter implements SpanExporter {
     }
 
     const spansData = spans.map((span) => {
-      if (!span) {
-        return null;
-      }
+      if (!span) return null;
       const spanContext = span.spanContext();
       if (!spanContext) {
         return null;
@@ -160,9 +158,9 @@ class HTTPSpanExporter implements SpanExporter {
             (span.startTime[0] * 1e9 + span.startTime[1])) /
             1e6, 
         ),
-        eval_tags: span.resource.attributes[EVAL_TAGS], 
-        metadata: span.resource.attributes[METADATA], 
-        session_name: span.resource.attributes[SESSION_NAME],
+        eval_tags: span.resource?.attributes[EVAL_TAGS], 
+        metadata: span.resource?.attributes[METADATA], 
+        session_name: span.resource?.attributes[SESSION_NAME],
       };
     }).filter(Boolean); 
 
