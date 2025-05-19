@@ -58,7 +58,8 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
-        self._event_handler = None
+        self._tracer = tracer
+        self._event_handler = None   
 
         if self._use_legacy_callback_handler:
             import llama_index.core
