@@ -5,6 +5,8 @@ import os
 import sys
 import uuid
 import warnings
+import signal
+import atexit
 from typing import Any, Dict, List, Optional, Tuple, Type, Union, cast
 from urllib.parse import ParseResult, urlparse
 
@@ -33,6 +35,7 @@ from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor as _BatchSpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from fi_instrumentation.instrumentation.constants import DEFAULT_MAX_ACTIVE_SPANS_TRACKED, FI_MAX_ACTIVE_SPANS_TRACKED
 
 PROJECT_NAME = "project_name"
 PROJECT_TYPE = "project_type"
@@ -140,6 +143,8 @@ def register(
     else:
         global_provider_msg = ""
 
+    tracer_provider.setup_signal_handlers()
+
     details = tracer_provider._tracing_details()
     if verbose:
         print(f"{details}" f"{global_provider_msg}")
@@ -170,6 +175,9 @@ class TracerProvider(_TracerProvider):
         verbose: bool = True,
         **kwargs: Any,
     ):
+        if 'shutdown_on_exit' not in kwargs:
+            kwargs['shutdown_on_exit'] = True
+            
         sig = _get_class_signature(_TracerProvider)
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
@@ -257,6 +265,33 @@ class TracerProvider(_TracerProvider):
         )
         return details_msg
 
+    def shutdown(self) -> None:
+        """Override shutdown to force flush first"""
+        # Force flush to ensure all processors export their spans
+        if hasattr(self, 'force_flush'):
+            try:
+                self.force_flush(timeout_millis=5000)
+            except Exception as e:
+                print(f"Error during force flush: {e}")
+        
+        # Call the parent shutdown method
+        super().shutdown()
+
+    def setup_signal_handlers(self):
+        """Set up signal handlers to ensure proper shutdown on termination"""
+        def handle_signal(signum, frame):
+            print(f"Received signal {signum}, shutting down tracer provider...")
+            self.shutdown()
+            sys.exit(0)
+            
+        # Register signal handlers
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+        
+        atexit.register(self.shutdown)
+        
+        return self
+
 
 class SimpleSpanProcessor(_SimpleSpanProcessor):
     """
@@ -283,6 +318,8 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
         endpoint: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
+        self._active_spans = {}
+        
         if span_exporter is None:
             parsed_url, endpoint = _normalized_endpoint(endpoint)
             if _maybe_http_endpoint(parsed_url):
@@ -293,6 +330,51 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
                 )
                 span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
         super().__init__(span_exporter)
+
+    def on_start(
+        self, span: Any, parent_context: Optional[Any] = None
+    ) -> None:
+        """Track span when it starts"""
+        if hasattr(span, 'context') and hasattr(span.context, 'span_id'):
+            max_active_spans_tracked = int(os.getenv(FI_MAX_ACTIVE_SPANS_TRACKED, DEFAULT_MAX_ACTIVE_SPANS_TRACKED))
+            if len(self._active_spans) >= max_active_spans_tracked:
+                return
+            self._active_spans[span.context.span_id] = span
+
+        super().on_start(span, parent_context)
+
+    def on_end(self, span: Any) -> None:
+        """Remove span from tracking when it ends naturally"""
+        if hasattr(span, 'context') and hasattr(span.context, 'span_id'):
+            self._active_spans.pop(span.context.span_id, None)
+
+        super().on_end(span)
+
+    def shutdown(self) -> None:
+        """Override shutdown to ensure all active spans get exported"""
+        try:
+            # Process any spans that haven't been ended
+            if self._active_spans:
+                print(f"Ending {len(self._active_spans)} active spans during shutdown")
+                
+                # Create a copy to avoid modification during iteration
+                active_spans = list(self._active_spans.values())
+                
+                # End all active spans and mark them as leaked
+                for span in active_spans:
+                    if hasattr(span, 'is_recording') and span.is_recording():
+                        try:
+                            # Mark the span as leaked
+                            span.set_attribute("fi.span.leaked", True)
+                            span.end()
+                        except Exception as e:
+                            pass
+                
+                # Clear the tracking dictionary
+                self._active_spans.clear()
+        finally:
+            # Call the parent shutdown method
+            super().shutdown()
 
 
 class BatchSpanProcessor(_BatchSpanProcessor):
