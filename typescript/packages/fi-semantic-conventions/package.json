@@ -10,6 +10,26 @@
     "lint": "eslint . --ext .ts",
     "prepare": "pnpm run build"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "opentelemetry",
+    "semantic-conventions",
+    "typescript",
+    "traceai"
+  ],
+  "author": "Future AGI <no-reply@futureagi.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/fi-semantic-conventions"
+  },
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/fi-semantic-conventions#readme",
   "dependencies": {
     "@opentelemetry/api": "^1.7.0"
   },
