@@ -17,21 +17,20 @@ const MODULE_NAME = "@langchain/core/callbacks";
  * Flag to check if the openai module has been patched
  * Note: This is a fallback in case the module is made immutable (e.x. Deno, webpack, etc.)
  */
-let _isOpenInferencePatched = false;
+let _isFIPatched = false;
 
 /**
  * function to check if instrumentation is enabled / disabled
  */
 export function isPatched() {
-  return _isOpenInferencePatched;
+  return _isFIPatched;
 }
 
 type CallbackManagerModule = typeof CallbackManagerModuleV02;
 
 /**
- * An auto instrumentation class for LangChain that creates {@link https://github.com/Arize-ai/openinference/blob/main/spec/semantic_conventions.md|OpenInference} Compliant spans for LangChain
  * @param instrumentationConfig The config for the instrumentation @see {@link InstrumentationConfig}
- * @param traceConfig The OpenInference trace configuration. Can be used to mask or redact sensitive information on spans. @see {@link TraceConfigOptions}
+ * @param traceConfig The FI trace configuration. Can be used to mask or redact sensitive information on spans. @see {@link TraceConfigOptions}
  */
 export class LangChainInstrumentation extends InstrumentationBase<CallbackManagerModule> {
   private fiTracer: FITracer;
@@ -46,7 +45,6 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
      */
     instrumentationConfig?: InstrumentationConfig;
     /**
-     * The OpenInference trace configuration. Can be used to mask or redact sensitive information on spans.
      * @see {@link TraceConfigOptions}
      */
     traceConfig?: TraceConfigOptions;
@@ -79,11 +77,11 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
 
   private patch(
     module: CallbackManagerModule & {
-      openInferencePatched?: boolean;
+      fiPatched?: boolean;
     },
     moduleVersion?: string,
   ) {
-    if (module?.openInferencePatched || _isOpenInferencePatched) {
+    if (module?.fiPatched || _isFIPatched) {
       return module;
     }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -116,10 +114,10 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
         };
       });
     }
-    _isOpenInferencePatched = true;
+    _isFIPatched = true;
     try {
       // This can fail if the module is made immutable via the runtime or bundler
-      module.openInferencePatched = true;
+      module.fiPatched = true;
     } catch (e) {
       diag.debug(`Failed to set ${MODULE_NAME} patched flag on the module`, e);
     }
@@ -129,7 +127,7 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
 
   private unpatch(
     module?: CallbackManagerModule & {
-      openInferencePatched?: boolean;
+      fiPatched?: boolean;
     },
     moduleVersion?: string,
   ) {
@@ -149,10 +147,10 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
     ) {
       this._unwrap(module.CallbackManager, "_configureSync");
     }
-    _isOpenInferencePatched = false;
+    _isFIPatched = false;
     try {
       // This can fail if the module is made immutable via the runtime or bundler
-      module.openInferencePatched = false;
+      module.fiPatched = false;
     } catch (e) {
       diag.warn(`Failed to unset ${MODULE_NAME} patched flag on the module`, e);
     }
