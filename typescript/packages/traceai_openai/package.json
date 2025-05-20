@@ -8,10 +8,11 @@
     "build": "tsc",
     "test": "jest",
     "lint": "eslint . --ext .ts",
-    "prepare": "pnpm run build"
+    "prepare": "npm run build"
   },
   "files": [
     "dist",
+    "src",
     "README.md"
   ],
   "repository": {
