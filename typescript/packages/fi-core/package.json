@@ -13,7 +13,7 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "src"
   ],
   "repository": {
     "type": "git",
@@ -39,7 +39,6 @@
     "typescript"
   ],
   "author": "Future AGI <no-reply@futureagi.com>",
-  "license": "ISC",
   "publishConfig": {
     "access": "public"
   }

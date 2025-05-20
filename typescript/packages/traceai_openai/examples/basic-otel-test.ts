@@ -1,7 +1,6 @@
 import { register, ProjectType, EvalSpanKind, EvalName, EvalTag, EvalTagType } from "@traceai/fi-core";
 import { OpenAIInstrumentation } from "@traceai/openai";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
-import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 
 // Enable OpenTelemetry internal diagnostics
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
@@ -69,7 +68,7 @@ async function main() {
   });
 
   // 3. NOW Import and Initialize OpenAI Client
-  const OpenAI = (await import("openai")).default;
+  const { OpenAI } = await import("openai");
   const openai = new OpenAI({
     apiKey: openaiApiKey,
   });
