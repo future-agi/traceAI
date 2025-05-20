@@ -1,0 +1,74 @@
+{
+  "name": "@traceai/langchain",
+  "version": "3.2.0",
+  "description": "TraceAI Instrumentation for LangChain.js",
+  "main": "dist/src/index.js",
+  "module": "dist/esm/index.js",
+  "esnext": "dist/esnext/index.js",
+  "types": "dist/src/index.d.ts",
+ 
+  "scripts": {
+    "build": "tsc",
+    "version:update": "../../scripts/version-update.js",
+    "type:check": "tsc --noEmit",
+    "test": "jest",
+    "prepare": "pnpm run build"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/src/index.js"
+    }
+  },
+  "keywords": [
+    "opentelemetry",
+    "instrumentation",
+    "typescript",
+    "langchain",
+    "traceai"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_langchain"
+  },
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_langchain#readme",
+  "author": "Future AGI <no-reply@futureagi.com>",
+  "dependencies": {
+    "@traceai/fi-core": "^0.1.0",
+    "@traceai/fi-semantic-conventions": "^0.1.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^1.25.1",
+    "@opentelemetry/instrumentation": "^0.46.0"
+  },
+  "peerDependencies": {
+    "@langchain/core": "^0.2.0 || ^0.3.0"
+  },
+  "devDependencies": {
+    "@langchain/core": "^0.3.13",
+    "@langchain/coreV0.2": "npm:@langchain/core@^0.2.0",
+    "@langchain/openai": "^0.3.17",
+    "@langchain/openaiV0.2": "npm:@langchain/openai@^0.2.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.50.0",
+    "@opentelemetry/resources": "^1.25.1",
+    "@opentelemetry/sdk-trace-base": "^1.25.1",
+    "@opentelemetry/sdk-trace-node": "^1.25.1",
+    "@opentelemetry/semantic-conventions": "^1.25.1",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.11",
+    "dotenv": "^16.4.5",
+    "jest": "^29.7.0",
+    "langchain": "^0.3.3",
+    "langchainV0.1": "npm:langchain@^0.1.0",
+    "langchainV0.2": "npm:langchain@^0.2.0",
+    "openai": "^4.52.7"
+  }
+}

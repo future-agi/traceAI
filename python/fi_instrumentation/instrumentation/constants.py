@@ -1,0 +1,3 @@
+FI_MAX_ACTIVE_SPANS_TRACKED = "FI_MAX_ACTIVE_SPANS_TRACKED"
+# Maximum number of active spans to be tracked
+DEFAULT_MAX_ACTIVE_SPANS_TRACKED = 100

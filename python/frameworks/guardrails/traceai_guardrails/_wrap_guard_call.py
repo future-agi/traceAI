@@ -86,10 +86,14 @@ def _get_raw_input(args: Any, **kwargs: Any) -> str:
     output regardless of whether the those inputs are passed as positional or
     keyword arguments.
     """
+    kwargs_dict = _to_dict(kwargs)
+    if not isinstance(kwargs_dict, dict):
+        kwargs_dict = {} 
+
     return safe_json_dumps(
         {
             "args": _to_dict(args),
-            **_to_dict(kwargs)
+            **kwargs_dict
         },
         cls=SafeJSONEncoder,
     )
@@ -117,6 +121,8 @@ def _to_dict(result: Any) -> Any:
         return result.__dict__
     elif isinstance(result, list):
         return [_to_dict(item) for item in result]
+    elif isinstance(result, tuple): 
+        return tuple(_to_dict(item) for item in result)
     elif isinstance(result, dict):
         return {key: _to_dict(value) for key, value in result.items()}
     else:
