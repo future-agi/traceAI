@@ -20,11 +20,11 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@traceai/fi-semantic-conventions": "workspace:*",
-    "@traceai/fi-core": "workspace:*",
-    "@traceai/openai": "workspace:*",
-    "@traceai/anthropic": "workspace:*",
-    "@traceai/langchain": "workspace:*",
+    "@traceai/fi-semantic-conventions": "0.1.0",
+    "@traceai/fi-core": "0.1.0",
+    "@traceai/openai": "0.1.0",
+    "@traceai/anthropic": "0.1.0",
+    "@traceai/langchain": "0.1.0",
     "uuid": "^11.1.0"
   }
 }
