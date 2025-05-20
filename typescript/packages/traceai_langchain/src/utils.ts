@@ -42,7 +42,7 @@ export const SESSION_ID_KEYS = [
  */
 const onError = (message: string) => (error: unknown) => {
   diag.warn(
-    `OpenInference-LangChain: error processing langchain run, falling back to null. ${message}. ${error}`,
+    `TraceAI-LangChain: error processing langchain run, falling back to null. ${message}. ${error}`,
   );
 };
 
@@ -108,7 +108,7 @@ function getFISpanKindFromRunType(runType: string) {
 }
 
 /**
- * Formats the input or output of a langchain run into OpenInference attributes for a span.
+ * Formats the input or output of a langchain run into FI attributes for a span.
  * @param ioConfig - The input or output of a langchain run and the type of IO
  * @param ioConfig.io - The input or output of a langchain run
  * @param ioConfig.ioType - The type of IO
@@ -227,9 +227,9 @@ function getFunctionCallDataFromAdditionalKwargs(
 }
 
 /**
- * Gets the tool calls from the langchain message additional kwargs and formats them into OpenInference attributes.
+ * Gets the tool calls from the langchain message additional kwargs and formats them into FI attributes.
  * @param additionalKwargs - The langchain message additional kwargs to extract the tool calls from
- * @returns the OpenInference attributes for the tool calls
+ * @returns the FI attributes for the tool calls
  */
 function getToolCallDataFromAdditionalKwargs(
   additionalKwargs: Record<string, unknown>,
@@ -259,9 +259,9 @@ function getToolCallDataFromAdditionalKwargs(
 }
 
 /**
- * Parses a langchain message into OpenInference attributes.
+ * Parses a langchain message into FI attributes.
  * @param messageData - The langchain message data to parse
- * @returns The OpenInference attributes for the message
+ * @returns The FI attributes for the message
  */
 function parseMessage(messageData: Record<string, unknown>): LLMMessage {
   const message: LLMMessage = {};
@@ -292,9 +292,9 @@ function parseMessage(messageData: Record<string, unknown>): LLMMessage {
 }
 
 /**
- * Formats the input messages of a langchain run into OpenInference attributes.
+ * Formats the input messages of a langchain run into FI attributes.
  * @param input - The input of a langchain run.
- * @returns The OpenInference attributes for the input messages.
+ * @returns The FI attributes for the input messages.
  */
 function formatInputMessages(
   input: Run["inputs"],
@@ -347,9 +347,9 @@ function getFirstOutputGeneration(output: Run["outputs"]) {
 }
 
 /**
- * Formats the output messages of a langchain run into OpenInference attributes.
+ * Formats the output messages of a langchain run into FI attributes.
  * @param output - The output of a langchain run.
- * @returns The OpenInference attributes for the output messages.
+ * @returns The FI attributes for the output messages.
  */
 function formatOutputMessages(
   output: Run["outputs"],
@@ -374,9 +374,9 @@ function formatOutputMessages(
 }
 
 /**
- * Parses a langchain retrieval document into OpenInference attributes.
+ * Parses a langchain retrieval document into FI attributes.
  * @param document - The langchain retrieval document to parse
- * @returns The OpenInference attributes for the retrieval document
+ * @returns The FI attributes for the retrieval document
  */
 function parseRetrievalDocument(document: unknown) {
   if (!isObject(document)) {
@@ -394,9 +394,9 @@ function parseRetrievalDocument(document: unknown) {
 }
 
 /**
- * Formats the retrieval documents of a langchain run into OpenInference attributes.
+ * Formats the retrieval documents of a langchain run into FI attributes.
  * @param run - The langchain run to extract the retrieval documents from
- * @returns The OpenInference attributes for the retrieval documents.
+ * @returns The FI attributes for the retrieval documents.
  */
 function formatRetrievalDocuments(run: Run) {
   const normalizedRunType = run.run_type.toLowerCase();
@@ -416,7 +416,7 @@ function formatRetrievalDocuments(run: Run) {
 /**
  * Gets the model name from the langchain run extra data.
  * @param runExtra - The extra data from a langchain run
- * @returns The OpenInference attributes for the model name
+ * @returns The FI attributes for the model name
  */
 function formatLLMParams(
   runExtra: Run["extra"],
@@ -424,19 +424,19 @@ function formatLLMParams(
   if (!isObject(runExtra) || !isObject(runExtra.invocation_params)) {
     return null;
   }
-  const openInferenceParams: LLMParameterAttributes = {};
+  const fiParams: LLMParameterAttributes = {};
 
-  openInferenceParams[SemanticConventions.LLM_INVOCATION_PARAMETERS] =
+  fiParams[SemanticConventions.LLM_INVOCATION_PARAMETERS] =
     safelyJSONStringify(runExtra.invocation_params) ?? undefined;
 
   if (isString(runExtra.invocation_params.model_name)) {
-    openInferenceParams[SemanticConventions.LLM_MODEL_NAME] =
+    fiParams[SemanticConventions.LLM_MODEL_NAME] =
       runExtra.invocation_params.model_name;
   } else if (isString(runExtra.invocation_params.model)) {
-    openInferenceParams[SemanticConventions.LLM_MODEL_NAME] =
+    fiParams[SemanticConventions.LLM_MODEL_NAME] =
       runExtra.invocation_params.model;
   }
-  return openInferenceParams;
+  return fiParams;
 }
 
 function getTemplateFromSerialized(serialized: Run["serialized"]) {
@@ -465,7 +465,7 @@ const safelyGetTemplateFromSerialized = withSafety({
 /**
  * A best effort function to extract the prompt template from a langchain run.
  * @param run - The langchain run to extract the prompt template from
- * @returns The OpenInference attributes for the prompt template
+ * @returns The FI attributes for the prompt template
  */
 function formatPromptTemplate(run: Run): PromptTemplateAttributes | null {
   if (run.run_type.toLowerCase() !== "prompt") {
@@ -484,9 +484,9 @@ function getTokenCount(maybeCount: unknown) {
 }
 
 /**
- * Formats the token counts of a langchain run into OpenInference attributes.
+ * Formats the token counts of a langchain run into FI attributes.
  * @param outputs - The outputs of a langchain run
- * @returns The OpenInference attributes for the token counts
+ * @returns The FI attributes for the token counts
  *
  * @see https://github.com/langchain-ai/langchainjs/blob/main/langchain-core/src/language_models/chat_models.ts#L403 for how token counts get added to outputs
  */
@@ -613,9 +613,9 @@ function formatTokenCounts(
 }
 
 /**
- * Formats the function calls of a langchain run into OpenInference attributes.
+ * Formats the function calls of a langchain run into FI attributes.
  * @param outputs - The outputs of a langchain run
- * @returns The OpenInference attributes for the function calls
+ * @returns The FI attributes for the function calls
  */
 function formatFunctionCalls(outputs: Run["outputs"]) {
   const firstGeneration = getFirstOutputGeneration(outputs);
@@ -644,9 +644,9 @@ function formatFunctionCalls(outputs: Run["outputs"]) {
 }
 
 /**
- * Formats the tool calls of a langchain run into OpenInference attributes.
+ * Formats the tool calls of a langchain run into FI attributes.
  * @param run - The langchain run to extract the tool calls from
- * @returns The OpenInference attributes for the tool calls
+ * @returns The FI attributes for the tool calls
  */
 function formatToolCalls(run: Run) {
   const normalizedRunType = run.run_type.toLowerCase();
@@ -670,9 +670,9 @@ function formatToolCalls(run: Run) {
 }
 
 /**
- * Formats the metadata of a langchain run into OpenInference attributes.
+ * Formats the metadata of a langchain run into FI attributes.
  * @param run - The langchain run to extract the metadata from
- * @returns The OpenInference attributes for the metadata
+ * @returns The FI attributes for the metadata
  */
 function formatMetadata(run: Run) {
   if (!isObject(run.extra) || !isObject(run.extra.metadata)) {
@@ -684,12 +684,12 @@ function formatMetadata(run: Run) {
 }
 
 /**
- * Formats the session id of a langchain run into OpenInference attributes.
+ * Formats the session id of a langchain run into fi attributes.
  *
  * @see https://docs.smith.langchain.com/observability/how_to_guides/monitoring/threads#group-traces-into-threads
  *
  * @param run - The langchain run to extract the session id from
- * @returns The OpenInference attributes for the session id
+ * @returns The FI attributes for the session id
  */
 function formatSessionId(run: Run) {
   if (!isObject(run.extra)) {
@@ -726,7 +726,7 @@ export const safelyFormatOutputMessages = withSafety({
 });
 export const safelyGetFISpanKindFromRunType = withSafety({
   fn: getFISpanKindFromRunType,
-  onError: onError("Error getting OpenInference span kind from run type"),
+  onError: onError("Error getting FI span kind from run type"),
 });
 export const safelyFormatRetrievalDocuments = withSafety({
   fn: formatRetrievalDocuments,
