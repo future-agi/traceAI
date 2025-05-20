@@ -1,6 +1,6 @@
 {
   "name": "@traceai/langchain",
-  "version": "3.2.0",
+  "version": "0.1.0`",
   "description": "TraceAI Instrumentation for LangChain.js",
   "main": "dist/src/index.js",
   "module": "dist/esm/index.js",
