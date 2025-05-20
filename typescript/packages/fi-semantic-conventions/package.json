@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-semantic-conventions",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Semantic conventions for OpenTelemetry instrumentation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,7 +32,8 @@
   },
   "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/fi-semantic-conventions#readme",
   "dependencies": {
-    "@opentelemetry/api": "^1.7.0"
+    "@opentelemetry/api": "^1.7.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0",
