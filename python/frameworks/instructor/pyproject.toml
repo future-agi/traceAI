@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-instructor"
-version = "0.1.4"
+version = "0.1.5"
 description = "OpenTelemetry instrumentation for Instructor"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"

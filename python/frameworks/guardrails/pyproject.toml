@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-guardrails"
-version = "0.1.1"
+version = "0.1.2"
 description = "OpenTelemetry instrumentation for Guardrails"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"

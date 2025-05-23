@@ -1,3 +1,10 @@
+## [0.1.6] - 2025-05-23
+### Feature
+- Added support for FutureAGI's protect
+
+## [0.1.5] - 2025-05-08
+### Feature
+- Updated dependencies to the latest versions.
 
 ## [0.1.4] - 2025-05-02
 ### Changed
