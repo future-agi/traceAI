@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-bedrock"
-version = "0.1.4"
+version = "0.1.5"
 description = "OpenTelemetry instrumentation for Bedrock"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
