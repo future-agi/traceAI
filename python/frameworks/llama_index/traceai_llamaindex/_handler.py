@@ -223,10 +223,10 @@ class _Span(BaseSpan):
 
     def process_input(self, instance: Any, bound_args: inspect.BoundArguments) -> None:
         try:
-            self[INPUT_VALUE] = safe_json_dumps(bound_args.arguments, cls=_Encoder)
+            self[INPUT_VALUE] = safe_json_dumps(bound_args.arguments)
             self[INPUT_MIME_TYPE] = JSON
             # Add raw input
-            self[RAW_INPUT] = safe_json_dumps(bound_args.arguments, cls=_Encoder)
+            self[RAW_INPUT] = safe_json_dumps(bound_args.arguments)
         except BaseException as e:
             logger.exception(str(e))
             pass
@@ -263,10 +263,10 @@ class _Span(BaseSpan):
                 pass
         else:
             try:
-                self[OUTPUT_VALUE] = safe_json_dumps(result, cls=_Encoder)
+                self[OUTPUT_VALUE] = safe_json_dumps(result)
                 self[OUTPUT_MIME_TYPE] = JSON
                 # Add raw output
-                self[RAW_OUTPUT] = safe_json_dumps(result, cls=_Encoder)
+                self[RAW_OUTPUT] = safe_json_dumps(result)
             except BaseException as e:
                 logger.exception(str(e))
                 pass
@@ -334,7 +334,7 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: ExceptionEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentChatWithStepStartEvent) -> None:
@@ -342,12 +342,12 @@ class _Span(BaseSpan):
             self._span_kind = AGENT
         self[INPUT_VALUE] = event.user_msg
         self._attributes.pop(INPUT_MIME_TYPE, None)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentChatWithStepEndEvent) -> None:
         self[OUTPUT_VALUE] = str(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: AgentRunStepStartEvent) -> None:
@@ -356,11 +356,11 @@ class _Span(BaseSpan):
         if input := event.input:
             self[INPUT_VALUE] = input
             self._attributes.pop(INPUT_MIME_TYPE, None)
-            self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+            self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentRunStepEndEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
         # FIXME: not sure what to do here with interim outputs since
         # there is no corresponding semantic convention.
         ...
@@ -372,13 +372,13 @@ class _Span(BaseSpan):
             self[TOOL_NAME] = name
         self[TOOL_DESCRIPTION] = tool.description
         self[TOOL_PARAMETERS] = safe_json_dumps(tool.get_parameters_dict())
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: EmbeddingStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = EMBEDDING
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: EmbeddingEndEvent) -> None:
@@ -396,7 +396,7 @@ class _Span(BaseSpan):
     def _(self, event: StreamChatStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: StreamChatDeltaReceivedEvent) -> None:
@@ -411,14 +411,14 @@ class _Span(BaseSpan):
     @_process_event.register
     def _(self, event: StreamChatErrorEvent) -> None:
         self.record_exception(event.exception)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: StreamChatEndEvent) -> None:
         self[RAW_OUTPUT] = safe_json_dumps(self._stream_chunks)
         self[OUTPUT_VALUE] = self._stream_content
         self._stream_content.clear()
-        self._stream_chunks.clear
+        self._stream_chunks.clear()
 
     @_process_event.register
     def _(self, event: LLMPredictStartEvent) -> None:
@@ -437,19 +437,18 @@ class _Span(BaseSpan):
         }
         if template_arguments:
             self[LLM_PROMPT_TEMPLATE_VARIABLES] = safe_json_dumps(template_arguments)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMPredictEndEvent) -> None:
         self[OUTPUT_VALUE] = event.output
-        self._extract_token_counts(event.response)
         self[RAW_OUTPUT] = event.model_dump_json()
 
     @_process_event.register
     def _(self, event: LLMStructuredPredictStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMStructuredPredictEndEvent) -> None:
@@ -462,17 +461,17 @@ class _Span(BaseSpan):
         if not self._span_kind:
             self._span_kind = LLM
         self[LLM_PROMPTS] = [event.prompt]
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMCompletionInProgressEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMCompletionEndEvent) -> None:
         self[OUTPUT_VALUE] = event.response.text
         self._extract_token_counts(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: LLMChatStartEvent) -> None:
@@ -483,11 +482,11 @@ class _Span(BaseSpan):
             *event.messages,
         )
         self[INPUT_VALUE] = safe_json_dumps(event.messages)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMChatInProgressEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMChatEndEvent) -> None:
@@ -509,12 +508,12 @@ class _Span(BaseSpan):
     @_process_event.register
     def _(self, event: QueryStartEvent) -> None:
         self._process_query_type(event.query)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: QueryEndEvent) -> None:
         self._process_response_type(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: ReRankStartEvent) -> None:
@@ -531,24 +530,24 @@ class _Span(BaseSpan):
         self[RERANKER_TOP_K] = event.top_n
         self[RERANKER_MODEL_NAME] = event.model_name
         self._process_nodes(RERANKER_INPUT_DOCUMENTS, *event.nodes)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: ReRankEndEvent) -> None:
         self._process_nodes(RERANKER_OUTPUT_DOCUMENTS, *event.nodes)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.nodes), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.nodes))
 
     @_process_event.register
     def _(self, event: RetrievalStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = RETRIEVER
         self._process_query_type(event.str_or_query_bundle)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: RetrievalEndEvent) -> None:
         self._process_nodes(RETRIEVAL_DOCUMENTS, *event.nodes)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.nodes), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.nodes))
 
     @_process_event.register
     def _(self, event: SpanDropEvent) -> None:
@@ -560,12 +559,12 @@ class _Span(BaseSpan):
         if not self._span_kind:
             self._span_kind = CHAIN
         self._process_query_type(event.query)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: SynthesizeEndEvent) -> None:
         self._process_response_type(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: GetResponseStartEvent) -> None:
@@ -573,7 +572,7 @@ class _Span(BaseSpan):
             self._span_kind = CHAIN
         self[INPUT_VALUE] = event.query_str
         self._attributes.pop(INPUT_MIME_TYPE, None)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event), cls=_Encoder)
+        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: GetResponseEndEvent) -> None:
@@ -585,7 +584,7 @@ class _Span(BaseSpan):
             return
         self._process_response_text_type(event.response)
         # Add RAW_OUTPUT
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response), cls=_Encoder)
+        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
 
     def _extract_token_counts(
         self, response: Union[ChatResponse, CompletionResponse]
@@ -669,7 +668,7 @@ class _Span(BaseSpan):
 
             self[INPUT_VALUE] = query.query_str
             self._attributes.pop(INPUT_MIME_TYPE, None)
-            self[RAW_INPUT] = safe_json_dumps(_to_dict(query_dict), cls=_Encoder)
+            self[RAW_INPUT] = safe_json_dumps(_to_dict(query_dict))
         else:
             assert_never(query)
 
@@ -680,7 +679,7 @@ class _Span(BaseSpan):
             self._process_response_text_type(response.response)
             # Add RAW_OUTPUT
             self[RAW_OUTPUT] = safe_json_dumps(
-                _to_dict(response.response), cls=_Encoder
+                _to_dict(response.response)
             )
         elif isinstance(response, (StreamingResponse, AsyncStreamingResponse)):
             pass
