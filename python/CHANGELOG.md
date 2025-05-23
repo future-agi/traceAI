@@ -1,6 +1,7 @@
 ## [0.1.5] - 2025-05-23
 ### Feature
 - Added support for FutureAGI's protect
+- Handling for incomplete spans during termination
 
 ## [0.1.4] - 2025-05-08
 ### Feature
