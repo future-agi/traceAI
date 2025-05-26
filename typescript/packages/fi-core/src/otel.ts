@@ -414,9 +414,13 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     }
   }
 
-const projectName = optProjectName ?? getEnv("FI_PROJECT_NAME") ?? "default-project";
-const projectVersionName = optProjectVersionName ?? getEnv("FI_PROJECT_VERSION_NAME") ?? "0.0.0";
+const projectName = optProjectName ?? getEnv("FI_PROJECT_NAME");
+const projectVersionName = optProjectVersionName ?? getEnv("FI_PROJECT_VERSION_NAME") ?? "DEFAULT";
 const projectVersionId = uuidv4(); 
+
+if (!projectName) {
+  throw new Error("FI_PROJECT_NAME is not set");
+}
 
   const customEvalNames = preparedEvalTags.map(tag => tag.custom_eval_name).filter(name => name && name.length > 0);
   if (customEvalNames.length !== new Set(customEvalNames).size) {
