@@ -24,17 +24,23 @@
   },
   "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_openai#readme",
   "dependencies": {
-    "@opentelemetry/api": "^1.7.0",
-    "@opentelemetry/instrumentation": "^0.48.0",
-    "@traceai/fi-core": "^0.1.0",
-    "@traceai/fi-semantic-conventions": "^0.1.0"
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/instrumentation": "^0.46.0",
+    "@opentelemetry/core": "^1.25.1",
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/fi-semantic-conventions": "workspace:*"
   },
   "peerDependencies": {
-    "openai": "^4.0.0"
+    "openai": "^4.95.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.50.0",
+    "@opentelemetry/resources": "^1.25.1",
+    "@opentelemetry/sdk-trace-base": "^1.25.1",
+    "@opentelemetry/sdk-trace-node": "^1.25.1",
+    "@opentelemetry/semantic-conventions": "^1.25.1"
   },
   "keywords": [
     "opentelemetry",
