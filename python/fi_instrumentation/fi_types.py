@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Any, Dict, List, Type
 
 from fi_instrumentation.settings import get_env_collector_endpoint
+from index import check_eval_template_exists
 
 
 class SpanAttributes:
@@ -694,6 +695,20 @@ class EvalConfig:
                 ),
             },
         }
+        
+
+        check_if_its_user_eval = check_eval_template_exists(eval_name)
+        if check_if_its_user_eval and check_if_its_user_eval.get('isUserEvalTemplate'):
+            eval_template = check_if_its_user_eval.get('evalTemplate', {})
+            config = eval_template.get('config', {})
+            return {
+                key: {
+                    "type": field.get("type", str),
+                    "default": field.get("default"),
+                    "required": field.get("required", False)
+                }
+                for key, field in config.items()
+            }
 
         # Convert ConfigField objects to dictionary format
         if eval_name in configs:
@@ -896,15 +911,16 @@ class EvalTag:
         if not isinstance(self.type, EvalTagType):
             raise ValueError(f"type must be an EvalTagType enum, got {type(self.type)}")
 
-        if not isinstance(self.eval_name, EvalName):
+        if not self.eval_name: 
             raise ValueError(
-                f"eval_name must be an EvalName enum, got {type(self.eval_name)}"
+                f"eval_name must be an Present."
             )
+        
 
         if not isinstance(self.config, dict):
             raise ValueError(f"config must be a dictionary, got {type(self.config)}")
 
-        expected_config = EvalConfig.get_config_for_eval(self.eval_name)
+        expected_config = EvalConfig.get_config_for_eval(self.eval_name)  # HERE CHANGE REQUIRED
 
         for key, field_config in expected_config.items():
             if key not in self.config:
@@ -922,7 +938,7 @@ class EvalTag:
                     f"Unexpected field '{key}' in config for {self.eval_name.value}. Allowed fields are: {list(expected_config.keys())}"
                 )
 
-        expected_mapping = EvalMappingConfig.get_mapping_for_eval(self.eval_name)
+        expected_mapping = EvalMappingConfig.get_mapping_for_eval(self.eval_name)  # HERE CHANGE REQUIRED
 
         if not isinstance(self.mapping, dict):
             raise ValueError(f"mapping must be a dictionary, got {type(self.mapping)}")
@@ -972,3 +988,4 @@ class EvalTag:
 def prepare_eval_tags(eval_tags: List[EvalTag]) -> List[Dict[str, Any]]:
     """Convert list of EvalTag objects to list of dictionaries for API consumption"""
     return [tag.to_dict() for tag in eval_tags]
+

@@ -23,8 +23,10 @@ def get_env_project_version_name() -> str:
 
 
 def get_env_fi_auth_header() -> Optional[Dict[str, str]]:
-    api_key = os.environ.get("FI_API_KEY")
-    secret_key = os.environ.get("FI_SECRET_KEY")
+    # api_key = os.environ.get("FI_API_KEY")
+    # secret_key = os.environ.get("FI_SECRET_KEY")
+    api_key = "203101d66393443d9e20d26c3102203e"
+    secret_key = "19540727897043d8bbfdbdaa670a668a"
     if api_key and secret_key:
         return {"X-Api-Key": api_key, "X-Secret-Key": secret_key}
     return None
