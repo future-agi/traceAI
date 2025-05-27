@@ -898,7 +898,7 @@ class EvalTag:
 
         if not self.eval_name: 
             raise ValueError(
-                f"eval_name must be an Present."
+                f"eval_name is required"
             )
         
         if not self.custom_eval_name:
