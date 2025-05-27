@@ -648,36 +648,3 @@ def check_custom_eval_config_exists(
         print(f"Failed to check custom eval config: {e}")
         return False
 
-
-def get_custom_eval_template(
-   eval_name: str, base_url: Optional[str] = None
-) -> bool:
-    """
-    Check if a custom eval template exists for a given eval name.
-    """
-    if not eval_name:
-        return False
-    
-    if base_url is None:
-        base_url = get_env_collector_endpoint()
-
-    
-    url = f"{base_url}/tracer/custom-eval-config/get_custom_eval_by_name/"
-
-    try:
-        headers = {
-            CONTENT_TYPE : "application/json",
-            **(get_env_fi_auth_header() or {}),
-        }
-
-        response = requests.post(
-            url,
-            headers=headers,
-            json={"eval_template_name": eval_name},
-        )
-
-        response.raise_for_status()
-        return response.json().get("result", {})
-    except Exception as e:
-        print(f"Failed to check custom eval template: {e}")
-        return False

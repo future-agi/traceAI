@@ -2,8 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Type
 
-from fi_instrumentation.settings import get_env_collector_endpoint
-from python.fi_instrumentation.otel import get_custom_eval_template
+from fi_instrumentation.settings import get_env_collector_endpoint, get_custom_eval_template
 
 
 class SpanAttributes:
@@ -941,7 +940,7 @@ class EvalTag:
                 if key not in self.config:
                     if field_config["required"]:
                         raise ValueError(
-                            f"Required field '{key}' is missing from config for {self.eval_name.value}"
+                            f"Required field '{key}' is missing from config for {self.eval_name}"
                         )
                     self.config[key] = field_config["default"]
                 else:
@@ -950,7 +949,7 @@ class EvalTag:
             for key in self.config:
                 if key not in expected_config:
                     raise ValueError(
-                        f"Unexpected field '{key}' in config for {self.eval_name.value}. Allowed fields are: {list(expected_config.keys())}"
+                        f"Unexpected field '{key}' in config for {self.eval_name}. Allowed fields are: {list(expected_config.keys())}"
                     )
 
         return
@@ -981,14 +980,14 @@ class EvalTag:
             for key, field_config in expected_mapping.items():
                 if field_config["required"] and key not in self.mapping:
                     raise ValueError(
-                        f"Required mapping field '{key}' is missing for {self.eval_name.value}"
+                        f"Required mapping field '{key}' is missing for {self.eval_name}"
                     )
             required_keys = list(expected_mapping.keys())
             
         for key, value in self.mapping.items():
             if key not in required_keys:
                 raise ValueError(
-                    f"Unexpected mapping field '{key}' for {self.eval_name.value}. Allowed fields are: {required_keys}"
+                    f"Unexpected mapping field '{key}' for {self.eval_name}. Allowed fields are: {required_keys}"
                 )
             if not isinstance(key, str):
                 raise ValueError(f"All mapping keys must be strings, got {type(key)}")
@@ -1007,7 +1006,7 @@ class EvalTag:
         return {
             "type": self.type.value,
             "value": self.value.value,
-            "eval_name": self.eval_name.value,
+            "eval_name": self.eval_name,
             "config": self.config,
             "mapping": self.mapping,
             "custom_eval_name": self.custom_eval_name,
@@ -1015,7 +1014,7 @@ class EvalTag:
 
     def __str__(self) -> str:
         """String representation for debugging"""
-        return f"EvalTag(type={self.type.value}, value={self.value.value}, eval_name={self.eval_name.value})"
+        return f"EvalTag(type={self.type.value}, value={self.value.value}, eval_name={self.eval_name})"
 
 
 def prepare_eval_tags(eval_tags: List[EvalTag]) -> List[Dict[str, Any]]:
