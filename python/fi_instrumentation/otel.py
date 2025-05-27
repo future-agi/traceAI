@@ -649,7 +649,7 @@ def check_custom_eval_config_exists(
         return False
 
 
-def check_eval_template_exists(
+def get_custom_eval_template(
    eval_name: str, base_url: Optional[str] = None
 ) -> bool:
     """

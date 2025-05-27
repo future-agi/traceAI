@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, Dict, List, Type
 
 from fi_instrumentation.settings import get_env_collector_endpoint
-from index import check_eval_template_exists
+from python.fi_instrumentation.otel import get_custom_eval_template
 
 
 class SpanAttributes:
@@ -696,20 +696,6 @@ class EvalConfig:
             },
         }
         
-
-        check_if_its_user_eval = check_eval_template_exists(eval_name)
-        if check_if_its_user_eval and check_if_its_user_eval.get('isUserEvalTemplate'):
-            eval_template = check_if_its_user_eval.get('evalTemplate', {})
-            config = eval_template.get('config', {})
-            return {
-                key: {
-                    "type": field.get("type", str),
-                    "default": field.get("default"),
-                    "required": field.get("required", False)
-                }
-                for key, field in config.items()
-            }
-
         # Convert ConfigField objects to dictionary format
         if eval_name in configs:
             return {
@@ -892,9 +878,9 @@ class EvalMappingConfig:
 class EvalTag:
     type: EvalTagType
     value: EvalSpanKind
-    eval_name: EvalName
+    eval_name: str
     config: Dict[str, Any] = None
-    custom_eval_name: str = ""
+    custom_eval_name: str = None
     mapping: Dict[str, str] = None
 
     def __post_init__(self):
@@ -916,43 +902,93 @@ class EvalTag:
                 f"eval_name must be an Present."
             )
         
+        if not self.custom_eval_name:
+            self.custom_eval_name = self.eval_name
+        
+        eval_template = get_custom_eval_template(self.eval_name)
+        is_custom_eval = eval_template.get('isUserEvalTemplate')
+        custom_eval = eval_template.get('evalTemplate', {})
+        required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
+        
+        
+        self.validate_fagi_system_eval_name(is_custom_eval)
+
+        self.validate_fagi_system_eval_config(is_custom_eval)
+
+        self.validate_fagi_system_eval_mapping(is_custom_eval, required_keys)
+        
+
+    def _validate_field_type(self, key: str, expected_type: Type, value: Any) -> None:
+        """Validate field type according to configuration"""
+
+        if not isinstance(value, expected_type):
+            raise ValueError(f"Field '{key}' must be of type '{expected_type.__name__}', got '{type(value).__name__}' instead.")
+
+
+    def validate_fagi_system_eval_config(self, is_custom_eval: bool) -> None:
 
         if not isinstance(self.config, dict):
             raise ValueError(f"config must be a dictionary, got {type(self.config)}")
 
-        expected_config = EvalConfig.get_config_for_eval(self.eval_name)  # HERE CHANGE REQUIRED
 
-        for key, field_config in expected_config.items():
-            if key not in self.config:
-                if field_config["required"]:
+        if is_custom_eval:
+            self.config = {}
+            return
+        
+        else:
+            expected_config = EvalConfig.get_config_for_eval(self.eval_name)
+            for key, field_config in expected_config.items():
+                if key not in self.config:
+                    if field_config["required"]:
+                        raise ValueError(
+                            f"Required field '{key}' is missing from config for {self.eval_name.value}"
+                        )
+                    self.config[key] = field_config["default"]
+                else:
+                    self._validate_field_type(key, field_config["type"], self.config[key])
+
+            for key in self.config:
+                if key not in expected_config:
                     raise ValueError(
-                        f"Required field '{key}' is missing from config for {self.eval_name.value}"
+                        f"Unexpected field '{key}' in config for {self.eval_name.value}. Allowed fields are: {list(expected_config.keys())}"
                     )
-                self.config[key] = field_config["default"]
-            else:
-                self._validate_field_type(key, field_config["type"], self.config[key])
 
-        for key in self.config:
-            if key not in expected_config:
+        return
+    
+    def validate_fagi_system_eval_name(self, is_custom_eval: bool) -> None:
+
+        if not self.eval_name: 
+            raise ValueError(
+                f"eval_name must be an Present."
+            )
+        
+        if not is_custom_eval:
+            if not isinstance(self.eval_name, EvalName):
                 raise ValueError(
-                    f"Unexpected field '{key}' in config for {self.eval_name.value}. Allowed fields are: {list(expected_config.keys())}"
+                    f"eval_name must be an EvalName enum, got {type(self.eval_name)}"
                 )
 
-        expected_mapping = EvalMappingConfig.get_mapping_for_eval(self.eval_name)  # HERE CHANGE REQUIRED
+        return
+
+    def validate_fagi_system_eval_mapping(self, is_custom_eval: bool, required_keys: List[str]) -> None:
 
         if not isinstance(self.mapping, dict):
             raise ValueError(f"mapping must be a dictionary, got {type(self.mapping)}")
 
-        for key, field_config in expected_mapping.items():
-            if field_config["required"] and key not in self.mapping:
-                raise ValueError(
-                    f"Required mapping field '{key}' is missing for {self.eval_name.value}"
-                )
+        if not is_custom_eval:
 
+            expected_mapping = EvalMappingConfig.get_mapping_for_eval(self.eval_name)
+            for key, field_config in expected_mapping.items():
+                if field_config["required"] and key not in self.mapping:
+                    raise ValueError(
+                        f"Required mapping field '{key}' is missing for {self.eval_name.value}"
+                    )
+            required_keys = list(expected_mapping.keys())
+            
         for key, value in self.mapping.items():
-            if key not in expected_mapping:
+            if key not in required_keys:
                 raise ValueError(
-                    f"Unexpected mapping field '{key}' for {self.eval_name.value}. Allowed fields are: {list(expected_mapping.keys())}"
+                    f"Unexpected mapping field '{key}' for {self.eval_name.value}. Allowed fields are: {required_keys}"
                 )
             if not isinstance(key, str):
                 raise ValueError(f"All mapping keys must be strings, got {type(key)}")
@@ -960,12 +996,9 @@ class EvalTag:
                 raise ValueError(
                     f"All mapping values must be strings, got {type(value)}"
                 )
-
-    def _validate_field_type(self, key: str, expected_type: Type, value: Any) -> None:
-        """Validate field type according to configuration"""
-
-        if not isinstance(value, expected_type):
-            raise ValueError(f"Field '{key}' must be of type '{expected_type.__name__}', got '{type(value).__name__}' instead.")
+    
+        return
+    
 
 
 
