@@ -415,6 +415,13 @@ class EvalTagType(Enum):
     OBSERVATION_SPAN = "OBSERVATION_SPAN_TYPE"
 
 
+class ModelChoices(Enum):
+    TURING_LARGE = "turing_large"
+    TURING_SMALL = "turing_small"
+    PROTECT = "protect"
+    PROTECT_FLASH = "protect_flash"
+    TURING_FLASH = "turing_flash"
+
 class EvalSpanKind(Enum):
     TOOL = "TOOL"
     LLM = "LLM"
@@ -877,11 +884,12 @@ class EvalMappingConfig:
 class EvalTag:
     type: EvalTagType
     value: EvalSpanKind
+    model: ModelChoices
     eval_name: str
     config: Dict[str, Any] = None
     custom_eval_name: str = None
     mapping: Dict[str, str] = None
-    model: str = None
+    
 
     def __post_init__(self):
         if self.config is None:
@@ -905,15 +913,17 @@ class EvalTag:
         if not self.custom_eval_name:
             self.custom_eval_name = self.eval_name
         
-        if not self.model:
+        if not isinstance(self.model, ModelChoices):
             raise ValueError(
-                f"model name is required"
+                f"model must be a ModelChoices enum, got {type(self.model)}"
             )
+        
         
         eval_template = get_custom_eval_template(self.eval_name)
         is_custom_eval = eval_template.get('isUserEvalTemplate')
         custom_eval = eval_template.get('evalTemplate', {})
-        required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
+        if custom_eval:
+            required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
         
         
         self.validate_fagi_system_eval_name(is_custom_eval)
@@ -1016,7 +1026,7 @@ class EvalTag:
             "config": self.config,
             "mapping": self.mapping,
             "custom_eval_name": self.custom_eval_name,
-            "model": self.model,
+            "model": self.model.value,
         }
 
     def __str__(self) -> str:
