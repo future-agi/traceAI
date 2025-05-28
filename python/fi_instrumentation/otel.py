@@ -15,6 +15,7 @@ from fi_instrumentation.fi_types import (
     Endpoints,
     EvalTag,
     ProjectType,
+    EvalName,
     prepare_eval_tags,
 )
 from fi_instrumentation.settings import (
@@ -67,6 +68,9 @@ def register(
     metadata = metadata or {}
 
     if eval_tags:
+        for tag in eval_tags:
+            if isinstance(tag.eval_name, EvalName):
+                tag.eval_name = tag.eval_name.value
         eval_tags = prepare_eval_tags(eval_tags)
 
     if project_type == ProjectType.OBSERVE:
@@ -647,3 +651,4 @@ def check_custom_eval_config_exists(
     except Exception as e:
         print(f"Failed to check custom eval config: {e}")
         return False
+

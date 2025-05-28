@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Type
 
-from fi_instrumentation.settings import get_env_collector_endpoint
+from fi_instrumentation.settings import get_env_collector_endpoint, get_custom_eval_template
 
 
 class SpanAttributes:
@@ -415,6 +415,13 @@ class EvalTagType(Enum):
     OBSERVATION_SPAN = "OBSERVATION_SPAN_TYPE"
 
 
+class ModelChoices(Enum):
+    TURING_LARGE = "turing_large"
+    TURING_SMALL = "turing_small"
+    PROTECT = "protect"
+    PROTECT_FLASH = "protect_flash"
+    TURING_FLASH = "turing_flash"
+
 class EvalSpanKind(Enum):
     TOOL = "TOOL"
     LLM = "LLM"
@@ -425,62 +432,61 @@ class EvalSpanKind(Enum):
 
 
 class EvalName(Enum):
-    CONVERSATION_COHERENCE = "Conversation Coherence"
-    CONVERSATION_RESOLUTION = "Conversation Resolution"
-    DETERMINISTIC_EVALS = "Deterministic Evals"
-    CONTENT_MODERATION = "Content Moderation"
-    CONTEXT_ADHERENCE = "Context Adherence"
-    PROMPT_PERPLEXITY = "Prompt Perplexity"
-    CONTEXT_RELEVANCE = "Context Relevance"
-    COMPLETENESS = "Completeness"
-    CONTEXT_SIMILARITY = "Context Similarity"
-    PII = "PII"
-    TOXICITY = "Toxicity"
-    TONE = "Tone"
-    SEXIST = "Sexist"
-    PROMPT_INJECTION = "Prompt Injection"
-    NOT_GIBBERISH_TEXT = "Not Gibberish text"
-    SAFE_FOR_WORK_TEXT = "Safe for Work text"
-    PROMPT_INSTRUCTION_ADHERENCE = "Prompt/Instruction Adherence"
-    DATA_PRIVACY_COMPLIANCE = "Data Privacy Compliance"
-    IS_JSON = "Is Json"
-    ENDS_WITH = "Ends With"
-    EQUALS = "Equals"
-    CONTAINS_ALL = "Contains All"
-    LENGTH_LESS_THAN = "Length Less Than"
-    CONTAINS_NONE = "Contains None"
-    REGEX = "Regex"
-    STARTS_WITH = "Starts With"
-    API_CALL = "API Call"
-    LENGTH_BETWEEN = "Length Between"
-    CUSTOM_CODE_EVALUATION = "Custom Code Evaluation"
-    AGENT_AS_JUDGE = "Agent as a Judge"
-    ONE_LINE = "One Line"
-    CONTAINS_VALID_LINK = "Contains Valid Link"
-    IS_EMAIL = "Is Email"
-    LENGTH_GREATER_THAN = "Length Greater than"
-    NO_VALID_LINKS = "No Valid Links"
-    CONTAINS = "Contains"
-    CONTAINS_ANY = "Contains Any"
-    GROUNDEDNESS = "Groundedness"
-    ANSWER_SIMILARITY = "Answer Similarity"
-    EVAL_OUTPUT = "Eval Output"
-    EVAL_CONTEXT_RETRIEVAL_QUALITY = "Eval Context Retrieval Quality"
-    EVAL_IMAGE_INSTRUCTION = "Eval Image Instruction (text to image)"
-    SCORE_EVAL = "Score Eval"
-    SUMMARY_QUALITY = "Summary Quality"
-    FACTUAL_ACCURACY = "Factual Accuracy"
-    TRANSLATION_ACCURACY = "Translation Accuracy"
-    CULTURAL_SENSITIVITY = "Cultural Sensitivity"
-    BIAS_DETECTION = "Bias Detection"
-    EVALUATE_LLM_FUNCTION_CALLING = "Evaluate LLM Function calling"
-    AUDIO_TRANSCRIPTION = "Audio Transcription"
-    EVAL_AUDIO_DESCRIPTION = "Eval Audio Description"
-    AUDIO_QUALITY = "Audio Quality"
-    JSON_SCHEMA_VALIDATION = "Json Scheme Validation"
-    CHUNK_ATTRIBUTION = "Chunk Attribution"
-    CHUNK_UTILIZATION = "Chunk Utilization"
-    EVAL_RANKING = "Eval Ranking"
+    CONVERSATION_COHERENCE = "conversation_coherence"
+    CONVERSATION_RESOLUTION = "conversation_resolution"
+    CONTENT_MODERATION = "content_moderation"
+    CONTEXT_ADHERENCE = "context_adherence"
+    PROMPT_PERPLEXITY = "prompt_perplexity"
+    CONTEXT_RELEVANCE = "context_relevance"
+    COMPLETENESS = "completeness"
+    CONTEXT_SIMILARITY = "context_similarity"
+    PII = "pii"
+    TOXICITY = "toxicity"
+    TONE = "tone"
+    SEXIST = "sexist"
+    PROMPT_INJECTION = "prompt_injection"
+    NOT_GIBBERISH_TEXT = "not_gibberish_text"
+    SAFE_FOR_WORK_TEXT = "safe_for_work_text"
+    PROMPT_INSTRUCTION_ADHERENCE = "prompt_instruction_adherence"
+    DATA_PRIVACY_COMPLIANCE = "data_privacy_compliance"
+    IS_JSON = "is_json"
+    ENDS_WITH = "ends_with"
+    EQUALS = "equals"
+    CONTAINS_ALL = "contains_all"
+    LENGTH_LESS_THAN = "length_less_than"
+    CONTAINS_NONE = "contains_none"
+    REGEX = "regex"
+    STARTS_WITH = "starts_with"
+    API_CALL = "api_call"
+    LENGTH_BETWEEN = "length_between"
+    CUSTOM_CODE_EVALUATION = "custom_code_evaluation"
+    AGENT_AS_JUDGE = "agent_as_judge"
+    ONE_LINE = "one_line"
+    CONTAINS_VALID_LINK = "contains_valid_link"
+    IS_EMAIL = "is_email"
+    LENGTH_GREATER_THAN = "length_greater_than"
+    NO_VALID_LINKS = "no_valid_links"
+    CONTAINS = "contains"
+    CONTAINS_ANY = "contains_any"
+    GROUNDEDNESS = "groundedness"
+    ANSWER_SIMILARITY = "answer_similarity"
+    EVAL_OUTPUT = "eval_output"
+    EVAL_CONTEXT_RETRIEVAL_QUALITY = "eval_context_retrieval_quality"
+    EVAL_IMAGE_INSTRUCTION = "eval_image_instruction"
+    SCORE_EVAL = "score_eval"
+    SUMMARY_QUALITY = "summary_quality"
+    FACTUAL_ACCURACY = "factual_accuracy"
+    TRANSLATION_ACCURACY = "translation_accuracy"
+    CULTURAL_SENSITIVITY = "cultural_sensitivity"
+    BIAS_DETECTION = "bias_detection"
+    EVALUATE_LLM_FUNCTION_CALLING = "evaluate_llm_function_calling"
+    AUDIO_TRANSCRIPTION = "audio_transcription"
+    EVAL_AUDIO_DESCRIPTION = "eval_audio_description"
+    AUDIO_QUALITY = "audio_quality"
+    JSON_SCHEMA_VALIDATION = "json_schema_validation"
+    CHUNK_ATTRIBUTION = "chunk_attribution"
+    CHUNK_UTILIZATION = "chunk_utilization"
+    EVAL_RANKING = "eval_ranking"
 
 
 @dataclass
@@ -499,12 +505,6 @@ class EvalConfig:
             },
             EvalName.CONVERSATION_RESOLUTION: {
                 "model": ConfigField(type=str, default="gpt-4o-mini")
-            },
-            EvalName.DETERMINISTIC_EVALS: {
-                "multi_choice": ConfigField(type=bool, default=False),
-                "choices": ConfigField(type=list, default=[], required=True),
-                "rule_prompt": ConfigField(type=str, default="", required=True),
-                "input": ConfigField(type=list, default=[]),
             },
             EvalName.CONTENT_MODERATION: {},
             EvalName.CONTEXT_ADHERENCE: {
@@ -694,7 +694,7 @@ class EvalConfig:
                 ),
             },
         }
-
+        
         # Convert ConfigField objects to dictionary format
         if eval_name in configs:
             return {
@@ -720,7 +720,6 @@ class EvalMappingConfig:
             EvalName.CONVERSATION_RESOLUTION: {
                 "output": ConfigField(type=str, required=True)
             },
-            EvalName.DETERMINISTIC_EVALS: {},
             EvalName.CONTENT_MODERATION: {"text": ConfigField(type=str, required=True)},
             EvalName.CONTEXT_ADHERENCE: {
                 "context": ConfigField(type=str, required=True),
@@ -877,17 +876,19 @@ class EvalMappingConfig:
 class EvalTag:
     type: EvalTagType
     value: EvalSpanKind
-    eval_name: EvalName
+    eval_name: str | EvalName
+    model: ModelChoices = None
     config: Dict[str, Any] = None
-    custom_eval_name: str = ""
+    custom_eval_name: str = None
     mapping: Dict[str, str] = None
+    
 
     def __post_init__(self):
         if self.config is None:
             self.config = {}
         if self.mapping is None:
             self.mapping = {}
-            
+           
         if not isinstance(self.value, EvalSpanKind):
             raise ValueError(
                 f"value must be a EvalSpanKind enum, got {type(self.value)}"
@@ -896,54 +897,48 @@ class EvalTag:
         if not isinstance(self.type, EvalTagType):
             raise ValueError(f"type must be an EvalTagType enum, got {type(self.type)}")
 
-        if not isinstance(self.eval_name, EvalName):
+        if not self.eval_name: 
             raise ValueError(
-                f"eval_name must be an EvalName enum, got {type(self.eval_name)}"
+                f"eval_name is required"
             )
+        
+        if not self.custom_eval_name:
+            self.custom_eval_name = self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value
+        
+        
 
-        if not isinstance(self.config, dict):
-            raise ValueError(f"config must be a dictionary, got {type(self.config)}")
+        eval_template = get_custom_eval_template(self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value)
+        is_custom_eval = eval_template.get('isUserEvalTemplate')
+        custom_eval = eval_template.get('evalTemplate', {})
 
-        expected_config = EvalConfig.get_config_for_eval(self.eval_name)
-
-        for key, field_config in expected_config.items():
-            if key not in self.config:
-                if field_config["required"]:
+        self.validate_fagi_system_eval_name(is_custom_eval)
+        
+        if is_custom_eval:
+            required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
+        else:
+            required_keys = EvalMappingConfig.get_mapping_for_eval(self.eval_name).keys()
+        
+        if not is_custom_eval:
+            
+            if not isinstance(self.model, ModelChoices):
+                if (isinstance(self.model, str)):
+                    valid_models = [model.value for model in ModelChoices]
+                    if self.model not in valid_models:
+                        raise ValueError(
+                            f"model must be a valid model name, got {self.model}. Expected values are: {valid_models}"
+                        )
+                    else:
+                        self.model = ModelChoices(self.model)
+                else:
                     raise ValueError(
-                        f"Required field '{key}' is missing from config for {self.eval_name.value}"
+                        f"model must be a of type ModelChoices, got {type(self.model)}"
                     )
-                self.config[key] = field_config["default"]
-            else:
-                self._validate_field_type(key, field_config["type"], self.config[key])
+            
 
-        for key in self.config:
-            if key not in expected_config:
-                raise ValueError(
-                    f"Unexpected field '{key}' in config for {self.eval_name.value}. Allowed fields are: {list(expected_config.keys())}"
-                )
+        self.validate_fagi_system_eval_config(is_custom_eval)
 
-        expected_mapping = EvalMappingConfig.get_mapping_for_eval(self.eval_name)
-
-        if not isinstance(self.mapping, dict):
-            raise ValueError(f"mapping must be a dictionary, got {type(self.mapping)}")
-
-        for key, field_config in expected_mapping.items():
-            if field_config["required"] and key not in self.mapping:
-                raise ValueError(
-                    f"Required mapping field '{key}' is missing for {self.eval_name.value}"
-                )
-
-        for key, value in self.mapping.items():
-            if key not in expected_mapping:
-                raise ValueError(
-                    f"Unexpected mapping field '{key}' for {self.eval_name.value}. Allowed fields are: {list(expected_mapping.keys())}"
-                )
-            if not isinstance(key, str):
-                raise ValueError(f"All mapping keys must be strings, got {type(key)}")
-            if not isinstance(value, str):
-                raise ValueError(
-                    f"All mapping values must be strings, got {type(value)}"
-                )
+        self.validate_fagi_system_eval_mapping(is_custom_eval, required_keys)
+        
 
     def _validate_field_type(self, key: str, expected_type: Type, value: Any) -> None:
         """Validate field type according to configuration"""
@@ -952,23 +947,101 @@ class EvalTag:
             raise ValueError(f"Field '{key}' must be of type '{expected_type.__name__}', got '{type(value).__name__}' instead.")
 
 
+    def validate_fagi_system_eval_config(self, is_custom_eval: bool) -> None:
+
+        if not isinstance(self.config, dict):
+            raise ValueError(f"config must be a dictionary, got {type(self.config)}")
+
+
+        if is_custom_eval:
+            self.config = {}
+            return
+        
+        else:
+            expected_config = EvalConfig.get_config_for_eval(self.eval_name)
+            for key, field_config in expected_config.items():
+                if key not in self.config:
+                    if field_config["required"]:
+                        raise ValueError(
+                            f"Required field '{key}' is missing from config for {self.eval_name}"
+                        )
+                    self.config[key] = field_config["default"]
+                else:
+                    self._validate_field_type(key, field_config["type"], self.config[key])
+
+            for key in self.config:
+                if key not in expected_config:
+                    raise ValueError(
+                        f"Unexpected field '{key}' in config for {self.eval_name}. Allowed fields are: {list(expected_config.keys())}"
+                    )
+
+        return
+    
+    def validate_fagi_system_eval_name(self, is_custom_eval: bool) -> None:
+
+        if not self.eval_name: 
+            raise ValueError(
+                f"eval_name must be an Present."
+            )
+        
+        if not is_custom_eval:
+            if not isinstance(self.eval_name, EvalName):
+                raise ValueError(
+                    f"eval_name must be an EvalName enum, got {type(self.eval_name)}"
+                )
+
+        return
+
+    def validate_fagi_system_eval_mapping(self, is_custom_eval: bool, required_keys: List[str]) -> None:
+
+        if not isinstance(self.mapping, dict):
+            raise ValueError(f"mapping must be a dictionary, got {type(self.mapping)}")
+
+        if not is_custom_eval:
+
+            expected_mapping = EvalMappingConfig.get_mapping_for_eval(self.eval_name)
+            for key, field_config in expected_mapping.items():
+                if field_config["required"] and key not in self.mapping:
+                    raise ValueError(
+                        f"Required mapping field '{key}' is missing for {self.eval_name}"
+                    )
+            required_keys = list(expected_mapping.keys())
+            
+        for key, value in self.mapping.items():
+            if key not in required_keys:
+                raise ValueError(
+                    f"Unexpected mapping field '{key}' for {self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value}. Allowed fields are: {required_keys}"
+                )
+            if not isinstance(key, str):
+                raise ValueError(f"All mapping keys must be strings, got {type(key)}")
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"All mapping values must be strings, got {type(value)}"
+                )
+    
+        return
+    
+
+
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert EvalTag to dictionary format for API responses"""
         return {
             "type": self.type.value,
             "value": self.value.value,
-            "eval_name": self.eval_name.value,
+            "eval_name": self.eval_name,
             "config": self.config,
             "mapping": self.mapping,
             "custom_eval_name": self.custom_eval_name,
+            "model": self.model.value if self.model else None
         }
 
     def __str__(self) -> str:
         """String representation for debugging"""
-        return f"EvalTag(type={self.type.value}, value={self.value.value}, eval_name={self.eval_name.value})"
+        return f"EvalTag(type={self.type.value}, value={self.value.value}, eval_name={self.eval_name})"
 
 
 def prepare_eval_tags(eval_tags: List[EvalTag]) -> List[Dict[str, Any]]:
     """Convert list of EvalTag objects to list of dictionaries for API consumption"""
     return [tag.to_dict() for tag in eval_tags]
+

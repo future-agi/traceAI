@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-vertexai"
-version = "0.1.5"
+version = "0.1.6"
 description = "OpenTelemetry instrumentation for Vertex AI"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -11,7 +11,7 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">3.9, <4.0"
-fi-instrumentation-otel = "0.1.4"
+fi-instrumentation-otel = "0.1.6"
 google-cloud-aiplatform = ">= 1.49.0"
 
 [build-system]

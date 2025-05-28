@@ -37,7 +37,7 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             assert isinstance(config, TraceConfig)
 
         from traceai_langchain._tracer import FiTracer as LangChainFiTracer
-        from fi.evals import ProtectClient
+        from fi.evals import Protect
         from fi_instrumentation.instrumentation._tracers import FITracer
 
         self.fi_tracer = FITracer(
@@ -51,10 +51,10 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             name="BaseCallbackManager.__init__",
             wrapper=_BaseCallbackManagerInit(self._tracer),
         )
-        self._original_protect = ProtectClient.protect
+        self._original_protect = Protect.protect
         wrap_function_wrapper(
             module="fi.evals",
-            name="ProtectClient.protect",
+            name="Protect.protect",
             wrapper=GuardrailProtectWrapper(self._tracer),
         )
 
