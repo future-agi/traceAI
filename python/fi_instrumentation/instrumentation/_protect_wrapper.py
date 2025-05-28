@@ -69,7 +69,7 @@ def _get_protect_output(result: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
         logger.warning(f"Failed to serialize guardrail output: {e}", exc_info=True)
 
 class GuardrailProtectWrapper:
-    """Wraps the fi.evals.ProtectClient.protect method to create a Guardrail span."""
+    """Wraps the fi.evals.Protect.protect method to create a Guardrail span."""
 
     def __init__(self, tracer: Tracer):
         self._tracer = tracer

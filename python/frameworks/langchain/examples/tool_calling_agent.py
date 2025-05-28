@@ -21,7 +21,7 @@ from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from fi.evals import ProtectClient, EvalClient
+from fi.evals import Protect, Evaluator
 from traceai_langchain import LangChainInstrumentor
 import opentelemetry.trace as trace_api
 
@@ -285,8 +285,8 @@ def main():
     """Main execution function."""
     # Get the specific FITracer instance from setup
     tracer = setup_instrumentation() 
-    evaluator = EvalClient(fi_api_key=os.environ.get("FI_API_KEY"), fi_secret_key=os.environ.get("FI_SECRET_KEY"), fi_base_url=os.environ.get("FI_BASE_URL"))
-    protector = ProtectClient(evaluator=evaluator)
+    evaluator = Evaluator(fi_api_key=os.environ.get("FI_API_KEY"), fi_secret_key=os.environ.get("FI_SECRET_KEY"), fi_base_url=os.environ.get("FI_BASE_URL"))
+    protector = Protect(evaluator=evaluator)
     tools = [get_weather_info, get_stock_info, get_document_qa]
     agent_executor = create_agent(tools)
 

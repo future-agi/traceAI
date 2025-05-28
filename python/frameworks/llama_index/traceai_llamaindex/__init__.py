@@ -8,7 +8,7 @@ from opentelemetry.trace import Span
 from traceai_llamaindex.package import _instruments
 from traceai_llamaindex.version import __version__
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import ProtectClient
+from fi.evals import Protect
 from wrapt import wrap_function_wrapper
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -86,10 +86,10 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             else:
                 dispatcher.add_event_handler(self._event_handler)
 
-        self._original_protect = ProtectClient.protect
+        self._original_protect = Protect.protect
         wrap_function_wrapper(
             module="fi.evals",
-            name="ProtectClient.protect",
+            name="Protect.protect",
             wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
     def _uninstrument(self, **kwargs: Any) -> None:
