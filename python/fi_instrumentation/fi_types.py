@@ -434,7 +434,6 @@ class EvalSpanKind(Enum):
 class EvalName(Enum):
     CONVERSATION_COHERENCE = "conversation_coherence"
     CONVERSATION_RESOLUTION = "conversation_resolution"
-    DETERMINISTIC_EVALS = "deterministic_evals"
     CONTENT_MODERATION = "content_moderation"
     CONTEXT_ADHERENCE = "context_adherence"
     PROMPT_PERPLEXITY = "prompt_perplexity"
@@ -506,12 +505,6 @@ class EvalConfig:
             },
             EvalName.CONVERSATION_RESOLUTION: {
                 "model": ConfigField(type=str, default="gpt-4o-mini")
-            },
-            EvalName.DETERMINISTIC_EVALS: {
-                "multi_choice": ConfigField(type=bool, default=False),
-                "choices": ConfigField(type=list, default=[], required=True),
-                "rule_prompt": ConfigField(type=str, default="", required=True),
-                "input": ConfigField(type=list, default=[]),
             },
             EvalName.CONTENT_MODERATION: {},
             EvalName.CONTEXT_ADHERENCE: {
@@ -727,7 +720,6 @@ class EvalMappingConfig:
             EvalName.CONVERSATION_RESOLUTION: {
                 "output": ConfigField(type=str, required=True)
             },
-            EvalName.DETERMINISTIC_EVALS: {},
             EvalName.CONTENT_MODERATION: {"text": ConfigField(type=str, required=True)},
             EvalName.CONTEXT_ADHERENCE: {
                 "context": ConfigField(type=str, required=True),
