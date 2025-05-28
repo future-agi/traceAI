@@ -434,7 +434,6 @@ class EvalSpanKind(Enum):
 class EvalName(Enum):
     CONVERSATION_COHERENCE = "conversation_coherence"
     CONVERSATION_RESOLUTION = "conversation_resolution"
-    DETERMINISTIC_EVALS = "deterministic_evals"
     CONTENT_MODERATION = "content_moderation"
     CONTEXT_ADHERENCE = "context_adherence"
     PROMPT_PERPLEXITY = "prompt_perplexity"
@@ -506,12 +505,6 @@ class EvalConfig:
             },
             EvalName.CONVERSATION_RESOLUTION: {
                 "model": ConfigField(type=str, default="gpt-4o-mini")
-            },
-            EvalName.DETERMINISTIC_EVALS: {
-                "multi_choice": ConfigField(type=bool, default=False),
-                "choices": ConfigField(type=list, default=[], required=True),
-                "rule_prompt": ConfigField(type=str, default="", required=True),
-                "input": ConfigField(type=list, default=[]),
             },
             EvalName.CONTENT_MODERATION: {},
             EvalName.CONTEXT_ADHERENCE: {
@@ -727,7 +720,6 @@ class EvalMappingConfig:
             EvalName.CONVERSATION_RESOLUTION: {
                 "output": ConfigField(type=str, required=True)
             },
-            EvalName.DETERMINISTIC_EVALS: {},
             EvalName.CONTENT_MODERATION: {"text": ConfigField(type=str, required=True)},
             EvalName.CONTEXT_ADHERENCE: {
                 "context": ConfigField(type=str, required=True),
@@ -885,7 +877,7 @@ class EvalTag:
     type: EvalTagType
     value: EvalSpanKind
     model: ModelChoices
-    eval_name: str
+    eval_name: str | EvalName
     config: Dict[str, Any] = None
     custom_eval_name: str = None
     mapping: Dict[str, str] = None
@@ -911,19 +903,21 @@ class EvalTag:
             )
         
         if not self.custom_eval_name:
-            self.custom_eval_name = self.eval_name
+            self.custom_eval_name = self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value
         
         if not isinstance(self.model, ModelChoices):
             raise ValueError(
                 f"model must be a ModelChoices enum, got {type(self.model)}"
             )
         
-        
-        eval_template = get_custom_eval_template(self.eval_name)
+        eval_template = get_custom_eval_template(self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value)
         is_custom_eval = eval_template.get('isUserEvalTemplate')
         custom_eval = eval_template.get('evalTemplate', {})
+        
         if custom_eval:
             required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
+        else:
+            required_keys = EvalMappingConfig.get_mapping_for_eval(self.eval_name).keys()
         
         
         self.validate_fagi_system_eval_name(is_custom_eval)
@@ -1003,7 +997,7 @@ class EvalTag:
         for key, value in self.mapping.items():
             if key not in required_keys:
                 raise ValueError(
-                    f"Unexpected mapping field '{key}' for {self.eval_name}. Allowed fields are: {required_keys}"
+                    f"Unexpected mapping field '{key}' for {self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value}. Allowed fields are: {required_keys}"
                 )
             if not isinstance(key, str):
                 raise ValueError(f"All mapping keys must be strings, got {type(key)}")
