@@ -906,22 +906,34 @@ class EvalTag:
             self.custom_eval_name = self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value
         
         
+
         eval_template = get_custom_eval_template(self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value)
         is_custom_eval = eval_template.get('isUserEvalTemplate')
         custom_eval = eval_template.get('evalTemplate', {})
+
+        self.validate_fagi_system_eval_name(is_custom_eval)
         
-        if custom_eval:
+        if is_custom_eval:
             required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
         else:
             required_keys = EvalMappingConfig.get_mapping_for_eval(self.eval_name).keys()
         
         if not is_custom_eval:
+            
             if not isinstance(self.model, ModelChoices):
-                raise ValueError(
-                    f"model must be a present for all non-custom evals"
-                )
-        
-        self.validate_fagi_system_eval_name(is_custom_eval)
+                if (isinstance(self.model, str)):
+                    valid_models = [model.value for model in ModelChoices]
+                    if self.model not in valid_models:
+                        raise ValueError(
+                            f"model must be a valid model name, got {self.model}. Expected values are: {valid_models}"
+                        )
+                    else:
+                        self.model = ModelChoices(self.model)
+                else:
+                    raise ValueError(
+                        f"model must be a of type ModelChoices, got {type(self.model)}"
+                    )
+            
 
         self.validate_fagi_system_eval_config(is_custom_eval)
 
