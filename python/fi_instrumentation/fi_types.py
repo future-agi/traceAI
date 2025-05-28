@@ -425,62 +425,62 @@ class EvalSpanKind(Enum):
 
 
 class EvalName(Enum):
-    CONVERSATION_COHERENCE = "Conversation Coherence"
-    CONVERSATION_RESOLUTION = "Conversation Resolution"
-    DETERMINISTIC_EVALS = "Deterministic Evals"
-    CONTENT_MODERATION = "Content Moderation"
-    CONTEXT_ADHERENCE = "Context Adherence"
-    PROMPT_PERPLEXITY = "Prompt Perplexity"
-    CONTEXT_RELEVANCE = "Context Relevance"
-    COMPLETENESS = "Completeness"
-    CONTEXT_SIMILARITY = "Context Similarity"
-    PII = "PII"
-    TOXICITY = "Toxicity"
-    TONE = "Tone"
-    SEXIST = "Sexist"
-    PROMPT_INJECTION = "Prompt Injection"
-    NOT_GIBBERISH_TEXT = "Not Gibberish text"
-    SAFE_FOR_WORK_TEXT = "Safe for Work text"
-    PROMPT_INSTRUCTION_ADHERENCE = "Prompt/Instruction Adherence"
-    DATA_PRIVACY_COMPLIANCE = "Data Privacy Compliance"
-    IS_JSON = "Is Json"
-    ENDS_WITH = "Ends With"
-    EQUALS = "Equals"
-    CONTAINS_ALL = "Contains All"
-    LENGTH_LESS_THAN = "Length Less Than"
-    CONTAINS_NONE = "Contains None"
-    REGEX = "Regex"
-    STARTS_WITH = "Starts With"
-    API_CALL = "API Call"
-    LENGTH_BETWEEN = "Length Between"
-    CUSTOM_CODE_EVALUATION = "Custom Code Evaluation"
-    AGENT_AS_JUDGE = "Agent as a Judge"
-    ONE_LINE = "One Line"
-    CONTAINS_VALID_LINK = "Contains Valid Link"
-    IS_EMAIL = "Is Email"
-    LENGTH_GREATER_THAN = "Length Greater than"
-    NO_VALID_LINKS = "No Valid Links"
-    CONTAINS = "Contains"
-    CONTAINS_ANY = "Contains Any"
-    GROUNDEDNESS = "Groundedness"
-    ANSWER_SIMILARITY = "Answer Similarity"
-    EVAL_OUTPUT = "Eval Output"
-    EVAL_CONTEXT_RETRIEVAL_QUALITY = "Eval Context Retrieval Quality"
-    EVAL_IMAGE_INSTRUCTION = "Eval Image Instruction (text to image)"
-    SCORE_EVAL = "Score Eval"
-    SUMMARY_QUALITY = "Summary Quality"
-    FACTUAL_ACCURACY = "Factual Accuracy"
-    TRANSLATION_ACCURACY = "Translation Accuracy"
-    CULTURAL_SENSITIVITY = "Cultural Sensitivity"
-    BIAS_DETECTION = "Bias Detection"
-    EVALUATE_LLM_FUNCTION_CALLING = "Evaluate LLM Function calling"
-    AUDIO_TRANSCRIPTION = "Audio Transcription"
-    EVAL_AUDIO_DESCRIPTION = "Eval Audio Description"
-    AUDIO_QUALITY = "Audio Quality"
-    JSON_SCHEMA_VALIDATION = "Json Scheme Validation"
-    CHUNK_ATTRIBUTION = "Chunk Attribution"
-    CHUNK_UTILIZATION = "Chunk Utilization"
-    EVAL_RANKING = "Eval Ranking"
+    CONVERSATION_COHERENCE = "conversation_coherence"
+    CONVERSATION_RESOLUTION = "conversation_resolution"
+    DETERMINISTIC_EVALS = "deterministic_evals"
+    CONTENT_MODERATION = "content_moderation"
+    CONTEXT_ADHERENCE = "context_adherence"
+    PROMPT_PERPLEXITY = "prompt_perplexity"
+    CONTEXT_RELEVANCE = "context_relevance"
+    COMPLETENESS = "completeness"
+    CONTEXT_SIMILARITY = "context_similarity"
+    PII = "pii"
+    TOXICITY = "toxicity"
+    TONE = "tone"
+    SEXIST = "sexist"
+    PROMPT_INJECTION = "prompt_injection"
+    NOT_GIBBERISH_TEXT = "not_gibberish_text"
+    SAFE_FOR_WORK_TEXT = "safe_for_work_text"
+    PROMPT_INSTRUCTION_ADHERENCE = "prompt_instruction_adherence"
+    DATA_PRIVACY_COMPLIANCE = "data_privacy_compliance"
+    IS_JSON = "is_json"
+    ENDS_WITH = "ends_with"
+    EQUALS = "equals"
+    CONTAINS_ALL = "contains_all"
+    LENGTH_LESS_THAN = "length_less_than"
+    CONTAINS_NONE = "contains_none"
+    REGEX = "regex"
+    STARTS_WITH = "starts_with"
+    API_CALL = "api_call"
+    LENGTH_BETWEEN = "length_between"
+    CUSTOM_CODE_EVALUATION = "custom_code_evaluation"
+    AGENT_AS_JUDGE = "agent_as_judge"
+    ONE_LINE = "one_line"
+    CONTAINS_VALID_LINK = "contains_valid_link"
+    IS_EMAIL = "is_email"
+    LENGTH_GREATER_THAN = "length_greater_than"
+    NO_VALID_LINKS = "no_valid_links"
+    CONTAINS = "contains"
+    CONTAINS_ANY = "contains_any"
+    GROUNDEDNESS = "groundedness"
+    ANSWER_SIMILARITY = "answer_similarity"
+    EVAL_OUTPUT = "eval_output"
+    EVAL_CONTEXT_RETRIEVAL_QUALITY = "eval_context_retrieval_quality"
+    EVAL_IMAGE_INSTRUCTION = "eval_image_instruction"
+    SCORE_EVAL = "score_eval"
+    SUMMARY_QUALITY = "summary_quality"
+    FACTUAL_ACCURACY = "factual_accuracy"
+    TRANSLATION_ACCURACY = "translation_accuracy"
+    CULTURAL_SENSITIVITY = "cultural_sensitivity"
+    BIAS_DETECTION = "bias_detection"
+    EVALUATE_LLM_FUNCTION_CALLING = "evaluate_llm_function_calling"
+    AUDIO_TRANSCRIPTION = "audio_transcription"
+    EVAL_AUDIO_DESCRIPTION = "eval_audio_description"
+    AUDIO_QUALITY = "audio_quality"
+    JSON_SCHEMA_VALIDATION = "json_schema_validation"
+    CHUNK_ATTRIBUTION = "chunk_attribution"
+    CHUNK_UTILIZATION = "chunk_utilization"
+    EVAL_RANKING = "eval_ranking"
 
 
 @dataclass
@@ -881,6 +881,7 @@ class EvalTag:
     config: Dict[str, Any] = None
     custom_eval_name: str = None
     mapping: Dict[str, str] = None
+    model: str = None
 
     def __post_init__(self):
         if self.config is None:
@@ -903,6 +904,11 @@ class EvalTag:
         
         if not self.custom_eval_name:
             self.custom_eval_name = self.eval_name
+        
+        if not self.model:
+            raise ValueError(
+                f"model name is required"
+            )
         
         eval_template = get_custom_eval_template(self.eval_name)
         is_custom_eval = eval_template.get('isUserEvalTemplate')
@@ -1010,6 +1016,7 @@ class EvalTag:
             "config": self.config,
             "mapping": self.mapping,
             "custom_eval_name": self.custom_eval_name,
+            "model": self.model,
         }
 
     def __str__(self) -> str:
