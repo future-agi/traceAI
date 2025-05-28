@@ -647,3 +647,4 @@ def check_custom_eval_config_exists(
     except Exception as e:
         print(f"Failed to check custom eval config: {e}")
         return False
+
