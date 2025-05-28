@@ -884,8 +884,8 @@ class EvalMappingConfig:
 class EvalTag:
     type: EvalTagType
     value: EvalSpanKind
-    model: ModelChoices
     eval_name: str
+    model: ModelChoices = None
     config: Dict[str, Any] = None
     custom_eval_name: str = None
     mapping: Dict[str, str] = None
@@ -896,7 +896,7 @@ class EvalTag:
             self.config = {}
         if self.mapping is None:
             self.mapping = {}
-            
+           
         if not isinstance(self.value, EvalSpanKind):
             raise ValueError(
                 f"value must be a EvalSpanKind enum, got {type(self.value)}"
@@ -913,11 +913,6 @@ class EvalTag:
         if not self.custom_eval_name:
             self.custom_eval_name = self.eval_name
         
-        if not isinstance(self.model, ModelChoices):
-            raise ValueError(
-                f"model must be a ModelChoices enum, got {type(self.model)}"
-            )
-        
         
         eval_template = get_custom_eval_template(self.eval_name)
         is_custom_eval = eval_template.get('isUserEvalTemplate')
@@ -925,6 +920,11 @@ class EvalTag:
         if custom_eval:
             required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
         
+        if not is_custom_eval:
+            if not isinstance(self.model, ModelChoices):
+                raise ValueError(
+                    f"model must be a present for all non-custom evals"
+                )
         
         self.validate_fagi_system_eval_name(is_custom_eval)
 
@@ -978,9 +978,10 @@ class EvalTag:
             )
         
         if not is_custom_eval:
-            if not isinstance(self.eval_name, EvalName):
+            eval_names = [e.value for e in EvalName]
+            if self.eval_name not in eval_names:
                 raise ValueError(
-                    f"eval_name must be an EvalName enum, got {type(self.eval_name)}"
+                    f"eval_name {self.eval_name} is not a valid eval name"
                 )
 
         return
@@ -1026,7 +1027,7 @@ class EvalTag:
             "config": self.config,
             "mapping": self.mapping,
             "custom_eval_name": self.custom_eval_name,
-            "model": self.model.value,
+            "model": self.model.value if self.model else None
         }
 
     def __str__(self) -> str:
