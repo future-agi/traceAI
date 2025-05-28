@@ -4,7 +4,7 @@ Example showing how to use the guardrail tracing with Anthropic.
 import os
 import time
 from anthropic import Anthropic
-from fi.evals import ProtectClient, EvalClient
+from fi.evals import Protect, Evaluator
 from fi_instrumentation import register
 from traceai_anthropic import AnthropicInstrumentor
 from fi_instrumentation.instrumentation.config import TraceConfig
@@ -49,8 +49,8 @@ def safe_chat_with_claude(user_input: str) -> str:
     Safely chat with Claude by checking input through protection rules first
     """
 
-    evaluator = EvalClient(fi_api_key=os.environ.get("FI_API_KEY"), fi_secret_key=os.environ.get("FI_SECRET_KEY"), fi_base_url=os.environ.get("FI_BASE_URL"))
-    protector = ProtectClient(evaluator=evaluator)
+    evaluator = Evaluator(fi_api_key=os.environ.get("FI_API_KEY"), fi_secret_key=os.environ.get("FI_SECRET_KEY"), fi_base_url=os.environ.get("FI_BASE_URL"))
+    protector = Protect(evaluator=evaluator)
     # First, check the input through protection rules
     protection_result = protector.protect(
         inputs=user_input,

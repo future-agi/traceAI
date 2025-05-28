@@ -42,7 +42,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     def _instrument(self, **kwargs: Any) -> None:
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
-        from fi.evals import ProtectClient
+        from fi.evals import Protect
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):
@@ -89,16 +89,16 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             wrapper=_MessagesCountTokensWrapper(tracer=self._tracer),
         )
 
-        self._original_protect = ProtectClient.protect
+        self._original_protect = Protect.protect
         wrap_function_wrapper(
                 module="fi.evals",
-                name="ProtectClient.protect",
+                name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(tracer=self._tracer)
         )
     def _uninstrument(self, **kwargs: Any) -> None:
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
-        from fi.evals import ProtectClient 
+        from fi.evals import Protect 
 
         if self._original_completions_create is not None:
             Completions.create = self._original_completions_create  # type: ignore[method-assign]
@@ -111,4 +111,4 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             AsyncMessages.create = self._original_async_messages_create  # type: ignore[method-assign]
 
         if self._original_protect is not None:
-            ProtectClient.protect = self._original_protect
+            Protect.protect = self._original_protect

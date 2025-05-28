@@ -15,7 +15,7 @@ from traceai_haystack._wrappers import (
 from traceai_haystack.version import __version__
 from wrapt import wrap_function_wrapper
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import ProtectClient
+from fi.evals import Protect
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +76,10 @@ class HaystackInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             ),
         )
 
-        self._original_protect = ProtectClient.protect
+        self._original_protect = Protect.protect
         wrap_function_wrapper(
             module="fi.evals",
-            name="ProtectClient.protect",
+            name="Protect.protect",
             wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
     def _uninstrument(self, **kwargs: Any) -> None:

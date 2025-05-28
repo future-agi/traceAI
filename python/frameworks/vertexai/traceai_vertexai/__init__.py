@@ -9,7 +9,7 @@ from traceai_vertexai.package import _instruments
 from traceai_vertexai.version import __version__
 from wrapt import wrap_function_wrapper
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import ProtectClient
+from fi.evals import Protect
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -46,10 +46,10 @@ class VertexAIInstrumentor(BaseInstrumentor):  # type: ignore
                 name=method.__name__,
                 wrapper=lambda f, _, args, kwargs: _Wrapper(tracer)(f(*args, **kwargs)),
             )
-        self._original_protect = ProtectClient.protect
+        self._original_protect = Protect.protect
         wrap_function_wrapper(
             module="fi.evals",
-            name="ProtectClient.protect",
+            name="Protect.protect",
             wrapper=GuardrailProtectWrapper(tracer),
         )
 

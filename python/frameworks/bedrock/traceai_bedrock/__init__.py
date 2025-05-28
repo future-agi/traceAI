@@ -48,7 +48,7 @@ from traceai_bedrock.utils.anthropic import _extract_image_data
 from traceai_bedrock.version import __version__
 from wrapt import wrap_function_wrapper
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import ProtectClient
+from fi.evals import Protect
 
 ClientCreator = TypeVar("ClientCreator", bound=Callable[..., BaseClient])
 
@@ -421,10 +421,10 @@ class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
             ),
         )
 
-        self._original_protect = ProtectClient.protect
+        self._original_protect = Protect.protect
         wrap_function_wrapper(
             module="fi.evals",
-            name="ProtectClient.protect",
+            name="Protect.protect",
             wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
 
