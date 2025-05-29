@@ -94,7 +94,7 @@ function getExecContext(span: Span) {
  * @param instrumentationConfig The config for the instrumentation @see {@link InstrumentationConfig}
  * @param traceConfig The FI trace configuration. Can be used to mask or redact sensitive information on spans. @see {@link TraceConfigOptions}
  */
-export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
+export class OpenAIInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
 
@@ -126,8 +126,8 @@ export class OpenAIInstrumentation extends InstrumentationBase<typeof openai> {
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
-  protected init(): InstrumentationModuleDefinition<typeof openai> {
-    const module = new InstrumentationNodeModuleDefinition<typeof openai>(
+  protected init() {
+    const module = new InstrumentationNodeModuleDefinition(
       "openai",
       ["^4.0.0"],
       this.patch.bind(this),
