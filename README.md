@@ -2,11 +2,33 @@
 
 traceAI is  OSS package to enable standardized tracing of AI applications and frameworks 
 
-traceAI is a set of conventions and plugins that is complimentary to OpenTelemetry to enable tracing of AI applications. It instruments and monitors different code executions across models, frameworks, and vendors and maps them to a set of standardized attributes for traces and spans.
+traceAI is a set of conventions and plugins that integrates seamlessly with OpenTelemetry to instrument and monitor code executions across models, frameworks, and vendors, mapping them to standardized trace attributes. 
 
-traceAI is natively supported by Future AGI, but can be used with any OpenTelemetry-compatible backend as well. traceAI provides a set of instrumentations for popular machine learning SDKs and frameworks in a variety of languages.
+traceAI is natively supported by Future AGI, but can be used with any OpenTelemetry-compatible backend as well. traceAI provides a set of instrumentations for popular machine learning SDKs and frameworks in a variety of languages like Langchain, OpenAI, Anthropic, and more.
 
-## Python
+
+## Table of Contents
+- [Introduction](#introduction)
+- [Features](#features)
+- [Supported Frameworks](#supported-frameworks)
+- [Quickstart](#quickstart)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Features
+
+- **Standardized Tracing**: Maps AI workflows to a consistent set of trace attributes and spans.
+- **Framework Agnostic**: Works with popular AI frameworks like OpenAI, LangChain, Anthropic, and more.
+- **OpenTelemetry Integration**: Seamlessly integrates with OpenTelemetry-compatible backends.
+- **Extensible Plugins**: Easily add custom instrumentation for unsupported frameworks.
+- **Future AGI Native Support**: Optimized for Future AGI's observability platform.
+
+
+## Supported Frameworks
+
+
+
+### Python
 
 | Package | Description | Version |
 |---------|-------------|----------|
@@ -81,7 +103,7 @@ import openai
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
 response = openai.ChatCompletion.create(
-    model="gpt-4-0",
+    model="gpt-4o",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Can you tell me a joke?"}
@@ -91,3 +113,24 @@ response = openai.ChatCompletion.create(
 print(response.choices[0].message['content'].strip())
 ```
 
+## Contributing
+
+We welcome contributions from the community! To contribute:
+1. Fork the repository.
+2. Create a new branch (`git checkout -b feature/your-feature-name`).
+3. Commit your changes (`git commit -m 'Add your feature'`).
+4. Push to the branch (`git push origin feature/your-feature-name`).
+5. Open a pull request.
+
+## Resources
+
+- Website: https://www.futureagi.com/
+- Documentation: https://docs.futureagi.com/
+- Cookbooks: [How-To-Implement-Observability](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability)
+
+## Connect With Us
+
+- LinkedIn: https://www.linkedin.com/company/futureagi
+- Twitter: https://x.com/FutureAGI_
+- Reddit: https://www.reddit.com/user/Future_AGI/submitted/
+- Substack: https://substack.com/@futureagi
