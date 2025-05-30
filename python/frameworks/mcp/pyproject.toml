@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "traceAI-mcp"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for MCP"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+
+packages = [
+    { include = "traceai_mcp" },
+]
+
+[tool.poetry.dependencies]
+python = ">3.9, <4.0"
+fi-instrumentation-otel = "0.1.6"
+mcp = ">=1.8.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
