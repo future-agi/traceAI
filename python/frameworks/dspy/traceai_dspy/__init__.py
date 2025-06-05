@@ -39,8 +39,8 @@ from opentelemetry.trace import StatusCode
 from opentelemetry.util.types import AttributeValue
 from traceai_dspy.package import _instruments
 from traceai_dspy.version import __version__
-from wrapt import (  # type: check this import
-    BoundFunctionWrapper,
+from wrapt import (
+    BoundFunctionWrapper,  # type: check this import
     FunctionWrapper,
     wrap_object,
 )

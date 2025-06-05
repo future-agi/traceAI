@@ -1,11 +1,10 @@
 import logging
 from typing import Any, Collection, cast
 
+from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from opentelemetry.trace import Tracer
-
-from fi_instrumentation import FITracer, TraceConfig
 from traceai_openai_agents.package import _instruments
 from traceai_openai_agents.version import __version__
 
@@ -34,10 +33,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):  # type: ignore
                 config=config,
             )
             from agents import add_trace_processor
-
-            from traceai_openai_agents._processor import (
-                FiTracingProcessor,
-            )
+            from traceai_openai_agents._processor import FiTracingProcessor
 
             add_trace_processor(FiTracingProcessor(cast(Tracer, tracer)))
         except Exception as e:

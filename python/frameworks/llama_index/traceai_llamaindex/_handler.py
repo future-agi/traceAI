@@ -678,9 +678,7 @@ class _Span(BaseSpan):
         if isinstance(response, (Response, PydanticResponse)):
             self._process_response_text_type(response.response)
             # Add RAW_OUTPUT
-            self[RAW_OUTPUT] = safe_json_dumps(
-                _to_dict(response.response)
-            )
+            self[RAW_OUTPUT] = safe_json_dumps(_to_dict(response.response))
         elif isinstance(response, (StreamingResponse, AsyncStreamingResponse)):
             pass
         else:

@@ -5,9 +5,8 @@ import uuid
 from re import compile
 from typing import Any, Dict, List, Optional
 
-from opentelemetry.sdk.trace.id_generator import IdGenerator
 import requests
-
+from opentelemetry.sdk.trace.id_generator import IdGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -101,26 +100,23 @@ class UuidIdGenerator(IdGenerator):
         return int(uuid_span_id, 16)
 
 
-
-
 def get_custom_eval_template(
-   eval_name: str, base_url: Optional[str] = None
+    eval_name: str, base_url: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Check if a custom eval template exists for a given eval name.
     """
     if not eval_name:
         raise ValueError("Eval name is required")
-    
+
     if base_url is None:
         base_url = get_env_collector_endpoint()
 
-    
     url = f"{base_url}/tracer/custom-eval-config/get_custom_eval_by_name/"
 
     try:
         headers = {
-            "Content-Type" : "application/json",
+            "Content-Type": "application/json",
             **(get_env_fi_auth_header() or {}),
         }
 

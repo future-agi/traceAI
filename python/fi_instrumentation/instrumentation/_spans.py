@@ -1,13 +1,9 @@
 from typing import Any, Callable, Dict, Optional, Union, cast
 
 import wrapt  # type: ignore[import-untyped]
+from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from opentelemetry.trace import Span
 from opentelemetry.util.types import AttributeValue
-
-from fi_instrumentation.fi_types import (
-    FiSpanKindValues,
-    SpanAttributes,
-)
 
 from ._attributes import (
     get_input_attributes,
@@ -15,9 +11,7 @@ from ._attributes import (
     get_tool_attributes,
 )
 from ._types import FiMimeType
-from .config import (
-    TraceConfig,
-)
+from .config import TraceConfig
 
 _IMPORTANT_ATTRIBUTES = [
     SpanAttributes.FI_SPAN_KIND,
@@ -51,7 +45,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         span = cast(Span, self.__wrapped__)
         for k, v in reversed(self._self_important_attributes.items()):
             span.set_attribute(k, v)
-        if hasattr(span, 'is_recording') and span.is_recording():
+        if hasattr(span, "is_recording") and span.is_recording():
             span.end(end_time)
 
     def set_input(

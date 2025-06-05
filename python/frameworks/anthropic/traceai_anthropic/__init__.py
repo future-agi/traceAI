@@ -1,13 +1,13 @@
 import logging
 from typing import Any, Collection
 
-from fi_instrumentation.instrumentation.config import TraceConfig
 from fi_instrumentation import FITracer
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+from fi_instrumentation.instrumentation.config import TraceConfig
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import (  # type: ignore[attr-defined]
+from opentelemetry.instrumentation.instrumentor import (
     BaseInstrumentor,
-)
+)  # type: ignore[attr-defined]
 from traceai_anthropic._wrappers import (
     _AsyncCompletionsWrapper,
     _AsyncMessagesWrapper,
@@ -43,6 +43,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
         from fi.evals import Protect
+
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):
@@ -91,14 +92,15 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
         self._original_protect = Protect.protect
         wrap_function_wrapper(
-                module="fi.evals",
-                name="Protect.protect",
-                wrapper=GuardrailProtectWrapper(tracer=self._tracer)
+            module="fi.evals",
+            name="Protect.protect",
+            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
+
     def _uninstrument(self, **kwargs: Any) -> None:
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
-        from fi.evals import Protect 
+        from fi.evals import Protect
 
         if self._original_completions_create is not None:
             Completions.create = self._original_completions_create  # type: ignore[method-assign]

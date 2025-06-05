@@ -1,27 +1,37 @@
 from enum import Enum
 from inspect import signature
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Mapping, Optional, Tuple
-
-from opentelemetry import context as context_api
-from opentelemetry import trace as trace_api
-from opentelemetry.util.types import AttributeValue
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    Mapping,
+    Optional,
+    Tuple,
+)
 
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
-    MessageAttributes,
     FiMimeTypeValues,
     FiSpanKindValues,
+    MessageAttributes,
+    MessageContentAttributes,
     SpanAttributes,
     ToolAttributes,
     ToolCallAttributes,
-    MessageContentAttributes,
 )
+from opentelemetry import context as context_api
+from opentelemetry import trace as trace_api
+from opentelemetry.util.types import AttributeValue
 
 if TYPE_CHECKING:
     from smolagents.tools import Tool
 
 
-def _flatten(mapping: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, AttributeValue]]:
+def _flatten(
+    mapping: Optional[Mapping[str, Any]]
+) -> Iterator[Tuple[str, AttributeValue]]:
     if not mapping:
         return
     for key, value in mapping.items():
@@ -30,7 +40,9 @@ def _flatten(mapping: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, Attrib
         if isinstance(value, Mapping):
             for sub_key, sub_value in _flatten(value):
                 yield f"{key}.{sub_key}", sub_value
-        elif isinstance(value, list) and any(isinstance(item, Mapping) for item in value):
+        elif isinstance(value, list) and any(
+            isinstance(item, Mapping) for item in value
+        ):
             for index, sub_mapping in enumerate(value):
                 for sub_key, sub_value in _flatten(sub_mapping):
                     yield f"{key}.{index}.{sub_key}", sub_value
@@ -46,7 +58,9 @@ def _get_input_value(method: Callable[..., Any], *args: Any, **kwargs: Any) -> s
     return safe_json_dumps(arguments)
 
 
-def _bind_arguments(method: Callable[..., Any], *args: Any, **kwargs: Any) -> Dict[str, Any]:
+def _bind_arguments(
+    method: Callable[..., Any], *args: Any, **kwargs: Any
+) -> Dict[str, Any]:
     method_signature = signature(method)
     bound_args = method_signature.bind(*args, **kwargs)
     bound_args.apply_defaults()
@@ -54,7 +68,9 @@ def _bind_arguments(method: Callable[..., Any], *args: Any, **kwargs: Any) -> Di
 
 
 def _strip_method_args(arguments: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in arguments.items() if key not in ("self", "cls")}
+    return {
+        key: value for key, value in arguments.items() if key not in ("self", "cls")
+    }
 
 
 def _smolagent_run_attributes(
@@ -129,11 +145,16 @@ class _RunWrapper:
         ) as span:
             agent_output = wrapped(*args, **kwargs)
             span.set_attribute(RAW_OUTPUT, _get_raw_output(agent_output))
-            span.set_attribute(LLM_TOKEN_COUNT_PROMPT, agent.monitor.total_input_token_count)
-            span.set_attribute(LLM_TOKEN_COUNT_COMPLETION, agent.monitor.total_output_token_count)
+            span.set_attribute(
+                LLM_TOKEN_COUNT_PROMPT, agent.monitor.total_input_token_count
+            )
+            span.set_attribute(
+                LLM_TOKEN_COUNT_COMPLETION, agent.monitor.total_output_token_count
+            )
             span.set_attribute(
                 LLM_TOKEN_COUNT_TOTAL,
-                agent.monitor.total_input_token_count + agent.monitor.total_output_token_count,
+                agent.monitor.total_input_token_count
+                + agent.monitor.total_output_token_count,
             )
             span.set_status(trace_api.StatusCode.OK)
             span.set_attribute(OUTPUT_VALUE, str(agent_output))
@@ -184,15 +205,21 @@ def _llm_input_messages(messages: list[Any]) -> Iterator[Tuple[str, Any]]:
                 for index, subcontent in enumerate(content):
                     if subcontent.get("type") == "text":
                         yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "text"
-                        yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TEXT}", subcontent.get("text")
+                        yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TEXT}", subcontent.get(
+                            "text"
+                        )
                     elif subcontent.get("type") == "image_url":
                         if image_url := subcontent.get("image_url"):
                             yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "image"
-                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_IMAGE}", image_url.get("url")
+                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_IMAGE}", image_url.get(
+                                "url"
+                            )
                     elif subcontent.get("type") == "input_audio":
                         if input_audio := subcontent.get("input_audio"):
                             yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "audio"
-                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_AUDIO}", input_audio.get("data")
+                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_AUDIO}", input_audio.get(
+                                "data"
+                            )
 
             yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_ROLE}", message.get("role", "")
 
@@ -263,7 +290,9 @@ def _tools(tool: "Tool") -> Iterator[Tuple[str, Any]]:
     yield TOOL_PARAMETERS, safe_json_dumps(tool.inputs)
 
 
-def _input_value_and_mime_type(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
+def _input_value_and_mime_type(
+    arguments: Mapping[str, Any]
+) -> Iterator[Tuple[str, Any]]:
     yield INPUT_MIME_TYPE, JSON
     yield INPUT_VALUE, safe_json_dumps(arguments)
 
@@ -299,13 +328,18 @@ class _ModelWrapper:
             span.set_status(trace_api.StatusCode.OK)
             span.set_attribute(RAW_OUTPUT, _get_raw_output(output_message))
             span.set_attribute(LLM_TOKEN_COUNT_PROMPT, model.last_input_token_count)
-            span.set_attribute(LLM_TOKEN_COUNT_COMPLETION, model.last_output_token_count)
+            span.set_attribute(
+                LLM_TOKEN_COUNT_COMPLETION, model.last_output_token_count
+            )
             span.set_attribute(LLM_MODEL_NAME, model.model_id)
             span.set_attribute(
-                LLM_TOKEN_COUNT_TOTAL, model.last_input_token_count + model.last_output_token_count
+                LLM_TOKEN_COUNT_TOTAL,
+                model.last_input_token_count + model.last_output_token_count,
             )
             span.set_attributes(dict(_llm_output_messages(output_message)))
-            span.set_attributes(dict(_llm_tools(arguments.get("tools_to_call_from", []))))
+            span.set_attributes(
+                dict(_llm_tools(arguments.get("tools_to_call_from", [])))
+            )
             span.set_attributes(dict(_output_value_and_mime_type(output_message)))
         return output_message
 
@@ -371,18 +405,14 @@ def _output_value_and_mime_type_for_tool_span(
 
 
 def _get_raw_input(args: Any, **kwargs: Any) -> Iterator[Tuple[str, Any]]:
-    raw_input = safe_json_dumps(
-        {
-            "args": _to_dict(args),
-            **(_to_dict(kwargs) or {})
-        }
-    )
-    
+    raw_input = safe_json_dumps({"args": _to_dict(args), **(_to_dict(kwargs) or {})})
+
     yield RAW_INPUT, raw_input
+
 
 def _get_raw_output(response: Any):
     raw_output = _to_dict(response)
-    
+
     return safe_json_dumps(raw_output or {})
 
 
@@ -402,6 +432,7 @@ def _to_dict(result: Any) -> Any:
         return {key: _to_dict(value) for key, value in result.items()}
     else:
         return result
+
 
 # span attributes
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
@@ -426,7 +457,9 @@ RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
 
 # message attributes
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
-MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
+MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
+    MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
+)
 MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE

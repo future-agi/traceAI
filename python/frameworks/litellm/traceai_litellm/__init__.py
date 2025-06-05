@@ -15,6 +15,7 @@ from typing import (
 )
 
 import litellm
+from fi.evals import Protect
 from fi_instrumentation import (
     FITracer,
     TraceConfig,
@@ -29,6 +30,7 @@ from fi_instrumentation.fi_types import (
     MessageContentAttributes,
     SpanAttributes,
 )
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from litellm.types.utils import Choices, EmbeddingResponse, ImageResponse, ModelResponse
 from openai.types.image import Image
 from opentelemetry import context as context_api
@@ -39,9 +41,6 @@ from opentelemetry.util.types import AttributeValue
 from traceai_litellm.package import _instruments
 from traceai_litellm.version import __version__
 from wrapt import wrap_function_wrapper
-
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import Protect
 
 
 # Helper functions to set span attributes

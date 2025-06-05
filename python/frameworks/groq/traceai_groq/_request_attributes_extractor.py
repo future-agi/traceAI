@@ -8,8 +8,8 @@ from fi_instrumentation.fi_types import (
     MessageAttributes,
     MessageContentAttributes,
     SpanAttributes,
-    ToolCallAttributes,
     ToolAttributes,
+    ToolCallAttributes,
 )
 from opentelemetry.util.types import AttributeValue
 from traceai_groq._utils import (
@@ -149,7 +149,7 @@ class _RequestAttributesExtractor:
         type_ = content.pop("type", None)
         if type_ is None:
             return
-        
+
         if type_ == "text":
             if text := content.pop("text"):
                 yield f"{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "text"

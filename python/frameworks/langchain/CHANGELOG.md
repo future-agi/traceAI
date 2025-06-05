@@ -1,3 +1,12 @@
+## [0.1.8] - 2025-06-05
+### Feature
+- Bug Fixes
+- Support for adding custom attributes through metadata
+
+## [0.1.7] - 2025-05-29
+### Feature
+- Updated dependencies to the latest versions.
+
 ## [0.1.6] - 2025-05-23
 ### Feature
 - Added support for FutureAGI's protect

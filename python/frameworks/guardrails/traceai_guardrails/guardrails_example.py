@@ -1,9 +1,10 @@
+import os
+
+from dotenv import load_dotenv
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
-import os
 from guardrails import Guard, OnFailAction
 from traceai_guardrails import GuardrailsInstrumentor
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -18,12 +19,14 @@ trace_provider = register(
 
 GuardrailsInstrumentor().instrument(tracer_provider=trace_provider)
 
-#from guardrails import Guard, OnFailAction
+# from guardrails import Guard, OnFailAction
 from guardrails.hub import CompetitorCheck, ToxicLanguage
 
 guard = Guard().use_many(
     CompetitorCheck(["Apple", "Microsoft", "Google"], on_fail=OnFailAction.EXCEPTION),
-    ToxicLanguage(threshold=0.5, validation_method="sentence", on_fail=OnFailAction.EXCEPTION)
+    ToxicLanguage(
+        threshold=0.5, validation_method="sentence", on_fail=OnFailAction.EXCEPTION
+    ),
 )
 
 guard.validate(

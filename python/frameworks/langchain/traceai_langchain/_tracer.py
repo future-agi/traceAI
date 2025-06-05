@@ -29,7 +29,6 @@ from uuid import UUID
 
 import wrapt  # type: ignore
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
-from fi_instrumentation.instrumentation._tracers import FITracer
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -42,6 +41,7 @@ from fi_instrumentation.fi_types import (
     SpanAttributes,
     ToolCallAttributes,
 )
+from fi_instrumentation.instrumentation._tracers import FITracer
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.human import HumanMessage
 from langchain_core.tracers import BaseTracer, LangChainTracer
@@ -181,7 +181,9 @@ class FiTracer(BaseTracer):
         self.run_map = _DictWithLock[str, Run](self.run_map)
         self._tracer = fi_tracer
         self._spans_by_run: Dict[UUID, Span] = _DictWithLock[UUID, Span]()
-        self._context_by_run: Dict[UUID, Dict[str, Any]] = _DictWithLock[UUID, Dict[str, Any]]()
+        self._context_by_run: Dict[UUID, Dict[str, Any]] = _DictWithLock[
+            UUID, Dict[str, Any]
+        ]()
         self._lock = RLock()  # handlers may be run in a thread by langchain
 
     def get_span(self, run_id: UUID) -> Optional[Span]:
@@ -192,10 +194,10 @@ class FiTracer(BaseTracer):
         self.run_map[str(run.id)] = run
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
-        
+
         # Capture context attributes at span start time
         captured_context = dict(get_attributes_from_context())
-        
+
         with self._lock:
             parent_context = (
                 trace_api.set_span_in_context(parent)
@@ -205,7 +207,7 @@ class FiTracer(BaseTracer):
             )
             # Store the captured context for this run
             self._context_by_run[run.id] = captured_context
-            
+
         # We can't use real time because the handler may be
         # called in a background thread.
         start_time_utc_nano = _as_utc_nano(run.start_time)
@@ -246,10 +248,10 @@ class FiTracer(BaseTracer):
         self.run_map.pop(str(run.id), None)
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
-        
+
         span = self._spans_by_run.pop(run.id, None)
         captured_context = self._context_by_run.pop(run.id, {})
-        
+
         if span:
             try:
                 _update_span(span, run, captured_context)
@@ -625,7 +627,7 @@ def _parse_message_data(
         return
     assert hasattr(message_data, "get"), f"expected Mapping, found {type(message_data)}"
     id_ = message_data.get("id")
-    assert isinstance(id_, List), f"expected list, found {type(id_)}" 
+    assert isinstance(id_, List), f"expected list, found {type(id_)}"
     message_class_name = id_[-1]
     if message_class_name.startswith("HumanMessage"):
         role = "user"
@@ -923,13 +925,13 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
     if not run.extra or not (metadata := run.extra.get("metadata")):
         return
     assert isinstance(metadata, Mapping), f"expected Mapping, found {type(metadata)}"
-    
+
     # Add all metadata fields as individual span attributes
     for key, value in metadata.items():
         if value is not None:
             # Convert value to string for span attributes
             str_value = str(value)
-            
+
             # Map specific keys to standard attribute names
             if key == "user_id":
                 yield "user.id", str_value
@@ -938,7 +940,7 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
             else:
                 # Add other metadata with metadata prefix to avoid conflicts
                 yield f"{key}", str_value
-    
+
     # Handle legacy session ID keys for backward compatibility
     if legacy_session_id := (
         metadata.get(LANGCHAIN_SESSION_ID)
@@ -946,7 +948,7 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
         or metadata.get(LANGCHAIN_THREAD_ID)
     ):
         yield SESSION_ID, legacy_session_id
-    
+
     # Also include the full metadata as JSON for completeness
     yield METADATA, safe_json_dumps(metadata)
 

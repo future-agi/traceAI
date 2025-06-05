@@ -5,11 +5,14 @@ from inspect import signature
 from typing import Any, Callable, Iterator, List, Mapping, Optional, Tuple
 
 import opentelemetry.context as context_api
+from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation.fi_types import (
+    FiSpanKindValues,
+    MessageAttributes,
+    SpanAttributes,
+)
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
-
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
-from fi_instrumentation.fi_types import SpanAttributes, FiSpanKindValues, MessageAttributes
 
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -21,12 +24,16 @@ class SafeJSONEncoder(json.JSONEncoder):
         try:
             return super().default(o)
         except TypeError:
-            if hasattr(o, "dict") and callable(o.dict):  # pydantic v1 models, e.g., from Cohere
+            if hasattr(o, "dict") and callable(
+                o.dict
+            ):  # pydantic v1 models, e.g., from Cohere
                 return o.dict()
             return repr(o)
 
 
-def _flatten(mapping: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, AttributeValue]]:
+def _flatten(
+    mapping: Optional[Mapping[str, Any]]
+) -> Iterator[Tuple[str, AttributeValue]]:
     if not mapping:
         return
     for key, value in mapping.items():
@@ -35,7 +42,9 @@ def _flatten(mapping: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, Attrib
         if isinstance(value, Mapping):
             for sub_key, sub_value in _flatten(value):
                 yield f"{key}.{sub_key}", sub_value
-        elif isinstance(value, List) and any(isinstance(item, Mapping) for item in value):
+        elif isinstance(value, List) and any(
+            isinstance(item, Mapping) for item in value
+        ):
             for index, sub_mapping in enumerate(value):
                 for sub_key, sub_value in _flatten(sub_mapping):
                     yield f"{key}.{index}.{sub_key}", sub_value
@@ -60,7 +69,9 @@ def _get_input_value(method: Callable[..., Any], *args: Any, **kwargs: Any) -> s
     signature_contains_self_parameter = first_parameter_name in ["self"]
     bound_arguments = method_signature.bind(
         *(
-            [None]  # the value bound to the method's self argument is discarded below, so pass None
+            [
+                None
+            ]  # the value bound to the method's self argument is discarded below, so pass None
             if signature_contains_self_parameter
             else []  # no self parameter, so no need to pass a value
         ),
@@ -88,13 +99,10 @@ def _get_raw_input(args: Any, **kwargs: Any) -> str:
     """
     kwargs_dict = _to_dict(kwargs)
     if not isinstance(kwargs_dict, dict):
-        kwargs_dict = {} 
+        kwargs_dict = {}
 
     return safe_json_dumps(
-        {
-            "args": _to_dict(args),
-            **kwargs_dict
-        },
+        {"args": _to_dict(args), **kwargs_dict},
         cls=SafeJSONEncoder,
     )
 
@@ -112,6 +120,7 @@ def _get_raw_output(response: Any) -> str:
         cls=SafeJSONEncoder,
     )
 
+
 def _to_dict(result: Any) -> Any:
     if not result:
         return
@@ -121,15 +130,17 @@ def _to_dict(result: Any) -> Any:
         return result.__dict__
     elif isinstance(result, list):
         return [_to_dict(item) for item in result]
-    elif isinstance(result, tuple): 
+    elif isinstance(result, tuple):
         return tuple(_to_dict(item) for item in result)
     elif isinstance(result, dict):
         return {key: _to_dict(value) for key, value in result.items()}
     else:
         return result
-    
 
-def _get_llm_input_messages(messages: List[Any]) -> Iterator[Tuple[str, AttributeValue]]:
+
+def _get_llm_input_messages(
+    messages: List[Any],
+) -> Iterator[Tuple[str, AttributeValue]]:
     for index, message in enumerate(messages):
         if isinstance(message, dict):
             content = message.get("content", "")
@@ -140,8 +151,9 @@ def _get_llm_input_messages(messages: List[Any]) -> Iterator[Tuple[str, Attribut
 
 def _get_llm_output_messages(output: Any) -> Iterator[Tuple[str, AttributeValue]]:
     if output and isinstance(output, str):
-            yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_ROLE}", "assistant"
-            yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_CONTENT}", output
+        yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_ROLE}", "assistant"
+        yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_CONTENT}", output
+
 
 class _WithTracer(ABC):
     """
@@ -179,7 +191,7 @@ class _GuardCallWrapper(_WithTracer):
                         RAW_INPUT: _get_raw_input(
                             args,
                             **kwargs,
-                        )
+                        ),
                     }
                 )
             ),
@@ -189,7 +201,9 @@ class _GuardCallWrapper(_WithTracer):
                 response = wrapped(*args, **kwargs)
                 span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
             except Exception as exception:
-                span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exception)))
+                span.set_status(
+                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
+                )
                 span.record_exception(exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
@@ -225,7 +239,7 @@ class _PromptCallableWrapper(_WithTracer):
                         RAW_INPUT: _get_raw_input(
                             args,
                             **kwargs,
-                        )
+                        ),
                     }
                 )
             ),
@@ -241,16 +255,24 @@ class _PromptCallableWrapper(_WithTracer):
                     span.set_attribute(OUTPUT_VALUE, response.output)
                     for k, v in _get_llm_output_messages(response.output):
                         span.set_attribute(k, v)
-                
-                if hasattr(response, 'prompt_token_count') and response.prompt_token_count is not None:
+
+                if (
+                    hasattr(response, "prompt_token_count")
+                    and response.prompt_token_count is not None
+                ):
                     span.set_attribute(PROMPT_TOKENS, response.prompt_token_count)
 
-                if hasattr(response, 'response_token_count') and response.response_token_count is not None:
+                if (
+                    hasattr(response, "response_token_count")
+                    and response.response_token_count is not None
+                ):
                     span.set_attribute(COMPLETION_TOKENS, response.response_token_count)
 
                 span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
             except Exception as exception:
-                span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exception)))
+                span.set_status(
+                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
+                )
                 span.record_exception(exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
@@ -286,7 +308,7 @@ class _ParseCallableWrapper(_WithTracer):
                         RAW_INPUT: _get_raw_input(
                             args,
                             **kwargs,
-                        )
+                        ),
                     }
                 )
             ),
@@ -296,7 +318,9 @@ class _ParseCallableWrapper(_WithTracer):
                 response = wrapped(*args, **kwargs)
                 span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
             except Exception as exception:
-                span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exception)))
+                span.set_status(
+                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
+                )
                 span.record_exception(exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
@@ -324,7 +348,7 @@ class _PostValidationWrapper(_WithTracer):
                 _flatten(
                     {
                         RAW_INPUT: _get_raw_input(args, **kwargs),
-                    }   
+                    }
                 )
             ),
         ) as span:
@@ -332,28 +356,38 @@ class _PostValidationWrapper(_WithTracer):
             try:
                 validator = args[0]
                 span.set_attribute("validator_name", validator.rail_alias)
-                span.set_attribute("validator_on_fail", validator.on_fail_descriptor.name)
+                span.set_attribute(
+                    "validator_on_fail", validator.on_fail_descriptor.name
+                )
 
                 validation_result = args[2]
                 if validator.rail_alias == "fi/dataset_embeddings":
                     span.set_attribute(
                         INPUT_VALUE,
-                        validation_result.metadata.get("user_message")
-                        if validation_result.metadata
-                        else "",
+                        (
+                            validation_result.metadata.get("user_message")
+                            if validation_result.metadata
+                            else ""
+                        ),
                     )
                 span.set_attribute(OUTPUT_VALUE, validation_result.outcome)
                 span.set_attributes(
                     dict(
                         _flatten(
-                            validation_result.metadata if validation_result.metadata else {},
+                            (
+                                validation_result.metadata
+                                if validation_result.metadata
+                                else {}
+                            ),
                         )
                     )
                 )
                 response = wrapped(*args, **kwargs)
                 span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
             except Exception as exception:
-                span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exception)))
+                span.set_status(
+                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
+                )
                 span.record_exception(exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
