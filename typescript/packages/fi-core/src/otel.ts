@@ -517,8 +517,8 @@ interface CheckExistsResponse {
 
 export interface CheckCustomEvalTemplateExistsResponse {
   result?: {
-    is_user_eval_template?: boolean;
-    eval_template?: any
+    isUserEvalTemplate?: boolean;
+    evalTemplate?: any
   };
   // Add other fields if the API returns more
 }
@@ -606,8 +606,8 @@ export async function checkCustomEvalTemplateExists(
   if (!eval_template_name || eval_template_name.length === 0) {
     const response: CheckCustomEvalTemplateExistsResponse = {
       result: {
-        is_user_eval_template: false,
-        eval_template: null
+        isUserEvalTemplate: false,
+        evalTemplate: null
       }
     }
     return response;
@@ -665,8 +665,8 @@ export async function checkCustomEvalTemplateExists(
       );
       return {
         result: {
-          is_user_eval_template: false,
-          eval_template: null
+          isUserEvalTemplate: false,
+          evalTemplate: null
         }
       };
     }
@@ -680,8 +680,8 @@ export async function checkCustomEvalTemplateExists(
     diag.error(`checkCustomEvalTemplateExists: Error checking custom eval template: ${error}`);
     return {
       result: {
-        is_user_eval_template: false,
-        eval_template: null
+        isUserEvalTemplate: false,
+        evalTemplate: null
       }
     };
   }

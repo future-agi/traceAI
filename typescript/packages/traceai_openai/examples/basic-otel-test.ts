@@ -1,6 +1,8 @@
-import { register, ProjectType, EvalSpanKind, EvalName, EvalTag, EvalTagType } from "@traceai/fi-core";
+import { register, ProjectType, EvalSpanKind, EvalName, EvalTag, EvalTagType, ModelChoices } from "@traceai/fi-core";
 import { OpenAIInstrumentation } from "@traceai/openai";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import { DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
+import { diag } from "@opentelemetry/api";
 
 // Enable OpenTelemetry internal diagnostics
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
@@ -31,8 +33,9 @@ async function main() {
 
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
-    projectName: "ts-observability-suite-v3",
+    projectName: "ts-observability-suite-v5",
     projectType: ProjectType.EXPERIMENT,
+    projectVersionName: "sarthak_f1",
     // sessionName: "basic-otel-test-session-" + Date.now(), // OBSERVE only
     evalTags: [
       new EvalTag({
@@ -40,23 +43,61 @@ async function main() {
         value: EvalSpanKind.LLM,
         eval_name: EvalName.CHUNK_ATTRIBUTION,
         config: {},
-        custom_eval_name: "Chunk_Attribution",
+        custom_eval_name: "Chunk_Attribution_3",
         mapping: {
           "context": "raw.input",
           "output": "raw.output"
-        }
+        },
+        model: ModelChoices.TURING_SMALL
       }),
-      new EvalTag({
-        type: EvalTagType.OBSERVATION_SPAN,
-        value: EvalSpanKind.LLM,
-        eval_name: EvalName.SUMMARY_QUALITY,
-        config: {},
-        custom_eval_name: "Summary_Quality",
-        mapping: {
-          "context": "raw.input",
-          "output": "raw.output"
+      new EvalTag(
+        {
+          type: EvalTagType.OBSERVATION_SPAN,
+          value: EvalSpanKind.LLM,
+          eval_name: "toxic_nature",
+          custom_eval_name: "toxic_nature_custom_eval_config_2",
+          mapping: {
+            "output": "raw.output"
+          }
         }
-      })
+      ),
+      new EvalTag(
+        {
+          type: EvalTagType.OBSERVATION_SPAN,
+          value: EvalSpanKind.LLM,
+          eval_name: "custom-eval-1",
+          custom_eval_name: "custom-eval-1-config_eval_2",
+          mapping: {
+            "output": "raw.output",
+            "input": "raw.input"
+          }
+        }
+      ),
+      new EvalTag(
+        {
+          type: EvalTagType.OBSERVATION_SPAN,
+          value: EvalSpanKind.LLM,
+          eval_name: "detereministic_custom_eval_template",
+          custom_eval_name: "detereministic_custom_eval_template_2",
+          mapping: {
+            "output": "raw.output",
+            "query": "raw.input",
+            "input": "raw.input"
+          }
+        }
+      )
+      // ,
+      // new EvalTag({
+      //   type: EvalTagType.OBSERVATION_SPAN,
+      //   value: EvalSpanKind.LLM,
+      //   eval_name: EvalName.SUMMARY_QUALITY,
+      //   config: {},
+      //   custom_eval_name: "Summary_Quality_1",
+      //   mapping: {
+      //     "context": "raw.input",
+      //     "output": "raw.output"
+      //   }
+      // })
     ]
   });
 

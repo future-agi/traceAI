@@ -538,15 +538,15 @@ enum ProjectType {
         throw new Error(`type must be an EvalTagType enum, got ${typeof this.type}`);
       }
 
-
-      if (this.model && !Object.values(ModelChoices).includes(this.model)) {
-        throw new Error(`model must be a valid model name, got ${this.model}. Expected values are: ${Object.values(ModelChoices).join(', ')}`);
-      }
-
       const customEvalTemplate: CheckCustomEvalTemplateExistsResponse = await checkCustomEvalTemplateExists(this.eval_name as string);
-      if (!customEvalTemplate.result?.is_user_eval_template) {
+      
+      if (!customEvalTemplate.result?.isUserEvalTemplate) {
         if (!Object.values(EvalName).includes(this.eval_name as EvalName)) {
           throw new Error(`eval_name must be a valid EvalName enum if its not a custom eval template, got ${this.eval_name}. Expected values are: ${Object.values(EvalName).join(', ')}`);
+        }
+
+        if (!this.model || !Object.values(ModelChoices).includes(this.model)) {
+          throw new Error(`Model must be provied in case of fagi evals. Model must be a valid model name, got ${this.model}. Expected values are: ${Object.values(ModelChoices).join(', ')}`);
         }
 
         // Get expected config for this eval type
@@ -575,12 +575,13 @@ enum ProjectType {
 
 
       // Get expected mapping for this eval type
-      const expectedMapping = getMappingForEval(this.eval_name as EvalName);
+      let expectedMapping = null;
       let requiredKeys: string[] = [];
-      if (customEvalTemplate.result?.is_user_eval_template) {
-        requiredKeys = customEvalTemplate.result?.eval_template?.config?.requiredKeys ?? [];
+      if (customEvalTemplate.result?.isUserEvalTemplate) {
+        requiredKeys = customEvalTemplate.result?.evalTemplate?.config?.requiredKeys ?? [];
       } 
       else {
+        expectedMapping = getMappingForEval(this.eval_name as EvalName);
         for (const [key, fieldConfig] of Object.entries(expectedMapping)) {
           if (fieldConfig.required) {
             requiredKeys.push(key);
@@ -597,7 +598,7 @@ enum ProjectType {
 
       // Check for unexpected mapping fields
       for (const key in this.mapping) {
-        if (!customEvalTemplate.result?.is_user_eval_template && !(key in expectedMapping)) {
+        if (!customEvalTemplate.result?.isUserEvalTemplate && expectedMapping && !(key in expectedMapping)) {
           throw new Error(`Unexpected mapping field '${key}' for ${this.eval_name}. Allowed fields are: ${Object.keys(expectedMapping).join(', ')}`);
         }
         if (typeof key !== 'string') {
@@ -647,5 +648,6 @@ enum ProjectType {
     prepareEvalTags,
     // Export both the interface and the class
     IEvalTag,
-    EvalTag
+    EvalTag,
+    ModelChoices
   };
