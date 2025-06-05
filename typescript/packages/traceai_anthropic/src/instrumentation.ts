@@ -48,7 +48,7 @@ function getExecContext(span: Span) {
   return execContext;
 }
 
-export class AnthropicInstrumentation extends InstrumentationBase<typeof Anthropic> {
+export class AnthropicInstrumentation extends InstrumentationBase{
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
 
@@ -59,7 +59,7 @@ export class AnthropicInstrumentation extends InstrumentationBase<typeof Anthrop
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super("@traceai/instrumentation-anthropic", VERSION, instrumentationConfig);
+    super("@traceai/instrumentation-anthropic", VERSION,Object.assign({}, instrumentationConfig));
     this._traceConfig = traceConfig;
   }
 
@@ -68,8 +68,8 @@ export class AnthropicInstrumentation extends InstrumentationBase<typeof Anthrop
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
   }
 
-  protected init(): InstrumentationModuleDefinition<typeof Anthropic> {
-    const module = new InstrumentationNodeModuleDefinition<typeof Anthropic>(
+  protected init(){
+    const module = new InstrumentationNodeModuleDefinition(
       MODULE_NAME,
       [">=0.20.0 <1"], // Looser version range based on recent activity
       this.patch.bind(this),

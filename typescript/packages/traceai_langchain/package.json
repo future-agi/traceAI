@@ -1,32 +1,15 @@
 {
   "name": "@traceai/langchain",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceAI Instrumentation for LangChain.js",
-  "main": "dist/src/index.js",
-  "module": "dist/esm/index.js",
-  "esnext": "dist/esnext/index.js",
-  "types": "dist/src/index.d.ts",
- 
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "version:update": "../../scripts/version-update.js",
-    "type:check": "tsc --noEmit",
     "test": "jest",
-    "prepare": "pnpm run build"
+    "lint": "eslint . --ext .ts",
+    "prepare": "npm run build"
   },
-  "exports": {
-    ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/src/index.js"
-    }
-  },
-  "keywords": [
-    "opentelemetry",
-    "instrumentation",
-    "typescript",
-    "langchain",
-    "traceai"
-  ],
   "files": [
     "dist",
     "src",
@@ -40,6 +23,13 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
+  "keywords": [
+    "opentelemetry",
+    "instrumentation",
+    "typescript",
+    "langchain",
+    "traceai"
+  ],
   "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_langchain#readme",
   "author": "Future AGI <no-reply@futureagi.com>",
   "dependencies": {

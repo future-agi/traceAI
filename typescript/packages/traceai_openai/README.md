@@ -14,15 +14,15 @@ pnpm add @traceai/openai
 
 ## Quick Start
 
-```typescript
+```javascript
 // export Future AGI API KEYS
 // export FI_API_KEY=your_api_key
 // export FI_SECRET_KEY=your_secret_key
 
-import { register, ProjectType } from "@traceai/fi-core";
-import { OpenAIInstrumentation } from "@traceai/openai";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
+const { register, ProjectType } = require("@traceai/fi-core");
+const { OpenAIInstrumentation } = require("@traceai/openai");
+const { registerInstrumentations } = require("@opentelemetry/instrumentation");
+const { diag, DiagConsoleLogger, DiagLogLevel } = require("@opentelemetry/api");
 
 // Enable OpenTelemetry internal diagnostics (optional, for debugging)
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
@@ -41,7 +41,7 @@ registerInstrumentations({
 });
 
 // 3. Import and Initialize OpenAI Client
-const OpenAI = (await import("openai")).default;
+const OpenAI = require("openai");
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });

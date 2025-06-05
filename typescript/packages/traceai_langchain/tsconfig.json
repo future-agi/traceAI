@@ -1,11 +1,11 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "outDir": "dist",
+    "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"]
+    "types": ["node"],
+    "composite": true
   },
-  "files": [],
   "include": ["src/**/*"],
   "references": [
     { "path": "../fi-core" },
