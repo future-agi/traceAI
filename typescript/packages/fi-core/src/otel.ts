@@ -20,7 +20,7 @@ import {
   SimpleSpanProcessor as OTelSimpleSpanProcessor,
   IdGenerator,
 } from "@opentelemetry/sdk-trace-node";
-import { Resource } from "@opentelemetry/resources";
+import { Resource, resourceFromAttributes, detectResources, defaultResource } from "@opentelemetry/resources";
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
 import { v4 as uuidv4 } from "uuid"; // For UUID generation
 
@@ -131,8 +131,8 @@ class HTTPSpanExporter implements SpanExporter {
       if (!spanContext) {
         return null;
       }
-      const parentSpanId = span.parentSpanId
-        ? this.formatSpanId(span.parentSpanId)
+      const parentSpanId = span.parentSpanContext?.spanId
+        ? this.formatSpanId(span.parentSpanContext.spanId)
         : undefined;
 
       return {
@@ -277,30 +277,35 @@ class FITracerProvider extends BasicTracerProvider {
 
   constructor(config: FITracerProviderOptions = {}) {
     const idGenerator = config.idGenerator ?? new UuidIdGenerator();
-    super({ resource: config.resource, idGenerator });
-    this.verbose = config.verbose ?? getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false; // Allow provider verbosity via env
+    
+    const verbose = config.verbose ?? getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false; // Allow provider verbosity via env
     // Construct the full endpoint using the new logic
-    this.endpoint = constructFullEndpoint(config.endpoint);
-    this.headers = config.headers ?? getEnvFiAuthHeader();
+    const endpoint = constructFullEndpoint(config.endpoint);
+    const headers = config.headers ?? getEnvFiAuthHeader();
 
-    if (this.verbose) {
-      diag.info(`FITracerProvider: Using full exporter endpoint: ${this.endpoint}`); // Use diag.info
+    if (verbose) {
+      diag.info(`FITracerProvider: Using full exporter endpoint: ${endpoint}`); // Use diag.info
     }
 
     // Pass the provider's verbosity to the exporter if not explicitly set for exporter
     const exporterVerbose = config.verbose; // We won't directly use FI_VERBOSE_EXPORTER here, HTTPSpanExporter handles its own env var.
                                          // If FITracerProvider is verbose, its default exporter will be too, unless HTTPSpanExporter's option/env says otherwise.
 
-    const exporter = new HTTPSpanExporter({ endpoint: this.endpoint, headers: this.headers, verbose: exporterVerbose });
+    const exporter = new HTTPSpanExporter({ endpoint: endpoint, headers: headers, verbose: exporterVerbose });
     const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
-    super.addSpanProcessor(defaultProcessor);
+    super({ resource: config.resource, idGenerator, spanProcessors: [defaultProcessor] });
     this.defaultProcessorAttached = true;
+    this.verbose = verbose;
+    this.endpoint = endpoint;
+    this.headers = headers;
+    this.defaultProcessorAttached = true;
+
     // Log to confirm processor and exporter details
-    if (this.verbose) {
-      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with HTTPSpanExporter targeting: ${this.endpoint}`);
+    if (verbose) {
+      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with HTTPSpanExporter targeting: ${endpoint}`);
     }
 
-    if (this.verbose) {
+    if (verbose) {
       this.printTracingDetails();
     }
   }
@@ -313,11 +318,11 @@ class FITracerProvider extends BasicTracerProvider {
       (this as any)._registeredSpanProcessors = []; 
       this.defaultProcessorAttached = false; 
     }
-    super.addSpanProcessor(spanProcessor);
+    (this as any)._registeredSpanProcessors.push(spanProcessor);
   }
 
   private printTracingDetails(): void {
-    const resource = this.resource;
+    const resource = (this as BasicTracerProvider as any).resource;
     if (!resource) {
       diag.warn("No resource available for tracing details");
       return;
@@ -465,7 +470,9 @@ if (!projectName) {
     resourceAttributes[SESSION_NAME] = sessionName;
   }
 
-  const resource = Resource.default().merge(new Resource(resourceAttributes));
+  const detected = detectResources();
+  const resource = detected.merge(resourceFromAttributes(resourceAttributes));
+
   
   // Headers for the exporter
   const exporterHeaders = optHeaders ?? getEnvFiAuthHeader();

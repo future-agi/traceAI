@@ -26,6 +26,7 @@ async function main() {
   }
 
   const fiBaseUrl = process.env.FI_BASE_URL;
+  console.log("fiBaseUrl", fiBaseUrl);
   // console.log(`Initializing FI tracer...`);
   if (fiBaseUrl) {
     // console.log(`Using custom FI endpoint: ${fiBaseUrl}`);
@@ -35,7 +36,7 @@ async function main() {
   const tracerProvider = register({
     projectName: "ts-observability-suite-v5",
     projectType: ProjectType.EXPERIMENT,
-    projectVersionName: "sarthak_f1",
+    projectVersionName: "sarthak_f2",
     // sessionName: "basic-otel-test-session-" + Date.now(), // OBSERVE only
     evalTags: [
       new EvalTag({
@@ -43,7 +44,7 @@ async function main() {
         value: EvalSpanKind.LLM,
         eval_name: EvalName.CHUNK_ATTRIBUTION,
         config: {},
-        custom_eval_name: "Chunk_Attribution_3",
+        custom_eval_name: "Chunk_Attribution_5",
         mapping: {
           "context": "raw.input",
           "output": "raw.output"
@@ -55,37 +56,37 @@ async function main() {
           type: EvalTagType.OBSERVATION_SPAN,
           value: EvalSpanKind.LLM,
           eval_name: "toxic_nature",
-          custom_eval_name: "toxic_nature_custom_eval_config_2",
+          custom_eval_name: "toxic_nature_custom_eval_config_5",
           mapping: {
             "output": "raw.output"
           }
         }
-      ),
-      new EvalTag(
-        {
-          type: EvalTagType.OBSERVATION_SPAN,
-          value: EvalSpanKind.LLM,
-          eval_name: "custom-eval-1",
-          custom_eval_name: "custom-eval-1-config_eval_2",
-          mapping: {
-            "output": "raw.output",
-            "input": "raw.input"
-          }
-        }
-      ),
-      new EvalTag(
-        {
-          type: EvalTagType.OBSERVATION_SPAN,
-          value: EvalSpanKind.LLM,
-          eval_name: "detereministic_custom_eval_template",
-          custom_eval_name: "detereministic_custom_eval_template_2",
-          mapping: {
-            "output": "raw.output",
-            "query": "raw.input",
-            "input": "raw.input"
-          }
-        }
       )
+      // new EvalTag(
+      //   {
+      //     type: EvalTagType.OBSERVATION_SPAN,
+      //     value: EvalSpanKind.LLM,
+      //     eval_name: "custom-eval-1",
+      //     custom_eval_name: "custom-eval-1-config_eval_2",
+      //     mapping: {
+      //       "output": "raw.output",
+      //       "input": "raw.input"
+      //     }
+      //   }
+      // ),
+      // new EvalTag(
+      //   {
+      //     type: EvalTagType.OBSERVATION_SPAN,
+      //     value: EvalSpanKind.LLM,
+      //     eval_name: "detereministic_custom_eval_template",
+      //     custom_eval_name: "detereministic_custom_eval_template_2",
+      //     mapping: {
+      //       "output": "raw.output",
+      //       "query": "raw.input",
+      //       "input": "raw.input"
+      //     }
+      //   }
+      // )
       // ,
       // new EvalTag({
       //   type: EvalTagType.OBSERVATION_SPAN,
