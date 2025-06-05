@@ -29,6 +29,7 @@ from uuid import UUID
 
 import wrapt  # type: ignore
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation.instrumentation._tracers import FITracer
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -83,9 +84,9 @@ class _DictWithLock(ObjectProxy, Generic[K, V]):  # type: ignore
         super().__init__(wrapped or {})
         self._self_lock = RLock()
 
-    def get(self, key: K) -> Optional[V]:
+    def get(self, key: K, default: Optional[V] = None) -> Optional[V]:
         with self._self_lock:
-            return cast(Optional[V], self.__wrapped__.get(key))
+            return cast(Optional[V], self.__wrapped__.get(key, default))
 
     def pop(self, key: K, *args: Any) -> Optional[V]:
         with self._self_lock:
@@ -105,7 +106,7 @@ class _DictWithLock(ObjectProxy, Generic[K, V]):  # type: ignore
 
 
 class FiTracer(BaseTracer):
-    __slots__ = ("_tracer", "_spans_by_run")
+    __slots__ = ("_tracer", "_spans_by_run", "_context_by_run")
 
     def _extract_content(self, data: Any) -> Any:
         """Extract clean content from various message formats"""
@@ -172,14 +173,15 @@ class FiTracer(BaseTracer):
         except Exception as e:
             logger.exception(f"Error sending span data to API: {e}")
 
-    def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, fi_tracer: "FITracer", *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         if TYPE_CHECKING:
             # check that `run_map` still exists in parent class
             assert self.run_map
         self.run_map = _DictWithLock[str, Run](self.run_map)
-        self._tracer = tracer
+        self._tracer = fi_tracer
         self._spans_by_run: Dict[UUID, Span] = _DictWithLock[UUID, Span]()
+        self._context_by_run: Dict[UUID, Dict[str, Any]] = _DictWithLock[UUID, Dict[str, Any]]()
         self._lock = RLock()  # handlers may be run in a thread by langchain
 
     def get_span(self, run_id: UUID) -> Optional[Span]:
@@ -190,6 +192,10 @@ class FiTracer(BaseTracer):
         self.run_map[str(run.id)] = run
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
+        
+        # Capture context attributes at span start time
+        captured_context = dict(get_attributes_from_context())
+        
         with self._lock:
             parent_context = (
                 trace_api.set_span_in_context(parent)
@@ -197,6 +203,9 @@ class FiTracer(BaseTracer):
                 and (parent := self._spans_by_run.get(parent_run_id))
                 else None
             )
+            # Store the captured context for this run
+            self._context_by_run[run.id] = captured_context
+            
         # We can't use real time because the handler may be
         # called in a background thread.
         start_time_utc_nano = _as_utc_nano(run.start_time)
@@ -237,10 +246,13 @@ class FiTracer(BaseTracer):
         self.run_map.pop(str(run.id), None)
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return
+        
         span = self._spans_by_run.pop(run.id, None)
+        captured_context = self._context_by_run.pop(run.id, {})
+        
         if span:
             try:
-                _update_span(span, run)
+                _update_span(span, run, captured_context)
 
                 # Send final span data with both input and output
                 output_data = None
@@ -358,7 +370,7 @@ def _record_exception(span: Span, error: BaseException) -> None:
 
 
 @audit_timing  # type: ignore
-def _update_span(span: Span, run: Run) -> None:
+def _update_span(span: Span, run: Run, captured_context: Dict[str, Any]) -> None:
     if run.error is None:
         span.set_status(trace_api.StatusCode.OK)
     else:
@@ -369,27 +381,27 @@ def _update_span(span: Span, run: Run) -> None:
         else _langchain_run_type_to_span_kind(run.run_type)
     )
     span.set_attribute(FI_SPAN_KIND, span_kind.value)
-    span.set_attributes(dict(get_attributes_from_context()))
-    filtered_inputs, images, eval_input, query = _filter_images(
+    span.set_attributes(dict(captured_context))
+    filtered_data, images, eval_input, query = _filter_images(
         run.inputs.get("messages", [])
     )
 
-    if not filtered_inputs:
+    if not filtered_data:
         if isinstance(run.inputs, dict):
             if input_value := run.inputs.get("input"):
-                filtered_inputs = str(input_value)
+                filtered_data = str(input_value)
             elif query := run.inputs.get("query"):
-                filtered_inputs = str(query)
+                filtered_data = str(query)
             elif question := run.inputs.get("question"):
-                filtered_inputs = str(question)
+                filtered_data = str(question)
         else:
-            filtered_inputs = None
+            filtered_data = None
 
     span.set_attributes(
         dict(
             _flatten(
                 chain(
-                    _as_span_input(filtered_inputs),
+                    _as_span_input(filtered_data),
                     _as_output(_convert_io(run.outputs)),
                     _as_input_images(images),
                     _as_eval_input(eval_input),
@@ -911,12 +923,31 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
     if not run.extra or not (metadata := run.extra.get("metadata")):
         return
     assert isinstance(metadata, Mapping), f"expected Mapping, found {type(metadata)}"
-    if session_id := (
+    
+    # Add all metadata fields as individual span attributes
+    for key, value in metadata.items():
+        if value is not None:
+            # Convert value to string for span attributes
+            str_value = str(value)
+            
+            # Map specific keys to standard attribute names
+            if key == "user_id":
+                yield "user.id", str_value
+            elif key == "session_id":
+                yield "session.id", str_value
+            else:
+                # Add other metadata with metadata prefix to avoid conflicts
+                yield f"{key}", str_value
+    
+    # Handle legacy session ID keys for backward compatibility
+    if legacy_session_id := (
         metadata.get(LANGCHAIN_SESSION_ID)
         or metadata.get(LANGCHAIN_CONVERSATION_ID)
         or metadata.get(LANGCHAIN_THREAD_ID)
     ):
-        yield SESSION_ID, session_id
+        yield SESSION_ID, legacy_session_id
+    
+    # Also include the full metadata as JSON for completeness
     yield METADATA, safe_json_dumps(metadata)
 
 
@@ -1009,7 +1040,7 @@ def _get_attributes_from_image(
         yield f"{IMAGE_URL}", url
 
 
-def _filter_images(messages: Any) -> Tuple[Any, List[str]]:
+def _filter_images(messages: Any) -> Tuple[Any, List[str], str, str]:
     filtered_data = []
     images = []
     eval_input = []
