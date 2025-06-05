@@ -1,13 +1,8 @@
 from typing import Any, Callable, Collection, Optional
 
+from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from wrapt import wrap_function_wrapper
-
-from fi_instrumentation import (
-    FITracer,
-    TraceConfig,
-)
 from traceai_smolagents._wrappers import (
     _ModelWrapper,
     _RunWrapper,
@@ -15,6 +10,7 @@ from traceai_smolagents._wrappers import (
     _ToolCallWrapper,
 )
 from traceai_smolagents.version import __version__
+from wrapt import wrap_function_wrapper
 
 _instruments = ("smolagents >= 1.2.2",)
 
@@ -54,7 +50,9 @@ class SmolagentsInstrumentor(BaseInstrumentor):
             wrapper=run_wrapper,
         )
 
-        self._original_step_methods: Optional[dict[type, Optional[Callable[..., Any]]]] = {}
+        self._original_step_methods: Optional[
+            dict[type, Optional[Callable[..., Any]]]
+        ] = {}
         step_wrapper = _StepWrapper(tracer=self._tracer)
         for step_cls in [CodeAgent, ToolCallingAgent]:
             self._original_step_methods[step_cls] = getattr(step_cls, "step", None)
@@ -74,7 +72,9 @@ class SmolagentsInstrumentor(BaseInstrumentor):
 
         for model_subclass in exported_model_subclasses:
             model_subclass_wrapper = _ModelWrapper(tracer=self._tracer)
-            self._original_model_call_methods[model_subclass] = getattr(model_subclass, "__call__")
+            self._original_model_call_methods[model_subclass] = getattr(
+                model_subclass, "__call__"
+            )
             wrap_function_wrapper(
                 module="smolagents",
                 name=model_subclass.__name__ + ".__call__",

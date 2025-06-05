@@ -2,7 +2,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Type
 
-from fi_instrumentation.settings import get_env_collector_endpoint, get_custom_eval_template
+from fi_instrumentation.settings import (
+    get_custom_eval_template,
+    get_env_collector_endpoint,
+)
 
 
 class SpanAttributes:
@@ -422,6 +425,7 @@ class ModelChoices(Enum):
     PROTECT_FLASH = "protect_flash"
     TURING_FLASH = "turing_flash"
 
+
 class EvalSpanKind(Enum):
     TOOL = "TOOL"
     LLM = "LLM"
@@ -690,11 +694,11 @@ class EvalConfig:
             EvalName.EVAL_RANKING: {
                 "criteria": ConfigField(
                     type=str,
-                    default="Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content."
+                    default="Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content.",
                 ),
             },
         }
-        
+
         # Convert ConfigField objects to dictionary format
         if eval_name in configs:
             return {
@@ -854,7 +858,7 @@ class EvalMappingConfig:
             },
             EvalName.EVAL_RANKING: {
                 "input": ConfigField(type=str, required=True),
-                "context" : ConfigField(type=str, required=True),
+                "context": ConfigField(type=str, required=True),
             },
         }
 
@@ -881,14 +885,13 @@ class EvalTag:
     config: Dict[str, Any] = None
     custom_eval_name: str = None
     mapping: Dict[str, str] = None
-    
 
     def __post_init__(self):
         if self.config is None:
             self.config = {}
         if self.mapping is None:
             self.mapping = {}
-           
+
         if not isinstance(self.value, EvalSpanKind):
             raise ValueError(
                 f"value must be a EvalSpanKind enum, got {type(self.value)}"
@@ -897,31 +900,35 @@ class EvalTag:
         if not isinstance(self.type, EvalTagType):
             raise ValueError(f"type must be an EvalTagType enum, got {type(self.type)}")
 
-        if not self.eval_name: 
-            raise ValueError(
-                f"eval_name is required"
-            )
-        
-        if not self.custom_eval_name:
-            self.custom_eval_name = self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value
-        
-        
+        if not self.eval_name:
+            raise ValueError(f"eval_name is required")
 
-        eval_template = get_custom_eval_template(self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value)
-        is_custom_eval = eval_template.get('isUserEvalTemplate')
-        custom_eval = eval_template.get('evalTemplate', {})
+        if not self.custom_eval_name:
+            self.custom_eval_name = (
+                self.eval_name
+                if isinstance(self.eval_name, str)
+                else self.eval_name.value
+            )
+
+        eval_template = get_custom_eval_template(
+            self.eval_name if isinstance(self.eval_name, str) else self.eval_name.value
+        )
+        is_custom_eval = eval_template.get("isUserEvalTemplate")
+        custom_eval = eval_template.get("evalTemplate", {})
 
         self.validate_fagi_system_eval_name(is_custom_eval)
-        
+
         if is_custom_eval:
-            required_keys = custom_eval.get('config', {}).get('requiredKeys', [])
+            required_keys = custom_eval.get("config", {}).get("requiredKeys", [])
         else:
-            required_keys = EvalMappingConfig.get_mapping_for_eval(self.eval_name).keys()
-        
+            required_keys = EvalMappingConfig.get_mapping_for_eval(
+                self.eval_name
+            ).keys()
+
         if not is_custom_eval:
-            
+
             if not isinstance(self.model, ModelChoices):
-                if (isinstance(self.model, str)):
+                if isinstance(self.model, str):
                     valid_models = [model.value for model in ModelChoices]
                     if self.model not in valid_models:
                         raise ValueError(
@@ -933,30 +940,28 @@ class EvalTag:
                     raise ValueError(
                         f"model must be a of type ModelChoices, got {type(self.model)}"
                     )
-            
 
         self.validate_fagi_system_eval_config(is_custom_eval)
 
         self.validate_fagi_system_eval_mapping(is_custom_eval, required_keys)
-        
 
     def _validate_field_type(self, key: str, expected_type: Type, value: Any) -> None:
         """Validate field type according to configuration"""
 
         if not isinstance(value, expected_type):
-            raise ValueError(f"Field '{key}' must be of type '{expected_type.__name__}', got '{type(value).__name__}' instead.")
-
+            raise ValueError(
+                f"Field '{key}' must be of type '{expected_type.__name__}', got '{type(value).__name__}' instead."
+            )
 
     def validate_fagi_system_eval_config(self, is_custom_eval: bool) -> None:
 
         if not isinstance(self.config, dict):
             raise ValueError(f"config must be a dictionary, got {type(self.config)}")
 
-
         if is_custom_eval:
             self.config = {}
             return
-        
+
         else:
             expected_config = EvalConfig.get_config_for_eval(self.eval_name)
             for key, field_config in expected_config.items():
@@ -967,7 +972,9 @@ class EvalTag:
                         )
                     self.config[key] = field_config["default"]
                 else:
-                    self._validate_field_type(key, field_config["type"], self.config[key])
+                    self._validate_field_type(
+                        key, field_config["type"], self.config[key]
+                    )
 
             for key in self.config:
                 if key not in expected_config:
@@ -976,14 +983,12 @@ class EvalTag:
                     )
 
         return
-    
+
     def validate_fagi_system_eval_name(self, is_custom_eval: bool) -> None:
 
-        if not self.eval_name: 
-            raise ValueError(
-                f"eval_name must be an Present."
-            )
-        
+        if not self.eval_name:
+            raise ValueError(f"eval_name must be an Present.")
+
         if not is_custom_eval:
             if not isinstance(self.eval_name, EvalName):
                 raise ValueError(
@@ -992,7 +997,9 @@ class EvalTag:
 
         return
 
-    def validate_fagi_system_eval_mapping(self, is_custom_eval: bool, required_keys: List[str]) -> None:
+    def validate_fagi_system_eval_mapping(
+        self, is_custom_eval: bool, required_keys: List[str]
+    ) -> None:
 
         if not isinstance(self.mapping, dict):
             raise ValueError(f"mapping must be a dictionary, got {type(self.mapping)}")
@@ -1006,7 +1013,7 @@ class EvalTag:
                         f"Required mapping field '{key}' is missing for {self.eval_name}"
                     )
             required_keys = list(expected_mapping.keys())
-            
+
         for key, value in self.mapping.items():
             if key not in required_keys:
                 raise ValueError(
@@ -1018,11 +1025,8 @@ class EvalTag:
                 raise ValueError(
                     f"All mapping values must be strings, got {type(value)}"
                 )
-    
+
         return
-    
-
-
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert EvalTag to dictionary format for API responses"""
@@ -1033,7 +1037,7 @@ class EvalTag:
             "config": self.config,
             "mapping": self.mapping,
             "custom_eval_name": self.custom_eval_name,
-            "model": self.model.value if self.model else None
+            "model": self.model.value if self.model else None,
         }
 
     def __str__(self) -> str:
@@ -1044,4 +1048,3 @@ class EvalTag:
 def prepare_eval_tags(eval_tags: List[EvalTag]) -> List[Dict[str, Any]]:
     """Convert list of EvalTag objects to list of dictionaries for API consumption"""
     return [tag.to_dict() for tag in eval_tags]
-

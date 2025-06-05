@@ -1,5 +1,5 @@
-from abc import ABC
 import logging
+from abc import ABC
 from contextlib import contextmanager
 from itertools import chain
 from typing import (
@@ -15,8 +15,7 @@ from typing import (
 )
 
 import opentelemetry.context as context_api
-from anthropic.types import Message, MessageTokensCount
-from anthropic.types import TextBlock, ToolUseBlock
+from anthropic.types import Message, MessageTokensCount, TextBlock, ToolUseBlock
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
@@ -41,6 +40,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
 
 class _WithTracer(ABC):
     """
@@ -535,9 +535,7 @@ def _extract_image_data(messages):
                     input_images.append(data)
                     image_index = len(input_images) - 1
                     eval_input.append(
-                        "{{"
-                        + f"{SpanAttributes.INPUT_IMAGES}.{image_index}"
-                        + "}}"
+                        "{{" + f"{SpanAttributes.INPUT_IMAGES}.{image_index}" + "}}"
                     )
 
         def process_non_image_item(item, filtered_content):
@@ -687,18 +685,24 @@ def _get_llm_input_messages(messages: List[Dict[str, str]]) -> Any:
                         if block_type == "image":
                             yield from _get_image_block(block, msg_prefix, block_index)
                         elif block_type == "tool_use":
-                            yield from _get_tool_use_block(block, msg_prefix, tool_index)
+                            yield from _get_tool_use_block(
+                                block, msg_prefix, tool_index
+                            )
                             tool_index += 1
                         elif block_type == "tool_result":
                             yield from _get_tool_result_block(block, msg_prefix)
                         elif block_type == "text":
-                            yield from _get_text_block_dct(block, msg_prefix, block_index)
+                            yield from _get_text_block_dct(
+                                block, msg_prefix, block_index
+                            )
 
         if role := message.get("role"):
             yield f"{msg_prefix}.{MESSAGE_ROLE}", role
 
 
-def _get_tool_use_block(block: ToolUseBlock, msg_prefix: str, tool_index: int) -> Iterator[Tuple[str, Any]]:
+def _get_tool_use_block(
+    block: ToolUseBlock, msg_prefix: str, tool_index: int
+) -> Iterator[Tuple[str, Any]]:
     if tool_call_id := block.id:
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_ID}",
@@ -716,24 +720,34 @@ def _get_tool_use_block(block: ToolUseBlock, msg_prefix: str, tool_index: int) -
         )
 
 
-def _get_text_block(block: TextBlock, msg_prefix: str, block_index: int) -> Iterator[Tuple[str, Any]]:
+def _get_text_block(
+    block: TextBlock, msg_prefix: str, block_index: int
+) -> Iterator[Tuple[str, Any]]:
     yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TYPE}", "text"
     yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TEXT}", block.text
 
 
-def _get_text_block_dct(block: Dict[str, Any], msg_prefix: str, block_index: int) -> Iterator[Tuple[str, Any]]:
+def _get_text_block_dct(
+    block: Dict[str, Any], msg_prefix: str, block_index: int
+) -> Iterator[Tuple[str, Any]]:
     yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TYPE}", "text"
-    yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TEXT}", block.get("text")
+    yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TEXT}", block.get(
+        "text"
+    )
 
 
-def _get_image_block(block: Dict[str, Any], msg_prefix: str, block_index: int) -> Iterator[Tuple[str, Any]]:
+def _get_image_block(
+    block: Dict[str, Any], msg_prefix: str, block_index: int
+) -> Iterator[Tuple[str, Any]]:
     source = block.get("source", {})
     if data := source.get("data"):
         yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TYPE}", "image"
         yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_IMAGE}", data
 
 
-def _get_tool_result_block(block: Dict[str, Any], msg_prefix: str) -> Iterator[Tuple[str, Any]]:
+def _get_tool_result_block(
+    block: Dict[str, Any], msg_prefix: str
+) -> Iterator[Tuple[str, Any]]:
     if tool_call_id := block.get("tool_use_id"):
         yield (
             f"{msg_prefix}.{MESSAGE_TOOL_CALL_ID}",
@@ -742,11 +756,7 @@ def _get_tool_result_block(block: Dict[str, Any], msg_prefix: str) -> Iterator[T
     if content := block.get("content"):
         yield (
             f"{msg_prefix}.{MESSAGE_CONTENT}",
-            (
-                content
-                if isinstance(content, str)
-                else safe_json_dumps(content)
-            ),
+            (content if isinstance(content, str) else safe_json_dumps(content)),
         )
 
 

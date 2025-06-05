@@ -5,11 +5,10 @@ from typing import Any, Callable, Collection, Dict, Optional, Union
 
 from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.fi_types import SpanAttributes
-from traceai_autogen.utils import _to_dict
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.trace import Link, SpanContext, Status, StatusCode
-
+from traceai_autogen.utils import _to_dict
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -53,16 +52,16 @@ class AutogenInstrumentor(BaseInstrumentor):
             config = TraceConfig()
         else:
             assert isinstance(config, TraceConfig)
-            
+
         # Create tracer
         self.tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
-        
+
         autogen = import_module(_MODULE)
         ConversableAgent = autogen.ConversableAgent
-        
+
         # Save original methods
         self._original_generate = ConversableAgent.generate_reply
         self._original_initiate_chat = ConversableAgent.initiate_chat
@@ -94,7 +93,9 @@ class AutogenInstrumentor(BaseInstrumentor):
                         SpanAttributes.INPUT_VALUE,
                         instrumentor._safe_json_dumps(messages),
                     )
-                    span.set_attribute(SpanAttributes.INPUT_MIME_TYPE, "application/json")
+                    span.set_attribute(
+                        SpanAttributes.INPUT_MIME_TYPE, "application/json"
+                    )
                     span.set_attribute("agent.type", agent_self.__class__.__name__)
 
                     response = instrumentor._original_generate(
@@ -109,7 +110,9 @@ class AutogenInstrumentor(BaseInstrumentor):
                         SpanAttributes.OUTPUT_VALUE,
                         instrumentor._safe_json_dumps(response),
                     )
-                    span.set_attribute(SpanAttributes.OUTPUT_MIME_TYPE, "application/json")
+                    span.set_attribute(
+                        SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
+                    )
 
                     span.set_status(Status(StatusCode.OK))
                     return response
@@ -135,16 +138,20 @@ class AutogenInstrumentor(BaseInstrumentor):
                     span.set_attribute(SpanAttributes.FI_SPAN_KIND, "AGENT")
                     span.set_attribute(
                         SpanAttributes.RAW_INPUT,
-                        instrumentor._safe_json_dumps({
-                            "args": args,
-                             **kwargs,
-                        }),
+                        instrumentor._safe_json_dumps(
+                            {
+                                "args": args,
+                                **kwargs,
+                            }
+                        ),
                     )
                     span.set_attribute(
                         SpanAttributes.INPUT_VALUE,
                         instrumentor._safe_json_dumps(message),
                     )
-                    span.set_attribute(SpanAttributes.INPUT_MIME_TYPE, "application/json")
+                    span.set_attribute(
+                        SpanAttributes.INPUT_MIME_TYPE, "application/json"
+                    )
 
                     result = instrumentor._original_initiate_chat(
                         agent_self, recipient, *args, **kwargs
@@ -166,7 +173,9 @@ class AutogenInstrumentor(BaseInstrumentor):
                             instrumentor._safe_json_dumps(result),
                         )
 
-                    span.set_attribute(SpanAttributes.OUTPUT_MIME_TYPE, "application/json")
+                    span.set_attribute(
+                        SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
+                    )
 
                     span.set_status(Status(StatusCode.OK))
                     return result
@@ -210,7 +219,9 @@ class AutogenInstrumentor(BaseInstrumentor):
                         SpanAttributes.INPUT_VALUE,
                         instrumentor._safe_json_dumps(func_call),
                     )
-                    span.set_attribute(SpanAttributes.INPUT_MIME_TYPE, "application/json")
+                    span.set_attribute(
+                        SpanAttributes.INPUT_MIME_TYPE, "application/json"
+                    )
 
                     # If the agent stores a function map, you can store annotations
                     if hasattr(agent_self, "_function_map"):
@@ -233,7 +244,9 @@ class AutogenInstrumentor(BaseInstrumentor):
                             )
 
                         # Record function name
-                        span.set_attribute(SpanAttributes.TOOL_CALL_FUNCTION_NAME, function_name)
+                        span.set_attribute(
+                            SpanAttributes.TOOL_CALL_FUNCTION_NAME, function_name
+                        )
 
                     # Execute function
                     result = instrumentor._original_execute_function(
@@ -249,7 +262,9 @@ class AutogenInstrumentor(BaseInstrumentor):
                         SpanAttributes.OUTPUT_VALUE,
                         instrumentor._safe_json_dumps(result),
                     )
-                    span.set_attribute(SpanAttributes.OUTPUT_MIME_TYPE, "application/json")
+                    span.set_attribute(
+                        SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
+                    )
 
                     span.set_status(Status(StatusCode.OK))
                     return result
@@ -275,11 +290,10 @@ class AutogenInstrumentor(BaseInstrumentor):
             # Import autogen module safely to avoid circular imports
             autogen = import_module(_MODULE)
             ConversableAgent = autogen.ConversableAgent
-            
+
             ConversableAgent.generate_reply = self._original_generate
             ConversableAgent.initiate_chat = self._original_initiate_chat
             ConversableAgent.execute_function = self._original_execute_function
             self._original_generate = None
             self._original_initiate_chat = None
             self._original_execute_function = None
-

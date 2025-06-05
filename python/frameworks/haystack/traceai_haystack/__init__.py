@@ -2,11 +2,13 @@ import logging
 from typing import Any, Callable, Collection
 
 import haystack
+from fi.evals import Protect
 from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import (  # type: ignore[attr-defined]
+from opentelemetry.instrumentation.instrumentor import (
     BaseInstrumentor,
-)
+)  # type: ignore[attr-defined]
 from traceai_haystack._wrappers import (
     _ComponentRunWrapper,
     _PipelineRunComponentWrapper,
@@ -14,8 +16,6 @@ from traceai_haystack._wrappers import (
 )
 from traceai_haystack.version import __version__
 from wrapt import wrap_function_wrapper
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import Protect
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,7 @@ class HaystackInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             name="Protect.protect",
             wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
+
     def _uninstrument(self, **kwargs: Any) -> None:
 
         if self._original_pipeline_run is not None:

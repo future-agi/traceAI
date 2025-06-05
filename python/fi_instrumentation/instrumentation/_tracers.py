@@ -6,9 +6,9 @@ from contextlib import contextmanager
 from datetime import datetime
 from secrets import randbits
 from types import ModuleType
-from typing import (  # type: ignore[attr-defined]
+from typing import (
     TYPE_CHECKING,
-    Any,
+    Any,  # type: ignore[attr-defined]
     Awaitable,
     Callable,
     Dict,
@@ -24,6 +24,7 @@ from typing import (  # type: ignore[attr-defined]
 )
 
 import wrapt  # type: ignore[import-untyped]
+from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY, Context, get_value
 from opentelemetry.sdk.trace.id_generator import IdGenerator, RandomIdGenerator
 from opentelemetry.trace import (
@@ -41,20 +42,13 @@ from opentelemetry.trace import (
 from opentelemetry.util.types import Attributes
 from typing_extensions import ParamSpec, TypeVar, _AnnotatedAlias, overload
 
-from fi_instrumentation.fi_types import (
-    FiSpanKindValues,
-    SpanAttributes,
-)
-
 from ._attributes import (
     get_input_attributes,
     get_span_kind_attributes,
     get_tool_attributes,
 )
 from ._spans import FiSpan
-from .config import (
-    TraceConfig,
-)
+from .config import TraceConfig
 from .context_attributes import get_attributes_from_context
 
 if TYPE_CHECKING:

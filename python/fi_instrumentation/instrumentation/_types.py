@@ -1,9 +1,6 @@
 from typing import Literal, Union
 
-from fi_instrumentation.fi_types import (
-    FiMimeTypeValues,
-    FiSpanKindValues,
-)
+from fi_instrumentation.fi_types import FiMimeTypeValues, FiSpanKindValues
 
 FiSpanKind = Union[
     Literal[

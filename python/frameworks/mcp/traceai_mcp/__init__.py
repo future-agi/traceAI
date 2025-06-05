@@ -5,9 +5,8 @@ from typing import Any, AsyncGenerator, Callable, Collection, Tuple, cast
 from opentelemetry import context, propagate
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from opentelemetry.instrumentation.utils import unwrap
-from wrapt import ObjectProxy, register_post_import_hook, wrap_function_wrapper
-
 from traceai_mcp.package import _instruments
+from wrapt import ObjectProxy, register_post_import_hook, wrap_function_wrapper
 
 
 class MCPInstrumentor(BaseInstrumentor):  # type: ignore
@@ -45,7 +44,9 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         )
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
-                "mcp.server.sse", "SseServerTransport.connect_sse", self._wrap_plain_transport
+                "mcp.server.sse",
+                "SseServerTransport.connect_sse",
+                self._wrap_plain_transport,
             ),
             "mcp.server.sse",
         )
@@ -71,7 +72,9 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         # propagate context broadly.
         register_post_import_hook(
             lambda _: wrap_function_wrapper(
-                "mcp.server.session", "ServerSession.__init__", self._base_session_init_wrapper
+                "mcp.server.session",
+                "ServerSession.__init__",
+                self._base_session_init_wrapper,
             ),
             "mcp.server.session",
         )
@@ -83,8 +86,14 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
     @asynccontextmanager
     async def _wrap_transport_with_callback(
         self, wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any
-    ) -> AsyncGenerator[Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter", Any], None]:
-        async with wrapped(*args, **kwargs) as (read_stream, write_stream, get_session_id_callback):
+    ) -> AsyncGenerator[
+        Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter", Any], None
+    ]:
+        async with wrapped(*args, **kwargs) as (
+            read_stream,
+            write_stream,
+            get_session_id_callback,
+        ):
             yield (
                 InstrumentedStreamReader(read_stream),
                 InstrumentedStreamWriter(write_stream),
@@ -94,9 +103,13 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
     @asynccontextmanager
     async def _wrap_plain_transport(
         self, wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any
-    ) -> AsyncGenerator[Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter"], None]:
+    ) -> AsyncGenerator[
+        Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter"], None
+    ]:
         async with wrapped(*args, **kwargs) as (read_stream, write_stream):
-            yield InstrumentedStreamReader(read_stream), InstrumentedStreamWriter(write_stream)
+            yield InstrumentedStreamReader(read_stream), InstrumentedStreamWriter(
+                write_stream
+            )
 
     def _base_session_init_wrapper(
         self, wrapped: Callable[..., None], instance: Any, args: Any, kwargs: Any
@@ -106,9 +119,15 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         writer = getattr(instance, "_incoming_message_stream_writer", None)
         if reader and writer:
             setattr(
-                instance, "_incoming_message_stream_reader", ContextAttachingStreamReader(reader)
+                instance,
+                "_incoming_message_stream_reader",
+                ContextAttachingStreamReader(reader),
             )
-            setattr(instance, "_incoming_message_stream_writer", ContextSavingStreamWriter(writer))
+            setattr(
+                instance,
+                "_incoming_message_stream_writer",
+                ContextSavingStreamWriter(writer),
+            )
 
 
 class InstrumentedStreamReader(ObjectProxy):  # type: ignore

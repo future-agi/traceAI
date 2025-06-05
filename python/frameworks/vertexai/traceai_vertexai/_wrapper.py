@@ -12,6 +12,7 @@ from typing import (
     ContextManager,
     Iterable,
     Iterator,
+    List,
     Mapping,
     Optional,
     Protocol,
@@ -20,7 +21,6 @@ from typing import (
     TypeVar,
     Union,
     cast,
-    List,
 )
 
 import proto
@@ -40,8 +40,8 @@ from google.cloud import aiplatform_v1 as v1
 from google.cloud import aiplatform_v1beta1 as v1beta1
 from google.cloud.aiplatform_v1.types.prediction_service import (
     GenerateContentRequest,
-    PredictResponse,
     PredictRequest,
+    PredictResponse,
 )
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api

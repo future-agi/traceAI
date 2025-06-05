@@ -1,9 +1,9 @@
+from fi_instrumentation.instrumentation._tracers import FITracer
 from fi_instrumentation.instrumentation.config import (
     REDACTED_VALUE,
     TraceConfig,
     suppress_tracing,
 )
-from fi_instrumentation.instrumentation._tracers import FITracer
 from fi_instrumentation.instrumentation.context_attributes import (
     get_attributes_from_context,
     using_attributes,

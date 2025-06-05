@@ -6,14 +6,13 @@ from json import JSONEncoder
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
-from opentelemetry.util.types import AttributeValue
-from typing_extensions import TypeGuard
-
 from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
     SpanAttributes,
 )
+from opentelemetry.util.types import AttributeValue
+from typing_extensions import TypeGuard
 
 from ._types import FiMimeType, FiSpanKind
 

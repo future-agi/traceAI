@@ -23,6 +23,7 @@ from typing import (
 
 from botocore.client import BaseClient
 from botocore.response import StreamingBody
+from fi.evals import Protect
 from fi_instrumentation import (
     FITracer,
     TraceConfig,
@@ -36,6 +37,7 @@ from fi_instrumentation.fi_types import (
     MessageContentAttributes,
     SpanAttributes,
 )
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
@@ -47,8 +49,6 @@ from traceai_bedrock.package import _instruments
 from traceai_bedrock.utils.anthropic import _extract_image_data
 from traceai_bedrock.version import __version__
 from wrapt import wrap_function_wrapper
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import Protect
 
 ClientCreator = TypeVar("ClientCreator", bound=Callable[..., BaseClient])
 

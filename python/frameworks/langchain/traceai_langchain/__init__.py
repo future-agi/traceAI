@@ -4,6 +4,7 @@ from uuid import UUID
 
 import langchain_core
 from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from langchain_core.callbacks import BaseCallbackManager
 from langchain_core.runnables.config import var_child_runnable_config  # noqa F401
 from opentelemetry import trace as trace_api
@@ -13,7 +14,7 @@ from traceai_langchain._tracer import FiTracer
 from traceai_langchain.package import _instruments
 from traceai_langchain.version import __version__
 from wrapt import wrap_function_wrapper  # type: ignore
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -36,9 +37,9 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
         else:
             assert isinstance(config, TraceConfig)
 
-        from traceai_langchain._tracer import FiTracer as LangChainFiTracer
         from fi.evals import Protect
         from fi_instrumentation.instrumentation._tracers import FITracer
+        from traceai_langchain._tracer import FiTracer as LangChainFiTracer
 
         self.fi_tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
@@ -57,7 +58,6 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             name="Protect.protect",
             wrapper=GuardrailProtectWrapper(self._tracer),
         )
-
 
     def _uninstrument(self, **kwargs: Any) -> None:
         langchain_core.callbacks.BaseCallbackManager.__init__ = self._original_callback_manager_init  # type: ignore

@@ -32,7 +32,7 @@ async function main() {
 
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
-    projectName: "ts-observability-suite-v3",
+    projectName: "ts-observability-suite-v4",
     projectType: ProjectType.OBSERVE,
     sessionName: "basic-otel-test-session-" + Date.now(),
   });

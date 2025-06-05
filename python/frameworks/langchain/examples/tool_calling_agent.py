@@ -1,6 +1,8 @@
 import os
 
+import opentelemetry.trace as trace_api
 import requests
+from fi.evals import Evaluator, Protect
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import (
     EvalName,
@@ -21,9 +23,7 @@ from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from fi.evals import Protect, Evaluator
 from traceai_langchain import LangChainInstrumentor
-import opentelemetry.trace as trace_api
 
 # Configure trace provider with custom evaluation tags
 eval_tags = [
@@ -284,8 +284,12 @@ def create_agent(tools: list) -> agents.AgentExecutor:
 def main():
     """Main execution function."""
     # Get the specific FITracer instance from setup
-    tracer = setup_instrumentation() 
-    evaluator = Evaluator(fi_api_key=os.environ.get("FI_API_KEY"), fi_secret_key=os.environ.get("FI_SECRET_KEY"), fi_base_url=os.environ.get("FI_BASE_URL"))
+    tracer = setup_instrumentation()
+    evaluator = Evaluator(
+        fi_api_key=os.environ.get("FI_API_KEY"),
+        fi_secret_key=os.environ.get("FI_SECRET_KEY"),
+        fi_base_url=os.environ.get("FI_BASE_URL"),
+    )
     protector = Protect(evaluator=evaluator)
     tools = [get_weather_info, get_stock_info, get_document_qa]
     agent_executor = create_agent(tools)
@@ -298,35 +302,38 @@ def main():
         "And how about MSFT?",
     ]
     rules = [
-    {
-        "metric": "Tone",
-        "contains": ["anger", "fear"],
-        "type": "any"
-    },
-    {
-        "metric": "Toxicity"
-    },
-    {
-        "metric": "Prompt Injection",
-    },
-
-]
+        {"metric": "Tone", "contains": ["anger", "fear"], "type": "any"},
+        {"metric": "Toxicity"},
+        {
+            "metric": "Prompt Injection",
+        },
+    ]
     results = []
     for query in queries:
         # Create a parent span for each query processing step using the correct tracer
-        with tracer.start_as_current_span(f"Process Query: {query[:50]}...") as parent_span: # Limit query length for span name
+        with tracer.start_as_current_span(
+            f"Process Query: {query[:50]}..."
+        ) as parent_span:  # Limit query length for span name
             # Agent execution should now inherit context from parent_span
             agent_result = agent_executor.invoke({"input": query})
-            
-            # Guardrail execution should also inherit context from parent_span
-            protect_result = protector.protect(inputs=query, protect_rules=rules, action="block", reason=True) # Protecting original query for now
-            
-            # Add attributes to the parent span
-            parent_span.set_attribute("agent.output", str(agent_result.get('output', '')))
-            parent_span.set_attribute("guardrail.status", protect_result.get('status', ''))
-            parent_span.set_attribute("guardrail.failed_rule", protect_result.get('failed_rule', ''))
 
-            results.append(protect_result) # Or maybe agent_result?
+            # Guardrail execution should also inherit context from parent_span
+            protect_result = protector.protect(
+                inputs=query, protect_rules=rules, action="block", reason=True
+            )  # Protecting original query for now
+
+            # Add attributes to the parent span
+            parent_span.set_attribute(
+                "agent.output", str(agent_result.get("output", ""))
+            )
+            parent_span.set_attribute(
+                "guardrail.status", protect_result.get("status", "")
+            )
+            parent_span.set_attribute(
+                "guardrail.failed_rule", protect_result.get("failed_rule", "")
+            )
+
+            results.append(protect_result)  # Or maybe agent_result?
 
     return results
 
