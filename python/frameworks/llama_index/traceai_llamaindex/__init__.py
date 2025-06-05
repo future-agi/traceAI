@@ -1,15 +1,16 @@
 import logging
 from typing import Any, Collection, Optional
 
+from fi.evals import Protect
 from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from opentelemetry.trace import Span
 from traceai_llamaindex.package import _instruments
 from traceai_llamaindex.version import __version__
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import Protect
 from wrapt import wrap_function_wrapper
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -59,7 +60,7 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             config=config,
         )
         self._tracer = tracer
-        self._event_handler = None   
+        self._event_handler = None
 
         if self._use_legacy_callback_handler:
             import llama_index.core
@@ -92,6 +93,7 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             name="Protect.protect",
             wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
+
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._use_legacy_callback_handler:
             import llama_index.core

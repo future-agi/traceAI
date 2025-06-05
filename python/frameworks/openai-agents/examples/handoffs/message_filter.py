@@ -6,7 +6,6 @@ import random
 from agents import Agent, HandoffInputData, Runner, function_tool, handoff, trace
 from agents.extensions import handoff_filters
 from fi_instrumentation import register
-
 from traceai_openai_agents import OpenAIAgentsInstrumentor
 
 tracer_provider = register(project_name="openai-agents-example")
@@ -19,7 +18,9 @@ def random_number_tool(max: int) -> int:
     return random.randint(0, max)
 
 
-def spanish_handoff_message_filter(handoff_message_data: HandoffInputData) -> HandoffInputData:
+def spanish_handoff_message_filter(
+    handoff_message_data: HandoffInputData,
+) -> HandoffInputData:
     # First, we'll remove any tool-related messages from the message history
     handoff_message_data = handoff_filters.remove_all_tools(handoff_message_data)
 
@@ -70,7 +71,12 @@ async def main():
         result = await Runner.run(
             second_agent,
             input=result.to_input_list()
-            + [{"content": "Can you generate a random number between 0 and 100?", "role": "user"}],
+            + [
+                {
+                    "content": "Can you generate a random number between 0 and 100?",
+                    "role": "user",
+                }
+            ],
         )
 
         print("Step 2 done")

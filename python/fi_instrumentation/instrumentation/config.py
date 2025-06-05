@@ -1,22 +1,7 @@
 import os
 from dataclasses import dataclass, field, fields
 from types import TracebackType
-from typing import (
-    Any,
-    Callable,
-    Optional,
-    Type,
-    Union,
-    get_args,
-)
-
-from opentelemetry.context import (
-    _SUPPRESS_INSTRUMENTATION_KEY,
-    attach,
-    detach,
-    set_value,
-)
-from opentelemetry.util.types import AttributeValue
+from typing import Any, Callable, Optional, Type, Union, get_args
 
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
@@ -25,6 +10,13 @@ from fi_instrumentation.fi_types import (
     MessageContentAttributes,
     SpanAttributes,
 )
+from opentelemetry.context import (
+    _SUPPRESS_INSTRUMENTATION_KEY,
+    attach,
+    detach,
+    set_value,
+)
+from opentelemetry.util.types import AttributeValue
 
 from .logging import logger
 

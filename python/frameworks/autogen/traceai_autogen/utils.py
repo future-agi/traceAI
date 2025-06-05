@@ -18,5 +18,3 @@ def _to_dict(value: Any) -> Any:
     if hasattr(value, "__dict__"):
         return _to_dict(vars(value))
     return str(value)
-
-

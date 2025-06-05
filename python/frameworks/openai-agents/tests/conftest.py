@@ -1,13 +1,12 @@
 from typing import Iterator
 
 import pytest
+from openinference.instrumentation.openai import OpenAIInstrumentor
+from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-from openinference.instrumentation.openai import OpenAIInstrumentor
-from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
 
 @pytest.fixture

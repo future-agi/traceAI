@@ -5,7 +5,11 @@ from secrets import token_hex
 from typing import Any, Iterable, Mapping, Sequence, Union
 
 import pytest
-from agents.tracing.span_data import FunctionSpanData, GenerationSpanData, MCPListToolsSpanData
+from agents.tracing.span_data import (
+    FunctionSpanData,
+    GenerationSpanData,
+    MCPListToolsSpanData,
+)
 from openai.types.responses import (
     EasyInputMessageParam,
     FunctionTool,
@@ -35,8 +39,10 @@ from openai.types.responses.response_input_item_param import (
     ItemReference,
     Message,
 )
-from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
-
+from openai.types.responses.response_usage import (
+    InputTokensDetails,
+    OutputTokensDetails,
+)
 from openinference.instrumentation.openai_agents._processor import (
     _get_attributes_from_chat_completions_input,
     _get_attributes_from_chat_completions_message_content,
@@ -286,7 +292,9 @@ def test_get_attributes_from_input(
             id="message_with_content_list",
         ),
         pytest.param(
-            EasyInputMessageParam(role="developer", content="Debug info", type="message"),
+            EasyInputMessageParam(
+                role="developer", content="Debug info", type="message"
+            ),
             {
                 "message.role": "developer",
                 "message.content": "Debug info",
@@ -294,7 +302,9 @@ def test_get_attributes_from_input(
             id="developer_message",
         ),
         pytest.param(
-            EasyInputMessageParam(role="system", content="System message", type="message"),
+            EasyInputMessageParam(
+                role="system", content="System message", type="message"
+            ),
             {
                 "message.role": "system",
                 "message.content": "System message",
@@ -370,7 +380,9 @@ def test_get_attributes_from_response_function_tool_call_param(
     tool_call_param: ResponseFunctionToolCallParam,
     expected_attributes: Mapping[str, Any],
 ) -> None:
-    attributes = dict(_get_attributes_from_response_function_tool_call_param(tool_call_param, ""))
+    attributes = dict(
+        _get_attributes_from_response_function_tool_call_param(tool_call_param, "")
+    )
     assert attributes == expected_attributes
 
 
@@ -419,7 +431,9 @@ def test_get_attributes_from_function_call_output(
     function_call_output: FunctionCallOutput,
     expected_attributes: Mapping[str, Any],
 ) -> None:
-    attributes = dict(_get_attributes_from_function_call_output(function_call_output, ""))
+    attributes = dict(
+        _get_attributes_from_function_call_output(function_call_output, "")
+    )
     assert attributes == expected_attributes
 
 
@@ -466,7 +480,10 @@ def test_get_attributes_from_function_call_output(
         pytest.param(
             GenerationSpanData(
                 model="gpt-4",
-                model_config={"temperature": 0.7, "base_url": "https://api.openai.com/v1"},
+                model_config={
+                    "temperature": 0.7,
+                    "base_url": "https://api.openai.com/v1",
+                },
                 input=[{"role": "user", "content": "Hello"}],
                 output=[{"role": "assistant", "content": "Hi"}],
                 usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
@@ -555,7 +572,9 @@ def test_get_attributes_from_mcp_list_tool_span_data(
     mcp_list_tool_span_data: MCPListToolsSpanData,
     expected_attributes: Mapping[str, Any],
 ) -> None:
-    attributes = dict(_get_attributes_from_mcp_list_tool_span_data(mcp_list_tool_span_data))
+    attributes = dict(
+        _get_attributes_from_mcp_list_tool_span_data(mcp_list_tool_span_data)
+    )
     assert attributes == expected_attributes
 
 
@@ -583,7 +602,10 @@ def test_get_attributes_from_mcp_list_tool_span_data(
             id="none_input",
         ),
         pytest.param(
-            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}],
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi"},
+            ],
             {
                 "input.value": json.dumps(
                     [
@@ -605,7 +627,9 @@ def test_get_attributes_from_chat_completions_input(
     chat_completions_input: Sequence[dict[str, Any]],
     expected_attributes: Mapping[str, Any],
 ) -> None:
-    attributes = dict(_get_attributes_from_chat_completions_input(chat_completions_input))
+    attributes = dict(
+        _get_attributes_from_chat_completions_input(chat_completions_input)
+    )
     assert attributes == expected_attributes
 
 
@@ -637,7 +661,10 @@ def test_get_attributes_from_chat_completions_input(
             id="none_output",
         ),
         pytest.param(
-            [{"role": "assistant", "content": "Hi"}, {"role": "user", "content": "Thanks"}],
+            [
+                {"role": "assistant", "content": "Hi"},
+                {"role": "user", "content": "Thanks"},
+            ],
             {
                 "output.value": json.dumps(
                     [
@@ -659,7 +686,9 @@ def test_get_attributes_from_chat_completions_output(
     chat_completions_output: Sequence[dict[str, Any]],
     expected_attributes: Mapping[str, Any],
 ) -> None:
-    attributes = dict(_get_attributes_from_chat_completions_output(chat_completions_output))
+    attributes = dict(
+        _get_attributes_from_chat_completions_output(chat_completions_output)
+    )
     assert attributes == expected_attributes
 
 
@@ -770,7 +799,9 @@ def test_get_attributes_from_chat_completions_message_dicts(
     expected_attributes: Mapping[str, Any],
 ) -> None:
     attributes = dict(
-        _get_attributes_from_chat_completions_message_dicts(message_dicts, "llm.input_messages.")
+        _get_attributes_from_chat_completions_message_dicts(
+            message_dicts, "llm.input_messages."
+        )
     )
     assert attributes == expected_attributes
 
@@ -858,7 +889,9 @@ def test_get_attributes_from_chat_completions_message_content_item(
     content_item: Mapping[str, Any],
     expected_attributes: Mapping[str, Any],
 ) -> None:
-    attributes = dict(_get_attributes_from_chat_completions_message_content_item(content_item, ""))
+    attributes = dict(
+        _get_attributes_from_chat_completions_message_content_item(content_item, "")
+    )
     assert attributes == expected_attributes
 
 
@@ -923,7 +956,9 @@ def test_get_attributes_from_chat_completions_tool_call_dict(
     tool_call_dict: Mapping[str, Any],
     expected_attributes: Mapping[str, Any],
 ) -> None:
-    attributes = dict(_get_attributes_from_chat_completions_tool_call_dict(tool_call_dict, ""))
+    attributes = dict(
+        _get_attributes_from_chat_completions_tool_call_dict(tool_call_dict, "")
+    )
     assert attributes == expected_attributes
 
 

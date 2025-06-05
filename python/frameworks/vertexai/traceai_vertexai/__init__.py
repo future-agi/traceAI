@@ -1,15 +1,15 @@
 import logging
 from typing import Any, Collection
 
+from fi.evals import Protect
 from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from opentelemetry.trace import get_tracer, get_tracer_provider
 from traceai_vertexai import _instrumentation_status
 from traceai_vertexai.package import _instruments
 from traceai_vertexai.version import __version__
 from wrapt import wrap_function_wrapper
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import Protect
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())

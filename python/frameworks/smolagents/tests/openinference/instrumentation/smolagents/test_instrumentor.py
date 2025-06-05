@@ -3,23 +3,6 @@ import os
 from typing import Any, Generator, Optional
 
 import pytest
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.util._importlib_metadata import entry_points
-from smolagents import OpenAIServerModel, Tool
-from smolagents.agents import (  # type: ignore[import-untyped]
-    CodeAgent,
-    ToolCallingAgent,
-)
-from smolagents.models import (  # type: ignore[import-untyped]
-    ChatMessage,
-    ChatMessageToolCall,
-    ChatMessageToolCallDefinition,
-)
-
 from openinference.instrumentation import OITracer
 from openinference.instrumentation.smolagents import SmolagentsInstrumentor
 from openinference.semconv.trace import (
@@ -29,6 +12,22 @@ from openinference.semconv.trace import (
     SpanAttributes,
     ToolAttributes,
     ToolCallAttributes,
+)
+from opentelemetry import trace as trace_api
+from opentelemetry.sdk import trace as trace_sdk
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.util._importlib_metadata import entry_points
+from smolagents import OpenAIServerModel, Tool
+from smolagents.agents import (
+    CodeAgent,  # type: ignore[import-untyped]
+    ToolCallingAgent,
+)
+from smolagents.models import (
+    ChatMessage,  # type: ignore[import-untyped]
+    ChatMessageToolCall,
+    ChatMessageToolCallDefinition,
 )
 
 
@@ -70,7 +69,9 @@ def in_memory_span_exporter() -> InMemorySpanExporter:
 
 
 @pytest.fixture
-def tracer_provider(in_memory_span_exporter: InMemorySpanExporter) -> trace_api.TracerProvider:
+def tracer_provider(
+    in_memory_span_exporter: InMemorySpanExporter,
+) -> trace_api.TracerProvider:
     resource = Resource(attributes={})
     tracer_provider = trace_sdk.TracerProvider(resource=resource)
     span_processor = SimpleSpanProcessor(span_exporter=in_memory_span_exporter)
@@ -83,7 +84,9 @@ def instrument(
     tracer_provider: trace_api.TracerProvider,
     in_memory_span_exporter: InMemorySpanExporter,
 ) -> Generator[None, None, None]:
-    SmolagentsInstrumentor().instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+    SmolagentsInstrumentor().instrument(
+        tracer_provider=tracer_provider, skip_dep_check=True
+    )
     yield
     SmolagentsInstrumentor().uninstrument()
     in_memory_span_exporter.clear()
@@ -157,13 +160,17 @@ class TestModels:
         assert isinstance(inv_params := attributes.pop(LLM_INVOCATION_PARAMETERS), str)
         assert json.loads(inv_params) == {}
         assert attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "user"
-        assert attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}") == input_message_content
+        assert (
+            attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
+            == input_message_content
+        )
         assert isinstance(attributes.pop(LLM_TOKEN_COUNT_PROMPT), int)
         assert isinstance(attributes.pop(LLM_TOKEN_COUNT_COMPLETION), int)
         assert isinstance(attributes.pop(LLM_TOKEN_COUNT_TOTAL), int)
         assert attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "assistant"
         assert (
-            attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}") == output_message_content
+            attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
+            == output_message_content
         )
         assert not attributes
 
@@ -189,7 +196,10 @@ class TestModels:
             name = "get_weather"
             description = "Get the weather for a given city"
             inputs = {
-                "location": {"type": "string", "description": "The city to get the weather for"}
+                "location": {
+                    "type": "string",
+                    "description": "The city to get the weather for",
+                }
             }
             output_type = "string"
 
@@ -231,7 +241,10 @@ class TestModels:
         assert isinstance(inv_params := attributes.pop(LLM_INVOCATION_PARAMETERS), str)
         assert json.loads(inv_params) == {}
         assert attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "user"
-        assert attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}") == input_message_content
+        assert (
+            attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
+            == input_message_content
+        )
         assert isinstance(
             tool_json_schema := attributes.pop(f"{LLM_TOOLS}.0.{TOOL_JSON_SCHEMA}"), str
         )
@@ -257,7 +270,9 @@ class TestModels:
         assert isinstance(attributes.pop(LLM_TOKEN_COUNT_TOTAL), int)
         assert attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "assistant"
         assert (
-            attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_ID}")
+            attributes.pop(
+                f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_ID}"
+            )
             == tool_call.id
         )
         assert (
@@ -409,7 +424,10 @@ class TestTools:
             name = "get_weather"
             description = "Get the weather for a given city"
             inputs = {
-                "location": {"type": "string", "description": "The city to get the weather for"}
+                "location": {
+                    "type": "string",
+                    "description": "The city to get the weather for",
+                }
             }
             output_type = "string"
 
@@ -453,7 +471,10 @@ class TestTools:
             name = "get_weather"
             description = "Get detailed weather information for a given city"
             inputs = {
-                "location": {"type": "string", "description": "The city to get the weather for"}
+                "location": {
+                    "type": "string",
+                    "description": "The city to get the weather for",
+                }
             }
             output_type = "object"
 
@@ -478,11 +499,16 @@ class TestTools:
             "kwargs": {},
         }
         assert isinstance(output_value := attributes.pop(OUTPUT_VALUE), str)
-        assert json.loads(output_value) == {"condition": "sunny", "temperature": 25, "humidity": 60}
+        assert json.loads(output_value) == {
+            "condition": "sunny",
+            "temperature": 25,
+            "humidity": 60,
+        }
         assert attributes.pop(OUTPUT_MIME_TYPE) == JSON
         assert attributes.pop(TOOL_NAME) == "get_weather"
         assert (
-            attributes.pop(TOOL_DESCRIPTION) == "Get detailed weather information for a given city"
+            attributes.pop(TOOL_DESCRIPTION)
+            == "Get detailed weather information for a given city"
         )
         assert isinstance(tool_parameters := attributes.pop(TOOL_PARAMETERS), str)
         assert json.loads(tool_parameters) == {
@@ -496,7 +522,9 @@ class TestTools:
 
 # message attributes
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
-MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
+MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
+    MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
+)
 MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE

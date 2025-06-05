@@ -16,6 +16,18 @@ from agents.tracing.span_data import (
     ResponseSpanData,
     SpanData,
 )
+from fi_instrumentation import safe_json_dumps
+from fi_instrumentation.fi_types import (
+    FiLLMProviderValues,
+    FiLLMSystemValues,
+    FiMimeTypeValues,
+    FiSpanKindValues,
+    MessageAttributes,
+    MessageContentAttributes,
+    SpanAttributes,
+    ToolAttributes,
+    ToolCallAttributes,
+)
 from openai.types.responses import (
     EasyInputMessageParam,
     FunctionTool,
@@ -40,27 +52,9 @@ from openai.types.responses.response_input_item_param import FunctionCallOutput,
 from openai.types.responses.response_output_message_param import Content
 from opentelemetry.context import attach, detach
 from opentelemetry.trace import Span as OtelSpan
-from opentelemetry.trace import (
-    Status,
-    StatusCode,
-    Tracer,
-    set_span_in_context,
-)
+from opentelemetry.trace import Status, StatusCode, Tracer, set_span_in_context
 from opentelemetry.util.types import AttributeValue
 from typing_extensions import assert_never
-
-from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import (
-    MessageAttributes,
-    MessageContentAttributes,
-    FiLLMProviderValues,
-    FiLLMSystemValues,
-    FiMimeTypeValues,
-    FiSpanKindValues,
-    SpanAttributes,
-    ToolAttributes,
-    ToolCallAttributes,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +133,9 @@ class FiTracingProcessor(TracingProcessor):
 
         data = span.span_data
         if isinstance(data, ResponseSpanData):
-            if hasattr(data, "response") and isinstance(response := data.response, Response):
+            if hasattr(data, "response") and isinstance(
+                response := data.response, Response
+            ):
                 otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
                 otel_span.set_attribute(RAW_OUTPUT, response.model_dump_json())
                 otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
@@ -167,7 +163,7 @@ class FiTracingProcessor(TracingProcessor):
             for k, v in _get_attributes_from_function_span_data(data):
                 otel_span.set_attribute(k, v)
         elif isinstance(data, MCPListToolsSpanData):
-            otel_span.set_attribute(RAW_OUTPUT, safe_json_dumps(data.output))       
+            otel_span.set_attribute(RAW_OUTPUT, safe_json_dumps(data.output))
             for k, v in _get_attributes_from_mcp_list_tool_span_data(data):
                 otel_span.set_attribute(k, v)
         end_time: Optional[int] = None
@@ -450,7 +446,11 @@ def _get_attributes_from_function_span_data(
         yield INPUT_MIME_TYPE, JSON
     if obj.output is not None:
         yield OUTPUT_VALUE, _convert_to_primitive(obj.output)
-        if isinstance(obj.output, str) and obj.output[0] == "{" and obj.output[-1] == "}":
+        if (
+            isinstance(obj.output, str)
+            and obj.output[0] == "{"
+            and obj.output[-1] == "}"
+        ):
             yield OUTPUT_MIME_TYPE, JSON
 
 
@@ -470,12 +470,16 @@ def _get_attributes_from_message_content_list(
             ...
         elif item["type"] == "refusal":
             yield f"{prefix}{MESSAGE_CONTENTS}.{i}.{MESSAGE_CONTENT_TYPE}", "text"
-            yield f"{prefix}{MESSAGE_CONTENTS}.{i}.{MESSAGE_CONTENT_TEXT}", item["refusal"]
+            yield f"{prefix}{MESSAGE_CONTENTS}.{i}.{MESSAGE_CONTENT_TEXT}", item[
+                "refusal"
+            ]
         elif TYPE_CHECKING:
             assert_never(item["type"])
 
 
-def _get_attributes_from_response(obj: Response) -> Iterator[tuple[str, AttributeValue]]:
+def _get_attributes_from_response(
+    obj: Response,
+) -> Iterator[tuple[str, AttributeValue]]:
     yield from _get_attributes_from_tools(obj.tools)
     yield from _get_attributes_from_usage(obj.usage)
     yield from _get_attributes_from_response_output(obj.output)
@@ -525,7 +529,9 @@ def _get_attributes_from_response_output(
             msg_idx += 1
         elif isinstance(item, ResponseFunctionToolCall):
             yield f"{LLM_OUTPUT_MESSAGES}.{msg_idx}.{MESSAGE_ROLE}", "assistant"
-            prefix = f"{LLM_OUTPUT_MESSAGES}.{msg_idx}.{MESSAGE_TOOL_CALLS}.{tool_call_idx}."
+            prefix = (
+                f"{LLM_OUTPUT_MESSAGES}.{msg_idx}.{MESSAGE_TOOL_CALLS}.{tool_call_idx}."
+            )
             yield from _get_attributes_from_function_tool_call(item, prefix)
             tool_call_idx += 1
         elif isinstance(item, ResponseFileSearchToolCall):
@@ -597,6 +603,7 @@ def _flatten(
         else:
             yield f"{prefix}{key}", str(value)
 
+
 def _to_dict(result: Any) -> Any:
     if not result:
         return
@@ -639,7 +646,9 @@ MESSAGE_CONTENTS = MessageAttributes.MESSAGE_CONTENTS
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
 MESSAGE_CONTENT_TEXT = MessageContentAttributes.MESSAGE_CONTENT_TEXT
 MESSAGE_CONTENT_TYPE = MessageContentAttributes.MESSAGE_CONTENT_TYPE
-MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
+MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
+    MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
+)
 MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS

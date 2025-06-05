@@ -1,14 +1,14 @@
 from importlib import import_module
 from typing import Any, Collection
 
+from fi.evals import Protect
 from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from traceai_instructor._wrappers import _HandleResponseWrapper, _PatchWrapper
 from traceai_instructor.version import __version__
 from wrapt import wrap_function_wrapper
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from fi.evals import Protect
 
 _instruments = ("instructor >= 0.0.1", "futureagi >= 0.0.1")
 
@@ -53,6 +53,7 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
             name="Protect.protect",
             wrapper=GuardrailProtectWrapper(tracer=self._tracer),
         )
+
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._original_patch is not None:
             instructor_module = import_module("instructor")

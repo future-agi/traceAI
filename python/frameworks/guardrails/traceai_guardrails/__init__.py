@@ -3,18 +3,17 @@ import logging
 from importlib import import_module, metadata
 from typing import Any, Collection
 
+from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
 from packaging.version import Version
-from wrapt import ObjectProxy, wrap_function_wrapper
-
-from fi_instrumentation import FITracer, TraceConfig
 from traceai_guardrails._wrap_guard_call import (
     _ParseCallableWrapper,
     _PostValidationWrapper,
     _PromptCallableWrapper,
 )
 from traceai_guardrails.version import __version__
+from wrapt import ObjectProxy, wrap_function_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,9 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
         try:
             version = Version(metadata.version("guardrails-ai"))
             if (version.major, version.minor, version.micro) >= (0, 5, 1):
-                logger.info("Guardrails version >= 0.5.1 detected, skipping instrumentation")
+                logger.info(
+                    "Guardrails version >= 0.5.1 detected, skipping instrumentation"
+                )
                 return
 
             import guardrails as gd
@@ -73,7 +74,9 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
                 wrap_function_wrapper(
                     module="guardrails.guard",
                     name=f"Guard.from_{name}",
-                    wrapper=lambda f, _, args, kwargs: f(*args, **{**kwargs, "tracer": self._tracer}),
+                    wrapper=lambda f, _, args, kwargs: f(
+                        *args, **{**kwargs, "tracer": self._tracer}
+                    ),
                 )
 
             runner_module = import_module(_RUNNER_MODULE)
@@ -117,31 +120,44 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
 
             # not unwrapping by checking and using the __wrap__ attribute below because the
             # original package itself also uses wrapping
-            if hasattr(self, '_original_guardrails_llm_providers_call') and self._original_guardrails_llm_providers_call is not None:
+            if (
+                hasattr(self, "_original_guardrails_llm_providers_call")
+                and self._original_guardrails_llm_providers_call is not None
+            ):
                 llm_providers = import_module(_LLM_PROVIDERS_MODULE)
-                llm_providers.PromptCallableBase.__call__ = self._original_guardrails_llm_providers_call
+                llm_providers.PromptCallableBase.__call__ = (
+                    self._original_guardrails_llm_providers_call
+                )
                 self._original_guardrails_llm_providers_call = None
 
-            if hasattr(self, '_original_guardrails_runner_step') and self._original_guardrails_runner_step is not None:
+            if (
+                hasattr(self, "_original_guardrails_runner_step")
+                and self._original_guardrails_runner_step is not None
+            ):
                 runner_module = import_module(_RUNNER_MODULE)
                 runner_module.Runner.step = self._original_guardrails_runner_step
                 self._original_guardrails_runner_step = None
 
-            if hasattr(self, '_original_guardrails_validation_after_run') and self._original_guardrails_validation_after_run is not None:
+            if (
+                hasattr(self, "_original_guardrails_validation_after_run")
+                and self._original_guardrails_validation_after_run is not None
+            ):
                 validation_module = import_module(_VALIDATION_MODULE)
                 validation_module.ValidatorServiceBase.after_run_validator = (
                     self._original_guardrails_validation_after_run
                 )
                 self._original_guardrails_validation_after_run = None
 
-            if hasattr(gd.guard, 'contextvars'):
+            if hasattr(gd.guard, "contextvars"):
                 if isinstance(gd.guard.contextvars, _Contextvars):
                     if wrapped := getattr(gd.guard.contextvars, "__wrapped__", None):
                         gd.guard.contextvars = wrapped
 
-            if hasattr(gd.async_guard, 'contextvars'):
+            if hasattr(gd.async_guard, "contextvars"):
                 if isinstance(gd.async_guard.contextvars, _Contextvars):
-                    if wrapped := getattr(gd.async_guard.contextvars, "__wrapped__", None):
+                    if wrapped := getattr(
+                        gd.async_guard.contextvars, "__wrapped__", None
+                    ):
                         gd.async_guard.contextvars = wrapped
 
         except Exception as e:
