@@ -1,3 +1,5 @@
+import { checkCustomEvalTemplateExists, CheckCustomEvalTemplateExistsResponse } from "./otel";
+
 enum ProjectType {
     EXPERIMENT = "experiment",
     OBSERVE = "observe",
@@ -6,6 +8,14 @@ enum ProjectType {
 
   enum EvalTagType {
     OBSERVATION_SPAN = "OBSERVATION_SPAN_TYPE"
+  }
+
+  enum ModelChoices {
+    TURING_LARGE = "turing_large",
+    TURING_SMALL = "turing_small",
+    PROTECT = "protect",
+    PROTECT_FLASH = "protect_flash",
+    TURING_FLASH = "turing_flash"
   }
 
   enum EvalSpanKind {
@@ -18,62 +28,61 @@ enum ProjectType {
   }
 
   enum EvalName {
-    DETERMINISTIC_EVALS = "Deterministic Evals",
-    CONVERSATION_COHERENCE = "Conversation Coherence",
-    CONVERSATION_RESOLUTION = "Conversation Resolution",
-    CONTENT_MODERATION = "Content Moderation",
-    CONTEXT_ADHERENCE = "Context Adherence",
-    PROMPT_PERPLEXITY = "Prompt Perplexity",
-    CONTEXT_RELEVANCE = "Context Relevance",
-    COMPLETENESS = "Completeness",
-    CONTEXT_SIMILARITY = "Context Similarity",
-    PII = "PII",
-    TOXICITY = "Toxicity",
-    TONE = "Tone",
-    SEXIST = "Sexist",
-    PROMPT_INJECTION = "Prompt Injection",
-    NOT_GIBBERISH_TEXT = "Not Gibberish text",
-    SAFE_FOR_WORK_TEXT = "Safe for Work text",
-    PROMPT_INSTRUCTION_ADHERENCE = "Prompt/Instruction Adherence",
-    DATA_PRIVACY_COMPLIANCE = "Data Privacy Compliance",
-    IS_JSON = "Is Json",
-    ENDS_WITH = "Ends With",
-    EQUALS = "Equals",
-    CONTAINS_ALL = "Contains All",
-    LENGTH_LESS_THAN = "Length Less Than",
-    CONTAINS_NONE = "Contains None",
-    REGEX = "Regex",
-    STARTS_WITH = "Starts With",
-    API_CALL = "API Call",
-    LENGTH_BETWEEN = "Length Between",
-    CUSTOM_CODE_EVALUATION = "Custom Code Evaluation",
-    AGENT_AS_JUDGE = "Agent as a Judge",
-    ONE_LINE = "One Line",
-    CONTAINS_VALID_LINK = "Contains Valid Link",
-    IS_EMAIL = "Is Email",
-    LENGTH_GREATER_THAN = "Length Greater than",
-    NO_VALID_LINKS = "No Valid Links",
-    CONTAINS = "Contains",
-    CONTAINS_ANY = "Contains Any",
-    GROUNDEDNESS = "Groundedness",
-    ANSWER_SIMILARITY = "Answer Similarity",
-    EVAL_OUTPUT = "Eval Output",
-    EVAL_CONTEXT_RETRIEVAL_QUALITY = "Eval Context Retrieval Quality",
-    EVAL_IMAGE_INSTRUCTION = "Eval Image Instruction (text to image)",
-    SCORE_EVAL = "Score Eval",
-    SUMMARY_QUALITY = "Summary Quality",
-    FACTUAL_ACCURACY = "Factual Accuracy",
-    TRANSLATION_ACCURACY = "Translation Accuracy",
-    CULTURAL_SENSITIVITY = "Cultural Sensitivity",
-    BIAS_DETECTION = "Bias Detection",
-    EVALUATE_LLM_FUNCTION_CALLING = "Evaluate LLM Function calling",
-    AUDIO_TRANSCRIPTION = "Audio Transcription",
-    EVAL_AUDIO_DESCRIPTION = "Eval Audio Description",
-    AUDIO_QUALITY = "Audio Quality",
-    JSON_SCHEMA_VALIDATION = "Json Scheme Validation",
-    CHUNK_ATTRIBUTION = "Chunk Attribution",
-    CHUNK_UTILIZATION = "Chunk Utilization",
-    EVAL_RANKING = "Eval Ranking"
+    CONVERSATION_COHERENCE = "conversation_coherence",
+    CONVERSATION_RESOLUTION = "conversation_resolution",
+    CONTENT_MODERATION = "content_moderation",
+    CONTEXT_ADHERENCE = "context_adherence",
+    PROMPT_PERPLEXITY = "prompt_perplexity",
+    CONTEXT_RELEVANCE = "context_relevance",
+    COMPLETENESS = "completeness",
+    CONTEXT_SIMILARITY = "context_similarity",
+    PII = "pii",
+    TOXICITY = "toxicity",
+    TONE = "tone",
+    SEXIST = "sexist",
+    PROMPT_INJECTION = "prompt_injection",
+    NOT_GIBBERISH_TEXT = "not_gibberish_text",
+    SAFE_FOR_WORK_TEXT = "safe_for_work_text",
+    PROMPT_INSTRUCTION_ADHERENCE = "prompt_instruction_adherence",
+    DATA_PRIVACY_COMPLIANCE = "data_privacy_compliance",
+    IS_JSON = "is_json",
+    ENDS_WITH = "ends_with",
+    EQUALS = "equals",
+    CONTAINS_ALL = "contains_all",
+    LENGTH_LESS_THAN = "length_less_than",
+    CONTAINS_NONE = "contains_none",
+    REGEX = "regex",
+    STARTS_WITH = "starts_with",
+    API_CALL = "api_call",
+    LENGTH_BETWEEN = "length_between",
+    CUSTOM_CODE_EVALUATION = "custom_code_evaluation",
+    AGENT_AS_JUDGE = "agent_as_judge",
+    ONE_LINE = "one_line",
+    CONTAINS_VALID_LINK = "contains_valid_link",
+    IS_EMAIL = "is_email",
+    LENGTH_GREATER_THAN = "length_greater_than",
+    NO_VALID_LINKS = "no_valid_links",
+    CONTAINS = "contains",
+    CONTAINS_ANY = "contains_any",
+    GROUNDEDNESS = "groundedness",
+    ANSWER_SIMILARITY = "answer_similarity",
+    EVAL_OUTPUT = "eval_output",
+    EVAL_CONTEXT_RETRIEVAL_QUALITY = "eval_context_retrieval_quality",
+    EVAL_IMAGE_INSTRUCTION = "eval_image_instruction",
+    SCORE_EVAL = "score_eval",
+    SUMMARY_QUALITY = "summary_quality",
+    FACTUAL_ACCURACY = "factual_accuracy",
+    TRANSLATION_ACCURACY = "translation_accuracy",
+    CULTURAL_SENSITIVITY = "cultural_sensitivity",
+    BIAS_DETECTION = "bias_detection",
+    EVALUATE_LLM_FUNCTION_CALLING = "evaluate_llm_function_calling",
+    AUDIO_TRANSCRIPTION = "audio_transcription",
+    EVAL_AUDIO_DESCRIPTION = "eval_audio_description",
+    AUDIO_QUALITY = "audio_quality",
+    JSON_SCHEMA_VALIDATION = "json_schema_validation",
+    CHUNK_ATTRIBUTION = "chunk_attribution",
+    CHUNK_UTILIZATION = "chunk_utilization",
+    EVAL_RANKING = "eval_ranking"
   }
 
   interface ConfigField {
@@ -97,12 +106,6 @@ enum ProjectType {
       },
       [EvalName.CONVERSATION_RESOLUTION]: {
         model: { type: 'string', default: 'gpt-4o-mini', required: false }
-      },
-      [EvalName.DETERMINISTIC_EVALS]: {
-        multi_choice: { type: 'boolean', default: false, required: false },
-        choices: { type: 'array', default: [], required: true },
-        rule_prompt: { type: 'string', default: '', required: true },
-        input: { type: 'array', default: [], required: false }
       },
       [EvalName.CONTENT_MODERATION]: {},
       [EvalName.CONTEXT_ADHERENCE]: {
@@ -265,7 +268,6 @@ enum ProjectType {
       [EvalName.CONVERSATION_RESOLUTION]: {
         "output": { type: 'string', required: true }
       },
-      [EvalName.DETERMINISTIC_EVALS]: {},
       [EvalName.CONTENT_MODERATION]: {
         "text": { type: 'string', required: true }
       },
@@ -478,7 +480,7 @@ enum ProjectType {
   interface IEvalTag {
     type: EvalTagType;
     value: EvalSpanKind;
-    eval_name: EvalName;
+    eval_name: EvalName | string;
     custom_eval_name: string;
     config: Record<string, any>;
     mapping: Record<string, string>;
@@ -487,44 +489,47 @@ enum ProjectType {
     metadata?: Record<string, any> | null;
     toDict(): Record<string, any>;
     toString(): string;
+    model?: ModelChoices;
   }
 
   class EvalTag implements IEvalTag {
     type: EvalTagType;
     value: EvalSpanKind;
-    eval_name: EvalName;
+    eval_name: EvalName | string;
     custom_eval_name: string;
     config: Record<string, any>;
     mapping: Record<string, string>;
     score?: number;
     rationale?: string | null;
     metadata?: Record<string, any> | null;
+    model?: ModelChoices;
 
     constructor(params: {
       type: EvalTagType;
       value: EvalSpanKind;
-      eval_name: EvalName;
+      eval_name: EvalName | string;
       custom_eval_name: string;
       config?: Record<string, any>;
       mapping?: Record<string, string>;
       score?: number;
       rationale?: string | null;
       metadata?: Record<string, any> | null;
+      model?: ModelChoices;
     }) {
       this.type = params.type;
       this.value = params.value;
       this.eval_name = params.eval_name;
-      this.custom_eval_name = params.custom_eval_name;
+      this.custom_eval_name = params.custom_eval_name ?? (params.eval_name as string);
       this.config = params.config || {};
       this.mapping = params.mapping || {};
       this.score = params.score;
       this.rationale = params.rationale;
       this.metadata = params.metadata;
-
+      this.model = params.model;
       this.validate();
     }
 
-    private validate(): void {
+    private async validate(): Promise<void> {
       if (!Object.values(EvalSpanKind).includes(this.value)) {
         throw new Error(`value must be a EvalSpanKind enum, got ${typeof this.value}`);
       }
@@ -533,45 +538,66 @@ enum ProjectType {
         throw new Error(`type must be an EvalTagType enum, got ${typeof this.type}`);
       }
 
-      if (!Object.values(EvalName).includes(this.eval_name)) {
-        throw new Error(`eval_name must be an EvalName enum, got ${typeof this.eval_name}`);
+
+      if (this.model && !Object.values(ModelChoices).includes(this.model)) {
+        throw new Error(`model must be a valid model name, got ${this.model}. Expected values are: ${Object.values(ModelChoices).join(', ')}`);
       }
 
-      // Get expected config for this eval type
-      const expectedConfig = getConfigForEval(this.eval_name);
-      
-      // Validate config fields
-      for (const [key, fieldConfig] of Object.entries(expectedConfig)) {
-        if (!(key in this.config)) {
-          if (fieldConfig.required) {
-            throw new Error(`Required field '${key}' is missing from config for ${this.eval_name}`);
+      const customEvalTemplate: CheckCustomEvalTemplateExistsResponse = await checkCustomEvalTemplateExists(this.eval_name as string);
+      if (!customEvalTemplate.result?.is_user_eval_template) {
+        if (!Object.values(EvalName).includes(this.eval_name as EvalName)) {
+          throw new Error(`eval_name must be a valid EvalName enum if its not a custom eval template, got ${this.eval_name}. Expected values are: ${Object.values(EvalName).join(', ')}`);
+        }
+
+        // Get expected config for this eval type
+        const expectedConfig = getConfigForEval(this.eval_name as EvalName);
+        
+        // Validate config fields
+        for (const [key, fieldConfig] of Object.entries(expectedConfig)) {
+          if (!(key in this.config)) {
+            if (fieldConfig.required) {
+              throw new Error(`Required field '${key}' is missing from config for ${this.eval_name}`);
+            }
+            this.config[key] = fieldConfig.default;
+          } else {
+            validateFieldType(key, fieldConfig.type, this.config[key]);
           }
-          this.config[key] = fieldConfig.default;
-        } else {
-          validateFieldType(key, fieldConfig.type, this.config[key]);
         }
+
+        // Check for unexpected config fields
+        for (const key in this.config) {
+          if (!(key in expectedConfig)) {
+            throw new Error(`Unexpected field '${key}' in config for ${this.eval_name}. Allowed fields are: ${Object.keys(expectedConfig).join(', ')}`);
+          }
+        }
+
       }
 
-      // Check for unexpected config fields
-      for (const key in this.config) {
-        if (!(key in expectedConfig)) {
-          throw new Error(`Unexpected field '${key}' in config for ${this.eval_name}. Allowed fields are: ${Object.keys(expectedConfig).join(', ')}`);
-        }
-      }
 
       // Get expected mapping for this eval type
-      const expectedMapping = getMappingForEval(this.eval_name);
+      const expectedMapping = getMappingForEval(this.eval_name as EvalName);
+      let requiredKeys: string[] = [];
+      if (customEvalTemplate.result?.is_user_eval_template) {
+        requiredKeys = customEvalTemplate.result?.eval_template?.config?.requiredKeys ?? [];
+      } 
+      else {
+        for (const [key, fieldConfig] of Object.entries(expectedMapping)) {
+          if (fieldConfig.required) {
+            requiredKeys.push(key);
+          }
+        }
+      }
 
       // Validate mapping fields
-      for (const [key, fieldConfig] of Object.entries(expectedMapping)) {
-        if (fieldConfig.required && !(key in this.mapping)) {
+      for (const key of requiredKeys) {
+        if (!(key in this.mapping)) {
           throw new Error(`Required mapping field '${key}' is missing for ${this.eval_name}`);
         }
       }
 
       // Check for unexpected mapping fields
       for (const key in this.mapping) {
-        if (!(key in expectedMapping)) {
+        if (!customEvalTemplate.result?.is_user_eval_template && !(key in expectedMapping)) {
           throw new Error(`Unexpected mapping field '${key}' for ${this.eval_name}. Allowed fields are: ${Object.keys(expectedMapping).join(', ')}`);
         }
         if (typeof key !== 'string') {
@@ -593,7 +619,8 @@ enum ProjectType {
         custom_eval_name: this.custom_eval_name,
         score: this.score,
         rationale: this.rationale,
-        metadata: this.metadata
+        metadata: this.metadata,
+        model: this.model
       };
     }
 

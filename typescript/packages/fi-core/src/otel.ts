@@ -39,6 +39,7 @@ export const SESSION_NAME = "session_name";
 const DEFAULT_FI_COLLECTOR_BASE_URL = "https://api.futureagi.com";
 const FI_COLLECTOR_PATH = "/tracer/observation-span/create_otel_span/";
 const FI_CUSTOM_EVAL_CONFIG_CHECK_PATH = "/tracer/custom-eval-config/check_exists/";
+const FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH = "/tracer/custom-eval-config/get_custom_eval_by_name/";
 
 
 
@@ -514,6 +515,14 @@ interface CheckExistsResponse {
   // Add other fields if the API returns more
 }
 
+export interface CheckCustomEvalTemplateExistsResponse {
+  result?: {
+    is_user_eval_template?: boolean;
+    eval_template?: any
+  };
+  // Add other fields if the API returns more
+}
+
 async function checkCustomEvalConfigExists(
   projectName: string,
   evalTags: any[], // Expects result of prepareEvalTags
@@ -586,6 +595,95 @@ async function checkCustomEvalConfigExists(
   } catch (error) {
     diag.error(`checkCustomEvalConfigExists: Error checking custom eval config: ${error}`);
     return false;
+  }
+}
+
+export async function checkCustomEvalTemplateExists(
+  eval_template_name: string,
+  verbose?: boolean,
+  customEndpoint?: string,
+): Promise<CheckCustomEvalTemplateExistsResponse> {
+  if (!eval_template_name || eval_template_name.length === 0) {
+    const response: CheckCustomEvalTemplateExistsResponse = {
+      result: {
+        is_user_eval_template: false,
+        eval_template: null
+      }
+    }
+    return response;
+  }
+
+  let apiBaseUrl: string;
+  if (customEndpoint) {
+    try {
+      const parsedCustom = new URL(customEndpoint);
+      if (parsedCustom.pathname.endsWith(FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH)) {
+        if (verbose) diag.info(`checkCustomEvalTemplateExists: Using custom full endpoint: ${customEndpoint}`);
+        apiBaseUrl = customEndpoint.substring(0, customEndpoint.lastIndexOf(FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH));
+      } else if (parsedCustom.pathname === "/" || parsedCustom.pathname === "") { 
+         apiBaseUrl = `${parsedCustom.protocol}//${parsedCustom.host}`;
+      } else { 
+         apiBaseUrl = customEndpoint; 
+      }
+    } catch (e) {
+      if (verbose) diag.warn(`checkCustomEvalTemplateExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
+      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    }
+  } else {
+    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+  }
+
+  if (apiBaseUrl.endsWith('/')) {
+    apiBaseUrl = apiBaseUrl.slice(0, -1);
+  }
+  const url = `${apiBaseUrl}${FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH}`;
+
+  const headers: FIHeaders = {
+    "Content-Type": "application/json",
+    ...(getEnvFiAuthHeader() || {}),
+  };
+
+  const payload = {
+    eval_template_name: eval_template_name
+  };
+
+  if (verbose) {
+    diag.info(`checkCustomEvalTemplateExists: Checking custom eval template at ${url} with payload:`, JSON.stringify(payload, null, 2));
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      diag.error(
+        `checkCustomEvalTemplateExists: Failed to check custom eval template: ${response.status} ${response.statusText} - ${errorText}`,
+      );
+      return {
+        result: {
+          is_user_eval_template: false,
+          eval_template: null
+        }
+      };
+    }
+
+    const result = await response.json() as CheckCustomEvalTemplateExistsResponse;
+    if (verbose) {
+        diag.info("checkCustomEvalTemplateExists: Response from server:", JSON.stringify(result, null, 2));
+    }
+    return result;
+  } catch (error) {
+    diag.error(`checkCustomEvalTemplateExists: Error checking custom eval template: ${error}`);
+    return {
+      result: {
+        is_user_eval_template: false,
+        eval_template: null
+      }
+    };
   }
 }
 
