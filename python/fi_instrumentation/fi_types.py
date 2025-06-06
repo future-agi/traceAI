@@ -407,6 +407,7 @@ class FiLLMProviderValues(Enum):
     GOOGLE = "google"
     AZURE = "azure"
     AWS = "aws"
+    VERTEXAI = "vertexai"
 
 
 class ProjectType(Enum):
