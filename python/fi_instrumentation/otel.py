@@ -558,7 +558,18 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             print(f"Failed to export spans due to timeout: {e}")
             return SpanExportResult.FAILURE
         except requests.HTTPError as e:
-            print(f"Failed to export spans due to HTTP error: {e}")
+            error_log = f"Failed to export spans due to an HTTP error: {e}"
+
+            if e.response is not None:
+                try:
+                    response_data = e.response.json()           
+                    if isinstance(response_data, dict) and 'result' in response_data:
+                        server_error = response_data['result']
+                        error_log = f"Failed to export spans due to an error. Server responded with: {server_error}"
+                except ValueError:
+                    pass
+
+            print(error_log)
             return SpanExportResult.FAILURE
         except Exception as e:
             print(f"Failed to export spans due to an unexpected error: {e}")
