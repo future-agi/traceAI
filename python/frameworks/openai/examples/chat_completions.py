@@ -13,7 +13,7 @@ from fi_instrumentation.fi_types import (
     ProjectType,
     ModelChoices,
     )
-from frameworks.openai.traceai_openai import OpenAIInstrumentor
+from traceai_openai import OpenAIInstrumentor
 
 # Configure trace provider with custom evaluation tags
 eval_tags = [

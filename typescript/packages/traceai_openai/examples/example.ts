@@ -13,7 +13,7 @@ diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
 // 1. Register FI Core TracerProvider (sets up exporter)
 const tracerProvider = register({
   projectName: "test-4",
-  projectType: "observe",
+  projectType: ProjectType.OBSERVE,
   sessionName: "test-session-" + Date.now(),
 });
 
