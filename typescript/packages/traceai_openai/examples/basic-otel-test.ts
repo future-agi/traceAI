@@ -1,7 +1,8 @@
-import { register, ProjectType } from "@traceai/fi-core";
+import { register, ProjectType, EvalSpanKind, EvalName, EvalTag, EvalTagType, ModelChoices } from "@traceai/fi-core";
 import { OpenAIInstrumentation } from "@traceai/openai";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
-import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
+import { DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
+import { diag } from "@opentelemetry/api";
 
 // Enable OpenTelemetry internal diagnostics
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
@@ -25,6 +26,7 @@ async function main() {
   }
 
   const fiBaseUrl = process.env.FI_BASE_URL;
+  console.log("fiBaseUrl", fiBaseUrl);
   // console.log(`Initializing FI tracer...`);
   if (fiBaseUrl) {
     // console.log(`Using custom FI endpoint: ${fiBaseUrl}`);
@@ -32,20 +34,83 @@ async function main() {
 
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
-    projectName: "ts-observability-suite-v4",
-    projectType: ProjectType.OBSERVE,
-    sessionName: "basic-otel-test-session-" + Date.now(),
+    projectName: "ts-observability-suite-v5",
+    projectType: ProjectType.EXPERIMENT,
+    projectVersionName: "sarthak_f2",
+    // sessionName: "basic-otel-test-session-" + Date.now(), // OBSERVE only
+    evalTags: [
+      new EvalTag({
+        type: EvalTagType.OBSERVATION_SPAN,
+        value: EvalSpanKind.LLM,
+        eval_name: EvalName.CHUNK_ATTRIBUTION,
+        config: {},
+        custom_eval_name: "Chunk_Attribution_5",
+        mapping: {
+          "context": "raw.input",
+          "output": "raw.output"
+        },
+        model: ModelChoices.TURING_SMALL
+      }),
+      new EvalTag(
+        {
+          type: EvalTagType.OBSERVATION_SPAN,
+          value: EvalSpanKind.LLM,
+          eval_name: "toxic_nature",
+          custom_eval_name: "toxic_nature_custom_eval_config_5",
+          mapping: {
+            "output": "raw.output"
+          }
+        }
+      )
+      // new EvalTag(
+      //   {
+      //     type: EvalTagType.OBSERVATION_SPAN,
+      //     value: EvalSpanKind.LLM,
+      //     eval_name: "custom-eval-1",
+      //     custom_eval_name: "custom-eval-1-config_eval_2",
+      //     mapping: {
+      //       "output": "raw.output",
+      //       "input": "raw.input"
+      //     }
+      //   }
+      // ),
+      // new EvalTag(
+      //   {
+      //     type: EvalTagType.OBSERVATION_SPAN,
+      //     value: EvalSpanKind.LLM,
+      //     eval_name: "detereministic_custom_eval_template",
+      //     custom_eval_name: "detereministic_custom_eval_template_2",
+      //     mapping: {
+      //       "output": "raw.output",
+      //       "query": "raw.input",
+      //       "input": "raw.input"
+      //     }
+      //   }
+      // )
+      // ,
+      // new EvalTag({
+      //   type: EvalTagType.OBSERVATION_SPAN,
+      //   value: EvalSpanKind.LLM,
+      //   eval_name: EvalName.SUMMARY_QUALITY,
+      //   config: {},
+      //   custom_eval_name: "Summary_Quality_1",
+      //   mapping: {
+      //     "context": "raw.input",
+      //     "output": "raw.output"
+      //   }
+      // })
+    ]
   });
 
   // 2. Register OpenAI Instrumentation *BEFORE* importing/using OpenAI client
   // console.log("Registering OpenAI Instrumentation...");
   registerInstrumentations({
     tracerProvider: tracerProvider,
-    instrumentations: [new OpenAIInstrumentation()], // Using default config for OpenAIInstrumentation
+    instrumentations: [new OpenAIInstrumentation()],
   });
 
   // 3. NOW Import and Initialize OpenAI Client
-  const OpenAI = (await import("openai")).default;
+  const { OpenAI } = await import("openai");
   const openai = new OpenAI({
     apiKey: openaiApiKey,
   });
