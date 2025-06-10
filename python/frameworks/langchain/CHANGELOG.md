@@ -1,3 +1,7 @@
+## [0.1.9] - 2025-06-10
+### Feature
+- Added support for ai-evaluation
+
 ## [0.1.8] - 2025-06-05
 ### Feature
 - Bug Fixes

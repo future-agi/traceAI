@@ -1,3 +1,12 @@
+## [0.1.7] - 2025-06-10
+### Feature
+- Added support for ai-evaluation
+- Added support for new evals in Prototype
+
+## [0.1.6] - 2025-06-03
+### Feature
+- Added Support for Custom Evaluations in Prototype
+
 ## [0.1.5] - 2025-05-23
 ### Feature
 - Added support for FutureAGI's protect
