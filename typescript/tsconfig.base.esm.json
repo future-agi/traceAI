@@ -1,0 +1,12 @@
+{
+    "extends": "./tsconfig.base.esnext.json",
+    "compilerOptions": {
+      "target": "ES2020",
+      "moduleResolution": "node10",
+      "module": "ES2020"
+    },
+    "tsc-alias": {
+      "verbose": false,
+      "resolveFullPaths": true
+    }
+  }
