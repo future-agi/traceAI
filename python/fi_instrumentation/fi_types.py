@@ -518,6 +518,7 @@ class EvalName(Enum):
     BLEU_SCORE = "bleu_score"
     ROUGE_SCORE = "rouge_score"
     TEXT_TO_SQL = "text_to_sql"
+    RECALL_SCORE = "recall_score"
 
 
 @dataclass
@@ -870,6 +871,7 @@ class EvalConfig:
                     default="Check if the generated SQL query correctly matches the intent of the input text and produces valid SQL syntax. If the SQL query is incorrect, invalid, or doesn't match the input requirements then return Failed else return Passed",
                 )
             },
+            EvalName.RECALL_SCORE: {}
         }
 
         # Convert ConfigField objects to dictionary format
@@ -1122,6 +1124,10 @@ class EvalMappingConfig:
             EvalName.TEXT_TO_SQL: {
                 "input": ConfigField(type=str, required=True),
                 "output": ConfigField(type=str, required=True)
+            },
+            EvalName.RECALL_SCORE: {
+                "reference": ConfigField(type=str, required=True),
+                "hypothesis": ConfigField(type=str, required=True)
             },
         }
 

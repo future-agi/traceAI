@@ -1,8 +1,13 @@
 import logging
 from importlib import import_module
 from typing import Any, Collection
-
-from fi.evals import Protect
+logger = logging.getLogger(__name__)
+try:
+    from fi.evals import Protect
+except ImportError:
+    logger.warning("ai-evaluation is not installed, please install it to trace protect")
+    Protect = None
+    pass
 from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from groq.resources.chat.completions import AsyncCompletions, Completions
