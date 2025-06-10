@@ -20,10 +20,16 @@ from typing import (
     TypeVar,
     cast,
 )
+logger = logging.getLogger(__name__)
 
 from botocore.client import BaseClient
 from botocore.response import StreamingBody
-from fi.evals import Protect
+try:
+    from fi.evals import Protect
+except ImportError:
+    logger.warning("ai-evaluation is not installed, please install it to trace protect")
+    Protect = None
+    pass
 from fi_instrumentation import (
     FITracer,
     TraceConfig,

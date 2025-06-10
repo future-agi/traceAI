@@ -42,7 +42,12 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     def _instrument(self, **kwargs: Any) -> None:
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
-        from fi.evals import Protect
+        try:
+            from fi.evals import Protect
+        except ImportError:
+            logger.warning("ai-evaluation is not installed, please install it to trace protect")
+            Protect = None
+            pass
 
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
@@ -100,7 +105,12 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     def _uninstrument(self, **kwargs: Any) -> None:
         from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
-        from fi.evals import Protect
+        try:
+            from fi.evals import Protect
+        except ImportError:
+            logger.warning("ai-evaluation is not installed, please install it to trace protect")
+            Protect = None
+            pass
 
         if self._original_completions_create is not None:
             Completions.create = self._original_completions_create  # type: ignore[method-assign]
