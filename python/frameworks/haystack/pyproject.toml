@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-haystack"
-version = "0.1.6"
+version = "0.1.7"
 description = "OpenTelemetry instrumentation for Haystack"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -12,7 +12,7 @@ packages = [
 [tool.poetry.dependencies]
 python = ">3.9, <3.13"
 haystack-ai = ">=2.10.0"
-fi-instrumentation-otel = "0.1.6"
+fi-instrumentation-otel = "0.1.7"
 
 
 [build-system]
