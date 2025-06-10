@@ -37,7 +37,12 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
         else:
             assert isinstance(config, TraceConfig)
 
-        from fi.evals import Protect
+        try:
+            from fi.evals import Protect
+        except ImportError:
+            logger.warning("ai-evaluation is not installed, please install it to trace protect")
+            Protect = None
+            pass
         from fi_instrumentation.instrumentation._tracers import FITracer
         from traceai_langchain._tracer import FiTracer as LangChainFiTracer
 

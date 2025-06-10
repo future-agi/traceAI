@@ -28,6 +28,7 @@ import wrapt
 from fi_instrumentation import get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
+    FiLLMProviderValues,
     FiMimeTypeValues,
     FiSpanKindValues,
     ImageAttributes,
@@ -144,7 +145,7 @@ class _Wrapper:
             if input_data := extracted_data.get("filtered_messages"):
                 span.set_attribute(INPUT_VALUE, safe_json_dumps(input_data))
                 span.set_attribute(INPUT_MIME_TYPE, JSON)
-                span.set_attribute(LLM_PROVIDER, "vertexai")
+                span.set_attribute(LLM_PROVIDER, VERTEXAI)
             if input_images := extracted_data.get("input_images"):
                 span.set_attribute(INPUT_IMAGES, safe_json_dumps(input_images))
             if eval_input := extracted_data.get("eval_input"):
@@ -425,7 +426,7 @@ def _(req: PredictRequest, span: Span) -> None:
         span: the OpenTelemetry span to update with attributes
     """
     if req.endpoint:
-        span.set_attribute(LLM_PROVIDER, "vertexai")
+        span.set_attribute(LLM_PROVIDER, VERTEXAI)
         span.set_attribute("prediction.endpoint", req.endpoint)
 
     if req.instances:
@@ -707,6 +708,7 @@ JSON = FiMimeTypeValues.JSON.value
 LLM = FiSpanKindValues.LLM.value
 EMBEDDING = FiSpanKindValues.EMBEDDING.value
 LLM_PROVIDER = SpanAttributes.LLM_PROVIDER
+VERTEXAI = FiLLMProviderValues.VERTEXAI.value
 LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
 LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
 LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
