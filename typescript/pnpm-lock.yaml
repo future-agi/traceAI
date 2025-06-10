@@ -46,8 +46,8 @@ importers:
         specifier: ^2.0.1
         version: 2.0.1(@opentelemetry/api@1.9.0)
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
-        version: link:../fi-semantic-conventions
+        specifier: ^0.1.8
+        version: 0.1.8
       uuid:
         specifier: ^11.1.0
         version: 11.1.0
@@ -102,11 +102,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
-        version: link:../fi-core
+        specifier: ^0.1.10
+        version: 0.1.10
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
-        version: link:../fi-semantic-conventions
+        specifier: ^0.1.8
+        version: 0.1.8
     devDependencies:
       '@types/node':
         specifier: ^22.15.29
@@ -197,11 +197,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
-        version: link:../fi-core
+        specifier: ^0.1.10
+        version: 0.1.10
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
-        version: link:../fi-semantic-conventions
+        specifier: ^0.1.8
+        version: 0.1.8
       openai:
         specifier: ^5.1.0
         version: 5.2.0(zod@3.24.4)
@@ -1168,8 +1168,14 @@ packages:
   '@traceai/fi-core@0.1.0':
     resolution: {integrity: sha512-9AOT09r7oerHZPYnm5qpcs86itJHcmxF5UySUxSyO7nU1zRJSvaCVUUL6XGlzHS+BY9wEg2f8Q7qB8Jfb1M98g==}
 
+  '@traceai/fi-core@0.1.10':
+    resolution: {integrity: sha512-hB2nJFET3E+p64FQloBMzS9bBxry8v6oGTlPbX1DrDHnJwo3RGwNfhznONx5FAm3j5lD/ZuqkBZDi0qtsXS94A==}
+
   '@traceai/fi-semantic-conventions@0.1.0':
     resolution: {integrity: sha512-6yruG14N/2Nq6jNffFyryvqaliH5EDzRD1htHj65kdt8kZVQUCVdJ/SAUxeyW3nuziKEzaUp0nn3Bf8ZxEpVPA==}
+
+  '@traceai/fi-semantic-conventions@0.1.8':
+    resolution: {integrity: sha512-gTuxEJRYBEhSA1RGf/z81mwP35ssQuFDVcYNPDO55FOHyhYIsiWGRP9reD4blVtRAyaM48WgsSH8TdKN08DqRA==}
 
   '@tsconfig/node10@1.0.11':
     resolution: {integrity: sha512-DcRjDCujK/kCk/cUe8Xz8ZSpm8mS3mNNpta+jGCA6USEDfktlNvm1+IuZ9eTcDbNk41BHwpHHeW+N1lKCz4zOw==}
@@ -3739,13 +3745,25 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/sdk-node': 0.48.0(@opentelemetry/api@1.9.0)
-      '@traceai/fi-semantic-conventions': 0.1.0
+      '@traceai/fi-semantic-conventions': 0.1.8
     transitivePeerDependencies:
       - supports-color
+
+  '@traceai/fi-core@0.1.10':
+    dependencies:
+      '@opentelemetry/api': 1.9.0
+      '@opentelemetry/core': 2.0.1(@opentelemetry/api@1.9.0)
+      '@traceai/fi-semantic-conventions': 0.1.8
+      uuid: 11.1.0
 
   '@traceai/fi-semantic-conventions@0.1.0':
     dependencies:
       '@opentelemetry/api': 1.9.0
+
+  '@traceai/fi-semantic-conventions@0.1.8':
+    dependencies:
+      '@opentelemetry/api': 1.9.0
+      uuid: 11.1.0
 
   '@tsconfig/node10@1.0.11': {}
 

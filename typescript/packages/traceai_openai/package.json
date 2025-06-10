@@ -1,6 +1,6 @@
 {
   "name": "@traceai/openai",
-  "version": "0.1.2",
+  "version": "0.1.10",
   "description": "OpenTelemetry instrumentation for OpenAI",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -28,8 +28,8 @@
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
     "@opentelemetry/core": "^2.0.1",
-    "@traceai/fi-core": "workspace:*",
-    "@traceai/fi-semantic-conventions": "workspace:*"
+    "@traceai/fi-core": "^0.1.10",
+    "@traceai/fi-semantic-conventions": "^0.1.8"
   },
   "peerDependencies": {
     "openai": "^5.1.0"

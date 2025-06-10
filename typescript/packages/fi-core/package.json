@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-core",
-  "version": "0.1.1",
+  "version": "0.1.10",
   "description": "Core OpenTelemetry instrumentation for TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -27,7 +27,7 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.0.1",
-    "@traceai/fi-semantic-conventions": "workspace:*",
+    "@traceai/fi-semantic-conventions": "^0.1.8",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

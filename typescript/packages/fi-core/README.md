@@ -12,7 +12,6 @@ Core OpenTelemetry instrumentation library for TypeScript applications with adva
 - **Custom Span Exporter**: HTTP-based span exporter with configurable endpoints
 - **AI Evaluation Tags**: Comprehensive evaluation system for AI applications with 50+ built-in evaluators
 - **Project Management**: Support for project versioning, sessions, and metadata
-- **UUID-based Trace IDs**: Custom ID generation for better trace identification
 - **Flexible Configuration**: Environment variable and programmatic configuration support
 - **TypeScript Support**: Full TypeScript support with comprehensive type definitions
 
@@ -31,13 +30,12 @@ yarn add @traceai/fi-core
 ### Basic Setup
 
 ```typescript
-import { register } from '@traceai/fi-core';
+import { register, ProjectType } from '@traceai/fi-core';
 
 // Initialize tracing with minimal configuration
 const tracerProvider = register({
   projectName: 'my-ai-project',
-  projectType: 'experiment',
-  verbose: true
+  projectType: ProjectType.EXPERIMENT,
 });
 ```
 
@@ -48,16 +46,18 @@ import { register, ProjectType, EvalTag, EvalName, EvalSpanKind } from '@traceai
 
 // Create evaluation tags for AI model monitoring
 const evalTags = [
-  await EvalTag.create({
-    type: 'OBSERVATION_SPAN_TYPE',
-    value: EvalSpanKind.LLM,
-    eval_name: EvalName.CONTEXT_ADHERENCE,
-    custom_eval_name: 'custom_context_check',
-    config: {
-      criteria: 'Check if the response adheres to the given context'
-    }
-  })
-];
+    new EvalTag({
+        type: EvalTagType.OBSERVATION_SPAN,
+        value: EvalSpanKind.LLM,
+        eval_name: EvalName.CONTEXT_ADHERENCE,
+        custom_eval_name: 'custom_context_check',
+        mapping: {
+            "context": "raw.input",
+            "output": "raw.output"
+        },
+        model: ModelChoices.TURING_SMALL
+    })
+]
 
 // Register with comprehensive configuration
 const tracerProvider = register({
@@ -66,13 +66,7 @@ const tracerProvider = register({
   projectVersionName: 'v1.0.0',
   evalTags: evalTags,
   sessionName: 'experiment-session-1',
-  metadata: {
-    model: 'gpt-4',
-    temperature: 0.7
-  },
-  batch: true,
   verbose: true,
-  endpoint: 'https://your-custom-endpoint.com'
 });
 ```
 
@@ -115,30 +109,12 @@ The evaluation system provides comprehensive AI model assessment capabilities:
 
 ## API Reference
 
-### Register Options
-
-```typescript
-interface RegisterOptions {
-  projectName?: string;
-  projectType?: ProjectType;
-  projectVersionName?: string;
-  evalTags?: EvalTag[];
-  sessionName?: string;
-  metadata?: Record<string, any>;
-  batch?: boolean;
-  setGlobalTracerProvider?: boolean;
-  headers?: Record<string, string>;
-  verbose?: boolean;
-  endpoint?: string;
-  idGenerator?: IdGenerator;
-}
-```
 
 ### Environment Variables
 
-- `FI_COLLECTOR_BASE_URL`: Base URL for the TraceAI collector
-- `FI_AUTH_HEADER`: Authentication header for API requests
-- `FI_VERBOSE`: Enable verbose logging
+- `FI_BASE_URL`: Base URL for the TraceAI collector
+- `FI_API_KEY`: API key for authentication
+- `FI_SECRET_KEY`: Secret key for authentication
 
 ## Examples
 
@@ -204,10 +180,6 @@ pnpm lint
 ## Contributing
 
 This package is part of the TraceAI project. Please refer to the main repository for contribution guidelines.
-
-## License
-
-See the main TraceAI repository for license information.
 
 ## Links
 
