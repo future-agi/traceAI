@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "traceAI-google-adk"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Anthropic"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+
+packages = [
+    { include = "traceai_google_adk" },
+]
+
+[tool.poetry.dependencies]
+python = ">3.9, <3.13"
+google-adk =  ">= 1.2.1"
+google-genai = "^1.0.0"
+fi-instrumentation-otel = "0.1.7"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
