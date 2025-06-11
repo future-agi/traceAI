@@ -43,7 +43,7 @@ from openai.types.responses.response_usage import (
     InputTokensDetails,
     OutputTokensDetails,
 )
-from openinference.instrumentation.openai_agents._processor import (
+from traceai_openai_agents._processor import (
     _get_attributes_from_chat_completions_input,
     _get_attributes_from_chat_completions_message_content,
     _get_attributes_from_chat_completions_message_content_item,

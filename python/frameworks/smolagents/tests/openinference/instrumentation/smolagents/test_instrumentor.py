@@ -3,12 +3,12 @@ import os
 from typing import Any, Generator, Optional
 
 import pytest
-from openinference.instrumentation import OITracer
-from openinference.instrumentation.smolagents import SmolagentsInstrumentor
-from openinference.semconv.trace import (
+from fi_instrumentation.instrumentation._tracers import FITracer
+from traceai_smolagents import SmolagentsInstrumentor
+from fi_instrumentation.fi_types import (
     MessageAttributes,
-    OpenInferenceMimeTypeValues,
-    OpenInferenceSpanKindValues,
+    FiMimeTypeValues,
+    FiSpanKindValues,
     SpanAttributes,
     ToolAttributes,
     ToolCallAttributes,
@@ -107,9 +107,8 @@ class TestInstrumentor:
         instrumentor = instrumentor_entrypoint.load()()
         assert isinstance(instrumentor, SmolagentsInstrumentor)
 
-    # Ensure we're using the common OITracer from common openinference-instrumentation pkg
-    def test_oitracer(self) -> None:
-        assert isinstance(SmolagentsInstrumentor()._tracer, OITracer)
+    def test_FITracer(self) -> None:
+        assert isinstance(SmolagentsInstrumentor()._tracer, FITracer)
 
 
 class TestModels:
@@ -148,7 +147,7 @@ class TestModels:
         assert span.name == "OpenAIServerModel.__call__"
         assert span.status.is_ok
         attributes = dict(span.attributes or {})
-        assert attributes.pop(OPENINFERENCE_SPAN_KIND) == LLM
+        assert attributes.pop(FI_SPAN_KIND) == LLM
         assert attributes.pop(INPUT_MIME_TYPE) == JSON
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         input_data = json.loads(input_value)
@@ -229,7 +228,7 @@ class TestModels:
         assert span.name == "OpenAIServerModel.__call__"
         assert span.status.is_ok
         attributes = dict(span.attributes or {})
-        assert attributes.pop(OPENINFERENCE_SPAN_KIND) == LLM
+        assert attributes.pop(FI_SPAN_KIND) == LLM
         assert attributes.pop(INPUT_MIME_TYPE) == JSON
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         input_data = json.loads(input_value)
@@ -444,7 +443,7 @@ class TestTools:
         span = spans[0]
         attributes = dict(span.attributes or {})
 
-        assert attributes.pop(OPENINFERENCE_SPAN_KIND) == TOOL
+        assert attributes.pop(FI_SPAN_KIND) == TOOL
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         assert json.loads(input_value) == {
             "args": ["Paris"],
@@ -491,7 +490,7 @@ class TestTools:
         span = spans[0]
         attributes = dict(span.attributes or {})
 
-        assert attributes.pop(OPENINFERENCE_SPAN_KIND) == TOOL
+        assert attributes.pop(FI_SPAN_KIND) == TOOL
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         assert json.loads(input_value) == {
             "args": ["Paris"],
@@ -531,13 +530,13 @@ MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
 
 # mime types
-JSON = OpenInferenceMimeTypeValues.JSON.value
-TEXT = OpenInferenceMimeTypeValues.TEXT.value
+JSON = FiMimeTypeValues.JSON.value
+TEXT = FiMimeTypeValues.TEXT.value
 
 # span kinds
-CHAIN = OpenInferenceSpanKindValues.CHAIN.value
-LLM = OpenInferenceSpanKindValues.LLM.value
-TOOL = OpenInferenceSpanKindValues.TOOL.value
+CHAIN = FiSpanKindValues.CHAIN.value
+LLM = FiSpanKindValues.LLM.value
+TOOL = FiSpanKindValues.TOOL.value
 
 # span attributes
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
@@ -551,7 +550,7 @@ LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
 LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
 LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
 LLM_TOOLS = SpanAttributes.LLM_TOOLS
-OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
+FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
