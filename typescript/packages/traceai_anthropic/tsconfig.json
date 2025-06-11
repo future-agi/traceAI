@@ -1,13 +1,10 @@
 {
-    "extends": "../../tsconfig.json",
-    "compilerOptions": {
-      "outDir": "./dist",
-      "rootDir": "./src",
-      "composite": true
-    },
-    "include": ["src/**/*"],
-    "references": [
-      { "path": "../fi-core" },
-      { "path": "../fi-semantic-conventions" }
-    ]
-  } 
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "files": [],
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "references": []
+}

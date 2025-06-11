@@ -129,7 +129,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
   protected init() {
     const module = new InstrumentationNodeModuleDefinition(
       "openai",
-      ["^4.0.0"],
+      ["^4.0.0", "^5.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
