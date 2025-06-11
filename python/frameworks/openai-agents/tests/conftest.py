@@ -1,8 +1,9 @@
 from typing import Iterator
 
 import pytest
-from openinference.instrumentation.openai import OpenAIInstrumentor
-from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+from traceai_openai_agents import OpenAIAgentsInstrumentor
+from traceai_openai import OpenAIInstrumentor
+
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
