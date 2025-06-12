@@ -41,7 +41,6 @@ from fi_instrumentation.fi_types import ProjectType
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
     project_name="langchain_app",
-    project_version_name="v1",  
     session_name="chat-bot"
 )
 ```
