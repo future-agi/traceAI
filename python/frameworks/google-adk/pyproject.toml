@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "traceAI-google-adk"
 version = "0.1.0"
-description = "OpenTelemetry instrumentation for Anthropic"
+description = "OpenTelemetry instrumentation for Google ADK"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 
