@@ -1,6 +1,6 @@
 openai
 openai_agents==0.0.7
-openinference-instrumentation-openai
+traceai-openai-agents
 opentelemetry-sdk
 respx
 pytest-vcr

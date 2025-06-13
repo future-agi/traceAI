@@ -85,9 +85,9 @@ class _UsingAttributesContextManager(ContextDecorator):
 
 class using_session(_UsingAttributesContextManager):
     """
-    Context manager to add session id to the current OpenTelemetry Context. OpenInference
+    Context manager to add session id to the current OpenTelemetry Context. TraceAI
     instrumentations will read this Context and pass the session id as a span attribute,
-    following the OpenInference semantic conventions.
+    following the TraceAI semantic conventions.
 
     Examples:
         with using_session("my-session-id"):
@@ -102,9 +102,9 @@ class using_session(_UsingAttributesContextManager):
 
 class using_user(_UsingAttributesContextManager):
     """
-    Context manager to add user id to the current OpenTelemetry Context. OpenInference
+    Context manager to add user id to the current OpenTelemetry Context. TraceAI
     instrumentations will read this Context and pass the user id as a span attribute,
-    following the OpenInference semantic conventions.
+    following the TraceAI semantic conventions.
 
     Examples:
         with using_user("my-user-id"):
@@ -119,9 +119,9 @@ class using_user(_UsingAttributesContextManager):
 
 class using_metadata(_UsingAttributesContextManager):
     """
-    Context manager to add metadata to the current OpenTelemetry Context. OpenInference
+    Context manager to add metadata to the current OpenTelemetry Context. TraceAI
     instrumentations will read this Context and pass the metadata as a span attribute,
-    following the OpenInference semantic conventions.
+    following the TraceAI semantic conventions.
 
     Examples:
         metadata = {
@@ -141,9 +141,9 @@ class using_metadata(_UsingAttributesContextManager):
 
 class using_tags(_UsingAttributesContextManager):
     """
-    Context manager to add tags to the current OpenTelemetry Context. OpenInference
+    Context manager to add tags to the current OpenTelemetry Context. TraceAI
     instrumentations will read this Context and pass the tags as a span attribute,
-    following the OpenInference semantic conventions.
+    following the TraceAI semantic conventions.
 
     Examples:
         tags = [
@@ -164,9 +164,9 @@ class using_tags(_UsingAttributesContextManager):
 class using_prompt_template(_UsingAttributesContextManager):
     """
     Context manager to add prompt template, with its version and variables a to the
-    current OpenTelemetry Context. OpenInference instrumentations will read this
+    current OpenTelemetry Context. TraceAI instrumentations will read this
     Context and pass the prompt template as a span attribute, following the
-    OpenInference semantic conventions.
+    TraceAI semantic conventions.
 
     Examples:
         prompt_template = "Please describe the weather forecast for {city} on {date}"
@@ -201,9 +201,9 @@ class using_prompt_template(_UsingAttributesContextManager):
 
 class using_attributes(_UsingAttributesContextManager):
     """
-    Context manager to add attributes to the current OpenTelemetry Context. OpenInference
+    Context manager to add attributes to the current OpenTelemetry Context. TraceAI
     instrumentations will read this Context and pass the attributes to the traced span,
-    following the OpenInference semantic conventions.
+    following the TraceAI semantic conventions.
 
     It is a convenient context manager to use if you find yourself using many others, provided
     by this package, combined.
