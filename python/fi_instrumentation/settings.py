@@ -15,6 +15,10 @@ def get_env_collector_endpoint() -> Optional[str]:
     return os.getenv("FI_BASE_URL", "https://api.futureagi.com")
 
 
+def get_env_grpc_collector_endpoint() -> Optional[str]:
+    return os.getenv("FI_GRPC_URL", "https://api.futureagi.com") # should change this since it's running on a diff port for grpc
+
+
 def get_env_project_name() -> str:
     return os.getenv("FI_PROJECT_NAME", "DEFAULT_PROJECT_NAME")
 
