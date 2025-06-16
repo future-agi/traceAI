@@ -27,6 +27,8 @@ wrapt = "^1.15.0"
 jsonschema = "^4.21.1"
 futureagi = "^0.6.0"
 ai-evaluation = "^0.1.0"
+grpcio = "*"
+grpcio-tools = "*"
 
 [build-system]
 requires = ["poetry-core"]
