@@ -491,10 +491,9 @@ class GRPCSpanExporter(_GRPCSpanExporter):
             passed_headers = bound_args.arguments["headers"]
             if isinstance(passed_headers, dict):
                 headers = {k.lower(): v for k, v in passed_headers.items()}
-            else:  # Assumed sequence of (key, value) tuples
+            else:
                 headers = {k.lower(): v for k, v in passed_headers}
 
-            # If the auth header is not in the headers, add it
             if AUTHORIZATION not in headers:
                 bound_args.arguments["headers"] = {
                     **headers,
@@ -579,21 +578,11 @@ class GRPCSpanExporter(_GRPCSpanExporter):
             return SpanExportResult.SUCCESS
 
         try:
-            total_start_time = time.time()
-            print("Starting gRPC export...")
 
-            channel_start_time = time.time()
             with grpc.insecure_channel(self._endpoint) as channel:
-                channel_end_time = time.time()
-                print(f"  gRPC channel creation took: {channel_end_time - channel_start_time:.4f} seconds")
-
-                stub_start_time = time.time()
                 stub = tracer_pb2_grpc.ObservationSpanControllerStub(channel)
-                stub_end_time = time.time()
-                print(f"  Stub creation took: {stub_end_time - stub_start_time:.4f} seconds")
                 metadata = list(self._headers) if self._headers else None
 
-                prepare_request_start_time = time.time()
                 otel_data_list = []
                 for span_data_item in spans_data:
                     s = Struct()
@@ -603,22 +592,12 @@ class GRPCSpanExporter(_GRPCSpanExporter):
                 request = tracer_pb2.CreateOtelSpanRequest(
                     otel_data_list=otel_data_list
                 )
-                prepare_request_end_time = time.time()
-                print(f"  Request preparation took: {prepare_request_end_time - prepare_request_start_time:.4f} seconds")
 
                 try:
-                    rpc_start_time = time.time()
-                    print("  Calling CreateOtelSpan RPC...")
                     stub.CreateOtelSpan(request, metadata=metadata)
-                    rpc_end_time = time.time()
-                    print(f"  CreateOtelSpan RPC call took: {rpc_end_time - rpc_start_time:.4f} seconds")
                 except grpc.RpcError as e:
-                    import traceback
-                    print(traceback.format_exc())
                     print(f"Failed to export spans via gRPC: {e.details()}")
 
-            total_end_time = time.time()
-            print(f"Total gRPC export process took: {total_end_time - total_start_time:.4f} seconds")
             return SpanExportResult.SUCCESS
 
         except Exception as e:
