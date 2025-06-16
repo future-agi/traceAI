@@ -23,6 +23,14 @@ import {
 import { Resource, resourceFromAttributes, detectResources, defaultResource } from "@opentelemetry/resources";
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
 import { v4 as uuidv4 } from "uuid"; // For UUID generation
+import * as grpc from "@grpc/grpc-js";
+import { 
+  CreateOtelSpanRequest, 
+  CreateOtelSpanResponse, 
+  ObservationSpanControllerClient 
+} from "./generated";
+import { GrpcTransport } from "@protobuf-ts/grpc-transport";
+import { Struct } from "./generated/google/protobuf/struct";
 
 // --- Constants for Resource Attributes ---
 export const PROJECT_NAME = "project_name";
@@ -40,6 +48,15 @@ const DEFAULT_FI_COLLECTOR_BASE_URL = "https://api.futureagi.com";
 const FI_COLLECTOR_PATH = "/tracer/observation-span/create_otel_span/";
 const FI_CUSTOM_EVAL_CONFIG_CHECK_PATH = "/tracer/custom-eval-config/check_exists/";
 const FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH = "/tracer/custom-eval-config/get_custom_eval_by_name/";
+
+// Default gRPC endpoint
+const DEFAULT_FI_GRPC_COLLECTOR_BASE_URL = "api.futureagi.com:443";
+
+// Transport enum
+export enum Transport {
+  HTTP = "http",
+  GRPC = "grpc",
+}
 
 
 
@@ -201,6 +218,212 @@ class HTTPSpanExporter implements SpanExporter {
   }
 }
 
+// --- Custom GRPCSpanExporter ---
+interface GRPCSpanExporterOptions {
+  endpoint: string; // gRPC endpoint
+  headers?: FIHeaders;
+  verbose?: boolean;
+}
+
+class GRPCSpanExporter implements SpanExporter {
+  private readonly endpoint: string;
+  private readonly headers: FIHeaders;
+  private isShutdown = false;
+  private verbose: boolean;
+  private client: ObservationSpanControllerClient | null = null;
+
+  constructor(options: GRPCSpanExporterOptions) {
+    this.endpoint = options.endpoint;
+    this.headers = options.headers || {};
+    this.verbose = options.verbose ?? false;
+  }
+
+  private getClient(): ObservationSpanControllerClient {
+    if (!this.client) {
+      const transport = new GrpcTransport({
+        host: this.endpoint,
+        channelCredentials: grpc.credentials.createSsl(),
+        meta: this.headers,
+      });
+      this.client = new ObservationSpanControllerClient(transport);
+    }
+    return this.client;
+  }
+
+  private formatTraceId(traceId: string): string {
+    return traceId;
+  }
+
+  private formatSpanId(spanId: string): string {
+    return spanId;
+  }
+
+  private convertAttributes(attributes: Attributes | undefined): Record<string, any> {
+    if (!attributes) {
+      return {};
+    }
+    try {
+      return JSON.parse(JSON.stringify(attributes));
+    } catch (e) {
+      diag.error(`GRPCSpanExporter: Error converting attributes: ${e}`);
+      return {};
+    }
+  }
+
+  private getSpanStatusName(status: SpanStatus): string {
+    switch (status.code) {
+      case SpanStatusCode.UNSET:
+        return "UNSET";
+      case SpanStatusCode.OK:
+        return "OK";
+      case SpanStatusCode.ERROR:
+        return "ERROR";
+      default:
+        return "UNKNOWN";
+    }
+  }
+
+  export(
+    spans: ReadableSpan[],
+    resultCallback: (result: ExportResult) => void,
+  ): void {
+    if (!spans || !resultCallback) {
+      resultCallback?.({ code: ExportResultCode.FAILED });
+      return;
+    }
+    if (this.isShutdown) {
+      resultCallback({ code: ExportResultCode.FAILED });
+      return;
+    }
+
+    const spansData = spans.map((span) => {
+      if (!span) return null;
+      const spanContext = span.spanContext();
+      if (!spanContext) {
+        return null;
+      }
+      const parentSpanId = span.parentSpanContext?.spanId
+        ? this.formatSpanId(span.parentSpanContext.spanId)
+        : undefined;
+
+      const spanData = {
+        trace_id: this.formatTraceId(spanContext.traceId),
+        span_id: this.formatSpanId(spanContext.spanId),
+        name: span.name || "unknown-span",
+        start_time: span.startTime?.[0] * 1e9 + span.startTime?.[1] || 0,
+        end_time: span.endTime?.[0] * 1e9 + span.endTime?.[1] || 0,
+        attributes: this.convertAttributes(span.attributes),
+        events: span.events.map((event) => ({
+          name: event.name,
+          attributes: this.convertAttributes(event.attributes),
+          timestamp: event.time[0] * 1e9 + event.time[1],
+        })),
+        status: this.getSpanStatusName(span.status),
+        parent_id: parentSpanId,
+        project_name: span.resource?.attributes[PROJECT_NAME],
+        project_type: span.resource?.attributes[PROJECT_TYPE],
+        project_version_name: span.resource?.attributes[PROJECT_VERSION_NAME],
+        project_version_id: span.resource?.attributes[PROJECT_VERSION_ID],
+        latency: Math.floor(
+          (span.endTime[0] * 1e9 +
+            span.endTime[1] -
+            (span.startTime[0] * 1e9 + span.startTime[1])) /
+            1e6,
+        ),
+        eval_tags: span.resource?.attributes[EVAL_TAGS],
+        metadata: span.resource?.attributes[METADATA],
+        session_name: span.resource?.attributes[SESSION_NAME],
+      };
+
+      // Convert to Struct
+      const struct = Struct.create();
+      Object.entries(spanData).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          (struct.fields as any)[key] = this.convertToValue(value);
+        }
+      });
+
+      return struct;
+    }).filter(Boolean) as Struct[];
+
+    if (this.verbose) {
+      diag.info("GRPCSpanExporter: Sending gRPC payload:", JSON.stringify(spansData, null, 2));
+    }
+
+    const request = CreateOtelSpanRequest.create({
+      otelDataList: spansData,
+    });
+
+    try {
+      const client = this.getClient();
+      const startTime = Date.now();
+      
+      if (this.verbose) {
+        diag.info("GRPCSpanExporter: Starting gRPC export...");
+      }
+
+      client.createOtelSpan(request)
+        .then((response) => {
+          const endTime = Date.now();
+          if (this.verbose) {
+            diag.info(`GRPCSpanExporter: Export completed in ${endTime - startTime}ms`);
+          }
+          resultCallback({ code: ExportResultCode.SUCCESS });
+        })
+        .catch((error) => {
+          diag.error(`GRPCSpanExporter: Failed to export spans: ${error}`);
+          resultCallback({ code: ExportResultCode.FAILED });
+        });
+    } catch (error) {
+      diag.error(`GRPCSpanExporter: Error exporting spans: ${error}`);
+      resultCallback({ code: ExportResultCode.FAILED });
+    }
+  }
+
+  private convertToValue(value: any): any {
+    if (value === null) {
+      return { nullValue: 0 };
+    }
+    if (typeof value === 'boolean') {
+      return { boolValue: value };
+    }
+    if (typeof value === 'number') {
+      return { numberValue: value };
+    }
+    if (typeof value === 'string') {
+      return { stringValue: value };
+    }
+    if (Array.isArray(value)) {
+      return {
+        listValue: {
+          values: value.map(v => this.convertToValue(v))
+        }
+      };
+    }
+    if (typeof value === 'object') {
+      const struct = Struct.create();
+      Object.entries(value).forEach(([k, v]) => {
+        (struct.fields as any)[k] = this.convertToValue(v);
+      });
+      return { structValue: struct };
+    }
+    return { stringValue: String(value) };
+  }
+
+  async shutdown(): Promise<void> {
+    this.isShutdown = true;
+    if (this.client) {
+      // Close the gRPC channel if needed
+      this.client = null;
+    }
+    return Promise.resolve();
+  }
+
+  async forceFlush?(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 // --- Helper Functions ---
 function getEnv(key: string, defaultValue?: string): string | undefined {
   return process.env[key] ?? defaultValue;
@@ -222,6 +445,12 @@ function getEnvFiAuthHeader(): FIHeaders | undefined {
     return { "X-Api-Key": apiKey, "X-Secret-Key": secretKey };
   }
   return undefined;
+}
+
+function getEnvGrpcCollectorEndpoint(): string {
+  return getEnv("FI_GRPC_COLLECTOR_ENDPOINT") ?? 
+         getEnv("FI_GRPC_BASE_URL") ?? 
+         DEFAULT_FI_GRPC_COLLECTOR_BASE_URL;
 }
 
 // This function now constructs the FULL endpoint URL
@@ -267,6 +496,7 @@ interface FITracerProviderOptions {
   idGenerator?: IdGenerator;
   endpoint?: string; // Custom endpoint (can be base or full, _constructFullEndpoint will handle)
   headers?: FIHeaders;
+  transport?: Transport; // Transport type
 }
 
 class FITracerProvider extends BasicTracerProvider {
@@ -274,35 +504,47 @@ class FITracerProvider extends BasicTracerProvider {
   private verbose: boolean;
   private endpoint: string; // This will store the fully constructed endpoint
   private headers?: FIHeaders;
+  private transport: Transport;
 
   constructor(config: FITracerProviderOptions = {}) {
     const idGenerator = config.idGenerator ?? new UuidIdGenerator();
+    const transport = config.transport ?? Transport.HTTP;
     
-    const verbose = config.verbose ?? getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false; // Allow provider verbosity via env
-    // Construct the full endpoint using the new logic
-    const endpoint = constructFullEndpoint(config.endpoint);
+    const verbose = config.verbose ?? getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false;
+    
+    // Construct the appropriate endpoint based on transport
+    let endpoint: string;
+    if (transport === Transport.GRPC) {
+      endpoint = config.endpoint ?? getEnvGrpcCollectorEndpoint();
+    } else {
+      endpoint = constructFullEndpoint(config.endpoint);
+    }
+    
     const headers = config.headers ?? getEnvFiAuthHeader();
 
     if (verbose) {
-      diag.info(`FITracerProvider: Using full exporter endpoint: ${endpoint}`); // Use diag.info
+      diag.info(`FITracerProvider: Using ${transport.toUpperCase()} exporter endpoint: ${endpoint}`);
     }
 
-    // Pass the provider's verbosity to the exporter if not explicitly set for exporter
-    const exporterVerbose = config.verbose; // We won't directly use FI_VERBOSE_EXPORTER here, HTTPSpanExporter handles its own env var.
-                                         // If FITracerProvider is verbose, its default exporter will be too, unless HTTPSpanExporter's option/env says otherwise.
-
-    const exporter = new HTTPSpanExporter({ endpoint: endpoint, headers: headers, verbose: exporterVerbose });
+    // Create the appropriate exporter
+    let exporter: SpanExporter;
+    if (transport === Transport.GRPC) {
+      exporter = new GRPCSpanExporter({ endpoint, headers, verbose: config.verbose });
+    } else {
+      exporter = new HTTPSpanExporter({ endpoint, headers, verbose: config.verbose });
+    }
+    
     const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
     super({ resource: config.resource, idGenerator, spanProcessors: [defaultProcessor] });
     this.defaultProcessorAttached = true;
     this.verbose = verbose;
     this.endpoint = endpoint;
     this.headers = headers;
-    this.defaultProcessorAttached = true;
+    this.transport = transport;
 
     // Log to confirm processor and exporter details
     if (verbose) {
-      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with HTTPSpanExporter targeting: ${endpoint}`);
+      diag.info(`FITracerProvider: Default SimpleSpanProcessor added with ${transport.toUpperCase()}SpanExporter targeting: ${endpoint}`);
     }
 
     if (verbose) {
@@ -335,7 +577,7 @@ class FITracerProvider extends BasicTracerProvider {
     const sessionName = resource.attributes[SESSION_NAME] || "N/A";
 
     const processorName = this.defaultProcessorAttached ? "SimpleSpanProcessor (default)" : "Custom/Multiple";
-    const transport = "HTTP"; 
+    const transportName = this.transport.toUpperCase(); 
 
     const detailsHeader =
       process.platform === "win32"
@@ -348,7 +590,7 @@ class FITracerProvider extends BasicTracerProvider {
     detailsMsg += `|  FI Project Version Name: ${projectVersionName}\n`;
     detailsMsg += `|  Span Processor: ${processorName}\n`;
     detailsMsg += `|  Collector Endpoint: ${this.endpoint}\n`; // Now shows the full endpoint
-    detailsMsg += `|  Transport: ${transport}\n`;
+    detailsMsg += `|  Transport: ${transportName}\n`;
     detailsMsg += `|  Transport Headers: ${this.headers ? Object.keys(this.headers).map(h => `${h}: ****`).join(', ') : 'None'}\n`;
     detailsMsg += `|  Eval Tags: ${typeof evalTags === 'string' ? evalTags : JSON.stringify(evalTags)}\n`;
     detailsMsg += `|  Session Name: ${sessionName}\n`;
@@ -381,6 +623,7 @@ export interface RegisterOptions {
   verbose?: boolean;
   endpoint?: string; // Can be a base URL or a full URL. _constructFullEndpoint will resolve.
   idGenerator?: IdGenerator;
+  transport?: Transport; // Transport type: HTTP or GRPC
 }
 
 function register(options: RegisterOptions = {}): FITracerProvider {
@@ -397,6 +640,7 @@ function register(options: RegisterOptions = {}): FITracerProvider {
     verbose = false,
     endpoint: optEndpoint,
     idGenerator = new UuidIdGenerator(),
+    transport = Transport.HTTP,
   } = options;
 
   const preparedEvalTags = prepareEvalTags(optEvalTags);
@@ -485,14 +729,24 @@ if (!projectName) {
     idGenerator,
     endpoint: optEndpoint,
     headers: exporterHeaders,
+    transport,
   });
 
   if (batch) {
-    const batchExporter = new HTTPSpanExporter({
-        endpoint: (tracerProvider as any)._endpoint,
+    let batchExporter: SpanExporter;
+    if (transport === Transport.GRPC) {
+      batchExporter = new GRPCSpanExporter({
+        endpoint: (tracerProvider as any).endpoint,
         headers: exporterHeaders,
         verbose: verbose
-    });
+      });
+    } else {
+      batchExporter = new HTTPSpanExporter({
+        endpoint: (tracerProvider as any).endpoint,
+        headers: exporterHeaders,
+        verbose: verbose
+      });
+    }
     const batchProcessor = new OTelBatchSpanProcessor(batchExporter);
 
     (tracerProvider as any)._registeredSpanProcessors = [];
@@ -700,6 +954,7 @@ export {
   SimpleSpanProcessor,
   BatchSpanProcessor,
   HTTPSpanExporter,
+  GRPCSpanExporter,
   UuidIdGenerator,
   checkCustomEvalConfigExists
 }
