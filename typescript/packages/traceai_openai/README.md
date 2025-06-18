@@ -12,6 +12,38 @@ yarn add @traceai/openai
 pnpm add @traceai/openai
 ```
 
+## Module System Support
+
+This package supports both **CommonJS** and **ESM** module systems for maximum compatibility.
+
+### ESM (ES Modules)
+```typescript
+import { OpenAIInstrumentation } from '@traceai/openai';
+import { register, ProjectType } from '@traceai/fi-core';
+```
+
+### CommonJS
+```javascript
+const { OpenAIInstrumentation } = require('@traceai/openai');
+const { register, ProjectType } = require('@traceai/fi-core');
+```
+
+### TypeScript Configuration
+
+For optimal compatibility, ensure your `tsconfig.json` includes:
+
+```json
+{
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  }
+}
+```
+
+The `module` setting can be `"commonjs"`, `"esnext"`, or any other module system based on your project needs.
+
 ## Quick Start
 
 ```javascript

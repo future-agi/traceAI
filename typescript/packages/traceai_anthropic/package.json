@@ -2,10 +2,21 @@
   "name": "@traceai/anthropic",
   "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for Anthropic",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/src/index.js",
+  "module": "./dist/esm/index.js",
+  "esnext": "./dist/esnext/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/src/index.js"
+    }
+  },
   "scripts": {
-    "build": "tsc",
+    "prebuild": "rimraf dist",
+    "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
+    "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
     "lint": "eslint . --ext .ts",
     "prepare": "pnpm run build"
@@ -33,8 +44,10 @@
     "@anthropic-ai/sdk": "^0.27.3"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
-    "@types/node": "^22.15.29"
+    "@types/node": "^22.15.29",
+    "rimraf": "^6.0.1",
+    "tsc-alias": "^1.8.16",
+    "typescript": "^5.8.3"
   },
   "keywords": [
     "opentelemetry",
@@ -46,4 +59,4 @@
   "publishConfig": {
     "access": "public"
   }
-} 
+}

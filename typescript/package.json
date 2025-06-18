@@ -4,7 +4,10 @@
   "private": true,
   "description": "OpenTelemetry instrumentation for TypeScript",
   "scripts": {
-    "build": "pnpm run -r build",
+    "build": "pnpm run build:ordered",
+    "build:deps": "pnpm --filter @traceai/fi-core --filter @traceai/fi-semantic-conventions run build",
+    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain run build",
+    "build:ordered": "pnpm run build:deps && pnpm run build:consumers",
     "test": "pnpm run -r test",
     "lint": "eslint . --ext .ts"
   },
