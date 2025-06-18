@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-semantic-conventions",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Semantic conventions for OpenTelemetry instrumentation",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
