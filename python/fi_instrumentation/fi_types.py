@@ -155,6 +155,10 @@ class SpanAttributes:
     """
     The response being sent from the model
     """
+    PROMPT_ID = "prompt.id"
+    """
+    The id of the prompt
+    """
 
 
 class MessageAttributes:

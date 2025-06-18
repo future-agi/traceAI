@@ -5,8 +5,10 @@ import math
 import os
 import signal
 import sys
+import time
 import uuid
 import warnings
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Type, Union, cast
 from urllib.parse import ParseResult, urlparse
 
@@ -26,11 +28,15 @@ from fi_instrumentation.settings import (
     UuidIdGenerator,
     get_env_collector_endpoint,
     get_env_fi_auth_header,
+    get_env_grpc_collector_endpoint,
     get_env_project_name,
     get_env_project_version_name,
 )
 from jsonschema import ValidationError
 from opentelemetry import trace as trace_api
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+    OTLPSpanExporter as _GRPCSpanExporter,
+)
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as _HTTPSpanExporter,
 )
@@ -40,6 +46,9 @@ from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor as _BatchSpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+import grpc
+from google.protobuf.struct_pb2 import Struct
+from fi_instrumentation.grpc import tracer_pb2, tracer_pb2_grpc
 
 PROJECT_NAME = "project_name"
 PROJECT_TYPE = "project_type"
@@ -51,6 +60,11 @@ SESSION_NAME = "session_name"
 
 CONTENT_TYPE = "Content-Type"
 AUTHORIZATION = "authorization"
+
+
+class Transport(str, Enum):
+    GRPC = "grpc"
+    HTTP = "http"
 
 
 def register(
@@ -65,6 +79,7 @@ def register(
     set_global_tracer_provider: bool = False,
     headers: Optional[Dict[str, str]] = None,
     verbose: bool = True,
+    transport: Transport = Transport.HTTP,
 ) -> _TracerProvider:
 
     eval_tags = eval_tags or []
@@ -125,16 +140,19 @@ def register(
     resource = Resource(attributes=resource_attributes)
 
     tracer_provider = TracerProvider(
-        resource=resource, verbose=False, id_generator=UuidIdGenerator()
+        resource=resource, verbose=False, id_generator=UuidIdGenerator(),
+        transport=transport
     )
     span_processor: SpanProcessor
     if batch:
         span_processor = BatchSpanProcessor(
-            endpoint=Endpoints.FUTURE_AGI.value, headers=headers
+            headers=headers,
+            transport=transport,
         )
     else:
         span_processor = SimpleSpanProcessor(
-            endpoint=Endpoints.FUTURE_AGI.value, headers=headers
+            headers=headers,
+            transport=transport,
         )
     tracer_provider.add_span_processor(span_processor)
     tracer_provider._default_processor = True
@@ -178,8 +196,8 @@ class TracerProvider(_TracerProvider):
     def __init__(
         self,
         *args: Any,
-        endpoint: Optional[str] = None,
         verbose: bool = True,
+        transport: Transport = Transport.HTTP,
         **kwargs: Any,
     ):
         if "shutdown_on_exit" not in kwargs:
@@ -198,11 +216,20 @@ class TracerProvider(_TracerProvider):
             )
         super().__init__(*bound_args.args, **bound_args.kwargs)
 
-        parsed_url, endpoint = _normalized_endpoint(endpoint)
         self._default_processor = False
 
-        http_exporter: SpanExporter = HTTPSpanExporter(endpoint=endpoint)
-        self.add_span_processor(SimpleSpanProcessor(span_exporter=http_exporter))
+
+        if transport == Transport.HTTP:
+            endpoint = get_env_collector_endpoint()
+            parsed_url, endpoint = _normalized_endpoint(endpoint)
+            exporter: SpanExporter = HTTPSpanExporter(endpoint=endpoint)
+        elif transport == Transport.GRPC:
+            endpoint = get_env_grpc_collector_endpoint()
+            exporter: SpanExporter = GRPCSpanExporter(endpoint=endpoint)
+        else:
+            raise ValueError(f"Invalid transport: {transport}")
+
+        self.add_span_processor(SimpleSpanProcessor(span_exporter=exporter))
         self._default_processor = True
         if verbose:
             print(self._tracing_details())
@@ -321,20 +348,20 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
     def __init__(
         self,
         span_exporter: Optional[SpanExporter] = None,
-        endpoint: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
+        transport: Transport = Transport.HTTP,
     ):
         self._active_spans = {}
 
         if span_exporter is None:
-            parsed_url, endpoint = _normalized_endpoint(endpoint)
-            if _maybe_http_endpoint(parsed_url):
+            if transport == Transport.HTTP:
+                endpoint = get_env_collector_endpoint()
+                parsed_url, endpoint = _normalized_endpoint(endpoint)
                 span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
-            else:
-                warnings.warn(
-                    "Could not infer collector endpoint protocol, defaulting to HTTP."
-                )
-                span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
+            elif transport == Transport.GRPC:
+                endpoint = get_env_grpc_collector_endpoint()
+                span_exporter = GRPCSpanExporter(endpoint=endpoint, headers=headers)
+
         super().__init__(span_exporter)
 
     def on_start(self, span: Any, parent_context: Optional[Any] = None) -> None:
@@ -418,19 +445,173 @@ class BatchSpanProcessor(_BatchSpanProcessor):
     def __init__(
         self,
         span_exporter: Optional[SpanExporter] = None,
-        endpoint: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
+        transport: Transport = Transport.HTTP,
     ):
         if span_exporter is None:
-            parsed_url, endpoint = _normalized_endpoint(endpoint)
-            if _maybe_http_endpoint(parsed_url):
+            if transport == Transport.HTTP:
+                endpoint = get_env_collector_endpoint()
+                parsed_url, endpoint = _normalized_endpoint(endpoint)
                 span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
-            else:
-                warnings.warn(
-                    "Could not infer collector endpoint protocol, defaulting to HTTP."
-                )
-                span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
+            elif transport == Transport.GRPC:
+                endpoint = get_env_grpc_collector_endpoint()
+                span_exporter = GRPCSpanExporter(endpoint=endpoint, headers=headers)
+
         super().__init__(span_exporter)
+
+
+class GRPCSpanExporter(_GRPCSpanExporter):
+    """
+    OTLP span exporter using gRPC.
+    Args:
+        endpoint (str, optional): OpenTelemetry Collector receiver endpoint. If not provided, the
+            `BASE_URL` environment variable will be used to infer which
+            collector endpoint to use, defaults to the gRPC endpoint.
+        headers: Headers to send when exporting. If not provided, the `FI_API_KEY`
+            and `FI_SECRET_KEY` environment variables will be used.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        sig = _get_class_signature(_GRPCSpanExporter)
+        bound_args = sig.bind_partial(*args, **kwargs)
+        bound_args.apply_defaults()
+
+        auth_header = get_env_fi_auth_header()
+        lower_case_auth_header = (
+            {k.lower(): v for k, v in auth_header.items()} if auth_header else None
+        )
+
+        if not bound_args.arguments.get("headers"):
+            headers = {
+                **(lower_case_auth_header or dict()),
+            }
+            bound_args.arguments["headers"] = headers if headers else None
+        else:
+            passed_headers = bound_args.arguments["headers"]
+            if isinstance(passed_headers, dict):
+                headers = {k.lower(): v for k, v in passed_headers.items()}
+            else:
+                headers = {k.lower(): v for k, v in passed_headers}
+
+            if AUTHORIZATION not in headers:
+                bound_args.arguments["headers"] = {
+                    **headers,
+                    **(lower_case_auth_header or dict()),
+                }
+            else:
+                bound_args.arguments["headers"] = headers
+
+        endpoint = get_env_grpc_collector_endpoint()
+        bound_args.arguments["endpoint"] = endpoint
+        super().__init__(*bound_args.args, **bound_args.kwargs)
+
+    def _convert_attributes(self, attributes):
+        """Convert mappingproxy objects to regular dictionaries."""
+        if attributes is None:
+            return {}
+        if not isinstance(attributes, dict):
+            return dict(attributes)
+        return attributes
+
+    def _format_trace_id(self, trace_id: int) -> str:
+        # Format the trace_id as a 32-character hexadecimal UUID
+        return f"{trace_id:032x}"
+
+    def _format_span_id(self, span_id: int) -> str:
+        # Format the span_id as a 16-character hexadecimal
+        return f"{span_id:016x}"
+
+    def export(self, spans) -> SpanExportResult:
+        """
+        Exports a batch of spans in JSON format.
+        Args:
+            spans (list): A list of spans to export.
+        Returns:
+            SpanExportResult: Indicates the success or failure of the export.
+        """
+        if not self._endpoint:
+            warnings.warn("gRPC Exporter endpoint is not configured. Cannot export spans.")
+            return SpanExportResult.FAILURE
+
+        spans_data = []
+        for span in spans:
+            span_data = {
+                "trace_id": self._format_trace_id(span.context.trace_id),
+                "span_id": self._format_span_id(span.context.span_id),
+                "name": span.name,
+                "start_time": span.start_time,
+                "end_time": span.end_time,
+                "attributes": self._convert_attributes(span.attributes),
+                "events": [
+                    {
+                        "name": event.name,
+                        "attributes": self._convert_attributes(event.attributes),
+                        "timestamp": event.timestamp,
+                    }
+                    for event in span.events
+                ],
+                "status": span.status.status_code.name,
+                "parent_id": (
+                    self._format_span_id(span.parent.span_id)
+                    if span.parent
+                    else None
+                ),
+                "project_name": span.resource.attributes.get(PROJECT_NAME),
+                "project_type": span.resource.attributes.get(PROJECT_TYPE),
+                "project_version_name": span.resource.attributes.get(
+                    PROJECT_VERSION_NAME
+                ),
+                "project_version_id": span.resource.attributes.get(
+                    PROJECT_VERSION_ID
+                ),
+                "latency": math.floor(
+                    (span.end_time - span.start_time) / 1000000
+                ),
+                "eval_tags": span.resource.attributes.get(EVAL_TAGS),
+                "metadata": span.resource.attributes.get(METADATA),
+                "session_name": span.resource.attributes.get(SESSION_NAME),
+            }
+            spans_data.append(span_data)
+
+        if not spans_data:
+            return SpanExportResult.SUCCESS
+
+        try:
+
+            with grpc.insecure_channel(self._endpoint) as channel:
+                stub = tracer_pb2_grpc.ObservationSpanControllerStub(channel)
+                metadata = list(self._headers) if self._headers else None
+
+                otel_data_list = []
+                for span_data_item in spans_data:
+                    s = Struct()
+                    s.update(span_data_item)
+                    otel_data_list.append(s)
+
+                request = tracer_pb2.CreateOtelSpanRequest(
+                    otel_data_list=otel_data_list
+                )
+
+                try:
+                    stub.CreateOtelSpan(request, metadata=metadata)
+                except grpc.RpcError as e:
+                    print(f"Failed to export spans via gRPC: {e.details()}")
+
+            return SpanExportResult.SUCCESS
+
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            print(f"Failed to export spans due to an unexpected error: {e}")
+            return SpanExportResult.FAILURE
+
+    def shutdown(self) -> None:
+        """Clean up any resources before shutting down."""
+        try:
+            if hasattr(self, "_session") and self._session:
+                self._session.close()
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
 
 
 class HTTPSpanExporter(_HTTPSpanExporter):
@@ -584,15 +765,11 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             print(f"Error during shutdown: {e}")
 
 
-def _maybe_http_endpoint(parsed_endpoint: ParseResult) -> bool:
-    if parsed_endpoint.path == "/tracer/observation-span/create_otel_span/":
-        return True
-    return False
-
-
 def _exporter_transport(exporter: SpanExporter) -> str:
     if isinstance(exporter, _HTTPSpanExporter):
         return "HTTP"
+    if isinstance(exporter, _GRPCSpanExporter):
+        return "gRPC"
     else:
         return exporter.__class__.__name__
 
@@ -611,11 +788,10 @@ def _construct_http_endpoint(parsed_endpoint: ParseResult) -> ParseResult:
 
 def _normalized_endpoint(endpoint: Optional[str]) -> Tuple[ParseResult, str]:
     if endpoint is None:
-        base_endpoint = get_env_collector_endpoint()
-        parsed = urlparse(base_endpoint)
-        parsed = _construct_http_endpoint(parsed)
-    else:
-        parsed = urlparse(endpoint)
+        endpoint = get_env_collector_endpoint()
+
+    parsed = urlparse(endpoint)
+    parsed = _construct_http_endpoint(parsed)
 
     return parsed, parsed.geturl()
 

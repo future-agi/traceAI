@@ -25,6 +25,36 @@ pnpm add @traceai/fi-core
 yarn add @traceai/fi-core
 ```
 
+## Module System Support
+
+This package supports both **CommonJS** and **ESM** module systems for maximum compatibility.
+
+### ESM (ES Modules)
+```typescript
+import { register, ProjectType, EvalTag } from '@traceai/fi-core';
+```
+
+### CommonJS
+```typescript
+const { register, ProjectType, EvalTag } = require('@traceai/fi-core');
+```
+
+### TypeScript Configuration
+
+For optimal compatibility, ensure your `tsconfig.json` includes:
+
+```json
+{
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  }
+}
+```
+
+The `module` setting can be `"commonjs"`, `"esnext"`, or any other module system your project requires.
+
 ## Quick Start
 
 ### Basic Setup
