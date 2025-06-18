@@ -357,7 +357,6 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
             if transport == Transport.HTTP:
                 endpoint = get_env_collector_endpoint()
                 parsed_url, endpoint = _normalized_endpoint(endpoint)
-                print("~~~~~~ endpoint", endpoint)
                 span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
             elif transport == Transport.GRPC:
                 endpoint = get_env_grpc_collector_endpoint()

@@ -1,4 +1,4 @@
-import { register, ProjectType, EvalSpanKind, EvalName, EvalTag, EvalTagType, ModelChoices } from "@traceai/fi-core";
+import { register, ProjectType, EvalSpanKind, EvalName, EvalTag, EvalTagType, ModelChoices, Transport } from "@traceai/fi-core";
 import { OpenAIInstrumentation } from "@traceai/openai";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import { DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
@@ -34,34 +34,34 @@ async function main() {
 
   // 1. Register FI Core TracerProvider (sets up exporter)
   const tracerProvider = register({
-    projectName: "ts-observability-suite-v5",
-    projectType: ProjectType.EXPERIMENT,
-    projectVersionName: "sarthak_f2",
+    projectName: "GRPC",
+    projectType: ProjectType.OBSERVE,
+    transport: Transport.GRPC,
     // sessionName: "basic-otel-test-session-" + Date.now(), // OBSERVE only
-    evalTags: [
-      new EvalTag({
-        type: EvalTagType.OBSERVATION_SPAN,
-        value: EvalSpanKind.LLM,
-        eval_name: EvalName.CHUNK_ATTRIBUTION,
-        config: {},
-        custom_eval_name: "Chunk_Attribution_5",
-        mapping: {
-          "context": "raw.input",
-          "output": "raw.output"
-        },
-        model: ModelChoices.TURING_SMALL
-      }),
-      new EvalTag(
-        {
-          type: EvalTagType.OBSERVATION_SPAN,
-          value: EvalSpanKind.LLM,
-          eval_name: "toxic_nature",
-          custom_eval_name: "toxic_nature_custom_eval_config_5",
-          mapping: {
-            "output": "raw.output"
-          }
-        }
-      )
+    // evalTags: [
+    //   new EvalTag({
+    //     type: EvalTagType.OBSERVATION_SPAN,
+    //     value: EvalSpanKind.LLM,
+    //     eval_name: EvalName.CHUNK_ATTRIBUTION,
+    //     config: {},
+    //     custom_eval_name: "Chunk_Attribution_5",
+    //     mapping: {
+    //       "context": "raw.input",
+    //       "output": "raw.output"
+    //     },
+    //     model: ModelChoices.TURING_SMALL
+    //   }),
+    //   new EvalTag(
+    //     {
+    //       type: EvalTagType.OBSERVATION_SPAN,
+    //       value: EvalSpanKind.LLM,
+    //       eval_name: "toxic_nature",
+    //       custom_eval_name: "toxic_nature_custom_eval_config_5",
+    //       mapping: {
+    //         "output": "raw.output"
+    //       }
+    //     }
+    //   )
       // new EvalTag(
       //   {
       //     type: EvalTagType.OBSERVATION_SPAN,
@@ -99,7 +99,7 @@ async function main() {
       //     "output": "raw.output"
       //   }
       // })
-    ]
+    
   });
 
   // 2. Register OpenAI Instrumentation *BEFORE* importing/using OpenAI client

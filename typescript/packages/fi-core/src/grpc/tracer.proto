@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package tfc.tracer;
+
+import "google/protobuf/struct.proto";
+
+service ObservationSpanController {
+    rpc CreateOtelSpan(CreateOtelSpanRequest) returns (CreateOtelSpanResponse) {}
+}
+
+message CreateOtelSpanRequest {
+    repeated google.protobuf.Struct otel_data_list = 1;
+}
+
+message CreateOtelSpanResponse {
+    repeated string ids = 1;
+}
+
