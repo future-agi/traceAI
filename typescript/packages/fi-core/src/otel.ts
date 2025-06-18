@@ -51,7 +51,7 @@ const FI_CUSTOM_EVAL_CONFIG_CHECK_PATH = "/tracer/custom-eval-config/check_exist
 const FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH = "/tracer/custom-eval-config/get_custom_eval_by_name/";
 
 // Default gRPC endpoint  
-const DEFAULT_FI_GRPC_COLLECTOR_BASE_URL = "localhost:50051";
+const DEFAULT_FI_GRPC_COLLECTOR_BASE_URL = "https://grpc.futureagi.com:50051";
 
 // Transport enum
 export enum Transport {
@@ -227,30 +227,26 @@ class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private customHeaders: FIHeaders;
 
   constructor(options: { endpoint: string; headers?: FIHeaders; verbose?: boolean }) {
-    // Call super with proper OTLP configuration
     const { endpoint, headers = {}, verbose = false } = options;
     
+    // Since we completely override export(), pass empty config to super()
+    super({});
+    
     // Store original endpoint for our custom logic
-    const cleanEndpoint = endpoint.replace(/^https?:\/\//, '');
-    
-    // Determine credentials based on endpoint
-    const isLocalhost = cleanEndpoint.includes('localhost') || cleanEndpoint.includes('127.0.0.1');
-    
-    super({
-      url: `http${isLocalhost ? '' : 's'}://${cleanEndpoint}`,
-      headers,
-    });
-    
-    this.originalEndpoint = cleanEndpoint;
+    this.originalEndpoint = endpoint.replace(/^https?:\/\//, '');
     this.customHeaders = headers;
     this.verbose = verbose;
   }
 
   private getClient(): ObservationSpanControllerClient {
     if (!this.client) {
-      // Use insecure credentials for localhost, SSL for others
-      const isLocalhost = this.originalEndpoint.includes('localhost') || this.originalEndpoint.includes('127.0.0.1');
-      const credentials = isLocalhost ? grpc.credentials.createInsecure() : grpc.credentials.createSsl();
+      // Default to insecure credentials (matching Python implementation)
+      // Most gRPC servers, even remote ones, often use insecure connections
+      const credentials = grpc.credentials.createInsecure();
+      
+      if (this.verbose) {
+        diag.info(`GRPCSpanExporter: Connecting to ${this.originalEndpoint} with insecure credentials`);
+      }
       
       const transport = new GrpcTransport({
         host: this.originalEndpoint,
