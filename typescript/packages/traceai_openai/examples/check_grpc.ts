@@ -9,10 +9,10 @@ import { GRPCSpanExporter } from "@traceai/fi-core";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 const otlpProcessor = new SimpleSpanProcessor(
     new GRPCSpanExporter({
-        endpoint: "localhost:50051",
+        endpoint: "https://grpc.futureagi.com:50051",
         headers: {
-            "X-Api-Key": "0ce7f643df7e490c8e1018cb3a231591",
-            "X-Secret-Key": "a22030bba7d04054b49e1ae97a548e8b",
+            "X-Api-Key": process.env.FI_API_KEY || "",
+            "X-Secret-Key": process.env.FI_SECRET_KEY || "",
         },
     })
   );
@@ -48,13 +48,57 @@ const tracer = provider.getTracer("combined-tracing-example-te-sarthak");
 
 // Test function to validate instrumentation is working
 async function testInstrumentation() {
-    const span = tracer.startSpan("test_manual_span");
-    const response = await openai.chat.completions.create({
-        messages: [{ role: "user", content: "Say hello" }],
-        model: "gpt-4o-mini",
+    // Start parent span
+    const parentSpan = tracer.startSpan("parent-span", {
+        attributes: { "fi.span.kind": "chain" }
     });
-    span.end();
 
+    // Optionally, set input attribute for parent
+    parentSpan.setAttribute("input", "Parent span input");
+
+    // Use context.with to make parentSpan the current span
+    await context.with(trace.setSpan(context.active(), parentSpan), async () => {
+        for (let i = 0; i < 3; i++) {
+            // Start child span as child of parent
+            const childSpan = tracer.startSpan(
+                `child-span-${i}`,
+                {
+                    attributes: { "fi.span.kind": "chain" },
+                }
+            );
+            childSpan.setAttribute("input", `Child span ${i} input`);
+
+            await context.with(trace.setSpan(context.active(), childSpan), async () => {
+                for (let j = 0; j < 2; j++) {
+                    // Start grandchild span as child of childSpan
+                    const grandchildSpan = tracer.startSpan(
+                        `grandchild-span-${i}-${j}`,
+                        {
+                            attributes: { "fi.span.kind": "chain" }
+                        }
+                    );
+                    grandchildSpan.setAttribute("input", `Grandchild span ${i}-${j} input`);
+
+                    await context.with(trace.setSpan(context.active(), grandchildSpan), async () => {
+                        // Optionally, do some work here
+                        // For demonstration, call OpenAI only on the first grandchild
+                        if (i === 0 && j === 0) {
+                            const response = await openai.chat.completions.create({
+                                messages: [{ role: "user", content: "Say hello" }],
+                                model: "gpt-4o-mini",
+                            });
+                            // Optionally, record response in span
+                            grandchildSpan.setAttribute("openai_response_id", response.id || "");
+                        }
+                    });
+                    grandchildSpan.end();
+                }
+            });
+            childSpan.end();
+        }
+    });
+
+    parentSpan.end();
 }
 
 // Main execution combining all approaches
