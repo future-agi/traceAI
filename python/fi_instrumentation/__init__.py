@@ -24,6 +24,7 @@ from .otel import (
     HTTPSpanExporter,
     SimpleSpanProcessor,
     TracerProvider,
+    Transport,
     register,
 )
 
@@ -51,5 +52,6 @@ __all__ = [
     "PROJECT_NAME",
     "PROJECT_TYPE",
     "PROJECT_VERSION_NAME",
+    "Transport",
     "register",
 ]
