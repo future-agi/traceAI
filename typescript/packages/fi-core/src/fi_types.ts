@@ -885,7 +885,7 @@ class EvalTag implements IEvalTag {
   metadata?: Record<string, any> | null;
   model?: ModelChoices;
 
-  private constructor(params: {
+  constructor(params: {
     type: EvalTagType;
     value: EvalSpanKind;
     eval_name: EvalName | string;
@@ -949,15 +949,13 @@ class EvalTag implements IEvalTag {
     if (!customEvalTemplate.result?.isUserEvalTemplate) {
       if (!Object.values(EvalName).includes(this.eval_name as EvalName)) {
         throw new Error(
-          `eval_name must be a valid EvalName enum if its not a custom eval template, got ${
-            this.eval_name
-          }. Expected values are: ${Object.values(EvalName).join(", ")}`
+          `Invalid eval_name '${this.eval_name}'. Expected one of: ${Object.values(EvalName).slice(0, 5).join(', ')}... (${Object.values(EvalName).length} total options)`
         );
       }
 
       if (!this.model || !Object.values(ModelChoices).includes(this.model)) {
         throw new Error(
-          `Model must be provied in case of fagi evals. Model must be a valid model name, got ${
+          `Model must be provided in case of fagi evals. Model must be a valid model name, got ${
             this.model
           }. Expected values are: ${Object.values(ModelChoices).join(", ")}`
         );
