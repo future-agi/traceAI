@@ -18,6 +18,8 @@
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "lint": "eslint . --ext .ts",
     "prepare": "pnpm run build"
   },
@@ -57,6 +59,9 @@
     "@protobuf-ts/protoc": "^2.11.0",
     "@types/google-protobuf": "^3.15.12",
     "@types/node": "^22.15.29",
+    "@types/jest": "^29.5.12",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4",
     "google-protobuf": "^3.21.4",
     "rimraf": "^6.0.1",
     "tsc-alias": "^1.8.16",
