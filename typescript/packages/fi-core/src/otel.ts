@@ -24,14 +24,9 @@ import {
 import { Resource, resourceFromAttributes, detectResources, defaultResource } from "@opentelemetry/resources";
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
 import { v4 as uuidv4 } from "uuid"; // For UUID generation
+
+// Import grpc for metadata handling
 import * as grpc from "@grpc/grpc-js";
-import { 
-  CreateOtelSpanRequest, 
-  CreateOtelSpanResponse, 
-  ObservationSpanControllerClient 
-} from "./generated";
-import { GrpcTransport } from "@protobuf-ts/grpc-transport";
-import { Struct } from "./generated/google/protobuf/struct";
 
 // --- Constants for Resource Attributes ---
 export const PROJECT_NAME = "project_name";
@@ -222,168 +217,49 @@ class HTTPSpanExporter implements SpanExporter {
 // --- Custom GRPCSpanExporter extending OTLP gRPC exporter ---
 class GRPCSpanExporter extends _OTLPGRPCTraceExporter {
   private verbose: boolean;
-  private client: ObservationSpanControllerClient | null = null;
-  private originalEndpoint: string;
-  private customHeaders: FIHeaders;
 
-  constructor(options: { endpoint: string; headers?: FIHeaders; verbose?: boolean }) {
-    const { endpoint, headers = {}, verbose = false } = options;
+  constructor(options: { endpoint: string; headers?: FIHeaders; verbose?: boolean; [key: string]: any }) {
+    const { endpoint, headers = {}, verbose = false, ...restOptions } = options;
     
-    // Since we completely override export(), pass empty config to super()
-    super({});
-    
-    // Store original endpoint for our custom logic
-    this.originalEndpoint = endpoint.replace(/^https?:\/\//, '');
-    this.customHeaders = headers;
-    this.verbose = verbose;
-  }
+    const auth_header = headers;
+    const lower_case_auth_header = auth_header 
+      ? Object.fromEntries(Object.entries(auth_header).map(([k, v]) => [k.toLowerCase(), v]))
+      : {};
 
-  private getClient(): ObservationSpanControllerClient {
-    if (!this.client) {
-      // Default to insecure credentials (matching Python implementation)
-      // Most gRPC servers, even remote ones, often use insecure connections
-      const credentials = grpc.credentials.createInsecure();
-      
-      if (this.verbose) {
-        diag.info(`GRPCSpanExporter: Connecting to ${this.originalEndpoint} with insecure credentials`);
-      }
-      
-      const transport = new GrpcTransport({
-        host: this.originalEndpoint,
-        channelCredentials: credentials,
-        meta: this.customHeaders,
-      });
-      this.client = new ObservationSpanControllerClient(transport);
-    }
-    return this.client;
-  }
-
-  private convertAttributes(attributes: Attributes | undefined): Record<string, any> {
-    if (!attributes) {
-      return {};
-    }
-    try {
-      return JSON.parse(JSON.stringify(attributes));
-    } catch (e) {
-      diag.error(`GRPCSpanExporter: Error converting attributes: ${e}`);
-      return {};
-    }
-  }
-
-  private getSpanStatusName(status: SpanStatus): string {
-    switch (status.code) {
-      case SpanStatusCode.UNSET:
-        return "UNSET";
-      case SpanStatusCode.OK:
-        return "OK";
-      case SpanStatusCode.ERROR:
-        return "ERROR";
-      default:
-        return "UNKNOWN";
-    }
-  }
-
-  export(
-    spans: ReadableSpan[],
-    resultCallback: (result: ExportResult) => void,
-  ): void {
-    if (!spans || !resultCallback) {
-      resultCallback?.({ code: ExportResultCode.FAILED });
-      return;
-    }
-
-    const spansData = spans.map((span) => {
-      if (!span) return null;
-      const spanContext = span.spanContext();
-      if (!spanContext) {
-        return null;
-      }
-      const parentSpanId = span.parentSpanContext?.spanId || undefined;
-
-      const spanData = {
-        trace_id: spanContext.traceId,
-        span_id: spanContext.spanId,
-        name: span.name || "unknown-span",
-        start_time: span.startTime?.[0] * 1e9 + span.startTime?.[1] || 0,
-        end_time: span.endTime?.[0] * 1e9 + span.endTime?.[1] || 0,
-        attributes: this.convertAttributes(span.attributes),
-        events: span.events.map((event) => ({
-          name: event.name,
-          attributes: this.convertAttributes(event.attributes),
-          timestamp: event.time[0] * 1e9 + event.time[1],
-        })),
-        status: this.getSpanStatusName(span.status),
-        parent_id: parentSpanId,
-        project_name: span.resource?.attributes[PROJECT_NAME],
-        project_type: span.resource?.attributes[PROJECT_TYPE],
-        project_version_name: span.resource?.attributes[PROJECT_VERSION_NAME],
-        project_version_id: span.resource?.attributes[PROJECT_VERSION_ID],
-        latency: Math.floor(
-          (span.endTime[0] * 1e9 +
-            span.endTime[1] -
-            (span.startTime[0] * 1e9 + span.startTime[1])) /
-            1e6,
-        ),
-        eval_tags: span.resource?.attributes[EVAL_TAGS],
-        metadata: span.resource?.attributes[METADATA],
-        session_name: span.resource?.attributes[SESSION_NAME],
-      };
-
-      // Clean up undefined values and convert to Struct
-      const cleanSpanData: Record<string, any> = {};
-      Object.entries(spanData).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          cleanSpanData[key] = value;
-        }
-      });
-      
-      // Convert to Struct using proper protobuf method
-      return Struct.fromJson(cleanSpanData);
-    }).filter(Boolean) as Struct[];
-
-    if (this.verbose) {
-      diag.info("GRPCSpanExporter: Sending gRPC payload with", spansData.length, "spans");
-    }
-
-    const request = CreateOtelSpanRequest.create({
-      otelDataList: spansData,
+    const metadata = new grpc.Metadata();
+    Object.entries(lower_case_auth_header).forEach(([key, value]) => {
+      metadata.set(key, value);
     });
 
-    try {
-      const client = this.getClient();
-      const startTime = Date.now();
-      
-      if (this.verbose) {
-        diag.info("GRPCSpanExporter: Starting gRPC export...");
-      }
+    const grpcConfig = {
+      url: endpoint,
+      metadata: metadata,
+      ...(endpoint.includes('localhost') || endpoint.includes('127.0.0.1') ? { 
+        credentials: grpc.credentials.createInsecure() 
+      } : {}),
+      ...restOptions,
+    };
 
-      client.createOtelSpan(request)
-        .then((response) => {
-          const endTime = Date.now();
-          if (this.verbose) {
-            diag.info(`GRPCSpanExporter: Export completed in ${endTime - startTime}ms`);
-          }
-          resultCallback({ code: ExportResultCode.SUCCESS });
-        })
-        .catch((error) => {
-          diag.error(`GRPCSpanExporter: Failed to export spans: ${error}`);
-          resultCallback({ code: ExportResultCode.FAILED });
-        });
+    try {
+      super(grpcConfig);
     } catch (error) {
-      diag.error(`GRPCSpanExporter: Error exporting spans: ${error}`);
-      resultCallback({ code: ExportResultCode.FAILED });
+      diag.error(`GRPCSpanExporter: Error initializing OTLP exporter:`, error);
+      throw error;
+    }
+    
+    this.verbose = verbose;
+    
+    if (this.verbose) {
+      diag.info(`GRPCSpanExporter: Configured for endpoint: ${endpoint}`);
+      diag.info(`GRPCSpanExporter: Authentication: ${Object.keys(lower_case_auth_header).length > 0 ? 'Enabled' : 'None'}`);
     }
   }
 
   async shutdown(): Promise<void> {
-    if (this.client) {
-      this.client = null;
+    if (this.verbose) {
+      diag.info("GRPCSpanExporter: Shutting down...");
     }
     return super.shutdown();
-  }
-
-  async forceFlush(): Promise<void> {
-    return super.forceFlush();
   }
 }
 
@@ -404,15 +280,15 @@ function getEnvFiAuthHeader(): FIHeaders | undefined {
   const apiKey = getEnv("FI_API_KEY");
   const secretKey = getEnv("FI_SECRET_KEY");
   if (apiKey && secretKey) {
-    // Match Python SDK: use X-Api-Key and X-Secret-Key headers
-    return { "X-Api-Key": apiKey, "X-Secret-Key": secretKey };
+    // Use lowercase headers for gRPC compatibility
+    return { "x-api-key": apiKey, "x-secret-key": secretKey };
   }
   return undefined;
 }
 
 function getEnvGrpcCollectorEndpoint(): string {
   let endpoint = getEnv("FI_GRPC_COLLECTOR_ENDPOINT") ?? 
-                 getEnv("FI_GRPC_BASE_URL") ?? 
+                 getEnv("FI_GRPC_URL") ?? 
                  DEFAULT_FI_GRPC_COLLECTOR_BASE_URL;
                  
   // Remove http:// or https:// prefix if present (gRPC doesn't use HTTP protocol prefix)

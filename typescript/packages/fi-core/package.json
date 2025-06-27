@@ -15,8 +15,7 @@
   },
   "scripts": {
     "prebuild": "rimraf dist",
-    "build": "pnpm run build:proto && tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
-    "build:proto": "npx protoc --ts_out src/generated --proto_path src/grpc src/grpc/tracer.proto",
+    "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
     "lint": "eslint . --ext .ts",
