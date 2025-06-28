@@ -17,8 +17,8 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
       expect(attributes).toEqual({
-        'llm.input_messages.0.role': 'user',
-        'llm.input_messages.0.content': 'Hello world!',
+        'llm.input_messages.0.message.role': 'user',
+        'llm.input_messages.0.message.content': 'Hello world!',
       });
     });
 
@@ -34,12 +34,12 @@ describe('Response Attributes Functions', () => {
              const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'user',
-         'llm.input_messages.0.content': 'System message',
-         'llm.input_messages.1.role': 'user',
-         'llm.input_messages.1.content': 'User message',
-         'llm.input_messages.2.role': 'assistant',
-         'llm.input_messages.2.content': 'Assistant message',
+         'llm.input_messages.0.message.role': 'user',
+         'llm.input_messages.0.message.content': 'System message',
+         'llm.input_messages.1.message.role': 'user',
+         'llm.input_messages.1.message.content': 'User message',
+         'llm.input_messages.2.message.role': 'assistant',
+         'llm.input_messages.2.message.content': 'Assistant message',
        });
      });
 
@@ -59,11 +59,11 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'user',
-         'llm.input_messages.0.contents.0.type': 'input_text',
-         'llm.input_messages.0.contents.0.text': 'What is in this image?',
-         'llm.input_messages.0.contents.1.type': 'input_image',
-         'llm.input_messages.0.contents.1.image.url': 'https://example.com/image.jpg',
+         'llm.input_messages.0.message.role': 'user',
+         'llm.input_messages.0.message.contents.0.message_content.type': 'input_text',
+         'llm.input_messages.0.message.contents.0.message_content.text': 'What is in this image?',
+         'llm.input_messages.0.message.contents.1.message_content.type': 'input_image',
+         'llm.input_messages.0.message.contents.1.message_content.image.image.url': 'https://example.com/image.jpg',
        });
      });
 
@@ -82,10 +82,10 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'assistant',
-         'llm.input_messages.0.tool_calls.0.id': 'call_123',
-         'llm.input_messages.0.tool_calls.0.function.name': 'get_weather',
-         'llm.input_messages.0.tool_calls.0.function.arguments': '{"location": "San Francisco"}',
+         'llm.input_messages.0.message.role': 'assistant',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.id': 'call_123',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.function.name': 'get_weather',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.function.arguments': '{"location": "San Francisco"}',
        });
      });
 
@@ -103,9 +103,9 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'tool',
-         'llm.input_messages.0.tool_call_id': 'call_123',
-         'llm.input_messages.0.content': '{"temperature": "72°F", "condition": "sunny"}',
+         'llm.input_messages.0.message.role': 'tool',
+         'llm.input_messages.0.message.tool_call_id': 'call_123',
+         'llm.input_messages.0.message.content': '{"temperature": "72°F", "condition": "sunny"}',
        });
      });
 
@@ -125,11 +125,11 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'assistant',
-         'llm.input_messages.0.contents.0.type': 'summary_text',
-         'llm.input_messages.0.contents.0.text': 'Let me think about this...',
-         'llm.input_messages.0.contents.1.type': 'summary_text',
-         'llm.input_messages.0.contents.1.text': 'Based on the input, I should...',
+         'llm.input_messages.0.message.role': 'assistant',
+         'llm.input_messages.0.message.contents.0.message_content.type': 'summary_text',
+         'llm.input_messages.0.message.contents.0.message_content.text': 'Let me think about this...',
+         'llm.input_messages.0.message.contents.1.message_content.type': 'summary_text',
+         'llm.input_messages.0.message.contents.1.message_content.text': 'Based on the input, I should...',
        });
      });
 
@@ -146,9 +146,9 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'assistant',
-         'llm.input_messages.0.tool_calls.0.id': 'search_123',
-         'llm.input_messages.0.tool_calls.0.function.name': 'web_search_call',
+         'llm.input_messages.0.message.role': 'assistant',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.id': 'search_123',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.function.name': 'web_search_call',
        });
      });
 
@@ -166,10 +166,10 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'assistant',
-         'llm.input_messages.0.tool_calls.0.id': 'computer_123',
-         'llm.input_messages.0.tool_calls.0.function.name': 'computer_call',
-         'llm.input_messages.0.tool_calls.0.function.arguments': '{"type":"screenshot"}',
+         'llm.input_messages.0.message.role': 'assistant',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.id': 'computer_123',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.function.name': 'computer_call',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.function.arguments': '{"type":"screenshot"}',
        });
      });
 
@@ -187,9 +187,9 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'tool',
-         'llm.input_messages.0.tool_call_id': 'computer_123',
-         'llm.input_messages.0.content': '{"screenshot":"base64_data..."}',
+         'llm.input_messages.0.message.role': 'tool',
+         'llm.input_messages.0.message.tool_call_id': 'computer_123',
+         'llm.input_messages.0.message.content': '{"screenshot":"base64_data..."}',
        });
      });
 
@@ -207,10 +207,10 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'assistant',
-         'llm.input_messages.0.tool_calls.0.id': 'search_456',
-         'llm.input_messages.0.tool_calls.0.function.name': 'file_search_call',
-         'llm.input_messages.0.tool_calls.0.function.arguments': '["search query 1","search query 2"]',
+         'llm.input_messages.0.message.role': 'assistant',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.id': 'search_456',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.function.name': 'file_search_call',
+         'llm.input_messages.0.message.tool_calls.0.tool_call.function.arguments': '["search query 1","search query 2"]',
        });
      });
 
@@ -229,9 +229,9 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesInputMessagesAttributes(body as any);
 
        expect(attributes).toEqual({
-         'llm.input_messages.0.role': 'tool',
-         'llm.input_messages.0.tool_call_id': 'search_456',
-         'llm.input_messages.0.content': '[{"content":"search result content"}]',
+         'llm.input_messages.0.message.role': 'tool',
+         'llm.input_messages.0.message.tool_call_id': 'search_456',
+         'llm.input_messages.0.message.content': '[{"content":"search result content"}]',
        });
      });
 
@@ -245,12 +245,10 @@ describe('Response Attributes Functions', () => {
        expect(attributes).toEqual({});
      });
 
-     it('should handle missing input field', () => {
-       const body = {};
+         it('should handle missing input field', () => {
+      const body = {};
 
-       const attributes = getResponsesInputMessagesAttributes(body as any);
-
-      expect(attributes).toEqual({});
+      expect(() => getResponsesInputMessagesAttributes(body as any)).toThrow();
     });
   });
 
@@ -269,9 +267,11 @@ describe('Response Attributes Functions', () => {
              const attributes = getResponsesUsageAttributes(response as any);
 
        expect(attributes).toEqual({
-         'llm.usage.input_tokens': 25,
-         'llm.usage.output_tokens': 15,
-         'llm.usage.cached_tokens': 5,
+         'llm.token_count.prompt': 25,
+         'llm.token_count.completion': 15,
+         'llm.token_count.prompt_details.cache_read': undefined,
+         'llm.token_count.total': undefined,
+         'llm.token_count.completion_details.reasoning': undefined,
        });
      });
 
@@ -299,7 +299,11 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesUsageAttributes(response as any);
 
        expect(attributes).toEqual({
-         'llm.usage.input_tokens': 25,
+         'llm.token_count.prompt': 25,
+         'llm.token_count.completion': undefined,
+         'llm.token_count.prompt_details.cache_read': undefined,
+         'llm.token_count.total': undefined,
+         'llm.token_count.completion_details.reasoning': undefined,
        });
      });
    });
@@ -320,8 +324,8 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesOutputMessagesAttributes(response as any);
 
        expect(attributes).toEqual({
-         'llm.output_messages.0.role': 'assistant',
-         'llm.output_messages.0.content': 'Hello! How can I help you today?',
+         'llm.output_messages.0.message.role': 'assistant',
+         'llm.output_messages.0.message.content': 'Hello! How can I help you today?',
        });
      });
 
@@ -347,13 +351,13 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesOutputMessagesAttributes(response as any);
 
        expect(attributes).toEqual({
-         'llm.output_messages.0.role': 'assistant',
-         'llm.output_messages.0.content': 'First message',
-         'llm.output_messages.1.role': 'assistant',
-         'llm.output_messages.1.contents.0.type': 'output_text',
-         'llm.output_messages.1.contents.0.text': 'Second message part 1',
-         'llm.output_messages.1.contents.1.type': 'output_text',
-         'llm.output_messages.1.contents.1.text': 'Second message part 2',
+         'llm.output_messages.0.message.role': 'assistant',
+         'llm.output_messages.0.message.content': 'First message',
+         'llm.output_messages.1.message.role': 'assistant',
+         'llm.output_messages.1.message.contents.0.message_content.type': 'output_text',
+         'llm.output_messages.1.message.contents.0.message_content.text': 'Second message part 1',
+         'llm.output_messages.1.message.contents.1.message_content.type': 'output_text',
+         'llm.output_messages.1.message.contents.1.message_content.text': 'Second message part 2',
        });
      });
 
@@ -377,9 +381,9 @@ describe('Response Attributes Functions', () => {
        const attributes = getResponsesOutputMessagesAttributes(response as any);
 
        expect(attributes).toEqual({
-         'llm.output_messages.0.role': 'assistant',
-         'llm.output_messages.0.contents.0.type': 'refusal',
-         'llm.output_messages.0.contents.0.text': 'I cannot provide information about that topic.',
+         'llm.output_messages.0.message.role': 'assistant',
+         'llm.output_messages.0.message.contents.0.message_content.type': 'refusal',
+         'llm.output_messages.0.message.contents.0.message_content.text': 'I cannot provide information about that topic.',
        });
      });
 
@@ -389,9 +393,7 @@ describe('Response Attributes Functions', () => {
          object: 'response',
        };
 
-       const attributes = getResponsesOutputMessagesAttributes(response as any);
-
-       expect(attributes).toEqual({});
+       expect(() => getResponsesOutputMessagesAttributes(response as any)).toThrow();
      });
 
      it('should handle empty output array', () => {
@@ -427,7 +429,7 @@ describe('Response Attributes Functions', () => {
           },
         },
         {
-          type: 'response.done',
+          type: 'response.completed',
           response: {
             id: 'resp_123',
             object: 'response',
@@ -529,13 +531,13 @@ describe('Response Attributes Functions', () => {
   });
 
   describe('Edge Cases and Error Handling', () => {
-    it('should handle null/undefined inputs gracefully', () => {
-      expect(() => getResponsesInputMessagesAttributes(null as any)).not.toThrow();
-      expect(() => getResponsesUsageAttributes(null as any)).not.toThrow();
-      expect(() => getResponsesOutputMessagesAttributes(null as any)).not.toThrow();
+    it('should throw on null/undefined inputs', () => {
+      expect(() => getResponsesInputMessagesAttributes(null as any)).toThrow();
+      expect(() => getResponsesUsageAttributes(null as any)).toThrow();
+      expect(() => getResponsesOutputMessagesAttributes(null as any)).toThrow();
     });
 
-    it('should handle malformed input objects', () => {
+    it('should throw on malformed input objects', () => {
       const malformedBody = {
         input: [
           null,
@@ -545,7 +547,7 @@ describe('Response Attributes Functions', () => {
         ],
       };
 
-      expect(() => getResponsesInputMessagesAttributes(malformedBody as any)).not.toThrow();
+      expect(() => getResponsesInputMessagesAttributes(malformedBody as any)).toThrow();
     });
 
     it('should handle item_reference type (no-op case)', () => {
