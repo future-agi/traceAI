@@ -1,157 +1,231 @@
 import { describe, it, expect } from '@jest/globals';
+import * as semanticConventions from '../index';
 
-// We need to test the actual exports from the semantic conventions
-// Since we can't easily mock the internal modules, we'll test the structure
-describe('Semantic Conventions Package', () => {
-  describe('Package Structure', () => {
-    it('should export resource conventions', () => {
-      // Test that the package can be imported without errors
-      expect(() => {
-        require('../index');
-      }).not.toThrow();
-    });
+// Import key exports to test integration
+import {
+  ATTR_PROJECT_NAME,
+  ATTR_SERVICE_NAME,
+  SemanticAttributePrefixes,
+  LLMAttributePostfixes,
+  INPUT_VALUE,
+  OUTPUT_VALUE,
+  LLM_MODEL_NAME,
+  SemanticConventions,
+  FISpanKind,
+  MimeType,
+  LLMSystem,
+  LLMProvider,
+} from '../index';
 
-    it('should export trace conventions', () => {
-      // Test that the package can be imported without errors
-      expect(() => {
-        require('../index');
-      }).not.toThrow();
-    });
-  });
-
-  describe('Export Verification', () => {
-    let semanticConventions: any;
-
-    beforeAll(() => {
-      semanticConventions = require('../index');
-    });
-
-    it('should have defined exports', () => {
+describe('Semantic Conventions Package Integration', () => {
+  describe('Main Package Exports', () => {
+    it('should export all expected modules', () => {
       expect(semanticConventions).toBeDefined();
       expect(typeof semanticConventions).toBe('object');
     });
 
-    it('should not be empty', () => {
-      const keys = Object.keys(semanticConventions);
-      expect(keys.length).toBeGreaterThan(0);
+    it('should have resource attributes', () => {
+      expect(ATTR_PROJECT_NAME).toBeDefined();
+      expect(ATTR_SERVICE_NAME).toBeDefined();
+      expect(typeof ATTR_PROJECT_NAME).toBe('string');
+      expect(typeof ATTR_SERVICE_NAME).toBe('string');
+    });
+
+    it('should have semantic prefixes and postfixes', () => {
+      expect(SemanticAttributePrefixes).toBeDefined();
+      expect(LLMAttributePostfixes).toBeDefined();
+      expect(typeof SemanticAttributePrefixes).toBe('object');
+      expect(typeof LLMAttributePostfixes).toBe('object');
+    });
+
+    it('should have semantic constants', () => {
+      expect(INPUT_VALUE).toBeDefined();
+      expect(OUTPUT_VALUE).toBeDefined();
+      expect(LLM_MODEL_NAME).toBeDefined();
+      expect(typeof INPUT_VALUE).toBe('string');
+      expect(typeof OUTPUT_VALUE).toBe('string');
+      expect(typeof LLM_MODEL_NAME).toBe('string');
+    });
+
+    it('should have enums', () => {
+      expect(FISpanKind).toBeDefined();
+      expect(MimeType).toBeDefined();
+      expect(LLMSystem).toBeDefined();
+      expect(LLMProvider).toBeDefined();
+      expect(typeof FISpanKind).toBe('object');
+      expect(typeof MimeType).toBe('object');
+      expect(typeof LLMSystem).toBe('object');
+      expect(typeof LLMProvider).toBe('object');
     });
   });
 
-  describe('Common Semantic Convention Patterns', () => {
-    it('should follow OpenTelemetry naming conventions', () => {
-      // Test that exports follow common patterns
-      const semanticConventions = require('../index');
-      const keys = Object.keys(semanticConventions);
+  describe('Cross-Module Integration', () => {
+    it('should construct valid attributes using prefixes and postfixes', () => {
+      // Test that prefix + postfix combinations match expected constants
+      const constructedLLMModel = `${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.model_name}`;
+      expect(constructedLLMModel).toBe(LLM_MODEL_NAME);
+      expect(constructedLLMModel).toBe('llm.model_name');
+    });
+
+    it('should have consistent attribute naming patterns', () => {
+      // Test that all constants follow expected patterns
+      expect(INPUT_VALUE).toBe(`${SemanticAttributePrefixes.input}.value`);
+      expect(OUTPUT_VALUE).toBe(`${SemanticAttributePrefixes.output}.value`);
       
-      // Check for common pattern adherence
-      keys.forEach(key => {
-        // Should be strings or objects typically
-        expect(['string', 'object', 'function']).toContain(typeof semanticConventions[key]);
+      // Test LLM-related constants
+      expect(LLM_MODEL_NAME).toBe(`${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.model_name}`);
+    });
+
+    it('should have enum values that work with semantic constants', () => {
+      // Test that enum values are appropriate for use with the constants
+      expect(Object.values(FISpanKind)).toContain('LLM');
+      expect(Object.values(LLMSystem)).toContain('openai');
+      expect(Object.values(LLMProvider)).toContain('openai');
+      expect(Object.values(MimeType)).toContain('application/json');
+      
+      // Test that semantic conventions object has expected properties
+      expect(SemanticConventions.FI_SPAN_KIND).toBeDefined();
+      expect(SemanticConventions.RAW_INPUT).toBeDefined();
+      expect(SemanticConventions.RAW_OUTPUT).toBeDefined();
+    });
+  });
+
+  describe('Export Structure Validation', () => {
+    it('should not have undefined exports', () => {
+      const exportedKeys = Object.keys(semanticConventions);
+      
+      exportedKeys.forEach(key => {
+        expect(semanticConventions[key as keyof typeof semanticConventions]).toBeDefined();
       });
     });
-  });
 
-  describe('Module Loading', () => {
-    it('should load resource module without errors', () => {
-      expect(() => {
-        require('../resource');
-      }).not.toThrow();
+    it('should have expected number of exports', () => {
+      const exportedKeys = Object.keys(semanticConventions);
+      // Should have a substantial number of exports (all the constants and enums)
+      expect(exportedKeys.length).toBeGreaterThan(50);
     });
 
-    it('should load trace module without errors', () => {
-      expect(() => {
-        require('../trace');
-      }).not.toThrow();
-    });
-  });
-
-  describe('Type Safety', () => {
-    it('should export constants as expected types', () => {
-      const semanticConventions = require('../index');
+    it('should export both constants and enums', () => {
+      const exportedKeys = Object.keys(semanticConventions);
       
-      // Basic type checking for common exports
-      Object.keys(semanticConventions).forEach(key => {
-        const value = semanticConventions[key];
+      // Should include resource attributes
+      expect(exportedKeys).toContain('ATTR_PROJECT_NAME');
+      expect(exportedKeys).toContain('ATTR_SERVICE_NAME');
+      
+      // Should include semantic constants
+      expect(exportedKeys).toContain('INPUT_VALUE');
+      expect(exportedKeys).toContain('OUTPUT_VALUE');
+      expect(exportedKeys).toContain('LLM_MODEL_NAME');
+      
+      // Should include enums
+      expect(exportedKeys).toContain('FISpanKind');
+      expect(exportedKeys).toContain('MimeType');
+      expect(exportedKeys).toContain('LLMSystem');
+      expect(exportedKeys).toContain('LLMProvider');
+    });
+  });
+
+  describe('Type Consistency', () => {
+    it('should have consistent string constants', () => {
+      const stringConstants = [
+        ATTR_PROJECT_NAME,
+        ATTR_SERVICE_NAME,
+        INPUT_VALUE,
+        OUTPUT_VALUE,
+        LLM_MODEL_NAME,
+      ];
+
+      stringConstants.forEach(constant => {
+        expect(typeof constant).toBe('string');
+        expect(constant.length).toBeGreaterThan(0);
+        expect(constant.trim()).toBe(constant); // No whitespace
+      });
+    });
+
+    it('should have consistent object structures for prefixes/postfixes', () => {
+      const objectStructures = [
+        SemanticAttributePrefixes,
+        LLMAttributePostfixes,
+      ];
+
+      objectStructures.forEach(obj => {
+        expect(typeof obj).toBe('object');
+        expect(obj).not.toBeNull();
+        expect(Object.keys(obj).length).toBeGreaterThan(0);
         
-        if (typeof value === 'string') {
-          // String constants should not be empty
+        Object.values(obj).forEach(value => {
+          expect(typeof value).toBe('string');
           expect(value.length).toBeGreaterThan(0);
-        }
+        });
+      });
+    });
+
+    it('should have consistent enum structures', () => {
+      const enums = [FISpanKind, MimeType, LLMSystem, LLMProvider];
+
+      enums.forEach(enumObj => {
+        expect(typeof enumObj).toBe('object');
+        expect(enumObj).not.toBeNull();
+        expect(Object.keys(enumObj).length).toBeGreaterThan(0);
         
-        if (typeof value === 'object' && value !== null) {
-          // Object exports should not be empty
-          expect(Object.keys(value).length).toBeGreaterThan(0);
-        }
+        Object.values(enumObj).forEach(value => {
+          expect(typeof value).toBe('string');
+          expect(value.length).toBeGreaterThan(0);
+        });
       });
     });
   });
 
-  describe('Consistency', () => {
-    it('should maintain consistent export structure', () => {
-      const semanticConventions = require('../index');
-      
-      // Test that the structure is consistent
-      expect(semanticConventions).toBeDefined();
-      
-      // If there are exports, they should be properly structured
-      const keys = Object.keys(semanticConventions);
-      if (keys.length > 0) {
-        keys.forEach(key => {
-          expect(key).toBeDefined();
-          expect(semanticConventions[key]).toBeDefined();
-        });
-      }
-    });
-  });
-
-  describe('Import/Export Integrity', () => {
-    it('should handle re-exports correctly', () => {
-      // Test multiple imports don't cause issues
-      const import1 = require('../index');
-      const import2 = require('../index');
-      
-      expect(import1).toEqual(import2);
-    });
-
-    it('should handle circular dependencies gracefully', () => {
-      // Test that circular dependencies (if any) don't cause issues
-      expect(() => {
-        require('../index');
-        require('../resource');
-        require('../trace');
-        require('../index'); // Re-import
-      }).not.toThrow();
-    });
-  });
-
-  describe('Performance', () => {
-    it('should load quickly', () => {
-      const start = Date.now();
+  describe('Import Performance', () => {
+    it('should import quickly', () => {
+      const start = process.hrtime.bigint();
       require('../index');
-      const end = Date.now();
+      const end = process.hrtime.bigint();
       
-      // Should load within reasonable time (less than 100ms)
-      expect(end - start).toBeLessThan(100);
+      const durationMs = Number(end - start) / 1_000_000;
+      expect(durationMs).toBeLessThan(50); // Less than 50ms
     });
-  });
 
-  describe('Memory Usage', () => {
-    it('should not create memory leaks on repeated imports', () => {
-      // Test that repeated imports don't cause memory issues
+    it('should not cause memory leaks on repeated imports', () => {
       const initialMemory = process.memoryUsage().heapUsed;
       
       // Import multiple times
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 5; i++) {
         delete require.cache[require.resolve('../index')];
         require('../index');
       }
       
-      const finalMemory = process.memoryUsage().heapUsed;
+      // Force garbage collection if available
+      if (global.gc) {
+        global.gc();
+      }
       
-      // Memory usage should not increase dramatically
-      // Allow for some variation due to GC and other factors
+      const finalMemory = process.memoryUsage().heapUsed;
       const memoryIncrease = finalMemory - initialMemory;
-      expect(memoryIncrease).toBeLessThan(1024 * 1024); // Less than 1MB increase
+      
+      // Should not increase memory by more than 500KB
+      expect(memoryIncrease).toBeLessThan(500 * 1024);
+    });
+  });
+
+  describe('Module Isolation', () => {
+    it('should work with ES6 and CommonJS imports', () => {
+      // Test CommonJS require
+      expect(() => {
+        const cjsImport = require('../index');
+        expect(cjsImport.INPUT_VALUE).toBeDefined();
+      }).not.toThrow();
+
+      // Test ES6 import (already tested above with import statements)
+      expect(INPUT_VALUE).toBeDefined();
+    });
+
+    it('should maintain referential integrity across imports', () => {
+      const import1 = require('../index');
+      const import2 = require('../index');
+      
+      expect(import1.INPUT_VALUE).toBe(import2.INPUT_VALUE);
+      expect(import1.FISpanKind).toBe(import2.FISpanKind);
     });
   });
 }); 

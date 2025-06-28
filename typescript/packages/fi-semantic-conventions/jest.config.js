@@ -14,13 +14,7 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', {
-      tsconfig: {
-        compilerOptions: {
-          module: 'commonjs'
-        }
-      }
-    }]
+    '^.+\\.ts$': 'ts-jest'
   },
   testTimeout: 10000
 }; 

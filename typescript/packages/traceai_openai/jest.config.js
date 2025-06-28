@@ -14,15 +14,9 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', {
-      tsconfig: {
-        compilerOptions: {
-          module: 'commonjs'
-        }
-      }
-    }]
+    '^.+\\.ts$': 'ts-jest'
   },
-  moduleNameMapping: {
+  moduleNameMapper: {
     '^@traceai/fi-core$': '<rootDir>/../fi-core/src',
     '^@traceai/fi-semantic-conventions$': '<rootDir>/../fi-semantic-conventions/src'
   },
