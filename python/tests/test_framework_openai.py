@@ -63,12 +63,12 @@ class TestOpenAIFramework:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.headers = {"content-type": "application/json"}
-            mock_response.text = '''{"id": "chatcmpl-test123", "object": "chat.completion", "created": 1699999999, "model": "gpt-3.5-turbo", "choices": [{"index": 0, "message": {"role": "assistant", "content": "This is a test response from GPT."}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 15, "completion_tokens": 10, "total_tokens": 25}}'''
+            mock_response.text = '''{"id": "chatcmpl-test123", "object": "chat.completion", "created": 1699999999, "model": "gpt-4o", "choices": [{"index": 0, "message": {"role": "assistant", "content": "This is a test response from GPT."}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 15, "completion_tokens": 10, "total_tokens": 25}}'''
             mock_response.json.return_value = {
                 "id": "chatcmpl-test123",
                 "object": "chat.completion",
                 "created": 1699999999,
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-4o",
                 "choices": [{
                     "index": 0,
                     "message": {
@@ -108,10 +108,10 @@ class TestOpenAIFramework:
                 session_id="test-session-123",
                 user_id="test-user-456", 
                 metadata={"test_type": "instrumentation", "framework": "openai"},
-                tags=["openai", "test", "gpt-3.5-turbo"]
+                tags=["openai", "test", "gpt-4o"]
             ):
                 response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                    model="gpt-4o",
                     messages=[
                         {"role": "system", "content": "You are a helpful assistant."},
                         {"role": "user", "content": "Write a short poem about software testing."}
@@ -128,7 +128,7 @@ class TestOpenAIFramework:
             
             # Verify response structure (parsed from mock JSON)
             assert parsed_response.choices[0].message.content == "This is a test response from GPT."
-            assert parsed_response.model == "gpt-3.5-turbo"
+            assert parsed_response.model == "gpt-4o"
             assert parsed_response.usage.total_tokens == 25
             
         finally:
@@ -138,12 +138,12 @@ class TestOpenAIFramework:
     def test_openai_function_calling(self, mock_openai_requests):
         """Test OpenAI instrumentation with function calling."""
         # Set up function calling response
-        mock_openai_requests.return_value.text = '''{"id": "chatcmpl-function123", "object": "chat.completion", "created": 1699999999, "model": "gpt-3.5-turbo", "choices": [{"index": 0, "message": {"role": "assistant", "content": null, "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "get_weather", "arguments": "{\\"location\\": \\"San Francisco\\"}"}}]}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35}}'''
+        mock_openai_requests.return_value.text = '''{"id": "chatcmpl-function123", "object": "chat.completion", "created": 1699999999, "model": "gpt-4o", "choices": [{"index": 0, "message": {"role": "assistant", "content": null, "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "get_weather", "arguments": "{\\"location\\": \\"San Francisco\\"}"}}]}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35}}'''
         mock_openai_requests.return_value.json.return_value = {
             "id": "chatcmpl-function123",
             "object": "chat.completion",
             "created": 1699999999,
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4o",
             "choices": [{
                 "index": 0,
                 "message": {
@@ -190,7 +190,7 @@ class TestOpenAIFramework:
             
             with using_attributes(session_id="function-test-session"):
                 response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                    model="gpt-4o",
                     messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
                     tools=tools,
                     max_tokens=50
