@@ -68,7 +68,7 @@ class TestAnthropicFramework:
             type="message",
             role="assistant",
             content=mock_content,
-            model="claude-3-sonnet-20240229",
+            model="claude-3-7-sonnet-latest",
             stop_reason="end_turn",
             stop_sequence=None,
             usage=mock_usage
@@ -103,7 +103,7 @@ class TestAnthropicFramework:
                 tags=["anthropic", "test", "claude-3-sonnet"]
             ):
                 response = client.messages.create(
-                    model="claude-3-sonnet-20240229",
+                    model="claude-3-7-sonnet-latest",
                     max_tokens=50,
                     messages=[
                         {"role": "user", "content": "Write a short poem about AI testing."}
@@ -115,7 +115,7 @@ class TestAnthropicFramework:
             
             # Verify response structure (directly from mock Message object)
             assert response.content[0].text == "This is a test response from Claude."
-            assert response.model == "claude-3-sonnet-20240229"
+            assert response.model == "claude-3-7-sonnet-latest"
             assert response.usage.input_tokens == 10
             assert response.usage.output_tokens == 12
             
@@ -140,7 +140,7 @@ class TestAnthropicFramework:
             type="message",
             role="assistant",
             content=mock_content,
-            model="claude-3-sonnet-20240229",
+            model="claude-3-7-sonnet-latest",
             stop_reason="tool_use",
             stop_sequence=None,
             usage=mock_usage
@@ -167,7 +167,7 @@ class TestAnthropicFramework:
             
             with using_attributes(session_id="tool-test-session"):
                 response = client.messages.create(
-                    model="claude-3-sonnet-20240229",
+                    model="claude-3-7-sonnet-latest",
                     max_tokens=50,
                     tools=tools,
                     messages=[{"role": "user", "content": "What's the weather in San Francisco?"}]
