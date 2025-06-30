@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fi-instrumentation-otel"
-version = "0.1.8"
+version = "0.1.9"
 description = "OpenTelemetry instrumentation"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
