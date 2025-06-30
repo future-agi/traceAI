@@ -1,12 +1,12 @@
 import math
-from collections import defaultdict, deque
-from typing import Literal, Optional
+from collections import deque
+from typing import Optional
 
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.output_parsers.openai_tools import (
     JsonOutputToolsParser,
     PydanticToolsParser,

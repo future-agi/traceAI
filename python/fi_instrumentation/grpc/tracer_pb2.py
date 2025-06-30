@@ -22,7 +22,6 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
-from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x18tracer/grpc/tracer.proto\x12\ntfc.tracer\x1a\x1cgoogle/protobuf/struct.proto\"H\n\x15\x43reateOtelSpanRequest\x12/\n\x0eotel_data_list\x18\x01 \x03(\x0b\x32\x17.google.protobuf.Struct\"%\n\x16\x43reateOtelSpanResponse\x12\x0b\n\x03ids\x18\x01 \x03(\t2v\n\x19ObservationSpanController\x12Y\n\x0e\x43reateOtelSpan\x12!.tfc.tracer.CreateOtelSpanRequest\x1a\".tfc.tracer.CreateOtelSpanResponse\"\x00\x62\x06proto3')

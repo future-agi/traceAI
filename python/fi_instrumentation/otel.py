@@ -5,16 +5,13 @@ import math
 import os
 import signal
 import sys
-import time
 import uuid
-import warnings
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
 
 import requests
 from fi_instrumentation.fi_types import (
-    Endpoints,
     EvalName,
     EvalTag,
     ProjectType,
@@ -46,9 +43,6 @@ from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor as _BatchSpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-import grpc
-from google.protobuf.struct_pb2 import Struct
-from fi_instrumentation.grpc import tracer_pb2, tracer_pb2_grpc
 
 PROJECT_NAME = "project_name"
 PROJECT_TYPE = "project_type"
