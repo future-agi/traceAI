@@ -9,8 +9,6 @@ from anthropic import Anthropic
 from fi.evals import Evaluator, Protect
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
-from fi_instrumentation.instrumentation.config import TraceConfig
-from opentelemetry import trace
 from traceai_anthropic import AnthropicInstrumentor
 
 # Initialize tracer

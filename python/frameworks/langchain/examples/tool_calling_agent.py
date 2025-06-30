@@ -1,6 +1,5 @@
 import os
 
-import opentelemetry.trace as trace_api
 import requests
 from fi.evals import Evaluator, Protect
 from fi_instrumentation import register

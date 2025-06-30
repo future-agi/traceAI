@@ -3,10 +3,6 @@ import os
 import requests
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import (
-    EvalName,
-    EvalSpanKind,
-    EvalTag,
-    EvalTagType,
     ProjectType,
 )
 from llama_index.core import Document, VectorStoreIndex
