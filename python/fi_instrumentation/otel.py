@@ -5,16 +5,13 @@ import math
 import os
 import signal
 import sys
-import time
 import uuid
-import warnings
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Type, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
 
 import requests
 from fi_instrumentation.fi_types import (
-    Endpoints,
     EvalName,
     EvalTag,
     ProjectType,
@@ -46,9 +43,6 @@ from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor as _BatchSpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-import grpc
-from google.protobuf.struct_pb2 import Struct
-from fi_instrumentation.grpc import tracer_pb2, tracer_pb2_grpc
 
 PROJECT_NAME = "project_name"
 PROJECT_TYPE = "project_type"
@@ -504,106 +498,6 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         endpoint = get_env_grpc_collector_endpoint()
         bound_args.arguments["endpoint"] = endpoint
         super().__init__(*bound_args.args, **bound_args.kwargs)
-
-    def _convert_attributes(self, attributes):
-        """Convert mappingproxy objects to regular dictionaries."""
-        if attributes is None:
-            return {}
-        if not isinstance(attributes, dict):
-            return dict(attributes)
-        return attributes
-
-    def _format_trace_id(self, trace_id: int) -> str:
-        # Format the trace_id as a 32-character hexadecimal UUID
-        return f"{trace_id:032x}"
-
-    def _format_span_id(self, span_id: int) -> str:
-        # Format the span_id as a 16-character hexadecimal
-        return f"{span_id:016x}"
-
-    def export(self, spans) -> SpanExportResult:
-        """
-        Exports a batch of spans in JSON format.
-        Args:
-            spans (list): A list of spans to export.
-        Returns:
-            SpanExportResult: Indicates the success or failure of the export.
-        """
-        if not self._endpoint:
-            warnings.warn("gRPC Exporter endpoint is not configured. Cannot export spans.")
-            return SpanExportResult.FAILURE
-
-        spans_data = []
-        for span in spans:
-            span_data = {
-                "trace_id": self._format_trace_id(span.context.trace_id),
-                "span_id": self._format_span_id(span.context.span_id),
-                "name": span.name,
-                "start_time": span.start_time,
-                "end_time": span.end_time,
-                "attributes": self._convert_attributes(span.attributes),
-                "events": [
-                    {
-                        "name": event.name,
-                        "attributes": self._convert_attributes(event.attributes),
-                        "timestamp": event.timestamp,
-                    }
-                    for event in span.events
-                ],
-                "status": span.status.status_code.name,
-                "parent_id": (
-                    self._format_span_id(span.parent.span_id)
-                    if span.parent
-                    else None
-                ),
-                "project_name": span.resource.attributes.get(PROJECT_NAME),
-                "project_type": span.resource.attributes.get(PROJECT_TYPE),
-                "project_version_name": span.resource.attributes.get(
-                    PROJECT_VERSION_NAME
-                ),
-                "project_version_id": span.resource.attributes.get(
-                    PROJECT_VERSION_ID
-                ),
-                "latency": math.floor(
-                    (span.end_time - span.start_time) / 1000000
-                ),
-                "eval_tags": span.resource.attributes.get(EVAL_TAGS),
-                "metadata": span.resource.attributes.get(METADATA),
-                "session_name": span.resource.attributes.get(SESSION_NAME),
-            }
-            spans_data.append(span_data)
-
-        if not spans_data:
-            return SpanExportResult.SUCCESS
-
-        try:
-
-            with grpc.insecure_channel(self._endpoint) as channel:
-                stub = tracer_pb2_grpc.ObservationSpanControllerStub(channel)
-                metadata = list(self._headers) if self._headers else None
-
-                otel_data_list = []
-                for span_data_item in spans_data:
-                    s = Struct()
-                    s.update(span_data_item)
-                    otel_data_list.append(s)
-
-                request = tracer_pb2.CreateOtelSpanRequest(
-                    otel_data_list=otel_data_list
-                )
-
-                try:
-                    stub.CreateOtelSpan(request, metadata=metadata)
-                except grpc.RpcError as e:
-                    print(f"Failed to export spans via gRPC: {e.details()}")
-
-            return SpanExportResult.SUCCESS
-
-        except Exception as e:
-            import traceback
-            print(traceback.format_exc())
-            print(f"Failed to export spans due to an unexpected error: {e}")
-            return SpanExportResult.FAILURE
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""

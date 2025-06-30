@@ -1,5 +1,3 @@
-from datetime import date
-from typing import Optional
 
 import requests
 from fi_instrumentation import register
@@ -8,7 +6,6 @@ from fi_instrumentation.fi_types import (
     EvalSpanKind,
     EvalTag,
     EvalTagType,
-    ProjectType,
 )
 from langchain import agents
 from langchain.tools import tool

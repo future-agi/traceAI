@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-core",
-  "version": "0.1.12",
+  "version": "0.1.14",
   "description": "Core OpenTelemetry instrumentation for TypeScript",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -15,8 +15,7 @@
   },
   "scripts": {
     "prebuild": "rimraf dist",
-    "build": "pnpm run build:proto && tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
-    "build:proto": "npx protoc --ts_out src/generated --proto_path src/grpc src/grpc/tracer.proto",
+    "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest",
     "lint": "eslint . --ext .ts",
@@ -50,7 +49,7 @@
     "@protobuf-ts/grpc-transport": "^2.11.0",
     "@protobuf-ts/runtime": "^2.11.0",
     "@protobuf-ts/runtime-rpc": "^2.11.0",
-    "@traceai/fi-semantic-conventions": "^0.1.8",
+    "@traceai/fi-semantic-conventions": "^0.1.9",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

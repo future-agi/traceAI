@@ -260,7 +260,6 @@ class _Span(BaseSpan):
                 self[RAW_OUTPUT] = result.model_dump_json(exclude_unset=True)
             except BaseException as e:
                 logger.exception(str(e))
-                pass
         else:
             try:
                 self[OUTPUT_VALUE] = safe_json_dumps(result)
@@ -269,7 +268,6 @@ class _Span(BaseSpan):
                 self[RAW_OUTPUT] = safe_json_dumps(result)
             except BaseException as e:
                 logger.exception(str(e))
-                pass
 
     @singledispatchmethod
     def process_instance(self, instance: Any) -> None: ...
@@ -896,7 +894,6 @@ class EventHandler(BaseEventHandler, extra="allow"):
                 logger.exception(
                     f"Error processing event of type {event.__class__.__qualname__}"
                 )
-                pass
         return event
 
 

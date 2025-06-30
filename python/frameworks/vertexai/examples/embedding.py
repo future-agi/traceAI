@@ -1,16 +1,9 @@
-import os
 
-import vertexai
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import (
-    EvalName,
-    EvalSpanKind,
-    EvalTag,
-    EvalTagType,
     ProjectType,
 )
 from traceai_vertexai import VertexAIInstrumentor
-from vertexai.generative_models import GenerativeModel, Part
 from vertexai.language_models import TextEmbeddingInput
 from vertexai.preview.language_models import TextEmbeddingModel
 

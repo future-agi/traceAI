@@ -1,6 +1,6 @@
 {
   "name": "@traceai/anthropic",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenTelemetry instrumentation for Anthropic",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -37,8 +37,8 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
-    "@traceai/fi-core": "^0.1.10",
-    "@traceai/fi-semantic-conventions": "^0.1.8"
+    "@traceai/fi-core": "^0.1.13",
+    "@traceai/fi-semantic-conventions": "^0.1.9"
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": "^0.27.3"

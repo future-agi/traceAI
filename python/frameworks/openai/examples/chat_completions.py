@@ -1,6 +1,4 @@
 import openai
-import sys
-import os
 
 # Now import from local paths
 from fi_instrumentation.otel import register
@@ -11,7 +9,6 @@ from fi_instrumentation.fi_types import (
     EvalTag,
     EvalTagType,
     ProjectType,
-    ModelChoices,
     )
 from traceai_openai import OpenAIInstrumentor
 
