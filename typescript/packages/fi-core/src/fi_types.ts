@@ -111,7 +111,12 @@ enum EvalName {
   BLEU_SCORE = "bleu_score",
   ROUGE_SCORE = "rouge_score",
   TEXT_TO_SQL = "text_to_sql",
-  RECALL_SCORE = "recall_score"  
+  RECALL_SCORE = "recall_score",
+  LEVENSHTEIN_SIMILARITY = "levenshtein_similarity",
+  NUMERIC_SIMILARITY = "numeric_similarity",
+  EMBEDDING_SIMILARITY = "embedding_similarity",
+  SEMANTIC_LIST_CONTAINS = "semantic_list_contains",
+  IS_AI_GENERATED_IMAGE = "is_AI_generated_image"
 }
 
 interface ConfigField {
@@ -532,6 +537,11 @@ function getConfigForEval(evalName: EvalName): EvalConfig {
       },
     },
     [EvalName.RECALL_SCORE]: {},
+    [EvalName.LEVENSHTEIN_SIMILARITY]: {},
+    [EvalName.NUMERIC_SIMILARITY]: {},
+    [EvalName.EMBEDDING_SIMILARITY]: {},
+    [EvalName.SEMANTIC_LIST_CONTAINS]: {},
+    [EvalName.IS_AI_GENERATED_IMAGE]: {}
   };
 
   if (!(evalName in configs)) {
@@ -821,6 +831,25 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
       reference: { type: "string", required: true },
       hypothesis: { type: "string", required: true },
     },
+    [EvalName.LEVENSHTEIN_SIMILARITY]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.NUMERIC_SIMILARITY]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.EMBEDDING_SIMILARITY]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.SEMANTIC_LIST_CONTAINS]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.IS_AI_GENERATED_IMAGE]: {
+      input_image: { type: "string", required: true },
+    }
   };
 
   if (!(evalName in mappings)) {

@@ -523,7 +523,11 @@ class EvalName(Enum):
     ROUGE_SCORE = "rouge_score"
     TEXT_TO_SQL = "text_to_sql"
     RECALL_SCORE = "recall_score"
-
+    LEVENSHTEIN_SIMILARITY = "levenshtein_similarity"
+    NUMERIC_SIMILARITY = "numeric_similarity"
+    EMBEDDING_SIMILARITY = "embedding_similarity"
+    SEMANTIC_LIST_CONTAINS = "semantic_list_contains"
+    IS_AI_GENERATED_IMAGE = "is_AI_generated_image"
 
 @dataclass
 class ConfigField:
@@ -875,7 +879,12 @@ class EvalConfig:
                     default="Check if the generated SQL query correctly matches the intent of the input text and produces valid SQL syntax. If the SQL query is incorrect, invalid, or doesn't match the input requirements then return Failed else return Passed",
                 )
             },
-            EvalName.RECALL_SCORE: {}
+            EvalName.RECALL_SCORE: {},
+            EvalName.LEVENSHTEIN_SIMILARITY: {},
+            EvalName.NUMERIC_SIMILARITY: {},
+            EvalName.EMBEDDING_SIMILARITY: {},
+            EvalName.SEMANTIC_LIST_CONTAINS: {},
+            EvalName.IS_AI_GENERATED_IMAGE: {}
         }
 
         # Convert ConfigField objects to dictionary format
@@ -1133,6 +1142,25 @@ class EvalMappingConfig:
                 "reference": ConfigField(type=str, required=True),
                 "hypothesis": ConfigField(type=str, required=True)
             },
+            EvalName.LEVENSHTEIN_SIMILARITY: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.NUMERIC_SIMILARITY: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.EMBEDDING_SIMILARITY: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.SEMANTIC_LIST_CONTAINS: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.IS_AI_GENERATED_IMAGE: {
+                "input_image": ConfigField(type=str, required=True)
+            }
         }
 
         # Convert ConfigField objects to dictionary format
