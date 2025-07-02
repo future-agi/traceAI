@@ -439,50 +439,29 @@ class EvalSpanKind(Enum):
     AGENT = "AGENT"
     RERANKER = "RERANKER"
 
-
 class EvalName(Enum):
     CONVERSATION_COHERENCE = "conversation_coherence"
     CONVERSATION_RESOLUTION = "conversation_resolution"
     CONTENT_MODERATION = "content_moderation"
     CONTEXT_ADHERENCE = "context_adherence"
-    PROMPT_PERPLEXITY = "prompt_perplexity"
     CONTEXT_RELEVANCE = "context_relevance"
     COMPLETENESS = "completeness"
-    CONTEXT_SIMILARITY = "context_similarity"
+    CHUNK_ATTRIBUTION = "chunk_attribution"
+    CHUNK_UTILIZATION = "chunk_utilization"
     PII = "pii"
     TOXICITY = "toxicity"
     TONE = "tone"
     SEXIST = "sexist"
     PROMPT_INJECTION = "prompt_injection"
-    NOT_GIBBERISH_TEXT = "not_gibberish_text"
-    SAFE_FOR_WORK_TEXT = "safe_for_work_text"
     PROMPT_INSTRUCTION_ADHERENCE = "prompt_instruction_adherence"
     DATA_PRIVACY_COMPLIANCE = "data_privacy_compliance"
     IS_JSON = "is_json"
-    ENDS_WITH = "ends_with"
-    EQUALS = "equals"
-    CONTAINS_ALL = "contains_all"
-    LENGTH_LESS_THAN = "length_less_than"
-    CONTAINS_NONE = "contains_none"
-    REGEX = "regex"
-    STARTS_WITH = "starts_with"
-    API_CALL = "api_call"
-    LENGTH_BETWEEN = "length_between"
-    CUSTOM_CODE_EVALUATION = "custom_code_evaluation"
-    AGENT_AS_JUDGE = "agent_as_judge"
     ONE_LINE = "one_line"
     CONTAINS_VALID_LINK = "contains_valid_link"
     IS_EMAIL = "is_email"
-    LENGTH_GREATER_THAN = "length_greater_than"
     NO_VALID_LINKS = "no_valid_links"
-    CONTAINS = "contains"
-    CONTAINS_ANY = "contains_any"
     GROUNDEDNESS = "groundedness"
-    ANSWER_SIMILARITY = "answer_similarity"
-    EVAL_OUTPUT = "eval_output"
-    EVAL_CONTEXT_RETRIEVAL_QUALITY = "eval_context_retrieval_quality"
-    EVAL_IMAGE_INSTRUCTION = "eval_image_instruction"
-    SCORE_EVAL = "score_eval"
+    EVAL_RANKING = "eval_ranking"
     SUMMARY_QUALITY = "summary_quality"
     FACTUAL_ACCURACY = "factual_accuracy"
     TRANSLATION_ACCURACY = "translation_accuracy"
@@ -490,12 +469,7 @@ class EvalName(Enum):
     BIAS_DETECTION = "bias_detection"
     EVALUATE_LLM_FUNCTION_CALLING = "evaluate_llm_function_calling"
     AUDIO_TRANSCRIPTION = "audio_transcription"
-    EVAL_AUDIO_DESCRIPTION = "eval_audio_description"
     AUDIO_QUALITY = "audio_quality"
-    JSON_SCHEMA_VALIDATION = "json_schema_validation"
-    CHUNK_ATTRIBUTION = "chunk_attribution"
-    CHUNK_UTILIZATION = "chunk_utilization"
-    EVAL_RANKING = "eval_ranking"
     NO_RACIAL_BIAS = "no_racial_bias"
     NO_GENDER_BIAS = "no_gender_bias"
     NO_AGE_BIAS = "no_age_bias"
@@ -523,7 +497,11 @@ class EvalName(Enum):
     ROUGE_SCORE = "rouge_score"
     TEXT_TO_SQL = "text_to_sql"
     RECALL_SCORE = "recall_score"
-
+    LEVENSHTEIN_SIMILARITY = "levenshtein_similarity"
+    NUMERIC_SIMILARITY = "numeric_similarity"
+    EMBEDDING_SIMILARITY = "embedding_similarity"
+    SEMANTIC_LIST_CONTAINS = "semantic_list_contains"
+    IS_AI_GENERATED_IMAGE = "is_AI_generated_image"
 
 @dataclass
 class ConfigField:
@@ -549,115 +527,32 @@ class EvalConfig:
                     default="check whether output contains any information which was not provided in the context.",
                 )
             },
-            EvalName.PROMPT_PERPLEXITY: {
-                "model": ConfigField(type=str, default="gpt-4o-mini")
-            },
             EvalName.CONTEXT_RELEVANCE: {
                 "check_internet": ConfigField(type=bool, default=False)
             },
             EvalName.COMPLETENESS: {},
-            EvalName.CONTEXT_SIMILARITY: {
-                "comparator": ConfigField(type=str, default="CosineSimilarity"),
-                "failure_threshold": ConfigField(type=float, default=0.5),
-            },
+            EvalName.CHUNK_ATTRIBUTION: {},
+            EvalName.CHUNK_UTILIZATION: {},
             EvalName.PII: {},
             EvalName.TOXICITY: {},
             EvalName.TONE: {},
             EvalName.SEXIST: {},
             EvalName.PROMPT_INJECTION: {},
-            EvalName.NOT_GIBBERISH_TEXT: {},
-            EvalName.SAFE_FOR_WORK_TEXT: {},
             EvalName.PROMPT_INSTRUCTION_ADHERENCE: {},
             EvalName.DATA_PRIVACY_COMPLIANCE: {
                 "check_internet": ConfigField(type=bool, default=False)
             },
             EvalName.IS_JSON: {},
-            EvalName.ENDS_WITH: {
-                "case_sensitive": ConfigField(type=bool, default=True),
-                "substring": ConfigField(type=str, default=None, required=True),
-            },
-            EvalName.EQUALS: {"case_sensitive": ConfigField(type=bool, default=True)},
-            EvalName.CONTAINS_ALL: {
-                "case_sensitive": ConfigField(type=bool, default=True),
-                "keywords": ConfigField(type=list, default=[]),
-            },
-            EvalName.LENGTH_LESS_THAN: {
-                "max_length": ConfigField(type=int, default=200)
-            },
-            EvalName.CONTAINS_NONE: {
-                "case_sensitive": ConfigField(type=bool, default=True),
-                "keywords": ConfigField(type=list, default=[]),
-            },
-            EvalName.REGEX: {
-                "pattern": ConfigField(type=str, default=""),
-            },
-            EvalName.STARTS_WITH: {
-                "substring": ConfigField(type=str, default=None, required=True),
-                "case_sensitive": ConfigField(type=bool, default=True),
-            },
-            EvalName.API_CALL: {
-                "url": ConfigField(type=str, default=None, required=True),
-                "payload": ConfigField(type=dict, default={}),
-                "headers": ConfigField(type=dict, default={}),
-            },
-            EvalName.LENGTH_BETWEEN: {
-                "max_length": ConfigField(type=int, default=200),
-                "min_length": ConfigField(type=int, default=50),
-            },
-            EvalName.CUSTOM_CODE_EVALUATION: {
-                "code": ConfigField(type=str, default=None)
-            },
-            EvalName.AGENT_AS_JUDGE: {
-                "model": ConfigField(type=str, default="gpt-4o-mini"),
-                "eval_prompt": ConfigField(type=str, default=None, required=True),
-                "system_prompt": ConfigField(type=str, default=""),
-            },
             EvalName.ONE_LINE: {},
             EvalName.CONTAINS_VALID_LINK: {},
             EvalName.IS_EMAIL: {},
-            EvalName.LENGTH_GREATER_THAN: {
-                "min_length": ConfigField(type=int, default=50),
-            },
             EvalName.NO_VALID_LINKS: {},
-            EvalName.CONTAINS: {
-                "case_sensitive": ConfigField(type=bool, default=True),
-                "keyword": ConfigField(type=str, default=None, required=True),
-            },
-            EvalName.CONTAINS_ANY: {
-                "case_sensitive": ConfigField(type=bool, default=True),
-                "keywords": ConfigField(type=list, default=[]),
-            },
             EvalName.GROUNDEDNESS: {},
-            EvalName.ANSWER_SIMILARITY: {
-                "comparator": ConfigField(type=str, default="CosineSimilarity"),
-                "failure_threshold": ConfigField(type=float, default=0.5),
-            },
-            EvalName.EVAL_OUTPUT: {
-                "check_internet": ConfigField(type=bool, default=False),
+            EvalName.EVAL_RANKING: {
                 "criteria": ConfigField(
                     type=str,
-                    default="Check if the output follows the given input instructions, checking for completion of all requested tasks and adherence to specified constraints or formats.",
+                    default="Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content.",
                 ),
-            },
-            EvalName.EVAL_CONTEXT_RETRIEVAL_QUALITY: {
-                "criteria": ConfigField(
-                    type=str,
-                    default="Evaluate if the context is relevant and sufficient to support the output.",
-                )
-            },
-            EvalName.EVAL_IMAGE_INSTRUCTION: {
-                "criteria": ConfigField(
-                    type=str,
-                    default="Check if the output follows the given input instructions, checking for completion of all requested tasks and adherence to specified constraints or formats.",
-                )
-            },
-            EvalName.SCORE_EVAL: {
-                "rule_prompt": ConfigField(
-                    type=str,
-                    default="Check if the output follows the given input instructions, checking for completion of all requested tasks and adherence to specified constraints or formats.",
-                ),
-                "criteria": ConfigField(type=str, default=""),
-                "input": ConfigField(type=list, default=[]),
             },
             EvalName.SUMMARY_QUALITY: {
                 "check_internet": ConfigField(type=bool, default=False),
@@ -704,30 +599,12 @@ class EvalConfig:
                     default="determine the accuracy of the transcription of the given audio",
                 )
             },
-            EvalName.EVAL_AUDIO_DESCRIPTION: {
-                "criteria": ConfigField(
-                    type=str,
-                    default="determine the if the description of the given audio matches the given audio",
-                ),
-                "model": ConfigField(type=str, default="gemini-2.0-flash"),
-            },
             EvalName.AUDIO_QUALITY: {
                 "criteria": ConfigField(
                     type=str,
                     default="determine the quality of the given audio",
                 ),
                 "model": ConfigField(type=str, default="gemini-2.0-flash"),
-            },
-            EvalName.JSON_SCHEMA_VALIDATION: {
-                "validations": ConfigField(type=list, default=[]),
-            },
-            EvalName.CHUNK_ATTRIBUTION: {},
-            EvalName.CHUNK_UTILIZATION: {},
-            EvalName.EVAL_RANKING: {
-                "criteria": ConfigField(
-                    type=str,
-                    default="Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content.",
-                ),
             },
             EvalName.NO_RACIAL_BIAS: {
                 "criteria": ConfigField(
@@ -875,7 +752,12 @@ class EvalConfig:
                     default="Check if the generated SQL query correctly matches the intent of the input text and produces valid SQL syntax. If the SQL query is incorrect, invalid, or doesn't match the input requirements then return Failed else return Passed",
                 )
             },
-            EvalName.RECALL_SCORE: {}
+            EvalName.RECALL_SCORE: {},
+            EvalName.LEVENSHTEIN_SIMILARITY: {},
+            EvalName.NUMERIC_SIMILARITY: {},
+            EvalName.EMBEDDING_SIMILARITY: {},
+            EvalName.SEMANTIC_LIST_CONTAINS: {},
+            EvalName.IS_AI_GENERATED_IMAGE: {},
         }
 
         # Convert ConfigField objects to dictionary format
@@ -908,7 +790,6 @@ class EvalMappingConfig:
                 "context": ConfigField(type=str, required=True),
                 "output": ConfigField(type=str, required=True),
             },
-            EvalName.PROMPT_PERPLEXITY: {"input": ConfigField(type=str, required=True)},
             EvalName.CONTEXT_RELEVANCE: {
                 "context": ConfigField(type=str, required=True),
                 "input": ConfigField(type=str, required=True),
@@ -917,21 +798,21 @@ class EvalMappingConfig:
                 "input": ConfigField(type=str, required=True),
                 "output": ConfigField(type=str, required=True),
             },
-            EvalName.CONTEXT_SIMILARITY: {
+            EvalName.CHUNK_ATTRIBUTION: {
+                "input": ConfigField(type=str, required=False),
+                "output": ConfigField(type=str, required=True),
                 "context": ConfigField(type=str, required=True),
-                "response": ConfigField(type=str, required=True),
+            },
+            EvalName.CHUNK_UTILIZATION: {
+                "input": ConfigField(type=str, required=False),
+                "output": ConfigField(type=str, required=True),
+                "context": ConfigField(type=str, required=True),
             },
             EvalName.PII: {"input": ConfigField(type=str, required=True)},
             EvalName.TOXICITY: {"input": ConfigField(type=str, required=True)},
             EvalName.TONE: {"input": ConfigField(type=str, required=True)},
             EvalName.SEXIST: {"input": ConfigField(type=str, required=True)},
             EvalName.PROMPT_INJECTION: {"input": ConfigField(type=str, required=True)},
-            EvalName.SAFE_FOR_WORK_TEXT: {
-                "response": ConfigField(type=str, required=True)
-            },
-            EvalName.NOT_GIBBERISH_TEXT: {
-                "response": ConfigField(type=str, required=True)
-            },
             EvalName.PROMPT_INSTRUCTION_ADHERENCE: {
                 "output": ConfigField(type=str, required=True)
             },
@@ -939,62 +820,29 @@ class EvalMappingConfig:
                 "input": ConfigField(type=str, required=True)
             },
             EvalName.IS_JSON: {"text": ConfigField(type=str, required=True)},
-            EvalName.ENDS_WITH: {"text": ConfigField(type=str, required=True)},
-            EvalName.EQUALS: {
-                "text": ConfigField(type=str, required=True),
-                "expected_text": ConfigField(
-                    type=str, default="expected", required=True
-                ),
-            },
-            EvalName.CONTAINS_ALL: {"text": ConfigField(type=str, required=True)},
-            EvalName.LENGTH_LESS_THAN: {"text": ConfigField(type=str, required=True)},
-            EvalName.CONTAINS_NONE: {"text": ConfigField(type=str, required=True)},
-            EvalName.REGEX: {"text": ConfigField(type=str, required=True)},
-            EvalName.STARTS_WITH: {"text": ConfigField(type=str, required=True)},
-            EvalName.LENGTH_BETWEEN: {"text": ConfigField(type=str, required=True)},
             EvalName.ONE_LINE: {"text": ConfigField(type=str, required=True)},
             EvalName.CONTAINS_VALID_LINK: {
                 "text": ConfigField(type=str, required=True)
             },
             EvalName.IS_EMAIL: {"text": ConfigField(type=str, required=True)},
-            EvalName.LENGTH_GREATER_THAN: {
-                "text": ConfigField(type=str, required=True)
-            },
             EvalName.NO_VALID_LINKS: {"text": ConfigField(type=str, required=True)},
-            EvalName.CONTAINS: {"text": ConfigField(type=str, required=True)},
-            EvalName.CONTAINS_ANY: {"text": ConfigField(type=str, required=True)},
             EvalName.GROUNDEDNESS: {
                 "output": ConfigField(type=str, required=True),
                 "input": ConfigField(type=str, required=True),
             },
-            EvalName.ANSWER_SIMILARITY: {
-                "response": ConfigField(type=str, required=True),
-                "expected_response": ConfigField(type=str, required=True),
-            },
-            EvalName.EVAL_OUTPUT: {
-                "input": ConfigField(type=str),
-                "output": ConfigField(type=str, required=True),
-                "context": ConfigField(type=str),
-            },
-            EvalName.EVAL_CONTEXT_RETRIEVAL_QUALITY: {
-                "context": ConfigField(type=str),
-                "input": ConfigField(type=str),
-                "output": ConfigField(type=str),
-            },
-            EvalName.EVAL_IMAGE_INSTRUCTION: {
+            EvalName.EVAL_RANKING: {
                 "input": ConfigField(type=str, required=True),
-                "image_url": ConfigField(type=str, required=True),
+                "context": ConfigField(type=str, required=True),
             },
-            EvalName.SCORE_EVAL: {},
             EvalName.SUMMARY_QUALITY: {
-                "input": ConfigField(type=str),
+                "input": ConfigField(type=str, required=False),
                 "output": ConfigField(type=str, required=True),
-                "context": ConfigField(type=str),
+                "context": ConfigField(type=str, required=False),
             },
             EvalName.FACTUAL_ACCURACY: {
-                "input": ConfigField(type=str),
+                "input": ConfigField(type=str, required=False),
                 "output": ConfigField(type=str, required=True),
-                "context": ConfigField(type=str),
+                "context": ConfigField(type=str, required=False),
             },
             EvalName.TRANSLATION_ACCURACY: {
                 "input": ConfigField(type=str, required=True),
@@ -1008,36 +856,12 @@ class EvalMappingConfig:
                 "input": ConfigField(type=str, required=True),
                 "output": ConfigField(type=str, required=True),
             },
-            EvalName.API_CALL: {"response": ConfigField(type=str, required=True)},
-            EvalName.CUSTOM_CODE_EVALUATION: {},
-            EvalName.AGENT_AS_JUDGE: {},
             EvalName.AUDIO_TRANSCRIPTION: {
                 "input audio": ConfigField(type=str, required=True),
                 "input transcription": ConfigField(type=str, required=True),
             },
-            EvalName.EVAL_AUDIO_DESCRIPTION: {
-                "input audio": ConfigField(type=str, required=True)
-            },
             EvalName.AUDIO_QUALITY: {
                 "input audio": ConfigField(type=str, required=True)
-            },
-            EvalName.JSON_SCHEMA_VALIDATION: {
-                "actual_json": ConfigField(type=dict, required=True),
-                "expected_json": ConfigField(type=str, required=True),
-            },
-            EvalName.CHUNK_ATTRIBUTION: {
-                "input": ConfigField(type=str),
-                "output": ConfigField(type=str, required=True),
-                "context": ConfigField(type=str, required=True),
-            },
-            EvalName.CHUNK_UTILIZATION: {
-                "input": ConfigField(type=str),
-                "output": ConfigField(type=str, required=True),
-                "context": ConfigField(type=str, required=True),
-            },
-            EvalName.EVAL_RANKING: {
-                "input": ConfigField(type=str, required=True),
-                "context": ConfigField(type=str, required=True),
             },
             EvalName.NO_RACIAL_BIAS: {
                 "input": ConfigField(type=str, required=True)
@@ -1132,6 +956,25 @@ class EvalMappingConfig:
             EvalName.RECALL_SCORE: {
                 "reference": ConfigField(type=str, required=True),
                 "hypothesis": ConfigField(type=str, required=True)
+            },
+            EvalName.LEVENSHTEIN_SIMILARITY: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.NUMERIC_SIMILARITY: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.EMBEDDING_SIMILARITY: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.SEMANTIC_LIST_CONTAINS: {
+                "response": ConfigField(type=str, required=True),
+                "expected_text": ConfigField(type=str, required=True)
+            },
+            EvalName.IS_AI_GENERATED_IMAGE: {
+                "input_image": ConfigField(type=str, required=True)
             },
         }
 
