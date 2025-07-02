@@ -225,11 +225,11 @@ class _ResponseAttributesExtractor:
             yield MessageAttributes.MESSAGE_CONTENT, content
         if audio := getattr(message, "audio", None):
             # Handle audio attributes
-            yield MessageContentAttributes.MESSAGE_CONTENT_TYPE, "audio"
+            yield f"{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "audio"
             if audio_data := getattr(audio, "data", None):
-                yield MessageContentAttributes.MESSAGE_CONTENT_AUDIO, audio_data
+                yield f"{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_AUDIO}", audio_data
             if transcript := getattr(audio, "transcript", None):
-                yield MessageContentAttributes.MESSAGE_AUDIO_TRANSCRIPT, transcript
+                yield f"{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_AUDIO_TRANSCRIPT}", transcript
         if function_call := getattr(message, "function_call", None):
             # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/chat/chat_completion_message.py#L12  # noqa: E501
             if name := getattr(function_call, "name", None):
