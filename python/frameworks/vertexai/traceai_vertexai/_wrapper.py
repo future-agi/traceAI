@@ -625,7 +625,8 @@ def _parse_predictions(predictions: List[Any]) -> Iterator[Tuple[str, AttributeV
     for index, prediction in enumerate(predictions):
         if prediction.get("mimeType", "").startswith("image"):
             if image := prediction.get("bytesBase64Encoded"):
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image
+                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
+                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image
                 yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}", "assistant"
 
 
