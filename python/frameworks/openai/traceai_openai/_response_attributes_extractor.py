@@ -296,6 +296,10 @@ class _ResponseAttributesExtractor:
         data: Iterable[object],
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        
+        if model := request_parameters.get("model"):
+            yield SpanAttributes.LLM_MODEL_NAME, model
+
         for index, obj in enumerate(data):
             yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}", "assistant"
             if image := getattr(obj, "url", None):
