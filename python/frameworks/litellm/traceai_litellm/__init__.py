@@ -300,6 +300,7 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         ) in LiteLLMInstrumentor.original_litellm_funcs.items():
             setattr(litellm, func_name, original_func)
         self.original_litellm_funcs.clear()
+        self._tracer = None
 
     @wraps(litellm.completion)
     def _completion_wrapper(self, *args: Any, **kwargs: Any) -> Any:
