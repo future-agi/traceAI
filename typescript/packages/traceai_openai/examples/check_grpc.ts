@@ -9,7 +9,7 @@ import { GRPCSpanExporter } from "@traceai/fi-core";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 const otlpProcessor = new SimpleSpanProcessor(
     new GRPCSpanExporter({
-        endpoint: "https://grpc.futureagi.com:50051",
+        endpoint: "https://grpc.futureagi.com",
         headers: {
             "X-Api-Key": process.env.FI_API_KEY || "",
             "X-Secret-Key": process.env.FI_SECRET_KEY || "",
