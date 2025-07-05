@@ -4,18 +4,19 @@ from typing import Any, Callable, ContextManager, Iterator, Mapping, Optional, c
 
 import wrapt
 from botocore.eventstream import EventStream
+from opentelemetry.trace import Span, Status, StatusCode, use_span
+from opentelemetry.util.types import AttributeValue
+
 from fi_instrumentation import safe_json_dumps
+from traceai_bedrock._proxy import _AnyT, _CallbackT, _Iterator
 from fi_instrumentation.fi_types import (
-    FiMimeTypeValues,
-    FiSpanKindValues,
     ImageAttributes,
     MessageAttributes,
     MessageContentAttributes,
+    FiMimeTypeValues,
+    FiSpanKindValues,
     SpanAttributes,
 )
-from opentelemetry.trace import Span, Status, StatusCode, use_span
-from opentelemetry.util.types import AttributeValue
-from traceai_bedrock._proxy import _AnyT, _CallbackT, _Iterator
 
 
 class _EventStream(wrapt.ObjectProxy):  # type: ignore[misc]
@@ -58,11 +59,11 @@ def _finish(
             span.set_attribute(k, v)
         span.end()
         return
-
-    output = result["content"][0]["text"] if "content" in result else result
-    span.set_attribute(OUTPUT_VALUE, safe_json_dumps(output))
-    span.set_attribute(OUTPUT_MIME_TYPE, FiMimeTypeValues.TEXT.value)
-
+    if isinstance(result, dict):
+        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(result))
+        span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+    elif result is not None:
+        span.set_attribute(OUTPUT_VALUE, str(result))
     span.set_status(Status(StatusCode.OK))
     for k, v in request_attributes.items():
         span.set_attribute(k, v)
@@ -82,9 +83,7 @@ LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
 LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
-MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
-    MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
-)
+MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
 MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND

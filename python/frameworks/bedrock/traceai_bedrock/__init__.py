@@ -20,41 +20,52 @@ from typing import (
     TypeVar,
     cast,
 )
-logger = logging.getLogger(__name__)
 
 from botocore.client import BaseClient
 from botocore.response import StreamingBody
-try:
-    from fi.evals import Protect
-except ImportError:
-    logger.warning("ai-evaluation is not installed, please install it to trace protect")
-    Protect = None
-    pass
+from opentelemetry import context as context_api
+from opentelemetry import trace as trace_api
+from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
+from opentelemetry.trace import Status, StatusCode, Tracer
+from opentelemetry.util.types import AttributeValue
+from wrapt import wrap_function_wrapper
+
 from fi_instrumentation import (
     FITracer,
     TraceConfig,
     get_attributes_from_context,
     safe_json_dumps,
 )
+from traceai_bedrock._rag_wrappers import (
+    _retrieve_and_generate_wrapper,
+    _retrieve_wrapper,
+)
+from traceai_bedrock._wrappers import (
+    _InvokeAgentWithResponseStream,
+    _InvokeModelWithResponseStream,
+    _RetrieveAndGenerateStream,
+)
+from traceai_bedrock.package import _instruments
+from traceai_bedrock.utils import _extract_invoke_model_attributes
+from traceai_bedrock.utils.anthropic import (
+    _attributes as anthropic_attributes,
+)
+from traceai_bedrock.version import __version__
 from fi_instrumentation.fi_types import (
-    FiSpanKindValues,
     ImageAttributes,
     MessageAttributes,
     MessageContentAttributes,
+    FiSpanKindValues,
     SpanAttributes,
 )
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
-from opentelemetry import context as context_api
-from opentelemetry import trace as trace_api
-from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
-from opentelemetry.trace import Tracer
-from opentelemetry.util.types import AttributeValue
-from traceai_bedrock._wrappers import _InvokeModelWithResponseStream
-from traceai_bedrock.package import _instruments
-from traceai_bedrock.utils.anthropic import _extract_image_data
-from traceai_bedrock.version import __version__
-from wrapt import wrap_function_wrapper
+try:
+    from fi.evals import Protect
+except ImportError:
+    logger.warning("ai-evaluation is not installed, please install it to trace protect")
+    Protect = None
+    pass
 
 ClientCreator = TypeVar("ClientCreator", bound=Callable[..., BaseClient])
 
@@ -76,6 +87,18 @@ class InstrumentedClient(BaseClient):  # type: ignore
 
     converse: Callable[..., Any]
     _unwrapped_converse: Callable[..., Any]
+
+    invoke_agent: Callable[..., Any]
+    _unwrapped_invoke_agent: Callable[..., Any]
+
+    retrieve: Callable[..., Any]
+    _unwrapped_retrieve: Callable[..., Any]
+
+    retrieve_and_generate: Callable[..., Any]
+    _unwrapped_retrieve_and_generate: Callable[..., Any]
+
+    retrieve_and_generate_stream: Callable[..., Any]
+    _unwrapped_retrieve_and_generate_stream: Callable[..., Any]
 
 
 class BufferedStreamingBody(StreamingBody):  # type: ignore
@@ -116,14 +139,31 @@ def _client_creation_wrapper(
         bound_arguments = call_signature.bind(*args, **kwargs)
         bound_arguments.apply_defaults()
 
+        if bound_arguments.arguments.get("service_name") == "bedrock-agent-runtime":
+            client = cast(InstrumentedClient, client)
+
+            client._unwrapped_invoke_agent = client.invoke_agent
+            client.invoke_agent = _InvokeAgentWithResponseStream(tracer)(client.invoke_agent)
+
+            client._unwrapped_retrieve = client.retrieve
+            client.retrieve = _retrieve_wrapper(tracer)(client)
+
+            client._unwrapped_retrieve_and_generate = client.retrieve_and_generate
+            client.retrieve_and_generate = _retrieve_and_generate_wrapper(tracer)(client)
+
+            client._unwrapped_retrieve_and_generate_stream = client.retrieve_and_generate_stream
+            client.retrieve_and_generate_stream = _RetrieveAndGenerateStream(tracer)(
+                client.retrieve_and_generate_stream
+            )
+
         if bound_arguments.arguments.get("service_name") == "bedrock-runtime":
             client = cast(InstrumentedClient, client)
 
             client._unwrapped_invoke_model = client.invoke_model
             client.invoke_model = _model_invocation_wrapper(tracer)(client)
-            client.invoke_model_with_response_stream = _InvokeModelWithResponseStream(
-                tracer
-            )(client.invoke_model_with_response_stream)
+            client.invoke_model_with_response_stream = _InvokeModelWithResponseStream(tracer)(
+                client.invoke_model_with_response_stream
+            )
 
             if module_version >= _MINIMUM_CONVERSE_BOTOCORE_VERSION:
                 client._unwrapped_converse = client.converse
@@ -133,9 +173,7 @@ def _client_creation_wrapper(
     return _client_wrapper  # type: ignore
 
 
-def _model_invocation_wrapper(
-    tracer: Tracer,
-) -> Callable[[InstrumentedClient], Callable[..., Any]]:
+def _model_invocation_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Callable[..., Any]]:
     def _invocation_wrapper(wrapped_client: InstrumentedClient) -> Callable[..., Any]:
         """Instruments a bedrock client's `invoke_model` or `converse` method."""
 
@@ -145,121 +183,43 @@ def _model_invocation_wrapper(
                 return wrapped_client._unwrapped_invoke_model(*args, **kwargs)  # type: ignore
 
             with tracer.start_as_current_span("bedrock.invoke_model") as span:
-                span.set_attribute(
-                    SpanAttributes.FI_SPAN_KIND,
-                    FiSpanKindValues.LLM.value,
+                request_body = json.loads(kwargs["body"])
+                model_id = str(kwargs.get("modelId"))
+                # Determine if this is a Claude Messages API model
+                is_claude_message_api = _extract_invoke_model_attributes.is_claude_message_api(
+                    model_id
                 )
-                response = wrapped_client._unwrapped_invoke_model(*args, **kwargs)
+
+                # Set input attributes based on model type
+                if is_claude_message_api:
+                    anthropic_attributes.set_input_attributes(span, request_body, model_id)
+                else:
+                    _extract_invoke_model_attributes.set_input_attributes(span, request_body)
+
+                # Execute the model invocation with proper error handling
+                try:
+                    response = wrapped_client._unwrapped_invoke_model(*args, **kwargs)
+                except Exception as e:
+                    span.set_status(Status(StatusCode.ERROR))
+                    span.end()
+                    raise e
+
+                # Process the streaming response body
                 response["body"] = BufferedStreamingBody(
                     response["body"]._raw_stream, response["body"]._content_length
                 )
-                raw_request_body = kwargs["body"]
-                request_body = json.loads(raw_request_body)
                 response_body = json.loads(response.get("body").read())
                 response["body"].reset()
 
-                input = request_body.get("messages", [])
-                if input:
-                    extracted_data = _extract_image_data(input)
-
-                    if extracted_data["filtered_messages"] and (
-                        input_value := safe_json_dumps(
-                            extracted_data["filtered_messages"]
-                        )
-                    ):
-                        _set_span_attribute(
-                            span, SpanAttributes.INPUT_VALUE, input_value
-                        )
-
-                    if input_images := extracted_data.get("input_images"):
-                        _set_span_attribute(
-                            span,
-                            SpanAttributes.INPUT_IMAGES,
-                            input_images,
-                        )
-
-                    if eval_input := extracted_data.get("eval_input"):
-                        _set_span_attribute(
-                            span,
-                            SpanAttributes.EVAL_INPUT,
-                            eval_input,
-                        )
-
+                # Set response attributes based on model type
+                if is_claude_message_api:
+                    anthropic_attributes.set_response_attributes(span, response_body)
                 else:
-                    input_value = (
-                        request_body.get("prompt")
-                        or request_body.get("input")
-                        or request_body
+                    _extract_invoke_model_attributes.set_response_attributes(
+                        span, kwargs, response_body, response
                     )
-                    input_value = safe_json_dumps(input_value)
-                    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, input_value)
-                    _set_span_attribute(span, SpanAttributes.EVAL_INPUT, input_value)
-
-                invocation_parameters = safe_json_dumps(request_body)
-
-                _set_span_attribute(
-                    span,
-                    SpanAttributes.LLM_INVOCATION_PARAMETERS,
-                    invocation_parameters,
-                )
-
-                if metadata := response.get("ResponseMetadata"):
-                    if headers := metadata.get("HTTPHeaders"):
-                        if input_token_count := headers.get(
-                            "x-amzn-bedrock-input-token-count"
-                        ):
-                            input_token_count = int(input_token_count)
-                            _set_span_attribute(
-                                span,
-                                SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
-                                input_token_count,
-                            )
-                        if response_token_count := headers.get(
-                            "x-amzn-bedrock-output-token-count"
-                        ):
-                            response_token_count = int(response_token_count)
-                            _set_span_attribute(
-                                span,
-                                SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
-                                response_token_count,
-                            )
-                        if total_token_count := (
-                            input_token_count + response_token_count
-                            if input_token_count and response_token_count
-                            else None
-                        ):
-                            _set_span_attribute(
-                                span,
-                                SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
-                                total_token_count,
-                            )
-
-                if model_id := kwargs.get("modelId"):
-                    _set_span_attribute(span, SpanAttributes.LLM_MODEL_NAME, model_id)
-
-                    if isinstance(model_id, str):
-                        (vendor, *_) = model_id.split(".")
-                    if vendor == "ai21":
-                        content = str(response_body.get("completions"))
-                    # when using the anthropic Inference profile ARN we are not getting the vendor as anthropic
-                    elif vendor == "anthropic":
-                        content = str(response_body.get("completion"))
-                    elif vendor == "cohere":
-                        content = str(response_body.get("generations"))
-                    elif vendor == "meta":
-                        content = str(response_body.get("generation"))
-                    elif vendor == "mistral":
-                        content = str(
-                            response_body.get("outputs", [{}])[0].get("text", "")
-                        )
-                    else:
-                        # Default for Anthropic
-                        content = response_body.get("content", [{}])[0].get("text", "")
-
-                    if content:
-                        _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, content)
-
                 span.set_attributes(dict(get_attributes_from_context()))
+                span.set_status(Status(StatusCode.OK))
                 return response  # type: ignore
 
         return instrumented_response
@@ -267,9 +227,7 @@ def _model_invocation_wrapper(
     return _invocation_wrapper
 
 
-def _model_converse_wrapper(
-    tracer: Tracer,
-) -> Callable[[InstrumentedClient], Callable[..., Any]]:
+def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Callable[..., Any]]:
     def _converse_wrapper(wrapped_client: InstrumentedClient) -> Callable[..., Any]:
         """Instruments a bedrock client's `converse` method."""
 
@@ -290,9 +248,7 @@ def _model_converse_wrapper(
                 if inference_config := kwargs.get("inferenceConfig"):
                     invocation_parameters = safe_json_dumps(inference_config)
                     _set_span_attribute(
-                        span,
-                        SpanAttributes.LLM_INVOCATION_PARAMETERS,
-                        invocation_parameters,
+                        span, SpanAttributes.LLM_INVOCATION_PARAMETERS, invocation_parameters
                     )
 
                 aggregated_messages = []
@@ -303,8 +259,7 @@ def _model_converse_wrapper(
                             "content": [
                                 {
                                     "text": " ".join(
-                                        prompt.get("text", "")
-                                        for prompt in system_prompts
+                                        prompt.get("text", "") for prompt in system_prompts
                                     )
                                 }
                             ],
@@ -322,26 +277,15 @@ def _model_converse_wrapper(
                             f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{key}",
                             value,
                         )
-
-                input = kwargs.get("messages", [])
-                extracted_data = _extract_image_data(input)
-
-                input_value = safe_json_dumps(extracted_data["filtered_messages"])
-                _set_span_attribute(span, SpanAttributes.INPUT_VALUE, input_value)
-
-                if input_images := extracted_data.get("input_images"):
-                    _set_span_attribute(
-                        span,
-                        SpanAttributes.INPUT_IMAGES,
-                        input_images,
-                    )
-
-                if eval_input := extracted_data.get("eval_input"):
-                    _set_span_attribute(
-                        span,
-                        SpanAttributes.EVAL_INPUT,
-                        eval_input,
-                    )
+                last_message = aggregated_messages[-1]
+                if isinstance(last_message, dict) and (
+                    request_msg_content := last_message.get("content")
+                ):
+                    request_msg_prompt = "\n".join(
+                        content_input.get("text", "")  # type: ignore
+                        for content_input in request_msg_content
+                    ).strip("\n")
+                    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, request_msg_prompt)
 
                 response = wrapped_client._unwrapped_converse(*args, **kwargs)
                 if (
@@ -351,27 +295,18 @@ def _model_converse_wrapper(
                 ):
                     # Currently only supports text-based data
                     response_text = "\n".join(
-                        content_input.get("text", "")
-                        for content_input in response_content
+                        content_input.get("text", "") for content_input in response_content
                     )
-                    _set_span_attribute(
-                        span, SpanAttributes.OUTPUT_VALUE, response_text
-                    )
+                    _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, response_text)
 
                     span_prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0"
-                    _set_span_attribute(
-                        span, f"{span_prefix}.message.role", response_role
-                    )
-                    _set_span_attribute(
-                        span, f"{span_prefix}.message.content", response_text
-                    )
+                    _set_span_attribute(span, f"{span_prefix}.message.role", response_role)
+                    _set_span_attribute(span, f"{span_prefix}.message.content", response_text)
 
                 if usage := response.get("usage"):
                     if input_token_count := usage.get("inputTokens"):
                         _set_span_attribute(
-                            span,
-                            SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
-                            input_token_count,
+                            span, SpanAttributes.LLM_TOKEN_COUNT_PROMPT, input_token_count
                         )
                     if response_token_count := usage.get("outputTokens"):
                         _set_span_attribute(
@@ -381,9 +316,7 @@ def _model_converse_wrapper(
                         )
                     if total_token_count := usage.get("totalTokens"):
                         _set_span_attribute(
-                            span,
-                            SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
-                            total_token_count,
+                            span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_token_count
                         )
 
                 span.set_attributes(dict(get_attributes_from_context()))

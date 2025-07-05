@@ -27,6 +27,7 @@ from .otel import (
     Transport,
     register,
 )
+from .instrumentation import _attributes
 
 __all__ = [
     # Context and attributes
@@ -54,4 +55,5 @@ __all__ = [
     "PROJECT_VERSION_NAME",
     "Transport",
     "register",
+    "_attributes",
 ]
