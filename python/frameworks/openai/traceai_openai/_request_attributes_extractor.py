@@ -11,9 +11,11 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    cast,
 )
 
 from fi_instrumentation import safe_json_dumps
+from traceai_openai._attributes._responses_api import _ResponsesApiAttributes
 from fi_instrumentation.fi_types import (
     ImageAttributes,
     MessageAttributes,
@@ -27,6 +29,8 @@ from traceai_openai._utils import _get_openai_version
 if TYPE_CHECKING:
     from openai.types import Completion, CreateEmbeddingResponse
     from openai.types.chat import ChatCompletion
+    from openai.types.responses.response import Response
+    from openai.types.responses.response_create_params import ResponseCreateParamsBase
 
 __all__ = ("_RequestAttributesExtractor",)
 
@@ -39,6 +43,7 @@ class _RequestAttributesExtractor:
         "_openai",
         "_chat_completion_type",
         "_completion_type",
+        "_responses_type",
         "_create_embedding_response_type",
     )
 
@@ -48,6 +53,7 @@ class _RequestAttributesExtractor:
             openai.types.chat.ChatCompletion
         )
         self._completion_type: Type["Completion"] = openai.types.Completion
+        self._responses_type: Type["Response"] = openai.types.responses.response.Response
         self._create_embedding_response_type: Type["CreateEmbeddingResponse"] = (
             openai.types.CreateEmbeddingResponse
         )
@@ -62,6 +68,10 @@ class _RequestAttributesExtractor:
         if cast_to is self._chat_completion_type:
             yield from self._get_attributes_from_chat_completion_create_param(
                 request_parameters
+            )
+        elif cast_to is self._responses_type:
+            yield from _ResponsesApiAttributes._get_attributes_from_response_create_param_base(
+                cast("ResponseCreateParamsBase", request_parameters)
             )
         elif cast_to is self._create_embedding_response_type:
             yield from _get_attributes_from_embedding_create_param(request_parameters)
