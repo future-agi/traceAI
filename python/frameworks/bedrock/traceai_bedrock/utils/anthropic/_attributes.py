@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Tuple
 
 from opentelemetry.trace import Span
 
-from fi_instrumentation import (
+from fi_instrumentation.instrumentation import (
     Image,
     ImageMessageContent,
     Message,

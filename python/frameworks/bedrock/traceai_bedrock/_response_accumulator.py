@@ -9,7 +9,7 @@ from typing import Any, Dict, Mapping, Optional, TypeVar, Union
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
-from fi_instrumentation import (
+from fi_instrumentation.instrumentation import (
     get_input_attributes,
     get_output_attributes,
     get_span_kind_attributes,

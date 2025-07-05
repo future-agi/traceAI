@@ -21,7 +21,7 @@ from opentelemetry.trace import Span
 from opentelemetry.util.types import AttributeValue
 
 from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
+from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes, FiLLMProviderValues
 
 
 def _set_span_attribute(span: trace_api.Span, name: str, value: AttributeValue) -> None:
@@ -132,6 +132,7 @@ def set_input_attributes(span: Span, request_body: Dict[str, Any]) -> None:
     invocation_parameters = safe_json_dumps(request_body)
     _set_span_attribute(span, SpanAttributes.INPUT_VALUE, prompt)
     _set_span_attribute(span, SpanAttributes.LLM_INVOCATION_PARAMETERS, invocation_parameters)
+    _set_span_attribute(span, SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.AWS.value)
     span.set_attribute(
         SpanAttributes.FI_SPAN_KIND,
         FiSpanKindValues.LLM.value,

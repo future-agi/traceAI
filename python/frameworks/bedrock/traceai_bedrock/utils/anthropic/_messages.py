@@ -283,12 +283,12 @@ def _attributes_from_image_param(
         data = source["data"]
         type_ = source["type"]
         yield (
-            f"{prefix}{MESSAGE_CONTENT_IMAGE}.{IMAGE_URL}",
+            f"{prefix}{MESSAGE_CONTENT_IMAGE}",
             f"data:{media_type};{type_},{data}",
         )
     elif source["type"] == "url":
         yield (
-            f"{prefix}{MESSAGE_CONTENT_IMAGE}.{IMAGE_URL}",
+            f"{prefix}{MESSAGE_CONTENT_IMAGE}",
             source["url"],
         )
     elif TYPE_CHECKING:
@@ -352,7 +352,6 @@ def _invocation_parameters(
     return safe_json_dumps(parameters)
 
 
-IMAGE_URL = ImageAttributes.IMAGE_URL
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 JSON = FiMimeTypeValues.JSON.value

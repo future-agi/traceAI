@@ -141,7 +141,6 @@ class _RetrieveAndGenerateStream(_WithTracer):
                 raise e
 
 
-IMAGE_URL = ImageAttributes.IMAGE_URL
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 JSON = FiMimeTypeValues.JSON.value

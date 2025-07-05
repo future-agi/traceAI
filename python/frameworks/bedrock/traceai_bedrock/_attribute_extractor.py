@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from opentelemetry.util.types import AttributeValue
 
-from fi_instrumentation.instrumentation._attributes import (
+from fi_instrumentation.instrumentation import (
     Message,
     TokenCount,
     ToolCall,

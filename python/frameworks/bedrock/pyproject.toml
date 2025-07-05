@@ -10,10 +10,10 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">3.9, <3.14"
+python = ">3.10, <3.13"
 dacite = "^1.9.1"
 fi-instrumentation-otel = ">=0.1.7"
-botocore = ">=1.34.116"
+botocore = "*"
 boto3 = ">=1.38.17"
 
 

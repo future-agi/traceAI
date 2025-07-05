@@ -58,6 +58,7 @@ from fi_instrumentation.fi_types import (
     MessageContentAttributes,
     FiSpanKindValues,
     SpanAttributes,
+    FiLLMProviderValues,
 )
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 try:
@@ -241,6 +242,8 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
                     SpanAttributes.FI_SPAN_KIND,
                     FiSpanKindValues.LLM.value,
                 )
+                
+                _set_span_attribute(span, SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.AWS.value)
 
                 if model_id := kwargs.get("modelId"):
                     _set_span_attribute(span, SpanAttributes.LLM_MODEL_NAME, model_id)
@@ -287,7 +290,12 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
                     ).strip("\n")
                     _set_span_attribute(span, SpanAttributes.INPUT_VALUE, request_msg_prompt)
 
-                response = wrapped_client._unwrapped_converse(*args, **kwargs)
+                try:
+                    response = wrapped_client._unwrapped_converse(*args, **kwargs)
+                except Exception as e:
+                    span.record_exception(e)
+                    raise e
+
                 if (
                     (response_message := response.get("output", {}).get("message"))
                     and (response_role := response_message.get("role"))
@@ -320,7 +328,8 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
                         )
 
                 span.set_attributes(dict(get_attributes_from_context()))
-            return response  # type: ignore
+                span.set_status(Status(StatusCode.OK))
+                return response  # type: ignore
 
         return instrumented_response
 
@@ -415,7 +424,7 @@ def _get_attributes_from_message_content(
     if image := content.get("image"):
         yield f"{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
         for key, value in _get_attributes_from_image(image):
-            yield f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{key}", value
+            yield f"{key}", value
 
 
 def _get_attributes_from_image(
@@ -424,7 +433,7 @@ def _get_attributes_from_image(
     if (source := image.get("source")) and (img_bytes := source.get("bytes")):
         base64_img = base64.b64encode(img_bytes).decode("utf-8")
         yield (
-            f"{ImageAttributes.IMAGE_URL}",
+            f"{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}",
             f"data:image/jpeg;base64,{base64_img}",
         )
 
