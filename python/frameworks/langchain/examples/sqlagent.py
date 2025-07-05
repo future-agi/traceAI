@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import (
@@ -18,7 +18,6 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import AnyMessage, add_messages
 from langgraph.prebuilt import ToolNode
-from pydantic import BaseModel, Field
 from traceai_langchain import LangChainInstrumentor
 from typing_extensions import TypedDict
 

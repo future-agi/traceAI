@@ -46,7 +46,7 @@ const FI_CUSTOM_EVAL_CONFIG_CHECK_PATH = "/tracer/custom-eval-config/check_exist
 const FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH = "/tracer/custom-eval-config/get_custom_eval_by_name/";
 
 // Default gRPC endpoint  
-const DEFAULT_FI_GRPC_COLLECTOR_BASE_URL = "https://grpc.futureagi.com:50051";
+const DEFAULT_FI_GRPC_COLLECTOR_BASE_URL = "https://grpc.futureagi.com";
 
 // Transport enum
 export enum Transport {

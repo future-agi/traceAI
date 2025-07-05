@@ -3,7 +3,7 @@ from typing import Any, Callable, Collection, List, Optional
 from uuid import UUID
 
 import langchain_core
-from fi_instrumentation import FITracer, TraceConfig
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from langchain_core.callbacks import BaseCallbackManager
 from langchain_core.runnables.config import var_child_runnable_config  # noqa F401
@@ -42,7 +42,6 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
         except ImportError:
             logger.warning("ai-evaluation is not installed, please install it to trace protect")
             Protect = None
-            pass
         from fi_instrumentation.instrumentation._tracers import FITracer
         from traceai_langchain._tracer import FiTracer as LangChainFiTracer
 

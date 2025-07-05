@@ -1,5 +1,4 @@
 import base64
-from io import BytesIO
 
 import httpx
 from fi_instrumentation import register
@@ -13,7 +12,6 @@ from fi_instrumentation.fi_types import (
 from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from PIL import Image
 from traceai_langchain import LangChainInstrumentor
 
 # Configure trace provider with custom evaluation tags

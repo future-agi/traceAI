@@ -16,7 +16,7 @@ def get_env_collector_endpoint() -> Optional[str]:
 
 
 def get_env_grpc_collector_endpoint() -> Optional[str]:
-    return os.getenv("FI_GRPC_URL", "https://grpc.futureagi.com:50051")
+    return os.getenv("FI_GRPC_URL", "https://grpc.futureagi.com")
 
 
 def get_env_project_name() -> str:

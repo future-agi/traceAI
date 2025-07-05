@@ -1,4 +1,3 @@
-import os
 
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
@@ -6,7 +5,6 @@ from langchain.embeddings import OpenAIEmbeddings
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CohereRerank
 from langchain.schema import Document
-from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import FAISS
 from traceai_langchain import LangChainInstrumentor
 

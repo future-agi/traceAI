@@ -5,9 +5,6 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from traceai_google_adk import GoogleADKInstrumentor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 
