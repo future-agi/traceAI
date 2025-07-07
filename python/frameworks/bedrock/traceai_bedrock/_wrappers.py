@@ -4,19 +4,26 @@ import json
 from typing import Any, Callable
 
 import wrapt
+from opentelemetry import context as context_api
+from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
+from opentelemetry.trace import Status, StatusCode, Tracer
+
+from traceai_bedrock._attribute_extractor import AttributeExtractor
+from traceai_bedrock._rag_wrappers import _RagEventStream
+from traceai_bedrock._response_accumulator import _ResponseAccumulator
+from traceai_bedrock.utils import _EventStream, _use_span
+from traceai_bedrock.utils.anthropic._messages import (
+    _AnthropicMessagesCallback,
+)
 from fi_instrumentation.fi_types import (
-    FiMimeTypeValues,
-    FiSpanKindValues,
     ImageAttributes,
     MessageAttributes,
     MessageContentAttributes,
+    FiLLMProviderValues,
+    FiMimeTypeValues,
+    FiSpanKindValues,
     SpanAttributes,
 )
-from opentelemetry import context as context_api
-from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
-from opentelemetry.trace import Tracer
-from traceai_bedrock.utils import _EventStream, _use_span
-from traceai_bedrock.utils.anthropic._messages import _AnthropicMessagesCallback
 
 
 class _WithTracer:
@@ -53,17 +60,87 @@ class _InvokeModelWithResponseStream(_WithTracer):
                         _use_span(span),
                     )
                     return response
-
             span.set_attribute(LLM_INVOCATION_PARAMETERS, kwargs["body"])
             span.set_attribute(INPUT_MIME_TYPE, JSON)
             span.set_attribute(INPUT_VALUE, kwargs["body"])
             span.set_attribute(FI_SPAN_KIND, LLM)
             span.end()
-
             return response
 
 
-IMAGE_URL = ImageAttributes.IMAGE_URL
+class _InvokeAgentWithResponseStream(_WithTracer):
+    _name = "bedrock_agent.invoke_agent"
+
+    @wrapt.decorator  # type: ignore[misc]
+    def __call__(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+        # span = self._tracer.start_span(self._name)
+        with self._tracer.start_as_current_span(
+            self._name,
+            end_on_exit=False,
+        ) as span:
+            attributes = {
+                SpanAttributes.FI_SPAN_KIND: FiSpanKindValues.AGENT.value,
+                SpanAttributes.LLM_PROVIDER: FiLLMProviderValues.AWS.value,
+            }
+            if input_text := kwargs.get("inputText"):
+                attributes[SpanAttributes.INPUT_VALUE] = input_text
+            span.set_attributes({k: v for k, v in attributes.items() if v is not None})
+            try:
+                response = wrapped(*args, **kwargs)
+                response["completion"] = _EventStream(
+                    response["completion"],
+                    _ResponseAccumulator(span, self._tracer, kwargs),
+                    _use_span(span),
+                )
+                return response
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.end()
+                raise e
+
+
+class _RetrieveAndGenerateStream(_WithTracer):
+    _name = "bedrock_agent.retrieve_and_generate_stream"
+
+    @wrapt.decorator  # type: ignore[misc]
+    def __call__(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+        with self._tracer.start_as_current_span(
+            self._name,
+            end_on_exit=False,
+        ) as span:
+            try:
+                span.set_attributes(AttributeExtractor.extract_bedrock_rag_input_attributes(kwargs))
+                response = wrapped(*args, **kwargs)
+                response["stream"] = _EventStream(
+                    response["stream"],
+                    _RagEventStream(span, self._tracer, kwargs),
+                    _use_span(span),
+                )
+                return response
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(Status(StatusCode.ERROR, str(e)))
+                span.end()
+                raise e
+
+
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 JSON = FiMimeTypeValues.JSON.value
@@ -76,9 +153,7 @@ LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
 LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
-MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
-    MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
-)
+MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
 MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND

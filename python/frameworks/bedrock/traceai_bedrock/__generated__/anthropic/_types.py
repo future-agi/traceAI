@@ -39,17 +39,13 @@ class CitationPageLocation:
 
 @dataclass
 class CitationsDelta:
-    citation: Union[
-        CitationCharLocation, CitationPageLocation, CitationContentBlockLocation
-    ]
+    citation: Union[CitationCharLocation, CitationPageLocation, CitationContentBlockLocation]
     type: str = "citations_delta"
 
 
 @dataclass
 class Delta:
-    stop_reason: Optional[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
-    ] = None
+    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]] = None
     stop_sequence: Optional[str] = None
 
 
@@ -86,11 +82,7 @@ class RawMessageStopEvent:
 class TextBlock:
     text: str
     citations: Optional[
-        List[
-            Union[
-                CitationCharLocation, CitationPageLocation, CitationContentBlockLocation
-            ]
-        ]
+        List[Union[CitationCharLocation, CitationPageLocation, CitationContentBlockLocation]]
     ] = None
     type: str = "text"
 
@@ -139,9 +131,7 @@ class Message:
     ]
     usage: Usage
     role: str = "assistant"
-    stop_reason: Optional[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
-    ] = None
+    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]] = None
     stop_sequence: Optional[str] = None
     type: str = "message"
 

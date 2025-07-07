@@ -18,19 +18,11 @@ from typing import (
 )
 
 from dacite import from_dict
-from fi_instrumentation import safe_json_dumps
-from fi_instrumentation.fi_types import (
-    FiMimeTypeValues,
-    FiSpanKindValues,
-    ImageAttributes,
-    MessageAttributes,
-    MessageContentAttributes,
-    SpanAttributes,
-    ToolAttributes,
-    ToolCallAttributes,
-)
 from opentelemetry.trace import Span
 from opentelemetry.util.types import AttributeValue
+from typing_extensions import assert_never
+
+from fi_instrumentation import safe_json_dumps
 from traceai_bedrock.__generated__.anthropic._types import (
     InputJSONDelta,
     Message,
@@ -46,11 +38,18 @@ from traceai_bedrock.__generated__.anthropic._types import (
     ToolUseBlock,
 )
 from traceai_bedrock.utils import _finish
-from traceai_bedrock.utils.anthropic import _extract_image_data
-from typing_extensions import assert_never
+from fi_instrumentation.fi_types import (
+    ImageAttributes,
+    MessageAttributes,
+    MessageContentAttributes,
+    FiMimeTypeValues,
+    FiSpanKindValues,
+    SpanAttributes,
+    ToolAttributes,
+    ToolCallAttributes,
+)
 
 if TYPE_CHECKING:
-    import anthropic
     from anthropic.types import (
         DocumentBlockParam,
         ImageBlockParam,
@@ -100,9 +99,7 @@ class _AnthropicMessagesCallback:
             if (message := self._snapshot) is None:
                 _finish(span, None, self._request_attributes)
             else:
-                for k, v in _attributes_from_message(
-                    message, f"{LLM_OUTPUT_MESSAGES}.{0}."
-                ):
+                for k, v in _attributes_from_message(message, f"{LLM_OUTPUT_MESSAGES}.{0}."):
                     span.set_attribute(k, v)
                 _finish(span, asdict(message), self._request_attributes)
         elif isinstance(obj, BaseException):
@@ -151,16 +148,12 @@ def _attributes_from_message_param(
     num_tool_calls = 0
     for i, block in enumerate(content):
         if TYPE_CHECKING:
-            assert not isinstance(
-                block, (str, anthropic.types.TextBlock, anthropic.types.ToolUseBlock)
-            )
+            assert isinstance(block, dict)
         if "type" not in block:
             continue
         if block["type"] == "text":
             try:
-                yield f"{prefix}{MESSAGE_CONTENTS}.{i}.{MESSAGE_CONTENT_TEXT}", block[
-                    "text"
-                ]
+                yield f"{prefix}{MESSAGE_CONTENTS}.{i}.{MESSAGE_CONTENT_TEXT}", block["text"]
             except KeyError:
                 pass
         elif block["type"] == "tool_use":
@@ -170,20 +163,18 @@ def _attributes_from_message_param(
             )
             num_tool_calls += 1
         elif block["type"] == "image":
-            yield from _attributes_from_image_param(
-                block, f"{prefix}{MESSAGE_CONTENTS}.{i}."
-            )
+            yield from _attributes_from_image_param(block, f"{prefix}{MESSAGE_CONTENTS}.{i}.")
         elif block["type"] == "tool_result":
-            yield from _attributes_from_tool_result_param(
-                block, f"{prefix}{MESSAGE_CONTENTS}.{i}."
-            )
+            yield from _attributes_from_tool_result_param(block, f"{prefix}{MESSAGE_CONTENTS}.{i}.")
         elif block["type"] == "document":
-            yield from _attributes_from_document_param(
-                block, f"{prefix}{MESSAGE_CONTENTS}.{i}."
-            )
+            yield from _attributes_from_document_param(block, f"{prefix}{MESSAGE_CONTENTS}.{i}.")
+        elif block["type"] == "thinking":
+            pass  # TODO
+        elif block["type"] == "redacted_thinking":
+            pass  # TODO
         else:
             if TYPE_CHECKING:
-                assert_never(block)
+                assert_never(block)  # type: ignore[arg-type]
 
 
 @_stop_on_exception
@@ -206,8 +197,16 @@ def _attributes_from_message(
             if TYPE_CHECKING:
                 assert_never(block)
     usage = message.usage
-    if usage.input_tokens:
-        yield LLM_TOKEN_COUNT_PROMPT, usage.input_tokens
+    # See https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
+    # cache_creation_input_tokens: Number of tokens written to the cache when creating a new entry.
+    # cache_read_input_tokens: Number of tokens retrieved from the cache for this request.
+    # input_tokens: Number of input tokens which were not read from or used to create a cache.
+    if prompt_tokens := (
+        usage.input_tokens
+        + (usage.cache_creation_input_tokens or 0)
+        + (usage.cache_read_input_tokens or 0)
+    ):
+        yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
     if usage.output_tokens:
         yield LLM_TOKEN_COUNT_COMPLETION, usage.output_tokens
 
@@ -278,13 +277,22 @@ def _attributes_from_image_param(
     block: ImageBlockParam,
     prefix: str,
 ) -> Iterator[Tuple[str, AttributeValue]]:
-    media_type = block["source"]["media_type"]
-    data = block["source"]["data"]
-    type_ = block["source"]["type"]
-    yield (
-        f"{prefix}{MESSAGE_CONTENT_IMAGE}.{IMAGE_URL}",
-        f"data:{media_type};{type_},{data}",
-    )
+    source = block["source"]
+    if source["type"] == "base64":
+        media_type = source["media_type"]
+        data = source["data"]
+        type_ = source["type"]
+        yield (
+            f"{prefix}{MESSAGE_CONTENT_IMAGE}",
+            f"data:{media_type};{type_},{data}",
+        )
+    elif source["type"] == "url":
+        yield (
+            f"{prefix}{MESSAGE_CONTENT_IMAGE}",
+            source["url"],
+        )
+    elif TYPE_CHECKING:
+        assert_never(source["type"])
 
 
 @_stop_on_exception
@@ -318,24 +326,18 @@ def _attributes_from_request(
         pass
     num_messages = 0
     body = request["body"]
-    extracted_data = _extract_image_data(body["messages"])
-
     if system := body.get("system"):
         yield from _attributes_from_system_message(system, f"{LLM_INPUT_MESSAGES}.0.")
         num_messages += 1
     if isinstance(messages := body.get("messages"), list):
         for i, message in enumerate(messages, num_messages):
-            yield from _attributes_from_message_param(
-                message, f"{LLM_INPUT_MESSAGES}.{i}."
-            )
+            yield from _attributes_from_message_param(message, f"{LLM_INPUT_MESSAGES}.{i}.")
     yield LLM_INVOCATION_PARAMETERS, _invocation_parameters(body)
     if tools := body.get("tools"):
         for i, tool in enumerate(tools):
             yield from _attributes_from_tool(tool, f"{LLM_TOOLS}.{i}.")
     yield INPUT_MIME_TYPE, JSON
-    yield INPUT_VALUE, safe_json_dumps(extracted_data["filtered_messages"])
-    yield EVAL_INPUT, safe_json_dumps(extracted_data["eval_input"])
-    yield INPUT_IMAGES, safe_json_dumps(extracted_data["input_images"])
+    yield INPUT_VALUE, safe_json_dumps(body)
     yield FI_SPAN_KIND, LLM
 
 
@@ -350,11 +352,8 @@ def _invocation_parameters(
     return safe_json_dumps(parameters)
 
 
-IMAGE_URL = ImageAttributes.IMAGE_URL
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-EVAL_INPUT = SpanAttributes.EVAL_INPUT
-INPUT_IMAGES = SpanAttributes.INPUT_IMAGES
 JSON = FiMimeTypeValues.JSON.value
 LLM = FiSpanKindValues.LLM.value
 LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
@@ -369,9 +368,7 @@ MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENTS = MessageAttributes.MESSAGE_CONTENTS
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
 MESSAGE_CONTENT_TEXT = MessageContentAttributes.MESSAGE_CONTENT_TEXT
-MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
-    MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
-)
+MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
 MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
@@ -397,9 +394,7 @@ def accumulate_event(
     if current_snapshot is None:
         if isinstance(event, RawMessageStartEvent):
             return event.message
-        raise RuntimeError(
-            f'Unexpected event order, got {event.type} before "message_start"'
-        )
+        raise RuntimeError(f'Unexpected event order, got {event.type} before "message_start"')
     if isinstance(event, RawContentBlockStartEvent):
         # TODO: check index
         current_snapshot.content.append(event.content_block)
@@ -407,9 +402,7 @@ def accumulate_event(
         content = current_snapshot.content[event.index]
         if isinstance(content, TextBlock) and isinstance(event.delta, TextDelta):
             content.text += event.delta.text
-        elif isinstance(content, ToolUseBlock) and isinstance(
-            event.delta, InputJSONDelta
-        ):
+        elif isinstance(content, ToolUseBlock) and isinstance(event.delta, InputJSONDelta):
             if not isinstance(content.input, str):
                 content.input = ""
             content.input += event.delta.partial_json

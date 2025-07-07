@@ -11,7 +11,7 @@ packages = [
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
 fi-instrumentation-otel = "0.1.7"
-openai = "^1.57.1"
+openai = ">=1.69.0"
 
 [build-system]
 requires = ["poetry-core"]
