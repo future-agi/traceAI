@@ -312,20 +312,29 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             with self._tracer.start_as_current_span(
                 name="completion", attributes=dict(get_attributes_from_context())
             ) as span:
-                _instrument_func_type_completion(span, kwargs)
-                result = self.original_litellm_funcs["completion"](*args, **kwargs)
-                _finalize_span(span, result)
-                return result
+                try:
+                    _instrument_func_type_completion(span, kwargs)
+                    result = self.original_litellm_funcs["completion"](*args, **kwargs)
+                    _finalize_span(span, result)
+                    span.set_status(trace_api.StatusCode.OK)
+                    return result
+                except Exception as e:
+                    span.record_exception(e)
+                    raise
         else:
-            original_iterator = self.original_litellm_funcs["completion"](
-                *args, **kwargs
-            )
             span_cm = self._tracer.start_as_current_span(
                 name="completion", attributes=dict(get_attributes_from_context())
             )
             span = span_cm.__enter__()
-            _instrument_func_type_completion(span, kwargs)
-            return StreamingIteratorWrapper(original_iterator, span, span_cm)
+            try:
+                _instrument_func_type_completion(span, kwargs)
+                original_iterator = self.original_litellm_funcs["completion"](
+                    *args, **kwargs
+                )
+                return StreamingIteratorWrapper(original_iterator, span, span_cm)
+            except Exception as e:
+                span.record_exception(e)
+                raise
 
     @wraps(litellm.acompletion)
     async def _acompletion_wrapper(self, *args: Any, **kwargs: Any) -> Any:
@@ -336,22 +345,38 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             with self._tracer.start_as_current_span(
                 name="acompletion", attributes=dict(get_attributes_from_context())
             ) as span:
-                _instrument_func_type_completion(span, kwargs)
-                result = await self.original_litellm_funcs["acompletion"](
-                    *args, **kwargs
-                )
-                _finalize_span(span, result)
-                return result
+                try:
+                    _instrument_func_type_completion(span, kwargs)
+                    result = await self.original_litellm_funcs["acompletion"](
+                        *args, **kwargs
+                    )
+                    _finalize_span(span, result)
+                    span.set_status(trace_api.StatusCode.OK)
+                    return result
+                except Exception as e:
+                    span.record_exception(e)
+                    raise
         else:
-            original_async_iterator = await self.original_litellm_funcs["acompletion"](
-                *args, **kwargs
-            )
             span_cm = self._tracer.start_as_current_span(
                 name="acompletion", attributes=dict(get_attributes_from_context())
             )
             span = span_cm.__enter__()
-            _instrument_func_type_completion(span, kwargs)
-            return AsyncStreamingIteratorWrapper(original_async_iterator, span, span_cm)
+            try:
+                _instrument_func_type_completion(span, kwargs)
+                original_async_iterator = await self.original_litellm_funcs[
+                    "acompletion"
+                ](*args, **kwargs)
+                return AsyncStreamingIteratorWrapper(
+                    original_async_iterator, span, span_cm
+                )
+            except Exception as e:
+                span.set_status(
+                    trace_api.StatusCode.ERROR,
+                    description=f"{e.__class__.__name__}: {e}",
+                )
+                span.record_exception(e)
+                span_cm.__exit__(e, type(e), e.__traceback__)
+                raise
 
     @wraps(litellm.completion_with_retries)
     def _completion_with_retries_wrapper(
@@ -365,31 +390,41 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             name="completion_with_retries",
             attributes=dict(get_attributes_from_context()),
         ) as span:
-            _instrument_func_type_completion(span, kwargs)
-            result = self.original_litellm_funcs["completion_with_retries"](
-                *args, **kwargs
-            )
-            _finalize_span(span, result)
-        return result  # type:ignore
+            try:
+                _instrument_func_type_completion(span, kwargs)
+                result = self.original_litellm_funcs["completion_with_retries"](
+                    *args, **kwargs
+                )
+                _finalize_span(span, result)
+                span.set_status(trace_api.StatusCode.OK)
+                return result  # type:ignore
+            except Exception as e:
+                span.record_exception(e)
+                raise
 
     @wraps(litellm.acompletion_with_retries)
     async def _acompletion_with_retries_wrapper(
         self, *args: Any, **kwargs: Any
     ) -> ModelResponse:
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_litellm_funcs["acompletion_with_retries"](
+            return await self.original_litellm_funcs["acompletion_with_retries"](
                 *args, **kwargs
             )  # type:ignore
         with self._tracer.start_as_current_span(
             name="acompletion_with_retries",
             attributes=dict(get_attributes_from_context()),
         ) as span:
-            _instrument_func_type_completion(span, kwargs)
-            result = await self.original_litellm_funcs["acompletion_with_retries"](
-                *args, **kwargs
-            )
-            _finalize_span(span, result)
-        return result  # type:ignore
+            try:
+                _instrument_func_type_completion(span, kwargs)
+                result = await self.original_litellm_funcs[
+                    "acompletion_with_retries"
+                ](*args, **kwargs)
+                _finalize_span(span, result)
+                span.set_status(trace_api.StatusCode.OK)
+                return result  # type:ignore
+            except Exception as e:
+                span.record_exception(e)
+                raise
 
     @wraps(litellm.embedding)
     def _embedding_wrapper(self, *args: Any, **kwargs: Any) -> EmbeddingResponse:
@@ -400,24 +435,36 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         with self._tracer.start_as_current_span(
             name="embedding", attributes=dict(get_attributes_from_context())
         ) as span:
-            _instrument_func_type_embedding(span, kwargs)
-            result = self.original_litellm_funcs["embedding"](*args, **kwargs)
-            _finalize_span(span, result)
-        return result  # type:ignore
+            try:
+                _instrument_func_type_embedding(span, kwargs)
+                result = self.original_litellm_funcs["embedding"](*args, **kwargs)
+                _finalize_span(span, result)
+                span.set_status(trace_api.StatusCode.OK)
+                return result  # type:ignore
+            except Exception as e:
+                span.record_exception(e)
+                raise
 
     @wraps(litellm.aembedding)
     async def _aembedding_wrapper(self, *args: Any, **kwargs: Any) -> EmbeddingResponse:
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_litellm_funcs["aembedding"](
+            return await self.original_litellm_funcs["aembedding"](
                 *args, **kwargs
             )  # type:ignore
         with self._tracer.start_as_current_span(
             name="aembedding", attributes=dict(get_attributes_from_context())
         ) as span:
-            _instrument_func_type_embedding(span, kwargs)
-            result = await self.original_litellm_funcs["aembedding"](*args, **kwargs)
-            _finalize_span(span, result)
-        return result  # type:ignore
+            try:
+                _instrument_func_type_embedding(span, kwargs)
+                result = await self.original_litellm_funcs["aembedding"](
+                    *args, **kwargs
+                )
+                _finalize_span(span, result)
+                span.set_status(trace_api.StatusCode.OK)
+                return result  # type:ignore
+            except Exception as e:
+                span.record_exception(e)
+                raise
 
     @wraps(litellm.image_generation)
     def _image_generation_wrapper(self, *args: Any, **kwargs: Any) -> ImageResponse:
@@ -428,28 +475,40 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
         with self._tracer.start_as_current_span(
             name="image_generation", attributes=dict(get_attributes_from_context())
         ) as span:
-            _instrument_func_type_image_generation(span, kwargs)
-            result = self.original_litellm_funcs["image_generation"](*args, **kwargs)
-            _finalize_span(span, result)
-        return result  # type:ignore
+            try:
+                _instrument_func_type_image_generation(span, kwargs)
+                result = self.original_litellm_funcs["image_generation"](
+                    *args, **kwargs
+                )
+                _finalize_span(span, result)
+                span.set_status(trace_api.StatusCode.OK)
+                return result  # type:ignore
+            except Exception as e:
+                span.record_exception(e)
+                raise
 
     @wraps(litellm.aimage_generation)
     async def _aimage_generation_wrapper(
         self, *args: Any, **kwargs: Any
     ) -> ImageResponse:
         if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_litellm_funcs["aimage_generation"](
+            return await self.original_litellm_funcs["aimage_generation"](
                 *args, **kwargs
             )  # type:ignore
         with self._tracer.start_as_current_span(
             name="aimage_generation", attributes=dict(get_attributes_from_context())
         ) as span:
-            _instrument_func_type_image_generation(span, kwargs)
-            result = await self.original_litellm_funcs["aimage_generation"](
-                *args, **kwargs
-            )
-            _finalize_span(span, result)
-        return result  # type:ignore
+            try:
+                _instrument_func_type_image_generation(span, kwargs)
+                result = await self.original_litellm_funcs["aimage_generation"](
+                    *args, **kwargs
+                )
+                _finalize_span(span, result)
+                span.set_status(trace_api.StatusCode.OK)
+                return result  # type:ignore
+            except Exception as e:
+                span.record_exception(e)
+                raise
 
     def _set_wrapper_attr(self, func_wrapper: Any) -> None:
         func_wrapper.__func__.is_wrapper = True
@@ -497,8 +556,12 @@ class StreamingIteratorWrapper:
             _set_span_attribute(
                 self.span, SpanAttributes.OUTPUT_VALUE, self.content_string
             )
+            self.span.set_status(trace_api.StatusCode.OK)
             # End the span
             self.span_cm.__exit__(None, None, None)
+            raise
+        except Exception as e:
+            self.span.record_exception(e)
             raise
 
     def __enter__(self):
@@ -553,8 +616,12 @@ class AsyncStreamingIteratorWrapper:
             _set_span_attribute(
                 self.span, SpanAttributes.OUTPUT_VALUE, self.content_string
             )
+            self.span.set_status(trace_api.StatusCode.OK)
             # End the span
             self.span_cm.__exit__(None, None, None)
+            raise
+        except Exception as e:
+            self.span.record_exception(e)
             raise
 
     async def close(self):
