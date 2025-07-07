@@ -218,17 +218,19 @@ def _finalize_span(span: trace_api.Span, result: Any) -> None:
                 span, SpanAttributes.EMBEDDING_EMBEDDINGS, safe_json_dumps(result_data)
             )
     elif isinstance(result, ImageResponse):
-        if len(result.data) > 0:
-            if img_data := result.data[0]:
+        _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_ROLE}", "assistant")
+        for idx,img_data in enumerate(result.data):
+            _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image")
+            if img_data:
                 if isinstance(img_data, Image) and (
                     url := (img_data.url or img_data.b64_json)
                 ):
-                    _set_span_attribute(span, ImageAttributes.IMAGE_URL, url)
+                    _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
                 elif isinstance(img_data, dict) and (
                     url := (img_data.get("url") or img_data.get("b64_json"))
                 ):
-                    _set_span_attribute(span, ImageAttributes.IMAGE_URL, url)
+                    _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
     if hasattr(result, "usage"):
         _set_span_attribute(
