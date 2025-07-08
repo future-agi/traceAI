@@ -24,6 +24,7 @@ from traceai_openai._request_attributes_extractor import _RequestAttributesExtra
 from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
     _CompletionAccumulator,
+    _ResponsesAccumulator,
 )
 from traceai_openai._response_attributes_extractor import _ResponseAttributesExtractor
 from traceai_openai._span_io_handler import add_io_to_span_attributes
@@ -101,6 +102,14 @@ class _WithOpenAI(ABC):
         self._response_attributes_extractor = _ResponseAttributesExtractor(
             openai=openai
         )
+
+        def responses_accumulator(request_parameters: _RequestParameters) -> Any:
+            return _ResponsesAccumulator(
+                request_parameters=request_parameters,
+                chat_completion_type=openai.types.responses.response.Response,
+                response_attributes_extractor=self._response_attributes_extractor,
+            )
+        
         self._response_accumulator_factories: Mapping[
             type, Callable[[_RequestParameters], _ResponseAccumulator]
         ] = {
@@ -114,6 +123,7 @@ class _WithOpenAI(ABC):
                 chat_completion_type=openai.types.chat.ChatCompletion,
                 response_attributes_extractor=self._response_attributes_extractor,
             ),
+            openai.types.responses.response.Response: responses_accumulator,
         }
 
     def _get_span_kind(self, cast_to: type) -> str:

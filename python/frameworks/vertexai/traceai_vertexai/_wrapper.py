@@ -433,11 +433,11 @@ def _(req: PredictRequest, span: Span) -> None:
         for idx, instance in enumerate(req.instances):
             if prompt := instance.get("prompt"):
                 span.set_attribute(
-                    f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
+                    f"{LLM_INPUT_MESSAGES}.{idx}.{MESSAGE_CONTENT}",
                     safe_json_dumps(prompt),
                 )
                 span.set_attribute(
-                    f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
+                    f"{LLM_INPUT_MESSAGES}.{idx}.{MESSAGE_ROLE}",
                     "user",
                 )
 
@@ -625,8 +625,9 @@ def _parse_predictions(predictions: List[Any]) -> Iterator[Tuple[str, AttributeV
     for index, prediction in enumerate(predictions):
         if prediction.get("mimeType", "").startswith("image"):
             if image := prediction.get("bytesBase64Encoded"):
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}", "assistant"
+                yield f"{LLM_OUTPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}.0.{MESSAGE_CONTENT_TYPE}", "image"
+                yield f"{LLM_OUTPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}.0.{MESSAGE_CONTENT_IMAGE}", image
+                yield f"{LLM_OUTPUT_MESSAGES}.{index}.{MESSAGE_ROLE}", "assistant"
 
 
 def _role(role: str) -> str:

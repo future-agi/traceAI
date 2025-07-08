@@ -743,6 +743,9 @@ def _get_image_block(
     if data := source.get("data"):
         yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TYPE}", "image"
         yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_IMAGE}", data
+    elif data := source.get("url"):
+        yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_TYPE}", "image"
+        yield f"{msg_prefix}.{MESSAGE_CONTENT}.{block_index}.{MESSAGE_CONTENT_IMAGE}", data    
 
 
 def _get_tool_result_block(

@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import base64
 import logging
 from importlib import import_module
+
 from types import ModuleType
 from typing import (
     TYPE_CHECKING,
@@ -22,12 +25,14 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from opentelemetry.util.types import AttributeValue
+from traceai_openai._attributes._responses_api import _ResponsesApiAttributes
 from traceai_openai._utils import _get_openai_version, _get_texts
 
 if TYPE_CHECKING:
     from openai.types import Completion, CreateEmbeddingResponse
     from openai.types.chat import ChatCompletion
     from openai.types.images_response import ImagesResponse
+    from openai.types.responses.response import Response
 
 __all__ = ("_ResponseAttributesExtractor",)
 
@@ -48,6 +53,7 @@ class _ResponseAttributesExtractor:
         "_completion_type",
         "_create_embedding_response_type",
         "_images_response_type",
+        "_responses_type",
     )
 
     def __init__(self, openai: ModuleType) -> None:
@@ -56,6 +62,7 @@ class _ResponseAttributesExtractor:
             openai.types.chat.ChatCompletion
         )
         self._completion_type: Type["Completion"] = openai.types.Completion
+        self._responses_type: Type["Response"] = openai.types.responses.response.Response
         self._create_embedding_response_type: Type["CreateEmbeddingResponse"] = (
             openai.types.CreateEmbeddingResponse
         )
@@ -71,6 +78,11 @@ class _ResponseAttributesExtractor:
         if isinstance(response, self._chat_completion_type):
             yield from self._get_attributes_from_chat_completion(
                 completion=response,
+                request_parameters=request_parameters,
+            )
+        elif isinstance(response, self._responses_type):
+            yield from self._get_attributes_from_responses_response(
+                response=response,
                 request_parameters=request_parameters,
             )
         elif isinstance(response, self._create_embedding_response_type):
@@ -90,6 +102,13 @@ class _ResponseAttributesExtractor:
             )
         else:
             yield from ()
+
+    def _get_attributes_from_responses_response(
+        self,
+        response: Response,
+        request_parameters: Mapping[str, Any],
+    ) -> Iterator[Tuple[str, AttributeValue]]:
+        yield from _ResponsesApiAttributes._get_attributes_from_response(response)
 
     def _get_attributes_from_chat_completion(
         self,
@@ -206,11 +225,11 @@ class _ResponseAttributesExtractor:
             yield MessageAttributes.MESSAGE_CONTENT, content
         if audio := getattr(message, "audio", None):
             # Handle audio attributes
-            yield MessageContentAttributes.MESSAGE_CONTENT_TYPE, "audio"
+            yield f"{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "audio"
             if audio_data := getattr(audio, "data", None):
-                yield MessageContentAttributes.MESSAGE_CONTENT_AUDIO, audio_data
+                yield f"{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_AUDIO}", audio_data
             if transcript := getattr(audio, "transcript", None):
-                yield MessageContentAttributes.MESSAGE_AUDIO_TRANSCRIPT, transcript
+                yield f"{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_AUDIO_TRANSCRIPT}", transcript
         if function_call := getattr(message, "function_call", None):
             # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/chat/chat_completion_message.py#L12  # noqa: E501
             if name := getattr(function_call, "name", None):
@@ -277,8 +296,15 @@ class _ResponseAttributesExtractor:
         data: Iterable[object],
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        
+        if model := request_parameters.get("model"):
+            yield SpanAttributes.LLM_MODEL_NAME, model
+
         for index, obj in enumerate(data):
+            yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}", "assistant"
             if image := getattr(obj, "url", None):
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image
+                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
+                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image
             elif b64_json := getattr(obj, "b64_json", None):
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", b64_json
+                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
+                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", b64_json

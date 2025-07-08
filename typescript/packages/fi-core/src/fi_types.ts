@@ -34,44 +34,24 @@ enum EvalName {
   CONVERSATION_RESOLUTION = "conversation_resolution",
   CONTENT_MODERATION = "content_moderation",
   CONTEXT_ADHERENCE = "context_adherence",
-  PROMPT_PERPLEXITY = "prompt_perplexity",
   CONTEXT_RELEVANCE = "context_relevance",
   COMPLETENESS = "completeness",
-  CONTEXT_SIMILARITY = "context_similarity",
+  CHUNK_ATTRIBUTION = "chunk_attribution",
+  CHUNK_UTILIZATION = "chunk_utilization",
   PII = "pii",
   TOXICITY = "toxicity",
   TONE = "tone",
   SEXIST = "sexist",
   PROMPT_INJECTION = "prompt_injection",
-  NOT_GIBBERISH_TEXT = "not_gibberish_text",
-  SAFE_FOR_WORK_TEXT = "safe_for_work_text",
   PROMPT_INSTRUCTION_ADHERENCE = "prompt_instruction_adherence",
   DATA_PRIVACY_COMPLIANCE = "data_privacy_compliance",
   IS_JSON = "is_json",
-  ENDS_WITH = "ends_with",
-  EQUALS = "equals",
-  CONTAINS_ALL = "contains_all",
-  LENGTH_LESS_THAN = "length_less_than",
-  CONTAINS_NONE = "contains_none",
-  REGEX = "regex",
-  STARTS_WITH = "starts_with",
-  API_CALL = "api_call",
-  LENGTH_BETWEEN = "length_between",
-  CUSTOM_CODE_EVALUATION = "custom_code_evaluation",
-  AGENT_AS_JUDGE = "agent_as_judge",
   ONE_LINE = "one_line",
   CONTAINS_VALID_LINK = "contains_valid_link",
   IS_EMAIL = "is_email",
-  LENGTH_GREATER_THAN = "length_greater_than",
   NO_VALID_LINKS = "no_valid_links",
-  CONTAINS = "contains",
-  CONTAINS_ANY = "contains_any",
   GROUNDEDNESS = "groundedness",
-  ANSWER_SIMILARITY = "answer_similarity",
-  EVAL_OUTPUT = "eval_output",
-  EVAL_CONTEXT_RETRIEVAL_QUALITY = "eval_context_retrieval_quality",
-  EVAL_IMAGE_INSTRUCTION = "eval_image_instruction",
-  SCORE_EVAL = "score_eval",
+  EVAL_RANKING = "eval_ranking",
   SUMMARY_QUALITY = "summary_quality",
   FACTUAL_ACCURACY = "factual_accuracy",
   TRANSLATION_ACCURACY = "translation_accuracy",
@@ -79,12 +59,7 @@ enum EvalName {
   BIAS_DETECTION = "bias_detection",
   EVALUATE_LLM_FUNCTION_CALLING = "evaluate_llm_function_calling",
   AUDIO_TRANSCRIPTION = "audio_transcription",
-  EVAL_AUDIO_DESCRIPTION = "eval_audio_description",
   AUDIO_QUALITY = "audio_quality",
-  JSON_SCHEMA_VALIDATION = "json_schema_validation",
-  CHUNK_ATTRIBUTION = "chunk_attribution",
-  CHUNK_UTILIZATION = "chunk_utilization",
-  EVAL_RANKING = "eval_ranking",
   NO_RACIAL_BIAS = "no_racial_bias",
   NO_GENDER_BIAS = "no_gender_bias",
   NO_AGE_BIAS = "no_age_bias",
@@ -111,7 +86,12 @@ enum EvalName {
   BLEU_SCORE = "bleu_score",
   ROUGE_SCORE = "rouge_score",
   TEXT_TO_SQL = "text_to_sql",
-  RECALL_SCORE = "recall_score"  
+  RECALL_SCORE = "recall_score",
+  LEVENSHTEIN_SIMILARITY = "levenshtein_similarity",
+  NUMERIC_SIMILARITY = "numeric_similarity",
+  EMBEDDING_SIMILARITY = "embedding_similarity",
+  SEMANTIC_LIST_CONTAINS = "semantic_list_contains",
+  IS_AI_GENERATED_IMAGE = "is_AI_generated_image"
 }
 
 interface ConfigField {
@@ -145,133 +125,34 @@ function getConfigForEval(evalName: EvalName): EvalConfig {
         required: false,
       },
     },
-    [EvalName.PROMPT_PERPLEXITY]: {
-      model: { type: "string", default: "gpt-4o-mini", required: false },
-    },
     [EvalName.CONTEXT_RELEVANCE]: {
       check_internet: { type: "boolean", default: false, required: false },
     },
     [EvalName.COMPLETENESS]: {},
-    [EvalName.CONTEXT_SIMILARITY]: {
-      comparator: {
-        type: "string",
-        default: "CosineSimilarity",
-        required: false,
-      },
-      failure_threshold: { type: "number", default: 0.5, required: false },
-    },
+    [EvalName.CHUNK_ATTRIBUTION]: {},
+    [EvalName.CHUNK_UTILIZATION]: {},
     [EvalName.PII]: {},
     [EvalName.TOXICITY]: {},
     [EvalName.TONE]: {},
     [EvalName.SEXIST]: {},
     [EvalName.PROMPT_INJECTION]: {},
-    [EvalName.NOT_GIBBERISH_TEXT]: {},
-    [EvalName.SAFE_FOR_WORK_TEXT]: {},
     [EvalName.PROMPT_INSTRUCTION_ADHERENCE]: {},
     [EvalName.DATA_PRIVACY_COMPLIANCE]: {
       check_internet: { type: "boolean", default: false, required: false },
     },
     [EvalName.IS_JSON]: {},
-    [EvalName.ENDS_WITH]: {
-      case_sensitive: { type: "boolean", default: true, required: false },
-      substring: { type: "string", default: null, required: true },
-    },
-    [EvalName.EQUALS]: {
-      case_sensitive: { type: "boolean", default: true, required: false },
-    },
-    [EvalName.CONTAINS_ALL]: {
-      case_sensitive: { type: "boolean", default: true, required: false },
-      keywords: { type: "array", default: [], required: false },
-    },
-    [EvalName.LENGTH_LESS_THAN]: {
-      max_length: { type: "number", default: 200, required: false },
-    },
-    [EvalName.CONTAINS_NONE]: {
-      case_sensitive: { type: "boolean", default: true, required: false },
-      keywords: { type: "array", default: [], required: false },
-    },
-    [EvalName.REGEX]: {
-      pattern: { type: "string", default: "", required: false },
-    },
-    [EvalName.STARTS_WITH]: {
-      substring: { type: "string", default: null, required: true },
-      case_sensitive: { type: "boolean", default: true, required: false },
-    },
-    [EvalName.API_CALL]: {
-      url: { type: "string", default: null, required: true },
-      payload: { type: "object", default: {}, required: false },
-      headers: { type: "object", default: {}, required: false },
-    },
-    [EvalName.LENGTH_BETWEEN]: {
-      max_length: { type: "number", default: 200, required: false },
-      min_length: { type: "number", default: 50, required: false },
-    },
-    [EvalName.CUSTOM_CODE_EVALUATION]: {
-      code: { type: "string", default: null, required: false },
-    },
-    [EvalName.AGENT_AS_JUDGE]: {
-      model: { type: "string", default: "gpt-4o-mini", required: false },
-      eval_prompt: { type: "string", default: null, required: true },
-      system_prompt: { type: "string", default: "", required: false },
-    },
     [EvalName.ONE_LINE]: {},
     [EvalName.CONTAINS_VALID_LINK]: {},
     [EvalName.IS_EMAIL]: {},
-    [EvalName.LENGTH_GREATER_THAN]: {
-      min_length: { type: "number", default: 50, required: false },
-    },
     [EvalName.NO_VALID_LINKS]: {},
-    [EvalName.CONTAINS]: {
-      case_sensitive: { type: "boolean", default: true, required: false },
-      keyword: { type: "string", default: null, required: true },
-    },
-    [EvalName.CONTAINS_ANY]: {
-      case_sensitive: { type: "boolean", default: true, required: false },
-      keywords: { type: "array", default: [], required: false },
-    },
     [EvalName.GROUNDEDNESS]: {},
-    [EvalName.ANSWER_SIMILARITY]: {
-      comparator: {
-        type: "string",
-        default: "CosineSimilarity",
-        required: false,
-      },
-      failure_threshold: { type: "number", default: 0.5, required: false },
-    },
-    [EvalName.EVAL_OUTPUT]: {
-      check_internet: { type: "boolean", default: false, required: false },
+    [EvalName.EVAL_RANKING]: {
       criteria: {
         type: "string",
         default:
-          "Check if the output follows the given input instructions, checking for completion of all requested tasks and adherence to specified constraints or formats.",
+          "Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content.",
         required: false,
       },
-    },
-    [EvalName.EVAL_CONTEXT_RETRIEVAL_QUALITY]: {
-      criteria: {
-        type: "string",
-        default:
-          "Evaluate if the context is relevant and sufficient to support the output.",
-        required: false,
-      },
-    },
-    [EvalName.EVAL_IMAGE_INSTRUCTION]: {
-      criteria: {
-        type: "string",
-        default:
-          "Check if the output follows the given input instructions, checking for completion of all requested tasks and adherence to specified constraints or formats.",
-        required: false,
-      },
-    },
-    [EvalName.SCORE_EVAL]: {
-      rule_prompt: {
-        type: "string",
-        default:
-          "Check if the output follows the given input instructions, checking for completion of all requested tasks and adherence to specified constraints or formats.",
-        required: false,
-      },
-      criteria: { type: "string", default: "", required: false },
-      input: { type: "array", default: [], required: false },
     },
     [EvalName.SUMMARY_QUALITY]: {
       check_internet: { type: "boolean", default: false, required: false },
@@ -331,15 +212,6 @@ function getConfigForEval(evalName: EvalName): EvalConfig {
         required: false,
       },
     },
-    [EvalName.EVAL_AUDIO_DESCRIPTION]: {
-      criteria: {
-        type: "string",
-        default:
-          "determine the if the description of the given audio matches the given audio",
-        required: false,
-      },
-      model: { type: "string", default: "gemini-2.0-flash", required: false },
-    },
     [EvalName.AUDIO_QUALITY]: {
       criteria: {
         type: "string",
@@ -347,19 +219,6 @@ function getConfigForEval(evalName: EvalName): EvalConfig {
         required: false,
       },
       model: { type: "string", default: "gemini-2.0-flash", required: false },
-    },
-    [EvalName.JSON_SCHEMA_VALIDATION]: {
-      validations: { type: "array", default: [], required: false },
-    },
-    [EvalName.CHUNK_ATTRIBUTION]: {},
-    [EvalName.CHUNK_UTILIZATION]: {},
-    [EvalName.EVAL_RANKING]: {
-      criteria: {
-        type: "string",
-        default:
-          "Check if the summary concisely captures the main points while maintaining accuracy and relevance to the original content.",
-        required: false,
-      },
     },
     [EvalName.NO_RACIAL_BIAS]: {
       criteria: {
@@ -532,6 +391,11 @@ function getConfigForEval(evalName: EvalName): EvalConfig {
       },
     },
     [EvalName.RECALL_SCORE]: {},
+    [EvalName.LEVENSHTEIN_SIMILARITY]: {},
+    [EvalName.NUMERIC_SIMILARITY]: {},
+    [EvalName.EMBEDDING_SIMILARITY]: {},
+    [EvalName.SEMANTIC_LIST_CONTAINS]: {},
+    [EvalName.IS_AI_GENERATED_IMAGE]: {},
   };
 
   if (!(evalName in configs)) {
@@ -556,9 +420,6 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
       context: { type: "string", required: true },
       output: { type: "string", required: true },
     },
-    [EvalName.PROMPT_PERPLEXITY]: {
-      input: { type: "string", required: true },
-    },
     [EvalName.CONTEXT_RELEVANCE]: {
       context: { type: "string", required: true },
       input: { type: "string", required: true },
@@ -567,9 +428,15 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
       input: { type: "string", required: true },
       output: { type: "string", required: true },
     },
-    [EvalName.CONTEXT_SIMILARITY]: {
+    [EvalName.CHUNK_ATTRIBUTION]: {
+      input: { type: "string", required: false },
+      output: { type: "string", required: true },
       context: { type: "string", required: true },
-      response: { type: "string", required: true },
+    },
+    [EvalName.CHUNK_UTILIZATION]: {
+      input: { type: "string", required: false },
+      output: { type: "string", required: true },
+      context: { type: "string", required: true },
     },
     [EvalName.PII]: {
       input: { type: "string", required: true },
@@ -586,12 +453,6 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
     [EvalName.PROMPT_INJECTION]: {
       input: { type: "string", required: true },
     },
-    [EvalName.SAFE_FOR_WORK_TEXT]: {
-      response: { type: "string", required: true },
-    },
-    [EvalName.NOT_GIBBERISH_TEXT]: {
-      response: { type: "string", required: true },
-    },
     [EvalName.PROMPT_INSTRUCTION_ADHERENCE]: {
       output: { type: "string", required: true },
     },
@@ -599,31 +460,6 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
       input: { type: "string", required: true },
     },
     [EvalName.IS_JSON]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.ENDS_WITH]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.EQUALS]: {
-      text: { type: "string", required: true },
-      expected_text: { type: "string", default: "expected", required: true },
-    },
-    [EvalName.CONTAINS_ALL]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.LENGTH_LESS_THAN]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.CONTAINS_NONE]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.REGEX]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.STARTS_WITH]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.LENGTH_BETWEEN]: {
       text: { type: "string", required: true },
     },
     [EvalName.ONE_LINE]: {
@@ -635,41 +471,17 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
     [EvalName.IS_EMAIL]: {
       text: { type: "string", required: true },
     },
-    [EvalName.LENGTH_GREATER_THAN]: {
-      text: { type: "string", required: true },
-    },
     [EvalName.NO_VALID_LINKS]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.CONTAINS]: {
-      text: { type: "string", required: true },
-    },
-    [EvalName.CONTAINS_ANY]: {
       text: { type: "string", required: true },
     },
     [EvalName.GROUNDEDNESS]: {
       output: { type: "string", required: true },
       input: { type: "string", required: true },
     },
-    [EvalName.ANSWER_SIMILARITY]: {
-      response: { type: "string", required: true },
-      expected_response: { type: "string", required: true },
-    },
-    [EvalName.EVAL_OUTPUT]: {
-      input: { type: "string", required: false },
-      output: { type: "string", required: true },
-      context: { type: "string", required: false },
-    },
-    [EvalName.EVAL_CONTEXT_RETRIEVAL_QUALITY]: {
-      context: { type: "string", required: false },
-      input: { type: "string", required: false },
-      output: { type: "string", required: false },
-    },
-    [EvalName.EVAL_IMAGE_INSTRUCTION]: {
+    [EvalName.EVAL_RANKING]: {
       input: { type: "string", required: true },
-      image_url: { type: "string", required: true },
+      context: { type: "string", required: true },
     },
-    [EvalName.SCORE_EVAL]: {},
     [EvalName.SUMMARY_QUALITY]: {
       input: { type: "string", required: false },
       output: { type: "string", required: true },
@@ -694,38 +506,12 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
       input: { type: "string", required: true },
       output: { type: "string", required: true },
     },
-    [EvalName.API_CALL]: {
-      response: { type: "string", required: true },
-    },
-    [EvalName.CUSTOM_CODE_EVALUATION]: {},
-    [EvalName.AGENT_AS_JUDGE]: {},
     [EvalName.AUDIO_TRANSCRIPTION]: {
       "input audio": { type: "string", required: true },
       "input transcription": { type: "string", required: true },
     },
-    [EvalName.EVAL_AUDIO_DESCRIPTION]: {
-      "input audio": { type: "string", required: true },
-    },
     [EvalName.AUDIO_QUALITY]: {
       "input audio": { type: "string", required: true },
-    },
-    [EvalName.JSON_SCHEMA_VALIDATION]: {
-      actual_json: { type: "object", required: true },
-      expected_json: { type: "string", required: true },
-    },
-    [EvalName.CHUNK_ATTRIBUTION]: {
-      input: { type: "string", required: false },
-      output: { type: "string", required: true },
-      context: { type: "string", required: true },
-    },
-    [EvalName.CHUNK_UTILIZATION]: {
-      input: { type: "string", required: false },
-      output: { type: "string", required: true },
-      context: { type: "string", required: true },
-    },
-    [EvalName.EVAL_RANKING]: {
-      input: { type: "string", required: true },
-      context: { type: "string", required: true },
     },
     [EvalName.NO_RACIAL_BIAS]: {
       input: { type: "string", required: true },
@@ -820,6 +606,25 @@ function getMappingForEval(evalName: EvalName): EvalMapping {
     [EvalName.RECALL_SCORE]: {
       reference: { type: "string", required: true },
       hypothesis: { type: "string", required: true },
+    },
+    [EvalName.LEVENSHTEIN_SIMILARITY]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.NUMERIC_SIMILARITY]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.EMBEDDING_SIMILARITY]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.SEMANTIC_LIST_CONTAINS]: {
+      response: { type: "string", required: true },
+      expected_text: { type: "string", required: true },
+    },
+    [EvalName.IS_AI_GENERATED_IMAGE]: {
+      input_image: { type: "string", required: true },
     },
   };
 
