@@ -1,3 +1,7 @@
+## [0.1.8] - 2025-07-08
+### Feature
+- Added support for OpenAI's Dall-E image generation models
+
 ## [0.1.7] - 2025-06-10
 ### Feature
 - Added support for ai-evaluation

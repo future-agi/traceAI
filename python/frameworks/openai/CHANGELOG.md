@@ -1,3 +1,8 @@
+## [0.1.8] - 2025-07-08
+### Feature
+- Introduced compatibility with OpenAI's latest response method
+- Enabled functionality for OpenAI's latest multi-modal feature
+
 ## [0.1.7] - 2025-06-10
 ### Feature
 - Added support for ai-evaluation
