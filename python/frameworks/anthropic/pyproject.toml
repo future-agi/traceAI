@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-anthropic"
-version = "0.1.7"
+version = "0.1.8"
 description = "OpenTelemetry instrumentation for Anthropic"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -10,9 +10,9 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9, <3.13"
-anthropic = ">=0.30.0,<1.0.0"
-fi-instrumentation-otel = "0.1.7"
+python = ">3.9, <3.14"
+anthropic = ">=0.41.0"
+fi-instrumentation-otel = ">=0.1.7"
 
 
 [build-system]

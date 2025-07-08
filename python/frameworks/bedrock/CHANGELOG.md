@@ -1,3 +1,8 @@
+## [0.1.8] - 2025-07-08
+### Feature
+- Added support for Bedrock's new multi-modal response format
+- Updated dependencies to the latest versions.
+
 ## [0.1.7] - 2025-06-10
 ### Feature
 - Added support for ai-evaluation
