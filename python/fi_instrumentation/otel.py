@@ -111,6 +111,7 @@ def register(
 
     custom_eval_exists = check_custom_eval_config_exists(
         project_name=project_name,
+        project_type=project_type.value,
         eval_tags=eval_tags,
     )
 
@@ -703,7 +704,7 @@ def _get_class_signature(fn: Type[Any]) -> inspect.Signature:
 
 
 def check_custom_eval_config_exists(
-    project_name: str, eval_tags: list, base_url: Optional[str] = None
+    project_name: str, eval_tags: list, project_type: str = ProjectType.EXPERIMENT.value, base_url: Optional[str] = None
 ) -> bool:
     """
     Check if a custom eval config exists for a given project.
@@ -725,7 +726,7 @@ def check_custom_eval_config_exists(
         response = requests.post(
             url,
             headers=headers,
-            json={"project_name": project_name, "eval_tags": eval_tags},
+            json={"project_name": project_name, "eval_tags": eval_tags, "project_type": project_type},
         )
 
         response.raise_for_status()
