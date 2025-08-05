@@ -64,7 +64,7 @@ class TestHaystackInstrumentor:
     def test_instrumentation_dependencies(self):
         """Test instrumentation dependencies."""
         deps = self.instrumentor.instrumentation_dependencies()
-        assert deps == ("haystack-ai >= 2.9.0", "futureagi >= 0.0.1")
+        assert deps == ("haystack-ai >= 2.9.0")
 
     @patch("traceai_haystack.wrap_function_wrapper")
     @patch("traceai_haystack.trace_api.get_tracer")

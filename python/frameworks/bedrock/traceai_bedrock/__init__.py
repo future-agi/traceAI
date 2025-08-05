@@ -21,6 +21,8 @@ from typing import (
     cast,
 )
 
+logger = logging.getLogger(__name__)
+
 from botocore.client import BaseClient
 from botocore.response import StreamingBody
 from opentelemetry import context as context_api

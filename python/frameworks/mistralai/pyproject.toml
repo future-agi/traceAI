@@ -9,8 +9,8 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4.0"
-fi-instrumentation-otel = "0.1.6"
+python = ">3.9, <3.14"
+fi-instrumentation-otel = ">=0.1.11"
 mistralai = ">=1.0.2"
 
 [build-system]

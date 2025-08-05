@@ -6,6 +6,9 @@ from fi_instrumentation.settings import (
     get_custom_eval_template,
     get_env_collector_endpoint,
 )
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 class SpanAttributes:
@@ -1160,6 +1163,9 @@ class EvalTag:
             required_keys = EvalMappingConfig.get_mapping_for_eval(
                 self.eval_name
             ).keys()
+        
+        if self.model and is_custom_eval:
+            logger.warning("INFO :- Model is only required in case of FAGI evals")
 
         if not is_custom_eval:
 
@@ -1176,7 +1182,7 @@ class EvalTag:
                     raise ValueError(
                         f"model must be a of type ModelChoices, got {type(self.model)}"
                     )
-
+           
         self.validate_fagi_system_eval_config(is_custom_eval)
 
         self.validate_fagi_system_eval_mapping(is_custom_eval, required_keys)
@@ -1266,6 +1272,14 @@ class EvalTag:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert EvalTag to dictionary format for API responses"""
+
+        if isinstance(self.model, str):
+            model_name = self.model
+        elif isinstance(self.model, ModelChoices):
+            model_name = self.model.value
+        else:
+            raise ValueError(f"Model must be a string or ModelChoices, got {type(self.model)}")
+
         return {
             "type": self.type.value,
             "value": self.value.value,
@@ -1273,7 +1287,7 @@ class EvalTag:
             "config": self.config,
             "mapping": self.mapping,
             "custom_eval_name": self.custom_eval_name,
-            "model": self.model.value if self.model else None,
+            "model": model_name
         }
 
     def __str__(self) -> str:

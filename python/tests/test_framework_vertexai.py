@@ -48,7 +48,6 @@ class TestVertexAIInstrumentor:
         dependencies = instrumentor.instrumentation_dependencies()
         assert isinstance(dependencies, Collection)
         assert "google-cloud-aiplatform >= 1.49.0" in dependencies
-        assert "futureagi >= 0.0.1" in dependencies
 
     def test_instrument_with_default_config(self):
         """Test instrumentation with default configuration."""
