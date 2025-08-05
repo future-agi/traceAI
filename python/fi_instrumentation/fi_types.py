@@ -494,7 +494,7 @@ class ToolAttributes:
 
 class Endpoints(Enum):
     FUTURE_AGI = (
-        f"{get_env_collector_endpoint()}/tracer/observation-span/create_otel_span/"
+        f"{get_env_collector_endpoint()}/tracer/v1/traces"
     )
 
 
