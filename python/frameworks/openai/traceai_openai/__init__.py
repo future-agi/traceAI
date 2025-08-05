@@ -62,12 +62,14 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
             name="AsyncOpenAI.request",
             wrapper=_AsyncRequest(tracer=tracer, openai=openai),
         )
-        self._original_protect = Protect.protect
-        wrap_function_wrapper(
-            module="fi.evals",
-            name="Protect.protect",
-            wrapper=GuardrailProtectWrapper(tracer),
-        )
+
+        if Protect is not None:
+            self._original_protect = Protect.protect
+            wrap_function_wrapper(
+                module="fi.evals",
+                name="Protect.protect",
+                wrapper=GuardrailProtectWrapper(tracer),
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         openai = import_module(_MODULE)
