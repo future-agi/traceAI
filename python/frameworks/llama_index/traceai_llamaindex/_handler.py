@@ -44,7 +44,7 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from llama_index.core import QueryBundle
-from llama_index.core.agent.types import BaseAgent, BaseAgentWorker
+from llama_index.core.base.agent.types import BaseAgent, BaseAgentWorker
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
