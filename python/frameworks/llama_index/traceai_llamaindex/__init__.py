@@ -92,12 +92,13 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             else:
                 dispatcher.add_event_handler(self._event_handler)
 
-        self._original_protect = Protect.protect
-        wrap_function_wrapper(
-            module="fi.evals",
-            name="Protect.protect",
-            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
-        )
+        if Protect is not None:
+            self._original_protect = Protect.protect
+            wrap_function_wrapper(
+                module="fi.evals",
+                name="Protect.protect",
+                wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._use_legacy_callback_handler:
