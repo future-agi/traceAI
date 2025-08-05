@@ -93,7 +93,6 @@ class TestInstructorInstrumentor:
         
         assert isinstance(dependencies, tuple)
         assert "instructor >= 0.0.1" in dependencies
-        assert "futureagi >= 0.0.1" in dependencies
         assert len(dependencies) == 2
 
     def test_instrument_basic(self, tracer_provider, config, mock_protect):

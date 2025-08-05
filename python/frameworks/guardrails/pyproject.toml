@@ -10,10 +10,10 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9, <3.13"
+python = ">3.9, <3.13"
 packaging = "*"
 guardrails-ai = ">=0.4.5,<0.5.1"
-fi-instrumentation-otel = "0.1.6"
+fi-instrumentation-otel = ">=0.1.11"
 
 
 [build-system]

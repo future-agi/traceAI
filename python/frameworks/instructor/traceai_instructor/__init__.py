@@ -16,7 +16,7 @@ from traceai_instructor._wrappers import _HandleResponseWrapper, _PatchWrapper
 from traceai_instructor.version import __version__
 from wrapt import wrap_function_wrapper
 
-_instruments = ("instructor >= 0.0.1", "futureagi >= 0.0.1")
+_instruments = ("instructor >= 0.0.1",)
 
 
 class InstructorInstrumentor(BaseInstrumentor):  # type: ignore

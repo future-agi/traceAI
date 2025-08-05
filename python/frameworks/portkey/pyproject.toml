@@ -12,7 +12,7 @@ packages = [
 [tool.poetry.dependencies]
 python = ">3.9, <3.13"
 portkey-ai = ">0.1.0" 
-fi-instrumentation-otel = "^0.1.8"
+fi-instrumentation-otel = ">=0.1.11"
 
 
 [build-system]

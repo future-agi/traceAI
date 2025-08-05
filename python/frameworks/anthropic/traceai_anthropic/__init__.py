@@ -20,7 +20,7 @@ from wrapt import wrap_function_wrapper
 
 logger = logging.getLogger(__name__)
 
-_instruments = ("anthropic >= 0.30.0", "futureagi")
+_instruments = ("anthropic >= 0.30.0",)
 
 
 class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]

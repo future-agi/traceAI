@@ -66,7 +66,6 @@ class TestMCPInstrumentor:
         
         assert isinstance(dependencies, tuple)
         assert "mcp >= 0.1.0" in dependencies
-        assert "futureagi >= 0.0.1" in dependencies
         assert len(dependencies) >= 2
 
     def test_instrument_registers_post_import_hooks(self):

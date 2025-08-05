@@ -10,9 +10,9 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9, <3.13"
+python = ">3.10, <3.14"
 smolagents = ">=1.12.0"
-fi-instrumentation-otel = "0.1.6"
+fi-instrumentation-otel = ">=0.1.11"
 
 
 [build-system]

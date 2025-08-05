@@ -52,7 +52,7 @@ class TestGroqInstrumentor:
     def test_instrumentation_dependencies(self):
         """Test instrumentation dependencies."""
         deps = self.instrumentor.instrumentation_dependencies()
-        assert ("groq >= 0.9.0", "futureagi >= 0.0.1") == deps
+        assert ("groq >= 0.9.0") == deps
 
     @patch("traceai_groq.wrap_function_wrapper")
     @patch("traceai_groq.trace_api.get_tracer")
