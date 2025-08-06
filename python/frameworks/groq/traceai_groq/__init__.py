@@ -61,12 +61,13 @@ class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
         )
 
-        self._original_protect = Protect.protect
-        wrap_function_wrapper(
-            module="fi.evals",
-            name="Protect.protect",
-            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
-        )
+        if Protect is not None:
+            self._original_protect = Protect.protect
+            wrap_function_wrapper(
+                module="fi.evals",
+                name="Protect.protect",
+                wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         groq_module = import_module("groq.resources.chat.completions")

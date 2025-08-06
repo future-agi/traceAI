@@ -52,12 +52,14 @@ class VertexAIInstrumentor(BaseInstrumentor):  # type: ignore
                 name=method.__name__,
                 wrapper=lambda f, _, args, kwargs: _Wrapper(tracer)(f(*args, **kwargs)),
             )
-        self._original_protect = Protect.protect
-        wrap_function_wrapper(
-            module="fi.evals",
-            name="Protect.protect",
-            wrapper=GuardrailProtectWrapper(tracer),
-        )
+
+        if Protect is not None:
+            self._original_protect = Protect.protect
+            wrap_function_wrapper(
+                module="fi.evals",
+                name="Protect.protect",
+                wrapper=GuardrailProtectWrapper(tracer),
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         self._status._IS_INSTRUMENTED = False

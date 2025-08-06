@@ -371,12 +371,13 @@ class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
             ),
         )
 
-        self._original_protect = Protect.protect
-        wrap_function_wrapper(
-            module="fi.evals",
-            name="Protect.protect",
-            wrapper=GuardrailProtectWrapper(tracer=self._tracer),
-        )
+        if Protect is not None:
+            self._original_protect = Protect.protect
+            wrap_function_wrapper(
+                module="fi.evals",
+                name="Protect.protect",
+                wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         boto = import_module(_MODULE)

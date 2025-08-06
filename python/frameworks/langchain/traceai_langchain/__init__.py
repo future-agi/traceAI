@@ -56,12 +56,14 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             name="BaseCallbackManager.__init__",
             wrapper=_BaseCallbackManagerInit(self._tracer),
         )
-        self._original_protect = Protect.protect
-        wrap_function_wrapper(
-            module="fi.evals",
-            name="Protect.protect",
-            wrapper=GuardrailProtectWrapper(self._tracer),
-        )
+
+        if Protect is not None:
+            self._original_protect = Protect.protect
+            wrap_function_wrapper(
+                module="fi.evals",
+                name="Protect.protect",
+                wrapper=GuardrailProtectWrapper(self._tracer),
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         langchain_core.callbacks.BaseCallbackManager.__init__ = self._original_callback_manager_init  # type: ignore
