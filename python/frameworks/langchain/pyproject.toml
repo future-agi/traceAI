@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-langchain"
-version = "0.1.10"
+version = "0.1.11"
 description = "OpenTelemetry instrumentation for Langchain"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
