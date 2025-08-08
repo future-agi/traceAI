@@ -13,6 +13,7 @@ CONTEXT_ATTRIBUTES = (
     SpanAttributes.METADATA,
     SpanAttributes.TAG_TAGS,
     SpanAttributes.LLM_PROMPT_TEMPLATE,
+    SpanAttributes.LLM_PROMPT_TEMPLATE_LABEL,
     SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION,
     SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES,
 )
@@ -27,6 +28,7 @@ class _UsingAttributesContextManager(ContextDecorator):
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
         prompt_template: str = "",
+        prompt_template_label: str = "",
         prompt_template_version: str = "",
         prompt_template_variables: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -35,6 +37,7 @@ class _UsingAttributesContextManager(ContextDecorator):
         self._metadata = metadata
         self._tags = tags
         self._prompt_template = prompt_template
+        self._prompt_template_label = prompt_template_label
         self._prompt_template_version = prompt_template_version
         self._prompt_template_variables = prompt_template_variables
 
@@ -53,6 +56,10 @@ class _UsingAttributesContextManager(ContextDecorator):
         if self._prompt_template:
             ctx = set_value(
                 SpanAttributes.LLM_PROMPT_TEMPLATE, self._prompt_template, ctx
+            )
+        if self._prompt_template_label:
+            ctx = set_value(
+                SpanAttributes.LLM_PROMPT_TEMPLATE_LABEL, self._prompt_template_label, ctx
             )
         if self._prompt_template_version:
             ctx = set_value(
@@ -173,15 +180,15 @@ class using_prompt_template(_UsingAttributesContextManager):
         prompt_template_variables = {"city": "Johannesburg", date:"July 11"}
         with using_prompt_template(
             template=prompt_template,
-            version=prompt_template_variables,
-            variables="v1.0",
+            label="production",
+            version="v1.0",
+            variables=prompt_template_variables,
             ):
             # Tracing within this block will include the span attribute:
-            # "llm.prompt_template.template" = "Please describe the weather
-            forecast for {city} on {date}"
+            # "llm.prompt_template.name" = "Please describe the weather forecast for {city} on {date}"
+            # "llm.prompt_template.label" = "production"
             # "llm.prompt_template.version" = "v1.0"
-            # "llm.prompt_template.variables" = "{\"city\": \"Johannesburg\",
-            \"date\": \"July 11\"}"
+            # "llm.prompt_template.variables" = "{\"city\": \"Johannesburg\", \"date\": \"July 11\"}"
             ...
     """
 
@@ -189,11 +196,13 @@ class using_prompt_template(_UsingAttributesContextManager):
         self,
         *,
         template: str = "",
+        label: str = "",
         version: str = "",
         variables: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(
             prompt_template=template,
+            prompt_template_label=label,
             prompt_template_version=version,
             prompt_template_variables=variables,
         )
@@ -270,6 +279,7 @@ class using_attributes(_UsingAttributesContextManager):
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
         prompt_template: str = "",
+        prompt_template_label: str = "",
         prompt_template_version: str = "",
         prompt_template_variables: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -279,6 +289,7 @@ class using_attributes(_UsingAttributesContextManager):
             metadata=metadata,
             tags=tags,
             prompt_template=prompt_template,
+            prompt_template_label=prompt_template_label,
             prompt_template_version=prompt_template_version,
             prompt_template_variables=prompt_template_variables,
         )

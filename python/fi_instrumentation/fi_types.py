@@ -67,9 +67,13 @@ class SpanAttributes:
     """
     Prompts provided to a completions API.
     """
-    LLM_PROMPT_TEMPLATE = "llm.prompt_template.template"
+    LLM_PROMPT_TEMPLATE = "llm.prompt_template.name"
     """
-    The prompt template as a Python f-string.
+    The name/identifier of the prompt template being used.
+    """
+    LLM_PROMPT_TEMPLATE_LABEL = "llm.prompt_template.label"
+    """
+    A human-readable label or category for the prompt template.
     """
     LLM_PROMPT_TEMPLATE_VARIABLES = "llm.prompt_template.variables"
     """
@@ -494,7 +498,7 @@ class ToolAttributes:
 
 class Endpoints(Enum):
     FUTURE_AGI = (
-        f"{get_env_collector_endpoint()}/tracer/observation-span/create_otel_span/"
+        f"{get_env_collector_endpoint()}/tracer/v1/traces"
     )
 
 
