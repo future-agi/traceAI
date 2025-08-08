@@ -10,8 +10,8 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">3.9, <4.0"
-fi-instrumentation-otel = "0.1.6"
+python = ">3.10, <3.14"
+fi-instrumentation-otel = ">=0.1.11"
 mcp = ">=1.8.1"
 
 

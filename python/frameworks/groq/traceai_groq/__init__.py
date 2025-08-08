@@ -20,7 +20,7 @@ from wrapt import wrap_function_wrapper
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_instruments = ("groq >= 0.9.0", "futureagi >= 0.0.1")
+_instruments = ("groq >= 0.9.0",)
 
 
 class GroqInstrumentor(BaseInstrumentor):  # type: ignore[misc]

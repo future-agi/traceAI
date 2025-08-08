@@ -69,7 +69,6 @@ class TestLlamaIndexInstrumentor:
         
         assert isinstance(dependencies, tuple)
         assert "llama-index-core >= 0.10.43" in dependencies
-        assert "futureagi >= 0.0.1" in dependencies
         assert len(dependencies) >= 2
 
     def test_instrument_new_handler_mode(self, tracer_provider, config, mock_llama_index_core):

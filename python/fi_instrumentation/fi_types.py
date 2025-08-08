@@ -67,9 +67,13 @@ class SpanAttributes:
     """
     Prompts provided to a completions API.
     """
-    LLM_PROMPT_TEMPLATE = "llm.prompt_template.template"
+    LLM_PROMPT_TEMPLATE = "llm.prompt_template.name"
     """
-    The prompt template as a Python f-string.
+    The name/identifier of the prompt template being used.
+    """
+    LLM_PROMPT_TEMPLATE_LABEL = "llm.prompt_template.label"
+    """
+    A human-readable label or category for the prompt template.
     """
     LLM_PROMPT_TEMPLATE_VARIABLES = "llm.prompt_template.variables"
     """
@@ -590,7 +594,6 @@ class EvalName(Enum):
     TRANSLATION_ACCURACY = "translation_accuracy"
     CULTURAL_SENSITIVITY = "cultural_sensitivity"
     BIAS_DETECTION = "bias_detection"
-    EVALUATE_LLM_FUNCTION_CALLING = "evaluate_llm_function_calling"
     AUDIO_TRANSCRIPTION = "audio_transcription"
     AUDIO_QUALITY = "audio_quality"
     NO_RACIAL_BIAS = "no_racial_bias"
@@ -708,12 +711,6 @@ class EvalConfig:
                 "criteria": ConfigField(
                     type=str,
                     default="check whether given text has any forms of bias, promoting unfairness and unneutrality in it. Looking that input and context if provided.. If it is biased then return Failed else return Passed",
-                )
-            },
-            EvalName.EVALUATE_LLM_FUNCTION_CALLING: {
-                "criteria": ConfigField(
-                    type=str,
-                    default="Assess whether the output correctly identifies the need for a tool call and accurately includes the tool with the appropriate parameters extracted from the input.",
                 )
             },
             EvalName.AUDIO_TRANSCRIPTION: {
@@ -975,10 +972,6 @@ class EvalMappingConfig:
                 "input": ConfigField(type=str, required=True)
             },
             EvalName.BIAS_DETECTION: {"input": ConfigField(type=str, required=True)},
-            EvalName.EVALUATE_LLM_FUNCTION_CALLING: {
-                "input": ConfigField(type=str, required=True),
-                "output": ConfigField(type=str, required=True),
-            },
             EvalName.AUDIO_TRANSCRIPTION: {
                 "input audio": ConfigField(type=str, required=True),
                 "input transcription": ConfigField(type=str, required=True),

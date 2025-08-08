@@ -537,7 +537,6 @@ class TestBedrockFramework:
         instrumentor = BedrockInstrumentor()
         deps = instrumentor.instrumentation_dependencies()
         assert "boto3 >= 1.28.57" in deps
-        assert "futureagi >= 0.0.1" in deps
     
     def test_bedrock_uninstrument_before_instrument(self, mock_boto_modules, mock_protect):
         """Test uninstrument behavior when called before instrument."""
@@ -769,7 +768,6 @@ class TestBedrockFramework:
         
         # Test instruments tuple
         assert "boto3 >= 1.28.57" in _instruments
-        assert "futureagi >= 0.0.1" in _instruments
         
         # Test metrics support
         assert _supports_metrics is False 

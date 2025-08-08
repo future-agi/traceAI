@@ -31,9 +31,6 @@ from fi_instrumentation.settings import (
 )
 from jsonschema import ValidationError
 from opentelemetry import trace as trace_api
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-    OTLPSpanExporter as _GRPCSpanExporter,
-)
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as _HTTPSpanExporter,
 )
@@ -43,6 +40,16 @@ from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor as _BatchSpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
+try:
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+        OTLPSpanExporter as _GRPCSpanExporter,
+    )
+
+    _GRPC_INSTALLED = True
+except ImportError:
+    _GRPCSpanExporter = object
+    _GRPC_INSTALLED = False
 
 PROJECT_NAME = "project_name"
 PROJECT_TYPE = "project_type"
@@ -219,6 +226,11 @@ class TracerProvider(_TracerProvider):
             parsed_url, endpoint = _normalized_endpoint(endpoint)
             exporter: SpanExporter = HTTPSpanExporter(endpoint=endpoint)
         elif transport == Transport.GRPC:
+            if not _GRPC_INSTALLED:
+                raise RuntimeError(
+                    "gRPC transport is not available. "
+                    'Please install the gRPC dependencies with: pip install fi-instrumentation-otel[grpc]'
+                )
             endpoint = get_env_grpc_collector_endpoint()
             exporter: SpanExporter = GRPCSpanExporter(endpoint=endpoint)
         else:

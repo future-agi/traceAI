@@ -24,7 +24,7 @@ from wrapt import wrap_function_wrapper
 
 logger = logging.getLogger(__name__)
 
-_instruments = ("haystack-ai >= 2.9.0", "futureagi >= 0.0.1")
+_instruments = ("haystack-ai >= 2.9.0",)
 
 
 class HaystackInstrumentor(BaseInstrumentor):  # type: ignore[misc]
