@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-portkey"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenTelemetry instrumentation for Portkey AI"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"

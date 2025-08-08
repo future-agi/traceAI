@@ -229,7 +229,7 @@ class TracerProvider(_TracerProvider):
             if not _GRPC_INSTALLED:
                 raise RuntimeError(
                     "gRPC transport is not available. "
-                    'Please install the gRPC dependencies with: pip install fi-instrumentation-otel[grpc]'
+                    'Please install the gRPC dependencies with: pip install "fi-instrumentation-otel[grpc]"'
                 )
             endpoint = get_env_grpc_collector_endpoint()
             exporter: SpanExporter = GRPCSpanExporter(endpoint=endpoint)

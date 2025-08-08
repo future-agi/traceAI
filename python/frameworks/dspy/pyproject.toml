@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-DSPy"
-version = "0.1.6"
+version = "0.1.7"
 description = "OpenTelemetry instrumentation for DSPy"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
