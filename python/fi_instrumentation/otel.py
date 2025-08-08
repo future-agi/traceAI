@@ -1,7 +1,7 @@
 import atexit
 import inspect
 import json
-import math
+import logging
 import os
 import signal
 import sys
@@ -50,6 +50,8 @@ try:
 except ImportError:
     _GRPCSpanExporter = object
     _GRPC_INSTALLED = False
+
+logger = logging.getLogger(__name__)
 
 PROJECT_NAME = "project_name"
 PROJECT_TYPE = "project_type"
@@ -318,15 +320,27 @@ class TracerProvider(_TracerProvider):
 
     def setup_signal_handlers(self):
         """Set up signal handlers to ensure proper shutdown on termination"""
-
         def handle_signal(signum, frame):
             print(f"Received signal {signum}, shutting down tracer provider...")
-            self.shutdown()
-            sys.exit(0)
+            try:
+                self.shutdown()
+            except Exception as e:
+                logger.error(f"Error during signal handler shutdown: {e}")
+            finally:
+                sys.exit(0)
 
-        # Register signal handlers
-        signal.signal(signal.SIGINT, handle_signal)
-        signal.signal(signal.SIGTERM, handle_signal)
+        try:
+            signal.signal(signal.SIGINT, handle_signal)
+            signal.signal(signal.SIGTERM, handle_signal)
+        except ValueError as e:
+            logger.warning(
+                f"Failed to register signal handlers: {e}. "
+                "This is expected when running in non-main threads."
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to register signal handlers due to unexpected error: {e}. "
+            )
 
         atexit.register(self.shutdown)
 
