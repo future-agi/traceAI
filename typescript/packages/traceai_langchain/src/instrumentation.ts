@@ -7,12 +7,13 @@ import {
   isWrapped,
 } from "@opentelemetry/instrumentation";
 import { VERSION } from "./version";
-import { diag } from "@opentelemetry/api";
+import { diag, Tracer, TracerProvider } from "@opentelemetry/api";
 import { addTracerToHandlers } from "./instrumentationUtils";
 import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
 
 const MODULE_NAME = "@langchain/core/callbacks";
 
+const INSTRUMENTATION_NAME = "@traceai/langchain";
 /**
  * Flag to check if the openai module has been patched
  * Note: This is a fallback in case the module is made immutable (e.x. Deno, webpack, etc.)
@@ -34,10 +35,13 @@ type CallbackManagerModule = typeof CallbackManagerModuleV02;
  */
 export class LangChainInstrumentation extends InstrumentationBase<CallbackManagerModule> {
   private fiTracer: FITracer;
+  private tracerProvider?: TracerProvider;
+  private traceConfig?: TraceConfigOptions;
 
   constructor({
     instrumentationConfig,
     traceConfig,
+    tracerProvider,
   }: {
     /**
      * The config for the instrumentation
@@ -48,19 +52,31 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
      * @see {@link TraceConfigOptions}
      */
     traceConfig?: TraceConfigOptions;
+    /**
+     * An optional custom trace provider to be used for tracing. If not provided, a tracer will be created using the global tracer provider.
+     * This is useful if you want to use a non-global tracer provider.
+     *
+     * @see {@link TracerProvider}
+     */
+    tracerProvider?: TracerProvider;
   } = {}) {
     super(
-      "@traceai/traceai_langchain",
+      INSTRUMENTATION_NAME,
       VERSION,
       Object.assign({}, instrumentationConfig),
     );
+    this.tracerProvider = tracerProvider;
+    this.traceConfig = traceConfig;
     this.fiTracer = new FITracer({
-      tracer: this.tracer,
+      tracer:
+        this.tracerProvider?.getTracer(INSTRUMENTATION_NAME, VERSION) ??
+        this.tracer,
       traceConfig,
     });
   }
 
   manuallyInstrument(module: CallbackManagerModule) {
+    diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
   }
 
@@ -75,12 +91,36 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
     return module;
   }
 
+  get tracer(): Tracer {
+    if (this.tracerProvider) {
+      return this.tracerProvider.getTracer(
+        this.instrumentationName,
+        this.instrumentationVersion,
+      );
+    }
+    return super.tracer;
+  }
+
+  setTracerProvider(tracerProvider: TracerProvider): void {
+    super.setTracerProvider(tracerProvider);
+    this.tracerProvider = tracerProvider;
+    this.fiTracer = new FITracer({
+      tracer: this.tracer,
+      traceConfig: this.traceConfig,
+    });
+  }
+
   private patch(
     module: CallbackManagerModule & {
       fiPatched?: boolean;
     },
     moduleVersion?: string,
   ) {
+    diag.debug(
+      `Applying patch for ${MODULE_NAME}${
+        moduleVersion != null ? `@${moduleVersion}` : ""
+      }`,
+    );
     if (module?.fiPatched || _isFIPatched) {
       return module;
     }
@@ -134,6 +174,11 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
     if (module == null) {
       return;
     }
+    diag.debug(
+      `Removing patch for ${MODULE_NAME}${
+        moduleVersion != null ? `@${moduleVersion}` : ""
+      }`,
+    );
     if (isWrapped(module.CallbackManager.configure)) {
       this._unwrap(module.CallbackManager, "configure");
     }

@@ -33,9 +33,9 @@ export function addTracerToHandlers(
   }
   const tracerAlreadyRegistered =
     handlers.inheritableHandlers.some(
-      (handler: any) => handler instanceof LangChainTracer,
+      (handler) => handler instanceof LangChainTracer,
     ) ||
-    handlers.handlers.some((handler: any) => handler instanceof LangChainTracer);
+    handlers.handlers.some((handler) => handler instanceof LangChainTracer);
   if (tracerAlreadyRegistered) {
     return handlers;
   }
