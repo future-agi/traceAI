@@ -89,9 +89,9 @@ function flattenAttributes(
 }
 
 /**
- * Gets the FISpanKind based on the langchain run type.
+ * Gets the FI span kind based on the langchain run type.
  * @param runType - The langchain run type
- * @returns The FISpanKind based on the langchain run type or "UNKNOWN".
+ * @returns The FI span kind based on the langchain run type or "UNKNOWN".
  */
 function getFISpanKindFromRunType(runType: string) {
   const normalizedRunType = runType.toUpperCase();
@@ -100,9 +100,7 @@ function getFISpanKindFromRunType(runType: string) {
   }
 
   if (normalizedRunType in FISpanKind) {
-    return FISpanKind[
-      normalizedRunType as keyof typeof FISpanKind
-    ];
+    return FISpanKind[normalizedRunType as keyof typeof FISpanKind];
   }
   return FISpanKind.CHAIN;
 }
@@ -125,12 +123,12 @@ function formatIO({
   let mimeTypeAttribute: string;
   switch (ioType) {
     case "input": {
-      valueAttribute = SemanticConventions.RAW_INPUT;
+      valueAttribute = SemanticConventions.INPUT_VALUE;
       mimeTypeAttribute = SemanticConventions.INPUT_MIME_TYPE;
       break;
     }
     case "output": {
-      valueAttribute = SemanticConventions.RAW_OUTPUT;
+      valueAttribute = SemanticConventions.OUTPUT_VALUE;
       mimeTypeAttribute = SemanticConventions.OUTPUT_MIME_TYPE;
       break;
     }
@@ -409,7 +407,7 @@ function formatRetrievalDocuments(run: Run) {
   return {
     [RETRIEVAL_DOCUMENTS]: run.outputs.documents
       .map(parseRetrievalDocument)
-      .filter((doc: any) => doc != null),
+      .filter((doc) => doc != null),
   };
 }
 
@@ -435,6 +433,21 @@ function formatLLMParams(
   } else if (isString(runExtra.invocation_params.model)) {
     fiParams[SemanticConventions.LLM_MODEL_NAME] =
       runExtra.invocation_params.model;
+  }
+
+  // add tool json schema if present in the invocation params
+  const tools = runExtra.invocation_params.tools;
+  if (Array.isArray(tools)) {
+      tools.forEach((tool, index) => {
+        const toolJsonSchema = safelyJSONStringify(tool);
+        if (toolJsonSchema) {
+          const key: `${typeof SemanticConventions.LLM_TOOLS}.${number}.${
+            typeof SemanticConventions.TOOL_JSON_SCHEMA}` = `${
+            SemanticConventions.LLM_TOOLS
+          }.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`;
+          fiParams[key] = toolJsonSchema;
+        }
+      });
   }
   return fiParams;
 }
@@ -684,7 +697,7 @@ function formatMetadata(run: Run) {
 }
 
 /**
- * Formats the session id of a langchain run into fi attributes.
+ * Formats the session id of a langchain run into FI attributes.
  *
  * @see https://docs.smith.langchain.com/observability/how_to_guides/monitoring/threads#group-traces-into-threads
  *
