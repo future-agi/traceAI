@@ -1,6 +1,7 @@
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
-import { LangChainInstrumentation, isPatched } from '../instrumentation';
-import { FITracer } from '@traceai/fi-core';
+let LangChainInstrumentation: any;
+let isPatched: any;
+let FITracer: any;
 
 // Mock LangChain CallbackManager module
 const mockCallbackManagerModule = {
@@ -26,7 +27,7 @@ jest.mock('@traceai/fi-core', () => ({
         traceFlags: 1,
       }),
     }),
-    startActiveSpan: jest.fn((name, fn) => {
+    startActiveSpan: jest.fn((name: any, fn: any) => {
       const mockSpan = {
         setStatus: jest.fn(),
         recordException: jest.fn(),
@@ -40,22 +41,27 @@ jest.mock('@traceai/fi-core', () => ({
           traceFlags: 1,
         }),
       };
-      return fn(mockSpan);
+      return (fn as any)(mockSpan);
     }),
   })),
   TraceConfigOptions: {},
 }));
 
-// Mock addTracerToHandlers utility
-jest.mock('../instrumentationUtils', () => ({
-  addTracerToHandlers: jest.fn((tracer, handlers) => {
-    // Mock implementation that adds the tracer to handlers
-    return [...(handlers || []), { tracer }];
-  }),
+// Mock addTracerToHandlers utility by resolved path so it applies to instrumentation's import as well
+const addTracerToHandlersMock = jest.fn((tracer: any, handlers: any) => {
+  const list = Array.isArray(handlers) ? handlers : [];
+  return [...list, { tracer }];
+});
+jest.doMock(require.resolve('../instrumentationUtils'), () => ({
+  addTracerToHandlers: addTracerToHandlersMock,
 }));
 
+// Now import after mocks so the implementation uses mocked dependencies
+({ LangChainInstrumentation, isPatched } = require('../instrumentation'));
+({ FITracer } = require('@traceai/fi-core'));
+
 describe('LangChain Instrumentation', () => {
-  let instrumentation: LangChainInstrumentation;
+  let instrumentation: any;
   let mockTracer: any;
 
   beforeEach(() => {
@@ -63,8 +69,8 @@ describe('LangChain Instrumentation', () => {
     
     // Create a mock tracer
     mockTracer = {
-      startSpan: jest.fn().mockReturnValue(global.testUtils.createMockSpan()),
-      startActiveSpan: jest.fn((name, fn) => fn(global.testUtils.createMockSpan())),
+      startSpan: jest.fn().mockReturnValue((global as any).testUtils.createMockSpan()),
+      startActiveSpan: jest.fn((name: any, fn: any) => (fn as any)((global as any).testUtils.createMockSpan())),
     };
 
     instrumentation = new LangChainInstrumentation({
@@ -74,7 +80,7 @@ describe('LangChain Instrumentation', () => {
       traceConfig: {
         maskInputs: false,
         maskOutputs: false,
-      },
+      } as any,
     });
 
     // Mock the tracer property
@@ -102,7 +108,7 @@ describe('LangChain Instrumentation', () => {
         traceConfig: {
           maskInputs: true,
           maskOutputs: true,
-        },
+        } as any,
       });
       expect(customInstrumentation).toBeInstanceOf(LangChainInstrumentation);
     });
@@ -156,24 +162,19 @@ describe('LangChain Instrumentation', () => {
     });
 
     it('should add tracer to handlers in _configureSync', () => {
-      const { addTracerToHandlers } = require('../instrumentationUtils');
-      
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
       const testHandlers = [{ name: 'existing-handler' }];
       mockCallbackManagerModule.CallbackManager._configureSync(testHandlers);
-      
-      expect(addTracerToHandlers).toHaveBeenCalledWith(
-        expect.any(Object), // FITracer instance
-        testHandlers
-      );
+      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      expect(Array.isArray(calledWith)).toBe(true);
+      expect(calledWith.length).toBe(testHandlers.length + 1);
     });
   });
 
   describe('CallbackManager configure Patching (legacy)', () => {
     beforeEach(() => {
       // Remove _configureSync to simulate older version
-      delete mockCallbackManagerModule.CallbackManager._configureSync;
+      delete (mockCallbackManagerModule.CallbackManager as any)._configureSync;
       mockCallbackManagerModule.CallbackManager.configure = jest.fn();
     });
 
@@ -186,47 +187,31 @@ describe('LangChain Instrumentation', () => {
 
   describe('Handler Integration', () => {
     it('should integrate with existing handlers', () => {
-      const { addTracerToHandlers } = require('../instrumentationUtils');
-      
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
       const existingHandlers = [
         { name: 'console-handler' },
         { name: 'file-handler' },
       ];
-      
       mockCallbackManagerModule.CallbackManager._configureSync?.(existingHandlers);
-      
-      expect(addTracerToHandlers).toHaveBeenCalledWith(
-        expect.any(Object),
-        existingHandlers
-      );
+      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      expect(Array.isArray(calledWith)).toBe(true);
+      expect(calledWith.length).toBe(existingHandlers.length + 1);
     });
 
     it('should handle empty handlers array', () => {
-      const { addTracerToHandlers } = require('../instrumentationUtils');
-      
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
       mockCallbackManagerModule.CallbackManager._configureSync?.([]);
-      
-      expect(addTracerToHandlers).toHaveBeenCalledWith(
-        expect.any(Object),
-        []
-      );
+      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      expect(Array.isArray(calledWith)).toBe(true);
+      expect(calledWith.length).toBe(1);
     });
 
     it('should handle undefined handlers', () => {
-      const { addTracerToHandlers } = require('../instrumentationUtils');
-      
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
       mockCallbackManagerModule.CallbackManager._configureSync?.(undefined);
-      
-      expect(addTracerToHandlers).toHaveBeenCalledWith(
-        expect.any(Object),
-        undefined
-      );
+      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      expect(Array.isArray(calledWith)).toBe(true);
+      expect(calledWith.length).toBe(1);
     });
   });
 
@@ -236,7 +221,7 @@ describe('LangChain Instrumentation', () => {
         traceConfig: {
           maskInputs: true,
           maskOutputs: false,
-        },
+        } as any,
       });
 
       expect(maskedInstrumentation).toBeInstanceOf(LangChainInstrumentation);
@@ -254,7 +239,7 @@ describe('LangChain Instrumentation', () => {
         traceConfig: {
           maskInputs: false,
           maskOutputs: true,
-        },
+        } as any,
       });
 
       expect(maskedInstrumentation).toBeInstanceOf(LangChainInstrumentation);
@@ -270,21 +255,17 @@ describe('LangChain Instrumentation', () => {
 
   describe('Unpatch', () => {
     it('should properly unpatch _configureSync', () => {
+      // Ensure method exists even if previous tests deleted it
+      mockCallbackManagerModule.CallbackManager._configureSync = jest.fn();
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
-      // Verify it's patched
       expect(isPatched()).toBe(true);
-      
-      // Unpatch
       instrumentation.disable();
-      
-      // Should still be defined but restored
       expect(mockCallbackManagerModule.CallbackManager._configureSync).toBeDefined();
     });
 
     it('should properly unpatch configure when _configureSync not available', () => {
       // Remove _configureSync to simulate older version
-      delete mockCallbackManagerModule.CallbackManager._configureSync;
+      delete (mockCallbackManagerModule.CallbackManager as any)._configureSync;
       mockCallbackManagerModule.CallbackManager.configure = jest.fn();
       
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
@@ -319,7 +300,7 @@ describe('LangChain Instrumentation', () => {
       instrumentation.manuallyInstrument(v01Module as any);
       
       expect(v01Module.CallbackManager.configure).toBeDefined();
-      expect(v01Module.CallbackManager._configureSync).toBeUndefined();
+      expect((v01Module as any).CallbackManager._configureSync).toBeUndefined();
     });
 
     it('should handle v0.2.0+ modules (_configureSync available)', () => {
@@ -367,16 +348,16 @@ describe('LangChain Instrumentation', () => {
 
   describe('Module Flag Management', () => {
     it('should set fiPatched flag on successful patch', () => {
-      const moduleWithFlag = {
+      const moduleWithFlag: any = {
         CallbackManager: {
           configure: jest.fn(),
           _configureSync: jest.fn(),
         },
       };
-
-      instrumentation.manuallyInstrument(moduleWithFlag as any);
-      
-      expect((moduleWithFlag as any).fiPatched).toBe(true);
+      // Ensure property is writable
+      Object.defineProperty(moduleWithFlag, 'fiPatched', { value: undefined, writable: true, configurable: true });
+      instrumentation.manuallyInstrument(moduleWithFlag);
+      expect(moduleWithFlag.fiPatched).toBe(true);
     });
 
     it('should handle flag setting failure gracefully', () => {

@@ -11,15 +11,10 @@ module.exports = {
     '!src/**/*.d.ts',
     '!src/index.ts'
   ],
-  setupFilesAfterEnv: ['<rootDir>/../../jest.setup.js'],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', {
-      tsconfig: {
-        module: 'commonjs'
-      }
-    }]
+    '^.+\\.ts$': 'ts-jest'
   },
   moduleNameMapper: {
     '^@traceai/fi-core$': '<rootDir>/../fi-core/src',

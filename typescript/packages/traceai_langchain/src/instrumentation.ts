@@ -33,7 +33,7 @@ type CallbackManagerModule = typeof CallbackManagerModuleV02;
  * @param instrumentationConfig The config for the instrumentation @see {@link InstrumentationConfig}
  * @param traceConfig The FI trace configuration. Can be used to mask or redact sensitive information on spans. @see {@link TraceConfigOptions}
  */
-export class LangChainInstrumentation extends InstrumentationBase<CallbackManagerModule> {
+export class LangChainInstrumentation extends InstrumentationBase {
   private fiTracer: FITracer;
   private tracerProvider?: TracerProvider;
   private traceConfig?: TraceConfigOptions;
@@ -80,9 +80,9 @@ export class LangChainInstrumentation extends InstrumentationBase<CallbackManage
     this.patch(module);
   }
 
-  protected init(): InstrumentationModuleDefinition<CallbackManagerModule> {
+  protected init(): InstrumentationModuleDefinition {
     const module =
-      new InstrumentationNodeModuleDefinition<CallbackManagerModule>(
+      new InstrumentationNodeModuleDefinition(
         "@langchain/core/dist/callbacks/manager.cjs",
         ["^0.1.0", "^0.2.0"],
         this.patch.bind(this),
