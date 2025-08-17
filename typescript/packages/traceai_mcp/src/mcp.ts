@@ -63,7 +63,7 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     instrumentationConfig?: InstrumentationConfig;
   } = {}) {
     super(
-      "@arizeai/openinference-instrumentation-mcp",
+      "@traceai/mcp",
       VERSION,
       instrumentationConfig,
     );
@@ -291,13 +291,13 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   }
 
   private _patchTransport<M, U extends Transport>(
-    module: M & { openInferencePatched?: boolean },
+    module: M & { fiPatched?: boolean },
     moduleName: keyof typeof patchedModules,
     moduleVersion: string | undefined,
     transportClass: { prototype: U },
   ) {
     diag.debug(`Applying patch for ${moduleName}@${moduleVersion}`);
-    if (module?.openInferencePatched || patchedModules[moduleName]) {
+    if (module?.fiPatched || patchedModules[moduleName]) {
       return module;
     }
 
@@ -312,7 +312,7 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     patchedModules[moduleName] = true;
     try {
       // This can fail if the module is made immutable via the runtime or bundler
-      module.openInferencePatched = true;
+      module.fiPatched = true;
     } catch (e) {
       diag.debug(`Failed to set ${moduleName} patched flag on the module`, e);
     }
@@ -321,7 +321,7 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
   }
 
   private _unpatchTransport<M, U extends Transport>(
-    module: M & { openInferencePatched?: boolean },
+    module: M & { fiPatched?: boolean },
     moduleName: keyof typeof patchedModules,
     transportClass: { prototype: U },
   ) {
@@ -331,7 +331,7 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     patchedModules[moduleName] = false;
     try {
       // This can fail if the module is made immutable via the runtime or bundler
-      module.openInferencePatched = false;
+      module.fiPatched = false;
     } catch (e) {
       diag.warn(`Failed to unset ${moduleName} patched flag on the module`, e);
     }
