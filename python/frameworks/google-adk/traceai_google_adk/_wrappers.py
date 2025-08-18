@@ -1,3 +1,4 @@
+import base64
 import inspect
 import json
 import logging
@@ -25,7 +26,6 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.telemetry import _build_llm_request_for_trace
 from google.adk.tools import BaseTool
 from google.genai import types
-from google.genai.types import MediaModality
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
@@ -357,7 +357,10 @@ def stop_on_exception(
 def _get_attributes_from_generate_content_config(
     obj: types.GenerateContentConfig,
 ) -> Iterator[tuple[str, AttributeValue]]:
-    yield SpanAttributes.LLM_INVOCATION_PARAMETERS, obj.model_dump_json(exclude_none=True)
+    yield (
+        SpanAttributes.LLM_INVOCATION_PARAMETERS,
+        obj.model_dump_json(exclude_none=True, fallback=_default),
+    )
 
 
 @stop_on_exception
@@ -378,22 +381,44 @@ def _get_attributes_from_llm_response(
 def _get_attributes_from_usage_metadata(
     obj: types.GenerateContentResponseUsageMetadata,
 ) -> Iterator[tuple[str, AttributeValue]]:
-    if obj.candidates_token_count:
-        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, obj.candidates_token_count
+    if total := obj.total_token_count:
+        yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total
+    if obj.prompt_tokens_details:
+        prompt_details_audio = 0
+        for modality_token_count in obj.prompt_tokens_details:
+            if (
+                modality_token_count.modality is types.MediaModality.AUDIO
+                and modality_token_count.token_count
+            ):
+                prompt_details_audio += modality_token_count.token_count
+        if prompt_details_audio:
+            yield (
+                SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO,
+                prompt_details_audio,
+            )
+    if prompt := obj.prompt_token_count:
+        yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt
     if obj.candidates_tokens_details:
         completion_details_audio = 0
         for modality_token_count in obj.candidates_tokens_details:
             if (
-                modality_token_count.modality is MediaModality.AUDIO
+                modality_token_count.modality is types.MediaModality.AUDIO
                 and modality_token_count.token_count
             ):
                 completion_details_audio += modality_token_count.token_count
         if completion_details_audio:
-            yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO, completion_details_audio
-    if obj.prompt_token_count:
-        yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, obj.prompt_token_count
-    if obj.total_token_count:
-        yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, obj.total_token_count
+            yield (
+                SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO,
+                completion_details_audio,
+            )
+    completion = 0
+    if candidates := obj.candidates_token_count:
+        completion += candidates
+    if thoughts := obj.thoughts_token_count:
+        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, thoughts
+        completion += thoughts
+    if completion:
+        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion
 
 
 @stop_on_exception
@@ -509,14 +534,13 @@ def bind_args_kwargs(func: Any, *args: Any, **kwargs: Any) -> OrderedDict[str, A
     return bound.arguments
 
 
-def _default(obj: Any) -> str:
+def _default(obj: Any) -> Any:
     from pydantic import BaseModel
 
     if isinstance(obj, BaseModel):
-        return json.dumps(
-            obj.model_dump(exclude=None),
-            ensure_ascii=False,
-            default=str,
-        )
-    else:
-        return str(obj)
+        return obj.model_dump(exclude_none=True)
+    if inspect.isclass(obj) and issubclass(obj, BaseModel):
+        return obj.model_json_schema()
+    if isinstance(obj, bytes):
+        return base64.b64encode(obj).decode()
+    return str(obj)
