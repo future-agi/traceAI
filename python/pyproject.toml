@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fi-instrumentation-otel"
-version = "0.1.13"
+version = "0.1.14"
 description = "OpenTelemetry instrumentation"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -19,7 +19,7 @@ opentelemetry-api = "^1.29.0"
 opentelemetry-sdk = "^1.29.0"
 opentelemetry-exporter-otlp-proto-http = "^1.29.0"
 opentelemetry-instrumentation = "*"
-requests = "2.32.3"
+requests = "^2.32.3"
 typing-extensions = "^4.9.0"
 pydantic = "^2.9.2"
 wrapt = "^1.15.0"
