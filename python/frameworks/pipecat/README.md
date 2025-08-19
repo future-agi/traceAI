@@ -8,11 +8,11 @@ This integration provides support for using OpenTelemetry with Pipecat applicati
 1. **Install traceAI Pipecat**
 
 ```bash
-pip install traceai-pipecat
+pip install traceAI-pipecat
 ```
 
 ### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI
+Set up your environment variables to authenticate with FutureAGI and Pipecat.
 
 ```python
 import os
@@ -22,8 +22,6 @@ os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
 ```
 
 ## Quickstart
-
-### Method 1: Using Integration Functions (Recommended)
 
 This method automatically updates your existing span exporters to include Pipecat attribute mapping.
 
@@ -36,7 +34,6 @@ from fi_instrumentation.otel import register, Transport, ProjectType
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
     project_name="Pipecat Voice App",
-    transport=Transport.HTTP,  # or Transport.GRPC
     set_global_tracer_provider=True,
 )
 ```
@@ -45,35 +42,19 @@ trace_provider = register(
 Install attribute mapping to convert Pipecat attributes to Future AGI conventions:
 
 ```python
-from traceai_pipecat import install_http_attribute_mapping
+from traceai_pipecat import enable_http_attribute_mapping
 
 # For HTTP transport
-success = install_http_attribute_mapping()
+success = enable_http_attribute_mapping()
 
 # For gRPC transport
-from traceai_pipecat import install_grpc_attribute_mapping
-success = install_grpc_attribute_mapping()
+from traceai_pipecat import enable_grpc_attribute_mapping
+success = enable_grpc_attribute_mapping()
 
 # Or specify transport explicitly via enum
-from traceai_pipecat import install_fi_attribute_mapping
+from traceai_pipecat import enable_fi_attribute_mapping
 from fi_instrumentation.otel import Transport
-success = install_fi_attribute_mapping(transport=Transport.HTTP)  # or Transport.GRPC
-```
-
-### Method 2: Using Standalone Exporters
-
-This method creates new exporters without modifying existing ones, giving you more control.
-
-```python
-from traceai_pipecat import create_mapped_http_exporter, create_mapped_grpc_exporter
-
-# Create mapped exporters
-http_exporter = create_mapped_http_exporter()
-grpc_exporter = create_mapped_grpc_exporter()
-
-# Use these exporters with your own span processors
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-span_processor = SimpleSpanProcessor(http_exporter)
+success = enable_fi_attribute_mapping(transport=Transport.HTTP)  # or Transport.GRPC
 ```
 
 ## Features
@@ -105,7 +86,7 @@ Automatically determines the appropriate `fi.span.kind` based on span attributes
 
 ```python
 from fi_instrumentation.otel import register, Transport, ProjectType
-from traceai_pipecat import install_http_attribute_mapping
+from traceai_pipecat import enable_http_attribute_mapping
 
 # Initialize tracer provider
 trace_provider = register(
@@ -117,7 +98,7 @@ trace_provider = register(
 
 # Install attribute mapping
 try:
-    install_http_attribute_mapping()
+    enable_http_attribute_mapping()
     print("✅ Successfully installed HTTP attribute mapping")
 except Exception as e:
     print(f"❌ Error: {e}")
@@ -129,7 +110,7 @@ except Exception as e:
 
 ```python
 from fi_instrumentation.otel import register, Transport, ProjectType
-from traceai_pipecat import install_grpc_attribute_mapping
+from traceai_pipecat import enable_grpc_attribute_mapping
 
 # Initialize tracer provider
 trace_provider = register(
@@ -141,7 +122,7 @@ trace_provider = register(
 
 # Install attribute mapping
 try:
-    install_grpc_attribute_mapping()
+    enable_grpc_attribute_mapping()
     print("✅ Successfully installed gRPC attribute mapping")
 except Exception as e:
     print(f"❌ Error: {e}")
@@ -153,7 +134,7 @@ except Exception as e:
 
 ### Integration Functions
 
-#### `install_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool`
+#### `enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool`
 Install attribute mapping by replacing existing span exporters.
 
 **Parameters:**
@@ -162,10 +143,10 @@ Install attribute mapping by replacing existing span exporters.
 **Returns:**
 - `bool`: True if at least one exporter was replaced
 
-#### `install_http_attribute_mapping() -> bool`
+#### `enable_http_attribute_mapping() -> bool`
 Convenience function for HTTP transport.
 
-#### `install_grpc_attribute_mapping() -> bool`
+#### `enable_grpc_attribute_mapping() -> bool`
 Convenience function for gRPC transport.
 
 ### Exporter Creation Functions
@@ -187,17 +168,6 @@ gRPC span exporter that maps Pipecat attributes to Future AGI conventions.
 #### `BaseMappedSpanExporter`
 Base class for mapped span exporters.
 
-## Migration from Legacy Code
-
-If you're using the legacy `install_fi_attribute_mapping` function from `utils.attribute_mapper`, you can migrate to the new API:
-
-```python
-# Old way (still supported for backward compatibility)
-from traceai_pipecat.utils.attribute_mapper import install_fi_attribute_mapping
-
-# New way (recommended)
-from traceai_pipecat import install_http_attribute_mapping
-```
 
 ## Troubleshooting
 
@@ -210,16 +180,6 @@ from traceai_pipecat import install_http_attribute_mapping
 2. **Import errors for gRPC**
    - Install gRPC dependencies: `pip install "fi-instrumentation[grpc]"`
 
-3. **Attribute mapping not working**
-   - Verify that your Pipecat spans include the expected attributes
-   - Check logs for any mapping errors
-
-### Debug Mode
-
-Enable debug logging to see detailed information about the integration:
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
+3. **Data not being sent to FutureAGI**
+   - Ensure that your you have set the `FI_API_KEY` and `FI_SECRET_KEY` environment variables
+   - Ensure that the `set_global_tracer_provider`  in the `register` function is set to `True`

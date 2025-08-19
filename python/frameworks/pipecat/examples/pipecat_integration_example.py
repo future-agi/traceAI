@@ -20,7 +20,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
-from traceai_pipecat import install_fi_attribute_mapping
+from traceai_pipecat import enable_fi_attribute_mapping
 
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
@@ -31,7 +31,7 @@ trace_provider = register(
 )
 
 try:
-    success = install_fi_attribute_mapping(transport=Transport.GRPC)
+    success = enable_fi_attribute_mapping(transport=Transport.GRPC)
     if success:
         print("✅ Successfully installed attribute mapping with auto-detection")
     else:

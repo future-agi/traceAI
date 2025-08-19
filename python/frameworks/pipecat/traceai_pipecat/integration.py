@@ -16,7 +16,7 @@ from .exporters import MappedGRPCSpanExporter, MappedHTTPSpanExporter
 logger = logging.getLogger(__name__)
 
 
-def install_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
+def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
     """
     Install the mapping exporter by swapping FI's exporter instances.
 
@@ -98,28 +98,28 @@ def install_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
     return swapped_any
 
 
-def install_http_attribute_mapping() -> bool:
+def enable_http_attribute_mapping() -> bool:
     """
     Install HTTP attribute mapping for Pipecat.
 
-    Convenience function that calls install_fi_attribute_mapping with HTTP transport.
+    Convenience function that calls enable_fi_attribute_mapping with HTTP transport.
 
     Returns:
         True if at least one exporter was swapped; False otherwise.
     """
-    return install_fi_attribute_mapping(transport=Transport.HTTP)
+    return enable_fi_attribute_mapping(transport=Transport.HTTP)
 
 
-def install_grpc_attribute_mapping() -> bool:
+def enable_grpc_attribute_mapping() -> bool:
     """
     Install gRPC attribute mapping for Pipecat.
 
-    Convenience function that calls install_fi_attribute_mapping with gRPC transport.
+    Convenience function that calls enable_fi_attribute_mapping with gRPC transport.
 
     Returns:
         True if at least one exporter was swapped; False otherwise.
     """
-    return install_fi_attribute_mapping(transport=Transport.GRPC)
+    return enable_fi_attribute_mapping(transport=Transport.GRPC)
 
 
 def create_mapped_http_exporter(
