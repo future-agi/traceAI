@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "traceAI-pipecat"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Pipecat"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "traceai_pipecat" }
+]
+
+[tool.poetry.dependencies]
+python = ">3.9,<3.14"
+fi-instrumentation-otel = ">=0.1.14"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
