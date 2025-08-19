@@ -10,6 +10,7 @@ from typing import Any, Dict
 
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
+
 def _ensure_json_string(value: Any) -> str:
     """Ensure a value is a valid JSON string."""
     try:
@@ -54,7 +55,9 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         input_val = attributes.get("input")
         mime_type = _detect_mime_type(input_val)
         mapped["input.value"] = (
-            _ensure_json_string(input_val) if mime_type == "application/json" else input_val
+            _ensure_json_string(input_val)
+            if mime_type == "application/json"
+            else input_val
         )
         mapped["input.mime_type"] = mime_type
 
@@ -81,7 +84,9 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
                 if content is not None:
                     # Content may be str or structured; serialize non-str to JSON
                     mapped[f"llm.input_messages.{index}.message.content"] = (
-                        content if isinstance(content, str) else _ensure_json_string(content)
+                        content
+                        if isinstance(content, str)
+                        else _ensure_json_string(content)
                     )
 
     # STT transcript or LLM output
@@ -105,9 +110,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     # Invocation parameters (temperature, max_tokens, etc.)
     invocation_params: Dict[str, Any] = {}
     for key, val in attributes.items():
-        if key.startswith("gen_ai.request.") and key not in (
-            "gen_ai.request.model",
-        ):
+        if key.startswith("gen_ai.request.") and key not in ("gen_ai.request.model",):
             invocation_params[key.split("gen_ai.request.", 1)[1]] = val
     if invocation_params:
         mapped["llm.invocation_parameters"] = _ensure_json_string(invocation_params)
@@ -116,13 +119,19 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     if "gen_ai.usage.input_tokens" in attributes:
         mapped["llm.token_count.prompt"] = attributes.get("gen_ai.usage.input_tokens")
     if "gen_ai.usage.output_tokens" in attributes:
-        mapped["llm.token_count.completion"] = attributes.get("gen_ai.usage.output_tokens")
+        mapped["llm.token_count.completion"] = attributes.get(
+            "gen_ai.usage.output_tokens"
+        )
     # Total tokens
     try:
         prompt_tokens = mapped.get("llm.token_count.prompt")
         completion_tokens = mapped.get("llm.token_count.completion")
-        if isinstance(prompt_tokens, (int, float)) and isinstance(completion_tokens, (int, float)):
-            mapped["llm.token_count.total"] = int(prompt_tokens) + int(completion_tokens)
+        if isinstance(prompt_tokens, (int, float)) and isinstance(
+            completion_tokens, (int, float)
+        ):
+            mapped["llm.token_count.total"] = int(prompt_tokens) + int(
+                completion_tokens
+            )
     except Exception:
         pass
 
@@ -215,15 +224,25 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     if "fi.span.kind" not in mapped:
         span_kind = None
         # Tool call/result spans
-        if any(k in attributes for k in ("tool.function_name", "tool.call_id", "tool.arguments", "tool.result")):
+        if any(
+            k in attributes
+            for k in (
+                "tool.function_name",
+                "tool.call_id",
+                "tool.arguments",
+                "tool.result",
+            )
+        ):
             span_kind = "TOOL"
         # Turn or conversation spans
-        elif any(k in attributes for k in ("turn.number", "turn.type", "conversation.type")):
+        elif any(
+            k in attributes for k in ("turn.number", "turn.type", "conversation.type")
+        ):
             span_kind = "CHAIN"
         # Setup spans (Gemini Live/OpenAI Realtime session setup)
-        elif any(k in attributes for k in ("tools.definitions", "system_instruction")) or any(
-            str(k).startswith("session.") for k in attributes.keys()
-        ):
+        elif any(
+            k in attributes for k in ("tools.definitions", "system_instruction")
+        ) or any(str(k).startswith("session.") for k in attributes.keys()):
             span_kind = "AGENT"
         else:
             # Treat gen ai operations, STT, TTS as LLM by convention
@@ -248,18 +267,21 @@ class BaseMappedSpanExporter(SpanExporter):
             return _map_attributes_to_fi_conventions(base)
         except Exception:
             return base
-        
+
     def export(self, spans) -> SpanExportResult:
         for span in spans:
             try:
-                if hasattr(span, "_attributes") and getattr(span, "_attributes") is not None:
+                if (
+                    hasattr(span, "_attributes")
+                    and getattr(span, "_attributes") is not None
+                ):
                     original_attributes = getattr(span, "_attributes")
-                    
+
                     base_attributes = dict(original_attributes)
                     mapped_attributes = self._convert_attributes(base_attributes)
-                    
+
                     setattr(span, "_attributes", mapped_attributes)
-                    
+
             except Exception:
                 continue
 

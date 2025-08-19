@@ -1,20 +1,14 @@
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv(override=True)
 
-from pipecat.pipeline.task import PipelineTask, PipelineParams
-
 from dotenv import load_dotenv
+from fi_instrumentation import Transport, register
+from fi_instrumentation.fi_types import ProjectType
 from loguru import logger
-
-print("🚀 Starting Pipecat bot...")
-print("⏳ Loading AI models (30-40 seconds first run, <2 seconds after)\n")
-
-logger.info("Loading Silero VAD model...")
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-
-logger.info("✅ Silero VAD model loaded")
-logger.info("Loading pipeline components...")
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -25,11 +19,7 @@ from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
-
-from fi_instrumentation.fi_types import ProjectType
-from fi_instrumentation import register, Transport
 from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
-from opentelemetry import trace as trace_api
 from traceai_pipecat import install_fi_attribute_mapping
 
 trace_provider = register(
@@ -47,25 +37,7 @@ try:
     else:
         print("❌ Failed to install attribute mapping with auto-detection")
 except Exception as e:
-    print(f"❌ Error installing attribute mapping: {e}")  
-
-
-
-from loguru import logger
-
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserver, RTVIProcessor
-from pipecat.runner.types import RunnerArguments
-from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.transports.base_transport import BaseTransport, TransportParams
-from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
-
+    print(f"❌ Error installing attribute mapping: {e}")
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
@@ -122,7 +94,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     async def on_client_connected(transport, client):
         logger.info(f"Client connected")
         # Kick off the conversation.
-        messages.append({"role": "system", "content": "Say hello and briefly introduce yourself."})
+        messages.append(
+            {"role": "system", "content": "Say hello and briefly introduce yourself."}
+        )
         await task.queue_frames([context_aggregator.user().get_context_frame()])
 
     @transport.event_handler("on_client_disconnected")

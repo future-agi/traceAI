@@ -8,10 +8,10 @@ by updating existing span exporters in the tracer provider.
 import logging
 from typing import Optional
 
-from opentelemetry import trace as trace_api
 from fi_instrumentation.otel import Transport
+from opentelemetry import trace as trace_api
 
-from .exporters import MappedHTTPSpanExporter, MappedGRPCSpanExporter
+from .exporters import MappedGRPCSpanExporter, MappedHTTPSpanExporter
 
 logger = logging.getLogger(__name__)
 
@@ -46,32 +46,42 @@ def install_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
 
         try:
             if transport == Transport.HTTP:
-                from fi_instrumentation.otel import HTTPSpanExporter as _FIHTTPSpanExporter
+                from fi_instrumentation.otel import (
+                    HTTPSpanExporter as _FIHTTPSpanExporter,
+                )
+
                 if isinstance(exporter, _FIHTTPSpanExporter):
                     endpoint = getattr(exporter, "_endpoint", None)
                     headers = getattr(exporter, "_headers", None)
-                    new_exporter = MappedHTTPSpanExporter(endpoint=endpoint, headers=headers)
+                    new_exporter = MappedHTTPSpanExporter(
+                        endpoint=endpoint, headers=headers
+                    )
 
                     if hasattr(proc, "_batch_processor"):
                         setattr(proc._batch_processor, "_exporter", new_exporter)
                     else:
                         setattr(proc, "span_exporter", new_exporter)
-                    
+
                     swapped_any = True
                     logger.info("Replaced HTTP exporter with mapped HTTP exporter")
 
             elif transport == Transport.GRPC:
-                from fi_instrumentation.otel import GRPCSpanExporter as _FIGRPCSpanExporter
+                from fi_instrumentation.otel import (
+                    GRPCSpanExporter as _FIGRPCSpanExporter,
+                )
+
                 if isinstance(exporter, _FIGRPCSpanExporter):
                     endpoint = getattr(exporter, "_endpoint", None)
                     headers = getattr(exporter, "_headers", None)
-                    new_exporter = MappedGRPCSpanExporter(endpoint=endpoint, headers=headers)
-                    
+                    new_exporter = MappedGRPCSpanExporter(
+                        endpoint=endpoint, headers=headers
+                    )
+
                     if hasattr(proc, "_batch_processor"):
                         setattr(proc._batch_processor, "_exporter", new_exporter)
                     else:
                         setattr(proc, "span_exporter", new_exporter)
-                    
+
                     swapped_any = True
                     logger.info("Replaced gRPC exporter with mapped gRPC exporter")
 
@@ -112,7 +122,9 @@ def install_grpc_attribute_mapping() -> bool:
     return install_fi_attribute_mapping(transport=Transport.GRPC)
 
 
-def create_mapped_http_exporter(endpoint: Optional[str] = None, headers: Optional[dict] = None):
+def create_mapped_http_exporter(
+    endpoint: Optional[str] = None, headers: Optional[dict] = None
+):
     """
     Create a mapped HTTP exporter for Pipecat.
 
@@ -130,7 +142,9 @@ def create_mapped_http_exporter(endpoint: Optional[str] = None, headers: Optiona
     return MappedHTTPSpanExporter(endpoint=endpoint, headers=headers)
 
 
-def create_mapped_grpc_exporter(endpoint: Optional[str] = None, headers: Optional[dict] = None):
+def create_mapped_grpc_exporter(
+    endpoint: Optional[str] = None, headers: Optional[dict] = None
+):
     """
     Create a mapped gRPC exporter for Pipecat.
 

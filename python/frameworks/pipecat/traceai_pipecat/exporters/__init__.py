@@ -5,12 +5,12 @@ This module provides HTTP and gRPC exporters that can be used independently
 for Pipecat applications.
 """
 
-from .http_exporter import MappedHTTPSpanExporter
-from .grpc_exporter import MappedGRPCSpanExporter
 from .base_exporter import BaseMappedSpanExporter
+from .grpc_exporter import MappedGRPCSpanExporter
+from .http_exporter import MappedHTTPSpanExporter
 
 __all__ = [
     "MappedHTTPSpanExporter",
-    "MappedGRPCSpanExporter", 
+    "MappedGRPCSpanExporter",
     "BaseMappedSpanExporter",
 ]
