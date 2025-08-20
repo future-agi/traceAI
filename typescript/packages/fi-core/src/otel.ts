@@ -354,7 +354,7 @@ class FITracerProvider extends BasicTracerProvider {
     const idGenerator = config.idGenerator ?? new UuidIdGenerator();
     const transport = config.transport ?? Transport.HTTP;
     
-    const verbose = config.verbose ?? getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true" ?? false;
+    const verbose = config.verbose ?? (getEnv("FI_VERBOSE_PROVIDER")?.toLowerCase() === "true");
     
     // Construct the appropriate endpoint based on transport
     let endpoint: string;

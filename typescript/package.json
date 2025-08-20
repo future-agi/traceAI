@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pnpm run build:ordered",
     "build:deps": "pnpm --filter @traceai/fi-core --filter @traceai/fi-semantic-conventions run build",
-    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain run build",
+    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain --filter @traceai/bedrock --filter @traceai/vercel run build",
     "build:ordered": "pnpm run build:deps && pnpm run build:consumers",
     "test": "pnpm run -r test",
     "test:coverage": "pnpm run -r test:coverage",
@@ -35,6 +35,8 @@
     "@traceai/openai": "workspace:*",
     "@traceai/anthropic": "workspace:*",
     "@traceai/langchain": "workspace:*",
+    "@traceai/bedrock": "workspace:*",
+    "@traceai/vercel": "workspace:*",
     "uuid": "^11.1.0"
   }
 }
