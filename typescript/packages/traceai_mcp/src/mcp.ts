@@ -16,7 +16,6 @@ import type * as ServerStdioModule from "@modelcontextprotocol/sdk/server/stdio"
 import type * as ServerStreamableHTTPModule from "@modelcontextprotocol/sdk/server/streamableHttp";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport";
 
-import { VERSION } from "./version";
 
 const CLIENT_SSE_MODULE_NAME = "@modelcontextprotocol/sdk/client/sse";
 const SERVER_SSE_MODULE_NAME = "@modelcontextprotocol/sdk/server/sse";
@@ -26,6 +25,8 @@ const CLIENT_STREAMABLE_HTTP_MODULE_NAME =
   "@modelcontextprotocol/sdk/client/streamableHttp";
 const SERVER_STREAMABLE_HTTP_MODULE_NAME =
   "@modelcontextprotocol/sdk/server/streamableHttp";
+
+const VERSION = "0.1.0";
 
 /**
  * Flags to check if a module has already been patched.
@@ -65,7 +66,7 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     super(
       "@traceai/mcp",
       VERSION,
-      instrumentationConfig,
+      instrumentationConfig ?? {},
     );
   }
 

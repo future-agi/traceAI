@@ -37,8 +37,9 @@
   },
   "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_mastra#readme",
   "dependencies": {
-    "@traceai/fi-core": "^0.1.15",
-    "@traceai/fi-semantic-conventions": "^0.1.9"
+    "@traceai/fi-core": "^0.1.16",
+    "@traceai/fi-semantic-conventions": "^0.1.10",
+    "@traceai/vercel": "^0.1.0"
   },
   "devDependencies": {
     "vitest": "^3.1.3"
