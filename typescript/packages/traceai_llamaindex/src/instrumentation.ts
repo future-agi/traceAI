@@ -24,7 +24,6 @@ import {
 import { LlamaIndexInstrumentationConfig } from "./types";
 import { chatWrapper, genericWrapper } from "./wrapper";
 import {
-  shouldSendPrompts,
   isLLM,
   isEmbedding,
   isSynthesizer,
@@ -32,10 +31,7 @@ import {
 } from "./utils";
 
 import {
-  SemanticConventions,
-  LLMSystem,
   FISpanKind,
-  LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
 

@@ -1,9 +1,5 @@
-import * as lodash from "lodash";
 import type * as llamaindex from "llamaindex";
-import { trace, context, Tracer, SpanStatusCode } from "@opentelemetry/api";
-import { LlamaIndexInstrumentationConfig } from "./types";
-import { safeExecuteInTheMiddle } from "@opentelemetry/instrumentation";
-import { Context } from "@opentelemetry/api";
+import { context, Context } from "@opentelemetry/api";
 
 import {
   BaseEmbedding,

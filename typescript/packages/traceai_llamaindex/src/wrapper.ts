@@ -1,4 +1,3 @@
-import * as lodash from "lodash";
 import type * as llamaindex from "llamaindex";
 
 import {
@@ -103,12 +102,13 @@ export function chatWrapper({ className }: { className: string },
         const streaming = params?.stream;
 
         const span = tracer()
-          .startSpan(`llamaindex.${lodash.snakeCase(className)}.chat`, {
+          .startSpan(`llamaindex.${className}.chat`, {
             kind: SpanKind.CLIENT,
           });
 
         try {
           span.setAttribute(SemanticConventions.LLM_SYSTEM, className);
+
           span.setAttribute(
             SemanticConventions.LLM_MODEL_NAME,
             this.metadata.model,
@@ -196,7 +196,7 @@ export function genericWrapper(
         const params = args[0];
         const streaming = params && (params as any).stream;
   
-        const name = `${lodash.snakeCase(className)}.${lodash.snakeCase(methodName)}`;
+        const name = `${className}.${methodName}`;
         const span = tracer().startSpan(`${name}`, {}, context.active());
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind);
   
