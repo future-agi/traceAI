@@ -1,5 +1,5 @@
 /*
- * Copyright Traceloop
+ * Copyright Future AGI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ export class LlamaIndexInstrumentation extends InstrumentationBase {
   declare protected _config: LlamaIndexInstrumentationConfig;
 
   constructor(config: LlamaIndexInstrumentationConfig = {}) {
-    super("@traceai/instrumentation-llamaindex", VERSION, config);
+    super("@traceai/llamaindex", VERSION, config);
   }
 
   public override setConfig(config: LlamaIndexInstrumentationConfig = {}) {
@@ -140,7 +140,7 @@ export class LlamaIndexInstrumentation extends InstrumentationBase {
           genericWrapper(
             cls.name,
             "retrieve",
-            FISpanKind.CHAIN,
+            FISpanKind.RETRIEVER,
             () => this.tracer,
           ),
         );
