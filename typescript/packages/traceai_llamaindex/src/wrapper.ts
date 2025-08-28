@@ -4,7 +4,6 @@ import {
   Tracer,
   Span,
   Context,
-  SpanKind,
   SpanStatusCode,
   trace,
   context,
@@ -102,9 +101,9 @@ export function chatWrapper({ className }: { className: string },
         const streaming = params?.stream;
 
         const span = tracer()
-          .startSpan(`llamaindex.${className}.chat`, {
-            kind: SpanKind.CLIENT,
-          });
+          .startSpan(`llamaindex.${className}.chat`);
+
+        span.setAttribute(SemanticConventions.FI_SPAN_KIND, FISpanKind.LLM);
 
         try {
           span.setAttribute(SemanticConventions.LLM_SYSTEM, className);
