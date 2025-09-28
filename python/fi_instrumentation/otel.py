@@ -76,7 +76,7 @@ def register(
     project_version_name: Optional[str] = None,
     eval_tags: Optional[List[EvalTag]] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    batch: bool = False,
+    batch: bool = True,
     set_global_tracer_provider: bool = False,
     headers: Optional[Dict[str, str]] = None,
     verbose: bool = True,
