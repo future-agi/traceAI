@@ -20,16 +20,13 @@ In a python file, set up the `GoogleADKInstrumentor` and configure the tracer to
 ```python
 import asyncio
 
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
 from google.adk.agents import Agent
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from traceai_google_adk import GoogleADKInstrumentor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
-from fi_instrumentation import register
-from fi_instrumentation.fi_types import ProjectType
 
 tracer_provider = register(
     project_name="test_project",
@@ -37,8 +34,8 @@ tracer_provider = register(
 )
 
 
-
 GoogleADKInstrumentor().instrument(tracer_provider=tracer_provider)
+
 
 def get_weather(city: str) -> dict:
     """Retrieves the current weather report for a specified city.
@@ -63,13 +60,15 @@ def get_weather(city: str) -> dict:
             "error_message": f"Weather information for '{city}' is not available.",
         }
 
+
 agent = Agent(
-   name="test_agent",
-   model="gemini-2.5-flash-preview-05-20",
-   description="Agent to answer questions using tools.",
-   instruction="You must use the available tools to find an answer.",
-   tools=[get_weather]
+    name="test_agent",
+    model="gemini-2.5-flash-preview-05-20",
+    description="Agent to answer questions using tools.",
+    instruction="You must use the available tools to find an answer.",
+    tools=[get_weather],
 )
+
 
 async def main():
     app_name = "test_instrumentation"
@@ -78,22 +77,22 @@ async def main():
     runner = InMemoryRunner(agent=agent, app_name=app_name)
     session_service = runner.session_service
     await session_service.create_session(
-        app_name=app_name,
-        user_id=user_id,
-        session_id=session_id
+        app_name=app_name, user_id=user_id, session_id=session_id
     )
     async for event in runner.run_async(
         user_id=user_id,
         session_id=session_id,
-        new_message=types.Content(role="user", parts=[
-            types.Part(text="What is the weather in New York?")]
-        )
+        new_message=types.Content(
+            role="user", parts=[types.Part(text="What is the weather in New York?")]
+        ),
     ):
         if event.is_final_response():
             print(event.content.parts[0].text.strip())
 
+
 if __name__ == "__main__":
     asyncio.run(main())
+
 ```
 
 Since we are using Gemini, we must set the `GOOGLE_API_KEY` environment variable to authenticate with the Gemini API.
