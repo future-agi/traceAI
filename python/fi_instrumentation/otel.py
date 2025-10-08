@@ -59,7 +59,6 @@ PROJECT_VERSION_NAME = "project_version_name"
 PROJECT_VERSION_ID = "project_version_id"
 EVAL_TAGS = "eval_tags"
 METADATA = "metadata"
-SESSION_NAME = "session_name"
 
 CONTENT_TYPE = "Content-Type"
 AUTHORIZATION = "authorization"
@@ -76,9 +75,8 @@ def register(
     project_type: Optional[ProjectType] = ProjectType.EXPERIMENT,
     project_version_name: Optional[str] = None,
     eval_tags: Optional[List[EvalTag]] = None,
-    session_name: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    batch: bool = False,
+    batch: bool = True,
     set_global_tracer_provider: bool = False,
     headers: Optional[Dict[str, str]] = None,
     verbose: bool = True,
@@ -100,12 +98,6 @@ def register(
         if project_version_name:
             raise ValidationError(
                 "Project Version Name not allowed for project type OBSERVE"
-            )
-
-    if project_type == ProjectType.EXPERIMENT:
-        if session_name:
-            raise ValidationError(
-                "Session name is not allowed for project type EXPERIMENT"
             )
 
     project_name = project_name or get_env_project_name()
@@ -137,9 +129,6 @@ def register(
         EVAL_TAGS: json.dumps(eval_tags),
         METADATA: json.dumps(metadata),
     }
-
-    if project_type == ProjectType.OBSERVE and session_name is not None:
-        resource_attributes[SESSION_NAME] = session_name
 
     resource = Resource(attributes=resource_attributes)
 
@@ -261,7 +250,6 @@ class TracerProvider(_TracerProvider):
         project_type = self.resource.attributes.get(PROJECT_TYPE)
         project_version_name = self.resource.attributes.get(PROJECT_VERSION_NAME)
         eval_tags = self.resource.attributes.get(EVAL_TAGS)
-        session_name = self.resource.attributes.get(SESSION_NAME)
 
         processor_name: Optional[str] = None
         endpoint: Optional[str] = None
@@ -300,7 +288,6 @@ class TracerProvider(_TracerProvider):
             f"|  Transport: {transport}\n"
             f"|  Transport Headers: {headers}\n"
             f"|  Eval Tags: {eval_tags}\n"
-            f"|  Session Name: {session_name}\n"
             "|  \n"
             f"{configuration_msg if self._default_processor else ''}"
         )
