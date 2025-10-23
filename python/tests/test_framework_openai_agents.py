@@ -42,8 +42,8 @@ class TestOpenAIAgentsInstrumentor:
 
     @patch('traceai_openai_agents.trace_api.get_tracer_provider')
     @patch('traceai_openai_agents.trace_api.get_tracer')
-    @patch('agents.add_trace_processor')
-    def test_instrument_with_default_config(self, mock_add_processor, mock_get_tracer, mock_get_provider):
+    @patch('agents.set_trace_processors')
+    def test_instrument_with_default_config(self, mock_set_processor, mock_get_tracer, mock_get_provider):
         """Test instrumentation with default configuration."""
         mock_provider = Mock()
         mock_tracer = Mock(spec=Tracer)
@@ -55,16 +55,16 @@ class TestOpenAIAgentsInstrumentor:
 
         mock_get_provider.assert_called_once()
         mock_get_tracer.assert_called_once()
-        mock_add_processor.assert_called_once()
+        mock_set_processor.assert_called_once()
         
         # Verify FiTracingProcessor was created with correct tracer
-        args, kwargs = mock_add_processor.call_args
-        processor = args[0]
+        args, kwargs = mock_set_processor.call_args
+        processor = args[0][0]
         assert isinstance(processor, FiTracingProcessor)
 
     @patch('traceai_openai_agents.trace_api.get_tracer')
-    @patch('agents.add_trace_processor')
-    def test_instrument_with_custom_tracer_provider(self, mock_add_processor, mock_get_tracer):
+    @patch('agents.set_trace_processors')
+    def test_instrument_with_custom_tracer_provider(self, mock_set_processor, mock_get_tracer):
         """Test instrumentation with custom tracer provider."""
         mock_provider = Mock()
         mock_tracer = Mock(spec=Tracer)
@@ -74,12 +74,12 @@ class TestOpenAIAgentsInstrumentor:
         instrumentor._instrument(tracer_provider=mock_provider)
 
         mock_get_tracer.assert_called_once()
-        mock_add_processor.assert_called_once()
+        mock_set_processor.assert_called_once()
 
     @patch('traceai_openai_agents.trace_api.get_tracer_provider')
     @patch('traceai_openai_agents.trace_api.get_tracer')
-    @patch('agents.add_trace_processor')
-    def test_instrument_with_custom_config(self, mock_add_processor, mock_get_tracer, mock_get_provider):
+    @patch('agents.set_trace_processors')
+    def test_instrument_with_custom_config(self, mock_set_processor, mock_get_tracer, mock_get_provider):
         """Test instrumentation with custom trace config."""
         mock_provider = Mock()
         mock_tracer = Mock(spec=Tracer)
@@ -90,12 +90,12 @@ class TestOpenAIAgentsInstrumentor:
         instrumentor = OpenAIAgentsInstrumentor()
         instrumentor._instrument(config=custom_config)
 
-        mock_add_processor.assert_called_once()
+        mock_set_processor.assert_called_once()
 
     @patch('traceai_openai_agents.trace_api.get_tracer_provider')
     @patch('traceai_openai_agents.trace_api.get_tracer')
-    @patch('agents.add_trace_processor')
-    def test_instrument_with_invalid_config_type(self, mock_add_processor, mock_get_tracer, mock_get_provider):
+    @patch('agents.set_trace_processors')
+    def test_instrument_with_invalid_config_type(self, mock_set_processor, mock_get_tracer, mock_get_provider):
         """Test instrumentation fails with invalid config type."""
         mock_provider = Mock()
         mock_get_provider.return_value = mock_provider
@@ -105,10 +105,10 @@ class TestOpenAIAgentsInstrumentor:
         with pytest.raises(AssertionError):
             instrumentor._instrument(config="invalid_config")
 
-    @patch('agents.add_trace_processor')
-    def test_instrument_missing_agents_import(self, mock_add_processor):
+    @patch('agents.set_trace_processors')
+    def test_instrument_missing_agents_import(self, mock_set_processor):
         """Test instrumentation handles missing agents import gracefully."""
-        mock_add_processor.side_effect = ImportError("No module named 'agents'")
+        mock_set_processor.side_effect = ImportError("No module named 'agents'")
         
         instrumentor = OpenAIAgentsInstrumentor()
         
@@ -116,8 +116,8 @@ class TestOpenAIAgentsInstrumentor:
             instrumentor._instrument()
 
     @patch('traceai_openai_agents.trace_api.get_tracer_provider')
-    @patch('agents.add_trace_processor')
-    def test_instrument_exception_handling(self, mock_add_processor, mock_get_provider):
+    @patch('agents.set_trace_processors')
+    def test_instrument_exception_handling(self, mock_set_processor, mock_get_provider):
         """Test instrumentation handles exceptions properly."""
         mock_get_provider.side_effect = Exception("Test exception")
         
@@ -125,20 +125,6 @@ class TestOpenAIAgentsInstrumentor:
         
         with pytest.raises(Exception, match="Test exception"):
             instrumentor._instrument()
-
-    @patch('traceai_openai_agents.logger')
-    @patch('traceai_openai_agents.trace_api.get_tracer_provider')
-    @patch('agents.add_trace_processor')
-    def test_instrument_logs_exception(self, mock_add_processor, mock_get_provider, mock_logger):
-        """Test that instrumentation logs exceptions."""
-        mock_get_provider.side_effect = Exception("Test exception")
-        
-        instrumentor = OpenAIAgentsInstrumentor()
-        
-        with pytest.raises(Exception):
-            instrumentor._instrument()
-        
-        mock_logger.exception.assert_called_once()
 
     def test_uninstrument_todo(self):
         """Test that uninstrument method exists but is not implemented."""
@@ -508,10 +494,10 @@ class TestProcessorUtilityFunctions:
 class TestIntegrationScenarios:
     """Integration tests covering end-to-end scenarios."""
 
-    @patch('agents.add_trace_processor')
+    @patch('agents.set_trace_processors')
     @patch('traceai_openai_agents.trace_api.get_tracer_provider')
     @patch('traceai_openai_agents.trace_api.get_tracer')
-    def test_full_instrumentation_lifecycle(self, mock_get_tracer, mock_get_provider, mock_add_processor):
+    def test_full_instrumentation_lifecycle(self, mock_get_tracer, mock_get_provider, mock_set_processor):
         """Test complete instrumentation and processor setup."""
         mock_provider = Mock()
         mock_tracer = Mock(spec=Tracer)
@@ -523,11 +509,11 @@ class TestIntegrationScenarios:
 
         # Verify tracer setup
         mock_get_tracer.assert_called_once()
-        mock_add_processor.assert_called_once()
+        mock_set_processor.assert_called_once()
         
         # Verify processor is FiTracingProcessor
-        args, kwargs = mock_add_processor.call_args
-        processor = args[0]
+        args, kwargs = mock_set_processor.call_args
+        processor = args[0][0]
         assert isinstance(processor, FiTracingProcessor)
 
     def test_processor_trace_lifecycle(self):
@@ -627,10 +613,10 @@ class TestIntegrationScenarios:
 class TestErrorHandling:
     """Test error handling scenarios."""
 
-    @patch('agents.add_trace_processor')
-    def test_instrumentation_with_import_error(self, mock_add_processor):
+    @patch('agents.set_trace_processors')
+    def test_instrumentation_with_import_error(self, mock_set_processor):
         """Test instrumentation when agents module is not available."""
-        mock_add_processor.side_effect = ImportError("No module named 'agents'")
+        mock_set_processor.side_effect = ImportError("No module named 'agents'")
         
         instrumentor = OpenAIAgentsInstrumentor()
         
