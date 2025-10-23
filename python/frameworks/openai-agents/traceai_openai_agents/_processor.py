@@ -121,6 +121,7 @@ class FiTracingProcessor(TracingProcessor):
             attributes={
                 FI_SPAN_KIND: _get_span_kind(span.span_data),
                 LLM_SYSTEM: FiLLMSystemValues.OPENAI.value,
+                RAW_INPUT: safe_json_dumps(_to_dict(span.span_data)),
             },
         )
         self._otel_spans[span.span_id] = otel_span
@@ -143,10 +144,12 @@ class FiTracingProcessor(TracingProcessor):
         if isinstance(data, ResponseSpanData):
             if hasattr(data, "response") and isinstance(response := data.response, Response):
                 otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+                otel_span.set_attribute(RAW_OUTPUT, response.model_dump_json())
                 otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
                 for k, v in _get_attributes_from_response(response):
                     otel_span.set_attribute(k, v)
             if hasattr(data, "input") and (input := data.input):
+                otel_span.set_attribute(RAW_INPUT, safe_json_dumps(input))
                 if isinstance(input, str):
                     otel_span.set_attribute(INPUT_VALUE, input)
                 elif isinstance(input, list):
@@ -157,6 +160,8 @@ class FiTracingProcessor(TracingProcessor):
                 elif TYPE_CHECKING:
                     assert_never(input)
         elif isinstance(data, GenerationSpanData):
+            otel_span.set_attribute(RAW_INPUT, safe_json_dumps(data.input))
+            otel_span.set_attribute(RAW_OUTPUT, safe_json_dumps(data.output))
             for k, v in _get_attributes_from_generation_span_data(data):
                 otel_span.set_attribute(k, v)
         elif isinstance(data, FunctionSpanData):
@@ -714,6 +719,20 @@ def _flatten(
             yield f"{prefix}{key}", str(value)
 
 
+def _to_dict(result: Any) -> Any:
+    if not result:
+        return
+    if hasattr(result, "to_dict"):
+        return result.to_dict()
+    elif hasattr(result, "__dict__"):
+        return result.__dict__
+    elif isinstance(result, list):
+        return [_to_dict(item) for item in result]
+    elif isinstance(result, dict):
+        return {key: _to_dict(value) for key, value in result.items()}
+    else:
+        return result
+        
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
