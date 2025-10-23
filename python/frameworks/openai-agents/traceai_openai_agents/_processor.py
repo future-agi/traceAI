@@ -72,6 +72,8 @@ class FiTracingProcessor(TracingProcessor):
         self._root_spans: dict[str, OtelSpan] = {}
         self._otel_spans: dict[str, OtelSpan] = {}
         self._tokens: dict[str, object] = {}
+        self._trace_inputs: dict[str, Any] = {}
+        self._trace_outputs: dict[str, Any] = {}
         self._reverse_handoffs_dict: OrderedDict[str, str] = OrderedDict()
 
     def on_trace_start(self, trace: Trace) -> None:
@@ -95,6 +97,21 @@ class FiTracingProcessor(TracingProcessor):
             trace: The trace that started.
         """
         if root_span := self._root_spans.pop(trace.trace_id, None):
+            if initial_input := self._trace_inputs.pop(trace.trace_id, None):
+                if isinstance(initial_input, str):
+                    root_span.set_attribute(INPUT_VALUE, initial_input)
+                elif isinstance(initial_input, list):
+                    root_span.set_attribute(INPUT_MIME_TYPE, JSON)
+                    root_span.set_attribute(INPUT_VALUE, safe_json_dumps(initial_input))
+                    for k, v in _get_attributes_from_input(initial_input):
+                        root_span.set_attribute(k, v)
+            if final_output := self._trace_outputs.pop(trace.trace_id, None):
+                root_span.set_attribute(RAW_OUTPUT, final_output.model_dump_json())
+                if text_output := _get_text_from_response(final_output):
+                    root_span.set_attribute(OUTPUT_VALUE, text_output)
+                for k, v in _get_attributes_from_response(final_output):
+                    root_span.set_attribute(k, v)
+
             root_span.set_status(Status(StatusCode.OK))
             root_span.end()
 
@@ -142,10 +159,15 @@ class FiTracingProcessor(TracingProcessor):
         # otel_span.set_attributes(flatten_attributes)
         data = span.span_data
         if isinstance(data, ResponseSpanData):
+            if span.trace_id not in self._trace_inputs:
+                if hasattr(data, "input") and (input_data := data.input):
+                    self._trace_inputs[span.trace_id] = input_data
             if hasattr(data, "response") and isinstance(response := data.response, Response):
+                self._trace_outputs[span.trace_id] = response
                 otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
                 otel_span.set_attribute(RAW_OUTPUT, response.model_dump_json())
-                otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
+                if text_output := _get_text_from_response(response):
+                    otel_span.set_attribute(OUTPUT_VALUE, text_output)
                 for k, v in _get_attributes_from_response(response):
                     otel_span.set_attribute(k, v)
             if hasattr(data, "input") and (input := data.input):
@@ -159,6 +181,26 @@ class FiTracingProcessor(TracingProcessor):
                         otel_span.set_attribute(k, v)
                 elif TYPE_CHECKING:
                     assert_never(input)
+
+            if span.parent_id and (parent_otel_span := self._otel_spans.get(span.parent_id)):
+                if hasattr(data, "input") and (input := data.input):
+                    if isinstance(input, str):
+                        parent_otel_span.set_attribute(INPUT_VALUE, input)
+                    elif isinstance(input, list):
+                        parent_otel_span.set_attribute(INPUT_MIME_TYPE, JSON)
+                        parent_otel_span.set_attribute(
+                            INPUT_VALUE, safe_json_dumps(input)
+                        )
+                        for k, v in _get_attributes_from_input(input):
+                            parent_otel_span.set_attribute(k, v)
+                if hasattr(data, "response") and isinstance(
+                    response := data.response, Response
+                ):
+                    parent_otel_span.set_attribute(RAW_OUTPUT, response.model_dump_json())
+                    if text_output := _get_text_from_response(response):
+                        parent_otel_span.set_attribute(OUTPUT_VALUE, text_output)
+                    for k, v in _get_attributes_from_response(response):
+                        parent_otel_span.set_attribute(k, v)
         elif isinstance(data, GenerationSpanData):
             otel_span.set_attribute(RAW_INPUT, safe_json_dumps(data.input))
             otel_span.set_attribute(RAW_OUTPUT, safe_json_dumps(data.output))
@@ -547,6 +589,19 @@ def _get_attributes_from_message_content_list(
             ...
         elif TYPE_CHECKING:
             assert_never(item["type"])
+
+
+def _get_text_from_response(response: Response) -> Optional[str]:
+    """Extracts the concatenated text from a Response object."""
+    texts = []
+    if not hasattr(response, "output") or not response.output:
+        return None
+    for item in response.output:
+        if isinstance(item, ResponseOutputMessage) and item.content:
+            for content_item in item.content:
+                if isinstance(content_item, ResponseOutputText):
+                    texts.append(content_item.text)
+    return " ".join(texts) if texts else None
 
 
 def _get_attributes_from_response(obj: Response) -> Iterator[tuple[str, AttributeValue]]:
