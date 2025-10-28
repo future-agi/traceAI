@@ -7,12 +7,12 @@
 **OpenTelemetry-native instrumentation for AI applications**  
 *Standardized observability across LLMs, agents, and frameworks*
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
 [![TypeScript](https://img.shields.io/badge/typescript-5.0%2B-blue)](https://www.typescriptlang.org/)
 [![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-1.0+-purple)](https://opentelemetry.io/)
 
-[Documentation](https://docs.futureagi.com/) • [Examples](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability) • [Discord](#connect-with-us) • [PyPI Packages](#python) • [npm Packages](#typescript)
+[Documentation](https://docs.futureagi.com/) • [Examples](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability) • [Slack](https://join.slack.com/t/future-agi/shared_invite/zt-3gqwrdf2p-4oj1LVPqkQIoiS_OSrFL2A) • [PyPI Packages](#python) • [npm Packages](#typescript)
 
 </div>
 
@@ -219,7 +219,7 @@ const response = await openai.chat.completions.create({
 traceAI is built on top of OpenTelemetry and follows standard OTel instrumentation patterns. This means you get:
 
 **🔌 Full OpenTelemetry Compatibility**
-- Works with any OTel-compatible backend (Jaeger, Datadog, Honeycomb, New Relic, etc.)
+- Works with any OTel-compatible backend
 - Standard OTLP exporters (HTTP/gRPC)
 - Compatible with existing OTel setups
 
@@ -329,16 +329,17 @@ We welcome contributions from the community!
 4. **Push** to the branch (`git push origin feature/amazing-feature`)
 5. **Open** a Pull Request
 
-**Looking for ideas?** Check out:
-- [Open Issues](https://github.com/future-agi/traceAI/issues) labeled `good-first-issue` or `help-wanted`
-- [Feature Requests](https://github.com/future-agi/traceAI/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement)
-- Missing framework integrations
-
 **Found a bug?** Please [open an issue](https://github.com/future-agi/traceAI/issues/new) with:
 - Framework version
 - traceAI version
 - Minimal reproduction code
 - Expected vs actual behavior
+
+**Request a feature?** Please [open an issue](https://github.com/future-agi/traceAI/issues/new) with:
+- Use case or problem you're trying to solve
+- Proposed solution or feature description
+- Any relevant examples or mockups
+- Priority level (nice-to-have vs critical)
 
 ---
 
@@ -351,7 +352,7 @@ We welcome contributions from the community!
 | 👨‍🍳 [Cookbooks](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability) | Step-by-step implementation examples |
 | 📝 [Changelog](CHANGELOG.md) | All release notes and updates |
 | 🤝 [Contributing Guide](CONTRIBUTING.md) | How to contribute to traceAI |
-| 💬 [Discord](#) | Join our community (coming soon) |
+| 💬 [Slack](https://join.slack.com/t/future-agi/shared_invite/zt-3gqwrdf2p-4oj1LVPqkQIoiS_OSrFL2A) | Join our community |
 | 🐛 [Issues](https://github.com/future-agi/traceAI/issues) | Report bugs or request features |
 
 ---
