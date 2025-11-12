@@ -21,24 +21,30 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):  # type: ignore
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        try:
-            if not (tracer_provider := kwargs.get("tracer_provider")):
-                tracer_provider = trace_api.get_tracer_provider()
-            if not (config := kwargs.get("config")):
-                config = TraceConfig()
-            else:
-                assert isinstance(config, TraceConfig)
-            tracer = FITracer(
-                trace_api.get_tracer(__name__, __version__, tracer_provider),
-                config=config,
-            )
+        if not (tracer_provider := kwargs.get("tracer_provider")):
+            tracer_provider = trace_api.get_tracer_provider()
+        if (exclusive_processor := kwargs.get("exclusive_processor")) is None:
+            exclusive_processor = True
+        if not (config := kwargs.get("config")):
+            config = TraceConfig()
+        else:
+            assert isinstance(config, TraceConfig)
+        tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, tracer_provider),
+            config=config,
+        )
+
+        from traceai_openai_agents._processor import FiTracingProcessor
+
+
+        if exclusive_processor:
+            from agents import set_trace_processors
+
+            set_trace_processors([FiTracingProcessor(cast(Tracer, tracer))])
+        else:
             from agents import add_trace_processor
-            from traceai_openai_agents._processor import FiTracingProcessor
 
             add_trace_processor(FiTracingProcessor(cast(Tracer, tracer)))
-        except Exception as e:
-            logger.exception(f"Failed to instrument OpenAI Agents: {e}")
-            raise
 
     def _uninstrument(self, **kwargs: Any) -> None:
         # TODO : OpenAI Agents does not support uninstrumentation currently
