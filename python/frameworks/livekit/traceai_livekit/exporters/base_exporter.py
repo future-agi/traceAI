@@ -112,12 +112,15 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     
     input_val = None
     output_val = None
+    raw_input_val = None
+    raw_output_val = None
 
     # Case A: Assistant Turn (Top-level chain)
     # Input: User speech/text (LK_USER_INPUT)
     # Output: often not directly on this span, but might be aggregated or absent
     if LK_USER_INPUT in attributes:
         input_val = attributes.get(LK_USER_INPUT)
+        raw_input_val = attributes.get(LK_USER_INPUT)
 
     # Case B: LLM Node
     # Input: Chat Context (LK_CHAT_CTX) - usually a list of messages
@@ -126,9 +129,11 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
         chat_ctx = attributes.get(LK_CHAT_CTX)
         input_val = _ensure_json_string(chat_ctx)
+        raw_input_val = chat_ctx
 
     if LK_RESPONSE_TEXT in attributes:
         output_val = attributes.get(LK_RESPONSE_TEXT)
+        raw_output_val = output_val
     
     if LK_RESPONSE_FUNCTION_CALLS in attributes:
         # If there are function calls, this is also an output
@@ -136,14 +141,17 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         if output_val:
              # If we already have text, append function calls
              output_val = f"{output_val}\nFunction Calls: {_ensure_json_string(func_calls)}"
+             raw_output_val = {"text": raw_output_val, "function_calls": func_calls}
         else:
              output_val = _ensure_json_string(func_calls)
+             raw_output_val = func_calls
 
     # Case C: TTS Node
     # Input: Text to speak (LK_TTS_INPUT_TEXT)
     # Output: Audio (not usually in attributes, maybe just success)
     if LK_TTS_INPUT_TEXT in attributes:
         input_val = attributes.get(LK_TTS_INPUT_TEXT)
+        raw_input_val = attributes.get(LK_TTS_INPUT_TEXT)
         # TTS output is audio, we don't have the bytes here usually.
 
     # Case D: Function Tool Execution
@@ -151,11 +159,23 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     # Output: Tool Output (LK_FUNCTION_TOOL_OUTPUT)
     if LK_FUNCTION_TOOL_ARGS in attributes:
          input_val = attributes.get(LK_FUNCTION_TOOL_ARGS)
+         raw_input_val = attributes.get(LK_FUNCTION_TOOL_ARGS)
     
     if LK_FUNCTION_TOOL_OUTPUT in attributes:
          output_val = attributes.get(LK_FUNCTION_TOOL_OUTPUT)
+         raw_output_val = attributes.get(LK_FUNCTION_TOOL_OUTPUT)
+
+    # Case E: Session Start
+    if LK_SESSION_OPTIONS in attributes and raw_input_val is None:
+         raw_input_val = attributes.get(LK_SESSION_OPTIONS)
 
     # --- Set Input/Output Attributes ---
+    if raw_input_val is not None:
+        mapped[SpanAttributes.RAW_INPUT] = _ensure_json_string(raw_input_val)
+
+    if raw_output_val is not None:
+        mapped[SpanAttributes.RAW_OUTPUT] = _ensure_json_string(raw_output_val)
+
     if input_val is not None and SpanAttributes.INPUT_VALUE not in mapped:
         mime_type = _detect_mime_type(input_val)
         mapped[SpanAttributes.INPUT_VALUE] = (
