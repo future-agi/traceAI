@@ -1,9 +1,10 @@
 import inspect
 import logging
+import base64
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Tuple, TypeVar, cast
 
-from google.genai.types import Content, Part, UserContent
+from google.genai.types import Content, FunctionCall, FunctionResponse, Part, UserContent
 from opentelemetry.util.types import AttributeValue
 
 from fi_instrumentation import safe_json_dumps
@@ -13,10 +14,12 @@ from traceai_google_genai._utils import (
 )
 from fi_instrumentation.fi_types import (
     MessageAttributes,
+    MessageContentAttributes,
     FiLLMProviderValues,
     FiSpanKindValues,
     SpanAttributes,
     ToolAttributes,
+    ToolCallAttributes,
 )
 
 __all__ = ("_RequestAttributesExtractor",)
@@ -61,8 +64,11 @@ class _RequestAttributesExtractor:
         request_params_dict = dict(request_parameters)
         request_params_dict.pop("contents", None)  # Remove LLM input contents
         if config := request_params_dict.get("config", None):
-            # Config is a pydantic object, so we need to convert it to a JSON string
-            config_json = self._serialize_config_safely(config)
+            # config can either be a TypedDict or a pydantic object so we need to handle both cases
+            if isinstance(config, dict):
+                config_json = safe_json_dumps(config)
+            else:
+                config_json = self._serialize_config_safely(config)
             yield (
                 SpanAttributes.LLM_INVOCATION_PARAMETERS,
                 config_json,
@@ -319,7 +325,7 @@ class _RequestAttributesExtractor:
         elif isinstance(input_contents, Content) or isinstance(input_contents, UserContent):
             yield from self._get_attributes_from_content(input_contents)
         elif isinstance(input_contents, Part):
-            yield from self._get_attributes_from_part(input_contents)
+            yield from self._get_attributes_from_part(input_contents, 0)
         else:
             # TODO: Implement for File, PIL_Image
             logger.exception(f"Unexpected input contents type: {type(input_contents)}")
@@ -337,31 +343,179 @@ class _RequestAttributesExtractor:
                 MessageAttributes.MESSAGE_ROLE,
                 "user",
             )
-        # Flatten parts into a single message content
+        # Process parts as separate content items
         if parts := get_attribute(content, "parts"):
-            yield from self._flatten_parts(parts)
+            yield from self._get_attributes_from_parts(parts)
 
-    def _flatten_parts(self, parts: list[Part]) -> Iterator[Tuple[str, AttributeValue]]:
-        text_values = []
+    def _get_attributes_from_function_call(
+        self, function_call: FunctionCall, tool_call_index: int
+    ) -> Iterator[Tuple[str, AttributeValue]]:
+        if name := get_attribute(function_call, "name"):
+            if isinstance(name, str):
+                yield (
+                    MessageAttributes.MESSAGE_TOOL_CALLS
+                    + f".{tool_call_index}."
+                    + ToolCallAttributes.TOOL_CALL_FUNCTION_NAME,
+                    name,
+                )
+        if args := get_attribute(function_call, "args"):
+            yield (
+                MessageAttributes.MESSAGE_TOOL_CALLS
+                + f".{tool_call_index}."
+                + ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON,
+                safe_json_dumps(args),
+            )
+
+        if id := get_attribute(function_call, "id"):
+            yield (
+                MessageAttributes.MESSAGE_TOOL_CALLS
+                + f".{tool_call_index}."
+                + ToolCallAttributes.TOOL_CALL_ID,
+                id,
+            )
+
+    def _get_attributes_from_function_response(
+        self, function_response: FunctionResponse
+    ) -> Iterator[Tuple[str, AttributeValue]]:
+        if response := get_attribute(function_response, "response"):
+            yield (MessageAttributes.MESSAGE_CONTENT, safe_json_dumps(response))
+        if id := get_attribute(function_response, "id"):
+            yield (
+                MessageAttributes.MESSAGE_TOOL_CALL_ID,
+                id,
+            )
+
+    def _get_attributes_from_parts(self, parts: list[Part]) -> Iterator[Tuple[str, AttributeValue]]:
+        """Process parts as separate content items under message.contents.{index}"""
+        content_index = 0
+        tool_call_index = 0
+        
         for part in parts:
-            for attr, value in self._get_attributes_from_part(part):
-                if isinstance(value, str):
-                    text_values.append(value)
+            # Check if this part is a tool call or function response (not a content item)
+            part_attrs = list(self._get_attributes_from_part(part, tool_call_index))
+            has_tool_calls = any(
+                attr.startswith(MessageAttributes.MESSAGE_TOOL_CALLS) 
+                for attr, _ in part_attrs
+            )
+            has_tool_call_id = any(
+                attr == MessageAttributes.MESSAGE_TOOL_CALL_ID 
+                for attr, _ in part_attrs
+            )
+            
+            if has_tool_calls or has_tool_call_id:
+                # Tool calls and function responses are not content items
+                for attr, value in part_attrs:
+                    if attr.startswith(MessageAttributes.MESSAGE_TOOL_CALLS):
+                        tool_call_index = self._extract_tool_call_index(attr) + 1
+                    yield (attr, value)
             else:
-                # TODO: Handle other types of parts
-                logger.debug(f"Non-text part encountered: {part}")
-        if text_values:
-            yield (MessageAttributes.MESSAGE_CONTENT, "\n\n".join(text_values))
+                # This is a content item (text, image, audio, video)
+                for attr, value in part_attrs:
+                    # Map attributes to messageContent.* format
+                    if attr == MessageAttributes.MESSAGE_CONTENT:
+                        # Text content
+                        yield (
+                            f"{MessageAttributes.MESSAGE_CONTENTS}.{content_index}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}",
+                            "text",
+                        )
+                        yield (
+                            f"{MessageAttributes.MESSAGE_CONTENTS}.{content_index}.{MessageContentAttributes.MESSAGE_CONTENT_TEXT}",
+                            value,
+                        )
+                    elif attr == MessageContentAttributes.MESSAGE_CONTENT_TYPE:
+                        # Media content type
+                        yield (
+                            f"{MessageAttributes.MESSAGE_CONTENTS}.{content_index}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}",
+                            value,
+                        )
+                    elif attr in (
+                        MessageContentAttributes.MESSAGE_CONTENT_IMAGE,
+                        MessageContentAttributes.MESSAGE_CONTENT_AUDIO,
+                        MessageContentAttributes.MESSAGE_CONTENT_VIDEO,
+                    ):
+                        # Media content data
+                        yield (
+                            f"{MessageAttributes.MESSAGE_CONTENTS}.{content_index}.{attr}",
+                            value,
+                        )
+                content_index += 1
 
-    def _get_attributes_from_part(self, part: Part) -> Iterator[Tuple[str, AttributeValue]]:
+    def _extract_tool_call_index(self, attr: str) -> int:
+        """Extract tool call index from message tool call attribute key.
+
+        Example: 'message.tool_calls.0.function_name' -> 0
+        """
+        parts = attr.split(".")
+        if len(parts) >= 3 and parts[2].isdigit():
+            return int(parts[2])
+        return 0
+
+    def _get_attributes_from_part(
+        self, part: Part, tool_call_index: int
+    ) -> Iterator[Tuple[str, AttributeValue]]:
         # https://github.com/googleapis/python-genai/blob/main/google/genai/types.py#L566
         if text := get_attribute(part, "text"):
             yield (
                 MessageAttributes.MESSAGE_CONTENT,
                 text,
             )
+        elif inline_data := get_attribute(part, "inline_data"):
+            yield from self._get_attributes_from_inline_data(inline_data)
+        elif file_data := get_attribute(part, "file_data"):
+            yield from self._get_attributes_from_file_data(file_data)
+        elif function_call := get_attribute(part, "function_call"):
+            yield from self._get_attributes_from_function_call(function_call, tool_call_index)
+        elif function_response := get_attribute(part, "function_response"):
+            yield from self._get_attributes_from_function_response(function_response)
         else:
-            logger.exception("Other field types of parts are not supported yet")
+            logger.debug(f"Other field types of parts are not supported yet: {part}")
+
+    def _get_attributes_from_inline_data(
+        self, inline_data: Any
+    ) -> Iterator[Tuple[str, AttributeValue]]:
+        mime_type = get_attribute(inline_data, "mime_type")
+        data = get_attribute(inline_data, "data")
+
+        if not mime_type or data is None:
+            return
+
+        # Encode data if it's bytes
+        if isinstance(data, bytes):
+            try:
+                data = base64.b64encode(data).decode("utf-8")
+            except Exception:
+                logger.warning("Failed to base64 encode inline data", exc_info=True)
+                return
+
+        # Determine type based on mime_type
+        if mime_type.startswith("image/"):
+            yield (MessageContentAttributes.MESSAGE_CONTENT_IMAGE, data)
+            yield (MessageContentAttributes.MESSAGE_CONTENT_TYPE, "image")
+        elif mime_type.startswith("audio/"):
+            yield (MessageContentAttributes.MESSAGE_CONTENT_AUDIO, data)
+            yield (MessageContentAttributes.MESSAGE_CONTENT_TYPE, "audio")
+        elif mime_type.startswith("video/"):
+            yield (MessageContentAttributes.MESSAGE_CONTENT_VIDEO, data)
+            yield (MessageContentAttributes.MESSAGE_CONTENT_TYPE, "video")
+
+    def _get_attributes_from_file_data(
+        self, file_data: Any
+    ) -> Iterator[Tuple[str, AttributeValue]]:
+        mime_type = get_attribute(file_data, "mime_type")
+        file_uri = get_attribute(file_data, "file_uri")
+
+        if not mime_type or not file_uri:
+            return
+
+        if mime_type.startswith("image/"):
+            yield (MessageContentAttributes.MESSAGE_CONTENT_IMAGE, file_uri)
+            yield (MessageContentAttributes.MESSAGE_CONTENT_TYPE, "image")
+        elif mime_type.startswith("audio/"):
+            yield (MessageContentAttributes.MESSAGE_CONTENT_AUDIO, file_uri)
+            yield (MessageContentAttributes.MESSAGE_CONTENT_TYPE, "audio")
+        elif mime_type.startswith("video/"):
+            yield (MessageContentAttributes.MESSAGE_CONTENT_VIDEO, file_uri)
+            yield (MessageContentAttributes.MESSAGE_CONTENT_TYPE, "video")
 
 
 T = TypeVar("T", bound=type)
