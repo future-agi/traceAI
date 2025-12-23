@@ -12,6 +12,7 @@ from fi_instrumentation.instrumentation.context_attributes import (
     using_session,
     using_tags,
     using_user,
+    using_simulator_attributes,
 )
 from fi_instrumentation.instrumentation.helpers import safe_json_dumps
 from opentelemetry.sdk.resources import Resource
@@ -37,6 +38,7 @@ __all__ = [
     "using_session",
     "using_tags",
     "using_user",
+    "using_simulator_attributes",
     # Helpers and config
     "safe_json_dumps",
     "suppress_tracing",

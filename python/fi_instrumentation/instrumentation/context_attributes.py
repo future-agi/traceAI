@@ -1,7 +1,7 @@
 from contextlib import ContextDecorator
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from fi_instrumentation.fi_types import SpanAttributes
+from fi_instrumentation.fi_types import SimulatorAttributes, SpanAttributes
 from fi_instrumentation.instrumentation.helpers import safe_json_dumps
 from opentelemetry.context import attach, detach, get_current, get_value, set_value
 from opentelemetry.util.types import AttributeValue
@@ -16,6 +16,10 @@ CONTEXT_ATTRIBUTES = (
     SpanAttributes.LLM_PROMPT_TEMPLATE_LABEL,
     SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION,
     SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES,
+    SimulatorAttributes.RUN_TEST_ID,
+    SimulatorAttributes.TEST_EXECUTION_ID,
+    SimulatorAttributes.CALL_EXECUTION_ID,
+    SimulatorAttributes.IS_SIMULATOR_TRACE,
 )
 
 
@@ -31,6 +35,7 @@ class _UsingAttributesContextManager(ContextDecorator):
         prompt_template_label: str = "",
         prompt_template_version: str = "",
         prompt_template_variables: Optional[Dict[str, Any]] = None,
+        simulator_attributes: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._session_id = session_id
         self._user_id = user_id
@@ -40,6 +45,7 @@ class _UsingAttributesContextManager(ContextDecorator):
         self._prompt_template_label = prompt_template_label
         self._prompt_template_version = prompt_template_version
         self._prompt_template_variables = prompt_template_variables
+        self._simulator_attributes = simulator_attributes
 
     def attach_context(self) -> None:
         ctx = get_current()
@@ -73,6 +79,20 @@ class _UsingAttributesContextManager(ContextDecorator):
                 safe_json_dumps(self._prompt_template_variables),
                 ctx,
             )
+        if self._simulator_attributes:
+            run_test_id = self._simulator_attributes.get("run_test_id")
+            if run_test_id is not None:
+                ctx = set_value(SimulatorAttributes.RUN_TEST_ID, run_test_id, ctx)
+            test_execution_id = self._simulator_attributes.get("test_execution_id")
+            if test_execution_id is not None:
+                ctx = set_value(SimulatorAttributes.TEST_EXECUTION_ID, test_execution_id, ctx)
+            call_execution_id = self._simulator_attributes.get("call_execution_id")
+            if call_execution_id is not None:
+                ctx = set_value(SimulatorAttributes.CALL_EXECUTION_ID, call_execution_id, ctx)
+            is_simulator_trace = self._simulator_attributes.get("is_simulator_trace")
+            # Explicitly check for None, not truthiness, since False is a valid boolean value
+            if is_simulator_trace is not None:
+                ctx = set_value(SimulatorAttributes.IS_SIMULATOR_TRACE, is_simulator_trace, ctx)
         self._token = attach(ctx)
 
     def __enter__(self) -> Self:
@@ -207,6 +227,30 @@ class using_prompt_template(_UsingAttributesContextManager):
             prompt_template_variables=variables,
         )
 
+
+class using_simulator_attributes(_UsingAttributesContextManager):
+    """
+    Context manager to add simulator attributes to the current OpenTelemetry Context. TraceAI
+    instrumentations will read this Context and pass the simulator attributes as a span attribute,
+    following the TraceAI semantic conventions.
+
+    Examples:
+        simulator_attributes = {
+            "run_test_id": "550e8400-e29b-41d4-a716-446655440000",
+            "test_execution_id": "660e8400-e29b-41d4-a716-446655440001",
+            "call_execution_id": "770e8400-e29b-41d4-a716-446655440002",
+            "is_simulator_trace": True,
+        }
+        with using_simulator_attributes(simulator_attributes):
+            # Tracing within this block will include the span attributes:
+            # "fi.simulator.run_test_id" = "550e8400-e29b-41d4-a716-446655440000"
+            # "fi.simulator.test_execution_id" = "660e8400-e29b-41d4-a716-446655440001"
+            # "fi.simulator.call_execution_id" = "770e8400-e29b-41d4-a716-446655440002"
+            # "fi.simulator.is_simulator_trace" = True
+            ...
+    """
+    def __init__(self, simulator_attributes: Dict[str, Any]) -> None:
+        super().__init__(simulator_attributes=simulator_attributes)
 
 class using_attributes(_UsingAttributesContextManager):
     """
