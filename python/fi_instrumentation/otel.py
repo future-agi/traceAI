@@ -69,6 +69,25 @@ class Transport(str, Enum):
     HTTP = "http"
 
 
+class SemanticConvention(str, Enum):
+    """
+    Semantic convention standard to use for span attributes.
+
+    This determines how trace attributes are named and structured:
+    - FI: FutureAGI native convention (default) - uses fi.* namespace
+    - OTEL_GENAI: OpenTelemetry GenAI SIG convention - uses gen_ai.* namespace
+    - OPENINFERENCE: Arize Phoenix convention - uses openinference.* namespace
+    - OPENLLMETRY: Traceloop convention - uses traceloop.* namespace
+    """
+    FI = "fi"
+    OTEL_GENAI = "otel_genai"
+    OPENINFERENCE = "openinference"
+    OPENLLMETRY = "openllmetry"
+
+
+SEMANTIC_CONVENTION = "semantic_convention"
+
+
 def register(
     *,
     project_name: Optional[str] = None,
@@ -81,6 +100,7 @@ def register(
     headers: Optional[Dict[str, str]] = None,
     verbose: bool = True,
     transport: Transport = Transport.HTTP,
+    semantic_convention: SemanticConvention = SemanticConvention.FI,
 ) -> _TracerProvider:
 
     eval_tags = eval_tags or []
@@ -128,6 +148,7 @@ def register(
         PROJECT_VERSION_ID: project_version_id,
         EVAL_TAGS: json.dumps(eval_tags),
         METADATA: json.dumps(metadata),
+        SEMANTIC_CONVENTION: semantic_convention.value,
     }
 
     resource = Resource(attributes=resource_attributes)

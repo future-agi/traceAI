@@ -277,7 +277,6 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
             "image_generation": self._image_generation_wrapper,
             "aimage_generation": self._aimage_generation_wrapper,
         }
-
         if Protect is not None:
             self._original_protect = Protect.protect
             wrap_function_wrapper(
@@ -285,6 +284,8 @@ class LiteLLMInstrumentor(BaseInstrumentor):  # type: ignore
                 name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(tracer=self._tracer),
             )
+        else:
+            self._original_protect = None
 
         for func_name, func_wrapper in functions_to_instrument.items():
             if hasattr(litellm, func_name):
