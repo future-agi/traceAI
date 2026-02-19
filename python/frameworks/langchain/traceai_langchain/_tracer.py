@@ -165,10 +165,9 @@ class FiTracer(BaseTracer):
                 "output": cleaned_output,
             }
 
-            # if cleaned_input is not None:
-            #     span.set_attributes({"fi.llm.input": str(cleaned_input)})
-            if cleaned_output is not None:
-                span.set_attributes({"fi.llm.output": str(cleaned_output)})
+            # Input/output are already captured in gen_ai.input/output.messages
+            # No need for redundant attributes
+            pass
 
         except Exception as e:
             logger.exception(f"Error sending span data to API: {e}")
@@ -382,7 +381,7 @@ def _update_span(span: Span, run: Run, captured_context: Dict[str, Any]) -> None
         if "agent" in run.name.lower()
         else _langchain_run_type_to_span_kind(run.run_type)
     )
-    span.set_attribute(FI_SPAN_KIND, span_kind.value)
+    span.set_attribute(GEN_AI_SPAN_KIND, span_kind.value)
     span.set_attributes(dict(captured_context))
     filtered_data, images, eval_input, query = _filter_images(
         run.inputs.get("messages", [])
@@ -491,25 +490,25 @@ def _as_input_images(image_urls: List[str]) -> Iterator[Tuple[str, Any]]:
 
 
 def _as_eval_input(values: Iterable[str]) -> Iterator[Tuple[str, str]]:
-    yield EVAL_INPUT, json.dumps(values)
+    yield INPUT_VALUE, json.dumps(values)
 
 
 def _as_raw_input_output(run: Run) -> Iterator[Tuple[str, Any]]:
     if raw_input := run.inputs:
         if isinstance(raw_input, dict):
-            yield RAW_INPUT, safe_json_dumps(raw_input)
+            yield INPUT_VALUE, safe_json_dumps(raw_input)
         elif hasattr(raw_input, "__dict__"):
-            yield RAW_INPUT, safe_json_dumps(raw_input.__dict__)
+            yield INPUT_VALUE, safe_json_dumps(raw_input.__dict__)
     if raw_output := run.outputs:
         if isinstance(raw_output, dict):
-            yield RAW_OUTPUT, safe_json_dumps(raw_output)
+            yield OUTPUT_VALUE, safe_json_dumps(raw_output)
         elif hasattr(raw_output, "__dict__"):
-            yield RAW_OUTPUT, safe_json_dumps(raw_output.__dict__)
+            yield OUTPUT_VALUE, safe_json_dumps(raw_output.__dict__)
 
 
 def _as_query(values: Iterable[str]) -> Iterator[Tuple[str, str]]:
     if values:
-        yield QUERY, safe_json_dumps(values)
+        yield INPUT_VALUE, safe_json_dumps(values)
 
 
 def _convert_io(obj: Optional[Mapping[str, Any]]) -> Iterator[str]:
@@ -539,7 +538,7 @@ def _prompts(inputs: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, List[st
         return
     assert hasattr(inputs, "get"), f"expected Mapping, found {type(inputs)}"
     if prompts := inputs.get("prompts"):
-        yield LLM_PROMPTS, prompts
+        yield GEN_AI_PROMPTS, prompts
 
 
 @stop_on_exception
@@ -579,7 +578,7 @@ def _input_messages(
     else:
         raise ValueError(f"failed to parse messages of type {type(first_messages)}")
     if parsed_messages:
-        yield LLM_INPUT_MESSAGES, parsed_messages
+        yield GEN_AI_INPUT_MESSAGES, parsed_messages
 
 
 @stop_on_exception
@@ -615,7 +614,7 @@ def _output_messages(
             else:
                 raise ValueError(f"fail to parse message of type {type(message_data)}")
     if parsed_messages:
-        yield LLM_OUTPUT_MESSAGES, parsed_messages
+        yield GEN_AI_OUTPUT_MESSAGES, parsed_messages
 
 
 @stop_on_exception
@@ -746,7 +745,7 @@ def _parse_prompt_template(
     elif _get_cls_name(serialized).endswith("PromptTemplate") and isinstance(
         (template := kwargs.get("template")), str
     ):
-        yield LLM_PROMPT_TEMPLATE, template
+        yield GEN_AI_PROMPT_TEMPLATE_NAME, template
         if input_variables := kwargs.get("input_variables"):
             assert isinstance(
                 input_variables, list
@@ -756,7 +755,7 @@ def _parse_prompt_template(
                 if (value := inputs.get(variable)) is not None:
                     template_variables[variable] = value
             if template_variables:
-                yield LLM_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(template_variables)
+                yield GEN_AI_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(template_variables)
 
 
 @stop_on_exception
@@ -771,7 +770,7 @@ def _invocation_parameters(run: Run) -> Iterator[Tuple[str, str]]:
         assert isinstance(
             invocation_parameters, Mapping
         ), f"expected Mapping, found {type(invocation_parameters)}"
-        yield LLM_INVOCATION_PARAMETERS, safe_json_dumps(invocation_parameters)
+        yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_parameters)
 
 
 @stop_on_exception
@@ -784,7 +783,7 @@ def _model_name(extra: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, str]]
         return
     for key in ["model_name", "model"]:
         if name := invocation_params.get(key):
-            yield LLM_MODEL_NAME, name
+            yield GEN_AI_REQUEST_MODEL, name
             return
 
 
@@ -800,20 +799,20 @@ def _token_counts(outputs: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, i
         return
     for attribute_name, keys in [
         (
-            LLM_TOKEN_COUNT_PROMPT,
+            GEN_AI_USAGE_INPUT_TOKENS,
             (
                 "prompt_tokens",
                 "input_tokens",  # Anthropic-specific key
             ),
         ),
         (
-            LLM_TOKEN_COUNT_COMPLETION,
+            GEN_AI_USAGE_OUTPUT_TOKENS,
             (
                 "completion_tokens",
                 "output_tokens",  # Anthropic-specific key
             ),
         ),
-        (LLM_TOKEN_COUNT_TOTAL, ("total_tokens",)),
+        (GEN_AI_USAGE_TOTAL_TOKENS, ("total_tokens",)),
     ]:
         if (token_count := _get_first_value(token_usage, keys)) is not None:
             yield attribute_name, token_count
@@ -884,7 +883,7 @@ def _function_calls(outputs: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str,
             ]
         )
         function_call_data["arguments"] = json.loads(function_call_data["arguments"])
-        yield LLM_FUNCTION_CALL, safe_json_dumps(function_call_data)
+        yield GEN_AI_TOOL_CALL, safe_json_dumps(function_call_data)
     except Exception:
         pass
 
@@ -898,9 +897,9 @@ def _tools(run: Run) -> Iterator[Tuple[str, str]]:
         return
     assert hasattr(serialized, "get"), f"expected Mapping, found {type(serialized)}"
     if name := serialized.get("name"):
-        yield TOOL_NAME, name
+        yield GEN_AI_TOOL_NAME, name
     if description := serialized.get("description"):
-        yield TOOL_DESCRIPTION, description
+        yield GEN_AI_TOOL_DESCRIPTION, description
 
 
 @stop_on_exception
@@ -947,7 +946,7 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
         or metadata.get(LANGCHAIN_CONVERSATION_ID)
         or metadata.get(LANGCHAIN_THREAD_ID)
     ):
-        yield SESSION_ID, legacy_session_id
+        yield GEN_AI_CONVERSATION_ID, legacy_session_id
 
     # Also include the full metadata as JSON for completeness
     yield METADATA, safe_json_dumps(metadata)
@@ -1105,21 +1104,18 @@ IMAGE_URL = ImageAttributes.IMAGE_URL
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 INPUT_IMAGES = SpanAttributes.INPUT_IMAGES
-EVAL_INPUT = SpanAttributes.EVAL_INPUT
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
-QUERY = SpanAttributes.QUERY
-LLM_FUNCTION_CALL = SpanAttributes.LLM_FUNCTION_CALL
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
-LLM_PROMPT_TEMPLATE = SpanAttributes.LLM_PROMPT_TEMPLATE
-LLM_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+GEN_AI_TOOL_CALL = SpanAttributes.GEN_AI_TOOL_CALL
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
+GEN_AI_PROMPT_TEMPLATE_NAME = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME
+GEN_AI_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENTS = MessageAttributes.MESSAGE_CONTENTS
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
@@ -1134,18 +1130,17 @@ MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
 METADATA = SpanAttributes.METADATA
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
-OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 RERANKER_INPUT_DOCUMENTS = RerankerAttributes.RERANKER_INPUT_DOCUMENTS
 RERANKER_MODEL_NAME = RerankerAttributes.RERANKER_MODEL_NAME
 RERANKER_OUTPUT_DOCUMENTS = RerankerAttributes.RERANKER_OUTPUT_DOCUMENTS
 RERANKER_QUERY = RerankerAttributes.RERANKER_QUERY
 RERANKER_TOP_K = RerankerAttributes.RERANKER_TOP_K
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
-SESSION_ID = SpanAttributes.SESSION_ID
+GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
-TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
-TOOL_NAME = SpanAttributes.TOOL_NAME
+GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
+GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS

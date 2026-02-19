@@ -146,7 +146,7 @@ class _ResponseExtractor:
             return
 
         json_string = safe_json_dumps(result)
-        yield SpanAttributes.RAW_OUTPUT, json_string
+        yield SpanAttributes.OUTPUT_VALUE, json_string
 
         yield from _as_output_attributes(
             _ValueAndType(json_string, FiMimeTypeValues.JSON)
@@ -156,7 +156,7 @@ class _ResponseExtractor:
         if not (result := self._response_accumulator._result()):
             return
         if completion := result.get("completion", ""):
-            yield SpanAttributes.LLM_OUTPUT_MESSAGES, completion
+            yield SpanAttributes.GEN_AI_OUTPUT_MESSAGES, completion
 
 
 class _MessagesStream(ObjectProxy):  # type: ignore
@@ -352,7 +352,7 @@ class _MessageResponseExtractor:
             return
 
         json_string = safe_json_dumps(result)
-        yield SpanAttributes.RAW_OUTPUT, json_string
+        yield SpanAttributes.OUTPUT_VALUE, json_string
 
         messages = result.get("messages", [])
         message_content = ""
@@ -383,7 +383,7 @@ class _MessageResponseExtractor:
         for message in messages:
             if role := message.get("role"):
                 yield (
-                    f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
+                    f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
                     role,
                 )
             if output_tokens := message.get("output_tokens"):
@@ -399,24 +399,24 @@ class _MessageResponseExtractor:
                 # this is the current assumption of the non streaming implementation.
                 if (content_type := content.get("type")) == "text":
                     yield (
-                        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
+                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
                         content.get("text", ""),
                     )
                 elif content_type == "tool_use":
                     yield (
-                        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_idx}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
+                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_idx}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
                         content.get("tool_name", ""),
                     )
                     yield (
-                        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_idx}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
+                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_idx}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
                         content.get("tool_input", "{}"),
                     )
                     tool_idx += 1
             idx += 1
-        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, total_completion_token_count
-        yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, total_prompt_token_count
+        yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, total_completion_token_count
+        yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, total_prompt_token_count
         yield (
-            SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+            SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS,
             total_completion_token_count + total_prompt_token_count,
         )
 

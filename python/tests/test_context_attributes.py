@@ -26,16 +26,16 @@ class TestUsingSession:
         session_id = "test-session-123"
         
         # Initially, session ID should not be in context
-        initial_value = get_value(SpanAttributes.SESSION_ID)
+        initial_value = get_value(SpanAttributes.GEN_AI_CONVERSATION_ID)
         assert initial_value is None
         
         with using_session(session_id):
             # Inside context, session ID should be set
-            current_value = get_value(SpanAttributes.SESSION_ID)
+            current_value = get_value(SpanAttributes.GEN_AI_CONVERSATION_ID)
             assert current_value == session_id
         
         # After context, session ID should be cleared
-        final_value = get_value(SpanAttributes.SESSION_ID)
+        final_value = get_value(SpanAttributes.GEN_AI_CONVERSATION_ID)
         assert final_value is None
 
     @pytest.mark.asyncio
@@ -44,16 +44,16 @@ class TestUsingSession:
         session_id = "test-session-async-456"
         
         # Initially, session ID should not be in context
-        initial_value = get_value(SpanAttributes.SESSION_ID)
+        initial_value = get_value(SpanAttributes.GEN_AI_CONVERSATION_ID)
         assert initial_value is None
         
         async with using_session(session_id):
             # Inside context, session ID should be set
-            current_value = get_value(SpanAttributes.SESSION_ID)
+            current_value = get_value(SpanAttributes.GEN_AI_CONVERSATION_ID)
             assert current_value == session_id
         
         # After context, session ID should be cleared
-        final_value = get_value(SpanAttributes.SESSION_ID)
+        final_value = get_value(SpanAttributes.GEN_AI_CONVERSATION_ID)
         assert final_value is None
 
     def test_using_session_nested(self):
@@ -62,16 +62,16 @@ class TestUsingSession:
         session_id2 = "session-2"
         
         with using_session(session_id1):
-            assert get_value(SpanAttributes.SESSION_ID) == session_id1
+            assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) == session_id1
             
             with using_session(session_id2):
-                assert get_value(SpanAttributes.SESSION_ID) == session_id2
+                assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) == session_id2
             
             # Should revert to outer session
-            assert get_value(SpanAttributes.SESSION_ID) == session_id1
+            assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) == session_id1
         
         # Should be cleared after all contexts
-        assert get_value(SpanAttributes.SESSION_ID) is None
+        assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) is None
 
     def test_using_session_exception_handling(self):
         """Test using_session properly handles exceptions."""
@@ -79,13 +79,13 @@ class TestUsingSession:
         
         try:
             with using_session(session_id):
-                assert get_value(SpanAttributes.SESSION_ID) == session_id
+                assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) == session_id
                 raise ValueError("Test exception")
         except ValueError:
             pass
         
         # Should still clear session ID after exception
-        final_value = get_value(SpanAttributes.SESSION_ID)
+        final_value = get_value(SpanAttributes.GEN_AI_CONVERSATION_ID)
         assert final_value is None
 
 
@@ -235,27 +235,27 @@ class TestUsingPromptTemplate:
             version=version,
             variables=variables
         ):
-            template_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE)
-            version_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION)
-            variables_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES)
+            template_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME)
+            version_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION)
+            variables_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES)
             
             assert template_value == template
             assert version_value == version
             assert variables_value == '{"name": "Alice", "date": "2023-01-01"}'
         
         # Should be cleared after context
-        assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE) is None
-        assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION) is None
-        assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES) is None
+        assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME) is None
+        assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION) is None
+        assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES) is None
 
     def test_using_prompt_template_partial(self):
         """Test using_prompt_template with partial parameters."""
         template = "Simple template"
         
         with using_prompt_template(template=template):
-            template_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE)
-            version_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION)
-            variables_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES)
+            template_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME)
+            version_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION)
+            variables_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES)
             
             assert template_value == template
             assert version_value is None
@@ -268,8 +268,8 @@ class TestUsingPromptTemplate:
         variables = {"param": "value"}
         
         async with using_prompt_template(template=template, variables=variables):
-            template_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE)
-            variables_value = get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES)
+            template_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME)
+            variables_value = get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES)
             
             assert template_value == template
             assert variables_value == '{"param": "value"}'
@@ -297,22 +297,22 @@ class TestUsingAttributes:
             prompt_template_version=prompt_template_version,
             prompt_template_variables=prompt_template_variables,
         ):
-            assert get_value(SpanAttributes.SESSION_ID) == session_id
+            assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) == session_id
             assert get_value(SpanAttributes.USER_ID) == user_id
             assert get_value(SpanAttributes.METADATA) == '{"key": "value"}'
             assert get_value(SpanAttributes.TAG_TAGS) == tags
-            assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE) == prompt_template
-            assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION) == prompt_template_version
-            assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES) == '{"var": "test"}'
+            assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME) == prompt_template
+            assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION) == prompt_template_version
+            assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES) == '{"var": "test"}'
         
         # All should be cleared after context
-        assert get_value(SpanAttributes.SESSION_ID) is None
+        assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) is None
         assert get_value(SpanAttributes.USER_ID) is None
         assert get_value(SpanAttributes.METADATA) is None
         assert get_value(SpanAttributes.TAG_TAGS) is None
-        assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE) is None
-        assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION) is None
-        assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES) is None
+        assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME) is None
+        assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION) is None
+        assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES) is None
 
     def test_using_attributes_partial_parameters(self):
         """Test using_attributes with partial parameters."""
@@ -320,7 +320,7 @@ class TestUsingAttributes:
         metadata = {"partial": "data"}
         
         with using_attributes(session_id=session_id, metadata=metadata):
-            assert get_value(SpanAttributes.SESSION_ID) == session_id
+            assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) == session_id
             assert get_value(SpanAttributes.METADATA) == '{"partial": "data"}'
             assert get_value(SpanAttributes.USER_ID) is None
             assert get_value(SpanAttributes.TAG_TAGS) is None
@@ -334,10 +334,10 @@ class TestUsingAttributes:
             prompt_template_version="",
         ):
             # Empty strings should not set values
-            assert get_value(SpanAttributes.SESSION_ID) is None
+            assert get_value(SpanAttributes.GEN_AI_CONVERSATION_ID) is None
             assert get_value(SpanAttributes.USER_ID) is None
-            assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE) is None
-            assert get_value(SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION) is None
+            assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME) is None
+            assert get_value(SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION) is None
 
 
 class TestGetAttributesFromContext:
@@ -355,7 +355,7 @@ class TestGetAttributesFromContext:
         with using_session(session_id):
             attributes = list(get_attributes_from_context())
             assert len(attributes) == 1
-            assert attributes[0] == (SpanAttributes.SESSION_ID, session_id)
+            assert attributes[0] == (SpanAttributes.GEN_AI_CONVERSATION_ID, session_id)
 
     def test_get_attributes_from_context_multiple_attributes(self):
         """Test get_attributes_from_context with multiple attributes."""
@@ -372,7 +372,7 @@ class TestGetAttributesFromContext:
         ):
             attributes = dict(get_attributes_from_context())
             
-            assert attributes[SpanAttributes.SESSION_ID] == session_id
+            assert attributes[SpanAttributes.GEN_AI_CONVERSATION_ID] == session_id
             assert attributes[SpanAttributes.USER_ID] == user_id
             assert attributes[SpanAttributes.METADATA] == '{"key": "value"}'
             assert attributes[SpanAttributes.TAG_TAGS] == tags
@@ -390,9 +390,9 @@ class TestGetAttributesFromContext:
         ):
             attributes = dict(get_attributes_from_context())
             
-            assert attributes[SpanAttributes.LLM_PROMPT_TEMPLATE] == template
-            assert attributes[SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION] == version
-            assert attributes[SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES] == '{"var": "value"}'
+            assert attributes[SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME] == template
+            assert attributes[SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION] == version
+            assert attributes[SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES] == '{"var": "value"}'
 
     def test_get_attributes_from_context_nested_contexts(self):
         """Test get_attributes_from_context with nested contexts."""
@@ -406,7 +406,7 @@ class TestGetAttributesFromContext:
                     attributes = dict(get_attributes_from_context())
                     
                     # Should have the innermost session and the user
-                    assert attributes[SpanAttributes.SESSION_ID] == session_id2
+                    assert attributes[SpanAttributes.GEN_AI_CONVERSATION_ID] == session_id2
                     assert attributes[SpanAttributes.USER_ID] == user_id
 
 
@@ -416,13 +416,13 @@ class TestContextAttributesConstants:
     def test_context_attributes_constant(self):
         """Test CONTEXT_ATTRIBUTES constant contains expected attributes."""
         expected_attributes = {
-            SpanAttributes.SESSION_ID,
+            SpanAttributes.GEN_AI_CONVERSATION_ID,
             SpanAttributes.USER_ID,
             SpanAttributes.METADATA,
             SpanAttributes.TAG_TAGS,
-            SpanAttributes.LLM_PROMPT_TEMPLATE,
-            SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION,
-            SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES,
+            SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME,
+            SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION,
+            SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES,
         }
         
         assert set(CONTEXT_ATTRIBUTES) == expected_attributes 

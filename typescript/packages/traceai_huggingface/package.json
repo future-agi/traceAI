@@ -1,0 +1,64 @@
+{
+  "name": "@traceai/huggingface",
+  "version": "0.1.0",
+  "description": "TraceAI instrumentation for HuggingFace Inference API",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/cjs/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npm run build:cjs && npm run build:esm",
+    "build:cjs": "tsc -p tsconfig.json",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "test": "jest --config jest.config.js",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_huggingface"
+  },
+  "keywords": [
+    "traceai",
+    "huggingface",
+    "hf",
+    "opentelemetry",
+    "instrumentation",
+    "tracing",
+    "llm",
+    "observability"
+  ],
+  "author": "FutureAGI",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@opentelemetry/api": "^1.4.0",
+    "@opentelemetry/core": "^1.30.0",
+    "@opentelemetry/instrumentation": "^0.57.0",
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/fi-semantic-conventions": "workspace:*"
+  },
+  "devDependencies": {
+    "@huggingface/inference": "^2.8.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^18.0.0",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@huggingface/inference": ">=2.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -241,19 +241,19 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
 
             with tracer.start_as_current_span("bedrock.converse") as span:
                 span.set_attribute(
-                    SpanAttributes.FI_SPAN_KIND,
+                    SpanAttributes.GEN_AI_SPAN_KIND,
                     FiSpanKindValues.LLM.value,
                 )
                 
-                _set_span_attribute(span, SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.AWS.value)
+                _set_span_attribute(span, SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.AWS.value)
 
                 if model_id := kwargs.get("modelId"):
-                    _set_span_attribute(span, SpanAttributes.LLM_MODEL_NAME, model_id)
+                    _set_span_attribute(span, SpanAttributes.GEN_AI_REQUEST_MODEL, model_id)
 
                 if inference_config := kwargs.get("inferenceConfig"):
                     invocation_parameters = safe_json_dumps(inference_config)
                     _set_span_attribute(
-                        span, SpanAttributes.LLM_INVOCATION_PARAMETERS, invocation_parameters
+                        span, SpanAttributes.GEN_AI_REQUEST_PARAMETERS, invocation_parameters
                     )
 
                 aggregated_messages = []
@@ -279,7 +279,7 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
                     for key, value in _get_attributes_from_message_param(msg):
                         _set_span_attribute(
                             span,
-                            f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{key}",
+                            f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{idx}.{key}",
                             value,
                         )
                 last_message = aggregated_messages[-1]
@@ -309,24 +309,24 @@ def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Ca
                     )
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, response_text)
 
-                    span_prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0"
+                    span_prefix = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0"
                     _set_span_attribute(span, f"{span_prefix}.message.role", response_role)
                     _set_span_attribute(span, f"{span_prefix}.message.content", response_text)
 
                 if usage := response.get("usage"):
                     if input_token_count := usage.get("inputTokens"):
                         _set_span_attribute(
-                            span, SpanAttributes.LLM_TOKEN_COUNT_PROMPT, input_token_count
+                            span, SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, input_token_count
                         )
                     if response_token_count := usage.get("outputTokens"):
                         _set_span_attribute(
                             span,
-                            SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS,
                             response_token_count,
                         )
                     if total_token_count := usage.get("totalTokens"):
                         _set_span_attribute(
-                            span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_token_count
+                            span, SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_token_count
                         )
 
                 span.set_attributes(dict(get_attributes_from_context()))

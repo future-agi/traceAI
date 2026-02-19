@@ -442,9 +442,9 @@ class TestUtilityFunctions:
         attributes = payload_to_semantic_attributes(CBEventType.LLM, payload)
         
         assert SpanAttributes.INPUT_VALUE in attributes
-        assert SpanAttributes.LLM_MODEL_NAME in attributes
+        assert SpanAttributes.GEN_AI_REQUEST_MODEL in attributes
         assert attributes[SpanAttributes.INPUT_VALUE] == "What is the weather?"
-        assert attributes[SpanAttributes.LLM_MODEL_NAME] == "gpt-3.5-turbo"
+        assert attributes[SpanAttributes.GEN_AI_REQUEST_MODEL] == "gpt-3.5-turbo"
 
     def test_payload_to_semantic_attributes_embedding(self):
         """Test payload to semantic attributes conversion for embeddings."""

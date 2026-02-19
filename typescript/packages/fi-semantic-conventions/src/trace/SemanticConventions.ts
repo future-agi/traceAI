@@ -566,6 +566,29 @@ export const SemanticAttributePrefixes = {
     PROMPT_URL,
     RAW_INPUT: "raw.input",
     RAW_OUTPUT: "raw.output",
+
+    // Vector Database attributes
+    DB_SYSTEM: "db.system",
+    DB_OPERATION_NAME: "db.operation.name",
+    DB_NAMESPACE: "db.namespace",
+    DB_VECTOR_QUERY_TOP_K: "db.vector.query.top_k",
+    DB_VECTOR_QUERY_FILTER: "db.vector.query.filter",
+    DB_VECTOR_QUERY_INCLUDE_METADATA: "db.vector.query.include_metadata",
+    DB_VECTOR_QUERY_INCLUDE_VECTORS: "db.vector.query.include_vectors",
+    DB_VECTOR_QUERY_SCORE_THRESHOLD: "db.vector.query.score_threshold",
+    DB_VECTOR_QUERY_METRIC: "db.vector.query.metric",
+    DB_VECTOR_RESULTS_COUNT: "db.vector.results.count",
+    DB_VECTOR_RESULTS_SCORES: "db.vector.results.scores",
+    DB_VECTOR_RESULTS_IDS: "db.vector.results.ids",
+    DB_VECTOR_UPSERT_COUNT: "db.vector.upsert.count",
+    DB_VECTOR_UPSERT_DIMENSIONS: "db.vector.upsert.dimensions",
+    DB_VECTOR_DELETE_COUNT: "db.vector.delete.count",
+    DB_VECTOR_DELETE_ALL: "db.vector.delete.all",
+    DB_VECTOR_INDEX_NAME: "db.vector.index.name",
+    DB_VECTOR_COLLECTION_NAME: "db.vector.collection.name",
+    DB_VECTOR_INDEX_METRIC: "db.vector.index.metric",
+    DB_VECTOR_INDEX_DIMENSIONS: "db.vector.index.dimensions",
+    DB_VECTOR_NAMESPACE: "db.vector.namespace",
   } as const;
   
   export enum FISpanKind {
@@ -578,6 +601,7 @@ export const SemanticAttributePrefixes = {
     AGENT = "AGENT",
     GUARDRAIL = "GUARDRAIL",
     EVALUATOR = "EVALUATOR",
+    VECTOR_DB = "VECTOR_DB",
     UNKNOWN = "UNKNOWN",
   }
   
@@ -599,8 +623,18 @@ export const SemanticAttributePrefixes = {
     AI21 = "ai21",
     META = "meta",
     AMAZON = "amazon",
+    GROQ = "groq",
+    GOOGLE_GENERATIVE_AI = "google_generative_ai",
+    OLLAMA = "ollama",
+    TOGETHER = "together",
+    HUGGINGFACE = "huggingface",
+    VLLM = "vllm",
+    DEEPSEEK = "deepseek",
+    FIREWORKS = "fireworks",
+    CEREBRAS = "cerebras",
+    XAI = "xai",
   }
-  
+
   export enum LLMProvider {
     OPENAI = "openai",
     ANTHROPIC = "anthropic",
@@ -610,4 +644,135 @@ export const SemanticAttributePrefixes = {
     GOOGLE = "google",
     AWS = "aws",
     AZURE = "azure",
+    GROQ = "groq",
+    GOOGLE_GENERATIVE_AI = "google_generative_ai",
+    OLLAMA = "ollama",
+    TOGETHER = "together",
+    HUGGINGFACE = "huggingface",
+    VLLM = "vllm",
+    DEEPSEEK = "deepseek",
+    FIREWORKS = "fireworks",
+    CEREBRAS = "cerebras",
+    XAI = "xai",
+  }
+
+  /**
+   * Vector Database Semantic Conventions
+   *
+   * Based on OpenTelemetry database semantic conventions with extensions
+   * for vector-specific operations.
+   */
+
+  // Semantic attribute prefixes for vector databases
+  export const VectorDBAttributePrefixes = {
+    db: "db",
+    dbVector: "db.vector",
+    dbVectorQuery: "db.vector.query",
+    dbVectorResults: "db.vector.results",
+    dbVectorUpsert: "db.vector.upsert",
+    dbVectorDelete: "db.vector.delete",
+    dbVectorIndex: "db.vector.index",
+    dbVectorCollection: "db.vector.collection",
+  } as const;
+
+  // Core DB attributes (OTEL standard)
+  export const DB_SYSTEM = "db.system" as const;
+  export const DB_OPERATION_NAME = "db.operation.name" as const;
+  export const DB_NAMESPACE = "db.namespace" as const;
+
+  // Query attributes
+  export const DB_VECTOR_QUERY_TOP_K = "db.vector.query.top_k" as const;
+  export const DB_VECTOR_QUERY_FILTER = "db.vector.query.filter" as const;
+  export const DB_VECTOR_QUERY_INCLUDE_METADATA = "db.vector.query.include_metadata" as const;
+  export const DB_VECTOR_QUERY_INCLUDE_VECTORS = "db.vector.query.include_vectors" as const;
+  export const DB_VECTOR_QUERY_SCORE_THRESHOLD = "db.vector.query.score_threshold" as const;
+  export const DB_VECTOR_QUERY_METRIC = "db.vector.query.metric" as const;
+
+  // Result attributes
+  export const DB_VECTOR_RESULTS_COUNT = "db.vector.results.count" as const;
+  export const DB_VECTOR_RESULTS_SCORES = "db.vector.results.scores" as const;
+  export const DB_VECTOR_RESULTS_IDS = "db.vector.results.ids" as const;
+
+  // Upsert/Insert attributes
+  export const DB_VECTOR_UPSERT_COUNT = "db.vector.upsert.count" as const;
+  export const DB_VECTOR_UPSERT_DIMENSIONS = "db.vector.upsert.dimensions" as const;
+
+  // Delete attributes
+  export const DB_VECTOR_DELETE_COUNT = "db.vector.delete.count" as const;
+  export const DB_VECTOR_DELETE_ALL = "db.vector.delete.all" as const;
+
+  // Index/Collection attributes
+  export const DB_VECTOR_INDEX_NAME = "db.vector.index.name" as const;
+  export const DB_VECTOR_COLLECTION_NAME = "db.vector.collection.name" as const;
+  export const DB_VECTOR_INDEX_METRIC = "db.vector.index.metric" as const;
+  export const DB_VECTOR_INDEX_DIMENSIONS = "db.vector.index.dimensions" as const;
+
+  // Namespace
+  export const DB_VECTOR_NAMESPACE = "db.vector.namespace" as const;
+
+  /**
+   * Vector Database Semantic Conventions object
+   */
+  export const VectorDBSemanticConventions = {
+    // Core DB attributes
+    DB_SYSTEM,
+    DB_OPERATION_NAME,
+    DB_NAMESPACE,
+
+    // Query attributes
+    DB_VECTOR_QUERY_TOP_K,
+    DB_VECTOR_QUERY_FILTER,
+    DB_VECTOR_QUERY_INCLUDE_METADATA,
+    DB_VECTOR_QUERY_INCLUDE_VECTORS,
+    DB_VECTOR_QUERY_SCORE_THRESHOLD,
+    DB_VECTOR_QUERY_METRIC,
+
+    // Result attributes
+    DB_VECTOR_RESULTS_COUNT,
+    DB_VECTOR_RESULTS_SCORES,
+    DB_VECTOR_RESULTS_IDS,
+
+    // Upsert/Insert attributes
+    DB_VECTOR_UPSERT_COUNT,
+    DB_VECTOR_UPSERT_DIMENSIONS,
+
+    // Delete attributes
+    DB_VECTOR_DELETE_COUNT,
+    DB_VECTOR_DELETE_ALL,
+
+    // Index/Collection attributes
+    DB_VECTOR_INDEX_NAME,
+    DB_VECTOR_COLLECTION_NAME,
+    DB_VECTOR_INDEX_METRIC,
+    DB_VECTOR_INDEX_DIMENSIONS,
+
+    // Namespace
+    DB_VECTOR_NAMESPACE,
+  } as const;
+
+  /**
+   * Supported vector database systems
+   */
+  export enum VectorDBSystem {
+    CHROMADB = "chromadb",
+    PINECONE = "pinecone",
+    QDRANT = "qdrant",
+    WEAVIATE = "weaviate",
+    MILVUS = "milvus",
+    PGVECTOR = "pgvector",
+    REDIS = "redis",
+    MONGODB = "mongodb",
+    LANCEDB = "lancedb",
+  }
+
+  /**
+   * Vector distance/similarity metrics
+   */
+  export enum VectorMetric {
+    COSINE = "cosine",
+    EUCLIDEAN = "euclidean",
+    DOT_PRODUCT = "dot_product",
+    L2 = "l2",
+    IP = "ip",
+    HAMMING = "hamming",
   }

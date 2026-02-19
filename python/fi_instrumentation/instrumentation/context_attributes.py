@@ -8,14 +8,14 @@ from opentelemetry.util.types import AttributeValue
 from typing_extensions import Self
 
 CONTEXT_ATTRIBUTES = (
-    SpanAttributes.SESSION_ID,
+    SpanAttributes.GEN_AI_CONVERSATION_ID,
     SpanAttributes.USER_ID,
     SpanAttributes.METADATA,
     SpanAttributes.TAG_TAGS,
-    SpanAttributes.LLM_PROMPT_TEMPLATE,
-    SpanAttributes.LLM_PROMPT_TEMPLATE_LABEL,
-    SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION,
-    SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES,
+    SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME,
+    SpanAttributes.GEN_AI_PROMPT_TEMPLATE_LABEL,
+    SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION,
+    SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES,
     SimulatorAttributes.RUN_TEST_ID,
     SimulatorAttributes.TEST_EXECUTION_ID,
     SimulatorAttributes.CALL_EXECUTION_ID,
@@ -50,7 +50,7 @@ class _UsingAttributesContextManager(ContextDecorator):
     def attach_context(self) -> None:
         ctx = get_current()
         if self._session_id:
-            ctx = set_value(SpanAttributes.SESSION_ID, self._session_id, ctx)
+            ctx = set_value(SpanAttributes.GEN_AI_CONVERSATION_ID, self._session_id, ctx)
         if self._user_id:
             ctx = set_value(SpanAttributes.USER_ID, self._user_id, ctx)
         if self._metadata:
@@ -61,21 +61,21 @@ class _UsingAttributesContextManager(ContextDecorator):
             ctx = set_value(SpanAttributes.TAG_TAGS, self._tags, ctx)
         if self._prompt_template:
             ctx = set_value(
-                SpanAttributes.LLM_PROMPT_TEMPLATE, self._prompt_template, ctx
+                SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME, self._prompt_template, ctx
             )
         if self._prompt_template_label:
             ctx = set_value(
-                SpanAttributes.LLM_PROMPT_TEMPLATE_LABEL, self._prompt_template_label, ctx
+                SpanAttributes.GEN_AI_PROMPT_TEMPLATE_LABEL, self._prompt_template_label, ctx
             )
         if self._prompt_template_version:
             ctx = set_value(
-                SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION,
+                SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION,
                 self._prompt_template_version,
                 ctx,
             )
         if self._prompt_template_variables:
             ctx = set_value(
-                SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES,
+                SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES,
                 safe_json_dumps(self._prompt_template_variables),
                 ctx,
             )
@@ -243,10 +243,10 @@ class using_simulator_attributes(_UsingAttributesContextManager):
         }
         with using_simulator_attributes(simulator_attributes):
             # Tracing within this block will include the span attributes:
-            # "fi.simulator.run_test_id" = "550e8400-e29b-41d4-a716-446655440000"
-            # "fi.simulator.test_execution_id" = "660e8400-e29b-41d4-a716-446655440001"
-            # "fi.simulator.call_execution_id" = "770e8400-e29b-41d4-a716-446655440002"
-            # "fi.simulator.is_simulator_trace" = True
+            # "gen_ai.simulator.run_test_id" = "550e8400-e29b-41d4-a716-446655440000"
+            # "gen_ai.simulator.test_execution_id" = "660e8400-e29b-41d4-a716-446655440001"
+            # "gen_ai.simulator.call_execution_id" = "770e8400-e29b-41d4-a716-446655440002"
+            # "gen_ai.simulator.is_simulator_trace" = True
             ...
     """
     def __init__(self, simulator_attributes: Dict[str, Any]) -> None:

@@ -5,7 +5,8 @@
     "rootDir": ".",
     "baseUrl": "./src"
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
   "references": [
     { "path": "../fi-core" },
     { "path": "../fi-semantic-conventions" }

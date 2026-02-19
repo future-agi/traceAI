@@ -52,7 +52,7 @@ output/
 #csv files
 *.csv
 #virtual environments
-**/venv
+**/.venv
 **/env
 **/.env
 *.DS_Store
@@ -63,3 +63,6 @@ output/
 .DS_Store
 **/package-lock.json
 **/tsconfig.tsbuildinfo
+**/.fi
+**/.pytest_cache
+planning/

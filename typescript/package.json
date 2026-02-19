@@ -6,13 +6,18 @@
   "scripts": {
     "build": "pnpm run build:ordered",
     "build:deps": "pnpm --filter @traceai/fi-core --filter @traceai/fi-semantic-conventions run build",
-    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain --filter @traceai/bedrock --filter @traceai/vercel run build",
+    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain --filter @traceai/bedrock --filter @traceai/vercel --filter @traceai/chromadb --filter @traceai/pinecone --filter @traceai/qdrant --filter @traceai/weaviate --filter @traceai/milvus --filter @traceai/lancedb --filter @traceai/mongodb --filter @traceai/pgvector --filter @traceai/redis --filter @traceai/together --filter @traceai/huggingface --filter @traceai/vllm --filter @traceai/deepseek --filter @traceai/fireworks --filter @traceai/cerebras --filter @traceai/xai run build",
     "build:ordered": "pnpm run build:deps && pnpm run build:consumers",
     "test": "pnpm run -r test",
     "test:coverage": "pnpm run -r test:coverage",
     "test:watch": "pnpm run -r test:watch",
     "prepublishOnly": "pnpm run build && pnpm run test && pnpm run lint",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "test:e2e": "pnpm --filter traceai-e2e-tests run test",
+    "test:e2e:chromadb": "pnpm --filter traceai-e2e-tests run test:chromadb",
+    "test:e2e:qdrant": "pnpm --filter traceai-e2e-tests run test:qdrant",
+    "e2e:docker:up": "pnpm --filter traceai-e2e-tests run docker:up",
+    "e2e:docker:down": "pnpm --filter traceai-e2e-tests run docker:down"
   },
   "keywords": [
     "opentelemetry",
@@ -37,6 +42,22 @@
     "@traceai/langchain": "workspace:*",
     "@traceai/bedrock": "workspace:*",
     "@traceai/vercel": "workspace:*",
+    "@traceai/chromadb": "workspace:*",
+    "@traceai/pinecone": "workspace:*",
+    "@traceai/qdrant": "workspace:*",
+    "@traceai/weaviate": "workspace:*",
+    "@traceai/milvus": "workspace:*",
+    "@traceai/lancedb": "workspace:*",
+    "@traceai/mongodb": "workspace:*",
+    "@traceai/pgvector": "workspace:*",
+    "@traceai/redis": "workspace:*",
+    "@traceai/together": "workspace:*",
+    "@traceai/huggingface": "workspace:*",
+    "@traceai/vllm": "workspace:*",
+    "@traceai/deepseek": "workspace:*",
+    "@traceai/fireworks": "workspace:*",
+    "@traceai/cerebras": "workspace:*",
+    "@traceai/xai": "workspace:*",
     "uuid": "^11.1.0"
   }
 }

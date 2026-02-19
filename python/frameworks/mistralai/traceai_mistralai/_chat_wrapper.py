@@ -106,7 +106,7 @@ class _WithMistralAI(ABC):
         self,
         request_parameters: Dict[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield SpanAttributes.FI_SPAN_KIND, self._get_span_kind()
+        yield SpanAttributes.GEN_AI_SPAN_KIND, self._get_span_kind()
         try:
             yield from _process_input_messages(request_parameters.get("messages", []))
             yield from _raw_input(request_parameters)
@@ -405,7 +405,7 @@ class _ResponseAttributes:
                     .get("content", "")
                 )
 
-                yield SpanAttributes.RAW_OUTPUT, value
+                yield SpanAttributes.OUTPUT_VALUE, value
                 yield SpanAttributes.OUTPUT_VALUE, output_value
                 yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
             except Exception:

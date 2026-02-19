@@ -205,7 +205,7 @@ class TraceConfig:
     ) -> Optional[AttributeValue]:
         if (
             self.hide_llm_invocation_parameters
-            and key == SpanAttributes.LLM_INVOCATION_PARAMETERS
+            and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
         elif self.hide_inputs and key == SpanAttributes.INPUT_VALUE:
@@ -218,48 +218,48 @@ class TraceConfig:
             return None
         elif (
             self.hide_inputs or self.hide_input_messages
-        ) and SpanAttributes.LLM_INPUT_MESSAGES in key:
+        ) and SpanAttributes.GEN_AI_INPUT_MESSAGES in key:
             return None
         elif (
             self.hide_outputs or self.hide_output_messages
-        ) and SpanAttributes.LLM_OUTPUT_MESSAGES in key:
+        ) and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key:
             return None
         elif (
             self.hide_input_text
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageAttributes.MESSAGE_CONTENT in key
             and MessageAttributes.MESSAGE_CONTENTS not in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_output_text
-            and SpanAttributes.LLM_OUTPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key
             and MessageAttributes.MESSAGE_CONTENT in key
             and MessageAttributes.MESSAGE_CONTENTS not in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_input_text
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_TEXT in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_output_text
-            and SpanAttributes.LLM_OUTPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_TEXT in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_input_images
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_IMAGE in key
         ):
             return None
         elif (
             is_base64_url(value)  # type:ignore
             and len(value) > self.base64_image_max_length  # type:ignore
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_IMAGE in key
             and key.endswith(ImageAttributes.IMAGE_URL)
         ):

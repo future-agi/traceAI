@@ -632,8 +632,8 @@ class TestInstrumentationFunctions:
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         attribute_names = [args[0] for args in call_args_list]
         
-        assert SpanAttributes.FI_SPAN_KIND in attribute_names
-        assert SpanAttributes.LLM_MODEL_NAME in attribute_names
+        assert SpanAttributes.GEN_AI_SPAN_KIND in attribute_names
+        assert SpanAttributes.GEN_AI_REQUEST_MODEL in attribute_names
 
     def test_instrument_func_type_embedding(self):
         """Test _instrument_func_type_embedding function."""
@@ -652,7 +652,7 @@ class TestInstrumentationFunctions:
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         attribute_names = [args[0] for args in call_args_list]
         
-        assert SpanAttributes.FI_SPAN_KIND in attribute_names
+        assert SpanAttributes.GEN_AI_SPAN_KIND in attribute_names
         assert SpanAttributes.EMBEDDING_MODEL_NAME in attribute_names
 
     def test_instrument_func_type_image_generation(self):
@@ -672,8 +672,8 @@ class TestInstrumentationFunctions:
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         attribute_names = [args[0] for args in call_args_list]
         
-        assert SpanAttributes.FI_SPAN_KIND in attribute_names
-        assert SpanAttributes.LLM_MODEL_NAME in attribute_names
+        assert SpanAttributes.GEN_AI_SPAN_KIND in attribute_names
+        assert SpanAttributes.GEN_AI_REQUEST_MODEL in attribute_names
 
     def test_finalize_span(self, sample_completion_response):
         """Test _finalize_span function."""

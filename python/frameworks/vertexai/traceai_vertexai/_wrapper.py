@@ -135,26 +135,26 @@ class _Wrapper:
         span_name = inspect.stack()[1].function
         attributes = dict(get_attributes_from_context())
         span = self._tracer.start_span(name=span_name, attributes=attributes)
-        span.set_attribute(FI_SPAN_KIND, LLM)
+        span.set_attribute(GEN_AI_SPAN_KIND, LLM)
 
         if isinstance(request, proto.Message):
             input = request.__class__.to_dict(request)
-            span.set_attribute(RAW_INPUT, safe_json_dumps(input))
+            span.set_attribute(INPUT_VALUE, safe_json_dumps(input))
             extracted_data = _extract_image_data(input.get("contents", []))
 
             if input_data := extracted_data.get("filtered_messages"):
                 span.set_attribute(INPUT_VALUE, safe_json_dumps(input_data))
                 span.set_attribute(INPUT_MIME_TYPE, JSON)
-                span.set_attribute(LLM_PROVIDER, VERTEXAI)
+                span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
             if input_images := extracted_data.get("input_images"):
                 span.set_attribute(INPUT_IMAGES, safe_json_dumps(input_images))
             if eval_input := extracted_data.get("eval_input"):
-                span.set_attribute(EVAL_INPUT, safe_json_dumps(eval_input))
+                span.set_attribute(INPUT_VALUE, safe_json_dumps(eval_input))
             if query := extracted_data.get("query"):
-                span.set_attribute(QUERY, safe_json_dumps(query))
+                span.set_attribute(INPUT_VALUE, safe_json_dumps(query))
 
         else:
-            span.set_attribute(RAW_INPUT, safe_json_dumps(request))
+            span.set_attribute(INPUT_VALUE, safe_json_dumps(request))
             span.set_attribute(INPUT_VALUE, str(request))
         try:
             _update_span(request, span)
@@ -327,7 +327,7 @@ def _finish(span: Span, result: Any) -> None:
 
     if isinstance(result, proto.Message):
         raw_output = result.__class__.to_dict(result)
-        span.set_attribute(RAW_OUTPUT, safe_json_dumps(raw_output))
+        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(raw_output))
 
         if isinstance(result, v1.CountTokensResponse):
             output = result.total_tokens
@@ -346,7 +346,7 @@ def _finish(span: Span, result: Any) -> None:
                 ):
                     output = prediction["embeddings"]
                     vector = output.get("values")
-                    span.set_attribute(FI_SPAN_KIND, EMBEDDING)
+                    span.set_attribute(GEN_AI_SPAN_KIND, EMBEDDING)
                     span.set_attribute(EMBEDDING_EMBEDDINGS, safe_json_dumps(output))
                     span.set_attribute(
                         f"{EMBEDDING_EMBEDDINGS}.{idx}.{EMBEDDING_VECTOR}",
@@ -357,7 +357,7 @@ def _finish(span: Span, result: Any) -> None:
         span.set_attribute(OUTPUT_MIME_TYPE, JSON)
 
     elif result is not None:
-        span.set_attribute(RAW_OUTPUT, safe_json_dumps(result))
+        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(result))
         span.set_attribute(OUTPUT_VALUE, safe_json_dumps(result))
     try:
         _update_span(result, span)
@@ -381,9 +381,9 @@ def _update_span(obj: Any, span: Span) -> None: ...
 @_update_span.register(v1.GenerateContentRequest)
 @_update_span.register(v1beta1.GenerateContentRequest)
 def _(req: GenerateContentRequest, span: Span) -> None:
-    span.set_attribute(LLM_MODEL_NAME, req.model)
+    span.set_attribute(GEN_AI_REQUEST_MODEL, req.model)
     span.set_attribute(
-        LLM_INVOCATION_PARAMETERS,
+        GEN_AI_REQUEST_PARAMETERS,
         safe_json_dumps(
             (
                 v1.GenerationConfig.to_dict(req.generation_config)
@@ -395,12 +395,12 @@ def _(req: GenerateContentRequest, span: Span) -> None:
     msg_idx = -1
     if (system_instruction := req.system_instruction).parts:
         msg_idx += 1
-        prefix = f"{LLM_INPUT_MESSAGES}.{msg_idx}."
+        prefix = f"{GEN_AI_INPUT_MESSAGES}.{msg_idx}."
         for k, v in _parse_content(cast(Content, system_instruction), prefix, "system"):
             span.set_attribute(k, v)
     for content in cast(Iterable[Content], req.contents):
         msg_idx += 1
-        prefix = f"{LLM_INPUT_MESSAGES}.{msg_idx}."
+        prefix = f"{GEN_AI_INPUT_MESSAGES}.{msg_idx}."
         for k, v in _parse_content(content, prefix):
             span.set_attribute(k, v)
 
@@ -411,7 +411,7 @@ def _(resp: GenerateContentResponse, span: Span) -> None:
     for k, v in _parse_usage_metadata(resp.usage_metadata):
         span.set_attribute(k, v)
     for candidate in cast(Iterable[Candidate], resp.candidates):
-        prefix = f"{LLM_OUTPUT_MESSAGES}.{candidate.index}."
+        prefix = f"{GEN_AI_OUTPUT_MESSAGES}.{candidate.index}."
         for k, v in _parse_content(cast(Content, candidate.content), prefix):
             span.set_attribute(k, v)
 
@@ -426,18 +426,18 @@ def _(req: PredictRequest, span: Span) -> None:
         span: the OpenTelemetry span to update with attributes
     """
     if req.endpoint:
-        span.set_attribute(LLM_PROVIDER, VERTEXAI)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, VERTEXAI)
         span.set_attribute("prediction.endpoint", req.endpoint)
 
     if req.instances:
         for idx, instance in enumerate(req.instances):
             if prompt := instance.get("prompt"):
                 span.set_attribute(
-                    f"{LLM_INPUT_MESSAGES}.{idx}.{MESSAGE_CONTENT}",
+                    f"{GEN_AI_INPUT_MESSAGES}.{idx}.{MESSAGE_CONTENT}",
                     safe_json_dumps(prompt),
                 )
                 span.set_attribute(
-                    f"{LLM_INPUT_MESSAGES}.{idx}.{MESSAGE_ROLE}",
+                    f"{GEN_AI_INPUT_MESSAGES}.{idx}.{MESSAGE_ROLE}",
                     "user",
                 )
 
@@ -486,11 +486,11 @@ def _parse_usage_metadata(
     usage_metadata: UsageMetadata,
 ) -> Iterator[Tuple[str, AttributeValue]]:
     if prompt_token_count := usage_metadata.prompt_token_count:
-        yield LLM_TOKEN_COUNT_PROMPT, prompt_token_count
+        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_token_count
     if candidates_token_count := usage_metadata.candidates_token_count:
-        yield LLM_TOKEN_COUNT_COMPLETION, candidates_token_count
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, candidates_token_count
     if total_token_count := usage_metadata.total_token_count:
-        yield LLM_TOKEN_COUNT_TOTAL, total_token_count
+        yield GEN_AI_USAGE_TOTAL_TOKENS, total_token_count
 
 
 @stop_on_exception
@@ -625,9 +625,9 @@ def _parse_predictions(predictions: List[Any]) -> Iterator[Tuple[str, AttributeV
     for index, prediction in enumerate(predictions):
         if prediction.get("mimeType", "").startswith("image"):
             if image := prediction.get("bytesBase64Encoded"):
-                yield f"{LLM_OUTPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}.0.{MESSAGE_CONTENT_TYPE}", "image"
-                yield f"{LLM_OUTPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}.0.{MESSAGE_CONTENT_IMAGE}", image
-                yield f"{LLM_OUTPUT_MESSAGES}.{index}.{MESSAGE_ROLE}", "assistant"
+                yield f"{GEN_AI_OUTPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}.0.{MESSAGE_CONTENT_TYPE}", "image"
+                yield f"{GEN_AI_OUTPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}.0.{MESSAGE_CONTENT_IMAGE}", image
+                yield f"{GEN_AI_OUTPUT_MESSAGES}.{index}.{MESSAGE_ROLE}", "assistant"
 
 
 def _role(role: str) -> str:
@@ -700,23 +700,20 @@ def _extract_image_data(messages):
 IMAGE_URL = ImageAttributes.IMAGE_URL
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-EVAL_INPUT = SpanAttributes.EVAL_INPUT
 INPUT_IMAGES = SpanAttributes.INPUT_IMAGES
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
-QUERY = SpanAttributes.QUERY
+OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 JSON = FiMimeTypeValues.JSON.value
 LLM = FiSpanKindValues.LLM.value
 EMBEDDING = FiSpanKindValues.EMBEDDING.value
-LLM_PROVIDER = SpanAttributes.LLM_PROVIDER
+GEN_AI_PROVIDER_NAME = SpanAttributes.GEN_AI_PROVIDER_NAME
 VERTEXAI = FiLLMProviderValues.VERTEXAI.value
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENTS = MessageAttributes.MESSAGE_CONTENTS
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
@@ -731,9 +728,8 @@ MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
-OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
 EMBEDDING_EMBEDDINGS = SpanAttributes.EMBEDDING_EMBEDDINGS

@@ -118,10 +118,10 @@ def _instrument_func_type_completion(
         litellm.completion_with_retries()
         litellm.acompletion_with_retries() (async version of completion_with_retries)
     """
-    _set_span_attribute(span, SpanAttributes.RAW_INPUT, safe_json_dumps(kwargs))
-    _set_span_attribute(span, SpanAttributes.FI_SPAN_KIND, FiSpanKindValues.LLM.value)
+    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
+    _set_span_attribute(span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value)
     _set_span_attribute(
-        span, SpanAttributes.LLM_MODEL_NAME, kwargs.get("model", "unknown_model")
+        span, SpanAttributes.GEN_AI_REQUEST_MODEL, kwargs.get("model", "unknown_model")
     )
 
     if messages := kwargs.get("messages"):
@@ -135,21 +135,21 @@ def _instrument_func_type_completion(
                 span, SpanAttributes.INPUT_IMAGES, json.dumps(input_images)
             )
         if eval_input := process_messages.get("eval_input"):
-            _set_span_attribute(span, SpanAttributes.EVAL_INPUT, eval_input)
+            _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
         if query := process_messages.get("query"):
-            _set_span_attribute(span, SpanAttributes.QUERY, query)
+            _set_span_attribute(span, SpanAttributes.INPUT_VALUE, query)
 
         for index, input_message in list(enumerate(messages)):
             for key, value in _get_attributes_from_message_param(input_message):
                 _set_span_attribute(
-                    span, f"{SpanAttributes.LLM_INPUT_MESSAGES}.{index}.{key}", value
+                    span, f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{key}", value
                 )
 
     invocation_params = {
         k: v for k, v in kwargs.items() if k not in ["model", "messages"]
     }
     _set_span_attribute(
-        span, SpanAttributes.LLM_INVOCATION_PARAMETERS, json.dumps(invocation_params)
+        span, SpanAttributes.GEN_AI_REQUEST_PARAMETERS, json.dumps(invocation_params)
     )
 
 
@@ -161,10 +161,10 @@ def _instrument_func_type_embedding(
         litellm.embedding()
         litellm.aembedding() (async version of embedding)
     """
-    _set_span_attribute(span, SpanAttributes.RAW_INPUT, safe_json_dumps(kwargs))
+    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
     _set_span_attribute(
         span,
-        SpanAttributes.FI_SPAN_KIND,
+        SpanAttributes.GEN_AI_SPAN_KIND,
         FiSpanKindValues.EMBEDDING.value,
     )
     _set_span_attribute(
@@ -186,10 +186,10 @@ def _instrument_func_type_image_generation(
         litellm.image_generation()
         litellm.aimage_generation() (async version of image_generation)
     """
-    _set_span_attribute(span, SpanAttributes.RAW_INPUT, safe_json_dumps(kwargs))
-    _set_span_attribute(span, SpanAttributes.FI_SPAN_KIND, FiSpanKindValues.LLM.value)
+    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, safe_json_dumps(kwargs))
+    _set_span_attribute(span, SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value)
     if model := kwargs.get("model"):
-        _set_span_attribute(span, SpanAttributes.LLM_MODEL_NAME, model)
+        _set_span_attribute(span, SpanAttributes.GEN_AI_REQUEST_MODEL, model)
     if prompt := kwargs.get("prompt"):
         _set_span_attribute(span, SpanAttributes.INPUT_VALUE, str(prompt))
 
@@ -204,7 +204,7 @@ def _finalize_span(span: trace_api.Span, result: Any) -> None:
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, output)
                 for key, value in _get_attributes_from_message_param(choice.message):
                     _set_span_attribute(
-                        span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{key}", value
+                        span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{key}", value
                     )
     elif isinstance(result, EmbeddingResponse):
         if result_data := result.data:
@@ -218,31 +218,31 @@ def _finalize_span(span: trace_api.Span, result: Any) -> None:
                 span, SpanAttributes.EMBEDDING_EMBEDDINGS, safe_json_dumps(result_data)
             )
     elif isinstance(result, ImageResponse):
-        _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_ROLE}", "assistant")
+        _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_ROLE}", "assistant")
         for idx,img_data in enumerate(result.data):
-            _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image")
+            _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image")
             if img_data:
                 if isinstance(img_data, Image) and (
                     url := (img_data.url or img_data.b64_json)
                 ):
-                    _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
+                    _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
                 elif isinstance(img_data, dict) and (
                     url := (img_data.get("url") or img_data.get("b64_json"))
                 ):
-                    _set_span_attribute(span, f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
+                    _set_span_attribute(span, f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{0}.{MessageAttributes.MESSAGE_CONTENT}.{idx}.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", url)
                     _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, url)
     if hasattr(result, "usage"):
         _set_span_attribute(
-            span, SpanAttributes.LLM_TOKEN_COUNT_PROMPT, result.usage["prompt_tokens"]
+            span, SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, result.usage["prompt_tokens"]
         )
         _set_span_attribute(
             span,
-            SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS,
             result.usage["completion_tokens"],
         )
         _set_span_attribute(
-            span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, result.usage["total_tokens"]
+            span, SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, result.usage["total_tokens"]
         )
 
 
@@ -554,7 +554,7 @@ class StreamingIteratorWrapper:
             # After the iterator is exhausted, set the span attributes
             _set_span_attribute(
                 self.span,
-                SpanAttributes.RAW_OUTPUT,
+                SpanAttributes.OUTPUT_VALUE,
                 safe_json_dumps(self.processed_chunks),
             )
             _set_span_attribute(
@@ -614,7 +614,7 @@ class AsyncStreamingIteratorWrapper:
             # After the iterator is exhausted, set the span attributes
             _set_span_attribute(
                 self.span,
-                SpanAttributes.RAW_OUTPUT,
+                SpanAttributes.OUTPUT_VALUE,
                 safe_json_dumps(self.processed_chunks),
             )
             _set_span_attribute(
@@ -638,14 +638,14 @@ def _set_raw_output(span: trace_api.Span, result: Any) -> None:
         return
     if hasattr(result, "to_dict"):
         _set_span_attribute(
-            span, SpanAttributes.RAW_OUTPUT, safe_json_dumps(result.to_dict())
+            span, SpanAttributes.OUTPUT_VALUE, safe_json_dumps(result.to_dict())
         )
     elif hasattr(result, "__dict__"):
         _set_span_attribute(
-            span, SpanAttributes.RAW_OUTPUT, safe_json_dumps(result.__dict__)
+            span, SpanAttributes.OUTPUT_VALUE, safe_json_dumps(result.__dict__)
         )
     else:
-        _set_span_attribute(span, SpanAttributes.RAW_OUTPUT, safe_json_dumps(result))
+        _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, safe_json_dumps(result))
 
 
 def _process_messages(messages):

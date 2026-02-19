@@ -15,8 +15,22 @@ from traceai_langchain.package import _instruments
 from traceai_langchain.version import __version__
 from wrapt import wrap_function_wrapper  # type: ignore
 
+# LangGraph instrumentation exports
+from traceai_langchain._langgraph import (
+    LangGraphInstrumentor,
+    LangGraphAttributes,
+)
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+__all__ = [
+    "LangChainInstrumentor",
+    "LangGraphInstrumentor",
+    "LangGraphAttributes",
+    "get_current_span",
+    "get_ancestor_spans",
+]
 
 _MODULE = "langchain_core"
 

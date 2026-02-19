@@ -60,10 +60,10 @@ class _InvokeModelWithResponseStream(_WithTracer):
                         _use_span(span),
                     )
                     return response
-            span.set_attribute(LLM_INVOCATION_PARAMETERS, kwargs["body"])
+            span.set_attribute(GEN_AI_REQUEST_PARAMETERS, kwargs["body"])
             span.set_attribute(INPUT_MIME_TYPE, JSON)
             span.set_attribute(INPUT_VALUE, kwargs["body"])
-            span.set_attribute(FI_SPAN_KIND, LLM)
+            span.set_attribute(GEN_AI_SPAN_KIND, LLM)
             span.end()
             return response
 
@@ -87,8 +87,8 @@ class _InvokeAgentWithResponseStream(_WithTracer):
             end_on_exit=False,
         ) as span:
             attributes = {
-                SpanAttributes.FI_SPAN_KIND: FiSpanKindValues.AGENT.value,
-                SpanAttributes.LLM_PROVIDER: FiLLMProviderValues.AWS.value,
+                SpanAttributes.GEN_AI_SPAN_KIND: FiSpanKindValues.AGENT.value,
+                SpanAttributes.GEN_AI_PROVIDER_NAME: FiLLMProviderValues.AWS.value,
             }
             if input_text := kwargs.get("inputText"):
                 attributes[SpanAttributes.INPUT_VALUE] = input_text
@@ -145,17 +145,17 @@ INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 JSON = FiMimeTypeValues.JSON.value
 LLM = FiSpanKindValues.LLM.value
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
 MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
 MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
