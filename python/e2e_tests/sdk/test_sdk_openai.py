@@ -23,12 +23,16 @@ def openai_client():
 
     # Import and instrument
     from fi_instrumentation import register
-    from traceai_openai import OpenAIInstrumentor
+    try:
+        from traceai_openai import OpenAIInstrumentor
+    except (ImportError, AttributeError):
+        pytest.skip("traceai_openai not installed or incompatible")
 
     # Register tracer - sends to FutureAGI cloud
     tracer_provider = register(
-        project_name="e2e_test_openai",
-        project_version_name="1.0.0",
+        project_name=config.project_name,
+        project_version_name=config.project_version_name,
+        project_type=config.project_type,
         verbose=False,  # Reduce output noise
     )
 

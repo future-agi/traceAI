@@ -22,12 +22,16 @@ def groq_client():
 
     # Import and instrument
     from fi_instrumentation import register
-    from traceai_groq import GroqInstrumentor
+    try:
+        from traceai_groq import GroqInstrumentor
+    except (ImportError, AttributeError):
+        pytest.skip("traceai_groq not installed or incompatible")
 
     # Register tracer
     tracer_provider = register(
-        project_name="e2e_test_groq",
-        project_version_name="1.0.0",
+        project_name=config.project_name,
+        project_version_name=config.project_version_name,
+        project_type=config.project_type,
         verbose=False,
     )
 

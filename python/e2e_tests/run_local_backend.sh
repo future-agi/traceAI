@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run local backend for E2E testing
 
-cd /Users/nikhilpareek/Documents/futureAGI/code/core/core-backend
+# cd path/to/backend
 
 # Override Docker hostnames with localhost
 export PG_HOST=localhost

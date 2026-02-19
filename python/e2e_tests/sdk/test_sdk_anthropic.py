@@ -23,12 +23,16 @@ def anthropic_client():
 
     # Import and instrument
     from fi_instrumentation import register
-    from traceai_anthropic import AnthropicInstrumentor
+    try:
+        from traceai_anthropic import AnthropicInstrumentor
+    except (ImportError, AttributeError):
+        pytest.skip("traceai_anthropic not installed or incompatible")
 
     # Register tracer - sends to FutureAGI cloud
     tracer_provider = register(
-        project_name="e2e_test_anthropic",
-        project_version_name="1.0.0",
+        project_name=config.project_name,
+        project_version_name=config.project_version_name,
+        project_type=config.project_type,
         verbose=False,
     )
 
@@ -54,7 +58,10 @@ def async_anthropic_client():
 
     os.environ["ANTHROPIC_API_KEY"] = config.anthropic_api_key
 
-    from anthropic import AsyncAnthropic
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError:
+        pytest.skip("anthropic not installed")
 
     return AsyncAnthropic()
 

@@ -22,12 +22,15 @@ def setup_langchain():
 
     # Import and instrument
     from fi_instrumentation import register
-    from traceai_langchain import LangChainInstrumentor
+    try:
+        from traceai_langchain import LangChainInstrumentor
+    except (ImportError, AttributeError):
+        pytest.skip("traceai_langchain not installed or incompatible")
 
     # Register tracer
     tracer_provider = register(
-        project_name="e2e_test_langchain",
-        project_version_name="1.0.0",
+        project_name=config.project_name,
+        project_version_name=config.project_version_name,
     )
 
     # Instrument LangChain

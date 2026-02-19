@@ -6,8 +6,9 @@ import pytest
 import requests
 import uuid
 import time
+import random
 from datetime import datetime
-from typing import Generator, Dict, Any, Optional
+from typing import Generator, Dict, Any, List, Optional
 
 from config import config
 
@@ -80,6 +81,73 @@ def unique_span_id() -> str:
     """Generate a unique span ID."""
     return f"span_{uuid.uuid4().hex[:16]}"
 
+
+# ── Google OpenAI-compat client fixture ──
+
+@pytest.fixture(scope="module")
+def google_openai_client():
+    """Create an OpenAI client pointed at Google's OpenAI-compatible endpoint.
+
+    This is the primary fixture for testing OpenAI-wrapper instrumentors
+    (XAI, Fireworks, DeepSeek, Cerebras, etc.) using only a Google API key.
+    """
+    if not config.has_google():
+        pytest.skip("GOOGLE_API_KEY not set")
+
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url=config.google_openai_base_url,
+        api_key=config.google_api_key,
+    )
+    return client
+
+
+@pytest.fixture(scope="module")
+def async_google_openai_client():
+    """Create an async OpenAI client pointed at Google's OpenAI-compatible endpoint."""
+    if not config.has_google():
+        pytest.skip("GOOGLE_API_KEY not set")
+
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        base_url=config.google_openai_base_url,
+        api_key=config.google_api_key,
+    )
+    return client
+
+
+# ── Vector DB helper fixtures ──
+
+@pytest.fixture
+def generate_test_embedding():
+    """Generate a deterministic test embedding vector of given dimension."""
+    def _generate(dim: int = 128, seed: int = 42) -> List[float]:
+        rng = random.Random(seed)
+        return [rng.uniform(-1.0, 1.0) for _ in range(dim)]
+    return _generate
+
+
+@pytest.fixture
+def sample_documents():
+    """Sample documents for vector DB tests."""
+    return [
+        "The quick brown fox jumps over the lazy dog.",
+        "Machine learning is a subset of artificial intelligence.",
+        "Python is a popular programming language for data science.",
+        "OpenTelemetry provides observability for cloud-native software.",
+        "Vector databases store and query high-dimensional embeddings.",
+    ]
+
+
+@pytest.fixture
+def sample_embeddings(generate_test_embedding):
+    """Pre-generated embeddings for 5 sample documents (dim=128)."""
+    return [generate_test_embedding(128, seed=i) for i in range(5)]
+
+
+# ── Tracer provider fixture ──
 
 @pytest.fixture
 def tracer_provider(test_project):
@@ -167,24 +235,59 @@ def trace_verifier(api_session, test_project):
     return TraceVerifier(api_session, test_project.get("id", ""))
 
 
-# Markers for conditional test execution
+# ── Markers for conditional test execution ──
+
 def pytest_configure(config):
     """Add custom markers."""
-    config.addinivalue_line(
-        "markers", "openai: mark test as requiring OpenAI API key"
-    )
-    config.addinivalue_line(
-        "markers", "anthropic: mark test as requiring Anthropic API key"
-    )
-    config.addinivalue_line(
-        "markers", "groq: mark test as requiring Groq API key"
-    )
-    config.addinivalue_line(
-        "markers", "bedrock: mark test as requiring AWS Bedrock credentials"
-    )
-    config.addinivalue_line(
-        "markers", "vertexai: mark test as requiring Vertex AI credentials"
-    )
-    config.addinivalue_line(
-        "markers", "slow: mark test as slow running"
-    )
+    markers = [
+        "openai: mark test as requiring OpenAI API key",
+        "anthropic: mark test as requiring Anthropic API key",
+        "groq: mark test as requiring Groq API key",
+        "bedrock: mark test as requiring AWS Bedrock credentials",
+        "vertexai: mark test as requiring Vertex AI credentials",
+        "google: mark test as requiring Google API key",
+        "google_genai: mark test as requiring Google GenAI SDK",
+        "xai: mark test as requiring XAI API key",
+        "fireworks: mark test as requiring Fireworks API key",
+        "deepseek: mark test as requiring DeepSeek API key",
+        "cerebras: mark test as requiring Cerebras API key",
+        "cohere: mark test as requiring Cohere API key",
+        "mistral: mark test as requiring Mistral API key",
+        "together: mark test as requiring Together API key",
+        "huggingface: mark test as requiring HuggingFace API key",
+        "ollama: mark test as requiring Ollama server",
+        "portkey: mark test as requiring Portkey API key",
+        "pinecone: mark test as requiring Pinecone API key",
+        "litellm: mark test as requiring LiteLLM",
+        "langchain: mark test as requiring LangChain",
+        "llamaindex: mark test as requiring LlamaIndex",
+        "crewai: mark test as requiring CrewAI",
+        "autogen: mark test as requiring AutoGen",
+        "pydantic_ai: mark test as requiring PydanticAI",
+        "instructor: mark test as requiring Instructor",
+        "dspy: mark test as requiring DSPy",
+        "openai_agents: mark test as requiring OpenAI Agents SDK",
+        "haystack: mark test as requiring Haystack",
+        "smolagents: mark test as requiring Smolagents",
+        "google_adk: mark test as requiring Google ADK",
+        "agno: mark test as requiring Agno",
+        "strands: mark test as requiring AWS Strands",
+        "beeai: mark test as requiring BeeAI",
+        "claude_agent_sdk: mark test as requiring Claude Agent SDK",
+        "chromadb: mark test as requiring ChromaDB",
+        "lancedb: mark test as requiring LanceDB",
+        "qdrant: mark test as requiring Qdrant",
+        "weaviate: mark test as requiring Weaviate",
+        "milvus: mark test as requiring Milvus",
+        "pgvector: mark test as requiring pgvector",
+        "redis_vector: mark test as requiring Redis + RediSearch",
+        "mongodb: mark test as requiring MongoDB",
+        "guardrails: mark test as requiring Guardrails AI",
+        "mcp_server: mark test as requiring MCP server",
+        "vllm: mark test as requiring vLLM server",
+        "livekit: mark test as requiring LiveKit",
+        "pipecat: mark test as requiring Pipecat",
+        "slow: mark test as slow running",
+    ]
+    for marker in markers:
+        config.addinivalue_line("markers", marker)

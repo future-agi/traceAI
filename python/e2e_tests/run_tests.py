@@ -8,8 +8,62 @@ Runs E2E tests with configurable options.
 import argparse
 import subprocess
 import sys
-import os
 from pathlib import Path
+
+# All SDK choices for --sdk flag
+SDK_CHOICES = [
+    "all",
+    # LLM Providers
+    "openai",
+    "anthropic",
+    "groq",
+    "litellm",
+    "google_genai",
+    "xai",
+    "fireworks",
+    "deepseek",
+    "cerebras",
+    "cohere",
+    "mistralai",
+    "together",
+    "ollama",
+    "huggingface",
+    "bedrock",
+    "vertexai",
+    # Agent Frameworks
+    "langchain",
+    "llamaindex",
+    "crewai",
+    "autogen",
+    "pydantic_ai",
+    "instructor",
+    "dspy",
+    "openai_agents",
+    "haystack",
+    "smolagents",
+    "google_adk",
+    "agno",
+    "strands",
+    "beeai",
+    "claude_agent_sdk",
+    # Vector DBs
+    "chromadb",
+    "lancedb",
+    "qdrant",
+    "pinecone",
+    "weaviate",
+    "milvus",
+    "pgvector",
+    "redis",
+    "mongodb",
+    # Infrastructure & Specialty
+    "guardrails",
+    "mcp",
+    "vllm",
+    "portkey",
+    "livekit",
+    "pipecat",
+]
 
 
 def main():
@@ -22,9 +76,15 @@ def main():
     )
     parser.add_argument(
         "--sdk",
-        choices=["openai", "anthropic", "groq", "langchain", "litellm", "all"],
+        choices=SDK_CHOICES,
         default="all",
         help="Specific SDK to test (for sdk suite)",
+    )
+    parser.add_argument(
+        "--tier",
+        choices=["all", "a", "b"],
+        default="all",
+        help="Tier A = runnable with Google key, Tier B = needs native keys",
     )
     parser.add_argument(
         "--verbose", "-v",

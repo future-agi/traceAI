@@ -2,6 +2,7 @@
 E2E Tests for LiteLLM Instrumentation
 
 Tests LiteLLM's unified interface to multiple LLM providers.
+Includes Google Gemini tests that run with just a Google API key.
 """
 
 import pytest
@@ -9,7 +10,7 @@ import os
 import time
 from typing import Dict, Any
 
-from config import config, skip_if_no_openai, skip_if_no_anthropic
+from config import config, skip_if_no_openai, skip_if_no_anthropic, skip_if_no_google
 
 
 @pytest.fixture(scope="module")
@@ -22,15 +23,20 @@ def setup_litellm():
         os.environ["ANTHROPIC_API_KEY"] = config.anthropic_api_key
     if config.has_groq():
         os.environ["GROQ_API_KEY"] = config.groq_api_key
+    if config.has_google():
+        os.environ["GEMINI_API_KEY"] = config.google_api_key
 
     # Import and instrument
     from fi_instrumentation import register
-    from traceai_litellm import LiteLLMInstrumentor
+    try:
+        from traceai_litellm import LiteLLMInstrumentor
+    except (ImportError, AttributeError):
+        pytest.skip("traceai_litellm not installed or incompatible")
 
     # Register tracer
     tracer_provider = register(
-        project_name="e2e_test_litellm",
-        project_version_name="1.0.0",
+        project_name=config.project_name,
+        project_version_name=config.project_version_name,
     )
 
     # Instrument LiteLLM
@@ -40,6 +46,115 @@ def setup_litellm():
 
     # Cleanup
     LiteLLMInstrumentor().uninstrument()
+
+
+@skip_if_no_google
+class TestLiteLLMGoogle:
+    """Test LiteLLM with Google Gemini backend."""
+
+    def test_gemini_completion(self, setup_litellm):
+        """Test Gemini via LiteLLM."""
+        import litellm
+
+        response = litellm.completion(
+            model=f"gemini/{config.google_model}",
+            messages=[
+                {"role": "user", "content": "Say hello in one word."}
+            ],
+            max_tokens=20,
+        )
+
+        assert response.choices[0].message.content is not None
+        time.sleep(2)
+        print(f"Response: {response.choices[0].message.content}")
+
+    def test_gemini_streaming(self, setup_litellm):
+        """Test Gemini streaming via LiteLLM."""
+        import litellm
+
+        response = litellm.completion(
+            model=f"gemini/{config.google_model}",
+            messages=[{"role": "user", "content": "Count 1 to 3."}],
+            max_tokens=30,
+            stream=True,
+        )
+
+        chunks = []
+        for chunk in response:
+            if chunk.choices[0].delta.content:
+                chunks.append(chunk.choices[0].delta.content)
+
+        assert len(chunks) > 0
+        print(f"Streamed: {''.join(chunks)}")
+
+    def test_gemini_with_system_message(self, setup_litellm):
+        """Test Gemini with system message via LiteLLM."""
+        import litellm
+
+        response = litellm.completion(
+            model=f"gemini/{config.google_model}",
+            messages=[
+                {"role": "system", "content": "You respond in exactly one word."},
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+            max_tokens=10,
+        )
+
+        assert response.choices[0].message.content is not None
+
+    def test_gemini_tool_calling(self, setup_litellm):
+        """Test Gemini function calling via LiteLLM."""
+        import litellm
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string", "description": "City name"}
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+
+        response = litellm.completion(
+            model=f"gemini/{config.google_model}",
+            messages=[
+                {"role": "user", "content": "What's the weather in Paris?"}
+            ],
+            tools=tools,
+            tool_choice="auto",
+            max_tokens=100,
+        )
+
+        message = response.choices[0].message
+        if message.tool_calls:
+            assert len(message.tool_calls) > 0
+            print(f"Tool call: {message.tool_calls[0].function.name}")
+
+
+@skip_if_no_google
+class TestLiteLLMGoogleAsync:
+    """Test async LiteLLM with Google backend."""
+
+    @pytest.mark.asyncio
+    async def test_async_gemini_completion(self, setup_litellm):
+        """Test async Gemini completion."""
+        import litellm
+
+        response = await litellm.acompletion(
+            model=f"gemini/{config.google_model}",
+            messages=[{"role": "user", "content": "Say async briefly."}],
+            max_tokens=10,
+        )
+
+        assert response.choices[0].message.content is not None
 
 
 @skip_if_no_openai
