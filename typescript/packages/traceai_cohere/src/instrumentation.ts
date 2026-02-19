@@ -246,8 +246,8 @@ export class CohereInstrumentation extends InstrumentationBase {
                     [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
                     [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                       JSON.stringify(invocationParameters),
-                    [SemanticConventions.LLM_SYSTEM]: LLMSystem.COHERE,
                     [SemanticConventions.LLM_PROVIDER]: LLMProvider.COHERE,
+                    [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                     ...getChatInputMessagesAttributes(request),
                     ...getChatToolsAttributes(request),
                     [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
@@ -311,8 +311,8 @@ export class CohereInstrumentation extends InstrumentationBase {
                   [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
                   [SemanticConventions.INPUT_VALUE]: JSON.stringify(request.texts),
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.LLM_SYSTEM]: LLMSystem.COHERE,
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.COHERE,
+                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
                   ...getEmbedTextAttributes(request),
                   [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
                 },
@@ -371,8 +371,8 @@ export class CohereInstrumentation extends InstrumentationBase {
                   [SemanticConventions.LLM_MODEL_NAME]: modelName,
                   [SemanticConventions.INPUT_VALUE]: request.query,
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-                  [SemanticConventions.LLM_SYSTEM]: LLMSystem.COHERE,
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.COHERE,
+                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "rerank",
                   "cohere.rerank.query": request.query,
                   "cohere.rerank.documents_count": request.documents.length,
                   "cohere.rerank.top_n": request.top_n,
@@ -460,31 +460,21 @@ export class CohereInstrumentation extends InstrumentationBase {
  * Converts the chat request to LLM input messages
  */
 function getChatInputMessagesAttributes(request: CohereChatRequest): Attributes {
-  const attributes: Attributes = {};
-  let index = 0;
+  const messages: Record<string, unknown>[] = [];
 
-  // Add preamble as system message if present
   if (request.preamble) {
-    attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.${SemanticConventions.MESSAGE_ROLE}`] = 'system';
-    attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.${SemanticConventions.MESSAGE_CONTENT}`] = request.preamble;
-    index++;
+    messages.push({ role: 'system', content: request.preamble });
   }
 
-  // Add chat history
   if (request.chat_history) {
     request.chat_history.forEach((msg) => {
-      const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.`;
-      attributes[`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`] = msg.role;
-      attributes[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = msg.message;
-      index++;
+      messages.push({ role: msg.role, content: msg.message });
     });
   }
 
-  // Add current message
-  attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.${SemanticConventions.MESSAGE_ROLE}`] = 'user';
-  attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.${SemanticConventions.MESSAGE_CONTENT}`] = request.message;
+  messages.push({ role: 'user', content: request.message });
 
-  return attributes;
+  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]" };
 }
 
 /**
@@ -494,34 +484,22 @@ function getChatToolsAttributes(request: CohereChatRequest): Attributes {
   if (!request.tools) {
     return {};
   }
-  return request.tools.reduce((acc: Attributes, tool, index) => {
-    const key = `${SemanticConventions.LLM_TOOLS}.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`;
-    acc[key] = safelyJSONStringify(tool) ?? '';
-    return acc;
-  }, {});
+  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(request.tools) ?? "[]" };
 }
 
 /**
  * Gets chat output messages attributes
  */
 function getChatOutputMessagesAttributes(response: CohereChatResponse): Attributes {
-  const indexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
-  const attributes: Attributes = {
-    [`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: 'assistant',
-    [`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]: response.text,
-  };
+  const msg: Record<string, unknown> = { role: 'assistant', content: response.text };
 
-  // Add tool calls if present
   if (response.tool_calls) {
-    response.tool_calls.forEach((toolCall, idx) => {
-      const toolCallPrefix = `${indexPrefix}${SemanticConventions.MESSAGE_TOOL_CALLS}.${idx}.`;
-      attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`] = toolCall.name;
-      attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`] =
-        JSON.stringify(toolCall.parameters);
-    });
+    msg.tool_calls = response.tool_calls.map((tc) => ({
+      function: { name: tc.name, arguments: JSON.stringify(tc.parameters) },
+    }));
   }
 
-  return attributes;
+  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
 }
 
 /**

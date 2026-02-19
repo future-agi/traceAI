@@ -384,8 +384,8 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                 JSON.stringify(args.parameters ?? {}),
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.HUGGINGFACE,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
               [`${SemanticConventions.LLM_PROMPTS}.0`]: args.inputs,
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
             },
@@ -448,8 +448,8 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(args),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.HUGGINGFACE,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(args),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
             },
@@ -477,6 +477,9 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
             [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
             [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
             [SemanticConventions.LLM_MODEL_NAME]: result.model,
+            [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+            [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
+            [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(result.choices.map(c => c.finish_reason)) ?? "[]",
             ...getChatOutputMessagesAttributes(result),
             ...getUsageAttributes(result),
             [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -515,8 +518,8 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(args),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.HUGGINGFACE,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(args),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
             },
@@ -574,8 +577,8 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.EMBEDDING_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(args),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.HUGGINGFACE,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
               ...getEmbeddingInputAttributes(inputTexts),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
             },
@@ -641,7 +644,6 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                 JSON.stringify(args.parameters ?? {}),
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.HUGGINGFACE,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
             },
@@ -704,7 +706,6 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: args.inputs,
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.HUGGINGFACE,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
             },
@@ -767,7 +768,6 @@ export class HuggingFaceInstrumentation extends InstrumentationBase {
               [SemanticConventions.LLM_MODEL_NAME]: args.model ?? "unknown",
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(args.inputs),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.HUGGINGFACE,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.HUGGINGFACE,
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(args) ?? "",
             },
@@ -887,12 +887,10 @@ async function* wrapChatStream(
     throw error;
   }
 
-  const messageIndexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
   const attributes: Attributes = {
     [SemanticConventions.OUTPUT_VALUE]: fullContent,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]: fullContent,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: "assistant",
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "assistant", content: fullContent }]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
 
@@ -902,21 +900,21 @@ async function* wrapChatStream(
 }
 
 /**
- * Gets input message attributes for chat requests
+ * Gets input message attributes for chat requests (JSON blob)
  */
 function getChatInputMessagesAttributes(request: HFChatCompletionInput): Attributes {
-  return request.messages.reduce((acc, message, index) => {
-    const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.`;
-    acc[`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`] = message.role;
+  const serialized = request.messages.map((message) => {
+    const obj: Record<string, unknown> = { role: message.role };
     if (message.content) {
-      acc[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = message.content;
+      obj.content = message.content;
     }
-    return acc;
-  }, {} as Attributes);
+    return obj;
+  });
+  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
 }
 
 /**
- * Gets output message attributes from chat response
+ * Gets output message attributes from chat response (JSON blob)
  */
 function getChatOutputMessagesAttributes(response: HFChatCompletionOutput): Attributes {
   const choice = response.choices[0];
@@ -924,16 +922,12 @@ function getChatOutputMessagesAttributes(response: HFChatCompletionOutput): Attr
     return {};
   }
 
-  const indexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
-  const attributes: Attributes = {
-    [`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: choice.message.role,
-  };
-
+  const msg: Record<string, unknown> = { role: choice.message.role };
   if (choice.message.content) {
-    attributes[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = choice.message.content;
+    msg.content = choice.message.content;
   }
 
-  return attributes;
+  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
 }
 
 /**

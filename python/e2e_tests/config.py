@@ -100,11 +100,16 @@ class TestConfig:
 
     # Test settings
     project_name: str = os.getenv("E2E_PROJECT_NAME", "e2e_test_all")
-    project_version_name: str = os.getenv("E2E_PROJECT_VERSION", "1.0.0")
     project_type: ProjectType = (
         ProjectType.OBSERVE
         if os.getenv("E2E_PROJECT_TYPE", "experiment").lower() == "observe"
         else ProjectType.EXPERIMENT
+    )
+    # OBSERVE projects don't allow a version name
+    project_version_name: Optional[str] = (
+        None
+        if os.getenv("E2E_PROJECT_TYPE", "experiment").lower() == "observe"
+        else os.getenv("E2E_PROJECT_VERSION", "1.0.0")
     )
     test_project_prefix: str = "e2e_test_"
     cleanup_after_tests: bool = True

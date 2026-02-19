@@ -15,7 +15,7 @@ import {
   SpanStatusCode,
   Span,
 } from "@opentelemetry/api";
-import { SemanticConventions, FISpanKind, LLMSystem, LLMProvider, MimeType } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind, LLMProvider, MimeType } from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { FITracer, safelyJSONStringify, TraceConfigOptions } from "@traceai/fi-core";
 import { VERSION } from "./version";
@@ -113,8 +113,8 @@ export class AnthropicInstrumentation extends InstrumentationBase{
             attributes: {
               [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
               [SemanticConventions.LLM_MODEL_NAME]: params.model,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.ANTHROPIC,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.ANTHROPIC,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safelyJSONStringify(invocationParameters) ?? "",
               ...getAnthropicInputMessagesAttributes(params),
               ...getAnthropicToolsAttributes(params),
@@ -141,36 +141,49 @@ export class AnthropicInstrumentation extends InstrumentationBase{
                   }
                   const { reconstructedMessage } = aggregateAnthropicStreamEvents(chunks);
                   
-                  const streamSpanAttributes: Attributes = {};
+                  // Build output message as JSON blob
+                  const outputMessage: Record<string, unknown> = { role: reconstructedMessage.role };
                   let concatenatedStreamText = "";
-                  let toolCallOutputIndex = 0;
-
-                  if (reconstructedMessage.role) {
-                      streamSpanAttributes[`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`] = reconstructedMessage.role;
-                  }
+                  const toolCalls: Record<string, unknown>[] = [];
 
                   reconstructedMessage.content.forEach(block => {
                       if (block.type === 'text') {
                           concatenatedStreamText += (block as Anthropic.TextBlock).text;
                       } else if (block.type === 'tool_use') {
                           const toolUseBlock = block as Anthropic.ToolUseBlock;
-                          const toolCallPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_TOOL_CALLS}.${toolCallOutputIndex}.`;
-                          streamSpanAttributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`] = toolUseBlock.name;
-                          streamSpanAttributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`] = safelyJSONStringify(toolUseBlock.input) ?? "{}";
-                          toolCallOutputIndex++;
+                          toolCalls.push({
+                            function: { name: toolUseBlock.name, arguments: safelyJSONStringify(toolUseBlock.input) ?? "{}" },
+                          });
                       }
                   });
 
                   if (concatenatedStreamText) {
-                      streamSpanAttributes[`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`] = concatenatedStreamText;
+                    outputMessage.content = concatenatedStreamText;
+                  }
+                  if (toolCalls.length > 0) {
+                    outputMessage.tool_calls = toolCalls;
+                  }
+
+                  const streamSpanAttributes: Attributes = {
+                    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
+                  };
+
+                  if (concatenatedStreamText) {
                       streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = concatenatedStreamText;
                       streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.TEXT;
-                  } else if (toolCallOutputIndex > 0) { 
-                      streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = safelyJSONStringify(reconstructedMessage) ?? "";
-                      streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
                   } else {
                       streamSpanAttributes[SemanticConventions.OUTPUT_VALUE] = safelyJSONStringify(reconstructedMessage) ?? "";
                       streamSpanAttributes[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
+                  }
+
+                  if (reconstructedMessage.model) {
+                      streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_MODEL] = reconstructedMessage.model;
+                  }
+                  if (reconstructedMessage.id) {
+                      streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_ID] = reconstructedMessage.id;
+                  }
+                  if (reconstructedMessage.stop_reason) {
+                      streamSpanAttributes[SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS] = JSON.stringify([reconstructedMessage.stop_reason]);
                   }
 
                   if (reconstructedMessage.usage) {
@@ -201,7 +214,11 @@ export class AnthropicInstrumentation extends InstrumentationBase{
               span.setAttributes({
                 ...getAnthropicOutputMessagesAttributes(messageResponse),
                 ...getAnthropicUsageAttributes(messageResponse),
-                [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model, 
+                [SemanticConventions.LLM_MODEL_NAME]: messageResponse.model,
+                [SemanticConventions.GEN_AI_RESPONSE_MODEL]: messageResponse.model,
+                [SemanticConventions.GEN_AI_RESPONSE_ID]: messageResponse.id,
+                [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: messageResponse.stop_reason
+                  ? JSON.stringify([messageResponse.stop_reason]) : "[]",
                 [SemanticConventions.OUTPUT_VALUE]: safelyJSONStringify(messageResponse) ?? "",
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(messageResponse) ?? "",

@@ -241,8 +241,8 @@ export class GroqInstrumentation extends InstrumentationBase {
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                     JSON.stringify(invocationParameters),
-                  [SemanticConventions.LLM_SYSTEM]: LLMSystem.GROQ,
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.GROQ,
+                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getLLMInputMessagesAttributes(body),
                   ...getLLMToolsJSONSchema(body),
                   [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -272,6 +272,9 @@ export class GroqInstrumentation extends InstrumentationBase {
                   [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_MODEL_NAME]: result.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
+                  [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(result.choices.map(c => c.finish_reason)) ?? "[]",
                   ...getChatCompletionLLMOutputMessagesAttributes(result),
                   ...getUsageAttributes(result),
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -350,17 +353,17 @@ function isStreamResponse(
 function getLLMInputMessagesAttributes(
   body: GroqChatCompletionCreateParams,
 ): Attributes {
-  return body.messages.reduce((acc, message, index) => {
-    const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.`;
-    acc[`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`] = message.role;
+  const serialized = body.messages.map((message) => {
+    const obj: Record<string, unknown> = { role: message.role };
     if (message.content) {
-      acc[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = message.content;
+      obj.content = message.content;
     }
     if (message.tool_call_id) {
-      acc[`${indexPrefix}${SemanticConventions.MESSAGE_TOOL_CALL_ID}`] = message.tool_call_id;
+      obj.tool_call_id = message.tool_call_id;
     }
-    return acc;
-  }, {} as Attributes);
+    return obj;
+  });
+  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
 }
 
 /**
@@ -372,14 +375,7 @@ function getLLMToolsJSONSchema(
   if (!body.tools) {
     return {};
   }
-  return body.tools.reduce((acc: Attributes, tool, index) => {
-    const toolJsonSchema = safelyJSONStringify(tool);
-    const key = `${SemanticConventions.LLM_TOOLS}.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`;
-    if (toolJsonSchema) {
-      acc[key] = toolJsonSchema;
-    }
-    return acc;
-  }, {});
+  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(body.tools) ?? "[]" };
 }
 
 /**
@@ -410,31 +406,17 @@ function getChatCompletionLLMOutputMessagesAttributes(
     return {};
   }
 
-  const indexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
-  const attributes: Attributes = {
-    [`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: choice.message.role,
-  };
-
+  const msg: Record<string, unknown> = { role: choice.message.role };
   if (choice.message.content) {
-    attributes[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = choice.message.content;
+    msg.content = choice.message.content;
   }
-
   if (choice.message.tool_calls) {
-    choice.message.tool_calls.forEach((toolCall, index) => {
-      const toolCallIndexPrefix = `${indexPrefix}${SemanticConventions.MESSAGE_TOOL_CALLS}.${index}.`;
-      if (toolCall.id) {
-        attributes[`${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_ID}`] = toolCall.id;
-      }
-      if (toolCall.function) {
-        attributes[`${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`] =
-          toolCall.function.name;
-        attributes[`${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`] =
-          toolCall.function.arguments;
-      }
-    });
+    msg.tool_calls = choice.message.tool_calls.map((tc) => ({
+      id: tc.id,
+      function: { name: tc.function.name, arguments: tc.function.arguments },
+    }));
   }
-
-  return attributes;
+  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
 }
 
 /**
@@ -445,7 +427,7 @@ async function consumeChatCompletionStreamChunks(
   span: Span,
 ) {
   let streamResponse = "";
-  const toolCallAttributes: Attributes = {};
+  const toolCalls: Record<number, { id?: string; name?: string; arguments?: string }> = {};
   const allChunks: GroqChatCompletionChunk[] = [];
 
   try {
@@ -459,23 +441,19 @@ async function consumeChatCompletionStreamChunks(
         streamResponse += choice.delta.content;
       }
 
-      // Accumulate tool call attributes
       if (choice.delta?.tool_calls) {
         choice.delta.tool_calls.forEach((toolCall, index) => {
-          const toolCallIndexPrefix = `${SemanticConventions.MESSAGE_TOOL_CALLS}.${index}.`;
+          if (!toolCalls[index]) {
+            toolCalls[index] = {};
+          }
           if (toolCall.id) {
-            toolCallAttributes[`${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_ID}`] =
-              toolCall.id;
+            toolCalls[index].id = toolCall.id;
           }
           if (toolCall.function?.name) {
-            const nameKey = `${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`;
-            toolCallAttributes[nameKey] =
-              (toolCallAttributes[nameKey] || "") + toolCall.function.name;
+            toolCalls[index].name = (toolCalls[index].name || "") + toolCall.function.name;
           }
           if (toolCall.function?.arguments) {
-            const argsKey = `${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`;
-            toolCallAttributes[argsKey] =
-              (toolCallAttributes[argsKey] || "") + toolCall.function.arguments;
+            toolCalls[index].arguments = (toolCalls[index].arguments || "") + toolCall.function.arguments;
           }
         });
       }
@@ -487,19 +465,21 @@ async function consumeChatCompletionStreamChunks(
     return;
   }
 
-  const messageIndexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
+  const msg: Record<string, unknown> = { role: "assistant", content: streamResponse };
+  const toolCallEntries = Object.values(toolCalls);
+  if (toolCallEntries.length > 0) {
+    msg.tool_calls = toolCallEntries.map((tc) => ({
+      id: tc.id,
+      function: { name: tc.name, arguments: tc.arguments },
+    }));
+  }
+
   const attributes: Attributes = {
     [SemanticConventions.OUTPUT_VALUE]: streamResponse,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]: streamResponse,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: "assistant",
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
-
-  // Add tool call attributes
-  for (const [key, value] of Object.entries(toolCallAttributes)) {
-    attributes[`${messageIndexPrefix}${key}`] = value;
-  }
 
   span.setAttributes(attributes);
   span.setStatus({ code: SpanStatusCode.OK });

@@ -21,7 +21,6 @@ import {
   SemanticConventions,
   FISpanKind,
   MimeType,
-  LLMSystem,
   LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
@@ -152,7 +151,7 @@ export class FITracingProcessor implements TracingProcessor {
         kind: SpanKind.INTERNAL,
         attributes: {
           [SemanticConventions.FI_SPAN_KIND]: getSpanKind(agentSpan.spanData),
-          [SemanticConventions.LLM_SYSTEM]: LLMSystem.OPENAI,
+          [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
           [SemanticConventions.RAW_INPUT]: safeJsonStringify(agentSpan.spanData),
         },
       },

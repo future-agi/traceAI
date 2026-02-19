@@ -138,7 +138,7 @@ export class BeeAIInstrumentation extends InstrumentationBase {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.AGENT,
-        [SemanticConventions.LLM_SYSTEM]: "beeai",
+        [SemanticConventions.LLM_PROVIDER]: "beeai",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(input),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
         [SemanticConventions.RAW_INPUT]: safeJsonStringify(input),

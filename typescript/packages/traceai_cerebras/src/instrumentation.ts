@@ -228,8 +228,8 @@ export class CerebrasInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                 JSON.stringify(invocationParameters),
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.CEREBRAS,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.CEREBRAS,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(body),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
@@ -258,6 +258,9 @@ export class CerebrasInstrumentation extends InstrumentationBase {
               [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
               [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_MODEL_NAME]: result.model,
+              [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+              [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
+              [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(result.choices.map(c => c.finish_reason)) ?? "[]",
               ...getChatOutputMessagesAttributes(result),
               ...getUsageAttributes(result),
               ...getTimeInfoAttributes(result),
@@ -355,12 +358,11 @@ async function* wrapChatStream(
     throw error;
   }
 
-  const messageIndexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
+  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
   const attributes: Attributes = {
     [SemanticConventions.OUTPUT_VALUE]: fullContent,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]: fullContent,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: "assistant",
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
 
@@ -385,14 +387,14 @@ async function* wrapChatStream(
  * Gets input message attributes for chat requests
  */
 function getChatInputMessagesAttributes(request: CerebrasChatCompletionRequest): Attributes {
-  return request.messages.reduce((acc, message, index) => {
-    const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.`;
-    acc[`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`] = message.role;
+  const serialized = request.messages.map((message) => {
+    const obj: Record<string, unknown> = { role: message.role };
     if (message.content) {
-      acc[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = message.content;
+      obj.content = message.content;
     }
-    return acc;
-  }, {} as Attributes);
+    return obj;
+  });
+  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
 }
 
 /**
@@ -404,16 +406,11 @@ function getChatOutputMessagesAttributes(response: CerebrasChatCompletion): Attr
     return {};
   }
 
-  const indexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
-  const attributes: Attributes = {
-    [`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: choice.message.role,
-  };
-
+  const msg: Record<string, unknown> = { role: choice.message.role };
   if (choice.message.content) {
-    attributes[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = choice.message.content;
+    msg.content = choice.message.content;
   }
-
-  return attributes;
+  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
 }
 
 /**

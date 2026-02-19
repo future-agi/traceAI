@@ -22,10 +22,10 @@ export type LLMMessage = LLMMessageToolCalls &
 
 export type LLMMessagesAttributes =
   | {
-      [SemanticConventions.LLM_INPUT_MESSAGES]: LLMMessage[];
+      [SemanticConventions.LLM_INPUT_MESSAGES]: string;
     }
   | {
-      [SemanticConventions.LLM_OUTPUT_MESSAGES]: LLMMessage[];
+      [SemanticConventions.LLM_OUTPUT_MESSAGES]: string;
     };
 
 export type RetrievalDocument = {
@@ -36,9 +36,7 @@ export type RetrievalDocument = {
 export type LLMParameterAttributes = {
   [SemanticConventions.LLM_MODEL_NAME]?: string;
   [SemanticConventions.LLM_INVOCATION_PARAMETERS]?: string;
-  [
-    key: `${typeof SemanticConventions.LLM_TOOLS}.${number}.${typeof SemanticConventions.TOOL_JSON_SCHEMA}`
-  ]: string;
+  [SemanticConventions.LLM_TOOLS]?: string;
 };
 
 export type PromptTemplateAttributes = {

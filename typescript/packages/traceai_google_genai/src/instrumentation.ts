@@ -245,8 +245,8 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
                     [SemanticConventions.LLM_MODEL_NAME]: modelName,
                     [SemanticConventions.INPUT_VALUE]: JSON.stringify(request),
                     [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-                    [SemanticConventions.LLM_SYSTEM]: LLMSystem.GOOGLE_GENERATIVE_AI,
                     [SemanticConventions.LLM_PROVIDER]: LLMProvider.GOOGLE_GENERATIVE_AI,
+                    [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                     ...getLLMInputMessagesAttributes(request),
                     ...getGenerationConfigAttributes(request),
                     [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
@@ -274,6 +274,7 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
                 span.setAttributes({
                   [SemanticConventions.OUTPUT_VALUE]: result.response.text(),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.response.candidates?.[0] ? modelName : modelName,
                   ...getLLMOutputMessagesAttributes(result),
                   ...getUsageAttributes(result),
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -314,8 +315,8 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
                   [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
                   [SemanticConventions.INPUT_VALUE]: inputText,
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.TEXT,
-                  [SemanticConventions.LLM_SYSTEM]: LLMSystem.GOOGLE_GENERATIVE_AI,
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.GOOGLE_GENERATIVE_AI,
+                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
                   [`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_TEXT}`]: inputText,
                   [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
                 },
@@ -374,8 +375,8 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
                   [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
                   [SemanticConventions.INPUT_VALUE]: JSON.stringify(request),
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.LLM_SYSTEM]: LLMSystem.GOOGLE_GENERATIVE_AI,
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.GOOGLE_GENERATIVE_AI,
+                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
                   ...getBatchEmbeddingTextAttributes(request),
                   [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
                 },
@@ -457,39 +458,37 @@ export class GoogleGenAIInstrumentation extends InstrumentationBase {
 }
 
 /**
- * Converts the request to LLM input messages
+ * Converts the request to LLM input messages (JSON blob)
  */
 function getLLMInputMessagesAttributes(request: GenerateContentRequest): Attributes {
-  const attributes: Attributes = {};
+  const messages: Array<Record<string, unknown>> = [];
 
   // Add system instruction if present
   if (request.systemInstruction?.parts) {
     const systemText = request.systemInstruction.parts.map(p => p.text).join('');
-    attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`] = 'system';
-    attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`] = systemText;
+    messages.push({ role: 'system', content: systemText });
   }
 
   // Add content messages
-  const startIndex = request.systemInstruction ? 1 : 0;
-  request.contents.forEach((content, idx) => {
-    const index = startIndex + idx;
-    const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.`;
-    attributes[`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`] = content.role || 'user';
-
+  request.contents.forEach((content) => {
     const textParts = content.parts.filter(p => p.text).map(p => p.text).join('');
+    const msg: Record<string, unknown> = { role: content.role || 'user' };
     if (textParts) {
-      attributes[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = textParts;
+      msg.content = textParts;
     }
+    messages.push(msg);
   });
+
+  const attributes: Attributes = {
+    [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]",
+  };
 
   // Add tools if present
   if (request.tools) {
-    request.tools.forEach((tool, toolIdx) => {
-      tool.functionDeclarations?.forEach((func, funcIdx) => {
-        const key = `${SemanticConventions.LLM_TOOLS}.${toolIdx * 10 + funcIdx}.${SemanticConventions.TOOL_JSON_SCHEMA}`;
-        attributes[key] = safelyJSONStringify(func) ?? '';
-      });
-    });
+    const allFunctions = request.tools.flatMap(tool => tool.functionDeclarations || []);
+    if (allFunctions.length > 0) {
+      attributes[SemanticConventions.LLM_TOOLS] = safelyJSONStringify(allFunctions) ?? "[]";
+    }
   }
 
   return attributes;
@@ -523,7 +522,7 @@ function getUsageAttributes(result: GenerateContentResponse): Attributes {
 }
 
 /**
- * Converts the response to LLM output messages
+ * Converts the response to LLM output messages (JSON blob)
  */
 function getLLMOutputMessagesAttributes(result: GenerateContentResponse): Attributes {
   const candidate = result.response.candidates?.[0];
@@ -531,27 +530,29 @@ function getLLMOutputMessagesAttributes(result: GenerateContentResponse): Attrib
     return {};
   }
 
-  const indexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
-  const attributes: Attributes = {
-    [`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: candidate.content.role || 'model',
-  };
+  const msg: Record<string, unknown> = { role: candidate.content.role || 'model' };
 
   const textParts = candidate.content.parts.filter(p => p.text).map(p => p.text).join('');
   if (textParts) {
-    attributes[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = textParts;
+    msg.content = textParts;
   }
 
   // Handle function calls
-  candidate.content.parts.forEach((part, idx) => {
-    if (part.functionCall) {
-      const toolCallPrefix = `${indexPrefix}${SemanticConventions.MESSAGE_TOOL_CALLS}.${idx}.`;
-      attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`] = part.functionCall.name;
-      attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`] =
-        JSON.stringify(part.functionCall.args);
-    }
-  });
+  const toolCalls = candidate.content.parts
+    .filter(part => part.functionCall)
+    .map(part => ({
+      function: { name: part.functionCall!.name, arguments: JSON.stringify(part.functionCall!.args) },
+    }));
+  if (toolCalls.length > 0) {
+    msg.tool_calls = toolCalls;
+  }
 
-  return attributes;
+  return {
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
+    [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(
+      result.response.candidates?.map(c => c.finishReason).filter(Boolean)
+    ) ?? "[]",
+  };
 }
 
 /**

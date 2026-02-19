@@ -135,7 +135,7 @@ export class InstructorInstrumentation extends InstrumentationBase {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "instructor",
+        [SemanticConventions.LLM_PROVIDER]: "instructor",
         [SemanticConventions.LLM_MODEL_NAME]: model,
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(params),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,

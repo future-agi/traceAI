@@ -16,7 +16,7 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
 import {
   SemanticConventions,
   FISpanKind,
@@ -201,7 +201,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.AGENT,
-        [SemanticConventions.LLM_SYSTEM]: "google-adk",
+        [SemanticConventions.LLM_PROVIDER]: "google-adk",
         [SemanticConventions.LLM_MODEL_NAME]: model,
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(input),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
@@ -211,24 +211,16 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
       },
     });
 
-    // Add input message
+    // Add input message as JSON blob
     if (typeof input === "string") {
       span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.role`,
-        "user"
-      );
-      span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.content`,
-        input
+        SemanticConventions.LLM_INPUT_MESSAGES,
+        safelyJSONStringify([{ role: "user", content: input }]) ?? "[]"
       );
     } else if (input.message || input.content) {
       span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.role`,
-        "user"
-      );
-      span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.content`,
-        input.message || input.content
+        SemanticConventions.LLM_INPUT_MESSAGES,
+        safelyJSONStringify([{ role: "user", content: input.message || input.content }]) ?? "[]"
       );
     }
 
@@ -271,7 +263,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.AGENT,
-        [SemanticConventions.LLM_SYSTEM]: "google-adk",
+        [SemanticConventions.LLM_PROVIDER]: "google-adk",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(input),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
         "google_adk.agent_name": agentName,
@@ -314,7 +306,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.AGENT,
-        [SemanticConventions.LLM_SYSTEM]: "google-adk",
+        [SemanticConventions.LLM_PROVIDER]: "google-adk",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(input),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
         "google_adk.agent_name": agentName,
@@ -451,12 +443,13 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
       kind: SpanKind.CLIENT,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "google-adk",
+        [SemanticConventions.LLM_PROVIDER]: "google-adk",
         "google_adk.session_id": sessionId,
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(message),
-        [`${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.role`]: "user",
-        [`${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.content`]:
-          typeof message === "string" ? message : safeJsonStringify(message),
+        [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify([{
+          role: "user",
+          content: typeof message === "string" ? message : safeJsonStringify(message),
+        }]) ?? "[]",
       },
     });
 
@@ -492,12 +485,8 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
     if (typeof output === "string") {
       span.setAttribute(SemanticConventions.OUTPUT_VALUE, output);
       span.setAttribute(
-        `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.role`,
-        "assistant"
-      );
-      span.setAttribute(
-        `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.content`,
-        output
+        SemanticConventions.LLM_OUTPUT_MESSAGES,
+        safelyJSONStringify([{ role: "assistant", content: output }]) ?? "[]"
       );
     } else {
       span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJsonStringify(output));
@@ -557,8 +546,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
 
       span.setAttributes({
         [SemanticConventions.OUTPUT_VALUE]: fullContent || safeJsonStringify(chunks),
-        [`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.role`]: "assistant",
-        [`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.content`]: fullContent,
+        [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "assistant", content: fullContent }]) ?? "[]",
         [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(chunks),
       });
 

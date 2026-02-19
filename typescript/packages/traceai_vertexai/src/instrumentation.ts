@@ -17,7 +17,7 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
 import {
   SemanticConventions,
   FISpanKind,
@@ -200,17 +200,15 @@ export class VertexAIInstrumentation extends InstrumentationBase {
       kind: SpanKind.CLIENT,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "vertexai",
         [SemanticConventions.LLM_PROVIDER]: "google",
         [SemanticConventions.LLM_MODEL_NAME]: modelName,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
         [SemanticConventions.RAW_INPUT]: safeJsonStringify(request),
+        ...this.getInputMessagesAttributes(request),
       },
     });
-
-    // Add input messages
-    this.addInputMessages(span, request);
 
     const execContext = trace.setSpan(context.active(), span);
 
@@ -247,17 +245,16 @@ export class VertexAIInstrumentation extends InstrumentationBase {
       kind: SpanKind.CLIENT,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "vertexai",
         [SemanticConventions.LLM_PROVIDER]: "google",
         [SemanticConventions.LLM_MODEL_NAME]: modelName,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
         [SemanticConventions.RAW_INPUT]: safeJsonStringify(request),
         "vertexai.streaming": true,
+        ...this.getInputMessagesAttributes(request),
       },
     });
-
-    this.addInputMessages(span, request);
 
     const execContext = trace.setSpan(context.active(), span);
 
@@ -287,18 +284,17 @@ export class VertexAIInstrumentation extends InstrumentationBase {
     const message = args[0];
     const modelName = instance._model?.model || instance._model?._model || "unknown";
 
+    const inputContent = typeof message === "string" ? message : safeJsonStringify(message);
     const span = this.fiTracer.startSpan(`Vertex AI Chat Send Message`, {
       kind: SpanKind.CLIENT,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "vertexai",
         [SemanticConventions.LLM_PROVIDER]: "google",
         [SemanticConventions.LLM_MODEL_NAME]: modelName,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(message),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-        [`${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.role`]: "user",
-        [`${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.content`]:
-          typeof message === "string" ? message : safeJsonStringify(message),
+        [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify([{ role: "user", content: inputContent }]) ?? "[]",
       },
     });
 
@@ -333,19 +329,18 @@ export class VertexAIInstrumentation extends InstrumentationBase {
     const message = args[0];
     const modelName = instance._model?.model || instance._model?._model || "unknown";
 
+    const streamInputContent = typeof message === "string" ? message : safeJsonStringify(message);
     const span = this.fiTracer.startSpan(`Vertex AI Chat Send Message Stream`, {
       kind: SpanKind.CLIENT,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "vertexai",
         [SemanticConventions.LLM_PROVIDER]: "google",
         [SemanticConventions.LLM_MODEL_NAME]: modelName,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(message),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
         "vertexai.streaming": true,
-        [`${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.role`]: "user",
-        [`${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.content`]:
-          typeof message === "string" ? message : safeJsonStringify(message),
+        [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify([{ role: "user", content: streamInputContent }]) ?? "[]",
       },
     });
 
@@ -380,7 +375,7 @@ export class VertexAIInstrumentation extends InstrumentationBase {
       kind: SpanKind.CLIENT,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "vertexai",
+        [SemanticConventions.LLM_PROVIDER]: "google",
         [SemanticConventions.LLM_MODEL_NAME]: modelName,
         "vertexai.operation": "count_tokens",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
@@ -430,8 +425,9 @@ export class VertexAIInstrumentation extends InstrumentationBase {
       kind: SpanKind.CLIENT,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
-        [SemanticConventions.LLM_SYSTEM]: "vertexai",
+        [SemanticConventions.LLM_PROVIDER]: "google",
         [SemanticConventions.EMBEDDING_MODEL_NAME]: modelName,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(request),
         "vertexai.input_count": Array.isArray(texts) ? texts.length : 1,
       },
@@ -466,30 +462,27 @@ export class VertexAIInstrumentation extends InstrumentationBase {
     }
   }
 
-  private addInputMessages(span: Span, request: any): void {
+  private getInputMessagesAttributes(request: any): Record<string, string> {
     const contents = request.contents || [];
-    if (Array.isArray(contents)) {
-      contents.forEach((content: any, idx: number) => {
-        if (content.role) {
-          span.setAttribute(
-            `${SemanticConventions.LLM_INPUT_MESSAGES}.${idx}.message.role`,
-            content.role
-          );
-        }
-        if (content.parts) {
-          const textParts = content.parts
-            .filter((p: any) => p.text)
-            .map((p: any) => p.text)
-            .join("");
-          if (textParts) {
-            span.setAttribute(
-              `${SemanticConventions.LLM_INPUT_MESSAGES}.${idx}.message.content`,
-              textParts
-            );
-          }
-        }
-      });
+    if (!Array.isArray(contents) || contents.length === 0) {
+      return {};
     }
+    const messages = contents.map((content: any) => {
+      const msg: Record<string, unknown> = { role: content.role || "user" };
+      if (content.parts) {
+        const textParts = content.parts
+          .filter((p: any) => p.text)
+          .map((p: any) => p.text)
+          .join("");
+        if (textParts) {
+          msg.content = textParts;
+        }
+      }
+      return msg;
+    });
+    return {
+      [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]",
+    };
   }
 
   private setResponseAttributes(span: Span, result: any): void {
@@ -499,10 +492,7 @@ export class VertexAIInstrumentation extends InstrumentationBase {
 
     if (response.candidates?.[0]?.content) {
       const content = response.candidates[0].content;
-      span.setAttribute(
-        `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.role`,
-        content.role || "model"
-      );
+      const msg: Record<string, unknown> = { role: content.role || "model" };
 
       if (content.parts) {
         const textParts = content.parts
@@ -510,12 +500,25 @@ export class VertexAIInstrumentation extends InstrumentationBase {
           .map((p: any) => p.text)
           .join("");
         if (textParts) {
-          span.setAttribute(
-            `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.content`,
-            textParts
-          );
+          msg.content = textParts;
           span.setAttribute(SemanticConventions.OUTPUT_VALUE, textParts);
         }
+      }
+
+      span.setAttribute(
+        SemanticConventions.LLM_OUTPUT_MESSAGES,
+        safelyJSONStringify([msg]) ?? "[]"
+      );
+
+      // Add finish reasons
+      const finishReasons = response.candidates
+        ?.map((c: any) => c.finishReason)
+        .filter(Boolean);
+      if (finishReasons?.length) {
+        span.setAttribute(
+          SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS,
+          safelyJSONStringify(finishReasons) ?? "[]"
+        );
       }
     }
 
@@ -565,8 +568,7 @@ export class VertexAIInstrumentation extends InstrumentationBase {
 
         span.setAttributes({
           [SemanticConventions.OUTPUT_VALUE]: fullContent,
-          [`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.role`]: "model",
-          [`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.content`]: fullContent,
+          [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "model", content: fullContent }]) ?? "[]",
           [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(chunks),
         });
 

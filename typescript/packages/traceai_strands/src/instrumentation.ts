@@ -136,7 +136,7 @@ export class StrandsInstrumentation extends InstrumentationBase {
 
     const attributes: Record<string, any> = {
       [SemanticConventions.FI_SPAN_KIND]: FISpanKind.AGENT,
-      [SemanticConventions.LLM_SYSTEM]: "strands",
+      [SemanticConventions.LLM_PROVIDER]: "strands",
       [SemanticConventions.INPUT_VALUE]: safeJsonStringify(input),
       [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
       [SemanticConventions.RAW_INPUT]: safeJsonStringify(input),

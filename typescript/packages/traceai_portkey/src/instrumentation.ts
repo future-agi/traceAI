@@ -16,7 +16,7 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
 import {
   SemanticConventions,
   FISpanKind,
@@ -148,33 +148,26 @@ export class PortkeyInstrumentation extends InstrumentationBase {
     const model = params.model || "unknown";
     const messages = params.messages || [];
 
+    // Build input messages as JSON blob
+    const serializedMessages = messages.map((msg: any) => {
+      const obj: Record<string, unknown> = {};
+      if (msg.role) obj.role = msg.role;
+      if (msg.content) obj.content = typeof msg.content === "string" ? msg.content : safeJsonStringify(msg.content);
+      return obj;
+    });
+
     const span = this.fiTracer.startSpan("Portkey Chat Completions", {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "portkey",
         [SemanticConventions.LLM_PROVIDER]: "portkey",
         [SemanticConventions.LLM_MODEL_NAME]: model,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
         [SemanticConventions.INPUT_VALUE]: safeJsonStringify(params),
         [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
+        [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serializedMessages) ?? "[]",
         [SemanticConventions.RAW_INPUT]: safeJsonStringify(params),
       },
-    });
-
-    // Add input messages
-    messages.forEach((msg: any, idx: number) => {
-      if (msg.role) {
-        span.setAttribute(
-          `${SemanticConventions.LLM_INPUT_MESSAGES}.${idx}.message.role`,
-          msg.role
-        );
-      }
-      if (msg.content) {
-        span.setAttribute(
-          `${SemanticConventions.LLM_INPUT_MESSAGES}.${idx}.message.content`,
-          typeof msg.content === "string" ? msg.content : safeJsonStringify(msg.content)
-        );
-      }
     });
 
     const execContext = trace.setSpan(context.active(), span);
@@ -218,9 +211,9 @@ export class PortkeyInstrumentation extends InstrumentationBase {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-        [SemanticConventions.LLM_SYSTEM]: "portkey",
         [SemanticConventions.LLM_PROVIDER]: "portkey",
         [SemanticConventions.LLM_MODEL_NAME]: model,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
         [SemanticConventions.INPUT_VALUE]: params.prompt || safeJsonStringify(params),
         [SemanticConventions.RAW_INPUT]: safeJsonStringify(params),
       },
@@ -266,8 +259,9 @@ export class PortkeyInstrumentation extends InstrumentationBase {
       kind: SpanKind.INTERNAL,
       attributes: {
         [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
-        [SemanticConventions.LLM_SYSTEM]: "portkey",
+        [SemanticConventions.LLM_PROVIDER]: "portkey",
         [SemanticConventions.LLM_MODEL_NAME]: model,
+        [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
         [SemanticConventions.EMBEDDING_MODEL_NAME]: model,
         [SemanticConventions.INPUT_VALUE]: Array.isArray(input)
           ? safeJsonStringify(input)
@@ -315,21 +309,27 @@ export class PortkeyInstrumentation extends InstrumentationBase {
 
     if (result.model) {
       span.setAttribute(SemanticConventions.LLM_MODEL_NAME, result.model);
+      span.setAttribute(SemanticConventions.GEN_AI_RESPONSE_MODEL, result.model);
+    }
+    if (result.id) {
+      span.setAttribute(SemanticConventions.GEN_AI_RESPONSE_ID, result.id);
     }
 
     if (result.choices?.[0]?.message) {
       const message = result.choices[0].message;
-      span.setAttribute(
-        `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.role`,
-        message.role || "assistant"
-      );
+      const msg: Record<string, unknown> = { role: message.role || "assistant" };
       if (message.content) {
-        span.setAttribute(
-          `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.content`,
-          message.content
-        );
+        msg.content = message.content;
         span.setAttribute(SemanticConventions.OUTPUT_VALUE, message.content);
       }
+      span.setAttribute(
+        SemanticConventions.LLM_OUTPUT_MESSAGES,
+        safelyJSONStringify([msg]) ?? "[]"
+      );
+      span.setAttribute(
+        SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS,
+        safelyJSONStringify(result.choices.map((c: any) => c.finish_reason)) ?? "[]"
+      );
     }
 
     if (result.usage) {
@@ -356,8 +356,7 @@ export class PortkeyInstrumentation extends InstrumentationBase {
 
       span.setAttributes({
         [SemanticConventions.OUTPUT_VALUE]: fullContent,
-        [`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.role`]: "assistant",
-        [`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.message.content`]: fullContent,
+        [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([{ role: "assistant", content: fullContent }]) ?? "[]",
         [SemanticConventions.RAW_OUTPUT]: safeJsonStringify(chunks),
       });
 

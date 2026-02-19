@@ -356,8 +356,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                 JSON.stringify(invocationParameters),
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.OLLAMA,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.OLLAMA,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(request),
               ...getChatToolsJSONSchema(request),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
@@ -427,8 +427,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                 JSON.stringify(invocationParameters),
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.OLLAMA,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.OLLAMA,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
               ...getGenerateInputAttributes(request),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
             },
@@ -494,8 +494,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
               [SemanticConventions.EMBEDDING_MODEL_NAME]: request.model,
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(request),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.OLLAMA,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.OLLAMA,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
               ...getEmbedInputAttributes(inputTexts),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
             },
@@ -555,8 +555,8 @@ export class OllamaInstrumentation extends InstrumentationBase {
               [SemanticConventions.EMBEDDING_MODEL_NAME]: request.model,
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(request),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_SYSTEM]: LLMSystem.OLLAMA,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.OLLAMA,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
               [`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_TEXT}`]: request.prompt,
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(request) ?? "",
             },
@@ -702,12 +702,11 @@ async function* wrapChatStream(
     throw error;
   }
 
-  const messageIndexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
+  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
   const attributes: Attributes = {
     [SemanticConventions.OUTPUT_VALUE]: fullContent,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]: fullContent,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: "assistant",
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
 
@@ -786,14 +785,14 @@ async function* wrapGenerateStream(
  * Gets input message attributes for chat requests
  */
 function getChatInputMessagesAttributes(request: OllamaChatRequest): Attributes {
-  return request.messages.reduce((acc, message, index) => {
-    const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.`;
-    acc[`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`] = message.role;
+  const serialized = request.messages.map((message) => {
+    const obj: Record<string, unknown> = { role: message.role };
     if (message.content) {
-      acc[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = message.content;
+      obj.content = message.content;
     }
-    return acc;
-  }, {} as Attributes);
+    return obj;
+  });
+  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
 }
 
 /**
@@ -803,40 +802,23 @@ function getChatToolsJSONSchema(request: OllamaChatRequest): Attributes {
   if (!request.tools) {
     return {};
   }
-  return request.tools.reduce((acc: Attributes, tool, index) => {
-    const toolJsonSchema = safelyJSONStringify(tool);
-    const key = `${SemanticConventions.LLM_TOOLS}.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`;
-    if (toolJsonSchema) {
-      acc[key] = toolJsonSchema;
-    }
-    return acc;
-  }, {});
+  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(request.tools) ?? "[]" };
 }
 
 /**
  * Gets output message attributes from chat response
  */
 function getChatOutputMessagesAttributes(response: OllamaChatResponse): Attributes {
-  const indexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
-  const attributes: Attributes = {
-    [`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: response.message.role,
-  };
-
+  const msg: Record<string, unknown> = { role: response.message.role };
   if (response.message.content) {
-    attributes[`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = response.message.content;
+    msg.content = response.message.content;
   }
-
   if (response.message.tool_calls) {
-    response.message.tool_calls.forEach((toolCall, index) => {
-      const toolCallIndexPrefix = `${indexPrefix}${SemanticConventions.MESSAGE_TOOL_CALLS}.${index}.`;
-      attributes[`${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`] =
-        toolCall.function.name;
-      attributes[`${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`] =
-        JSON.stringify(toolCall.function.arguments);
-    });
+    msg.tool_calls = response.message.tool_calls.map((tc) => ({
+      function: { name: tc.function.name, arguments: JSON.stringify(tc.function.arguments) },
+    }));
   }
-
-  return attributes;
+  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
 }
 
 /**
@@ -863,19 +845,13 @@ function getChatUsageAttributes(response: OllamaChatResponse): Attributes {
  * Gets input attributes for generate requests
  */
 function getGenerateInputAttributes(request: OllamaGenerateRequest): Attributes {
-  const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.0.`;
-  const attributes: Attributes = {
-    [`${indexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: "user",
-    [`${indexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]: request.prompt,
-  };
-
+  const messages: Record<string, unknown>[] = [
+    { role: "user", content: request.prompt },
+  ];
   if (request.system) {
-    const systemPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.1.`;
-    attributes[`${systemPrefix}${SemanticConventions.MESSAGE_ROLE}`] = "system";
-    attributes[`${systemPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = request.system;
+    messages.push({ role: "system", content: request.system });
   }
-
-  return attributes;
+  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]" };
 }
 
 /**

@@ -17,7 +17,7 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import { FITracer, TraceConfigOptions, safelyJSONStringify } from "@traceai/fi-core";
 import {
   SemanticConventions,
   FISpanKind,
@@ -361,24 +361,16 @@ export class PipecatInstrumentation extends InstrumentationBase {
       },
     });
 
-    // Add LLM input message attributes
+    // Add LLM input message as JSON blob
     if (typeof message === "string") {
       span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.role`,
-        "user"
-      );
-      span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.content`,
-        message
+        SemanticConventions.LLM_INPUT_MESSAGES,
+        safelyJSONStringify([{ role: "user", content: message }]) ?? "[]"
       );
     } else if (message?.content) {
       span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.role`,
-        message.role || "user"
-      );
-      span.setAttribute(
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.0.message.content`,
-        message.content
+        SemanticConventions.LLM_INPUT_MESSAGES,
+        safelyJSONStringify([{ role: message.role || "user", content: message.content }]) ?? "[]"
       );
     }
 
