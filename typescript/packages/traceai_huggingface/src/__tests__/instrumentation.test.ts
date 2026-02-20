@@ -117,7 +117,6 @@ describe("HuggingFaceInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("gpt2");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.HUGGINGFACE);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.HUGGINGFACE);
       expect(span.attributes[SemanticConventions.INPUT_VALUE]).toBe("The quick brown");
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.TEXT);
@@ -247,7 +246,7 @@ describe("HuggingFaceInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("meta-llama/Llama-2-7b-chat-hf");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.HUGGINGFACE);
+      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.HUGGINGFACE);
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
     });
 
@@ -438,7 +437,7 @@ describe("HuggingFaceInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.EMBEDDING);
       expect(span.attributes[SemanticConventions.EMBEDDING_MODEL_NAME]).toBe("sentence-transformers/all-MiniLM-L6-v2");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.HUGGINGFACE);
+      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.HUGGINGFACE);
     });
 
     it("should capture input text", async () => {

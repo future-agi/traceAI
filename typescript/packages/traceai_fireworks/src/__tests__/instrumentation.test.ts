@@ -121,7 +121,6 @@ describe("FireworksInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("accounts/fireworks/models/llama-v3p1-8b-instruct");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.FIREWORKS);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.FIREWORKS);
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
     });
@@ -293,7 +292,6 @@ describe("FireworksInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.EMBEDDING);
       expect(span.attributes[SemanticConventions.EMBEDDING_MODEL_NAME]).toBe("nomic-ai/nomic-embed-text-v1.5");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.FIREWORKS);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.FIREWORKS);
     });
 

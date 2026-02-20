@@ -9,7 +9,7 @@
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { FireworksInstrumentation } from "../instrumentation";
-import { SemanticConventions, FISpanKind, LLMSystem } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind, LLMProvider } from "@traceai/fi-semantic-conventions";
 
 const FIREWORKS_API_KEY = process.env.FIREWORKS_API_KEY;
 
@@ -70,7 +70,7 @@ describeIf("FireworksInstrumentation E2E", () => {
     const span = spans[0];
     expect(span.name).toBe("Fireworks Chat Completions");
     expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-    expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.FIREWORKS);
+    expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.FIREWORKS);
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT]).toBeDefined();
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]).toBeDefined();
   }, 30000);

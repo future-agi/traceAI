@@ -149,7 +149,7 @@ describe("Strands Agent Tracing", () => {
     expect(spans.length).toBeGreaterThanOrEqual(1);
     // Model name should be captured
     const span = spans[0];
-    expect(span.attributes["llm.model_name"]).toBe("us.anthropic.claude-sonnet-4-20250514-v1:0");
+    expect(span.attributes["gen_ai.request.model"]).toBe("us.anthropic.claude-sonnet-4-20250514-v1:0");
   });
 
   it("should handle errors gracefully", async () => {

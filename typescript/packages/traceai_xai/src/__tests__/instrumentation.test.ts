@@ -121,7 +121,6 @@ describe("XAIInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("grok-beta");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.XAI);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.XAI);
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
     });
@@ -368,7 +367,6 @@ describe("XAIInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.EMBEDDING);
       expect(span.attributes[SemanticConventions.EMBEDDING_MODEL_NAME]).toBe("grok-embed");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.XAI);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.XAI);
     });
 

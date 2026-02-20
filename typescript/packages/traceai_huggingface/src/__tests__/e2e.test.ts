@@ -7,7 +7,7 @@
 import { HuggingFaceInstrumentation } from "../instrumentation";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SemanticConventions, FISpanKind, LLMSystem } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind, LLMProvider } from "@traceai/fi-semantic-conventions";
 
 // Check if we have API access
 const hasApiKey = !!process.env.HF_TOKEN;
@@ -74,7 +74,7 @@ describeE2E("HuggingFaceInstrumentation E2E Tests", () => {
       const span = spans[0];
       expect(span.name).toBe("HuggingFace Text Generation");
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.HUGGINGFACE);
+      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.HUGGINGFACE);
     }, 60000);
 
     it("should capture input prompt", async () => {

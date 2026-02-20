@@ -121,7 +121,6 @@ describe("DeepSeekInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("deepseek-chat");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.DEEPSEEK);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.DEEPSEEK);
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
     });

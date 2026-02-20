@@ -10,7 +10,7 @@
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { VLLMInstrumentation } from "../instrumentation";
-import { SemanticConventions, FISpanKind, LLMSystem } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind, LLMProvider } from "@traceai/fi-semantic-conventions";
 
 const VLLM_BASE_URL = process.env.VLLM_BASE_URL;
 const VLLM_MODEL = process.env.VLLM_MODEL || "meta-llama/Llama-2-7b-chat-hf";
@@ -74,7 +74,7 @@ describeIf("VLLMInstrumentation E2E", () => {
     const span = spans[0];
     expect(span.name).toBe("vLLM Chat Completions");
     expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-    expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.VLLM);
+    expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.VLLM);
     expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe(VLLM_MODEL);
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT]).toBeDefined();
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]).toBeDefined();
@@ -123,7 +123,7 @@ describeIf("VLLMInstrumentation E2E", () => {
     const span = spans[0];
     expect(span.name).toBe("vLLM Completions");
     expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-    expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.VLLM);
+    expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.VLLM);
   }, 30000);
 
   it("should handle errors gracefully", async () => {

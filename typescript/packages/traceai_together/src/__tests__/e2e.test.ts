@@ -7,7 +7,7 @@
 import { TogetherInstrumentation } from "../instrumentation";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SemanticConventions, FISpanKind, LLMSystem } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind, LLMProvider } from "@traceai/fi-semantic-conventions";
 
 // Check if we have API access
 const hasApiKey = !!process.env.TOGETHER_API_KEY;
@@ -77,7 +77,7 @@ describeE2E("TogetherInstrumentation E2E Tests", () => {
       const span = spans[0];
       expect(span.name).toBe("Together Chat Completions");
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.TOGETHER);
+      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.TOGETHER);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBeDefined();
     }, 30000);
 

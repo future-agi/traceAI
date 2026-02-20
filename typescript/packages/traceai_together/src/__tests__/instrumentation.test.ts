@@ -168,7 +168,6 @@ describe("TogetherInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("meta-llama/Llama-3-8b-chat-hf");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.TOGETHER);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.TOGETHER);
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
       expect(span.attributes[SemanticConventions.OUTPUT_MIME_TYPE]).toBe(MimeType.JSON);
@@ -422,7 +421,7 @@ describe("TogetherInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("togethercomputer/RedPajama-INCITE-7B-Base");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.TOGETHER);
+      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.TOGETHER);
       expect(span.attributes[`${SemanticConventions.LLM_PROMPTS}.0`]).toBe("Hello");
     });
 
@@ -527,7 +526,6 @@ describe("TogetherInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.EMBEDDING);
       expect(span.attributes[SemanticConventions.EMBEDDING_MODEL_NAME]).toBe("togethercomputer/m2-bert-80M-8k-retrieval");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.TOGETHER);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.TOGETHER);
     });
 

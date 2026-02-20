@@ -157,7 +157,6 @@ describe("CerebrasInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("llama3.1-8b");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.CEREBRAS);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.CEREBRAS);
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
     });

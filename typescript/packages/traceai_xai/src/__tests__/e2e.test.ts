@@ -9,7 +9,7 @@
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { XAIInstrumentation } from "../instrumentation";
-import { SemanticConventions, FISpanKind, LLMSystem } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind, LLMProvider } from "@traceai/fi-semantic-conventions";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
@@ -70,7 +70,7 @@ describeIf("XAIInstrumentation E2E", () => {
     const span = spans[0];
     expect(span.name).toBe("xAI Chat Completions");
     expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-    expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.XAI);
+    expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.XAI);
     expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("grok-beta");
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT]).toBeDefined();
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]).toBeDefined();

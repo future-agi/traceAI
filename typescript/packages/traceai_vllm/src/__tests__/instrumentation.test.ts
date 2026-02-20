@@ -166,7 +166,6 @@ describe("VLLMInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("meta-llama/Llama-2-7b-chat-hf");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.VLLM);
       expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.VLLM);
       expect(span.attributes[SemanticConventions.INPUT_MIME_TYPE]).toBe(MimeType.JSON);
       expect(span.attributes[SemanticConventions.OUTPUT_MIME_TYPE]).toBe(MimeType.JSON);
@@ -386,7 +385,7 @@ describe("VLLMInstrumentation", () => {
 
       expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("meta-llama/Llama-2-7b-hf");
-      expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.VLLM);
+      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.VLLM);
       expect(span.attributes[`${SemanticConventions.LLM_PROMPTS}.0`]).toBe("The quick brown fox");
     });
 

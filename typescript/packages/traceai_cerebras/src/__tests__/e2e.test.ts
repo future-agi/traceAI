@@ -9,7 +9,7 @@
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { CerebrasInstrumentation } from "../instrumentation";
-import { SemanticConventions, FISpanKind, LLMSystem } from "@traceai/fi-semantic-conventions";
+import { SemanticConventions, FISpanKind, LLMProvider } from "@traceai/fi-semantic-conventions";
 
 const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY;
 
@@ -69,7 +69,7 @@ describeIf("CerebrasInstrumentation E2E", () => {
     const span = spans[0];
     expect(span.name).toBe("Cerebras Chat Completions");
     expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-    expect(span.attributes[SemanticConventions.LLM_SYSTEM]).toBe(LLMSystem.CEREBRAS);
+    expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.CEREBRAS);
     expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("llama3.1-8b");
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT]).toBeDefined();
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]).toBeDefined();
