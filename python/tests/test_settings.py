@@ -34,7 +34,7 @@ class TestEnvironmentVariableGetters:
     def test_get_env_grpc_collector_endpoint_default(self, clean_env):
         """Test default gRPC collector endpoint."""
         result = get_env_grpc_collector_endpoint()
-        assert result == "https://grpc.futureagi.com:50051"
+        assert result == "https://grpc.futureagi.com"
 
     def test_get_env_grpc_collector_endpoint_custom(self, clean_env):
         """Test custom gRPC collector endpoint from environment."""

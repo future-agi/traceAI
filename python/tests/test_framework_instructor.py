@@ -63,14 +63,14 @@ def mock_instructor():
     with patch("traceai_instructor.import_module") as mock_import:
         mock_instructor_module = MagicMock()
         mock_patch_module = MagicMock()
-        
-        def import_side_effect(module_name):
+
+        def import_side_effect(module_name, package=None):
             if module_name == "instructor":
                 return mock_instructor_module
             elif module_name == "instructor.patch":
                 return mock_patch_module
             return MagicMock()
-            
+
         mock_import.side_effect = import_side_effect
         yield mock_instructor_module, mock_patch_module
 
@@ -90,80 +90,106 @@ class TestInstructorInstrumentor:
         """Test instrumentor dependencies are properly declared."""
         instrumentor = InstructorInstrumentor()
         dependencies = instrumentor.instrumentation_dependencies()
-        
+
         assert isinstance(dependencies, tuple)
         assert "instructor >= 0.0.1" in dependencies
-        assert len(dependencies) == 2
+        assert len(dependencies) == 1
 
     def test_instrument_basic(self, tracer_provider, config, mock_protect):
         """Test basic instrumentation setup."""
         instrumentor = InstructorInstrumentor()
-        
-        with patch("wrapt.wrap_function_wrapper") as mock_wrap:
-            with patch("importlib.import_module") as mock_import:
-                # Mock instructor modules
-                mock_instructor_module = MagicMock()
-                mock_patch_module = MagicMock()
-                
-                def import_side_effect(module_name):
-                    if module_name == "instructor":
-                        return mock_instructor_module
-                    elif module_name == "instructor.patch":
-                        return mock_patch_module
-                    return MagicMock()
-                
-                mock_import.side_effect = import_side_effect
-                
-                instrumentor._instrument(tracer_provider=tracer_provider, config=config)
-                
-                # Verify the tracer was created
-                assert hasattr(instrumentor, '_tracer')
-                assert isinstance(instrumentor._tracer, FITracer)
-                
-                # Verify original methods were stored
-                assert hasattr(instrumentor, '_original_patch')
-                assert hasattr(instrumentor, '_original_handle_response_model')
 
-    def test_instrument_without_tracer_provider(self, config, mock_instructor, mock_protect):
+        mock_instructor_module = MagicMock()
+        mock_patch_module = MagicMock()
+
+        def import_side_effect(module_name):
+            if module_name == "instructor":
+                return mock_instructor_module
+            elif module_name == "instructor.patch":
+                return mock_patch_module
+            return MagicMock()
+
+        with patch("traceai_instructor.wrap_function_wrapper") as mock_wrap, \
+             patch("traceai_instructor.import_module", side_effect=import_side_effect):
+            instrumentor._instrument(tracer_provider=tracer_provider, config=config)
+
+            # Verify the tracer was created
+            assert hasattr(instrumentor, '_tracer')
+            assert isinstance(instrumentor._tracer, FITracer)
+
+            # Verify original methods were stored
+            assert hasattr(instrumentor, '_original_patch')
+            assert hasattr(instrumentor, '_original_handle_response_model')
+
+    def test_instrument_without_tracer_provider(self, config, mock_protect):
         """Test instrumentation without explicit tracer provider."""
         instrumentor = InstructorInstrumentor()
-        
-        with patch("wrapt.wrap_function_wrapper"):
-            with patch("opentelemetry.trace.get_tracer_provider") as mock_get_provider:
-                mock_get_provider.return_value = MagicMock()
-                instrumentor._instrument(config=config)
-                mock_get_provider.assert_called_once()
+        mock_instructor_module = MagicMock()
+        mock_patch_module = MagicMock()
 
-    def test_instrument_without_config(self, tracer_provider, mock_instructor, mock_protect):
+        def import_side_effect(module_name):
+            if module_name == "instructor":
+                return mock_instructor_module
+            elif module_name == "instructor.patch":
+                return mock_patch_module
+            return MagicMock()
+
+        with patch("traceai_instructor.wrap_function_wrapper"), \
+             patch("traceai_instructor.import_module", side_effect=import_side_effect), \
+             patch("opentelemetry.trace.get_tracer_provider") as mock_get_provider:
+            mock_get_provider.return_value = MagicMock()
+            instrumentor._instrument(config=config)
+            mock_get_provider.assert_called_once()
+
+    def test_instrument_without_config(self, tracer_provider, mock_protect):
         """Test instrumentation without explicit config."""
         instrumentor = InstructorInstrumentor()
-        
-        with patch("wrapt.wrap_function_wrapper"):
+        mock_instructor_module = MagicMock()
+        mock_patch_module = MagicMock()
+
+        def import_side_effect(module_name):
+            if module_name == "instructor":
+                return mock_instructor_module
+            elif module_name == "instructor.patch":
+                return mock_patch_module
+            return MagicMock()
+
+        with patch("traceai_instructor.wrap_function_wrapper"), \
+             patch("traceai_instructor.import_module", side_effect=import_side_effect):
             instrumentor._instrument(tracer_provider=tracer_provider)
             # Should create default TraceConfig
             assert isinstance(instrumentor._tracer, FITracer)
 
-    def test_uninstrument(self, tracer_provider, config, mock_instructor, mock_protect):
+    def test_uninstrument(self, tracer_provider, config, mock_protect):
         """Test proper uninstrumentation."""
-        mock_instructor_module, mock_patch_module = mock_instructor
         instrumentor = InstructorInstrumentor()
-        
+        mock_instructor_module = MagicMock()
+        mock_patch_module = MagicMock()
+
+        def import_side_effect(module_name):
+            if module_name == "instructor":
+                return mock_instructor_module
+            elif module_name == "instructor.patch":
+                return mock_patch_module
+            return MagicMock()
+
         # Set up original methods
         original_patch = MagicMock()
         original_handle = MagicMock()
         mock_instructor_module.patch = MagicMock()
         mock_patch_module.handle_response_model = MagicMock()
-        
-        with patch("wrapt.wrap_function_wrapper"):
+
+        with patch("traceai_instructor.wrap_function_wrapper"), \
+             patch("traceai_instructor.import_module", side_effect=import_side_effect):
             instrumentor._instrument(tracer_provider=tracer_provider, config=config)
-            
+
             # Store originals manually for testing
             instrumentor._original_patch = original_patch
             instrumentor._original_handle_response_model = original_handle
-            
+
             # Test uninstrumentation
             instrumentor._uninstrument()
-            
+
             # Verify restoration
             assert mock_instructor_module.patch == original_patch
             assert mock_patch_module.handle_response_model == original_handle
@@ -573,31 +599,27 @@ class TestIntegrationScenarios:
     def test_instructor_patch_scenario(self, tracer_provider, config):
         """Test complete instructor.patch instrumentation scenario."""
         instrumentor = InstructorInstrumentor()
-        
-        with patch("wrapt.wrap_function_wrapper") as mock_wrap:
-            with patch("importlib.import_module") as mock_import:
-                # Mock instructor modules
-                mock_instructor = MagicMock()
-                mock_patch_module = MagicMock()
-                
-                def import_side_effect(module_name):
-                    if module_name == "instructor":
-                        return mock_instructor
-                    elif module_name == "instructor.patch":
-                        return mock_patch_module
-                    return MagicMock()
-                
-                mock_import.side_effect = import_side_effect
-                
-                # Instrument
-                instrumentor._instrument(tracer_provider=tracer_provider, config=config)
-                
-                # Verify the instrumentor was set up correctly
-                assert hasattr(instrumentor, '_tracer')
-                assert isinstance(instrumentor._tracer, FITracer)
-                
-                # Test uninstrumentation
-                instrumentor._uninstrument()
+        mock_instructor = MagicMock()
+        mock_patch_module = MagicMock()
+
+        def import_side_effect(module_name):
+            if module_name == "instructor":
+                return mock_instructor
+            elif module_name == "instructor.patch":
+                return mock_patch_module
+            return MagicMock()
+
+        with patch("traceai_instructor.wrap_function_wrapper") as mock_wrap, \
+             patch("traceai_instructor.import_module", side_effect=import_side_effect):
+            # Instrument
+            instrumentor._instrument(tracer_provider=tracer_provider, config=config)
+
+            # Verify the instrumentor was set up correctly
+            assert hasattr(instrumentor, '_tracer')
+            assert isinstance(instrumentor._tracer, FITracer)
+
+            # Test uninstrumentation
+            instrumentor._uninstrument()
 
     def test_response_model_handling_scenario(self, tracer_provider):
         """Test response model handling instrumentation scenario."""

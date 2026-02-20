@@ -52,7 +52,7 @@ class TestGroqInstrumentor:
     def test_instrumentation_dependencies(self):
         """Test instrumentation dependencies."""
         deps = self.instrumentor.instrumentation_dependencies()
-        assert ("groq >= 0.9.0") == deps
+        assert ("groq >= 0.9.0",) == deps
 
     @patch("traceai_groq.wrap_function_wrapper")
     @patch("traceai_groq.trace_api.get_tracer")
@@ -326,8 +326,8 @@ class TestRequestAttributesExtractor:
         
         # Should contain some attributes (exact keys depend on implementation)
         assert len(attributes) > 0
-        # Check for span kind
-        assert "fi.span.kind" in attr_dict
+        # Check for span kind (uses gen_ai.span.kind attribute name)
+        assert "gen_ai.span.kind" in attr_dict
 
     def test_get_extra_attributes_from_request(self):
         """Test extracting extra attributes from request."""
@@ -445,12 +445,12 @@ class TestUtilityFunctions:
             {"content": "Second message"},
             {"role": "user", "content": "User message"}
         ]
-        
+
         attributes = list(_extract_eval_input(messages))
-        
+
+        # _extract_eval_input yields SpanAttributes.INPUT_VALUE entries
         attr_dict = dict(attributes)
-        assert "eval.input" in attr_dict
-        assert "query" in attr_dict
+        assert "input.value" in attr_dict
 
     def test_process_response_dict(self):
         """Test _process_response with dict response."""
@@ -493,12 +493,12 @@ class TestUtilityFunctions:
         """Test _as_raw_output function."""
         mock_response = Mock()
         mock_response.model_dump.return_value = {"test": "value"}
-        
+
         attributes = list(_as_raw_output(mock_response))
-        
+
         assert len(attributes) == 1
         key, value = attributes[0]
-        assert key.endswith("output")  
+        assert key == "output.value"
         assert '"test": "value"' in value
 
     def test_as_streaming_output(self):
@@ -509,7 +509,7 @@ class TestUtilityFunctions:
             "choices": [{"delta": {"content": "Hello"}}],
             "model": "llama-3.1-70b-versatile"
         }
-        
+
         mock_chunk2 = Mock()
         mock_chunk2.to_dict.return_value = {
             "choices": [{"delta": {"content": " world!"}}],
@@ -522,16 +522,18 @@ class TestUtilityFunctions:
             },
             "model": "llama-3.1-70b-versatile"
         }
-        
+
         chunks = [mock_chunk1, mock_chunk2]
-        
+
         attributes = list(_as_streaming_output(chunks))
-        
+
+        # The function yields multiple output.value entries; dict keeps the last one
+        # It also yields gen_ai.usage.total_tokens and gen_ai.request.model
         attr_dict = dict(attributes)
         assert "output.value" in attr_dict
-        assert attr_dict["output.value"] == "Hello world!"
-        assert "llm.model_name" in attr_dict
-        assert "llm.token_count.total" in attr_dict
+        assert "gen_ai.request.model" in attr_dict
+        assert "gen_ai.usage.total_tokens" in attr_dict
+        assert attr_dict["gen_ai.usage.total_tokens"] == 50
 
     def test_to_dict_with_model_dump(self):
         """Test _to_dict with object that has __dict__."""

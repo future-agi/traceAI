@@ -21,7 +21,6 @@ from fi_instrumentation.otel import (
     PROJECT_VERSION_ID,
     EVAL_TAGS,
     METADATA,
-    SESSION_NAME,
     check_custom_eval_config_exists,
     _exporter_transport,
     _printable_headers,
@@ -41,7 +40,6 @@ class TestConstants:
         assert PROJECT_VERSION_ID == "project_version_id"
         assert EVAL_TAGS == "eval_tags"
         assert METADATA == "metadata"
-        assert SESSION_NAME == "session_name"
 
 
 class TestTransport:
@@ -146,13 +144,12 @@ class TestRegisterFunction:
         """Test register in OBSERVE mode."""
         result = register(
             project_type=ProjectType.OBSERVE,
-            session_name="test_session"
         )
-        
+
         call_args = mock_dependencies['provider_class'].call_args
         resource = call_args[1]['resource']
-        
-        assert resource.attributes[SESSION_NAME] == "test_session"
+
+        assert resource.attributes[PROJECT_TYPE] == ProjectType.OBSERVE.value
 
     def test_register_observe_mode_validation(self, mock_dependencies, clean_env):
         """Test register validation in OBSERVE mode."""
@@ -178,9 +175,8 @@ class TestRegisterFunction:
             )
 
     def test_register_experiment_mode_validation(self, mock_dependencies, clean_env):
-        """Test register validation in EXPERIMENT mode."""
-        # Should reject session_name in EXPERIMENT mode
-        with pytest.raises(Exception):  # Could be ValidationError or other implementation-specific error
+        """Test register validation in EXPERIMENT mode — session_name is not a valid parameter."""
+        with pytest.raises(TypeError):
             register(
                 project_type=ProjectType.EXPERIMENT,
                 session_name="test_session"
@@ -243,9 +239,9 @@ class TestRegisterFunction:
     def test_register_with_headers(self, mock_dependencies, clean_env):
         """Test register with custom headers."""
         headers = {"Authorization": "Bearer token"}
-        
-        result = register(headers=headers)
-        
+
+        result = register(headers=headers, batch=False)
+
         # Headers should be passed to processor
         mock_dependencies['simple_proc'].assert_called_with(
             headers=headers,

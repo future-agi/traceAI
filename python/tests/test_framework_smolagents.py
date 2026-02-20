@@ -148,17 +148,22 @@ class TestSmolagentsInstrumentor:
         """Test uninstrumentation process."""
         with patch('smolagents.MultiStepAgent') as mock_multi_step_agent, \
              patch('smolagents.Tool') as mock_tool:
-            
+
             instrumentor = SmolagentsInstrumentor()
             original_run = Mock()
             original_tool_call = Mock()
             instrumentor._original_run_method = original_run
             instrumentor._original_tool_call_method = original_tool_call
-            instrumentor._original_step_methods = {Mock: Mock()}
-            instrumentor._original_model_call_methods = {Mock: Mock()}
-            
+            # Use mock instances as keys (representing step/model classes),
+            # NOT the Mock class itself — setattr(Mock, "__call__", ...) would
+            # corrupt the Mock class globally and break all future mock calls.
+            mock_step_cls = Mock()
+            mock_model_cls = Mock()
+            instrumentor._original_step_methods = {mock_step_cls: Mock()}
+            instrumentor._original_model_call_methods = {mock_model_cls: Mock()}
+
             instrumentor._uninstrument()
-            
+
             assert mock_multi_step_agent.run == original_run
             assert mock_tool.__call__ == original_tool_call
 
@@ -428,11 +433,11 @@ class TestUtilityFunctions:
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there!"}
         ]
-        
+
         result = dict(_llm_input_messages(messages))
-        
-        # Should contain message attributes
-        assert any("llm.input_messages" in key for key in result.keys())
+
+        # Should contain message attributes with gen_ai.input.messages prefix
+        assert any("gen_ai.input.messages" in key for key in result.keys())
 
     def test_llm_output_messages(self):
         """Test LLM output messages processing."""
@@ -440,11 +445,11 @@ class TestUtilityFunctions:
         output_message.role = "assistant"
         output_message.content = "Hello!"
         output_message.tool_calls = None
-        
+
         result = dict(_llm_output_messages(output_message))
-        
-        assert "llm.output_messages.0.message.role" in result
-        assert "llm.output_messages.0.message.content" in result
+
+        assert "gen_ai.output.messages.0.message.role" in result
+        assert "gen_ai.output.messages.0.message.content" in result
 
     def test_llm_output_messages_with_tool_calls(self):
         """Test LLM output messages with tool calls."""
@@ -454,16 +459,16 @@ class TestUtilityFunctions:
         tool_call.function = Mock()
         tool_call.function.name = "test_func"
         tool_call.function.arguments = {"arg": "value"}
-        
+
         output_message = Mock()
         output_message.role = "assistant"
         output_message.content = "I'll call a function"
         output_message.tool_calls = [tool_call]
-        
+
         result = dict(_llm_output_messages(output_message))
-        
-        assert "llm.output_messages.0.message.tool_calls.0.tool_call.id" in result
-        assert "llm.output_messages.0.message.tool_calls.0.tool_call.function.name" in result
+
+        assert "gen_ai.output.messages.0.message.tool_calls.0.tool_call.id" in result
+        assert "gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name" in result
 
     def test_llm_invocation_parameters(self):
         """Test LLM invocation parameters extraction."""
@@ -474,7 +479,7 @@ class TestUtilityFunctions:
         
         result = dict(_llm_invocation_parameters(model, arguments))
         
-        assert "llm.invocation_parameters" in result
+        assert "gen_ai.request.parameters" in result
 
     def test_llm_tools(self):
         """Test LLM tools processing."""
@@ -495,9 +500,9 @@ class TestUtilityFunctions:
         
         result = dict(_tools(tool))
         
-        assert result["tool.name"] == "test_tool"
-        assert result["tool.description"] == "A test tool"
-        assert "tool.parameters" in result
+        assert result["gen_ai.tool.name"] == "test_tool"
+        assert result["gen_ai.tool.description"] == "A test tool"
+        assert "gen_ai.tool.parameters" in result
 
     def test_input_value_and_mime_type(self):
         """Test input value and mime type extraction."""
@@ -543,7 +548,7 @@ class TestUtilityFunctions:
         
         result = dict(_get_raw_input(args, **kwargs))
         
-        assert "raw.input" in result
+        assert "input.value" in result
 
     def test_get_raw_output(self):
         """Test raw output extraction."""

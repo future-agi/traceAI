@@ -15,7 +15,7 @@ from fi_instrumentation.instrumentation.context_attributes import (
     get_attributes_from_context,
     CONTEXT_ATTRIBUTES,
 )
-from fi_instrumentation.fi_types import SpanAttributes
+from fi_instrumentation.fi_types import SimulatorAttributes, SpanAttributes
 
 
 class TestUsingSession:
@@ -421,8 +421,13 @@ class TestContextAttributesConstants:
             SpanAttributes.METADATA,
             SpanAttributes.TAG_TAGS,
             SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME,
+            SpanAttributes.GEN_AI_PROMPT_TEMPLATE_LABEL,
             SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION,
             SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES,
+            SimulatorAttributes.RUN_TEST_ID,
+            SimulatorAttributes.TEST_EXECUTION_ID,
+            SimulatorAttributes.CALL_EXECUTION_ID,
+            SimulatorAttributes.IS_SIMULATOR_TRACE,
         }
-        
+
         assert set(CONTEXT_ATTRIBUTES) == expected_attributes 

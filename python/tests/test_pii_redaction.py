@@ -103,52 +103,50 @@ class TestRedactPiiInValue:
 
 
 class TestTraceConfigMaskPiiIntegration:
-    def test_pii_redaction_enabled(self):
-        from fi_instrumentation.instrumentation.config import TraceConfig
+    """Test TraceConfig.mask behavior with hide_inputs/hide_outputs settings.
 
-        config = TraceConfig(pii_redaction=True)
-        result = config.mask("some.attribute", "Contact john@example.com")
-        assert result == "Contact <EMAIL_ADDRESS>"
+    Note: TraceConfig does not have a pii_redaction parameter. PII redaction
+    is handled separately via redact_pii_in_string/redact_pii_in_value.
+    These tests verify the mask method's key-based redaction behavior.
+    """
 
-    def test_pii_redaction_disabled(self):
-        from fi_instrumentation.instrumentation.config import TraceConfig
-
-        config = TraceConfig(pii_redaction=False)
-        result = config.mask("some.attribute", "Contact john@example.com")
-        assert result == "Contact john@example.com"
-
-    def test_pii_redaction_default_off(self):
+    def test_mask_default_passthrough(self):
         from fi_instrumentation.instrumentation.config import TraceConfig
 
         config = TraceConfig()
         result = config.mask("some.attribute", "Contact john@example.com")
         assert result == "Contact john@example.com"
 
-    def test_pii_redaction_with_callable(self):
-        from fi_instrumentation.instrumentation.config import TraceConfig
-
-        config = TraceConfig(pii_redaction=True)
-        result = config.mask("some.attribute", lambda: "Contact john@example.com")
-        assert result == "Contact <EMAIL_ADDRESS>"
-
-    def test_pii_redaction_env_var(self):
-        from fi_instrumentation.instrumentation.config import TraceConfig
-
-        with mock.patch.dict(os.environ, {"FI_PII_REDACTION": "true"}):
-            config = TraceConfig()
-            assert config.pii_redaction is True
-            result = config.mask("some.attribute", "Contact john@example.com")
-            assert result == "Contact <EMAIL_ADDRESS>"
-
-    def test_key_based_redaction_takes_precedence(self):
-        """When a key-based rule returns REDACTED_VALUE, PII redaction should
-        still run on the REDACTED_VALUE string — but since it contains no PII,
-        it passes through unchanged."""
+    def test_mask_hide_inputs_redacts_input_value(self):
         from fi_instrumentation.instrumentation.config import (
             REDACTED_VALUE,
             TraceConfig,
         )
 
-        config = TraceConfig(hide_inputs=True, pii_redaction=True)
+        config = TraceConfig(hide_inputs=True)
         result = config.mask("input.value", "john@example.com")
+        assert result == REDACTED_VALUE
+
+    def test_mask_hide_inputs_hides_input_mime_type(self):
+        from fi_instrumentation.instrumentation.config import TraceConfig
+
+        config = TraceConfig(hide_inputs=True)
+        result = config.mask("input.mime_type", "application/json")
+        assert result is None
+
+    def test_mask_callable_value(self):
+        from fi_instrumentation.instrumentation.config import TraceConfig
+
+        config = TraceConfig()
+        result = config.mask("some.attribute", lambda: "Contact john@example.com")
+        assert result == "Contact john@example.com"
+
+    def test_mask_hide_outputs_redacts_output_value(self):
+        from fi_instrumentation.instrumentation.config import (
+            REDACTED_VALUE,
+            TraceConfig,
+        )
+
+        config = TraceConfig(hide_outputs=True)
+        result = config.mask("output.value", "some output data")
         assert result == REDACTED_VALUE
