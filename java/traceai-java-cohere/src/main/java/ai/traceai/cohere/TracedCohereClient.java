@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Instrumentation wrapper for Cohere Java client.
@@ -67,18 +68,16 @@ public class TracedCohereClient {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "cohere");
 
             // Set model if specified
-            if (request.getModel().isPresent()) {
-                span.setAttribute(SemanticConventions.LLM_MODEL_NAME, request.getModel().get());
-                span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, request.getModel().get());
-            }
+            request.getModel().ifPresent(model -> {
+                span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model);
+                span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, model);
+            });
 
             // Set request parameters
-            if (request.getTemperature().isPresent()) {
-                span.setAttribute(SemanticConventions.LLM_REQUEST_TEMPERATURE, request.getTemperature().get());
-            }
-            if (request.getMaxTokens().isPresent()) {
-                span.setAttribute(SemanticConventions.LLM_REQUEST_MAX_TOKENS, request.getMaxTokens().get().longValue());
-            }
+            request.getTemperature().ifPresent(temp ->
+                span.setAttribute(SemanticConventions.LLM_REQUEST_TEMPERATURE, temp.doubleValue()));
+            request.getMaxTokens().ifPresent(maxTokens ->
+                span.setAttribute(SemanticConventions.LLM_REQUEST_MAX_TOKENS, maxTokens.longValue()));
 
             // Capture input message
             tracer.setInputValue(span, request.getMessage());
@@ -86,20 +85,18 @@ public class TracedCohereClient {
             inputMessages.add(FITracer.message("user", request.getMessage()));
 
             // Capture chat history if present
-            if (request.getChatHistory().isPresent()) {
-                List<Message> history = request.getChatHistory().get();
+            request.getChatHistory().ifPresent(history -> {
                 for (Message msg : history) {
-                    String role = msg.getRole().toString().toLowerCase();
+                    String role = extractMessageRole(msg);
                     String content = extractMessageContent(msg);
                     inputMessages.add(FITracer.message(role, content));
                 }
-            }
+            });
             tracer.setInputMessages(span, inputMessages);
 
             // Capture preamble/system prompt if present
-            if (request.getPreamble().isPresent()) {
-                span.setAttribute("cohere.preamble", request.getPreamble().get());
-            }
+            request.getPreamble().ifPresent(preamble ->
+                span.setAttribute("cohere.preamble", preamble));
 
             tracer.setRawInput(span, request);
 
@@ -113,36 +110,31 @@ public class TracedCohereClient {
             }
 
             // Capture finish reason
-            if (response.getFinishReason() != null) {
-                span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                    response.getFinishReason().toString());
-            }
+            response.getFinishReason().ifPresent(reason ->
+                span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, reason.toString()));
 
             // Capture response ID
-            if (response.getGenerationId() != null) {
-                span.setAttribute(SemanticConventions.LLM_RESPONSE_ID, response.getGenerationId());
-            }
+            response.getGenerationId().ifPresent(genId ->
+                span.setAttribute(SemanticConventions.LLM_RESPONSE_ID, genId));
 
             // Token usage
-            if (response.getMeta().isPresent()) {
-                ApiMeta meta = response.getMeta().get();
-                if (meta.getTokens().isPresent()) {
-                    ApiMetaTokens tokens = meta.getTokens().get();
-                    int inputTokens = tokens.getInputTokens().orElse(0);
-                    int outputTokens = tokens.getOutputTokens().orElse(0);
-                    tracer.setTokenCounts(span, inputTokens, outputTokens, inputTokens + outputTokens);
-                }
-            }
+            response.getMeta().ifPresent(meta ->
+                meta.getTokens().ifPresent(tokens -> {
+                    double inputTokens = tokens.getInputTokens().orElse(0.0);
+                    double outputTokens = tokens.getOutputTokens().orElse(0.0);
+                    tracer.setTokenCounts(span, (int) inputTokens, (int) outputTokens,
+                        (int) (inputTokens + outputTokens));
+                }));
 
             // Capture tool calls if present
-            if (response.getToolCalls() != null && !response.getToolCalls().isEmpty()) {
-                for (int i = 0; i < response.getToolCalls().size(); i++) {
-                    ToolCall toolCall = response.getToolCalls().get(i);
+            response.getToolCalls().ifPresent(toolCalls -> {
+                for (int i = 0; i < toolCalls.size(); i++) {
+                    ToolCall toolCall = toolCalls.get(i);
                     span.setAttribute("llm.tool_calls." + i + ".name", toolCall.getName());
                     span.setAttribute("llm.tool_calls." + i + ".parameters",
                         tracer.toJson(toolCall.getParameters()));
                 }
-            }
+            });
 
             tracer.setRawOutput(span, response);
             span.setStatus(StatusCode.OK);
@@ -171,13 +163,11 @@ public class TracedCohereClient {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "cohere");
 
             // Set model
-            if (request.getModel().isPresent()) {
-                span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, request.getModel().get());
-            }
+            request.getModel().ifPresent(model ->
+                span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, model));
 
             // Capture input texts
-            List<String> texts = request.getTexts();
-            if (texts != null) {
+            request.getTexts().ifPresent(texts -> {
                 span.setAttribute(SemanticConventions.EMBEDDING_VECTOR_COUNT, (long) texts.size());
 
                 StringBuilder inputBuilder = new StringBuilder();
@@ -190,56 +180,46 @@ public class TracedCohereClient {
                     inputBuilder.append("\n... and ").append(texts.size() - 5).append(" more");
                 }
                 tracer.setInputValue(span, inputBuilder.toString());
-            }
+            });
 
             // Capture embedding type
-            if (request.getInputType().isPresent()) {
-                span.setAttribute("cohere.input_type", request.getInputType().get().toString());
-            }
+            request.getInputType().ifPresent(inputType ->
+                span.setAttribute("cohere.input_type", inputType.toString()));
 
             tracer.setRawInput(span, request);
 
             // Execute request
             EmbedResponse response = client.embed(request);
 
-            // Capture output
-            if (response.getEmbeddings() != null) {
-                // Handle different embedding response types
-                response.getEmbeddings().visit(new EmbeddingsResponse.Visitor<Void>() {
-                    @Override
-                    public Void visitEmbeddingsFloatsResponse(EmbeddingsFloatsResponse floatsResponse) {
-                        List<List<Double>> embeddings = floatsResponse.getEmbeddings();
-                        if (embeddings != null && !embeddings.isEmpty()) {
-                            span.setAttribute(SemanticConventions.EMBEDDING_VECTOR_COUNT, (long) embeddings.size());
-                            span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) embeddings.get(0).size());
-                        }
-                        return null;
+            // Capture output using the visitor pattern for the union type
+            response.visit(new EmbedResponse.Visitor<Void>() {
+                @Override
+                public Void visitEmbeddingsFloats(EmbedFloatsResponse floatsResponse) {
+                    List<List<Double>> embeddings = floatsResponse.getEmbeddings();
+                    if (embeddings != null && !embeddings.isEmpty()) {
+                        span.setAttribute(SemanticConventions.EMBEDDING_VECTOR_COUNT, (long) embeddings.size());
+                        span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) embeddings.get(0).size());
                     }
-
-                    @Override
-                    public Void visitEmbeddingsByTypeResponse(EmbeddingsByTypeResponse byTypeResponse) {
-                        // Handle by-type response
-                        return null;
-                    }
-
-                    @Override
-                    public Void _visitUnknown(Object unknown) {
-                        return null;
-                    }
-                });
-            }
-
-            // Token usage
-            if (response.getMeta().isPresent()) {
-                ApiMeta meta = response.getMeta().get();
-                if (meta.getBilledUnits().isPresent()) {
-                    ApiMetaBilledUnits units = meta.getBilledUnits().get();
-                    if (units.getInputTokens().isPresent()) {
-                        span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT,
-                            units.getInputTokens().get().longValue());
-                    }
+                    // Token usage from float response meta
+                    floatsResponse.getMeta().ifPresent(meta ->
+                        meta.getBilledUnits().ifPresent(units ->
+                            units.getInputTokens().ifPresent(inputTokens ->
+                                span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT,
+                                    inputTokens.longValue()))));
+                    return null;
                 }
-            }
+
+                @Override
+                public Void visitEmbeddingsByType(EmbedByTypeResponse byTypeResponse) {
+                    // Handle by-type response
+                    return null;
+                }
+
+                @Override
+                public Void _visitUnknown(Object unknown) {
+                    return null;
+                }
+            });
 
             tracer.setRawOutput(span, response);
             span.setStatus(StatusCode.OK);
@@ -268,9 +248,8 @@ public class TracedCohereClient {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "cohere");
 
             // Set model
-            if (request.getModel().isPresent()) {
-                span.setAttribute(SemanticConventions.LLM_MODEL_NAME, request.getModel().get());
-            }
+            request.getModel().ifPresent(model ->
+                span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model));
 
             // Capture query
             tracer.setInputValue(span, request.getQuery());
@@ -282,9 +261,8 @@ public class TracedCohereClient {
             }
 
             // Capture top_n
-            if (request.getTopN().isPresent()) {
-                span.setAttribute("cohere.rerank.top_n", request.getTopN().get().longValue());
-            }
+            request.getTopN().ifPresent(topN ->
+                span.setAttribute("cohere.rerank.top_n", topN.longValue()));
 
             tracer.setRawInput(span, request);
 
@@ -298,21 +276,16 @@ public class TracedCohereClient {
                 // Capture top result
                 if (!response.getResults().isEmpty()) {
                     RerankResponseResultsItem topResult = response.getResults().get(0);
-                    span.setAttribute("cohere.rerank.top_score", topResult.getRelevanceScore());
+                    span.setAttribute("cohere.rerank.top_score", (double) topResult.getRelevanceScore());
                     span.setAttribute("cohere.rerank.top_index", (long) topResult.getIndex());
                 }
             }
 
             // Token usage
-            if (response.getMeta().isPresent()) {
-                ApiMeta meta = response.getMeta().get();
-                if (meta.getBilledUnits().isPresent()) {
-                    ApiMetaBilledUnits units = meta.getBilledUnits().get();
-                    if (units.getSearchUnits().isPresent()) {
-                        span.setAttribute("cohere.rerank.search_units", units.getSearchUnits().get().longValue());
-                    }
-                }
-            }
+            response.getMeta().ifPresent(meta ->
+                meta.getBilledUnits().ifPresent(units ->
+                    units.getSearchUnits().ifPresent(searchUnits ->
+                        span.setAttribute("cohere.rerank.search_units", searchUnits.longValue()))));
 
             tracer.setRawOutput(span, response);
             span.setStatus(StatusCode.OK);
@@ -335,8 +308,15 @@ public class TracedCohereClient {
         return client;
     }
 
+    private String extractMessageRole(Message message) {
+        if (message.isUser()) return "user";
+        if (message.isChatbot()) return "chatbot";
+        if (message.isSystem()) return "system";
+        if (message.isTool()) return "tool";
+        return "unknown";
+    }
+
     private String extractMessageContent(Message message) {
-        // Extract content based on message role
         return message.visit(new Message.Visitor<String>() {
             @Override
             public String visitUser(ChatMessage userMessage) {
@@ -354,8 +334,10 @@ public class TracedCohereClient {
             }
 
             @Override
-            public String visitTool(ToolMessage toolMessage) {
-                return tracer.toJson(toolMessage.getToolResults());
+            public String visitTool(ChatToolMessage toolMessage) {
+                return toolMessage.getToolResults()
+                    .map(results -> tracer.toJson(results))
+                    .orElse("");
             }
 
             @Override

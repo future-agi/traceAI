@@ -2,10 +2,8 @@ package ai.traceai.ollama;
 
 import ai.traceai.*;
 import io.github.ollama4j.OllamaAPI;
+import io.github.ollama4j.models.OllamaResult;
 import io.github.ollama4j.models.chat.*;
-import io.github.ollama4j.models.generate.OllamaResult;
-import io.github.ollama4j.models.embeddings.OllamaEmbeddingsRequestModel;
-import io.github.ollama4j.models.embeddings.OllamaEmbeddingResponseModel;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -127,12 +125,8 @@ public class TracedOllamaAPI {
 
             tracer.setRawInput(span, messages);
 
-            // Execute request
-            OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(model);
-            for (OllamaChatMessage msg : messages) {
-                builder.withMessage(msg.getRole(), msg.getContent());
-            }
-            OllamaChatResult result = api.chat(builder.build());
+            // Execute request using the direct chat(model, messages) overload
+            OllamaChatResult result = api.chat(model, messages);
 
             // Capture output
             if (result.getResponse() != null) {
@@ -143,26 +137,6 @@ public class TracedOllamaAPI {
             // Capture metrics
             if (result.getResponseTime() > 0) {
                 span.setAttribute("ollama.response_time_ms", result.getResponseTime());
-            }
-
-            // Token counts if available from chat response
-            OllamaChatResponseModel chatResponse = result.getChatResponse();
-            if (chatResponse != null) {
-                if (chatResponse.getPromptEvalCount() != null) {
-                    span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT,
-                        chatResponse.getPromptEvalCount().longValue());
-                }
-                if (chatResponse.getEvalCount() != null) {
-                    span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_COMPLETION,
-                        chatResponse.getEvalCount().longValue());
-                }
-                if (chatResponse.getPromptEvalCount() != null && chatResponse.getEvalCount() != null) {
-                    span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL,
-                        (long) (chatResponse.getPromptEvalCount() + chatResponse.getEvalCount()));
-                }
-                if (chatResponse.getDone() != null && chatResponse.getDone()) {
-                    span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, "stop");
-                }
             }
 
             tracer.setRawOutput(span, result);
@@ -182,10 +156,10 @@ public class TracedOllamaAPI {
      *
      * @param model the model name
      * @param text  the text to embed
-     * @return the embedding response
+     * @return the embedding vector as a list of doubles
      * @throws Exception if embedding fails
      */
-    public OllamaEmbeddingResponseModel embed(String model, String text) throws Exception {
+    public List<Double> embed(String model, String text) throws Exception {
         Span span = tracer.startSpan("Ollama Embed", FISpanKind.EMBEDDING);
 
         try (Scope scope = span.makeCurrent()) {
@@ -198,21 +172,17 @@ public class TracedOllamaAPI {
             tracer.setInputValue(span, text);
 
             // Execute request
-            OllamaEmbeddingsRequestModel request = OllamaEmbeddingsRequestModel.builder()
-                .model(model)
-                .prompt(text)
-                .build();
-            OllamaEmbeddingResponseModel response = api.embed(request);
+            List<Double> embedding = api.generateEmbeddings(model, text);
 
             // Capture output
-            if (response.getEmbedding() != null) {
+            if (embedding != null) {
                 span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
-                    (long) response.getEmbedding().size());
+                    (long) embedding.size());
                 span.setAttribute(SemanticConventions.EMBEDDING_VECTOR_COUNT, 1L);
             }
 
             span.setStatus(StatusCode.OK);
-            return response;
+            return embedding;
 
         } catch (Exception e) {
             tracer.setError(span, e);
@@ -227,10 +197,10 @@ public class TracedOllamaAPI {
      *
      * @param model the model name
      * @param texts the texts to embed
-     * @return the embedding responses
+     * @return the embedding vectors
      * @throws Exception if embedding fails
      */
-    public List<OllamaEmbeddingResponseModel> embedBatch(String model, List<String> texts) throws Exception {
+    public List<List<Double>> embedBatch(String model, List<String> texts) throws Exception {
         Span span = tracer.startSpan("Ollama Embed Batch", FISpanKind.EMBEDDING);
 
         try (Scope scope = span.makeCurrent()) {
@@ -253,19 +223,15 @@ public class TracedOllamaAPI {
             tracer.setInputValue(span, inputBuilder.toString());
 
             // Execute requests
-            List<OllamaEmbeddingResponseModel> responses = new java.util.ArrayList<>();
+            List<List<Double>> responses = new ArrayList<>();
             for (String text : texts) {
-                OllamaEmbeddingsRequestModel request = OllamaEmbeddingsRequestModel.builder()
-                    .model(model)
-                    .prompt(text)
-                    .build();
-                responses.add(api.embed(request));
+                responses.add(api.generateEmbeddings(model, text));
             }
 
             // Capture output
-            if (!responses.isEmpty() && responses.get(0).getEmbedding() != null) {
+            if (!responses.isEmpty() && responses.get(0) != null) {
                 span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
-                    (long) responses.get(0).getEmbedding().size());
+                    (long) responses.get(0).size());
             }
 
             span.setStatus(StatusCode.OK);

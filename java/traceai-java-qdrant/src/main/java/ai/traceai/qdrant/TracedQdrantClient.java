@@ -3,6 +3,8 @@ package ai.traceai.qdrant;
 import ai.traceai.*;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.grpc.Points.*;
+import io.qdrant.client.grpc.Common.PointId;
+import io.qdrant.client.grpc.Common.Filter;
 import io.qdrant.client.grpc.Collections.*;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
@@ -21,7 +23,11 @@ import java.util.concurrent.ExecutionException;
  *     QdrantGrpcClient.newBuilder("localhost", 6334, false).build());
  * TracedQdrantClient traced = new TracedQdrantClient(client);
  *
- * List&lt;ScoredPoint&gt; results = traced.search("my-collection", queryVector, 10);
+ * List&lt;ScoredPoint&gt; results = traced.search(SearchPoints.newBuilder()
+ *     .setCollectionName("my-collection")
+ *     .addAllVector(queryVector)
+ *     .setLimit(10)
+ *     .build());
  * </pre>
  */
 public class TracedQdrantClient {
@@ -51,6 +57,7 @@ public class TracedQdrantClient {
 
     /**
      * Searches for similar vectors with tracing.
+     * Builds a SearchPoints request from the given parameters.
      *
      * @param collectionName the collection to search
      * @param queryVector    the query vector
@@ -61,37 +68,14 @@ public class TracedQdrantClient {
      */
     public List<ScoredPoint> search(String collectionName, List<Float> queryVector, int limit)
             throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Search", FISpanKind.RETRIEVER);
+        // Build SearchPoints request from simple params
+        SearchPoints searchRequest = SearchPoints.newBuilder()
+            .setCollectionName(collectionName)
+            .addAllVector(queryVector)
+            .setLimit(limit)
+            .build();
 
-        try (Scope scope = span.makeCurrent()) {
-            // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
-            span.setAttribute("qdrant.collection", collectionName);
-            span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) limit);
-            span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.size());
-
-            // Execute search
-            List<ScoredPoint> results = client.searchAsync(
-                collectionName,
-                queryVector,
-                limit
-            ).get();
-
-            // Capture results
-            span.setAttribute("qdrant.results_count", (long) results.size());
-            if (!results.isEmpty()) {
-                span.setAttribute("qdrant.top_score", results.get(0).getScore());
-            }
-
-            span.setStatus(StatusCode.OK);
-            return results;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
+        return search(searchRequest);
     }
 
     /**
@@ -112,9 +96,10 @@ public class TracedQdrantClient {
             span.setAttribute("qdrant.collection", searchRequest.getCollectionName());
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, searchRequest.getLimit());
 
-            if (searchRequest.hasVector()) {
-                span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
-                    (long) searchRequest.getVector().getDataCount());
+            // Capture vector dimensions from the repeated vector field
+            int vectorCount = searchRequest.getVectorCount();
+            if (vectorCount > 0) {
+                span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) vectorCount);
             }
 
             if (searchRequest.hasFilter()) {
@@ -160,8 +145,9 @@ public class TracedQdrantClient {
             span.setAttribute("qdrant.collection", collectionName);
             span.setAttribute("qdrant.points_count", (long) points.size());
 
+            // Try to capture vector dimensions from the first point
             if (!points.isEmpty() && points.get(0).hasVectors()) {
-                VectorsSelector vectors = points.get(0).getVectors();
+                Vectors vectors = points.get(0).getVectors();
                 if (vectors.hasVector()) {
                     span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
                         (long) vectors.getVector().getDataCount());
@@ -186,15 +172,16 @@ public class TracedQdrantClient {
     }
 
     /**
-     * Deletes points by IDs with tracing.
+     * Deletes points by filter with tracing.
+     * In Qdrant Java client v1.16.x, deleteAsync takes a Filter, not a list of PointIds.
      *
      * @param collectionName the collection name
-     * @param pointIds       the point IDs to delete
+     * @param filter         the filter to match points for deletion
      * @return the update result
      * @throws ExecutionException   if delete fails
      * @throws InterruptedException if interrupted
      */
-    public UpdateResult delete(String collectionName, List<PointId> pointIds)
+    public UpdateResult delete(String collectionName, Filter filter)
             throws ExecutionException, InterruptedException {
         Span span = tracer.startSpan("Qdrant Delete", FISpanKind.RETRIEVER);
 
@@ -202,10 +189,10 @@ public class TracedQdrantClient {
             // Set attributes
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
             span.setAttribute("qdrant.collection", collectionName);
-            span.setAttribute("qdrant.delete_count", (long) pointIds.size());
+            span.setAttribute("qdrant.has_filter", true);
 
             // Execute delete
-            UpdateResult result = client.deleteAsync(collectionName, pointIds).get();
+            UpdateResult result = client.deleteAsync(collectionName, filter).get();
 
             span.setAttribute("qdrant.status", result.getStatus().name());
             span.setStatus(StatusCode.OK);

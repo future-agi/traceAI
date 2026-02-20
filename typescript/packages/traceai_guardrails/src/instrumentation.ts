@@ -69,6 +69,7 @@ export class GuardrailsInstrumentation extends InstrumentationBase {
    * Manually instrument the @guardrails-ai/core module.
    */
   manuallyInstrument(guardrailsModule: any): void {
+    if (guardrailsModule == null) return;
     this.patch(guardrailsModule);
   }
 
@@ -206,6 +207,13 @@ let _isFIPatched = false;
  */
 export function isPatched(): boolean {
   return _isFIPatched;
+}
+
+/**
+ * Reset the patched state (for testing only).
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
 }
 
 // Helper functions

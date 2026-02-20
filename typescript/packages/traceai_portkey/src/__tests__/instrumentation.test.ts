@@ -2,7 +2,7 @@
  * Tests for Portkey instrumentation.
  */
 
-import { PortkeyInstrumentation, isPatched } from "../instrumentation";
+import { PortkeyInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -20,6 +20,7 @@ describe("PortkeyInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   afterAll(() => {
@@ -117,6 +118,7 @@ describe("Portkey Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap chat.completions.create when available", () => {
@@ -142,7 +144,7 @@ describe("Portkey Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap completions.create when available", () => {
@@ -165,7 +167,7 @@ describe("Portkey Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap embeddings.create when available", () => {
@@ -189,7 +191,7 @@ describe("Portkey Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should not double-patch module", () => {

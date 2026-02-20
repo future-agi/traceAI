@@ -69,6 +69,7 @@ export class InstructorInstrumentation extends InstrumentationBase {
    * Manually instrument the @instructor-ai/instructor module.
    */
   manuallyInstrument(instructorModule: any): void {
+    if (instructorModule == null) return;
     this.patch(instructorModule);
   }
 
@@ -181,6 +182,13 @@ let _isFIPatched = false;
  */
 export function isPatched(): boolean {
   return _isFIPatched;
+}
+
+/**
+ * Reset the patched state (for testing only).
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
 }
 
 // Helper functions

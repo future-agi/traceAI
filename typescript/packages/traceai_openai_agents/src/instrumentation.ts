@@ -421,6 +421,13 @@ export function isPatched(): boolean {
   return _isFIPatched;
 }
 
+/**
+ * Resets the internal patched state. Intended for testing only.
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
+}
+
 // Helper functions
 
 function safeJsonStringify(obj: unknown): string {
@@ -475,8 +482,3 @@ function getTextFromResponse(response: unknown): string | undefined {
   return texts.length > 0 ? texts.join(" ") : undefined;
 }
 
-// Type declaration for module augmentation
-declare module "@openai/agents" {
-  export function setTraceProcessors(processors: TracingProcessor[]): void;
-  export function addTraceProcessor(processor: TracingProcessor): void;
-}

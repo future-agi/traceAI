@@ -11,6 +11,7 @@ import com.microsoft.semantickernel.services.chatcompletion.AuthorRole;
 import com.microsoft.semantickernel.services.chatcompletion.ChatCompletionService;
 import com.microsoft.semantickernel.services.chatcompletion.ChatHistory;
 import com.microsoft.semantickernel.services.chatcompletion.ChatMessageContent;
+import com.microsoft.semantickernel.services.chatcompletion.StreamingChatContent;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -134,7 +135,7 @@ public class TracedChatCompletionService implements ChatCompletionService {
     }
 
     @Override
-    public Flux<ChatMessageContent<?>> getStreamingChatMessageContentsAsync(
+    public Flux<StreamingChatContent<?>> getStreamingChatMessageContentsAsync(
             ChatHistory chatHistory,
             @Nullable Kernel kernel,
             @Nullable InvocationContext invocationContext) {
@@ -175,6 +176,28 @@ public class TracedChatCompletionService implements ChatCompletionService {
                     span.end();
                 });
         }
+    }
+
+    @Override
+    public Mono<List<ChatMessageContent<?>>> getChatMessageContentsAsync(
+            String prompt,
+            @Nullable Kernel kernel,
+            @Nullable InvocationContext invocationContext) {
+
+        ChatHistory chatHistory = new ChatHistory();
+        chatHistory.addUserMessage(prompt);
+        return getChatMessageContentsAsync(chatHistory, kernel, invocationContext);
+    }
+
+    @Override
+    public Flux<StreamingChatContent<?>> getStreamingChatMessageContentsAsync(
+            String prompt,
+            @Nullable Kernel kernel,
+            @Nullable InvocationContext invocationContext) {
+
+        ChatHistory chatHistory = new ChatHistory();
+        chatHistory.addUserMessage(prompt);
+        return getStreamingChatMessageContentsAsync(chatHistory, kernel, invocationContext);
     }
 
     @Override

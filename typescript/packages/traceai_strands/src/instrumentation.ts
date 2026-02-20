@@ -304,6 +304,13 @@ export function isPatched(): boolean {
   return _isFIPatched;
 }
 
+/**
+ * Resets the internal patched state. Intended for testing only.
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
+}
+
 // Helper functions
 
 function safeJsonStringify(obj: unknown): string {

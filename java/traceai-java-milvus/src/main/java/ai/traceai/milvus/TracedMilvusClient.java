@@ -107,6 +107,7 @@ public class TracedMilvusClient {
 
     /**
      * Inserts data with tracing.
+     * In Milvus SDK v2.6.x, InsertReq.getData() returns List&lt;JsonObject&gt; (Gson).
      *
      * @param request the insert request
      * @return the insert response
@@ -119,7 +120,8 @@ public class TracedMilvusClient {
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
             span.setAttribute("milvus.collection", request.getCollectionName());
 
-            List<Map<String, Object>> data = request.getData();
+            // getData() returns List<JsonObject> in Milvus SDK v2.6.x
+            List<?> data = request.getData();
             if (data != null) {
                 span.setAttribute("milvus.insert_count", (long) data.size());
             }
@@ -143,6 +145,7 @@ public class TracedMilvusClient {
 
     /**
      * Upserts data with tracing.
+     * In Milvus SDK v2.6.x, UpsertReq.getData() returns List&lt;JsonObject&gt; (Gson).
      *
      * @param request the upsert request
      * @return the upsert response
@@ -155,7 +158,8 @@ public class TracedMilvusClient {
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
             span.setAttribute("milvus.collection", request.getCollectionName());
 
-            List<Map<String, Object>> data = request.getData();
+            // getData() returns List<JsonObject> in Milvus SDK v2.6.x
+            List<?> data = request.getData();
             if (data != null) {
                 span.setAttribute("milvus.upsert_count", (long) data.size());
             }
@@ -269,8 +273,10 @@ public class TracedMilvusClient {
             if (request.getFilter() != null) {
                 span.setAttribute("milvus.filter", request.getFilter());
             }
-            if (request.getLimit() != null) {
-                span.setAttribute("milvus.limit", request.getLimit().longValue());
+            // getLimit() returns primitive long in Milvus SDK v2.6.x
+            long limit = request.getLimit();
+            if (limit > 0) {
+                span.setAttribute("milvus.limit", limit);
             }
 
             // Execute query

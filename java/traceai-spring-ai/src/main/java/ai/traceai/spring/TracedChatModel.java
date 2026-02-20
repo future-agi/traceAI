@@ -6,6 +6,7 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.messages.Message;
 import reactor.core.publisher.Flux;
@@ -178,6 +179,11 @@ public class TracedChatModel implements ChatModel {
             span.end();
             throw e;
         }
+    }
+
+    @Override
+    public ChatOptions getDefaultOptions() {
+        return delegate.getDefaultOptions();
     }
 
     /**

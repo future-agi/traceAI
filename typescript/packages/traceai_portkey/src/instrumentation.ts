@@ -69,6 +69,7 @@ export class PortkeyInstrumentation extends InstrumentationBase {
    * Manually instrument the portkey-ai module.
    */
   manuallyInstrument(portkeyModule: any): void {
+    if (portkeyModule == null) return;
     this.patch(portkeyModule);
   }
 
@@ -390,6 +391,13 @@ let _isFIPatched = false;
  */
 export function isPatched(): boolean {
   return _isFIPatched;
+}
+
+/**
+ * Reset the patched state (for testing only).
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
 }
 
 // Helper functions

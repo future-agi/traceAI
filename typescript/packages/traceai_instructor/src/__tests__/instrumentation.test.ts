@@ -2,7 +2,7 @@
  * Tests for Instructor instrumentation.
  */
 
-import { InstructorInstrumentation, isPatched } from "../instrumentation";
+import { InstructorInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -20,6 +20,7 @@ describe("InstructorInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   afterAll(() => {
@@ -117,6 +118,7 @@ describe("Instructor Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap Instructor.chat.completions.create when available", () => {
@@ -142,7 +144,7 @@ describe("Instructor Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap default export when it is a function", () => {
@@ -162,7 +164,7 @@ describe("Instructor Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should not double-patch module", () => {
@@ -200,6 +202,7 @@ describe("Structured Extraction Tracing", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should handle response_model parameter", () => {
@@ -220,7 +223,7 @@ describe("Structured Extraction Tracing", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should handle responseModel parameter (camelCase)", () => {
@@ -241,7 +244,7 @@ describe("Structured Extraction Tracing", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should capture model name in span", () => {
@@ -262,6 +265,6 @@ describe("Structured Extraction Tracing", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });

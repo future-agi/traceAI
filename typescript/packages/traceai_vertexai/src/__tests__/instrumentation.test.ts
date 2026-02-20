@@ -2,7 +2,7 @@
  * Tests for Vertex AI instrumentation.
  */
 
-import { VertexAIInstrumentation, isPatched } from "../instrumentation";
+import { VertexAIInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -20,6 +20,7 @@ describe("VertexAIInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   afterAll(() => {
@@ -117,6 +118,7 @@ describe("GenerativeModel Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap GenerativeModel.generateContent when available", () => {
@@ -140,7 +142,7 @@ describe("GenerativeModel Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap GenerativeModel.generateContentStream when available", () => {
@@ -164,7 +166,7 @@ describe("GenerativeModel Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap GenerativeModel.countTokens when available", () => {
@@ -183,7 +185,7 @@ describe("GenerativeModel Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should not double-patch module", () => {
@@ -217,6 +219,7 @@ describe("ChatSession Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap ChatSession.sendMessage when available", () => {
@@ -239,7 +242,7 @@ describe("ChatSession Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap ChatSession.sendMessageStream when available", () => {
@@ -262,7 +265,7 @@ describe("ChatSession Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });
 
@@ -275,6 +278,7 @@ describe("TextEmbeddingModel Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap TextEmbeddingModel.embed when available", () => {
@@ -295,6 +299,6 @@ describe("TextEmbeddingModel Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });

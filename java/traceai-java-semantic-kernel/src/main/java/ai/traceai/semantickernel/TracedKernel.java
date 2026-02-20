@@ -233,12 +233,13 @@ public class TracedKernel {
 
         // Capture metadata if available
         if (result.getMetadata() != null) {
-            Map<String, Object> metadata = result.getMetadata();
-
-            // Try to extract token usage if present
-            if (metadata.containsKey("usage")) {
-                Object usage = metadata.get("usage");
-                extractTokenUsage(span, usage);
+            try {
+                Object usage = result.getMetadata().getUsage();
+                if (usage != null) {
+                    extractTokenUsage(span, usage);
+                }
+            } catch (Exception e) {
+                // Ignore metadata extraction failures
             }
         }
     }

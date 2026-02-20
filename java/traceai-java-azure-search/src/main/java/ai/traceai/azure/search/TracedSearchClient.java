@@ -1,6 +1,7 @@
 package ai.traceai.azure.search;
 
 import ai.traceai.*;
+import com.azure.core.util.Context;
 import com.azure.search.documents.SearchClient;
 import com.azure.search.documents.SearchDocument;
 import com.azure.search.documents.models.*;
@@ -91,7 +92,7 @@ public class TracedSearchClient {
                     .setQueries(vectorQuery));
 
             // Execute search
-            SearchPagedIterable results = searchClient.search(searchText, options);
+            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
 
             captureSearchResults(span, results);
 
@@ -140,7 +141,7 @@ public class TracedSearchClient {
                     .setQueries(vectorQuery));
 
             // Execute search
-            SearchPagedIterable results = searchClient.search(searchText, options);
+            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
 
             captureSearchResults(span, results);
 
@@ -184,7 +185,7 @@ public class TracedSearchClient {
                     .setQueries(vectorQuery));
 
             // Execute search with both text and vector
-            SearchPagedIterable results = searchClient.search(searchText, options);
+            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
 
             captureSearchResults(span, results);
 
@@ -220,7 +221,7 @@ public class TracedSearchClient {
                 .setTop(top);
 
             // Execute search
-            SearchPagedIterable results = searchClient.search(searchText, options);
+            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
 
             captureSearchResults(span, results);
 
@@ -456,7 +457,7 @@ public class TracedSearchClient {
         // Iterate through results to get count and top score
         results.forEach(result -> {
             int currentCount = count.incrementAndGet();
-            if (currentCount == 1 && result.getScore() != null) {
+            if (currentCount == 1) {
                 topScore.set(result.getScore());
             }
         });

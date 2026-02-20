@@ -71,6 +71,7 @@ export class PipecatInstrumentation extends InstrumentationBase {
    * Manually instrument the @pipecat-ai/client-js module.
    */
   manuallyInstrument(pipecatModule: any): void {
+    if (pipecatModule == null) return;
     this.patch(pipecatModule);
   }
 
@@ -506,6 +507,13 @@ let _isFIPatched = false;
  */
 export function isPatched(): boolean {
   return _isFIPatched;
+}
+
+/**
+ * Reset the patched state (for testing only).
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
 }
 
 // Helper functions

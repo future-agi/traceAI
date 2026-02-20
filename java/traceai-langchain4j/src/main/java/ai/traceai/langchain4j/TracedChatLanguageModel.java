@@ -1,6 +1,7 @@
 package ai.traceai.langchain4j;
 
 import ai.traceai.*;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.output.Response;

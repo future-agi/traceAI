@@ -10,8 +10,9 @@ describe("HuggingFaceInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter = new InMemorySpanExporter();
-    provider = new NodeTracerProvider();
-    provider.addSpanProcessor(new SimpleSpanProcessor(memoryExporter));
+    provider = new NodeTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(memoryExporter)],
+    });
     provider.register();
 
     instrumentation = new HuggingFaceInstrumentation();
@@ -264,10 +265,11 @@ describe("HuggingFaceInstrumentation", () => {
       const spans = memoryExporter.getFinishedSpans();
       const span = spans[0];
 
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`]).toBe("system");
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`]).toBe("You are helpful.");
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.1.${SemanticConventions.MESSAGE_ROLE}`]).toBe("user");
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.1.${SemanticConventions.MESSAGE_CONTENT}`]).toBe("Hello!");
+      const inputMessages = JSON.parse(span.attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(inputMessages[0].role).toBe("system");
+      expect(inputMessages[0].content).toBe("You are helpful.");
+      expect(inputMessages[1].role).toBe("user");
+      expect(inputMessages[1].content).toBe("Hello!");
     });
 
     it("should capture output messages", async () => {
@@ -281,8 +283,9 @@ describe("HuggingFaceInstrumentation", () => {
       const spans = memoryExporter.getFinishedSpans();
       const span = spans[0];
 
-      expect(span.attributes[`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`]).toBe("assistant");
-      expect(span.attributes[`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`]).toBe("Hello! How can I help you today?");
+      const outputMessages = JSON.parse(span.attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(outputMessages[0].role).toBe("assistant");
+      expect(outputMessages[0].content).toBe("Hello! How can I help you today?");
     });
 
     it("should capture token usage", async () => {

@@ -1,0 +1,92 @@
+{
+  "groups": [
+    {
+      "name": "traceai",
+      "type": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties"
+    }
+  ],
+  "properties": [
+    {
+      "name": "traceai.api-key",
+      "type": "java.lang.String",
+      "description": "The API key for authentication.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties"
+    },
+    {
+      "name": "traceai.base-url",
+      "type": "java.lang.String",
+      "description": "The base URL for the TraceAI backend.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties"
+    },
+    {
+      "name": "traceai.batch-size",
+      "type": "java.lang.Integer",
+      "description": "Batch size for span export.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": 512
+    },
+    {
+      "name": "traceai.enable-console-exporter",
+      "type": "java.lang.Boolean",
+      "description": "Enable console span exporter for debugging.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": false
+    },
+    {
+      "name": "traceai.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable or disable TraceAI instrumentation.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "traceai.export-interval-ms",
+      "type": "java.lang.Long",
+      "description": "Export interval in milliseconds.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": 5000
+    },
+    {
+      "name": "traceai.hide-input-messages",
+      "type": "java.lang.Boolean",
+      "description": "Whether to hide input messages in traces.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": false
+    },
+    {
+      "name": "traceai.hide-inputs",
+      "type": "java.lang.Boolean",
+      "description": "Whether to hide input values in traces.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": false
+    },
+    {
+      "name": "traceai.hide-output-messages",
+      "type": "java.lang.Boolean",
+      "description": "Whether to hide output messages in traces.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": false
+    },
+    {
+      "name": "traceai.hide-outputs",
+      "type": "java.lang.Boolean",
+      "description": "Whether to hide output values in traces.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties",
+      "defaultValue": false
+    },
+    {
+      "name": "traceai.project-name",
+      "type": "java.lang.String",
+      "description": "The project name for trace attribution.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties"
+    },
+    {
+      "name": "traceai.service-name",
+      "type": "java.lang.String",
+      "description": "The service name for trace attribution. If not set, uses the Spring application name.",
+      "sourceType": "ai.traceai.spring.autoconfigure.TraceAIProperties"
+    }
+  ],
+  "hints": []
+}

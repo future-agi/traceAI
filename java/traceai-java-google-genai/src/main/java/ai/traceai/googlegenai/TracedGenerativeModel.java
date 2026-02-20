@@ -1,8 +1,10 @@
 package ai.traceai.googlegenai;
 
 import ai.traceai.*;
-import com.google.ai.client.generativeai.GenerativeModel;
-import com.google.ai.client.generativeai.type.*;
+import com.google.genai.Chat;
+import com.google.genai.Client;
+import com.google.genai.ResponseStream;
+import com.google.genai.types.*;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
@@ -13,32 +15,32 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Instrumentation wrapper for Google Generative AI (Gemini) client.
- * Wraps the GenerativeModel to provide automatic tracing of all API calls.
+ * Instrumentation wrapper for Google Gen AI (Gemini) Java SDK.
+ * Wraps a Google GenAI Client to provide automatic tracing of all API calls.
  *
  * <p>Usage:</p>
  * <pre>
- * GenerativeModel model = new GenerativeModel("gemini-1.5-pro", apiKey);
- * TracedGenerativeModel traced = new TracedGenerativeModel(model);
+ * Client client = Client.builder().apiKey("your-key").build();
+ * TracedGenerativeModel traced = new TracedGenerativeModel(client, "gemini-1.5-pro");
  *
  * GenerateContentResponse response = traced.generateContent("Hello!");
  * </pre>
  */
 public class TracedGenerativeModel {
 
-    private final GenerativeModel model;
+    private final Client client;
     private final FITracer tracer;
     private final String modelName;
 
     /**
-     * Creates a new traced generative model with the given model and tracer.
+     * Creates a new traced generative model with the given client, tracer, and model name.
      *
-     * @param model     the GenerativeModel to wrap
+     * @param client    the Google GenAI Client to wrap
      * @param tracer    the FITracer for instrumentation
-     * @param modelName the model name for tracing
+     * @param modelName the model name for tracing and API calls
      */
-    public TracedGenerativeModel(GenerativeModel model, FITracer tracer, String modelName) {
-        this.model = model;
+    public TracedGenerativeModel(Client client, FITracer tracer, String modelName) {
+        this.client = client;
         this.tracer = tracer;
         this.modelName = modelName;
     }
@@ -46,11 +48,11 @@ public class TracedGenerativeModel {
     /**
      * Creates a new traced generative model using the global TraceAI tracer.
      *
-     * @param model     the GenerativeModel to wrap
-     * @param modelName the model name for tracing
+     * @param client    the Google GenAI Client to wrap
+     * @param modelName the model name for tracing and API calls
      */
-    public TracedGenerativeModel(GenerativeModel model, String modelName) {
-        this(model, TraceAI.getTracer(), modelName);
+    public TracedGenerativeModel(Client client, String modelName) {
+        this(client, TraceAI.getTracer(), modelName);
     }
 
     /**
@@ -63,20 +65,13 @@ public class TracedGenerativeModel {
         Span span = tracer.startSpan("Google GenAI Generate Content", FISpanKind.LLM);
 
         try (Scope scope = span.makeCurrent()) {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "google-genai");
-            span.setAttribute(SemanticConventions.LLM_PROVIDER, "google");
-            span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelName);
-            span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, modelName);
+            setSystemAttributes(span);
 
-            // Capture input
             tracer.setInputValue(span, prompt);
             tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", prompt)));
 
-            // Execute request
-            GenerateContentResponse response = model.generateContent(prompt);
+            GenerateContentResponse response = client.models.generateContent(modelName, prompt, null);
 
-            // Capture output
             captureResponse(span, response);
 
             span.setStatus(StatusCode.OK);
@@ -96,19 +91,15 @@ public class TracedGenerativeModel {
      * @param contents the input contents
      * @return the generate content response
      */
-    public GenerateContentResponse generateContent(Content... contents) {
+    public GenerateContentResponse generateContent(List<Content> contents) {
         Span span = tracer.startSpan("Google GenAI Generate Content", FISpanKind.LLM);
 
         try (Scope scope = span.makeCurrent()) {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "google-genai");
-            span.setAttribute(SemanticConventions.LLM_PROVIDER, "google");
-            span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelName);
+            setSystemAttributes(span);
 
-            // Capture input messages
             List<Map<String, String>> inputMessages = new ArrayList<>();
             for (Content content : contents) {
-                String role = content.getRole() != null ? content.getRole() : "user";
+                String role = content.role().orElse("user");
                 String text = extractContentText(content);
                 inputMessages.add(FITracer.message(role, text));
             }
@@ -116,10 +107,8 @@ public class TracedGenerativeModel {
 
             tracer.setRawInput(span, contents);
 
-            // Execute request
-            GenerateContentResponse response = model.generateContent(contents);
+            GenerateContentResponse response = client.models.generateContent(modelName, contents, null);
 
-            // Capture output
             captureResponse(span, response);
 
             span.setStatus(StatusCode.OK);
@@ -148,9 +137,11 @@ public class TracedGenerativeModel {
 
             tracer.setInputValue(span, prompt);
 
-            CountTokensResponse response = model.countTokens(prompt);
+            CountTokensResponse response = client.models.countTokens(modelName, prompt, null);
 
-            span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL, (long) response.getTotalTokens());
+            response.totalTokens().ifPresent(total ->
+                span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL, total.longValue())
+            );
 
             span.setStatus(StatusCode.OK);
             return response;
@@ -169,76 +160,80 @@ public class TracedGenerativeModel {
      * @return a traced chat session
      */
     public TracedChat startChat() {
-        return new TracedChat(model.startChat(), tracer, modelName);
+        Chat chat = client.chats.create(modelName);
+        return new TracedChat(chat, tracer, modelName);
     }
 
     /**
-     * Starts a chat session with history and tracing support.
+     * Gets the underlying Client.
      *
-     * @param history the chat history
-     * @return a traced chat session
+     * @return the wrapped Client
      */
-    public TracedChat startChat(List<Content> history) {
-        return new TracedChat(model.startChat(history), tracer, modelName);
+    public Client unwrap() {
+        return client;
     }
 
     /**
-     * Gets the underlying GenerativeModel.
+     * Gets the model name used by this traced model.
      *
-     * @return the wrapped GenerativeModel
+     * @return the model name
      */
-    public GenerativeModel unwrap() {
-        return model;
+    public String getModelName() {
+        return modelName;
+    }
+
+    private void setSystemAttributes(Span span) {
+        span.setAttribute(SemanticConventions.LLM_SYSTEM, "google-genai");
+        span.setAttribute(SemanticConventions.LLM_PROVIDER, "google");
+        span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelName);
+        span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, modelName);
     }
 
     private void captureResponse(Span span, GenerateContentResponse response) {
         if (response == null) return;
 
-        // Capture candidates
-        List<Candidate> candidates = response.getCandidates();
-        if (candidates != null && !candidates.isEmpty()) {
-            Candidate firstCandidate = candidates.get(0);
-
-            // Capture content
-            if (firstCandidate.getContent() != null) {
-                String text = extractContentText(firstCandidate.getContent());
+        // Capture text output using the convenience method
+        try {
+            String text = response.text();
+            if (text != null) {
                 tracer.setOutputValue(span, text);
                 tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("model", text)));
             }
-
-            // Capture finish reason
-            if (firstCandidate.getFinishReason() != null) {
-                span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                    firstCandidate.getFinishReason().name());
-            }
+        } catch (Exception e) {
+            // text() may throw if no text candidates exist
         }
+
+        // Capture finish reason from first candidate
+        response.candidates().ifPresent(candidates -> {
+            if (!candidates.isEmpty()) {
+                Candidate firstCandidate = candidates.get(0);
+                firstCandidate.finishReason().ifPresent(reason ->
+                    span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON, reason.toString())
+                );
+            }
+        });
 
         // Capture usage metadata
-        UsageMetadata usage = response.getUsageMetadata();
-        if (usage != null) {
-            tracer.setTokenCounts(
-                span,
-                usage.getPromptTokenCount(),
-                usage.getCandidatesTokenCount(),
-                usage.getTotalTokenCount()
-            );
-        }
+        response.usageMetadata().ifPresent(usage -> {
+            int prompt = usage.promptTokenCount().orElse(0);
+            int candidates = usage.candidatesTokenCount().orElse(0);
+            int total = usage.totalTokenCount().orElse(0);
+            tracer.setTokenCounts(span, prompt, candidates, total);
+        });
 
         tracer.setRawOutput(span, response);
     }
 
     private String extractContentText(Content content) {
-        if (content == null || content.getParts() == null) {
+        if (content == null) {
             return "";
         }
-
-        StringBuilder sb = new StringBuilder();
-        for (Part part : content.getParts()) {
-            if (part instanceof TextPart) {
-                sb.append(((TextPart) part).getText());
-            }
+        try {
+            String text = content.text();
+            return text != null ? text : "";
+        } catch (Exception e) {
+            return "";
         }
-        return sb.toString();
     }
 
     /**
@@ -275,31 +270,23 @@ public class TracedGenerativeModel {
                 GenerateContentResponse response = chat.sendMessage(message);
 
                 // Capture output
-                if (response.getCandidates() != null && !response.getCandidates().isEmpty()) {
-                    Candidate candidate = response.getCandidates().get(0);
-                    if (candidate.getContent() != null) {
-                        StringBuilder sb = new StringBuilder();
-                        for (Part part : candidate.getContent().getParts()) {
-                            if (part instanceof TextPart) {
-                                sb.append(((TextPart) part).getText());
-                            }
-                        }
-                        String text = sb.toString();
+                try {
+                    String text = response.text();
+                    if (text != null) {
                         tracer.setOutputValue(span, text);
                         tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("model", text)));
                     }
+                } catch (Exception e) {
+                    // text() may throw if no text candidates
                 }
 
                 // Token usage
-                UsageMetadata usage = response.getUsageMetadata();
-                if (usage != null) {
-                    tracer.setTokenCounts(
-                        span,
-                        usage.getPromptTokenCount(),
-                        usage.getCandidatesTokenCount(),
-                        usage.getTotalTokenCount()
-                    );
-                }
+                response.usageMetadata().ifPresent(usage -> {
+                    int prompt = usage.promptTokenCount().orElse(0);
+                    int candidates = usage.candidatesTokenCount().orElse(0);
+                    int total = usage.totalTokenCount().orElse(0);
+                    tracer.setTokenCounts(span, prompt, candidates, total);
+                });
 
                 span.setStatus(StatusCode.OK);
                 return response;

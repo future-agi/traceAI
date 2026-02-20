@@ -2,7 +2,7 @@
  * Tests for Haystack instrumentation.
  */
 
-import { HaystackInstrumentation, isPatched } from "../instrumentation";
+import { HaystackInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -20,6 +20,7 @@ describe("HaystackInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   afterAll(() => {
@@ -117,6 +118,7 @@ describe("Haystack Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap Pipeline.run when available", () => {
@@ -137,7 +139,7 @@ describe("Haystack Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap Component.run when available", () => {
@@ -158,7 +160,7 @@ describe("Haystack Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should not double-patch module", () => {
@@ -192,6 +194,7 @@ describe("Component Type Detection", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should detect retriever component type", () => {
@@ -208,7 +211,7 @@ describe("Component Type Detection", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should detect generator/llm component type", () => {
@@ -225,7 +228,7 @@ describe("Component Type Detection", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should detect embedding component type", () => {
@@ -242,6 +245,6 @@ describe("Component Type Detection", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });

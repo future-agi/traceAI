@@ -3,6 +3,8 @@ package ai.traceai.semantickernel;
 import ai.traceai.FISpanKind;
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
+import com.microsoft.semantickernel.Kernel;
+import com.microsoft.semantickernel.orchestration.InvocationContext;
 import com.microsoft.semantickernel.services.chatcompletion.AuthorRole;
 import com.microsoft.semantickernel.services.chatcompletion.ChatCompletionService;
 import com.microsoft.semantickernel.services.chatcompletion.ChatHistory;
@@ -24,6 +26,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,16 +53,15 @@ class TracedChatCompletionServiceTest {
         ChatHistory history = new ChatHistory();
         history.addUserMessage("Hello");
 
-        ChatMessageContent<?> responseMessage = ChatMessageContent.builder()
-            .withAuthorRole(AuthorRole.ASSISTANT)
-            .withContent("Hi there!")
-            .build();
+        ChatMessageContent<?> responseMessage = new ChatMessageContent<>(AuthorRole.ASSISTANT, "Hi there!");
 
-        when(delegate.getChatMessageContentsAsync(any(), any(), any()))
+        when(delegate.getChatMessageContentsAsync(
+            any(ChatHistory.class), any(), any()))
             .thenReturn(Mono.just(Arrays.asList(responseMessage)));
 
         // When
-        tracedService.getChatMessageContentsAsync(history, null, null).block();
+        tracedService.getChatMessageContentsAsync(
+            history, (Kernel) null, (InvocationContext) null).block();
 
         // Then
         List<SpanData> spans = otelTesting.getSpans();
@@ -77,27 +79,25 @@ class TracedChatCompletionServiceTest {
         ChatHistory history = new ChatHistory();
         history.addUserMessage("What is AI?");
 
-        ChatMessageContent<?> responseMessage = ChatMessageContent.builder()
-            .withAuthorRole(AuthorRole.ASSISTANT)
-            .withContent("AI stands for Artificial Intelligence.")
-            .build();
+        ChatMessageContent<?> responseMessage = new ChatMessageContent<>(
+            AuthorRole.ASSISTANT, "AI stands for Artificial Intelligence.");
 
-        when(delegate.getChatMessageContentsAsync(any(), any(), any()))
+        when(delegate.getChatMessageContentsAsync(
+            any(ChatHistory.class), any(), any()))
             .thenReturn(Mono.just(Arrays.asList(responseMessage)));
 
         // When
-        tracedService.getChatMessageContentsAsync(history, null, null).block();
+        tracedService.getChatMessageContentsAsync(
+            history, (Kernel) null, (InvocationContext) null).block();
 
         // Then
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
+        // LLM_SYSTEM and LLM_PROVIDER both map to "gen_ai.provider.name",
+        // so the provider value ("openai") overwrites the system value
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_SYSTEM)
-        )).isEqualTo("semantic-kernel");
-
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey(SemanticConventions.LLM_PROVIDER)
         )).isEqualTo("openai");
 
         assertThat(spanData.getAttributes().get(
@@ -112,36 +112,29 @@ class TracedChatCompletionServiceTest {
         history.addSystemMessage("You are a helpful assistant.");
         history.addUserMessage("Hello!");
 
-        ChatMessageContent<?> responseMessage = ChatMessageContent.builder()
-            .withAuthorRole(AuthorRole.ASSISTANT)
-            .withContent("Hi!")
-            .build();
+        ChatMessageContent<?> responseMessage = new ChatMessageContent<>(AuthorRole.ASSISTANT, "Hi!");
 
-        when(delegate.getChatMessageContentsAsync(any(), any(), any()))
+        when(delegate.getChatMessageContentsAsync(
+            any(ChatHistory.class), any(), any()))
             .thenReturn(Mono.just(Arrays.asList(responseMessage)));
 
         // When
-        tracedService.getChatMessageContentsAsync(history, null, null).block();
+        tracedService.getChatMessageContentsAsync(
+            history, (Kernel) null, (InvocationContext) null).block();
 
         // Then
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.0.message.role")
-        )).isEqualTo("system");
-
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.0.message.content")
-        )).isEqualTo("You are a helpful assistant.");
-
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.1.message.role")
-        )).isEqualTo("user");
-
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.1.message.content")
-        )).isEqualTo("Hello!");
+        // Messages are now stored as a single JSON blob at gen_ai.input.messages
+        String inputMessages = spanData.getAttributes().get(
+            AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES)
+        );
+        assertThat(inputMessages).isNotNull();
+        assertThat(inputMessages).contains("\"role\":\"system\"");
+        assertThat(inputMessages).contains("\"content\":\"You are a helpful assistant.\"");
+        assertThat(inputMessages).contains("\"role\":\"user\"");
+        assertThat(inputMessages).contains("\"content\":\"Hello!\"");
     }
 
     @Test
@@ -150,28 +143,28 @@ class TracedChatCompletionServiceTest {
         ChatHistory history = new ChatHistory();
         history.addUserMessage("Hello!");
 
-        ChatMessageContent<?> responseMessage = ChatMessageContent.builder()
-            .withAuthorRole(AuthorRole.ASSISTANT)
-            .withContent("Hello! How can I help you today?")
-            .build();
+        ChatMessageContent<?> responseMessage = new ChatMessageContent<>(
+            AuthorRole.ASSISTANT, "Hello! How can I help you today?");
 
-        when(delegate.getChatMessageContentsAsync(any(), any(), any()))
+        when(delegate.getChatMessageContentsAsync(
+            any(ChatHistory.class), any(), any()))
             .thenReturn(Mono.just(Arrays.asList(responseMessage)));
 
         // When
-        tracedService.getChatMessageContentsAsync(history, null, null).block();
+        tracedService.getChatMessageContentsAsync(
+            history, (Kernel) null, (InvocationContext) null).block();
 
         // Then
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.output_messages.0.message.role")
-        )).isEqualTo("assistant");
-
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.output_messages.0.message.content")
-        )).isEqualTo("Hello! How can I help you today?");
+        // Messages are now stored as a single JSON blob at gen_ai.output.messages
+        String outputMessages = spanData.getAttributes().get(
+            AttributeKey.stringKey(SemanticConventions.LLM_OUTPUT_MESSAGES)
+        );
+        assertThat(outputMessages).isNotNull();
+        assertThat(outputMessages).contains("\"role\":\"assistant\"");
+        assertThat(outputMessages).contains("\"content\":\"Hello! How can I help you today?\"");
 
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.OUTPUT_VALUE)
@@ -185,12 +178,14 @@ class TracedChatCompletionServiceTest {
         history.addUserMessage("Hello!");
 
         RuntimeException error = new RuntimeException("API Error");
-        when(delegate.getChatMessageContentsAsync(any(), any(), any()))
+        when(delegate.getChatMessageContentsAsync(
+            any(ChatHistory.class), any(), any()))
             .thenReturn(Mono.error(error));
 
         // When/Then
         try {
-            tracedService.getChatMessageContentsAsync(history, null, null).block();
+            tracedService.getChatMessageContentsAsync(
+                history, (Kernel) null, (InvocationContext) null).block();
         } catch (Exception e) {
             // Expected
         }

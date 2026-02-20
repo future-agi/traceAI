@@ -29,7 +29,11 @@ jest.mock('@grpc/grpc-js', () => ({
     createSsl: jest.fn(),
     createInsecure: jest.fn(),
   },
-  Metadata: jest.fn(),
+  Metadata: jest.fn().mockImplementation(() => ({
+    set: jest.fn(),
+    get: jest.fn(),
+    add: jest.fn(),
+  })),
 }));
 
 // Mock the generated client

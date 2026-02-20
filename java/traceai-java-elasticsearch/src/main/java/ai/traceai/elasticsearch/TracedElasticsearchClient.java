@@ -294,17 +294,16 @@ public class TracedElasticsearchClient {
                 }
 
                 final String docId = id;
-                final Map<String, Object> finalDoc = docToIndex;
+                final Object finalDoc = docToIndex;
 
                 operations.add(BulkOperation.of(op -> op
                     .index(idx -> {
-                        IndexOperation.Builder<Map<String, Object>> builder = idx
-                            .index(indexName)
-                            .document(finalDoc);
+                        idx.index(indexName)
+                           .document(finalDoc);
                         if (docId != null) {
-                            builder.id(docId);
+                            idx.id(docId);
                         }
-                        return builder;
+                        return idx;
                     })
                 ));
             }
@@ -389,7 +388,7 @@ public class TracedElasticsearchClient {
             // Try to capture vector dimensions from dense_vector mapping
             for (Map.Entry<String, Property> entry : mappings.entrySet()) {
                 Property prop = entry.getValue();
-                if (prop.isDenseVector() && prop.denseVector().dims() != null) {
+                if (prop.isDenseVector() && prop.denseVector().dims() > 0) {
                     span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) prop.denseVector().dims());
                     span.setAttribute("elasticsearch.vector_field", entry.getKey());
                     break;

@@ -10,6 +10,7 @@ import redis.clients.jedis.search.schemafields.*;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +54,7 @@ public class TracedRedisVectorSearch {
 
     /**
      * Creates a vector search index with tracing.
+     * Uses Jedis 5.x API: ftCreate(indexName, FTCreateParams, Iterable&lt;SchemaField&gt;).
      *
      * @param indexName    the index name
      * @param vectorField  the vector field name
@@ -77,21 +79,27 @@ public class TracedRedisVectorSearch {
             span.setAttribute("redis.distance_metric", distanceMetric);
             span.setAttribute("redis.algorithm", algorithm);
 
-            // Build schema
+            // Build vector field attributes
             Map<String, Object> vectorAttrs = new HashMap<>();
             vectorAttrs.put("TYPE", "FLOAT32");
             vectorAttrs.put("DIM", dimensions);
             vectorAttrs.put("DISTANCE_METRIC", distanceMetric);
 
-            Schema schema = new Schema()
-                .addField(new VectorField(vectorField,
-                    algorithm.equals("HNSW") ? VectorField.VectorAlgorithm.HNSW : VectorField.VectorAlgorithm.FLAT,
-                    vectorAttrs));
+            // Build schema field using Jedis 5.x SchemaField API
+            VectorField.VectorAlgorithm vectorAlgorithm = algorithm.equals("HNSW")
+                ? VectorField.VectorAlgorithm.HNSW
+                : VectorField.VectorAlgorithm.FLAT;
+            VectorField vectorSchemaField = VectorField.builder()
+                .fieldName(vectorField)
+                .algorithm(vectorAlgorithm)
+                .attributes(vectorAttrs)
+                .build();
 
-            // Create index
-            jedis.ftCreate(indexName,
-                IndexOptions.defaultOptions().setPrefix("doc:"),
-                schema);
+            // Create index using Jedis 5.x API with FTCreateParams
+            FTCreateParams createParams = FTCreateParams.createParams()
+                .prefix("doc:");
+
+            jedis.ftCreate(indexName, createParams, Arrays.asList(vectorSchemaField));
 
             span.setStatus(StatusCode.OK);
 

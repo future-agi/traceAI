@@ -14,7 +14,11 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
   transform: {
-    '^.+\\.ts$': 'ts-jest'
+    '^.+\\.ts$': ['ts-jest', {
+      tsconfig: {
+        module: 'commonjs'
+      }
+    }]
   },
   moduleNameMapper: {
     '^@traceai/fi-core$': '<rootDir>/../fi-core/src',

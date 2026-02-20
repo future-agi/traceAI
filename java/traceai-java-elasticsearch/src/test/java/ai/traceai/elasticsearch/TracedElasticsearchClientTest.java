@@ -5,35 +5,37 @@ import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.Result;
-import co.elastic.clients.elasticsearch._types.ShardStatistics;
 import co.elastic.clients.elasticsearch.core.*;
-import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
-import co.elastic.clients.elasticsearch.core.search.Hit;
-import co.elastic.clients.elasticsearch.core.search.HitsMetadata;
-import co.elastic.clients.elasticsearch.core.search.TotalHits;
 import co.elastic.clients.elasticsearch.core.search.TotalHitsRelation;
-import co.elastic.clients.elasticsearch.indices.CreateIndexResponse;
-import co.elastic.clients.elasticsearch.indices.ElasticsearchIndicesClient;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class TracedElasticsearchClientTest {
 
     @RegisterExtension
     static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
+
+    @Mock
+    private ElasticsearchClient mockClient;
 
     private FITracer tracer;
 
@@ -43,9 +45,21 @@ class TracedElasticsearchClientTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void shouldTraceKnnSearchWithCorrectAttributes() throws Exception {
-        // Create a mock client that returns a search response
-        ElasticsearchClient mockClient = createMockClientForKnnSearch();
+        SearchResponse<Map<String, Object>> mockResponse = SearchResponse.of(b -> b
+            .took(10)
+            .timedOut(false)
+            .shards(s -> s.total(1).successful(1).skipped(0).failed(0))
+            .hits(h -> h
+                .total(t -> t.value(2).relation(TotalHitsRelation.Eq))
+                .hits(List.of())
+            )
+        );
+
+        when(mockClient.search(any(java.util.function.Function.class), any(Class.class)))
+            .thenReturn(mockResponse);
+
         TracedElasticsearchClient traced = new TracedElasticsearchClient(mockClient, tracer);
 
         float[] queryVector = new float[]{0.1f, 0.2f, 0.3f, 0.4f};
@@ -77,9 +91,21 @@ class TracedElasticsearchClientTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void shouldTraceIndexDocumentWithCorrectAttributes() throws Exception {
-        // Create a mock client that returns an index response
-        ElasticsearchClient mockClient = createMockClientForIndex();
+        IndexResponse mockResponse = IndexResponse.of(b -> b
+            .index("test-index")
+            .id("doc-1")
+            .version(1)
+            .result(Result.Created)
+            .primaryTerm(1)
+            .seqNo(1)
+            .shards(s -> s.total(1).successful(1).failed(0))
+        );
+
+        when(mockClient.index(any(java.util.function.Function.class)))
+            .thenReturn(mockResponse);
+
         TracedElasticsearchClient traced = new TracedElasticsearchClient(mockClient, tracer);
 
         Map<String, Object> document = new HashMap<>();
@@ -105,8 +131,19 @@ class TracedElasticsearchClientTest {
 
     @Test
     void shouldTraceDeleteWithCorrectAttributes() throws Exception {
-        // Create a mock client that returns a delete response
-        ElasticsearchClient mockClient = createMockClientForDelete();
+        DeleteResponse mockResponse = DeleteResponse.of(b -> b
+            .index("test-index")
+            .id("doc-1")
+            .version(1)
+            .result(Result.Deleted)
+            .primaryTerm(1)
+            .seqNo(1)
+            .shards(s -> s.total(1).successful(1).failed(0))
+        );
+
+        when(mockClient.delete(any(java.util.function.Function.class)))
+            .thenReturn(mockResponse);
+
         TracedElasticsearchClient traced = new TracedElasticsearchClient(mockClient, tracer);
 
         DeleteResponse response = traced.delete("test-index", "doc-1");
@@ -128,108 +165,7 @@ class TracedElasticsearchClientTest {
 
     @Test
     void shouldReturnUnwrappedClient() {
-        ElasticsearchClient mockClient = createMockClientForKnnSearch();
         TracedElasticsearchClient traced = new TracedElasticsearchClient(mockClient, tracer);
-
         assertThat(traced.unwrap()).isSameAs(mockClient);
-    }
-
-    // Helper methods to create mock clients
-    // Note: In a real test, you would use a mocking framework like Mockito
-    // These are simplified stubs for demonstration
-
-    private ElasticsearchClient createMockClientForKnnSearch() {
-        return new MockElasticsearchClient() {
-            @Override
-            @SuppressWarnings("unchecked")
-            public <TDocument> SearchResponse<TDocument> search(
-                Function<SearchRequest.Builder, co.elastic.clients.util.ObjectBuilder<SearchRequest>> fn,
-                Class<TDocument> tDocumentClass) throws IOException {
-
-                // Build a minimal search response
-                return (SearchResponse<TDocument>) SearchResponse.of(b -> b
-                    .took(10)
-                    .timedOut(false)
-                    .shards(s -> s.total(1).successful(1).skipped(0).failed(0))
-                    .hits(h -> h
-                        .total(t -> t.value(2).relation(TotalHitsRelation.Eq))
-                        .hits(List.of())
-                    )
-                );
-            }
-        };
-    }
-
-    private ElasticsearchClient createMockClientForIndex() {
-        return new MockElasticsearchClient() {
-            @Override
-            public <TDocument> IndexResponse index(
-                Function<IndexRequest.Builder<TDocument>, co.elastic.clients.util.ObjectBuilder<IndexRequest<TDocument>>> fn) throws IOException {
-                return IndexResponse.of(b -> b
-                    .index("test-index")
-                    .id("doc-1")
-                    .version(1)
-                    .result(Result.Created)
-                    .primaryTerm(1)
-                    .seqNo(1)
-                    .shards(s -> s.total(1).successful(1).failed(0))
-                );
-            }
-        };
-    }
-
-    private ElasticsearchClient createMockClientForDelete() {
-        return new MockElasticsearchClient() {
-            @Override
-            public DeleteResponse delete(
-                Function<DeleteRequest.Builder, co.elastic.clients.util.ObjectBuilder<DeleteRequest>> fn) throws IOException {
-                return DeleteResponse.of(b -> b
-                    .index("test-index")
-                    .id("doc-1")
-                    .version(1)
-                    .result(Result.Deleted)
-                    .primaryTerm(1)
-                    .seqNo(1)
-                    .shards(s -> s.total(1).successful(1).failed(0))
-                );
-            }
-        };
-    }
-
-    // Abstract mock client base class
-    private static abstract class MockElasticsearchClient extends ElasticsearchClient {
-        MockElasticsearchClient() {
-            super(null, null);
-        }
-
-        @Override
-        public <TDocument> SearchResponse<TDocument> search(
-            Function<SearchRequest.Builder, co.elastic.clients.util.ObjectBuilder<SearchRequest>> fn,
-            Class<TDocument> tDocumentClass) throws IOException {
-            throw new UnsupportedOperationException("Not implemented");
-        }
-
-        @Override
-        public <TDocument> IndexResponse index(
-            Function<IndexRequest.Builder<TDocument>, co.elastic.clients.util.ObjectBuilder<IndexRequest<TDocument>>> fn) throws IOException {
-            throw new UnsupportedOperationException("Not implemented");
-        }
-
-        @Override
-        public DeleteResponse delete(
-            Function<DeleteRequest.Builder, co.elastic.clients.util.ObjectBuilder<DeleteRequest>> fn) throws IOException {
-            throw new UnsupportedOperationException("Not implemented");
-        }
-
-        @Override
-        public BulkResponse bulk(
-            Function<BulkRequest.Builder, co.elastic.clients.util.ObjectBuilder<BulkRequest>> fn) throws IOException {
-            throw new UnsupportedOperationException("Not implemented");
-        }
-
-        @Override
-        public ElasticsearchIndicesClient indices() {
-            throw new UnsupportedOperationException("Not implemented");
-        }
     }
 }

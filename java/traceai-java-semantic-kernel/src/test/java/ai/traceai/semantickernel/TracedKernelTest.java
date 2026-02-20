@@ -4,6 +4,7 @@ import ai.traceai.FISpanKind;
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
 import com.microsoft.semantickernel.Kernel;
+import com.microsoft.semantickernel.orchestration.FunctionInvocation;
 import com.microsoft.semantickernel.orchestration.FunctionResult;
 import com.microsoft.semantickernel.semanticfunctions.KernelFunction;
 import com.microsoft.semantickernel.semanticfunctions.KernelFunctionArguments;
@@ -16,6 +17,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -25,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class TracedKernelTest {
 
     @RegisterExtension
@@ -37,7 +41,7 @@ class TracedKernelTest {
     private KernelFunction<String> function;
 
     @Mock
-    private Kernel.InvokeBuilder<String> invokeBuilder;
+    private FunctionInvocation<String> functionInvocation;
 
     private FITracer tracer;
     private TracedKernel tracedKernel;
@@ -53,18 +57,19 @@ class TracedKernelTest {
         // Given
         when(function.getName()).thenReturn("testFunction");
         when(function.getPluginName()).thenReturn("testPlugin");
-        when(kernel.invokeAsync(any(KernelFunction.class))).thenReturn(invokeBuilder);
-        when(invokeBuilder.withArguments(any())).thenReturn(invokeBuilder);
 
         FunctionResult<String> mockResult = mock(FunctionResult.class);
         when(mockResult.getResult()).thenReturn("test result");
-        when(invokeBuilder.doOnSuccess(any())).thenAnswer(invocation -> {
+
+        when(kernel.invokeAsync(any(KernelFunction.class))).thenReturn(functionInvocation);
+        when(functionInvocation.withArguments(any())).thenReturn(functionInvocation);
+        when(functionInvocation.doOnSuccess(any())).thenAnswer(invocation -> {
             java.util.function.Consumer<FunctionResult<String>> consumer = invocation.getArgument(0);
             consumer.accept(mockResult);
-            return invokeBuilder;
+            return functionInvocation;
         });
-        when(invokeBuilder.doOnError(any())).thenReturn(invokeBuilder);
-        when(invokeBuilder.doFinally(any())).thenAnswer(invocation -> {
+        when(functionInvocation.doOnError(any())).thenReturn(functionInvocation);
+        when(functionInvocation.doFinally(any())).thenAnswer(invocation -> {
             java.util.function.Consumer<reactor.core.publisher.SignalType> consumer = invocation.getArgument(0);
             consumer.accept(reactor.core.publisher.SignalType.ON_COMPLETE);
             return Mono.just(mockResult);
@@ -91,18 +96,19 @@ class TracedKernelTest {
 
         when(function.getName()).thenReturn(functionName);
         when(function.getPluginName()).thenReturn(pluginName);
-        when(kernel.invokeAsync(any(KernelFunction.class))).thenReturn(invokeBuilder);
-        when(invokeBuilder.withArguments(any())).thenReturn(invokeBuilder);
 
         FunctionResult<String> mockResult = mock(FunctionResult.class);
         when(mockResult.getResult()).thenReturn("summary");
-        when(invokeBuilder.doOnSuccess(any())).thenAnswer(invocation -> {
+
+        when(kernel.invokeAsync(any(KernelFunction.class))).thenReturn(functionInvocation);
+        when(functionInvocation.withArguments(any())).thenReturn(functionInvocation);
+        when(functionInvocation.doOnSuccess(any())).thenAnswer(invocation -> {
             java.util.function.Consumer<FunctionResult<String>> consumer = invocation.getArgument(0);
             consumer.accept(mockResult);
-            return invokeBuilder;
+            return functionInvocation;
         });
-        when(invokeBuilder.doOnError(any())).thenReturn(invokeBuilder);
-        when(invokeBuilder.doFinally(any())).thenAnswer(invocation -> {
+        when(functionInvocation.doOnError(any())).thenReturn(functionInvocation);
+        when(functionInvocation.doFinally(any())).thenAnswer(invocation -> {
             java.util.function.Consumer<reactor.core.publisher.SignalType> consumer = invocation.getArgument(0);
             consumer.accept(reactor.core.publisher.SignalType.ON_COMPLETE);
             return Mono.just(mockResult);
@@ -133,18 +139,19 @@ class TracedKernelTest {
         // Given
         when(function.getName()).thenReturn("translate");
         when(function.getPluginName()).thenReturn("LanguagePlugin");
-        when(kernel.invokeAsync(any(KernelFunction.class))).thenReturn(invokeBuilder);
-        when(invokeBuilder.withArguments(any())).thenReturn(invokeBuilder);
 
         FunctionResult<String> mockResult = mock(FunctionResult.class);
         when(mockResult.getResult()).thenReturn("translated");
-        when(invokeBuilder.doOnSuccess(any())).thenAnswer(invocation -> {
+
+        when(kernel.invokeAsync(any(KernelFunction.class))).thenReturn(functionInvocation);
+        when(functionInvocation.withArguments(any())).thenReturn(functionInvocation);
+        when(functionInvocation.doOnSuccess(any())).thenAnswer(invocation -> {
             java.util.function.Consumer<FunctionResult<String>> consumer = invocation.getArgument(0);
             consumer.accept(mockResult);
-            return invokeBuilder;
+            return functionInvocation;
         });
-        when(invokeBuilder.doOnError(any())).thenReturn(invokeBuilder);
-        when(invokeBuilder.doFinally(any())).thenAnswer(invocation -> {
+        when(functionInvocation.doOnError(any())).thenReturn(functionInvocation);
+        when(functionInvocation.doFinally(any())).thenAnswer(invocation -> {
             java.util.function.Consumer<reactor.core.publisher.SignalType> consumer = invocation.getArgument(0);
             consumer.accept(reactor.core.publisher.SignalType.ON_COMPLETE);
             return Mono.just(mockResult);

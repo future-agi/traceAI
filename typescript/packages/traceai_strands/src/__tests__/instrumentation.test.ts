@@ -2,7 +2,7 @@
  * Tests for Strands instrumentation.
  */
 
-import { StrandsInstrumentation, isPatched } from "../instrumentation";
+import { StrandsInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -19,6 +19,7 @@ describe("StrandsInstrumentation", () => {
   instrumentation.setTracerProvider(tracerProvider);
 
   beforeEach(() => {
+    _resetPatchedStateForTesting();
     memoryExporter.reset();
   });
 
@@ -90,6 +91,7 @@ describe("Strands Agent Tracing", () => {
   instrumentation.setTracerProvider(tracerProvider);
 
   beforeEach(() => {
+    _resetPatchedStateForTesting();
     memoryExporter.reset();
     instrumentation.enable();
   });

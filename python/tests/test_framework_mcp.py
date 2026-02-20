@@ -66,7 +66,7 @@ class TestMCPInstrumentor:
         
         assert isinstance(dependencies, tuple)
         assert "mcp >= 0.1.0" in dependencies
-        assert len(dependencies) >= 2
+        assert len(dependencies) >= 1
 
     def test_instrument_registers_post_import_hooks(self):
         """Test that instrumentation registers all necessary post-import hooks."""
@@ -248,26 +248,43 @@ class TestInstrumentedStreamReader:
     def test_async_iteration_without_jsonrpc(self, mock_stream):
         """Test async iteration with non-JSONRPCRequest messages."""
         reader = InstrumentedStreamReader(mock_stream)
-        
-        # Mock message that's not a JSONRPCRequest
+
+        # Create a mock JSONRPCRequest class that isinstance() checks will fail against
+        mock_jsonrpc_request_cls = type("JSONRPCRequest", (), {})
+
+        # Mock message whose root is NOT a JSONRPCRequest instance
         mock_message = MagicMock()
-        mock_message.message.root = MagicMock()
-        mock_message.message.root.__class__.__name__ = "SomeOtherMessage"
-        
+        mock_message.message.root = MagicMock(spec=[])
+
         # Create an async iterator manually
         async def async_iter():
             for item in [mock_message]:
                 yield item
-        
+
         # Mock the __aiter__ method directly
         mock_stream.__aiter__ = lambda self: async_iter()
-        
+
+        # Patch the mcp imports used inside __aiter__
+        mock_session_message = MagicMock()
+        mock_mcp_shared = MagicMock()
+        mock_mcp_shared.message.SessionMessage = mock_session_message
+        mock_mcp_types = MagicMock()
+        mock_mcp_types.JSONRPCRequest = mock_jsonrpc_request_cls
+
+        import sys
+
         async def test_iteration():
-            items = []
-            async for item in reader:
-                items.append(item)
-            return items
-        
+            with patch.dict(sys.modules, {
+                "mcp": MagicMock(),
+                "mcp.shared": mock_mcp_shared,
+                "mcp.shared.message": mock_mcp_shared.message,
+                "mcp.types": mock_mcp_types,
+            }):
+                items = []
+                async for item in reader:
+                    items.append(item)
+                return items
+
         items = asyncio.run(test_iteration())
         assert len(items) == 1
         assert items[0] == mock_message

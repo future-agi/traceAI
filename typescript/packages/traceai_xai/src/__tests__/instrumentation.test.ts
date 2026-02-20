@@ -10,8 +10,9 @@ describe("XAIInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter = new InMemorySpanExporter();
-    provider = new NodeTracerProvider();
-    provider.addSpanProcessor(new SimpleSpanProcessor(memoryExporter));
+    provider = new NodeTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(memoryExporter)],
+    });
     provider.register();
 
     instrumentation = new XAIInstrumentation();
@@ -139,9 +140,10 @@ describe("XAIInstrumentation", () => {
       const spans = memoryExporter.getFinishedSpans();
       const span = spans[0];
 
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`]).toBe("system");
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`]).toBe("You are Grok.");
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.1.${SemanticConventions.MESSAGE_ROLE}`]).toBe("user");
+      const inputMessages = JSON.parse(span.attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(inputMessages[0].role).toBe("system");
+      expect(inputMessages[0].content).toBe("You are Grok.");
+      expect(inputMessages[1].role).toBe("user");
     });
 
     it("should capture output messages", async () => {
@@ -157,8 +159,9 @@ describe("XAIInstrumentation", () => {
       const spans = memoryExporter.getFinishedSpans();
       const span = spans[0];
 
-      expect(span.attributes[`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`]).toBe("assistant");
-      expect(span.attributes[`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`]).toBe("Hello! How can I help you today?");
+      const outputMessages = JSON.parse(span.attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(outputMessages[0].role).toBe("assistant");
+      expect(outputMessages[0].content).toBe("Hello! How can I help you today?");
     });
 
     it("should capture token usage", async () => {
@@ -239,10 +242,10 @@ describe("XAIInstrumentation", () => {
       const spans = memoryExporter.getFinishedSpans();
       const span = spans[0];
 
-      const toolCallPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_TOOL_CALLS}.0.`;
-      expect(span.attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_ID}`]).toBe("call_123");
-      expect(span.attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`]).toBe("get_current_time");
-      expect(span.attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`]).toBe('{"timezone": "Asia/Tokyo"}');
+      const outputMessages = JSON.parse(span.attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(outputMessages[0].tool_calls[0].id).toBe("call_123");
+      expect(outputMessages[0].tool_calls[0].function.name).toBe("get_current_time");
+      expect(outputMessages[0].tool_calls[0].function.arguments).toBe('{"timezone": "Asia/Tokyo"}');
     });
 
     it("should capture tool definitions", async () => {
@@ -273,9 +276,8 @@ describe("XAIInstrumentation", () => {
       const spans = memoryExporter.getFinishedSpans();
       const span = spans[0];
 
-      const toolKey = `${SemanticConventions.LLM_TOOLS}.0.${SemanticConventions.TOOL_JSON_SCHEMA}`;
-      expect(span.attributes[toolKey]).toBeDefined();
-      expect(typeof span.attributes[toolKey]).toBe("string");
+      expect(span.attributes[SemanticConventions.LLM_TOOLS]).toBeDefined();
+      expect(typeof span.attributes[SemanticConventions.LLM_TOOLS]).toBe("string");
     });
 
     it("should handle errors gracefully", async () => {

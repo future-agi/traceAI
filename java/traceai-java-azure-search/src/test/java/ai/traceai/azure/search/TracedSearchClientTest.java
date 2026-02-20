@@ -3,6 +3,7 @@ package ai.traceai.azure.search;
 import ai.traceai.FISpanKind;
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
+import com.azure.core.util.Context;
 import com.azure.search.documents.SearchClient;
 import com.azure.search.documents.models.*;
 import com.azure.search.documents.util.SearchPagedIterable;
@@ -16,6 +17,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -28,6 +31,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class TracedSearchClientTest {
 
     @RegisterExtension
@@ -57,7 +61,7 @@ class TracedSearchClientTest {
     void shouldCreateSpanForVectorSearch() {
         List<Float> vector = Arrays.asList(0.1f, 0.2f, 0.3f);
 
-        when(mockSearchClient.search(anyString(), any(SearchOptions.class)))
+        when(mockSearchClient.search(anyString(), any(SearchOptions.class), any(Context.class)))
             .thenReturn(mockSearchResults);
         when(mockSearchResults.iterator()).thenReturn(Collections.emptyIterator());
 
@@ -97,7 +101,7 @@ class TracedSearchClientTest {
         List<Float> vector = Arrays.asList(0.1f, 0.2f, 0.3f, 0.4f, 0.5f);
         String filter = "category eq 'technology'";
 
-        when(mockSearchClient.search(anyString(), any(SearchOptions.class)))
+        when(mockSearchClient.search(anyString(), any(SearchOptions.class), any(Context.class)))
             .thenReturn(mockSearchResults);
         when(mockSearchResults.iterator()).thenReturn(Collections.emptyIterator());
 
@@ -123,7 +127,7 @@ class TracedSearchClientTest {
     void shouldCreateSpanForHybridSearch() {
         List<Float> vector = Arrays.asList(0.1f, 0.2f, 0.3f);
 
-        when(mockSearchClient.search(anyString(), any(SearchOptions.class)))
+        when(mockSearchClient.search(anyString(), any(SearchOptions.class), any(Context.class)))
             .thenReturn(mockSearchResults);
         when(mockSearchResults.iterator()).thenReturn(Collections.emptyIterator());
 
@@ -141,7 +145,7 @@ class TracedSearchClientTest {
 
     @Test
     void shouldCreateSpanForTextSearch() {
-        when(mockSearchClient.search(anyString(), any(SearchOptions.class)))
+        when(mockSearchClient.search(anyString(), any(SearchOptions.class), any(Context.class)))
             .thenReturn(mockSearchResults);
         when(mockSearchResults.iterator()).thenReturn(Collections.emptyIterator());
 
@@ -292,7 +296,7 @@ class TracedSearchClientTest {
     void shouldRecordErrorOnVectorSearchFailure() {
         List<Float> vector = Arrays.asList(0.1f, 0.2f, 0.3f);
 
-        when(mockSearchClient.search(anyString(), any(SearchOptions.class)))
+        when(mockSearchClient.search(anyString(), any(SearchOptions.class), any(Context.class)))
             .thenThrow(new RuntimeException("Search service unavailable"));
 
         assertThatThrownBy(() -> tracedClient.searchWithVector("test", vector, "contentVector", 10))

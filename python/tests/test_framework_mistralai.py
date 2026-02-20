@@ -510,10 +510,10 @@ class TestUtilityFunctions:
     def test_raw_input_processing(self, sample_request):
         """Test raw input processing."""
         attributes = list(_raw_input(sample_request))
-        
+
         # Should return raw input attribute
         assert len(attributes) >= 1
-        assert attributes[0][0] == "raw.input"
+        assert attributes[0][0] == "input.value"
 
     def test_raw_input_empty(self):
         """Test raw input processing with None input."""

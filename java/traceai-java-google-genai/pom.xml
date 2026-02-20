@@ -21,11 +21,11 @@
             <artifactId>traceai-java-core</artifactId>
         </dependency>
 
-        <!-- Google Generative AI SDK (provided - user brings their own) -->
+        <!-- Google Gen AI Java SDK (provided - user brings their own) -->
         <dependency>
-            <groupId>com.google.ai.client.generativeai</groupId>
+            <groupId>com.google.genai</groupId>
             <artifactId>google-genai</artifactId>
-            <version>0.9.0</version>
+            <version>${google-genai.version}</version>
             <scope>provided</scope>
         </dependency>
 

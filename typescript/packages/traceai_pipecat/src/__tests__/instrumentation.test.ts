@@ -2,7 +2,7 @@
  * Tests for Pipecat instrumentation.
  */
 
-import { PipecatInstrumentation, isPatched } from "../instrumentation";
+import { PipecatInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -20,6 +20,7 @@ describe("PipecatInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   afterAll(() => {
@@ -117,6 +118,7 @@ describe("Pipecat Client Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap RTVIClient.connect when available", () => {
@@ -135,7 +137,7 @@ describe("Pipecat Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap RTVIClient.disconnect when available", () => {
@@ -154,7 +156,7 @@ describe("Pipecat Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap RTVIClient.action when available", () => {
@@ -173,7 +175,7 @@ describe("Pipecat Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap RTVIClient.sendMessage when available", () => {
@@ -192,7 +194,7 @@ describe("Pipecat Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should not double-patch module", () => {
@@ -226,6 +228,7 @@ describe("Pipeline Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap Pipeline.run when available", () => {
@@ -244,7 +247,7 @@ describe("Pipeline Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap FrameProcessor.processFrame when available", () => {
@@ -263,7 +266,7 @@ describe("Pipeline Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });
 
@@ -276,6 +279,7 @@ describe("Client Lifecycle Tracking", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should handle connect and disconnect lifecycle", () => {
@@ -293,7 +297,7 @@ describe("Client Lifecycle Tracking", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should handle actions during session", () => {
@@ -312,7 +316,7 @@ describe("Client Lifecycle Tracking", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });
 
@@ -325,6 +329,7 @@ describe("Message Handling", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should handle string messages", () => {
@@ -341,7 +346,7 @@ describe("Message Handling", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should handle object messages with content", () => {
@@ -358,6 +363,6 @@ describe("Message Handling", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });

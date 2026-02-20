@@ -230,16 +230,16 @@ public class TracedGenerativeModel {
                 tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("model", text)));
             }
 
-            // Capture finish reason
-            if (firstCandidate.hasFinishReason()) {
+            // Capture finish reason (enum fields don't have has*() in protobuf)
+            if (firstCandidate.getFinishReasonValue() != 0) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
                     firstCandidate.getFinishReason().name());
             }
         }
 
-        // Capture usage metadata
+        // Capture usage metadata (UsageMetadata is a nested class of GenerateContentResponse)
         if (response.hasUsageMetadata()) {
-            UsageMetadata usage = response.getUsageMetadata();
+            GenerateContentResponse.UsageMetadata usage = response.getUsageMetadata();
             tracer.setTokenCounts(
                 span,
                 usage.getPromptTokenCount(),

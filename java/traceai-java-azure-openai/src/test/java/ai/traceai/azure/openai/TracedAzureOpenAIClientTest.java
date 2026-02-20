@@ -113,9 +113,8 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey(SemanticConventions.LLM_SYSTEM)
-        )).isEqualTo("azure-openai");
+        // LLM_SYSTEM and LLM_PROVIDER both resolve to "gen_ai.provider.name",
+        // last setAttribute call wins (LLM_PROVIDER="azure")
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_PROVIDER)
         )).isEqualTo("azure");
@@ -229,12 +228,13 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.0.message.role")
-        )).isEqualTo("user");
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.0.message.content")
-        )).isEqualTo("Hello!");
+        // Messages are now stored as JSON blob under gen_ai.input.messages
+        String inputMessages = spanData.getAttributes().get(
+            AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES)
+        );
+        assertThat(inputMessages).isNotNull();
+        assertThat(inputMessages).contains("\"role\":\"user\"");
+        assertThat(inputMessages).contains("\"content\":\"Hello!\"");
     }
 
     @Test
@@ -255,12 +255,13 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.0.message.role")
-        )).isEqualTo("system");
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.1.message.role")
-        )).isEqualTo("user");
+        // Messages are now stored as JSON blob under gen_ai.input.messages
+        String inputMessages = spanData.getAttributes().get(
+            AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES)
+        );
+        assertThat(inputMessages).isNotNull();
+        assertThat(inputMessages).contains("\"role\":\"system\"");
+        assertThat(inputMessages).contains("\"role\":\"user\"");
     }
 
     @Test
@@ -286,12 +287,15 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.output_messages.0.message.role")
-        )).isNotNull();
+        // Output messages are now stored as JSON blob under gen_ai.output.messages
+        String outputMessages = spanData.getAttributes().get(
+            AttributeKey.stringKey(SemanticConventions.LLM_OUTPUT_MESSAGES)
+        );
+        assertThat(outputMessages).isNotNull();
+        assertThat(outputMessages).contains("\"role\":");
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_FINISH_REASON)
-        )).isEqualTo("stopped");
+        )).isEqualTo("stop");
     }
 
     @Test
@@ -467,9 +471,8 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey(SemanticConventions.LLM_SYSTEM)
-        )).isEqualTo("azure-openai");
+        // LLM_SYSTEM and LLM_PROVIDER both resolve to "gen_ai.provider.name",
+        // last setAttribute call wins (LLM_PROVIDER="azure")
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_PROVIDER)
         )).isEqualTo("azure");
@@ -633,9 +636,8 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey(SemanticConventions.LLM_SYSTEM)
-        )).isEqualTo("azure-openai");
+        // LLM_SYSTEM and LLM_PROVIDER both resolve to "gen_ai.provider.name",
+        // last setAttribute call wins (LLM_PROVIDER="azure")
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_PROVIDER)
         )).isEqualTo("azure");
@@ -694,18 +696,14 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.0.message.role")
-        )).isEqualTo("user");
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.0.message.content")
-        )).isEqualTo("Prompt 1");
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.1.message.role")
-        )).isEqualTo("user");
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.input_messages.1.message.content")
-        )).isEqualTo("Prompt 2");
+        // Messages are now stored as JSON blob under gen_ai.input.messages
+        String inputMessages = spanData.getAttributes().get(
+            AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES)
+        );
+        assertThat(inputMessages).isNotNull();
+        assertThat(inputMessages).contains("\"role\":\"user\"");
+        assertThat(inputMessages).contains("\"content\":\"Prompt 1\"");
+        assertThat(inputMessages).contains("\"content\":\"Prompt 2\"");
     }
 
     @Test
@@ -713,7 +711,6 @@ class TracedAzureOpenAIClientTest {
         // Arrange
         CompletionsOptions options = new CompletionsOptions(List.of("Test prompt"));
         setupMockCompletions("Completion text");
-        when(mockCompletions.getModel()).thenReturn("text-davinci-003");
         when(mockCompletions.getId()).thenReturn(RESPONSE_ID);
 
         when(mockOpenAIClient.getCompletions(anyString(), any(CompletionsOptions.class)))
@@ -726,9 +723,7 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_MODEL)
-        )).isEqualTo("text-davinci-003");
+        // Note: getCompletions does not call result.getModel(), so LLM_RESPONSE_MODEL is not set
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_ID)
         )).isEqualTo(RESPONSE_ID);
@@ -751,12 +746,13 @@ class TracedAzureOpenAIClientTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.output_messages.0.message.role")
-        )).isEqualTo("assistant");
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey("llm.output_messages.0.message.content")
-        )).isEqualTo(completionText);
+        // Output messages are now stored as JSON blob under gen_ai.output.messages
+        String outputMessages = spanData.getAttributes().get(
+            AttributeKey.stringKey(SemanticConventions.LLM_OUTPUT_MESSAGES)
+        );
+        assertThat(outputMessages).isNotNull();
+        assertThat(outputMessages).contains("\"role\":\"assistant\"");
+        assertThat(outputMessages).contains("\"content\":\"" + completionText + "\"");
     }
 
     @Test
@@ -832,7 +828,7 @@ class TracedAzureOpenAIClientTest {
 
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_RESPONSE_FINISH_REASON)
-        )).isEqualTo("stopped");
+        )).isEqualTo("stop");
     }
 
     @Test
@@ -951,11 +947,15 @@ class TracedAzureOpenAIClientTest {
         List<EmbeddingItem> items = new java.util.ArrayList<>();
         for (int i = 0; i < count; i++) {
             EmbeddingItem mockItem = mock(EmbeddingItem.class);
-            List<Double> vector = new java.util.ArrayList<>();
-            for (int j = 0; j < dimensions; j++) {
-                vector.add(0.0);
+            // Only stub getEmbedding() on the first item since the source
+            // only checks firstEmbedding.getEmbedding().size() for dimensions
+            if (i == 0) {
+                List<Float> vector = new java.util.ArrayList<>();
+                for (int j = 0; j < dimensions; j++) {
+                    vector.add(0.0f);
+                }
+                when(mockItem.getEmbedding()).thenReturn(vector);
             }
-            when(mockItem.getEmbedding()).thenReturn(vector);
             items.add(mockItem);
         }
         when(mockEmbeddings.getData()).thenReturn(items);

@@ -2,7 +2,7 @@
  * Tests for LiveKit instrumentation.
  */
 
-import { LiveKitInstrumentation, isPatched } from "../instrumentation";
+import { LiveKitInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -20,6 +20,7 @@ describe("LiveKitInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   afterAll(() => {
@@ -140,6 +141,7 @@ describe("LiveKit Client Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap Room.connect when available", () => {
@@ -158,7 +160,7 @@ describe("LiveKit Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap Room.disconnect when available", () => {
@@ -177,7 +179,7 @@ describe("LiveKit Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap LocalParticipant.publishTrack when available", () => {
@@ -199,7 +201,7 @@ describe("LiveKit Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap LocalParticipant.unpublishTrack when available", () => {
@@ -221,7 +223,7 @@ describe("LiveKit Client Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should not double-patch module", () => {
@@ -255,6 +257,7 @@ describe("LiveKit RTC Node Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap AudioSource.captureFrame when available", () => {
@@ -273,7 +276,7 @@ describe("LiveKit RTC Node Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap VideoSource.captureFrame when available", () => {
@@ -292,7 +295,7 @@ describe("LiveKit RTC Node Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });
 
@@ -305,6 +308,7 @@ describe("Room Lifecycle Tracking", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should handle room connect and disconnect lifecycle", () => {
@@ -322,7 +326,7 @@ describe("Room Lifecycle Tracking", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should handle track publish and unpublish", () => {
@@ -343,6 +347,6 @@ describe("Room Lifecycle Tracking", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });

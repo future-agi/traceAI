@@ -70,6 +70,7 @@ export class VertexAIInstrumentation extends InstrumentationBase {
    * Manually instrument the @google-cloud/vertexai module.
    */
   manuallyInstrument(vertexModule: any): void {
+    if (vertexModule == null) return;
     this.patch(vertexModule);
   }
 
@@ -617,6 +618,13 @@ let _isFIPatched = false;
  */
 export function isPatched(): boolean {
   return _isFIPatched;
+}
+
+/**
+ * Reset the patched state (for testing only).
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
 }
 
 // Helper functions

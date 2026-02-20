@@ -110,6 +110,35 @@ public class TracedTextEmbeddingGenerationService implements TextEmbeddingGenera
     }
 
     @Override
+    public Mono<Embedding> generateEmbeddingAsync(String data) {
+        Span span = tracer.startSpan("Semantic Kernel Single Embedding", FISpanKind.EMBEDDING);
+
+        try (Scope scope = span.makeCurrent()) {
+            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
+            span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
+            span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, modelName);
+
+            if (data != null) {
+                tracer.setInputValue(span, data);
+            }
+
+            return delegate.generateEmbeddingAsync(data)
+                .doOnSuccess(embedding -> {
+                    if (embedding != null && embedding.getVector() != null) {
+                        span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) embedding.getVector().size());
+                    }
+                    span.setStatus(StatusCode.OK);
+                })
+                .doOnError(error -> {
+                    tracer.setError(span, error);
+                })
+                .doFinally(signalType -> {
+                    span.end();
+                });
+        }
+    }
+
+    @Override
     public String getModelId() {
         return delegate.getModelId();
     }

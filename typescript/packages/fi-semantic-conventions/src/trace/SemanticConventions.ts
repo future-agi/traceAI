@@ -494,6 +494,16 @@ export const SemanticAttributePrefixes = {
   /** The conversation/session identifier */
   export const GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id" as const;
 
+  /**
+   * The identifier for a graph node (used in agent frameworks with graph-based execution)
+   */
+  export const GRAPH_NODE_ID = "graph.node.id" as const;
+
+  /**
+   * The identifier for the parent graph node
+   */
+  export const GRAPH_NODE_PARENT_ID = "graph.node.parent_id" as const;
+
   export const SemanticConventions = {
     IMAGE_URL,
     INPUT_VALUE,
@@ -565,6 +575,8 @@ export const SemanticAttributePrefixes = {
     GEN_AI_RESPONSE_ID,
     GEN_AI_RESPONSE_FINISH_REASONS,
     GEN_AI_CONVERSATION_ID,
+    GRAPH_NODE_ID,
+    GRAPH_NODE_PARENT_ID,
     RAW_INPUT: "raw.input",
     RAW_OUTPUT: "raw.output",
 

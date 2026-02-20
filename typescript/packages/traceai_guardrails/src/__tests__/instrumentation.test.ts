@@ -2,7 +2,7 @@
  * Tests for Guardrails instrumentation.
  */
 
-import { GuardrailsInstrumentation, isPatched } from "../instrumentation";
+import { GuardrailsInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -117,6 +117,7 @@ describe("Guardrails Patching", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should wrap Guard.validate when available", () => {
@@ -139,7 +140,7 @@ describe("Guardrails Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap Guard.parse when available", () => {
@@ -161,7 +162,7 @@ describe("Guardrails Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should wrap Guard.call when available", () => {
@@ -183,7 +184,7 @@ describe("Guardrails Patching", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should not double-patch module", () => {
@@ -217,6 +218,7 @@ describe("Validation Result Handling", () => {
 
   beforeEach(() => {
     memoryExporter.reset();
+    _resetPatchedStateForTesting();
   });
 
   it("should handle validation success", () => {
@@ -237,7 +239,7 @@ describe("Validation Result Handling", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should handle validation failure", () => {
@@ -258,7 +260,7 @@ describe("Validation Result Handling", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 
   it("should handle reask result", () => {
@@ -279,6 +281,6 @@ describe("Validation Result Handling", () => {
     };
 
     inst.manuallyInstrument(mockModule);
-    expect(mockModule._fiPatched).toBe(true);
+    expect((mockModule as any)._fiPatched).toBe(true);
   });
 });

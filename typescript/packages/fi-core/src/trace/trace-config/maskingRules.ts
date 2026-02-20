@@ -2,6 +2,7 @@ import { AttributeValue } from "@opentelemetry/api";
 import { REDACTED_VALUE } from "./constants";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
 import { MaskingRule, MaskingRuleArgs } from "./types";
+import { redactPiiInValue } from "./piiRedaction";
 
 /**
  * Redacts content within a JSON blob of messages.
@@ -154,6 +155,10 @@ export function mask({
     if (rule.condition({ config, key, value })) {
       return rule.action({ config, key, value });
     }
+  }
+  // No key-based rule matched — apply PII redaction if enabled
+  if (config.piiRedaction && value != null) {
+    return redactPiiInValue(value);
   }
   return value;
 }

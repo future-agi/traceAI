@@ -77,7 +77,8 @@ class TracedPgVectorStoreTest {
 
         // Then
         verify(mockStatement, times(2)).execute(anyString());
-        verify(mockConnection).close();
+        // Connection is closed once by extractDatabaseName in the constructor and once by the operation
+        verify(mockConnection, times(2)).close();
 
         List<SpanData> spans = otelTesting.getSpans();
         assertThat(spans).hasSize(1);
@@ -99,7 +100,7 @@ class TracedPgVectorStoreTest {
 
         // Then
         verify(mockStatement).execute(contains("CREATE INDEX"));
-        verify(mockConnection).close();
+        verify(mockConnection, times(2)).close();
 
         List<SpanData> spans = otelTesting.getSpans();
         assertThat(spans).hasSize(1);
@@ -120,7 +121,7 @@ class TracedPgVectorStoreTest {
 
         // Then
         verify(mockPreparedStatement).executeUpdate();
-        verify(mockConnection).close();
+        verify(mockConnection, times(2)).close();
 
         List<SpanData> spans = otelTesting.getSpans();
         assertThat(spans).hasSize(1);
@@ -143,7 +144,7 @@ class TracedPgVectorStoreTest {
 
         // Then
         assertThat(results).isEmpty();
-        verify(mockConnection).close();
+        verify(mockConnection, times(2)).close();
 
         List<SpanData> spans = otelTesting.getSpans();
         assertThat(spans).hasSize(1);
@@ -192,7 +193,7 @@ class TracedPgVectorStoreTest {
 
         // Then
         assertThat(deleted).isTrue();
-        verify(mockConnection).close();
+        verify(mockConnection, times(2)).close();
 
         List<SpanData> spans = otelTesting.getSpans();
         assertThat(spans).hasSize(1);

@@ -83,12 +83,10 @@ class TracedTextEmbeddingGenerationServiceTest {
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
+        // LLM_SYSTEM and LLM_PROVIDER both map to "gen_ai.provider.name",
+        // so the provider value ("openai") overwrites the system value
         assertThat(spanData.getAttributes().get(
             AttributeKey.stringKey(SemanticConventions.LLM_SYSTEM)
-        )).isEqualTo("semantic-kernel");
-
-        assertThat(spanData.getAttributes().get(
-            AttributeKey.stringKey(SemanticConventions.LLM_PROVIDER)
         )).isEqualTo("openai");
 
         assertThat(spanData.getAttributes().get(

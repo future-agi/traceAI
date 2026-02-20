@@ -82,12 +82,12 @@
         <langchain4j.version>0.35.0</langchain4j.version>
         <spring-ai.version>1.0.0-M4</spring-ai.version>
         <spring-boot.version>3.2.1</spring-boot.version>
-        <aws-sdk.version>2.24.0</aws-sdk.version>
+        <aws-sdk.version>2.25.67</aws-sdk.version>
         <google-cloud.version>1.7.0</google-cloud.version>
 
         <!-- Additional LLM SDK versions -->
         <cohere-java.version>1.9.3</cohere-java.version>
-        <google-genai.version>0.9.0</google-genai.version>
+        <google-genai.version>1.1.0</google-genai.version>
         <ollama4j.version>1.0.79</ollama4j.version>
         <watsonx-ai.version>0.12.0</watsonx-ai.version>
 

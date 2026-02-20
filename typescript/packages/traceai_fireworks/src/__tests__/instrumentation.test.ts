@@ -10,8 +10,9 @@ describe("FireworksInstrumentation", () => {
 
   beforeEach(() => {
     memoryExporter = new InMemorySpanExporter();
-    provider = new NodeTracerProvider();
-    provider.addSpanProcessor(new SimpleSpanProcessor(memoryExporter));
+    provider = new NodeTracerProvider({
+      spanProcessors: [new SimpleSpanProcessor(memoryExporter)],
+    });
     provider.register();
 
     instrumentation = new FireworksInstrumentation();
@@ -139,8 +140,9 @@ describe("FireworksInstrumentation", () => {
       const spans = memoryExporter.getFinishedSpans();
       const span = spans[0];
 
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`]).toBe("system");
-      expect(span.attributes[`${SemanticConventions.LLM_INPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`]).toBe("You are a helpful assistant.");
+      const inputMessages = JSON.parse(span.attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(inputMessages[0].role).toBe("system");
+      expect(inputMessages[0].content).toBe("You are a helpful assistant.");
     });
 
     it("should capture token usage", async () => {

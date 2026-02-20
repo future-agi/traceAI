@@ -262,7 +262,13 @@ public class FITracer {
         if (obj instanceof String) {
             return (String) obj;
         }
-        return gson.toJson(obj);
+        try {
+            return gson.toJson(obj);
+        } catch (Exception e) {
+            // Some SDK classes (e.g., Azure SDK) have conflicting field names in their
+            // class hierarchy that cause Gson serialization to fail. Fall back to toString().
+            return obj.toString();
+        }
     }
 
     /**

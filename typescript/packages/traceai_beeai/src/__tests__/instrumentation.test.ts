@@ -2,7 +2,7 @@
  * Tests for BeeAI instrumentation.
  */
 
-import { BeeAIInstrumentation, isPatched } from "../instrumentation";
+import { BeeAIInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
 import { VERSION } from "../version";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -103,7 +103,9 @@ describe("BeeAI Agent Tracing", () => {
       }
     }
 
-    const mockModule = { BeeAgent: MockBeeAgent };
+    const mockModule = { BeeAgent: MockBeeAgent } as any;
+    // Reset global patched flag so manuallyInstrument can patch fresh module
+    _resetPatchedStateForTesting();
     instrumentation.manuallyInstrument(mockModule);
 
     const agent = new mockModule.BeeAgent();

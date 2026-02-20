@@ -69,6 +69,7 @@ export class HaystackInstrumentation extends InstrumentationBase {
    * Manually instrument the @haystack-ai/haystack module.
    */
   manuallyInstrument(haystackModule: any): void {
+    if (haystackModule == null) return;
     this.patch(haystackModule);
   }
 
@@ -239,6 +240,13 @@ let _isFIPatched = false;
  */
 export function isPatched(): boolean {
   return _isFIPatched;
+}
+
+/**
+ * Reset the patched state (for testing only).
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
 }
 
 // Helper functions

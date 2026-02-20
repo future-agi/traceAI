@@ -1,0 +1,16 @@
+ai/traceai/watsonx/TracedWatsonxAITest$MockTextGenResult.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockChatRequest.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockEmbedResponse.class
+ai/traceai/watsonx/TracedWatsonxAITest.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockChatParameters.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockChatChoice.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockEmbedResult.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockChatMessage.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockTextGenResponse.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockTextGenResponseWithResults.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockTextGenParameters.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockEmbedRequest.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockChatResponse.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockChatUsage.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockWatsonxClient.class
+ai/traceai/watsonx/TracedWatsonxAITest$MockTextGenRequest.class

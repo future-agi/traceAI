@@ -70,6 +70,7 @@ export class GoogleADKInstrumentation extends InstrumentationBase {
    * Manually instrument the @google/adk module.
    */
   manuallyInstrument(adkModule: any): void {
+    if (adkModule == null) return;
     this.patch(adkModule);
   }
 
@@ -572,6 +573,13 @@ let _isFIPatched = false;
  */
 export function isPatched(): boolean {
   return _isFIPatched;
+}
+
+/**
+ * Reset the patched state (for testing only).
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
 }
 
 // Helper functions

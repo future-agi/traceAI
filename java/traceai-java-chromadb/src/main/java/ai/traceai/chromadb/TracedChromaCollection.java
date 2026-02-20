@@ -3,11 +3,14 @@ package ai.traceai.chromadb;
 import ai.traceai.*;
 import tech.amikos.chromadb.Collection;
 import tech.amikos.chromadb.Client;
+import tech.amikos.chromadb.Embedding;
 import tech.amikos.chromadb.embeddings.EmbeddingFunction;
+import tech.amikos.chromadb.model.QueryEmbedding.IncludeEnum;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -21,7 +24,7 @@ import java.util.Map;
  * Collection collection = client.getOrCreateCollection("my_collection", null, null, null);
  * TracedChromaCollection traced = new TracedChromaCollection(collection, "my_collection");
  *
- * Map&lt;String, Object&gt; results = traced.query(queryEmbeddings, 10, null, null, null);
+ * Collection.QueryResponse results = traced.query(queryTexts, 10, null, null, null);
  * </pre>
  */
 public class TracedChromaCollection {
@@ -54,22 +57,23 @@ public class TracedChromaCollection {
     }
 
     /**
-     * Queries the collection with embeddings and tracing.
+     * Queries the collection with text queries and tracing.
+     * In ChromaDB Java client v0.1.7, query only supports text-based queries.
      *
-     * @param queryEmbeddings the query embeddings
-     * @param nResults        number of results to return
-     * @param where           metadata filter (optional)
-     * @param whereDocument   document filter (optional)
-     * @param include         fields to include (optional)
+     * @param queryTexts the query texts
+     * @param nResults   number of results to return
+     * @param where      metadata filter (optional)
+     * @param whereDocument document filter (optional)
+     * @param include    fields to include (optional)
      * @return query results
      * @throws Exception if query fails
      */
     public Collection.QueryResponse query(
-            List<List<Float>> queryEmbeddings,
+            List<String> queryTexts,
             int nResults,
             Map<String, Object> where,
             Map<String, Object> whereDocument,
-            List<String> include) throws Exception {
+            List<IncludeEnum> include) throws Exception {
         Span span = tracer.startSpan("ChromaDB Query", FISpanKind.RETRIEVER);
 
         try (Scope scope = span.makeCurrent()) {
@@ -78,10 +82,11 @@ public class TracedChromaCollection {
             span.setAttribute("chromadb.collection", collectionName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) nResults);
 
-            if (queryEmbeddings != null && !queryEmbeddings.isEmpty()) {
-                span.setAttribute("chromadb.query_count", (long) queryEmbeddings.size());
-                span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
-                    (long) queryEmbeddings.get(0).size());
+            if (queryTexts != null) {
+                span.setAttribute("chromadb.query_count", (long) queryTexts.size());
+                if (!queryTexts.isEmpty()) {
+                    tracer.setInputValue(span, queryTexts.get(0));
+                }
             }
 
             if (where != null) {
@@ -91,9 +96,9 @@ public class TracedChromaCollection {
                 span.setAttribute("chromadb.has_where_document_filter", true);
             }
 
-            // Execute query
+            // Execute query - v0.1.7 signature: query(List<String>, Integer, Map, Map, List<IncludeEnum>)
             Collection.QueryResponse response = collection.query(
-                queryEmbeddings,
+                queryTexts,
                 nResults,
                 where,
                 whereDocument,
@@ -123,65 +128,8 @@ public class TracedChromaCollection {
     }
 
     /**
-     * Queries the collection with text (using embedding function) and tracing.
-     *
-     * @param queryTexts the query texts
-     * @param nResults   number of results to return
-     * @param where      metadata filter (optional)
-     * @param whereDocument document filter (optional)
-     * @param include    fields to include (optional)
-     * @return query results
-     * @throws Exception if query fails
-     */
-    public Collection.QueryResponse queryWithText(
-            List<String> queryTexts,
-            int nResults,
-            Map<String, Object> where,
-            Map<String, Object> whereDocument,
-            List<String> include) throws Exception {
-        Span span = tracer.startSpan("ChromaDB Query (Text)", FISpanKind.RETRIEVER);
-
-        try (Scope scope = span.makeCurrent()) {
-            // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
-            span.setAttribute("chromadb.collection", collectionName);
-            span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) nResults);
-
-            if (queryTexts != null) {
-                span.setAttribute("chromadb.query_count", (long) queryTexts.size());
-                // Capture first query text
-                if (!queryTexts.isEmpty()) {
-                    tracer.setInputValue(span, queryTexts.get(0));
-                }
-            }
-
-            // Execute query
-            Collection.QueryResponse response = collection.query(
-                queryTexts,
-                nResults,
-                where,
-                whereDocument,
-                include
-            );
-
-            // Capture results
-            if (response != null && response.getIds() != null && !response.getIds().isEmpty()) {
-                span.setAttribute("chromadb.results_count", (long) response.getIds().get(0).size());
-            }
-
-            span.setStatus(StatusCode.OK);
-            return response;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
-    }
-
-    /**
      * Adds documents to the collection with tracing.
+     * In ChromaDB Java client v0.1.7, metadatas must be List&lt;Map&lt;String, String&gt;&gt;.
      *
      * @param embeddings the embeddings (optional if using embedding function)
      * @param metadatas  the metadata for each document (optional)
@@ -190,8 +138,8 @@ public class TracedChromaCollection {
      * @throws Exception if add fails
      */
     public void add(
-            List<List<Float>> embeddings,
-            List<Map<String, Object>> metadatas,
+            List<Embedding> embeddings,
+            List<Map<String, String>> metadatas,
             List<String> documents,
             List<String> ids) throws Exception {
         Span span = tracer.startSpan("ChromaDB Add", FISpanKind.EMBEDDING);
@@ -204,7 +152,7 @@ public class TracedChromaCollection {
 
             if (embeddings != null && !embeddings.isEmpty()) {
                 span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
-                    (long) embeddings.get(0).size());
+                    (long) embeddings.get(0).getDimensions());
             }
 
             // Execute add
@@ -222,6 +170,7 @@ public class TracedChromaCollection {
 
     /**
      * Upserts documents to the collection with tracing.
+     * In ChromaDB Java client v0.1.7, metadatas must be List&lt;Map&lt;String, String&gt;&gt;.
      *
      * @param embeddings the embeddings (optional if using embedding function)
      * @param metadatas  the metadata for each document (optional)
@@ -230,8 +179,8 @@ public class TracedChromaCollection {
      * @throws Exception if upsert fails
      */
     public void upsert(
-            List<List<Float>> embeddings,
-            List<Map<String, Object>> metadatas,
+            List<Embedding> embeddings,
+            List<Map<String, String>> metadatas,
             List<String> documents,
             List<String> ids) throws Exception {
         Span span = tracer.startSpan("ChromaDB Upsert", FISpanKind.EMBEDDING);
@@ -296,19 +245,19 @@ public class TracedChromaCollection {
 
     /**
      * Gets documents from the collection with tracing.
+     * In ChromaDB Java client v0.1.7, get() takes 3 args: (ids, where, whereDocument)
+     * where the 'where' parameter is Map&lt;String, String&gt;.
      *
      * @param ids            the IDs to get (optional)
      * @param where          metadata filter (optional)
      * @param whereDocument  document filter (optional)
-     * @param include        fields to include (optional)
      * @return get response
      * @throws Exception if get fails
      */
-    public Collection.GetResponse get(
+    public Collection.GetResult get(
             List<String> ids,
-            Map<String, Object> where,
-            Map<String, Object> whereDocument,
-            List<String> include) throws Exception {
+            Map<String, String> where,
+            Map<String, Object> whereDocument) throws Exception {
         Span span = tracer.startSpan("ChromaDB Get", FISpanKind.RETRIEVER);
 
         try (Scope scope = span.makeCurrent()) {
@@ -321,7 +270,7 @@ public class TracedChromaCollection {
             }
 
             // Execute get
-            Collection.GetResponse response = collection.get(ids, where, whereDocument, include);
+            Collection.GetResult response = collection.get(ids, where, whereDocument);
 
             // Capture result
             if (response != null && response.getIds() != null) {
@@ -352,7 +301,7 @@ public class TracedChromaCollection {
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
             span.setAttribute("chromadb.collection", collectionName);
 
-            int count = collection.count();
+            Integer count = collection.count();
 
             span.setAttribute("chromadb.count", (long) count);
             span.setStatus(StatusCode.OK);

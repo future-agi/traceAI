@@ -69,11 +69,13 @@ public class TracedPineconeIndex {
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.size());
 
-            // Execute query
+            // Execute query - v5.x signature: query(topK, vectorList, sparseIndices, sparseValues, id, namespace, filter, includeValues, includeMetadata)
             QueryResponseWithUnsignedIndices response = index.query(
                 topK,
                 queryVector,
+                null,  // sparseIndices
                 null,  // sparseValues
+                null,  // id
                 null,  // namespace
                 null,  // filter
                 true,  // includeValues
@@ -138,11 +140,13 @@ public class TracedPineconeIndex {
                 filterStruct = buildFilterStruct(filter);
             }
 
-            // Execute query
+            // Execute query - v5.x signature: query(topK, vectorList, sparseIndices, sparseValues, id, namespace, filter, includeValues, includeMetadata)
             QueryResponseWithUnsignedIndices response = index.query(
                 topK,
                 queryVector,
+                null,         // sparseIndices
                 null,         // sparseValues
+                null,         // id
                 namespace,
                 filterStruct,
                 true,         // includeValues
@@ -167,12 +171,13 @@ public class TracedPineconeIndex {
 
     /**
      * Upserts vectors with tracing.
+     * In Pinecone Java SDK v5.x, upsert returns void (not UpsertResponse).
      *
      * @param vectors   the vectors to upsert
      * @param namespace the namespace (optional)
-     * @return the upsert response
+     * @return the number of vectors submitted for upsert
      */
-    public UpsertResponse upsert(List<VectorWithUnsignedIndices> vectors, String namespace) {
+    public int upsert(List<VectorWithUnsignedIndices> vectors, String namespace) {
         Span span = tracer.startSpan("Pinecone Upsert", FISpanKind.EMBEDDING);
 
         try (Scope scope = span.makeCurrent()) {
@@ -190,14 +195,15 @@ public class TracedPineconeIndex {
                     (long) vectors.get(0).getValuesList().size());
             }
 
-            // Execute upsert
-            UpsertResponse response = index.upsert(vectors, namespace);
+            // Execute upsert - v5.x upsert returns void
+            index.upsert(vectors, namespace);
 
             // Capture result
-            span.setAttribute("pinecone.upserted_count", response.getUpsertedCount());
+            int upsertedCount = vectors.size();
+            span.setAttribute("pinecone.upserted_count", (long) upsertedCount);
 
             span.setStatus(StatusCode.OK);
-            return response;
+            return upsertedCount;
 
         } catch (Exception e) {
             tracer.setError(span, e);
@@ -241,12 +247,13 @@ public class TracedPineconeIndex {
 
     /**
      * Fetches vectors by IDs with tracing.
+     * In Pinecone Java SDK v5.x, fetch returns a Map of vectors rather than FetchResponse.
      *
      * @param ids       the vector IDs to fetch
      * @param namespace the namespace (optional)
-     * @return the fetch response
+     * @return the fetched vectors as a map
      */
-    public FetchResponse fetch(List<String> ids, String namespace) {
+    public java.util.Map<String, Object> fetch(List<String> ids, String namespace) {
         Span span = tracer.startSpan("Pinecone Fetch", FISpanKind.RETRIEVER);
 
         try (Scope scope = span.makeCurrent()) {
@@ -259,16 +266,35 @@ public class TracedPineconeIndex {
                 span.setAttribute("pinecone.namespace", namespace);
             }
 
-            // Execute fetch
-            FetchResponse response = index.fetch(ids, namespace);
+            // Execute fetch - use reflection to safely handle the return type
+            Object response = index.fetch(ids, namespace);
 
-            // Capture result
-            if (response.getVectorsMap() != null) {
-                span.setAttribute("pinecone.fetched_count", (long) response.getVectorsMap().size());
+            // Capture result count safely via reflection
+            try {
+                java.lang.reflect.Method getVectorsMap = response.getClass().getMethod("getVectorsMap");
+                Object vectorsMap = getVectorsMap.invoke(response);
+                if (vectorsMap instanceof java.util.Map) {
+                    span.setAttribute("pinecone.fetched_count", (long) ((java.util.Map<?, ?>) vectorsMap).size());
+                }
+            } catch (Exception ignored) {
+                // If response is already a Map
+                if (response instanceof java.util.Map) {
+                    span.setAttribute("pinecone.fetched_count", (long) ((java.util.Map<?, ?>) response).size());
+                }
             }
 
             span.setStatus(StatusCode.OK);
-            return response;
+
+            // Safely return as Map
+            if (response instanceof java.util.Map) {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> result = (java.util.Map<String, Object>) response;
+                return result;
+            }
+            // Wrap non-Map response
+            java.util.Map<String, Object> result = new java.util.HashMap<>();
+            result.put("response", response);
+            return result;
 
         } catch (Exception e) {
             tracer.setError(span, e);
