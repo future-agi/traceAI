@@ -5,7 +5,10 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 /**
@@ -91,21 +94,25 @@ public class TracedAnthropicClient {
             }
 
             // Capture input messages
+            List<Map<String, String>> inputMsgs = new ArrayList<>();
+
+            // System prompt goes first
+            String systemPrompt = extractField(params, "system");
+            if (systemPrompt != null) {
+                inputMsgs.add(FITracer.message("system", systemPrompt));
+            }
+
             List<?> messages = extractFieldList(params, "messages");
             if (messages != null) {
                 for (int i = 0; i < messages.size(); i++) {
                     Object msg = messages.get(i);
                     String role = extractField(msg, "role");
                     String content = extractContent(msg);
-                    tracer.setInputMessage(span, i, role != null ? role : "user", content);
+                    inputMsgs.add(FITracer.message(role != null ? role : "user", content));
                 }
             }
 
-            // Extract system prompt
-            String systemPrompt = extractField(params, "system");
-            if (systemPrompt != null) {
-                tracer.setInputMessage(span, -1, "system", systemPrompt);
-            }
+            tracer.setInputMessages(span, inputMsgs);
 
             // Capture raw input
             tracer.setRawInput(span, params);
@@ -139,7 +146,7 @@ public class TracedAnthropicClient {
                 }
                 String output = outputBuilder.toString();
                 tracer.setOutputValue(span, output);
-                tracer.setOutputMessage(span, 0, "assistant", output);
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", output)));
             }
 
             // Extract stop reason

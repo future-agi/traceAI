@@ -7,7 +7,9 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Instrumentation wrapper for Azure OpenAI Java client.
@@ -86,10 +88,11 @@ public class TracedAzureOpenAIClient {
             // Capture input messages
             List<ChatRequestMessage> messages = options.getMessages();
             if (messages != null) {
-                for (int i = 0; i < messages.size(); i++) {
-                    ChatRequestMessage msg = messages.get(i);
-                    captureInputMessage(span, i, msg);
+                List<Map<String, String>> inputMessages = new ArrayList<>();
+                for (ChatRequestMessage msg : messages) {
+                    inputMessages.add(toMessageMap(msg));
                 }
+                tracer.setInputMessages(span, inputMessages);
             }
 
             // Capture raw input
@@ -110,10 +113,12 @@ public class TracedAzureOpenAIClient {
 
             // Capture output messages
             if (result.getChoices() != null && !result.getChoices().isEmpty()) {
+                List<Map<String, String>> outputMessages = new ArrayList<>();
                 for (int i = 0; i < result.getChoices().size(); i++) {
                     ChatChoice choice = result.getChoices().get(i);
-                    captureOutputChoice(span, i, choice);
+                    captureOutputChoice(span, i, choice, outputMessages);
                 }
+                tracer.setOutputMessages(span, outputMessages);
 
                 // Set primary output value
                 ChatChoice firstChoice = result.getChoices().get(0);
@@ -239,9 +244,11 @@ public class TracedAzureOpenAIClient {
             // Capture input prompts
             List<String> prompts = options.getPrompt();
             if (prompts != null && !prompts.isEmpty()) {
-                for (int i = 0; i < prompts.size(); i++) {
-                    tracer.setInputMessage(span, i, "user", prompts.get(i));
+                List<Map<String, String>> inputMessages = new ArrayList<>();
+                for (String prompt : prompts) {
+                    inputMessages.add(FITracer.message("user", prompt));
                 }
+                tracer.setInputMessages(span, inputMessages);
             }
 
             // Capture raw input
@@ -250,11 +257,6 @@ public class TracedAzureOpenAIClient {
             // Execute request
             Completions result = client.getCompletions(deploymentOrModelName, options);
 
-            // Set response model
-            if (result.getModel() != null) {
-                span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, result.getModel());
-            }
-
             // Set response ID
             if (result.getId() != null) {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_ID, result.getId());
@@ -262,16 +264,17 @@ public class TracedAzureOpenAIClient {
 
             // Capture output choices
             if (result.getChoices() != null && !result.getChoices().isEmpty()) {
-                for (int i = 0; i < result.getChoices().size(); i++) {
-                    Choice choice = result.getChoices().get(i);
+                List<Map<String, String>> outputMessages = new ArrayList<>();
+                for (Choice choice : result.getChoices()) {
                     if (choice.getText() != null) {
-                        tracer.setOutputMessage(span, i, "assistant", choice.getText());
+                        outputMessages.add(FITracer.message("assistant", choice.getText()));
                     }
                     if (choice.getFinishReason() != null) {
                         span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
                             choice.getFinishReason().toString());
                     }
                 }
+                tracer.setOutputMessages(span, outputMessages);
 
                 // Set primary output value
                 Choice firstChoice = result.getChoices().get(0);
@@ -313,18 +316,19 @@ public class TracedAzureOpenAIClient {
         return client;
     }
 
-    private void captureInputMessage(Span span, int index, ChatRequestMessage msg) {
+    private Map<String, String> toMessageMap(ChatRequestMessage msg) {
         String role = getMessageRole(msg);
         String content = getMessageContent(msg);
-        tracer.setInputMessage(span, index, role, content);
+        return FITracer.message(role, content);
     }
 
-    private void captureOutputChoice(Span span, int index, ChatChoice choice) {
+    private void captureOutputChoice(Span span, int index, ChatChoice choice,
+                                     List<Map<String, String>> outputMessages) {
         if (choice.getMessage() != null) {
             ChatResponseMessage message = choice.getMessage();
             String role = message.getRole() != null ? message.getRole().toString() : "assistant";
             String content = message.getContent();
-            tracer.setOutputMessage(span, index, role, content);
+            outputMessages.add(FITracer.message(role, content));
 
             // Capture finish reason
             if (choice.getFinishReason() != null) {
@@ -368,22 +372,26 @@ public class TracedAzureOpenAIClient {
     }
 
     private String getMessageContent(ChatRequestMessage msg) {
-        if (msg instanceof ChatRequestSystemMessage) {
-            return ((ChatRequestSystemMessage) msg).getContent();
-        } else if (msg instanceof ChatRequestUserMessage) {
-            ChatRequestUserMessage userMsg = (ChatRequestUserMessage) msg;
-            // User message content can be string or multipart
-            Object content = userMsg.getContent();
-            if (content instanceof String) {
-                return (String) content;
+        try {
+            if (msg instanceof ChatRequestSystemMessage) {
+                Object content = ((ChatRequestSystemMessage) msg).getContent();
+                return content != null ? content.toString() : null;
+            } else if (msg instanceof ChatRequestUserMessage) {
+                ChatRequestUserMessage userMsg = (ChatRequestUserMessage) msg;
+                Object content = userMsg.getContent();
+                return content != null ? content.toString() : null;
+            } else if (msg instanceof ChatRequestAssistantMessage) {
+                Object content = ((ChatRequestAssistantMessage) msg).getContent();
+                return content != null ? content.toString() : null;
+            } else if (msg instanceof ChatRequestToolMessage) {
+                Object content = ((ChatRequestToolMessage) msg).getContent();
+                return content != null ? content.toString() : null;
+            } else if (msg instanceof ChatRequestFunctionMessage) {
+                Object content = ((ChatRequestFunctionMessage) msg).getContent();
+                return content != null ? content.toString() : null;
             }
-            return content != null ? content.toString() : null;
-        } else if (msg instanceof ChatRequestAssistantMessage) {
-            return ((ChatRequestAssistantMessage) msg).getContent();
-        } else if (msg instanceof ChatRequestToolMessage) {
-            return ((ChatRequestToolMessage) msg).getContent();
-        } else if (msg instanceof ChatRequestFunctionMessage) {
-            return ((ChatRequestFunctionMessage) msg).getContent();
+        } catch (Exception e) {
+            // Fall through to default
         }
         return msg.toString();
     }

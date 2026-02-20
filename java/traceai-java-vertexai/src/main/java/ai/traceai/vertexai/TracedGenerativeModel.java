@@ -9,7 +9,10 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Instrumentation wrapper for Google Cloud Vertex AI GenerativeModel.
@@ -70,7 +73,7 @@ public class TracedGenerativeModel {
 
             // Capture input
             tracer.setInputValue(span, text);
-            tracer.setInputMessage(span, 0, "user", text);
+            tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", text)));
 
             // Execute request
             GenerateContentResponse response = model.generateContent(text);
@@ -106,12 +109,13 @@ public class TracedGenerativeModel {
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelName);
 
             // Capture input messages
-            for (int i = 0; i < contents.size(); i++) {
-                Content content = contents.get(i);
+            List<Map<String, String>> inputMessages = new ArrayList<>();
+            for (Content content : contents) {
                 String role = content.getRole();
-                String text = extractContentText(content);
-                tracer.setInputMessage(span, i, role != null ? role : "user", text);
+                String contentText = extractContentText(content);
+                inputMessages.add(FITracer.message(role != null ? role : "user", contentText));
             }
+            tracer.setInputMessages(span, inputMessages);
 
             tracer.setRawInput(span, contents);
 
@@ -150,7 +154,7 @@ public class TracedGenerativeModel {
 
             // Capture input
             tracer.setInputValue(span, text);
-            tracer.setInputMessage(span, 0, "user", text);
+            tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", text)));
 
             // Get the stream
             ResponseStream<GenerateContentResponse> stream = model.generateContentStream(text);
@@ -223,7 +227,7 @@ public class TracedGenerativeModel {
             if (firstCandidate.hasContent()) {
                 String text = extractContentText(firstCandidate.getContent());
                 tracer.setOutputValue(span, text);
-                tracer.setOutputMessage(span, 0, "model", text);
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("model", text)));
             }
 
             // Capture finish reason

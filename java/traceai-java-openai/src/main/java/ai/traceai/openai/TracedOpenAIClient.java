@@ -7,8 +7,10 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.stream.Stream;
+import java.util.Map;
 
 /**
  * Instrumentation wrapper for OpenAI Java client.
@@ -32,31 +34,17 @@ public class TracedOpenAIClient {
     private final OpenAIClient client;
     private final FITracer tracer;
 
-    /**
-     * Creates a new traced OpenAI client with the given client and tracer.
-     *
-     * @param client the OpenAI client to wrap
-     * @param tracer the FITracer for instrumentation
-     */
     public TracedOpenAIClient(OpenAIClient client, FITracer tracer) {
         this.client = client;
         this.tracer = tracer;
     }
 
-    /**
-     * Creates a new traced OpenAI client using the global TraceAI tracer.
-     *
-     * @param client the OpenAI client to wrap
-     */
     public TracedOpenAIClient(OpenAIClient client) {
         this(client, TraceAI.getTracer());
     }
 
     /**
      * Creates a chat completion with tracing.
-     *
-     * @param params the chat completion parameters
-     * @return the chat completion response
      */
     public ChatCompletion createChatCompletion(ChatCompletionCreateParams params) {
         String model = params.model().toString();
@@ -64,11 +52,10 @@ public class TracedOpenAIClient {
         Span span = tracer.startSpan("OpenAI Chat Completion", FISpanKind.LLM);
 
         try (Scope scope = span.makeCurrent()) {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "openai");
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model);
             span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, model);
+            span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, "chat");
 
             // Set request parameters
             params.temperature().ifPresent(temp ->
@@ -81,12 +68,13 @@ public class TracedOpenAIClient {
                 span.setAttribute(SemanticConventions.LLM_REQUEST_MAX_TOKENS, maxTokens.longValue())
             );
 
-            // Capture input messages
+            // Capture input messages as JSON blob
             List<ChatCompletionMessageParam> messages = params.messages();
-            for (int i = 0; i < messages.size(); i++) {
-                ChatCompletionMessageParam msg = messages.get(i);
-                captureInputMessage(span, i, msg);
+            List<Map<String, String>> inputMessages = new ArrayList<>();
+            for (ChatCompletionMessageParam msg : messages) {
+                inputMessages.add(FITracer.message("user", extractMessageContent(msg)));
             }
+            tracer.setInputMessages(span, inputMessages);
 
             // Capture raw input
             tracer.setRawInput(span, params);
@@ -104,12 +92,22 @@ public class TracedOpenAIClient {
                 span.setAttribute(SemanticConventions.LLM_RESPONSE_ID, result.id());
             }
 
-            // Capture output messages
+            // Capture output messages as JSON blob
             if (result.choices() != null && !result.choices().isEmpty()) {
-                for (int i = 0; i < result.choices().size(); i++) {
-                    ChatCompletion.Choice choice = result.choices().get(i);
-                    captureOutputChoice(span, i, choice);
+                List<Map<String, String>> outputMessages = new ArrayList<>();
+                for (ChatCompletion.Choice choice : result.choices()) {
+                    if (choice.message() != null) {
+                        String role = choice.message().role().toString();
+                        String content = choice.message().content().orElse(null);
+                        outputMessages.add(FITracer.message(role, content));
+
+                        if (choice.finishReason() != null) {
+                            span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
+                                choice.finishReason().toString());
+                        }
+                    }
                 }
+                tracer.setOutputMessages(span, outputMessages);
 
                 // Set primary output value
                 ChatCompletion.Choice firstChoice = result.choices().get(0);
@@ -118,19 +116,16 @@ public class TracedOpenAIClient {
                 }
             }
 
-            // Token usage
-            if (result.usage() != null) {
-                tracer.setTokenCounts(
-                    span,
-                    result.usage().promptTokens().intValue(),
-                    result.usage().completionTokens().intValue(),
-                    result.usage().totalTokens().intValue()
+            // Token usage — usage() returns Optional<CompletionUsage>
+            result.usage().ifPresent(usage -> {
+                tracer.setTokenCounts(span,
+                    usage.promptTokens(),
+                    usage.completionTokens(),
+                    usage.totalTokens()
                 );
-            }
+            });
 
-            // Capture raw output
             tracer.setRawOutput(span, result);
-
             span.setStatus(StatusCode.OK);
             return result;
 
@@ -144,17 +139,14 @@ public class TracedOpenAIClient {
 
     /**
      * Creates an embedding with tracing.
-     *
-     * @param params the embedding parameters
-     * @return the embedding response
      */
     public CreateEmbeddingResponse createEmbedding(EmbeddingCreateParams params) {
         Span span = tracer.startSpan("OpenAI Embedding", FISpanKind.EMBEDDING);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "openai");
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
             span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, params.model().toString());
+            span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, "embeddings");
 
             tracer.setRawInput(span, params);
 
@@ -171,14 +163,10 @@ public class TracedOpenAIClient {
             }
 
             if (result.usage() != null) {
-                span.setAttribute(
-                    SemanticConventions.LLM_TOKEN_COUNT_PROMPT,
-                    result.usage().promptTokens().longValue()
-                );
-                span.setAttribute(
-                    SemanticConventions.LLM_TOKEN_COUNT_TOTAL,
-                    result.usage().totalTokens().longValue()
-                );
+                span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_PROMPT,
+                    result.usage().promptTokens());
+                span.setAttribute(SemanticConventions.LLM_TOKEN_COUNT_TOTAL,
+                    result.usage().totalTokens());
             }
 
             tracer.setRawOutput(span, result);
@@ -195,66 +183,68 @@ public class TracedOpenAIClient {
 
     /**
      * Creates a streaming chat completion with tracing.
-     * The span is completed when the stream is fully consumed.
-     *
-     * @param params the chat completion parameters
-     * @return a stream of chat completion chunks
+     * Returns an Iterable that wraps the underlying StreamResponse.
      */
-    public Stream<ChatCompletionChunk> streamChatCompletion(ChatCompletionCreateParams params) {
+    public Iterable<ChatCompletionChunk> streamChatCompletion(ChatCompletionCreateParams params) throws Exception {
         String model = params.model().toString();
 
         Span span = tracer.startSpan("OpenAI Chat Completion (Stream)", FISpanKind.LLM);
 
         try {
-            // Set system attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "openai");
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model);
+            span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, "chat");
 
             // Capture input messages
             List<ChatCompletionMessageParam> messages = params.messages();
-            for (int i = 0; i < messages.size(); i++) {
-                ChatCompletionMessageParam msg = messages.get(i);
-                captureInputMessage(span, i, msg);
+            List<Map<String, String>> inputMessages = new ArrayList<>();
+            for (ChatCompletionMessageParam msg : messages) {
+                inputMessages.add(FITracer.message("user", extractMessageContent(msg)));
             }
+            tracer.setInputMessages(span, inputMessages);
 
             tracer.setRawInput(span, params);
 
-            // Get the stream
-            Stream<ChatCompletionChunk> stream = client.chat().completions().createStreaming(params);
+            // Get the stream response
+            var streamResponse = client.chat().completions().createStreaming(params);
 
-            // Wrap the stream to capture output and close span
+            // Collect chunks and finalize span when done
+            List<ChatCompletionChunk> chunks = new ArrayList<>();
             StringBuilder content = new StringBuilder();
 
-            return stream.peek(chunk -> {
-                if (chunk.choices() != null && !chunk.choices().isEmpty()) {
-                    ChatCompletionChunk.Choice choice = chunk.choices().get(0);
-                    if (choice.delta() != null && choice.delta().content().isPresent()) {
-                        content.append(choice.delta().content().get());
+            try {
+                streamResponse.stream().forEach(chunk -> {
+                    chunks.add(chunk);
+                    if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+                        ChatCompletionChunk.Choice choice = chunk.choices().get(0);
+                        if (choice.delta() != null && choice.delta().content().isPresent()) {
+                            content.append(choice.delta().content().get());
+                        }
+                        if (choice.finishReason() != null) {
+                            span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
+                                choice.finishReason().toString());
+                        }
                     }
+                    chunk.usage().ifPresent(usage -> {
+                        tracer.setTokenCounts(span,
+                            usage.promptTokens(),
+                            usage.completionTokens(),
+                            usage.totalTokens()
+                        );
+                    });
+                });
+            } finally {
+                streamResponse.close();
+            }
 
-                    // Check if this is the final chunk
-                    if (choice.finishReason() != null) {
-                        tracer.setOutputValue(span, content.toString());
-                        tracer.setOutputMessage(span, 0, "assistant", content.toString());
-                        span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                            choice.finishReason().toString());
-                    }
-                }
+            tracer.setOutputValue(span, content.toString());
+            tracer.setOutputMessages(span, Collections.singletonList(
+                FITracer.message("assistant", content.toString())));
 
-                // Capture usage if present
-                if (chunk.usage() != null) {
-                    tracer.setTokenCounts(
-                        span,
-                        chunk.usage().promptTokens().intValue(),
-                        chunk.usage().completionTokens().intValue(),
-                        chunk.usage().totalTokens().intValue()
-                    );
-                }
-            }).onClose(() -> {
-                span.setStatus(StatusCode.OK);
-                span.end();
-            });
+            span.setStatus(StatusCode.OK);
+            span.end();
+
+            return chunks;
 
         } catch (Exception e) {
             tracer.setError(span, e);
@@ -263,52 +253,12 @@ public class TracedOpenAIClient {
         }
     }
 
-    /**
-     * Gets the underlying OpenAI client.
-     *
-     * @return the wrapped OpenAI client
-     */
     public OpenAIClient unwrap() {
         return client;
     }
 
-    private void captureInputMessage(Span span, int index, ChatCompletionMessageParam msg) {
-        String role = msg.role().toString();
-        tracer.setInputMessage(span, index, role, extractMessageContent(msg));
-    }
-
-    private void captureOutputChoice(Span span, int index, ChatCompletion.Choice choice) {
-        if (choice.message() != null) {
-            String role = choice.message().role().toString();
-            String content = choice.message().content().orElse(null);
-            tracer.setOutputMessage(span, index, role, content);
-
-            // Capture finish reason
-            if (choice.finishReason() != null) {
-                span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                    choice.finishReason().toString());
-            }
-
-            // Capture tool calls if present
-            if (choice.message().toolCalls() != null && !choice.message().toolCalls().isEmpty()) {
-                for (int i = 0; i < choice.message().toolCalls().size(); i++) {
-                    ChatCompletionMessageToolCall toolCall = choice.message().toolCalls().get(i);
-                    span.setAttribute("llm.output_messages." + index + ".tool_calls." + i + ".id",
-                        toolCall.id());
-                    span.setAttribute("llm.output_messages." + index + ".tool_calls." + i + ".function.name",
-                        toolCall.function().name());
-                    span.setAttribute("llm.output_messages." + index + ".tool_calls." + i + ".function.arguments",
-                        toolCall.function().arguments());
-                }
-            }
-        }
-    }
-
     private String extractMessageContent(ChatCompletionMessageParam msg) {
-        // The OpenAI Java SDK uses a union type for message content
-        // We need to handle different message types appropriately
         try {
-            // Attempt to get content - implementation depends on SDK version
             return msg.toString();
         } catch (Exception e) {
             return "[content extraction failed]";

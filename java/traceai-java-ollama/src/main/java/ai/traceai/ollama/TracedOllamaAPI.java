@@ -10,7 +10,10 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Instrumentation wrapper for Ollama4j OllamaAPI.
@@ -69,7 +72,7 @@ public class TracedOllamaAPI {
 
             // Capture input
             tracer.setInputValue(span, prompt);
-            tracer.setInputMessage(span, 0, "user", prompt);
+            tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", prompt)));
 
             // Execute request
             OllamaResult result = api.generate(model, prompt, false, null);
@@ -77,7 +80,7 @@ public class TracedOllamaAPI {
             // Capture output
             if (result.getResponse() != null) {
                 tracer.setOutputValue(span, result.getResponse());
-                tracer.setOutputMessage(span, 0, "assistant", result.getResponse());
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", result.getResponse())));
             }
 
             // Capture metrics if available
@@ -114,12 +117,13 @@ public class TracedOllamaAPI {
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model);
 
             // Capture input messages
-            for (int i = 0; i < messages.size(); i++) {
-                OllamaChatMessage msg = messages.get(i);
+            List<Map<String, String>> inputMessages = new ArrayList<>();
+            for (OllamaChatMessage msg : messages) {
                 String role = msg.getRole().toString().toLowerCase();
                 String content = msg.getContent();
-                tracer.setInputMessage(span, i, role, content);
+                inputMessages.add(FITracer.message(role, content));
             }
+            tracer.setInputMessages(span, inputMessages);
 
             tracer.setRawInput(span, messages);
 
@@ -133,7 +137,7 @@ public class TracedOllamaAPI {
             // Capture output
             if (result.getResponse() != null) {
                 tracer.setOutputValue(span, result.getResponse());
-                tracer.setOutputMessage(span, 0, "assistant", result.getResponse());
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", result.getResponse())));
             }
 
             // Capture metrics

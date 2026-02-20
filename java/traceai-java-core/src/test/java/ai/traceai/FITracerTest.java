@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
@@ -108,37 +109,58 @@ class FITracerTest {
     }
 
     @Test
-    void shouldSetInputMessage() {
+    void shouldSetInputMessages() {
         Span span = tracer.startSpan("test", FISpanKind.LLM);
-        tracer.setInputMessage(span, 0, "user", "Hello, world!");
+        tracer.setInputMessages(span, Arrays.asList(
+            FITracer.message("user", "Hello, world!")
+        ));
         span.end();
 
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            io.opentelemetry.api.common.AttributeKey.stringKey("llm.input_messages.0.message.role")
-        )).isEqualTo("user");
-        assertThat(spanData.getAttributes().get(
-            io.opentelemetry.api.common.AttributeKey.stringKey("llm.input_messages.0.message.content")
-        )).isEqualTo("Hello, world!");
+        String jsonBlob = spanData.getAttributes().get(
+            io.opentelemetry.api.common.AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES)
+        );
+        assertThat(jsonBlob).isEqualTo("[{\"role\":\"user\",\"content\":\"Hello, world!\"}]");
     }
 
     @Test
-    void shouldSetOutputMessage() {
+    void shouldSetMultipleInputMessages() {
         Span span = tracer.startSpan("test", FISpanKind.LLM);
-        tracer.setOutputMessage(span, 0, "assistant", "Hi there!");
+        tracer.setInputMessages(span, Arrays.asList(
+            FITracer.message("system", "You are helpful."),
+            FITracer.message("user", "Hello!")
+        ));
         span.end();
 
         List<SpanData> spans = otelTesting.getSpans();
         SpanData spanData = spans.get(0);
 
-        assertThat(spanData.getAttributes().get(
-            io.opentelemetry.api.common.AttributeKey.stringKey("llm.output_messages.0.message.role")
-        )).isEqualTo("assistant");
-        assertThat(spanData.getAttributes().get(
-            io.opentelemetry.api.common.AttributeKey.stringKey("llm.output_messages.0.message.content")
-        )).isEqualTo("Hi there!");
+        String jsonBlob = spanData.getAttributes().get(
+            io.opentelemetry.api.common.AttributeKey.stringKey(SemanticConventions.LLM_INPUT_MESSAGES)
+        );
+        assertThat(jsonBlob).contains("\"role\":\"system\"");
+        assertThat(jsonBlob).contains("\"role\":\"user\"");
+        assertThat(jsonBlob).contains("\"content\":\"You are helpful.\"");
+        assertThat(jsonBlob).contains("\"content\":\"Hello!\"");
+    }
+
+    @Test
+    void shouldSetOutputMessages() {
+        Span span = tracer.startSpan("test", FISpanKind.LLM);
+        tracer.setOutputMessages(span, Arrays.asList(
+            FITracer.message("assistant", "Hi there!")
+        ));
+        span.end();
+
+        List<SpanData> spans = otelTesting.getSpans();
+        SpanData spanData = spans.get(0);
+
+        String jsonBlob = spanData.getAttributes().get(
+            io.opentelemetry.api.common.AttributeKey.stringKey(SemanticConventions.LLM_OUTPUT_MESSAGES)
+        );
+        assertThat(jsonBlob).isEqualTo("[{\"role\":\"assistant\",\"content\":\"Hi there!\"}]");
     }
 
     @Test

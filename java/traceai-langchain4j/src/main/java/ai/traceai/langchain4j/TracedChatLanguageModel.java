@@ -8,7 +8,10 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Traced wrapper for LangChain4j ChatLanguageModel.
@@ -67,12 +70,13 @@ public class TracedChatLanguageModel implements ChatLanguageModel {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
 
             // Capture input messages
-            for (int i = 0; i < messages.size(); i++) {
-                ChatMessage msg = messages.get(i);
+            List<Map<String, String>> inputMessages = new ArrayList<>();
+            for (ChatMessage msg : messages) {
                 String role = getRole(msg);
                 String content = getText(msg);
-                tracer.setInputMessage(span, i, role, content);
+                inputMessages.add(FITracer.message(role, content));
             }
+            tracer.setInputMessages(span, inputMessages);
 
             // Execute generation
             Response<AiMessage> response = delegate.generate(messages);
@@ -81,7 +85,7 @@ public class TracedChatLanguageModel implements ChatLanguageModel {
             if (response.content() != null) {
                 String outputText = response.content().text();
                 tracer.setOutputValue(span, outputText);
-                tracer.setOutputMessage(span, 0, "assistant", outputText);
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", outputText)));
 
                 // Capture tool execution requests if present
                 if (response.content().hasToolExecutionRequests()) {

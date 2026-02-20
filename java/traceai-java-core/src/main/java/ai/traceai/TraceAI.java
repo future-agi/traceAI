@@ -7,6 +7,7 @@ import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.SdkTracerProviderBuilder;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.exporter.logging.LoggingSpanExporter;
@@ -73,7 +74,7 @@ public final class TraceAI {
                 )));
 
             // Build tracer provider
-            SdkTracerProvider.Builder providerBuilder = SdkTracerProvider.builder()
+            SdkTracerProviderBuilder providerBuilder = SdkTracerProvider.builder()
                 .setResource(resource);
 
             // Add OTLP exporter if configured

@@ -7,7 +7,10 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Instrumentation wrapper for Google Generative AI (Gemini) client.
@@ -68,7 +71,7 @@ public class TracedGenerativeModel {
 
             // Capture input
             tracer.setInputValue(span, prompt);
-            tracer.setInputMessage(span, 0, "user", prompt);
+            tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", prompt)));
 
             // Execute request
             GenerateContentResponse response = model.generateContent(prompt);
@@ -103,12 +106,13 @@ public class TracedGenerativeModel {
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelName);
 
             // Capture input messages
-            for (int i = 0; i < contents.length; i++) {
-                Content content = contents[i];
+            List<Map<String, String>> inputMessages = new ArrayList<>();
+            for (Content content : contents) {
                 String role = content.getRole() != null ? content.getRole() : "user";
                 String text = extractContentText(content);
-                tracer.setInputMessage(span, i, role, text);
+                inputMessages.add(FITracer.message(role, text));
             }
+            tracer.setInputMessages(span, inputMessages);
 
             tracer.setRawInput(span, contents);
 
@@ -199,7 +203,7 @@ public class TracedGenerativeModel {
             if (firstCandidate.getContent() != null) {
                 String text = extractContentText(firstCandidate.getContent());
                 tracer.setOutputValue(span, text);
-                tracer.setOutputMessage(span, 0, "model", text);
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("model", text)));
             }
 
             // Capture finish reason
@@ -266,7 +270,7 @@ public class TracedGenerativeModel {
                 span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelName);
 
                 tracer.setInputValue(span, message);
-                tracer.setInputMessage(span, 0, "user", message);
+                tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", message)));
 
                 GenerateContentResponse response = chat.sendMessage(message);
 
@@ -282,7 +286,7 @@ public class TracedGenerativeModel {
                         }
                         String text = sb.toString();
                         tracer.setOutputValue(span, text);
-                        tracer.setOutputMessage(span, 0, "model", text);
+                        tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("model", text)));
                     }
                 }
 

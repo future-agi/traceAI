@@ -8,7 +8,10 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Instrumentation wrapper for Cohere Java client.
@@ -79,18 +82,19 @@ public class TracedCohereClient {
 
             // Capture input message
             tracer.setInputValue(span, request.getMessage());
-            tracer.setInputMessage(span, 0, "user", request.getMessage());
+            List<Map<String, String>> inputMessages = new ArrayList<>();
+            inputMessages.add(FITracer.message("user", request.getMessage()));
 
             // Capture chat history if present
             if (request.getChatHistory().isPresent()) {
                 List<Message> history = request.getChatHistory().get();
-                for (int i = 0; i < history.size(); i++) {
-                    Message msg = history.get(i);
+                for (Message msg : history) {
                     String role = msg.getRole().toString().toLowerCase();
                     String content = extractMessageContent(msg);
-                    tracer.setInputMessage(span, i + 1, role, content);
+                    inputMessages.add(FITracer.message(role, content));
                 }
             }
+            tracer.setInputMessages(span, inputMessages);
 
             // Capture preamble/system prompt if present
             if (request.getPreamble().isPresent()) {
@@ -105,7 +109,7 @@ public class TracedCohereClient {
             // Capture output
             if (response.getText() != null) {
                 tracer.setOutputValue(span, response.getText());
-                tracer.setOutputMessage(span, 0, "assistant", response.getText());
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", response.getText())));
             }
 
             // Capture finish reason

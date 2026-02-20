@@ -18,7 +18,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -161,7 +164,7 @@ public class TracedChatCompletionService implements ChatCompletionService {
                     String fullContent = contentBuilder.get().toString();
                     if (!fullContent.isEmpty()) {
                         tracer.setOutputValue(span, fullContent);
-                        tracer.setOutputMessage(span, 0, "assistant", fullContent);
+                        tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", fullContent)));
                     }
                     span.setStatus(StatusCode.OK);
                 })
@@ -230,19 +233,21 @@ public class TracedChatCompletionService implements ChatCompletionService {
 
         List<ChatMessageContent<?>> messages = chatHistory.getMessages();
         StringBuilder inputBuilder = new StringBuilder();
+        List<Map<String, String>> inputMessages = new ArrayList<>();
 
-        for (int i = 0; i < messages.size(); i++) {
-            ChatMessageContent<?> message = messages.get(i);
+        for (ChatMessageContent<?> message : messages) {
             String role = mapRole(message.getAuthorRole());
             String content = message.getContent();
 
-            tracer.setInputMessage(span, i, role, content);
+            inputMessages.add(FITracer.message(role, content));
 
             if (inputBuilder.length() > 0) {
                 inputBuilder.append("\n");
             }
             inputBuilder.append(role).append(": ").append(content);
         }
+
+        tracer.setInputMessages(span, inputMessages);
 
         if (inputBuilder.length() > 0) {
             tracer.setInputValue(span, inputBuilder.toString());
@@ -258,13 +263,13 @@ public class TracedChatCompletionService implements ChatCompletionService {
         }
 
         StringBuilder outputBuilder = new StringBuilder();
+        List<Map<String, String>> outputMessages = new ArrayList<>();
 
-        for (int i = 0; i < messages.size(); i++) {
-            ChatMessageContent<?> message = messages.get(i);
+        for (ChatMessageContent<?> message : messages) {
             String role = mapRole(message.getAuthorRole());
             String content = message.getContent();
 
-            tracer.setOutputMessage(span, i, role, content);
+            outputMessages.add(FITracer.message(role, content));
 
             if (outputBuilder.length() > 0) {
                 outputBuilder.append("\n");
@@ -276,6 +281,8 @@ public class TracedChatCompletionService implements ChatCompletionService {
                 extractTokenUsage(span, message.getMetadata());
             }
         }
+
+        tracer.setOutputMessages(span, outputMessages);
 
         if (outputBuilder.length() > 0) {
             tracer.setOutputValue(span, outputBuilder.toString());

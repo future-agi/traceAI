@@ -8,6 +8,11 @@ import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
 import software.amazon.awssdk.services.bedrockruntime.model.*;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -120,16 +125,9 @@ public class TracedBedrockRuntimeClient {
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, modelId);
 
             // Capture input messages
-            if (request.messages() != null) {
-                for (int i = 0; i < request.messages().size(); i++) {
-                    Message msg = request.messages().get(i);
-                    String role = msg.roleAsString();
-                    String content = extractMessageContent(msg);
-                    tracer.setInputMessage(span, i, role, content);
-                }
-            }
+            List<Map<String, String>> inputMsgs = new ArrayList<>();
 
-            // Capture system prompt if present
+            // System prompt goes first
             if (request.system() != null && !request.system().isEmpty()) {
                 StringBuilder systemPrompt = new StringBuilder();
                 for (SystemContentBlock block : request.system()) {
@@ -137,8 +135,19 @@ public class TracedBedrockRuntimeClient {
                         systemPrompt.append(block.text());
                     }
                 }
-                tracer.setInputMessage(span, -1, "system", systemPrompt.toString());
+                inputMsgs.add(FITracer.message("system", systemPrompt.toString()));
             }
+
+            if (request.messages() != null) {
+                for (int i = 0; i < request.messages().size(); i++) {
+                    Message msg = request.messages().get(i);
+                    String role = msg.roleAsString();
+                    String content = extractMessageContent(msg);
+                    inputMsgs.add(FITracer.message(role, content));
+                }
+            }
+
+            tracer.setInputMessages(span, inputMsgs);
 
             // Capture inference config
             if (request.inferenceConfig() != null) {
@@ -165,7 +174,7 @@ public class TracedBedrockRuntimeClient {
                 String role = outputMsg.roleAsString();
                 String content = extractMessageContent(outputMsg);
                 tracer.setOutputValue(span, content);
-                tracer.setOutputMessage(span, 0, role, content);
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message(role, content)));
             }
 
             // Capture stop reason
@@ -232,12 +241,14 @@ public class TracedBedrockRuntimeClient {
                     if (json.has("messages")) {
                         // Claude Messages API format
                         var messages = json.getAsJsonArray("messages");
+                        List<Map<String, String>> inputMsgs = new ArrayList<>();
                         for (int i = 0; i < messages.size(); i++) {
                             var msg = messages.get(i).getAsJsonObject();
                             String role = msg.has("role") ? msg.get("role").getAsString() : "user";
                             String content = msg.has("content") ? msg.get("content").getAsString() : "";
-                            tracer.setInputMessage(span, i, role, content);
+                            inputMsgs.add(FITracer.message(role, content));
                         }
+                        tracer.setInputMessages(span, inputMsgs);
                     }
                     break;
 

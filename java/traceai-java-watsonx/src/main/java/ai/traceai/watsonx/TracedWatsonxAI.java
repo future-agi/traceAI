@@ -5,8 +5,11 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
-import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Instrumentation wrapper for IBM watsonx.ai Java client.
@@ -92,7 +95,7 @@ public class TracedWatsonxAI {
             String input = extractField(request, "input");
             if (input != null) {
                 tracer.setInputValue(span, input);
-                tracer.setInputMessage(span, 0, "user", input);
+                tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", input)));
             }
 
             // Extract parameters if available
@@ -162,7 +165,7 @@ public class TracedWatsonxAI {
 
             if (generatedText != null) {
                 tracer.setOutputValue(span, generatedText);
-                tracer.setOutputMessage(span, 0, "assistant", generatedText);
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", generatedText)));
             }
 
             // Extract stop reason from direct field if not found in results
@@ -239,7 +242,7 @@ public class TracedWatsonxAI {
             String input = extractField(request, "input");
             if (input != null) {
                 tracer.setInputValue(span, input);
-                tracer.setInputMessage(span, 0, "user", input);
+                tracer.setInputMessages(span, Collections.singletonList(FITracer.message("user", input)));
             }
 
             // Extract parameters if available
@@ -316,12 +319,13 @@ public class TracedWatsonxAI {
             // Extract messages
             List<?> messages = extractFieldList(request, "messages");
             if (messages != null) {
-                for (int i = 0; i < messages.size(); i++) {
-                    Object msg = messages.get(i);
+                List<Map<String, String>> inputMessages = new ArrayList<>();
+                for (Object msg : messages) {
                     String role = extractField(msg, "role");
                     String content = extractChatMessageContent(msg);
-                    tracer.setInputMessage(span, i, role != null ? role : "user", content);
+                    inputMessages.add(FITracer.message(role != null ? role : "user", content));
                 }
+                tracer.setInputMessages(span, inputMessages);
 
                 // Set the last user message as the input value
                 for (int i = messages.size() - 1; i >= 0; i--) {
@@ -370,7 +374,7 @@ public class TracedWatsonxAI {
                     String content = extractChatMessageContent(message);
                     if (content != null) {
                         tracer.setOutputValue(span, content);
-                        tracer.setOutputMessage(span, 0, role != null ? role : "assistant", content);
+                        tracer.setOutputMessages(span, Collections.singletonList(FITracer.message(role != null ? role : "assistant", content)));
                     }
                 }
 

@@ -11,6 +11,8 @@ import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -154,37 +156,45 @@ public class FITracer {
     }
 
     /**
-     * Sets an input message on a span.
+     * Sets input messages on a span as a JSON blob.
+     * Each message should be a Map with "role" and "content" keys.
      * @param span the span
-     * @param index the message index
-     * @param role the message role
-     * @param content the message content
+     * @param messages the list of message maps
      */
-    public void setInputMessage(Span span, int index, String role, String content) {
-        if (!config.isHideInputMessages()) {
-            String prefix = SemanticConventions.LLM_INPUT_MESSAGES + "." + index + ".message.";
-            span.setAttribute(prefix + "role", role);
-            if (content != null) {
-                span.setAttribute(prefix + "content", truncateIfNeeded(content));
-            }
+    public void setInputMessages(Span span, List<Map<String, String>> messages) {
+        if (!config.isHideInputMessages() && messages != null && !messages.isEmpty()) {
+            span.setAttribute(SemanticConventions.LLM_INPUT_MESSAGES,
+                truncateIfNeeded(gson.toJson(messages)));
         }
     }
 
     /**
-     * Sets an output message on a span.
+     * Sets output messages on a span as a JSON blob.
+     * Each message should be a Map with "role" and "content" keys.
      * @param span the span
-     * @param index the message index
+     * @param messages the list of message maps
+     */
+    public void setOutputMessages(Span span, List<Map<String, String>> messages) {
+        if (!config.isHideOutputMessages() && messages != null && !messages.isEmpty()) {
+            span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES,
+                truncateIfNeeded(gson.toJson(messages)));
+        }
+    }
+
+    /**
+     * Creates a message map with role and content.
+     * Convenience helper for building message lists.
      * @param role the message role
      * @param content the message content
+     * @return a map with role and content entries
      */
-    public void setOutputMessage(Span span, int index, String role, String content) {
-        if (!config.isHideOutputMessages()) {
-            String prefix = SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index + ".message.";
-            span.setAttribute(prefix + "role", role);
-            if (content != null) {
-                span.setAttribute(prefix + "content", truncateIfNeeded(content));
-            }
+    public static Map<String, String> message(String role, String content) {
+        Map<String, String> msg = new LinkedHashMap<>();
+        msg.put("role", role);
+        if (content != null) {
+            msg.put("content", content);
         }
+        return msg;
     }
 
     /**

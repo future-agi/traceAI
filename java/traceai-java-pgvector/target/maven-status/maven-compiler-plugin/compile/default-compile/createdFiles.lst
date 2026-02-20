@@ -1,0 +1,6 @@
+ai/traceai/pgvector/TracedPgVectorStore$NonClosingConnectionWrapper.class
+ai/traceai/pgvector/TracedPgVectorStore.class
+ai/traceai/pgvector/TracedPgVectorStore$1.class
+ai/traceai/pgvector/TracedPgVectorStore$SearchResult.class
+ai/traceai/pgvector/TracedPgVectorStore$IndexType.class
+ai/traceai/pgvector/TracedPgVectorStore$DistanceFunction.class

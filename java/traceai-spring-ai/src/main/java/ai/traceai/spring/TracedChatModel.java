@@ -10,7 +10,10 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.messages.Message;
 import reactor.core.publisher.Flux;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Traced wrapper for Spring AI ChatModel.
@@ -65,12 +68,13 @@ public class TracedChatModel implements ChatModel {
             // Capture input messages
             if (prompt != null && prompt.getInstructions() != null) {
                 List<Message> messages = prompt.getInstructions();
-                for (int i = 0; i < messages.size(); i++) {
-                    Message msg = messages.get(i);
+                List<Map<String, String>> inputMessages = new ArrayList<>();
+                for (Message msg : messages) {
                     String role = msg.getMessageType().getValue();
                     String content = msg.getContent();
-                    tracer.setInputMessage(span, i, role, content);
+                    inputMessages.add(FITracer.message(role, content));
                 }
+                tracer.setInputMessages(span, inputMessages);
             }
 
             // Capture prompt options if available
@@ -96,7 +100,7 @@ public class TracedChatModel implements ChatModel {
                 var output = response.getResult().getOutput();
                 if (output != null) {
                     tracer.setOutputValue(span, output.getContent());
-                    tracer.setOutputMessage(span, 0, "assistant", output.getContent());
+                    tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", output.getContent())));
                 }
             }
 
@@ -134,12 +138,13 @@ public class TracedChatModel implements ChatModel {
             // Capture input messages
             if (prompt != null && prompt.getInstructions() != null) {
                 List<Message> messages = prompt.getInstructions();
-                for (int i = 0; i < messages.size(); i++) {
-                    Message msg = messages.get(i);
+                List<Map<String, String>> inputMessages = new ArrayList<>();
+                for (Message msg : messages) {
                     String role = msg.getMessageType().getValue();
                     String content = msg.getContent();
-                    tracer.setInputMessage(span, i, role, content);
+                    inputMessages.add(FITracer.message(role, content));
                 }
+                tracer.setInputMessages(span, inputMessages);
             }
 
             // Get the stream
@@ -159,7 +164,7 @@ public class TracedChatModel implements ChatModel {
                 })
                 .doOnComplete(() -> {
                     tracer.setOutputValue(span, content.toString());
-                    tracer.setOutputMessage(span, 0, "assistant", content.toString());
+                    tracer.setOutputMessages(span, Collections.singletonList(FITracer.message("assistant", content.toString())));
                     span.setStatus(StatusCode.OK);
                     span.end();
                 })
