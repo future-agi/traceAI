@@ -90,14 +90,14 @@ public static class TraceAI
             .AddService(serviceName: projectName, serviceVersion: Version)
             .AddAttributes(new Dictionary<string, object>
             {
-                ["fi.project.name"] = projectName,
-                ["fi.project.type"] = options.ProjectType.ToValue(),
+                ["project_name"] = projectName,
+                ["project_type"] = options.ProjectType.ToValue(),
             });
 
         if (!string.IsNullOrEmpty(options.ProjectVersionName))
             resourceBuilder.AddAttributes(new Dictionary<string, object>
             {
-                ["fi.project.version_name"] = options.ProjectVersionName!,
+                ["project_version_name"] = options.ProjectVersionName!,
             });
 
         // Build auth headers
@@ -143,7 +143,7 @@ public static class TraceAI
             // HTTP — use OTLP HTTP exporter
             builder.AddOtlpExporter(exporterOptions =>
             {
-                exporterOptions.Endpoint = new Uri(endpoint + "/v1/traces");
+                exporterOptions.Endpoint = new Uri(endpoint.TrimEnd('/') + "/tracer/v1/traces");
                 exporterOptions.Protocol = OtlpExportProtocol.HttpProtobuf;
                 if (headers.Count > 0)
                     exporterOptions.Headers = string.Join(",", headers.Select(h => $"{h.Key}={h.Value}"));

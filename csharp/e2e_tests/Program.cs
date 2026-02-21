@@ -28,10 +28,10 @@ Console.WriteLine();
 var tracer = TraceAI.Register(opts =>
 {
     opts.ProjectName = "csharp-e2e-test";
+    opts.ProjectType = FIInstrumentation.Types.ProjectType.Observe;
     opts.Endpoint = baseUrl;
     opts.Batch = false; // Simple processor for immediate export
     opts.Verbose = true;
-    opts.EnableConsoleExporter = true; // Also print spans to console
 });
 
 Console.WriteLine("[OK] Tracer registered");
