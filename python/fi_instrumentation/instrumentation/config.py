@@ -19,6 +19,7 @@ from opentelemetry.context import (
 from opentelemetry.util.types import AttributeValue
 
 from .logging import logger
+from .pii_redaction import redact_pii_in_value
 
 
 class suppress_tracing:
@@ -75,6 +76,8 @@ FI_HIDE_EMBEDDING_VECTORS = "FI_HIDE_EMBEDDING_VECTORS"
 # Hides embedding vectors
 FI_BASE64_IMAGE_MAX_LENGTH = "FI_BASE64_IMAGE_MAX_LENGTH"
 # Limits characters of a base64 encoding of an image
+FI_PII_REDACTION = "FI_PII_REDACTION"
+# Enables regex-based PII redaction on attribute values
 REDACTED_VALUE = "__REDACTED__"
 # When a value is hidden, it will be replaced by this redacted value
 
@@ -91,6 +94,7 @@ DEFAULT_HIDE_OUTPUT_TEXT = False
 
 DEFAULT_HIDE_EMBEDDING_VECTORS = False
 DEFAULT_BASE64_IMAGE_MAX_LENGTH = 32_000
+DEFAULT_PII_REDACTION = False
 
 
 @dataclass(frozen=True)
@@ -185,6 +189,14 @@ class TraceConfig:
         },
     )
     """Limits characters of a base64 encoding of an image"""
+    pii_redaction: Optional[bool] = field(
+        default=None,
+        metadata={
+            "env_var": FI_PII_REDACTION,
+            "default_value": DEFAULT_PII_REDACTION,
+        },
+    )
+    """Enables regex-based PII redaction on attribute values"""
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -270,7 +282,10 @@ class TraceConfig:
             and EmbeddingAttributes.EMBEDDING_VECTOR in key
         ):
             return None
-        return value() if callable(value) else value
+        resolved = value() if callable(value) else value
+        if self.pii_redaction and resolved is not None:
+            resolved = redact_pii_in_value(resolved)
+        return resolved
 
     def _parse_value(
         self,

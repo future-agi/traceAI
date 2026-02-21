@@ -1,3 +1,2 @@
-META-INF/spring-configuration-metadata.json
-ai/traceai/spring/autoconfigure/TraceAIProperties.class
 ai/traceai/spring/autoconfigure/TraceAIAutoConfiguration.class
+ai/traceai/spring/autoconfigure/TraceAIProperties.class

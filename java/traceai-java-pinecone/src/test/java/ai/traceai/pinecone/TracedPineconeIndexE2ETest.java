@@ -48,6 +48,7 @@ class TracedPineconeIndexE2ETest {
         TraceAI.init(TraceConfig.builder()
                 .baseUrl(baseUrl)
                 .apiKey(System.getenv("FI_API_KEY"))
+                .secretKey(System.getenv("FI_SECRET_KEY"))
                 .projectName(System.getenv("FI_PROJECT_NAME") != null
                         ? System.getenv("FI_PROJECT_NAME")
                         : "java-pinecone-e2e")
@@ -80,7 +81,7 @@ class TracedPineconeIndexE2ETest {
                 // Best-effort cleanup
             }
         }
-        Thread.sleep(3000);
+        TraceAI.shutdown();
         TraceAI.shutdown();
     }
 

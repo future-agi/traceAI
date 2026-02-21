@@ -13,7 +13,7 @@ import { StrandsInstrumentation } from "../instrumentation";
 const FI_API_KEY = process.env.FI_API_KEY;
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
-const describeE2E = (FI_API_KEY && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) ? describe : describe.skip;
+const describeE2E = FI_API_KEY ? describe : describe.skip;
 
 describeE2E("Strands E2E Tests", () => {
   let provider: FITracerProvider;

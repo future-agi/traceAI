@@ -1,9 +1,10 @@
 package ai.traceai;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
+import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
@@ -68,10 +69,16 @@ public final class TraceAI {
                     ? config.getProjectName()
                     : "traceai-java-app";
 
+            var resourceAttrsBuilder = Attributes.builder()
+                .put(ResourceAttributes.SERVICE_NAME, serviceName);
+
+            if (config.getProjectName() != null) {
+                resourceAttrsBuilder.put(AttributeKey.stringKey("project_name"), config.getProjectName());
+            }
+            resourceAttrsBuilder.put(AttributeKey.stringKey("project_type"), "observe");
+
             Resource resource = Resource.getDefault()
-                .merge(Resource.create(Attributes.of(
-                    ResourceAttributes.SERVICE_NAME, serviceName
-                )));
+                .merge(Resource.create(resourceAttrsBuilder.build()));
 
             // Build tracer provider
             SdkTracerProviderBuilder providerBuilder = SdkTracerProvider.builder()
@@ -79,16 +86,22 @@ public final class TraceAI {
 
             // Add OTLP exporter if configured
             if (config.getBaseUrl() != null && config.getApiKey() != null) {
-                String endpoint = config.getBaseUrl().endsWith("/v1/traces")
-                    ? config.getBaseUrl()
-                    : config.getBaseUrl() + "/v1/traces";
+                String baseUrl = config.getBaseUrl().endsWith("/")
+                    ? config.getBaseUrl().substring(0, config.getBaseUrl().length() - 1)
+                    : config.getBaseUrl();
+                String endpoint = baseUrl + "/tracer/v1/traces";
 
-                OtlpGrpcSpanExporter otlpExporter = OtlpGrpcSpanExporter.builder()
+                var exporterBuilder = OtlpHttpSpanExporter.builder()
                     .setEndpoint(endpoint)
-                    .addHeader("Authorization", "Bearer " + config.getApiKey())
+                    .addHeader("X-Api-Key", config.getApiKey())
                     .addHeader("fi-project-name", config.getProjectName() != null ? config.getProjectName() : "")
-                    .setTimeout(Duration.ofSeconds(30))
-                    .build();
+                    .setTimeout(Duration.ofSeconds(30));
+
+                if (config.getSecretKey() != null) {
+                    exporterBuilder.addHeader("X-Secret-Key", config.getSecretKey());
+                }
+
+                OtlpHttpSpanExporter otlpExporter = exporterBuilder.build();
 
                 BatchSpanProcessor batchProcessor = BatchSpanProcessor.builder(otlpExporter)
                     .setMaxExportBatchSize(config.getBatchSize())
@@ -96,7 +109,7 @@ public final class TraceAI {
                     .build();
 
                 providerBuilder.addSpanProcessor(batchProcessor);
-                logger.info("TraceAI OTLP exporter configured for endpoint: {}", endpoint);
+                logger.info("TraceAI OTLP HTTP exporter configured for endpoint: {}", endpoint);
             }
 
             // Add console exporter if enabled
@@ -177,7 +190,8 @@ public final class TraceAI {
     public static void shutdown() {
         synchronized (lock) {
             if (tracerProvider != null) {
-                tracerProvider.shutdown();
+                tracerProvider.forceFlush().join(10, TimeUnit.SECONDS);
+                tracerProvider.shutdown().join(10, TimeUnit.SECONDS);
                 tracerProvider = null;
             }
             instance = null;

@@ -6,10 +6,11 @@
  *
  * Required environment variables:
  *   FI_API_KEY     - FI platform API key
- *   FI_SECRET_KEY  - FI platform secret key (if required)
- *   GOOGLE_API_KEY - Google API key for OpenAI-compatible endpoint
  *
- * Run with: FI_API_KEY=... GOOGLE_API_KEY=... pnpm test -- --testPathPattern=e2e
+ * Optional environment variables:
+ *   GOOGLE_API_KEY - Google API key for OpenAI-compatible endpoint (falls back to dummy key)
+ *
+ * Run with: FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
 import { register, FITracerProvider } from "@traceai/fi-core";
 import { LangChainInstrumentation } from "../instrumentation";
@@ -17,7 +18,7 @@ import { LangChainInstrumentation } from "../instrumentation";
 const FI_API_KEY = process.env.FI_API_KEY;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
-const describeE2E = FI_API_KEY && GOOGLE_API_KEY ? describe : describe.skip;
+const describeE2E = FI_API_KEY ? describe : describe.skip;
 
 describeE2E("LangChain E2E Tests", () => {
   let provider: FITracerProvider;

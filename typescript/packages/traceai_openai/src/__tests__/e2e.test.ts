@@ -18,7 +18,7 @@ import { OpenAIInstrumentation } from "../instrumentation";
 const FI_API_KEY = process.env.FI_API_KEY;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
-const describeE2E = FI_API_KEY && GOOGLE_API_KEY ? describe : describe.skip;
+const describeE2E = FI_API_KEY ? describe : describe.skip;
 
 describeE2E("OpenAIInstrumentation E2E", () => {
   let provider: FITracerProvider;
@@ -45,7 +45,7 @@ describeE2E("OpenAIInstrumentation E2E", () => {
 
     client = new OpenAI({
       baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-      apiKey: GOOGLE_API_KEY,
+      apiKey: GOOGLE_API_KEY || "dummy-key-for-e2e",
     });
   });
 

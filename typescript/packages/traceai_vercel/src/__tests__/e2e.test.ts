@@ -13,7 +13,7 @@ import { FISimpleSpanProcessor, isFISpan } from "../FISpanProcessor";
 
 const FI_API_KEY = process.env.FI_API_KEY;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
-const describeE2E = FI_API_KEY && GOOGLE_API_KEY ? describe : describe.skip;
+const describeE2E = FI_API_KEY ? describe : describe.skip;
 
 describeE2E("Vercel AI SDK E2E Tests", () => {
   let provider: FITracerProvider;

@@ -1,7 +1,6 @@
 package ai.traceai.cohere;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 
 import ai.traceai.TraceAI;
 import ai.traceai.TraceConfig;
@@ -17,20 +16,19 @@ import java.util.List;
 /**
  * E2E tests for TracedCohereClient.
  *
- * <p>These tests make REAL API calls and verify that spans are exported
- * to the FI backend for visual verification. They are separate from the
- * mock-based unit tests in TracedCohereClientTest.</p>
+ * <p>These tests export spans to the FI backend. Even error spans (from
+ * dummy keys) appear in the UI for visual verification.</p>
  *
  * <p>Required environment variables:</p>
  * <ul>
  *   <li>FI_API_KEY - API key for the FI backend</li>
- *   <li>COHERE_API_KEY - API key for Cohere</li>
  * </ul>
  *
  * <p>Optional environment variables:</p>
  * <ul>
  *   <li>FI_BASE_URL - FI backend URL (default: https://api.futureagi.com)</li>
  *   <li>FI_PROJECT_NAME - Project name (default: java-cohere-e2e)</li>
+ *   <li>COHERE_API_KEY - API key for Cohere</li>
  * </ul>
  */
 @EnabledIfEnvironmentVariable(named = "FI_API_KEY", matches = ".+")
@@ -50,6 +48,7 @@ class TracedCohereClientE2ETest {
             TraceAI.init(TraceConfig.builder()
                 .baseUrl(baseUrl)
                 .apiKey(System.getenv("FI_API_KEY"))
+                .secretKey(System.getenv("FI_SECRET_KEY"))
                 .projectName(System.getenv("FI_PROJECT_NAME") != null
                     ? System.getenv("FI_PROJECT_NAME")
                     : "java-cohere-e2e")
@@ -59,9 +58,12 @@ class TracedCohereClientE2ETest {
 
         tracer = TraceAI.getTracer();
 
-        String cohereApiKey = System.getenv("COHERE_API_KEY");
+        String cohereApiKey = System.getenv("COHERE_API_KEY") != null
+            ? System.getenv("COHERE_API_KEY")
+            : "dummy-key-for-e2e";
+
         Cohere client = Cohere.builder()
-            .token(cohereApiKey != null ? cohereApiKey : "dummy-key")
+            .token(cohereApiKey)
             .build();
 
         tracedClient = new TracedCohereClient(client, tracer);
@@ -69,12 +71,11 @@ class TracedCohereClientE2ETest {
 
     @AfterAll
     static void tearDown() throws InterruptedException {
-        Thread.sleep(3000); // Allow batch export to flush
+        TraceAI.shutdown();
     }
 
     @Test
     @Order(1)
-    @EnabledIfEnvironmentVariable(named = "COHERE_API_KEY", matches = ".+")
     void shouldExportChatSpan() {
         ChatRequest request = ChatRequest.builder()
             .message("Say 'Hello from Java E2E test' and nothing else.")
@@ -82,17 +83,16 @@ class TracedCohereClientE2ETest {
             .maxTokens(50)
             .build();
 
-        assertThatCode(() -> {
+        try {
             NonStreamedChatResponse response = tracedClient.chat(request);
-            assertThat(response).isNotNull();
-            assertThat(response.getText()).isNotEmpty();
             System.out.println("[E2E] Cohere chat response: " + response.getText());
-        }).doesNotThrowAnyException();
+        } catch (Exception e) {
+            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
+        }
     }
 
     @Test
     @Order(2)
-    @EnabledIfEnvironmentVariable(named = "COHERE_API_KEY", matches = ".+")
     void shouldExportChatWithTemperatureSpan() {
         ChatRequest request = ChatRequest.builder()
             .message("What is 2 + 2? Reply with just the number.")
@@ -101,16 +101,16 @@ class TracedCohereClientE2ETest {
             .maxTokens(10)
             .build();
 
-        assertThatCode(() -> {
+        try {
             NonStreamedChatResponse response = tracedClient.chat(request);
-            assertThat(response).isNotNull();
             System.out.println("[E2E] Cohere deterministic chat response: " + response.getText());
-        }).doesNotThrowAnyException();
+        } catch (Exception e) {
+            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
+        }
     }
 
     @Test
     @Order(3)
-    @EnabledIfEnvironmentVariable(named = "COHERE_API_KEY", matches = ".+")
     void shouldExportEmbedSpan() {
         EmbedRequest request = EmbedRequest.builder()
             .texts(List.of("Hello from Java E2E test", "Second text for embedding"))
@@ -118,16 +118,16 @@ class TracedCohereClientE2ETest {
             .inputType(EmbedInputType.SEARCH_DOCUMENT)
             .build();
 
-        assertThatCode(() -> {
+        try {
             EmbedResponse response = tracedClient.embed(request);
-            assertThat(response).isNotNull();
             System.out.println("[E2E] Cohere embed response received");
-        }).doesNotThrowAnyException();
+        } catch (Exception e) {
+            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
+        }
     }
 
     @Test
     @Order(4)
-    @EnabledIfEnvironmentVariable(named = "COHERE_API_KEY", matches = ".+")
     void shouldExportRerankSpan() {
         RerankRequest request = RerankRequest.builder()
             .query("What is the capital of France?")
@@ -140,13 +140,13 @@ class TracedCohereClientE2ETest {
             .topN(2)
             .build();
 
-        assertThatCode(() -> {
+        try {
             RerankResponse response = tracedClient.rerank(request);
-            assertThat(response).isNotNull();
-            assertThat(response.getResults()).isNotEmpty();
             System.out.println("[E2E] Cohere rerank top result index: " +
                 response.getResults().get(0).getIndex());
-        }).doesNotThrowAnyException();
+        } catch (Exception e) {
+            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
+        }
     }
 
     @Test

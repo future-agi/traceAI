@@ -36,6 +36,15 @@ jest.mock('@grpc/grpc-js', () => ({
   })),
 }));
 
+// Mock the OTLP HTTP trace exporter
+jest.mock('@opentelemetry/exporter-trace-otlp-http', () => ({
+  OTLPTraceExporter: jest.fn().mockImplementation(() => ({
+    export: jest.fn((_spans: any, callback: any) => callback({ code: 0 })),
+    shutdown: jest.fn(() => Promise.resolve()),
+    forceFlush: jest.fn(() => Promise.resolve()),
+  })),
+}));
+
 // Mock the generated client
 jest.mock('../generated', () => ({
   ObservationSpanControllerClient: jest.fn().mockImplementation(() => ({

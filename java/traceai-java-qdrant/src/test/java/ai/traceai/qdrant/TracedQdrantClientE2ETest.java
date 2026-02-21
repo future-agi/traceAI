@@ -51,6 +51,7 @@ class TracedQdrantClientE2ETest {
         TraceAI.init(TraceConfig.builder()
                 .baseUrl(baseUrl)
                 .apiKey(System.getenv("FI_API_KEY"))
+                .secretKey(System.getenv("FI_SECRET_KEY"))
                 .projectName(System.getenv("FI_PROJECT_NAME") != null
                         ? System.getenv("FI_PROJECT_NAME")
                         : "java-qdrant-e2e")
@@ -87,7 +88,7 @@ class TracedQdrantClientE2ETest {
                 // Collection may not exist
             }
         }
-        Thread.sleep(3000);
+        TraceAI.shutdown();
         TraceAI.shutdown();
     }
 

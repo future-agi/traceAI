@@ -22,6 +22,7 @@ public class TraceConfig {
     private boolean hideOutputMessages = false;
     private String baseUrl;
     private String apiKey;
+    private String secretKey;
     private String projectName;
     private String serviceName;
     private boolean enableConsoleExporter = false;
@@ -44,6 +45,7 @@ public class TraceConfig {
         return builder()
             .baseUrl(System.getenv("FI_BASE_URL"))
             .apiKey(System.getenv("FI_API_KEY"))
+            .secretKey(System.getenv("FI_SECRET_KEY"))
             .projectName(System.getenv("FI_PROJECT_NAME"))
             .build();
     }
@@ -115,6 +117,16 @@ public class TraceConfig {
         }
 
         /**
+         * Sets the secret key for authentication.
+         * @param key the secret key
+         * @return this builder
+         */
+        public Builder secretKey(String key) {
+            config.secretKey = key;
+            return this;
+        }
+
+        /**
          * Sets the project name for trace attribution.
          * @param name the project name
          * @return this builder
@@ -166,9 +178,23 @@ public class TraceConfig {
 
         /**
          * Builds the TraceConfig instance.
+         * Fields not explicitly set will fall back to environment variables:
+         * FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME.
          * @return the configured TraceConfig
          */
         public TraceConfig build() {
+            if (config.baseUrl == null) {
+                config.baseUrl = System.getenv("FI_BASE_URL");
+            }
+            if (config.apiKey == null) {
+                config.apiKey = System.getenv("FI_API_KEY");
+            }
+            if (config.secretKey == null) {
+                config.secretKey = System.getenv("FI_SECRET_KEY");
+            }
+            if (config.projectName == null) {
+                config.projectName = System.getenv("FI_PROJECT_NAME");
+            }
             return config;
         }
     }
@@ -180,6 +206,7 @@ public class TraceConfig {
     public boolean isHideOutputMessages() { return hideOutputMessages; }
     public String getBaseUrl() { return baseUrl; }
     public String getApiKey() { return apiKey; }
+    public String getSecretKey() { return secretKey; }
     public String getProjectName() { return projectName; }
     public String getServiceName() { return serviceName; }
     public boolean isEnableConsoleExporter() { return enableConsoleExporter; }

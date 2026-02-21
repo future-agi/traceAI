@@ -48,6 +48,7 @@ class TracedMilvusClientE2ETest {
         TraceAI.init(TraceConfig.builder()
                 .baseUrl(baseUrl)
                 .apiKey(System.getenv("FI_API_KEY"))
+                .secretKey(System.getenv("FI_SECRET_KEY"))
                 .projectName(System.getenv("FI_PROJECT_NAME") != null
                         ? System.getenv("FI_PROJECT_NAME")
                         : "java-milvus-e2e")
@@ -84,7 +85,7 @@ class TracedMilvusClientE2ETest {
             } catch (Exception ignored) {
             }
         }
-        Thread.sleep(3000);
+        TraceAI.shutdown();
         TraceAI.shutdown();
     }
 

@@ -39,6 +39,7 @@ class TracedChatModelE2ETest {
         TraceAI.init(TraceConfig.builder()
                 .baseUrl(baseUrl)
                 .apiKey(System.getenv("FI_API_KEY"))
+                .secretKey(System.getenv("FI_SECRET_KEY"))
                 .projectName(System.getenv("FI_PROJECT_NAME") != null
                         ? System.getenv("FI_PROJECT_NAME")
                         : "java-spring-ai-e2e")
@@ -49,7 +50,7 @@ class TracedChatModelE2ETest {
 
     @AfterAll
     static void tearDown() throws InterruptedException {
-        Thread.sleep(3000);
+        TraceAI.shutdown();
         TraceAI.shutdown();
     }
 

@@ -13,7 +13,7 @@ import { OpenAIAgentsInstrumentation } from "../instrumentation";
 const FI_API_KEY = process.env.FI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
-const describeE2E = (FI_API_KEY && (OPENAI_API_KEY || GOOGLE_API_KEY)) ? describe : describe.skip;
+const describeE2E = FI_API_KEY ? describe : describe.skip;
 
 describeE2E("OpenAI Agents E2E Tests", () => {
   let provider: FITracerProvider;

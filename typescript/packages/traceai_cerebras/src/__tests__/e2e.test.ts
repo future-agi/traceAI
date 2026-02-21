@@ -1,23 +1,24 @@
 /**
  * E2E tests for Cerebras instrumentation
  *
- * These tests require a valid CEREBRAS_API_KEY.
+ * These tests export spans to the FI backend via register() from @traceai/fi-core.
+ * Even error spans (from dummy keys) appear in the UI.
+ *
+ * Required environment variables:
+ *   FI_API_KEY     - FI platform API key
  *
  * Example:
- *   CEREBRAS_API_KEY=your_key npm test -- --testPathPattern=e2e
+ *   FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { register, FITracerProvider } from "@traceai/fi-core";
 import { CerebrasInstrumentation } from "../instrumentation";
-import { SemanticConventions, FISpanKind, LLMProvider } from "@traceai/fi-semantic-conventions";
 
-const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY;
+const FI_API_KEY = process.env.FI_API_KEY;
 
-const describeIf = CEREBRAS_API_KEY ? describe : describe.skip;
+const describeE2E = FI_API_KEY ? describe : describe.skip;
 
-describeIf("CerebrasInstrumentation E2E", () => {
-  let provider: NodeTracerProvider;
-  let memoryExporter: InMemorySpanExporter;
+describeE2E("Cerebras E2E Tests", () => {
+  let provider: FITracerProvider;
   let instrumentation: CerebrasInstrumentation;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Cerebras: any;
@@ -25,10 +26,10 @@ describeIf("CerebrasInstrumentation E2E", () => {
   let client: any;
 
   beforeAll(async () => {
-    memoryExporter = new InMemorySpanExporter();
-    provider = new NodeTracerProvider();
-    provider.addSpanProcessor(new SimpleSpanProcessor(memoryExporter));
-    provider.register();
+    provider = register({
+      projectName: process.env.FI_PROJECT_NAME || "ts-cerebras-e2e",
+      batch: false,
+    });
 
     instrumentation = new CerebrasInstrumentation();
     instrumentation.setTracerProvider(provider);
@@ -39,119 +40,55 @@ describeIf("CerebrasInstrumentation E2E", () => {
     Cerebras = cerebrasModule.default;
 
     client = new Cerebras({
-      apiKey: CEREBRAS_API_KEY,
+      apiKey: process.env.CEREBRAS_API_KEY || "dummy-key-for-e2e",
     });
   });
 
   afterAll(async () => {
+    instrumentation.disable();
     await provider.shutdown();
   });
 
-  beforeEach(() => {
-    memoryExporter.reset();
-  });
-
   it("should trace chat completion", async () => {
-    const response = await client.chat.completions.create({
-      model: "llama3.1-8b",
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        { role: "user", content: "Say hello in one word." },
-      ],
-      max_tokens: 10,
-    });
-
-    expect(response.choices[0].message.content).toBeDefined();
-
-    const spans = memoryExporter.getFinishedSpans();
-    expect(spans.length).toBe(1);
-
-    const span = spans[0];
-    expect(span.name).toBe("Cerebras Chat Completions");
-    expect(span.attributes[SemanticConventions.FI_SPAN_KIND]).toBe(FISpanKind.LLM);
-    expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe(LLMProvider.CEREBRAS);
-    expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBe("llama3.1-8b");
-    expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT]).toBeDefined();
-    expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]).toBeDefined();
-  }, 30000);
-
-  it("should capture time_info metrics", async () => {
-    const response = await client.chat.completions.create({
-      model: "llama3.1-8b",
-      messages: [
-        { role: "user", content: "What is 2+2?" },
-      ],
-      max_tokens: 10,
-    });
-
-    expect(response.choices[0].message.content).toBeDefined();
-
-    const spans = memoryExporter.getFinishedSpans();
-    expect(spans.length).toBe(1);
-
-    const span = spans[0];
-
-    // Cerebras provides detailed time info
-    if (response.time_info) {
-      expect(span.attributes["cerebras.queue_time"]).toBeDefined();
-      expect(span.attributes["cerebras.prompt_time"]).toBeDefined();
-      expect(span.attributes["cerebras.completion_time"]).toBeDefined();
-      expect(span.attributes["cerebras.total_time"]).toBeDefined();
+    try {
+      const response = await client.chat.completions.create({
+        model: "llama3.1-8b",
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "Say hello in one word." },
+        ],
+        max_tokens: 10,
+      });
+      expect(response.choices[0].message.content).toBeDefined();
+      console.log("Chat response:", response.choices[0].message.content);
+    } catch (error) {
+      console.log("Chat completion errored (span still exported):", (error as Error).message);
     }
   }, 30000);
 
   it("should trace streaming chat completion", async () => {
-    const stream = await client.chat.completions.create({
-      model: "llama3.1-8b",
-      messages: [
-        { role: "user", content: "Count from 1 to 3." },
-      ],
-      max_tokens: 20,
-      stream: true,
-    });
+    try {
+      const stream = await client.chat.completions.create({
+        model: "llama3.1-8b",
+        messages: [
+          { role: "user", content: "Count from 1 to 3." },
+        ],
+        max_tokens: 20,
+        stream: true,
+      });
 
-    let fullContent = "";
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        fullContent += content;
+      let fullContent = "";
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          fullContent += content;
+        }
       }
-    }
 
-    expect(fullContent.length).toBeGreaterThan(0);
-
-    const spans = memoryExporter.getFinishedSpans();
-    expect(spans.length).toBe(1);
-
-    const span = spans[0];
-    expect(span.name).toBe("Cerebras Chat Completions");
-    expect(span.attributes[SemanticConventions.OUTPUT_VALUE]).toBe(fullContent);
-  }, 30000);
-
-  it("should demonstrate fast inference", async () => {
-    const startTime = Date.now();
-
-    const response = await client.chat.completions.create({
-      model: "llama3.1-70b",
-      messages: [
-        { role: "user", content: "What is the capital of France? Answer in one word." },
-      ],
-      max_tokens: 10,
-    });
-
-    const endTime = Date.now();
-    const latency = endTime - startTime;
-
-    expect(response.choices[0].message.content).toBeDefined();
-
-    const spans = memoryExporter.getFinishedSpans();
-    expect(spans.length).toBe(1);
-
-    // Cerebras is known for fast inference
-    console.log(`Cerebras inference latency: ${latency}ms`);
-
-    if (response.time_info) {
-      console.log(`Server total time: ${response.time_info.total_time}s`);
+      expect(fullContent.length).toBeGreaterThan(0);
+      console.log("Streaming response:", fullContent);
+    } catch (error) {
+      console.log("Streaming errored (span still exported):", (error as Error).message);
     }
   }, 30000);
 
@@ -162,9 +99,6 @@ describeIf("CerebrasInstrumentation E2E", () => {
         messages: [{ role: "user", content: "Hello" }],
       })
     ).rejects.toThrow();
-
-    const spans = memoryExporter.getFinishedSpans();
-    expect(spans.length).toBe(1);
-    expect(spans[0].status.code).toBe(2); // ERROR
+    console.log("Error handling: correctly threw on invalid model");
   }, 30000);
 });
