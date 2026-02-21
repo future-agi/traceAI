@@ -7,7 +7,7 @@
  * Run with: FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
 
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { PipecatInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -20,18 +20,25 @@ describeE2E("Pipecat E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-pipecat-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
     instrumentation = new PipecatInstrumentation();
     instrumentation.setTracerProvider(provider);
     instrumentation.enable();
+
+    const pipecatModule = await import("pipecat-ai");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    instrumentation.manuallyInstrument(pipecatModule as any);
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Pipeline", () => {
     it("should verify pipecat module can be imported with instrumentation", async () => {

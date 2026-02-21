@@ -287,6 +287,11 @@ export class GroqInstrumentation extends InstrumentationBase {
                 result = leftStream as unknown as typeof result;
               }
               return result;
+            }).catch((error: Error) => {
+              span.recordException(error);
+              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+              span.end();
+              throw error;
             });
 
             return context.bind(execContext, wrappedPromise) as Promise<GroqChatCompletion | GroqStream<GroqChatCompletionChunk>>;

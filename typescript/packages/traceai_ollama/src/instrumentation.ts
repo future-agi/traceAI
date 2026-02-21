@@ -397,6 +397,11 @@ export class OllamaInstrumentation extends InstrumentationBase {
             return wrapChatStream(result, span);
           }
           return result;
+        }).catch((error: Error) => {
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          span.end();
+          throw error;
         });
 
         return context.bind(execContext, wrappedPromise) as Promise<OllamaChatResponse | OllamaAbortableAsyncIterator<OllamaChatResponse>>;
@@ -466,6 +471,11 @@ export class OllamaInstrumentation extends InstrumentationBase {
             return wrapGenerateStream(result, span);
           }
           return result;
+        }).catch((error: Error) => {
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          span.end();
+          throw error;
         });
 
         return context.bind(execContext, wrappedPromise) as Promise<OllamaGenerateResponse | OllamaAbortableAsyncIterator<OllamaGenerateResponse>>;
@@ -529,6 +539,11 @@ export class OllamaInstrumentation extends InstrumentationBase {
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return result;
+        }).catch((error: Error) => {
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          span.end();
+          throw error;
         });
 
         return context.bind(execContext, wrappedPromise) as Promise<OllamaEmbedResponse>;
@@ -590,6 +605,11 @@ export class OllamaInstrumentation extends InstrumentationBase {
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return result;
+        }).catch((error: Error) => {
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          span.end();
+          throw error;
         });
 
         return context.bind(execContext, wrappedPromise) as Promise<OllamaEmbeddingsResponse>;

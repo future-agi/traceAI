@@ -9,7 +9,7 @@
  *
  * Run with: FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { VertexAIInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -28,6 +28,7 @@ describeE2E("Vertex AI E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-vertexai-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
@@ -36,6 +37,8 @@ describeE2E("Vertex AI E2E Tests", () => {
     instrumentation.enable();
 
     const vertexModule = await import("@google-cloud/vertexai");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    instrumentation.manuallyInstrument(vertexModule as any);
     VertexAI = vertexModule.VertexAI;
     vertexAI = new VertexAI({
       project: GOOGLE_CLOUD_PROJECT || "dummy-project-for-e2e",
@@ -45,8 +48,10 @@ describeE2E("Vertex AI E2E Tests", () => {
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Content Generation", () => {
     it("should complete a basic content generation request", async () => {

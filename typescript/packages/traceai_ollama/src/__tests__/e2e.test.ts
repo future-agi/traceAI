@@ -10,7 +10,7 @@
  * Example:
  *   FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { OllamaInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -29,6 +29,7 @@ describeE2E("Ollama E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-ollama-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
@@ -37,14 +38,17 @@ describeE2E("Ollama E2E Tests", () => {
     instrumentation.enable();
 
     const ollamaModule = await import("ollama");
+    instrumentation.manuallyInstrument(ollamaModule as unknown as Record<string, unknown>);
     Ollama = ollamaModule.Ollama;
     client = new Ollama({ host: OLLAMA_HOST });
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Chat", () => {
     it("should complete a basic chat request", async () => {

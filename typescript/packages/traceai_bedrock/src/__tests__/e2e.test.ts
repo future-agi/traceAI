@@ -9,7 +9,7 @@
  *
  * Run with: FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { BedrockInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -34,6 +34,7 @@ describeE2E("Bedrock E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-bedrock-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
@@ -42,6 +43,7 @@ describeE2E("Bedrock E2E Tests", () => {
     instrumentation.enable();
 
     const bedrockModule = await import("@aws-sdk/client-bedrock-runtime");
+    instrumentation.manuallyInstrument(bedrockModule as unknown as { BedrockRuntimeClient: typeof bedrockModule.BedrockRuntimeClient });
     BedrockRuntimeClient = bedrockModule.BedrockRuntimeClient;
     InvokeModelCommand = bedrockModule.InvokeModelCommand;
     ConverseCommand = bedrockModule.ConverseCommand;
@@ -57,8 +59,10 @@ describeE2E("Bedrock E2E Tests", () => {
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Converse", () => {
     it("should complete a basic converse request", async () => {

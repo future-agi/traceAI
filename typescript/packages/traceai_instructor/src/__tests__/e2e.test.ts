@@ -7,7 +7,7 @@
  * Run with: FI_API_KEY=... GOOGLE_API_KEY=your_key pnpm test -- --testPathPattern=e2e
  */
 
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { InstructorInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -21,18 +21,25 @@ describeE2E("Instructor E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-instructor-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
     instrumentation = new InstructorInstrumentation();
     instrumentation.setTracerProvider(provider);
     instrumentation.enable();
+
+    const instructorModule = await import("@instructor-ai/instructor");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    instrumentation.manuallyInstrument(instructorModule as any);
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Structured Output", () => {
     it("should extract structured data from text", async () => {

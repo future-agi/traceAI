@@ -12,7 +12,7 @@
  *
  * Run with: FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { LangChainInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -27,18 +27,24 @@ describeE2E("LangChain E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-langchain-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
     instrumentation = new LangChainInstrumentation();
     instrumentation.setTracerProvider(provider);
     instrumentation.enable();
+
+    const callbackManagerModule = await import("@langchain/core/callbacks/manager");
+    instrumentation.manuallyInstrument(callbackManagerModule);
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("ChatOpenAI", () => {
     it("should complete a basic chat request via OpenAI-compatible endpoint", async () => {

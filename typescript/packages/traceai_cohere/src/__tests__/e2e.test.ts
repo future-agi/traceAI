@@ -10,7 +10,7 @@
  * Example:
  *   FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { CohereInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -26,6 +26,7 @@ describeE2E("Cohere E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-cohere-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
@@ -34,14 +35,17 @@ describeE2E("Cohere E2E Tests", () => {
     instrumentation.enable();
 
     const cohereModule = await import("cohere-ai");
+    instrumentation.manuallyInstrument(cohereModule as unknown as Record<string, unknown>);
     CohereClient = cohereModule.CohereClient;
     client = new CohereClient({ token: process.env.COHERE_API_KEY || "dummy-key-for-e2e" });
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Chat", () => {
     it("should complete a basic chat request", async () => {

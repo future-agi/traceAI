@@ -7,7 +7,7 @@
  * Run with: FI_API_KEY=... OPENAI_API_KEY=your_key pnpm test -- --testPathPattern=e2e
  */
 
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { OpenAIAgentsInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -22,18 +22,24 @@ describeE2E("OpenAI Agents E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-openai-agents-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
     instrumentation = new OpenAIAgentsInstrumentation();
     instrumentation.setTracerProvider(provider);
     instrumentation.enable();
+
+    const agentsModule = await import("@openai/agents");
+    instrumentation.manuallyInstrument(agentsModule as typeof import("@openai/agents"));
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Agent", () => {
     it("should create and run a basic agent", async () => {

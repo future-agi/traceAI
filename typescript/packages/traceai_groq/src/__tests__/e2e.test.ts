@@ -10,7 +10,7 @@
  * Example:
  *   FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { GroqInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -26,6 +26,7 @@ describeE2E("Groq E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-groq-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
@@ -34,14 +35,18 @@ describeE2E("Groq E2E Tests", () => {
     instrumentation.enable();
 
     const groqModule = await import("groq-sdk");
+    instrumentation.manuallyInstrument(groqModule as unknown as Record<string, unknown>);
     Groq = groqModule.default;
     client = new Groq({ apiKey: process.env.GROQ_API_KEY || "dummy-key-for-e2e" });
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    // Wait for SimpleSpanProcessor async HTTP exports to complete
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Chat Completions", () => {
     it("should complete a basic chat request", async () => {

@@ -7,7 +7,7 @@
  * Run with: FI_API_KEY=... GOOGLE_API_KEY=your_key pnpm test -- --testPathPattern=e2e
  */
 
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { FISimpleSpanProcessor, isFISpan } from "../FISpanProcessor";
 
@@ -21,13 +21,16 @@ describeE2E("Vercel AI SDK E2E Tests", () => {
   beforeAll(() => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-vercel-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
   });
 
   afterAll(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("generateText", () => {
     it("should generate text using Vercel AI SDK with OpenAI provider", async () => {

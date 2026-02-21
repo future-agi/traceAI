@@ -7,7 +7,7 @@
  * Run with: FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
 
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { GuardrailsInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -20,18 +20,25 @@ describeE2E("Guardrails E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-guardrails-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
     instrumentation = new GuardrailsInstrumentation();
     instrumentation.setTracerProvider(provider);
     instrumentation.enable();
+
+    const guardrailsModule = await import("@guardrails-ai/core");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    instrumentation.manuallyInstrument(guardrailsModule as any);
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Guard", () => {
     it("should verify guardrails module can be imported with instrumentation", async () => {

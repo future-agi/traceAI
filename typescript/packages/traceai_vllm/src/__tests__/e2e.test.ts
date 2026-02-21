@@ -14,7 +14,7 @@
  * Example:
  *   FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { VLLMInstrumentation } from "../instrumentation";
 
 const FI_API_KEY = process.env.FI_API_KEY;
@@ -33,6 +33,7 @@ describeE2E("VLLMInstrumentation E2E", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-vllm-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
@@ -52,8 +53,10 @@ describeE2E("VLLMInstrumentation E2E", () => {
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   it("should trace chat completion", async () => {
     try {

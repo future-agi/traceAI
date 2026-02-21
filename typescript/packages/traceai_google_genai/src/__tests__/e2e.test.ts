@@ -10,7 +10,7 @@
  * Example:
  *   FI_API_KEY=... pnpm test -- --testPathPattern=e2e
  */
-import { register, FITracerProvider } from "@traceai/fi-core";
+import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { SchemaType } from "@google/generative-ai";
 import { GoogleGenAIInstrumentation } from "../instrumentation";
 
@@ -27,6 +27,7 @@ describeE2E("Google GenAI E2E Tests", () => {
   beforeAll(async () => {
     provider = register({
       projectName: process.env.FI_PROJECT_NAME || "ts-google-genai-e2e",
+      projectType: ProjectType.OBSERVE,
       batch: false,
     });
 
@@ -35,14 +36,17 @@ describeE2E("Google GenAI E2E Tests", () => {
     instrumentation.enable();
 
     const googleModule = await import("@google/generative-ai");
+    instrumentation.manuallyInstrument(googleModule as unknown as Record<string, unknown>);
     GoogleGenerativeAI = googleModule.GoogleGenerativeAI;
     genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || "dummy-key-for-e2e");
   });
 
   afterAll(async () => {
     instrumentation.disable();
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await provider.forceFlush();
     await provider.shutdown();
-  });
+  }, 15000);
 
   describe("Content Generation", () => {
     it("should complete a basic content generation request", async () => {

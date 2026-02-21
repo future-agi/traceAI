@@ -282,6 +282,11 @@ export class CohereInstrumentation extends InstrumentationBase {
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return result;
+              }).catch((error: Error) => {
+                span.recordException(error);
+                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+                span.end();
+                throw error;
               });
 
               return context.bind(execContext, wrappedPromise);
@@ -342,6 +347,11 @@ export class CohereInstrumentation extends InstrumentationBase {
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return result;
+              }).catch((error: Error) => {
+                span.recordException(error);
+                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+                span.end();
+                throw error;
               });
 
               return context.bind(execContext, wrappedPromise);
@@ -405,6 +415,11 @@ export class CohereInstrumentation extends InstrumentationBase {
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return result;
+              }).catch((error: Error) => {
+                span.recordException(error);
+                span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+                span.end();
+                throw error;
               });
 
               return context.bind(execContext, wrappedPromise);

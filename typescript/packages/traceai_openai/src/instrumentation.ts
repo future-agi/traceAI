@@ -251,12 +251,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           );
 
           const wrappedPromise = execPromise.then((result) => {
-            // --- ADD LOG ---
-            // diag.debug(`@traceai/openai: ChatCompletion promise resolved. Result type: ${typeof result}`);
-
             if (isChatCompletionResponse(result)) {
-              // --- ADD LOG ---
-              // diag.debug(`@traceai/openai: ChatCompletion is NON-STREAM. Ending span: ${span.spanContext().spanId}`);
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -272,17 +267,18 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
               });
               span.setStatus({ code: SpanStatusCode.OK });
-              span.end(); // Non-streaming end
-              // --- ADD LOG ---
-              // diag.debug(`@traceai/openai: ChatCompletion NON-STREAM span ENDED: ${span.spanContext().spanId}`);
+              span.end();
             } else {
-              // --- ADD LOG ---
-              // diag.debug(`@traceai/openai: ChatCompletion IS STREAM. Consuming stream for span: ${span.spanContext().spanId}`);
               const [leftStream, rightStream] = result.tee();
-              consumeChatCompletionStreamChunks(rightStream, span); // This function now MUST ensure span.end() is called
+              consumeChatCompletionStreamChunks(rightStream, span);
               result = leftStream;
             }
             return result;
+          }).catch((error: Error) => {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            span.end();
+            throw error;
           });
           return context.bind(execContext, wrappedPromise);
         };
@@ -362,6 +358,11 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.end();
             }
             return result;
+          }).catch((error: Error) => {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            span.end();
+            throw error;
           });
           return context.bind(execContext, wrappedPromise);
         };
@@ -433,6 +434,11 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             return result;
+          }).catch((error: Error) => {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            span.end();
+            throw error;
           });
           return context.bind(execContext, wrappedPromise);
         };
@@ -517,20 +523,19 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 span.end();
               };
               if (isResponseCreateResponse(result)) {
-                // Record the results, as we have the final result
                 recordSpan(result);
               } else {
-                // This is a streaming response
-                // First split the stream via tee
                 const [leftStream, rightStream] = result.tee();
-                // take the right stream, consuming it and then recording the final chunk
-                // into the span
                 consumeResponseStreamEvents(rightStream).then(recordSpan);
-                // give the left stream back to the caller
                 result = leftStream;
               }
 
               return result;
+            }).catch((error: Error) => {
+              span.recordException(error);
+              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+              span.end();
+              throw error;
             });
             return context.bind(execContext, wrappedPromise);
           };
