@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: ai.traceai.azure.search.TracedSearchClientTest
--------------------------------------------------------------------------------
-Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.712 s -- in ai.traceai.azure.search.TracedSearchClientTest
