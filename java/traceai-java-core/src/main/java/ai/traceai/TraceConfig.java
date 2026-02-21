@@ -42,9 +42,9 @@ public class TraceConfig {
      */
     public static TraceConfig fromEnvironment() {
         return builder()
-            .baseUrl(System.getenv("TRACEAI_BASE_URL"))
-            .apiKey(System.getenv("TRACEAI_API_KEY"))
-            .projectName(System.getenv("TRACEAI_PROJECT_NAME"))
+            .baseUrl(System.getenv("FI_BASE_URL"))
+            .apiKey(System.getenv("FI_API_KEY"))
+            .projectName(System.getenv("FI_PROJECT_NAME"))
             .build();
     }
 

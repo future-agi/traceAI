@@ -134,9 +134,9 @@ public final class TraceAI {
      *
      * <p>Environment variables:</p>
      * <ul>
-     *   <li>TRACEAI_BASE_URL - The base URL for the TraceAI backend</li>
-     *   <li>TRACEAI_API_KEY - The API key for authentication</li>
-     *   <li>TRACEAI_PROJECT_NAME - The project name for trace attribution</li>
+     *   <li>FI_BASE_URL - The base URL for the backend</li>
+     *   <li>FI_API_KEY - The API key for authentication</li>
+     *   <li>FI_PROJECT_NAME - The project name</li>
      * </ul>
      */
     public static void initFromEnvironment() {
