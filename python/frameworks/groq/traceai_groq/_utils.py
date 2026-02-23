@@ -109,10 +109,10 @@ def _extract_eval_input(
             eval_input.append(message["content"])
 
     if eval_input and len(eval_input) > 0:
-        yield SpanAttributes.QUERY, eval_input[0]
+        yield SpanAttributes.INPUT_VALUE, eval_input[0]
 
     eval_input = "\n".join(eval_input)
-    yield SpanAttributes.EVAL_INPUT, eval_input
+    yield SpanAttributes.INPUT_VALUE, eval_input
 
 
 def _process_response(response: Any) -> str:
@@ -157,7 +157,7 @@ def _as_raw_output(raw_output: Any) -> Iterator[Tuple[str, AttributeValue]]:
     else:
         raw_output_dict = raw_output
 
-    yield SpanAttributes.RAW_OUTPUT, safe_json_dumps(raw_output_dict)
+    yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(raw_output_dict)
 
 
 def _as_streaming_output(chunks: List[ChatCompletionChunk]):
@@ -179,21 +179,21 @@ def _as_streaming_output(chunks: List[ChatCompletionChunk]):
             if usage:
                 total_tokens = usage.get("total_tokens")
                 if total_tokens is not None:
-                    yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_tokens
+                    yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
 
                 prompt_tokens = usage.get("prompt_tokens")
                 if prompt_tokens is not None:
-                    yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+                    yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
 
                 completion_tokens = usage.get("completion_tokens")
                 if completion_tokens is not None:
-                    yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+                    yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
 
         if model:
-            yield SpanAttributes.LLM_MODEL_NAME, model
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
 
     yield SpanAttributes.OUTPUT_VALUE, output_value
-    yield SpanAttributes.RAW_OUTPUT, safe_json_dumps(processed_chunks)
+    yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(processed_chunks)
 
 
 def _to_dict(value: Any) -> Any:

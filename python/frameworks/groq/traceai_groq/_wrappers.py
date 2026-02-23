@@ -191,9 +191,9 @@ class _CompletionsWrapper(_WithTracer):
                         try:
                             output_value = "".join(self._content)
 
-                            # Set the RAW_OUTPUT span attribute
+                            # Set the OUTPUT_VALUE span attribute
                             span._span.set_attribute(
-                                SpanAttributes.RAW_OUTPUT,
+                                SpanAttributes.OUTPUT_VALUE,
                                 safe_json_dumps(self._raw_data),
                             )
                             span._span.set_attribute(
@@ -331,9 +331,9 @@ class _AsyncCompletionsWrapper(_WithTracer):
                         try:
                             output_value = "".join(self._content)
 
-                            # Set the RAW_OUTPUT span attribute
+                            # Set the OUTPUT_VALUE span attribute
                             span._span.set_attribute(
-                                SpanAttributes.RAW_OUTPUT,
+                                SpanAttributes.OUTPUT_VALUE,
                                 safe_json_dumps(self._raw_data),
                             )
                             span._span.set_attribute(
@@ -391,9 +391,9 @@ CHAIN = FiSpanKindValues.CHAIN
 RETRIEVER = FiSpanKindValues.RETRIEVER
 EMBEDDING = FiSpanKindValues.EMBEDDING
 LLM = FiSpanKindValues.LLM
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 EMBEDDING_VECTOR = EmbeddingAttributes.EMBEDDING_VECTOR
 EMBEDDING_TEXT = EmbeddingAttributes.EMBEDDING_TEXT
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS

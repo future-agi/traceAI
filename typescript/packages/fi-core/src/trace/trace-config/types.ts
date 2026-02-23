@@ -14,6 +14,7 @@ export type TraceConfigOptions = {
   hideOutputText?: boolean;
   hideEmbeddingVectors?: boolean;
   base64ImageMaxLength?: number;
+  piiRedaction?: boolean;
 };
 
 /**
@@ -94,9 +95,9 @@ export type MaskingRuleArgs = {
  *   @example
  * ```typescript
  *  const config = {hideInputText: true}
- *  const key = "llm.input_messages.0.message.content"
+ *  const key = "gen_ai.input.messages"
  *  if (maskInputTextRule.condition({ config, key })) {
- *    return maskInputTextRule.action()
+ *    return maskInputTextRule.action({ config, key, value })
  *  }
  * ```
  */
@@ -109,9 +110,10 @@ export type MaskingRule = {
   condition: (args: MaskingRuleArgs) => boolean;
   /**
    * An action to be applied if the condition is met
+   * @param args The {@linkcode MaskingRuleArgs} to determine how the value should be masked
    * @returns A redacted value or undefined
    */
-  action: () => AttributeValue | undefined;
+  action: (args: MaskingRuleArgs) => AttributeValue | undefined;
 };
 
 /**

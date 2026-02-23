@@ -1,0 +1,70 @@
+{
+  "name": "@traceai/cerebras",
+  "version": "0.1.0",
+  "description": "TraceAI instrumentation for Cerebras AI",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/cjs/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npm run build:cjs && npm run build:esm",
+    "build:cjs": "tsc -p tsconfig.json",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "test": "jest --config jest.config.js",
+    "test:e2e": "jest --config jest.config.js --testMatch '**/*.e2e.test.ts'",
+    "clean": "rimraf dist"
+  },
+  "keywords": [
+    "traceai",
+    "opentelemetry",
+    "instrumentation",
+    "cerebras",
+    "llm",
+    "observability",
+    "tracing"
+  ],
+  "author": "FutureAGI",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/future-agi/traceai"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^1.29.0",
+    "@opentelemetry/instrumentation": "^0.56.0",
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/fi-semantic-conventions": "workspace:*"
+  },
+  "devDependencies": {
+    "@cerebras/cerebras_cloud_sdk": "^1.0.0",
+    "@opentelemetry/sdk-trace-base": "^1.29.0",
+    "@opentelemetry/sdk-trace-node": "^1.29.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.5",
+    "jest": "^29.7.0",
+    "rimraf": "^6.0.1",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "@cerebras/cerebras_cloud_sdk": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@cerebras/cerebras_cloud_sdk": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

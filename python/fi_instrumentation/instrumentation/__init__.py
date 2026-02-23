@@ -49,6 +49,7 @@ from .context_attributes import (
     using_session,
     using_tags,
     using_user,
+    using_simulator_attributes,
 )
 from .helpers import safe_json_dumps
 
@@ -61,6 +62,7 @@ __all__ = [
     "using_session",
     "using_tags",
     "using_user",
+    "using_simulator_attributes",
     "safe_json_dumps",
     "suppress_tracing",
     "TraceConfig",

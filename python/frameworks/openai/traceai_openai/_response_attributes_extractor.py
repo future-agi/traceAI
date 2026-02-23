@@ -117,7 +117,7 @@ class _ResponseAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/chat/chat_completion.py#L40  # noqa: E501
         if model := getattr(completion, "model", None):
-            yield SpanAttributes.LLM_MODEL_NAME, model
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         if usage := getattr(completion, "usage", None):
             yield from self._get_attributes_from_completion_usage(usage)
 
@@ -131,7 +131,7 @@ class _ResponseAttributesExtractor:
                     for key, value in self._get_attributes_from_chat_completion_message(
                         message
                     ):
-                        yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{key}", value
+                        yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
 
     def _get_attributes_from_completion(
         self,
@@ -140,7 +140,7 @@ class _ResponseAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/completion.py#L13  # noqa: E501
         if model := getattr(completion, "model", None):
-            yield SpanAttributes.LLM_MODEL_NAME, model
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         if usage := getattr(completion, "usage", None):
             yield from self._get_attributes_from_completion_usage(usage)
         if model_prompt := request_parameters.get("prompt"):
@@ -150,7 +150,7 @@ class _ResponseAttributesExtractor:
             # FIXME: tokens (List[int], List[List[int]]) can't be decoded reliably because model
             # names are not reliable (across OpenAI and Azure).
             if prompts := list(_get_texts(model_prompt, model)):
-                yield SpanAttributes.LLM_PROMPTS, prompts
+                yield SpanAttributes.GEN_AI_PROMPTS, prompts
 
     def _get_attributes_from_create_embedding_response(
         self,
@@ -274,11 +274,11 @@ class _ResponseAttributesExtractor:
         # openai.types.CompletionUsage
         # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/completion_usage.py#L8  # noqa: E501
         if (total_tokens := getattr(usage, "total_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_tokens
+            yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
         if (prompt_tokens := getattr(usage, "prompt_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+            yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
         if (completion_tokens := getattr(usage, "completion_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+            yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
 
     def _get_attributes_from_embedding_usage(
         self,
@@ -287,9 +287,9 @@ class _ResponseAttributesExtractor:
         # openai.types.create_embedding_response.Usage
         # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/create_embedding_response.py#L12  # noqa: E501
         if (total_tokens := getattr(usage, "total_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_tokens
+            yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
         if (prompt_tokens := getattr(usage, "prompt_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+            yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
 
     def _get_attributes_from_image_generation(
         self,
@@ -298,13 +298,13 @@ class _ResponseAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         
         if model := request_parameters.get("model"):
-            yield SpanAttributes.LLM_MODEL_NAME, model
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
 
         for index, obj in enumerate(data):
-            yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}", "assistant"
+            yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}", "assistant"
             if image := getattr(obj, "url", None):
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image
+                yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
+                yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", image
             elif b64_json := getattr(obj, "b64_json", None):
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
-                yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", b64_json
+                yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
+                yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}.0.{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}", b64_json

@@ -1,0 +1,33 @@
+{
+  "name": "traceai-e2e-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "End-to-end tests for TraceAI vector database instrumentations",
+  "scripts": {
+    "test": "jest --config jest.config.js",
+    "test:chromadb": "jest --config jest.config.js chromadb.e2e.test.ts",
+    "test:qdrant": "jest --config jest.config.js qdrant.e2e.test.ts",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "test:with-docker": "npm run docker:up && sleep 10 && npm test; npm run docker:down"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.7.0",
+    "@opentelemetry/sdk-trace-base": "^1.21.0",
+    "@opentelemetry/sdk-trace-node": "^1.21.0",
+    "@qdrant/js-client-rest": "^1.7.0",
+    "chromadb": "^1.7.3",
+    "@traceai/chromadb": "workspace:*",
+    "@traceai/qdrant": "workspace:*",
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/fi-semantic-conventions": "workspace:*"
+  }
+}
