@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: spring-ai-example
+  ai:
+    openai:
+      api-key: ${SPRING_AI_OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.7
+          max-tokens: 200
+
+traceai:
+  enabled: true
+  base-url: ${TRACEAI_BASE_URL:}
+  api-key: ${TRACEAI_API_KEY:}
+  project-name: spring-ai-example
+  enable-console-exporter: true
+  hide-inputs: false
+  hide-outputs: false
+
+server:
+  port: 8080
+
+logging:
+  level:
+    ai.traceai: DEBUG

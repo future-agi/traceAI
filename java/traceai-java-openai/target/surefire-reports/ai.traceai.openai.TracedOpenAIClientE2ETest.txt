@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: ai.traceai.openai.TracedOpenAIClientE2ETest
+-------------------------------------------------------------------------------
+Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.819 s -- in ai.traceai.openai.TracedOpenAIClientE2ETest

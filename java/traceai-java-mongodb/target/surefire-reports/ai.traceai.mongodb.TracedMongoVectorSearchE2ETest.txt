@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: ai.traceai.mongodb.TracedMongoVectorSearchE2ETest
+-------------------------------------------------------------------------------
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 7, Time elapsed: 0.002 s -- in ai.traceai.mongodb.TracedMongoVectorSearchE2ETest

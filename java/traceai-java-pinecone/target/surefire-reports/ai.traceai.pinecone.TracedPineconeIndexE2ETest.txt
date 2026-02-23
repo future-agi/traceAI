@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: ai.traceai.pinecone.TracedPineconeIndexE2ETest
+-------------------------------------------------------------------------------
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 7, Time elapsed: 0.074 s -- in ai.traceai.pinecone.TracedPineconeIndexE2ETest

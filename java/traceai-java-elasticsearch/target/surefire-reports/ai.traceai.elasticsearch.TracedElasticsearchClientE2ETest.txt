@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: ai.traceai.elasticsearch.TracedElasticsearchClientE2ETest
+-------------------------------------------------------------------------------
+Tests run: 8, Failures: 0, Errors: 0, Skipped: 8, Time elapsed: 0.002 s -- in ai.traceai.elasticsearch.TracedElasticsearchClientE2ETest
