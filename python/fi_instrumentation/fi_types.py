@@ -620,6 +620,36 @@ class SimulatorAttributes:
     """
 
 
+class SimulatorAttributes:
+    """
+    Semantic conventions for FAGI Simulator spans and traces.
+    """
+
+    RUN_TEST_ID = "fi.simulator.run_test_id"
+    """
+    The unique identifier of the RunTest definition.
+    Type: str (UUID)
+    """
+
+    TEST_EXECUTION_ID = "fi.simulator.test_execution_id"
+    """
+    The unique identifier of a specific test execution instance.
+    Type: str (UUID)
+    """
+
+    CALL_EXECUTION_ID = "fi.simulator.call_execution_id"
+    """
+    The unique identifier of an individual call execution.
+    Type: str (UUID)
+    """
+
+    IS_SIMULATOR_TRACE = "fi.simulator.is_simulator_trace"
+    """
+    Boolean flag indicating this trace originated from the FAGI simulator.
+    Type: bool
+    """
+
+
 class MessageAttributes:
     """
     Attributes for a message sent to or from an LLM
