@@ -99,6 +99,8 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
                 name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(tracer=self._tracer),
             )
+        else:
+            self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._use_legacy_callback_handler:

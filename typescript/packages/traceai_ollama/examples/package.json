@@ -1,0 +1,20 @@
+{
+  "name": "@traceai/ollama-examples",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "example": "npx ts-node example.ts"
+  },
+  "dependencies": {
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/ollama": "workspace:*",
+    "@opentelemetry/instrumentation": "^0.57.0",
+    "@opentelemetry/api": "^1.4.0",
+    "ollama": "^0.5.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}

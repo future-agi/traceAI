@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: ai.traceai.spring.TracedChatModelE2ETest
+-------------------------------------------------------------------------------
+Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.229 s -- in ai.traceai.spring.TracedChatModelE2ETest

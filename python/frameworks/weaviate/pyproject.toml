@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "traceAI-weaviate"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Weaviate vector database"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [{ include = "traceai_weaviate" }]
+keywords = ["opentelemetry", "weaviate", "vector-database", "tracing", "observability", "rag"]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.14"
+fi-instrumentation-otel = ">=0.1.11"
+weaviate-client = ">=4.0.0"
+wrapt = ">=1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

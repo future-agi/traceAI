@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.004" tests="8" errors="0" skipped="8" failures="0">
+  <properties/>
+  <testcase name="shouldInitializeTraceAI" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldInsertData" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldSearchVectors" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldUpsertData" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldQueryData" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldGetByIds" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldDeleteData" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldExposeUnwrappedClient" classname="ai.traceai.milvus.TracedMilvusClientE2ETest" time="0.0">
+    <skipped message="Environment variable [MILVUS_URL] does not exist"/>
+  </testcase>
+</testsuite>

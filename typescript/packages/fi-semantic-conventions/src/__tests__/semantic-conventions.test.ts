@@ -106,19 +106,19 @@ describe('Semantic Conventions', () => {
     });
 
     it('should have correct LLM constants', () => {
-      expect(LLM_INPUT_MESSAGES).toBe('llm.input_messages');
-      expect(LLM_PROMPTS).toBe('llm.prompts');
-      expect(LLM_INVOCATION_PARAMETERS).toBe('llm.invocation_parameters');
-      expect(LLM_OUTPUT_MESSAGES).toBe('llm.output_messages');
-      expect(LLM_MODEL_NAME).toBe('llm.model_name');
-      expect(LLM_PROVIDER).toBe('llm.provider');
-      expect(LLM_SYSTEM).toBe('llm.system');
+      expect(LLM_INPUT_MESSAGES).toBe('gen_ai.input.messages');
+      expect(LLM_PROMPTS).toBe('gen_ai.prompts');
+      expect(LLM_INVOCATION_PARAMETERS).toBe('gen_ai.request.parameters');
+      expect(LLM_OUTPUT_MESSAGES).toBe('gen_ai.output.messages');
+      expect(LLM_MODEL_NAME).toBe('gen_ai.request.model');
+      expect(LLM_PROVIDER).toBe('gen_ai.provider.name');
+      expect(LLM_SYSTEM).toBe('gen_ai.provider.name');
     });
 
     it('should have correct token count constants', () => {
-      expect(LLM_TOKEN_COUNT_COMPLETION).toBe('llm.token_count.completion');
-      expect(LLM_TOKEN_COUNT_PROMPT).toBe('llm.token_count.prompt');
-      expect(LLM_TOKEN_COUNT_TOTAL).toBe('llm.token_count.total');
+      expect(LLM_TOKEN_COUNT_COMPLETION).toBe('gen_ai.usage.output_tokens');
+      expect(LLM_TOKEN_COUNT_PROMPT).toBe('gen_ai.usage.input_tokens');
+      expect(LLM_TOKEN_COUNT_TOTAL).toBe('gen_ai.usage.total_tokens');
     });
 
     it('should have correct message constants', () => {
@@ -149,7 +149,7 @@ describe('Semantic Conventions', () => {
       const dotAttributeConstants = [
         INPUT_VALUE, INPUT_MIME_TYPE, OUTPUT_VALUE, OUTPUT_MIME_TYPE,
         LLM_INPUT_MESSAGES, LLM_PROMPTS, LLM_INVOCATION_PARAMETERS,
-        LLM_OUTPUT_MESSAGES, LLM_MODEL_NAME, LLM_PROVIDER, LLM_SYSTEM,
+        LLM_OUTPUT_MESSAGES, LLM_MODEL_NAME, LLM_PROVIDER,
         LLM_TOKEN_COUNT_COMPLETION, LLM_TOKEN_COUNT_PROMPT, LLM_TOKEN_COUNT_TOTAL
       ];
 
@@ -161,11 +161,11 @@ describe('Semantic Conventions', () => {
       });
     });
 
-    it('should not have duplicate constants', () => {
+    it('should not have duplicate constants (except LLM_PROVIDER/LLM_SYSTEM which share gen_ai.provider.name)', () => {
       const allConstants = [
         INPUT_VALUE, INPUT_MIME_TYPE, OUTPUT_VALUE, OUTPUT_MIME_TYPE,
         LLM_INPUT_MESSAGES, LLM_PROMPTS, LLM_INVOCATION_PARAMETERS,
-        LLM_OUTPUT_MESSAGES, LLM_MODEL_NAME, LLM_PROVIDER, LLM_SYSTEM,
+        LLM_OUTPUT_MESSAGES, LLM_MODEL_NAME, LLM_PROVIDER,
         LLM_TOKEN_COUNT_COMPLETION, LLM_TOKEN_COUNT_PROMPT, LLM_TOKEN_COUNT_TOTAL,
         MESSAGE_ROLE, MESSAGE_CONTENT, MESSAGE_NAME,
         MESSAGE_FUNCTION_CALL_NAME, MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON,
@@ -176,6 +176,9 @@ describe('Semantic Conventions', () => {
 
       const uniqueConstants = new Set(allConstants);
       expect(uniqueConstants.size).toBe(allConstants.length);
+
+      // LLM_PROVIDER and LLM_SYSTEM intentionally share the same value
+      expect(LLM_PROVIDER).toBe(LLM_SYSTEM);
     });
   });
 
@@ -256,7 +259,7 @@ describe('Semantic Conventions', () => {
     it('should have lowercase values', () => {
       Object.values(LLMSystem).forEach(value => {
         expect(value).toBe(value.toLowerCase());
-        expect(value).toMatch(/^[a-z]+$/);
+        expect(value).toMatch(/^[a-z0-9_]+$/);
       });
     });
   });
@@ -287,7 +290,7 @@ describe('Semantic Conventions', () => {
     it('should have lowercase values', () => {
       Object.values(LLMProvider).forEach(value => {
         expect(value).toBe(value.toLowerCase());
-        expect(value).toMatch(/^[a-z]+$/);
+        expect(value).toMatch(/^[a-z0-9_]+$/);
       });
     });
 

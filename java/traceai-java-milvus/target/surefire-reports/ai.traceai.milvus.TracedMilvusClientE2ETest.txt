@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: ai.traceai.milvus.TracedMilvusClientE2ETest
+-------------------------------------------------------------------------------
+Tests run: 8, Failures: 0, Errors: 0, Skipped: 8, Time elapsed: 0.004 s -- in ai.traceai.milvus.TracedMilvusClientE2ETest

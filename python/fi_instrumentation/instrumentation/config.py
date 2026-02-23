@@ -19,6 +19,7 @@ from opentelemetry.context import (
 from opentelemetry.util.types import AttributeValue
 
 from .logging import logger
+from .pii_redaction import redact_pii_in_value
 
 
 class suppress_tracing:
@@ -75,6 +76,8 @@ FI_HIDE_EMBEDDING_VECTORS = "FI_HIDE_EMBEDDING_VECTORS"
 # Hides embedding vectors
 FI_BASE64_IMAGE_MAX_LENGTH = "FI_BASE64_IMAGE_MAX_LENGTH"
 # Limits characters of a base64 encoding of an image
+FI_PII_REDACTION = "FI_PII_REDACTION"
+# Enables regex-based PII redaction on attribute values
 REDACTED_VALUE = "__REDACTED__"
 # When a value is hidden, it will be replaced by this redacted value
 
@@ -91,6 +94,7 @@ DEFAULT_HIDE_OUTPUT_TEXT = False
 
 DEFAULT_HIDE_EMBEDDING_VECTORS = False
 DEFAULT_BASE64_IMAGE_MAX_LENGTH = 32_000
+DEFAULT_PII_REDACTION = False
 
 
 @dataclass(frozen=True)
@@ -185,6 +189,14 @@ class TraceConfig:
         },
     )
     """Limits characters of a base64 encoding of an image"""
+    pii_redaction: Optional[bool] = field(
+        default=None,
+        metadata={
+            "env_var": FI_PII_REDACTION,
+            "default_value": DEFAULT_PII_REDACTION,
+        },
+    )
+    """Enables regex-based PII redaction on attribute values"""
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -205,7 +217,7 @@ class TraceConfig:
     ) -> Optional[AttributeValue]:
         if (
             self.hide_llm_invocation_parameters
-            and key == SpanAttributes.LLM_INVOCATION_PARAMETERS
+            and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
         elif self.hide_inputs and key == SpanAttributes.INPUT_VALUE:
@@ -218,48 +230,48 @@ class TraceConfig:
             return None
         elif (
             self.hide_inputs or self.hide_input_messages
-        ) and SpanAttributes.LLM_INPUT_MESSAGES in key:
+        ) and SpanAttributes.GEN_AI_INPUT_MESSAGES in key:
             return None
         elif (
             self.hide_outputs or self.hide_output_messages
-        ) and SpanAttributes.LLM_OUTPUT_MESSAGES in key:
+        ) and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key:
             return None
         elif (
             self.hide_input_text
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageAttributes.MESSAGE_CONTENT in key
             and MessageAttributes.MESSAGE_CONTENTS not in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_output_text
-            and SpanAttributes.LLM_OUTPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key
             and MessageAttributes.MESSAGE_CONTENT in key
             and MessageAttributes.MESSAGE_CONTENTS not in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_input_text
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_TEXT in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_output_text
-            and SpanAttributes.LLM_OUTPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_OUTPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_TEXT in key
         ):
             value = REDACTED_VALUE
         elif (
             self.hide_input_images
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_IMAGE in key
         ):
             return None
         elif (
             is_base64_url(value)  # type:ignore
             and len(value) > self.base64_image_max_length  # type:ignore
-            and SpanAttributes.LLM_INPUT_MESSAGES in key
+            and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
             and MessageContentAttributes.MESSAGE_CONTENT_IMAGE in key
             and key.endswith(ImageAttributes.IMAGE_URL)
         ):
@@ -270,7 +282,10 @@ class TraceConfig:
             and EmbeddingAttributes.EMBEDDING_VECTOR in key
         ):
             return None
-        return value() if callable(value) else value
+        resolved = value() if callable(value) else value
+        if self.pii_redaction and resolved is not None:
+            resolved = redact_pii_in_value(resolved)
+        return resolved
 
     def _parse_value(
         self,

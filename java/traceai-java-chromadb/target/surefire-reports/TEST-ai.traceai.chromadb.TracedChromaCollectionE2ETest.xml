@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.001" tests="8" errors="0" skipped="8" failures="0">
+  <properties/>
+  <testcase name="shouldInitializeTraceAI" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldAddDocuments" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldCountDocuments" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldQueryByText" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldGetDocumentsById" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldUpsertDocuments" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldDeleteDocuments" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldExposeUnwrappedCollection" classname="ai.traceai.chromadb.TracedChromaCollectionE2ETest" time="0.0">
+    <skipped message="Environment variable [CHROMA_URL] does not exist"/>
+  </testcase>
+</testsuite>
