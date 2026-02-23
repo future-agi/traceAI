@@ -366,7 +366,7 @@ def _get_span_kind_attributes(span_kind: str) -> Iterator[Tuple[str, Any]]:
     """
     Yields span kind attributes.
     """
-    yield FI_SPAN_KIND, span_kind
+    yield GEN_AI_SPAN_KIND, span_kind
 
 
 def _get_input_attributes(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
@@ -416,14 +416,14 @@ def _get_llm_input_message_attributes(
     ):
         for message_index, message in enumerate(messages):
             if (content := message.text) is not None:
-                yield f"{LLM_INPUT_MESSAGES}.{message_index}.{MESSAGE_CONTENT}", content
+                yield f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_CONTENT}", content
             if (role := message.role) is not None:
-                yield f"{LLM_INPUT_MESSAGES}.{message_index}.{MESSAGE_ROLE}", role
+                yield f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_ROLE}", role
             if (name := message.name) is not None:
-                yield f"{LLM_INPUT_MESSAGES}.{message_index}.{MESSAGE_NAME}", name
+                yield f"{GEN_AI_INPUT_MESSAGES}.{message_index}.{MESSAGE_NAME}", name
     elif isinstance(prompt := arguments.get("prompt"), str):
-        yield f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}", prompt
-        yield f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_ROLE}", USER
+        yield f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}", prompt
+        yield f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_ROLE}", USER
 
 
 def _get_llm_output_message_attributes(
@@ -449,20 +449,20 @@ def _get_llm_output_message_attributes(
                 for tool_call_index, tool_call in enumerate(tool_calls):
                     if (tool_call_arguments := tool_call.arguments) is not None:
                         yield (
-                            f"{LLM_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
+                            f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
                             safe_json_dumps(tool_call_arguments),
                         )
                     if (tool_name := tool_call.tool_name) is not None:
                         yield (
-                            f"{LLM_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_NAME}",
+                            f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_NAME}",
                             tool_name,
                         )
             else:
-                yield f"{LLM_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_CONTENT}", reply.text
-            yield f"{LLM_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_ROLE}", reply.role.value
+                yield f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_CONTENT}", reply.text
+            yield f"{GEN_AI_OUTPUT_MESSAGES}.{reply_index}.{MESSAGE_ROLE}", reply.role.value
         elif isinstance(reply, str):
-            yield f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}", reply
-            yield f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}", ASSISTANT
+            yield f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}", reply
+            yield f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}", ASSISTANT
 
 
 def _get_llm_model_attributes(response: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
@@ -476,14 +476,14 @@ def _get_llm_model_attributes(response: Mapping[str, Any]) -> Iterator[Tuple[str
         and response_meta
         and (model := response_meta[0].get("model")) is not None
     ):
-        yield LLM_MODEL_NAME, model
+        yield GEN_AI_REQUEST_MODEL, model
     elif (
         isinstance(replies := response.get("replies"), Sequence)
         and replies
         and isinstance(reply := replies[0], ChatMessage)
         and (model := reply.meta.get("model")) is not None
     ):
-        yield LLM_MODEL_NAME, model
+        yield GEN_AI_REQUEST_MODEL, model
 
 
 def _get_llm_token_count_attributes(
@@ -511,11 +511,11 @@ def _get_llm_token_count_attributes(
         token_usage = usage
     if token_usage is not None:
         if (completion_tokens := token_usage.get("completion_tokens")) is not None:
-            yield LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+            yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
         if (prompt_tokens := token_usage.get("prompt_tokens")) is not None:
-            yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+            yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
         if (total_tokens := token_usage.get("total_tokens")) is not None:
-            yield LLM_TOKEN_COUNT_TOTAL, total_tokens
+            yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
 
 
 def _get_llm_prompt_template_attributes_from_prompt_builder(
@@ -533,7 +533,7 @@ def _get_llm_prompt_template_attributes_from_prompt_builder(
         else getattr(component, "_template_string", None)
     )
     if template is not None:
-        yield LLM_PROMPT_TEMPLATE, template
+        yield GEN_AI_PROMPT_TEMPLATE_NAME, template
     if (
         template_variables := {
             **run_bound_args.kwargs,
@@ -546,7 +546,7 @@ def _get_llm_prompt_template_attributes_from_prompt_builder(
             ),
         }
     ) is not None:
-        yield LLM_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(template_variables)
+        yield GEN_AI_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(template_variables)
 
 
 def _get_output_attributes_for_prompt_builder(
@@ -765,17 +765,17 @@ EMBEDDING_TEXT = EmbeddingAttributes.EMBEDDING_TEXT
 EMBEDDING_VECTOR = EmbeddingAttributes.EMBEDDING_VECTOR
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
-LLM_PROMPT_TEMPLATE = SpanAttributes.LLM_PROMPT_TEMPLATE
-LLM_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES
-LLM_PROMPT_TEMPLATE_VERSION = SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
+GEN_AI_PROMPT_TEMPLATE_NAME = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME
+GEN_AI_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES
+GEN_AI_PROMPT_TEMPLATE_VERSION = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
     MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
@@ -785,7 +785,7 @@ MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
 METADATA = SpanAttributes.METADATA
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 RERANKER_INPUT_DOCUMENTS = RerankerAttributes.RERANKER_INPUT_DOCUMENTS
@@ -794,7 +794,7 @@ RERANKER_OUTPUT_DOCUMENTS = RerankerAttributes.RERANKER_OUTPUT_DOCUMENTS
 RERANKER_QUERY = RerankerAttributes.RERANKER_QUERY
 RERANKER_TOP_K = RerankerAttributes.RERANKER_TOP_K
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
-SESSION_ID = SpanAttributes.SESSION_ID
+GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
 TAG_TAGS = SpanAttributes.TAG_TAGS
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
