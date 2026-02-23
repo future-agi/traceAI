@@ -89,7 +89,7 @@ class _RunnerRunAsync(_WithTracer):
         tracer = self._tracer
         name = f"invocation [{instance.app_name}]"
         attributes = dict(get_attributes_from_context())
-        attributes[SpanAttributes.FI_SPAN_KIND] = FiSpanKindValues.CHAIN.value
+        attributes[SpanAttributes.GEN_AI_SPAN_KIND] = FiSpanKindValues.CHAIN.value
 
         arguments = bind_args_kwargs(wrapped, *args, **kwargs)
         try:
@@ -105,7 +105,7 @@ class _RunnerRunAsync(_WithTracer):
         if (user_id := kwargs.get("user_id")) is not None:
             attributes[SpanAttributes.USER_ID] = user_id
         if (session_id := kwargs.get("session_id")) is not None:
-            attributes[SpanAttributes.SESSION_ID] = session_id
+            attributes[SpanAttributes.GEN_AI_CONVERSATION_ID] = session_id
 
         class _AsyncGenerator(wrapt.ObjectProxy):  # type: ignore[misc]
             __wrapped__: AsyncGenerator[Event, None]
@@ -158,7 +158,7 @@ class _BaseAgentRunAsync(_WithTracer):
         tracer = self._tracer
         name = f"agent_run [{instance.name}]"
         attributes = dict(get_attributes_from_context())
-        attributes[SpanAttributes.FI_SPAN_KIND] = FiSpanKindValues.AGENT.value
+        attributes[SpanAttributes.GEN_AI_SPAN_KIND] = FiSpanKindValues.AGENT.value
 
         class _AsyncGenerator(wrapt.ObjectProxy):  # type: ignore[misc]
             __wrapped__: AsyncGenerator[Event, None]
@@ -204,7 +204,7 @@ class _TraceCallLlm(_WithTracer):
         span = get_current_span()
         span.set_status(StatusCode.OK)  # Pre-emptively set status to OK
         span.set_attribute(
-            SpanAttributes.FI_SPAN_KIND,
+            SpanAttributes.GEN_AI_SPAN_KIND,
             FiSpanKindValues.LLM.value,
         )
         arguments = bind_args_kwargs(wrapped, *args, **kwargs)
@@ -215,7 +215,7 @@ class _TraceCallLlm(_WithTracer):
         input_messages_index = 0
         if llm_request:
             span.set_attribute(
-                SpanAttributes.LLM_PROVIDER,
+                SpanAttributes.GEN_AI_PROVIDER_NAME,
                 FiLLMProviderValues.GOOGLE.value,
             )  # TODO: other providers may also be possible
 
@@ -235,12 +235,12 @@ class _TraceCallLlm(_WithTracer):
                 for i, tool in enumerate(llm_request.tools_dict.values()):
                     for k, v in _get_attributes_from_base_tool(
                         tool,
-                        prefix=f"{SpanAttributes.LLM_TOOLS}.{i}.",
+                        prefix=f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.",
                     ):
                         span.set_attribute(k, v)
 
             if llm_request.model:
-                span.set_attribute(SpanAttributes.LLM_MODEL_NAME, llm_request.model)
+                span.set_attribute(SpanAttributes.GEN_AI_REQUEST_MODEL, llm_request.model)
 
             if config := llm_request.config:
                 for k, v in _get_attributes_from_generate_content_config(config):
@@ -248,19 +248,19 @@ class _TraceCallLlm(_WithTracer):
 
                 if system_instruction := config.system_instruction:
                     span.set_attribute(
-                        f"{SpanAttributes.LLM_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_ROLE}",
+                        f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_ROLE}",
                         "system",
                     )
                     if isinstance(system_instruction, str):
                         span.set_attribute(
-                            f"{SpanAttributes.LLM_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_CONTENT}",
+                            f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_CONTENT}",
                             system_instruction,
                         )
                     elif isinstance(system_instruction, types.Content):
                         if system_instruction.parts:
                             for k, v in _get_attributes_from_parts(
                                 system_instruction.parts,
-                                prefix=f"{SpanAttributes.LLM_INPUT_MESSAGES}.{input_messages_index}.",
+                                prefix=f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.",
                                 text_only=True,
                             ):
                                 span.set_attribute(k, v)
@@ -273,7 +273,7 @@ class _TraceCallLlm(_WithTracer):
                 for i, content in enumerate(contents, input_messages_index):
                     for k, v in _get_attributes_from_content(
                         content,
-                        prefix=f"{SpanAttributes.LLM_INPUT_MESSAGES}.{i}.",
+                        prefix=f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.",
                     ):
                         span.set_attribute(k, v)
         if llm_response:
@@ -297,15 +297,15 @@ class _TraceToolCall(_WithTracer):
         span = get_current_span()
         span.set_status(StatusCode.OK)  # Pre-emptively set status to OK
         span.set_attribute(
-            SpanAttributes.FI_SPAN_KIND,
+            SpanAttributes.GEN_AI_SPAN_KIND,
             FiSpanKindValues.TOOL.value,
         )
         arguments = bind_args_kwargs(wrapped, *args, **kwargs)
         if base_tool := next(
             (arg for arg in arguments.values() if isinstance(arg, BaseTool)), None
         ):
-            span.set_attribute(SpanAttributes.TOOL_NAME, base_tool.name)
-            span.set_attribute(SpanAttributes.TOOL_DESCRIPTION, base_tool.description)
+            span.set_attribute(SpanAttributes.GEN_AI_TOOL_NAME, base_tool.name)
+            span.set_attribute(SpanAttributes.GEN_AI_TOOL_DESCRIPTION, base_tool.description)
             if args_dict := next(
                 (arg for arg in arguments.values() if isinstance(arg, Mapping)), None
             ):
@@ -357,7 +357,7 @@ def _get_attributes_from_generate_content_config(
     obj: types.GenerateContentConfig,
 ) -> Iterator[tuple[str, AttributeValue]]:
     yield (
-        SpanAttributes.LLM_INVOCATION_PARAMETERS,
+        SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
         obj.model_dump_json(exclude_none=True, fallback=_default),
     )
 
@@ -372,7 +372,7 @@ def _get_attributes_from_llm_response(
         yield from _get_attributes_from_usage_metadata(obj.usage_metadata)
     if obj.content:
         yield from _get_attributes_from_content(
-            obj.content, prefix=f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0."
+            obj.content, prefix=f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0."
         )
 
 
@@ -381,7 +381,7 @@ def _get_attributes_from_usage_metadata(
     obj: types.GenerateContentResponseUsageMetadata,
 ) -> Iterator[tuple[str, AttributeValue]]:
     if total := obj.total_token_count:
-        yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total
+        yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total
     if obj.prompt_tokens_details:
         prompt_details_audio = 0
         for modality_token_count in obj.prompt_tokens_details:
@@ -392,11 +392,11 @@ def _get_attributes_from_usage_metadata(
                 prompt_details_audio += modality_token_count.token_count
         if prompt_details_audio:
             yield (
-                SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO,
+                SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_AUDIO,
                 prompt_details_audio,
             )
     if prompt := obj.prompt_token_count:
-        yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt
+        yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt
     if obj.candidates_tokens_details:
         completion_details_audio = 0
         for modality_token_count in obj.candidates_tokens_details:
@@ -407,17 +407,17 @@ def _get_attributes_from_usage_metadata(
                 completion_details_audio += modality_token_count.token_count
         if completion_details_audio:
             yield (
-                SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO,
+                SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO,
                 completion_details_audio,
             )
     completion = 0
     if candidates := obj.candidates_token_count:
         completion += candidates
     if thoughts := obj.thoughts_token_count:
-        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, thoughts
+        yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING, thoughts
         completion += thoughts
     if completion:
-        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion
+        yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion
 
 
 @stop_on_exception

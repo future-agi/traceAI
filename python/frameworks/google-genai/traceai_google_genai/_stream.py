@@ -164,20 +164,20 @@ class _ResponseExtractor:
         if not (result := self._response_accumulator._result()):
             return
         if model_version := result.get("model_version"):
-            yield SpanAttributes.LLM_MODEL_NAME, model_version
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model_version
         if usage_metadata := result.get("usage_metadata"):
             if prompt_token_count := usage_metadata.get("prompt_token_count"):
-                yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, int(prompt_token_count)
+                yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, int(prompt_token_count)
             if candidates_token_count := usage_metadata.get("candidates_token_count"):
-                yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, int(candidates_token_count)
+                yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, int(candidates_token_count)
             if total_token_count := usage_metadata.get("total_token_count"):
-                yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, int(total_token_count)
+                yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, int(total_token_count)
         if candidates := result.get("candidates"):
             for idx, candidate in enumerate(candidates):
                 if content := candidate.get("content"):
                     if role := content.get("role"):
                         yield (
-                            f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
+                            f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
                             role,
                         )
                     if parts := content.get("parts"):
@@ -190,18 +190,18 @@ class _ResponseExtractor:
                                 # Handle function calls in streaming responses
                                 if function_name := function_call.get("name"):
                                     yield (
-                                        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_call_index}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
+                                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_call_index}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
                                         function_name,
                                     )
                                 if function_args := function_call.get("args"):
                                     yield (
-                                        f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_call_index}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
+                                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_call_index}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
                                         safe_json_dumps(function_args),
                                     )
                                 tool_call_index += 1
                         if text_parts:
                             yield (
-                                f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
+                                f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
                                 "".join(text_parts),
                             )
 

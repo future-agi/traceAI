@@ -46,7 +46,7 @@ def _set_model_name_attributes(
     """
     Set model name and output value attributes based on the model vendor.
 
-    Extracts the model ID from kwargs and sets the LLM_MODEL_NAME attribute.
+    Extracts the model ID from kwargs and sets the GEN_AI_REQUEST_MODEL attribute.
     Also extracts the appropriate output content based on the model vendor's
     response format and sets the OUTPUT_VALUE attribute.
 
@@ -61,7 +61,7 @@ def _set_model_name_attributes(
         - Meta: Uses "generation" field
     """
     if model_id := kwargs.get("modelId"):
-        _set_span_attribute(span, SpanAttributes.LLM_MODEL_NAME, model_id)
+        _set_span_attribute(span, SpanAttributes.GEN_AI_REQUEST_MODEL, model_id)
         vendor = None
         if isinstance(model_id, str):
             (vendor, *_) = model_id.split(".")
@@ -100,12 +100,12 @@ def _set_token_count_attributes(span: Span, metadata: Dict[str, Any]) -> None:
     if headers := metadata.get("HTTPHeaders"):
         if input_token_count := headers.get("x-amzn-bedrock-input-token-count"):
             input_token_count = int(input_token_count)
-            _set_span_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_PROMPT, input_token_count)
+            _set_span_attribute(span, SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, input_token_count)
         if response_token_count := headers.get("x-amzn-bedrock-output-token-count"):
             response_token_count = int(response_token_count)
             _set_span_attribute(
                 span,
-                SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS,
                 response_token_count,
             )
         if total_token_count := (
@@ -113,7 +113,7 @@ def _set_token_count_attributes(span: Span, metadata: Dict[str, Any]) -> None:
             if input_token_count and response_token_count
             else None
         ):
-            _set_span_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_token_count)
+            _set_span_attribute(span, SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_token_count)
 
 
 def set_input_attributes(span: Span, request_body: Dict[str, Any]) -> None:
@@ -131,10 +131,10 @@ def set_input_attributes(span: Span, request_body: Dict[str, Any]) -> None:
     prompt = request_body.pop("prompt", None)
     invocation_parameters = safe_json_dumps(request_body)
     _set_span_attribute(span, SpanAttributes.INPUT_VALUE, prompt)
-    _set_span_attribute(span, SpanAttributes.LLM_INVOCATION_PARAMETERS, invocation_parameters)
-    _set_span_attribute(span, SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.AWS.value)
+    _set_span_attribute(span, SpanAttributes.GEN_AI_REQUEST_PARAMETERS, invocation_parameters)
+    _set_span_attribute(span, SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.AWS.value)
     span.set_attribute(
-        SpanAttributes.FI_SPAN_KIND,
+        SpanAttributes.GEN_AI_SPAN_KIND,
         FiSpanKindValues.LLM.value,
     )
 

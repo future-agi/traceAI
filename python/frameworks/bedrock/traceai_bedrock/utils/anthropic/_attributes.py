@@ -115,14 +115,14 @@ def _get_llm_token_counts(usage: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
         ]
     )
     if prompt_tokens:
-        yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
 
     if usage.get("output_tokens"):
-        yield LLM_TOKEN_COUNT_COMPLETION, usage.get("output_tokens")
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, usage.get("output_tokens")
     if usage.get("cache_read_input_tokens"):
-        yield LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, usage.get("cache_read_input_tokens")
+        yield GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ, usage.get("cache_read_input_tokens")
     if usage.get("cache_creation_input_tokens"):
-        yield LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE, usage.get("cache_creation_input_tokens")
+        yield GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE, usage.get("cache_creation_input_tokens")
 
 
 def _get_llm_model_name_from_input(model_id: str) -> str:
@@ -309,10 +309,10 @@ def set_response_attributes(span: Span, response_body: Dict[str, Any]) -> None:
 
 
 # Token count attribute constants for convenience
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ = SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ
-LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE = (
-    SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ
+GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE = (
+    SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE
 )
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
