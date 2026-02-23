@@ -130,7 +130,7 @@ class _RunWrapper:
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: AGENT,
+                        GEN_AI_SPAN_KIND: AGENT,
                         INPUT_VALUE: _get_input_value(
                             wrapped,
                             *args,
@@ -144,15 +144,15 @@ class _RunWrapper:
             ),
         ) as span:
             agent_output = wrapped(*args, **kwargs)
-            span.set_attribute(RAW_OUTPUT, _get_raw_output(agent_output))
+            span.set_attribute(OUTPUT_VALUE, _get_raw_output(agent_output))
             span.set_attribute(
-                LLM_TOKEN_COUNT_PROMPT, agent.monitor.total_input_token_count
+                GEN_AI_USAGE_INPUT_TOKENS, agent.monitor.total_input_token_count
             )
             span.set_attribute(
-                LLM_TOKEN_COUNT_COMPLETION, agent.monitor.total_output_token_count
+                GEN_AI_USAGE_OUTPUT_TOKENS, agent.monitor.total_output_token_count
             )
             span.set_attribute(
-                LLM_TOKEN_COUNT_TOTAL,
+                GEN_AI_USAGE_TOTAL_TOKENS,
                 agent.monitor.total_input_token_count
                 + agent.monitor.total_output_token_count,
             )
@@ -179,7 +179,7 @@ class _StepWrapper:
         with self._tracer.start_as_current_span(
             span_name,
             attributes={
-                FI_SPAN_KIND: CHAIN,
+                GEN_AI_SPAN_KIND: CHAIN,
                 INPUT_VALUE: _get_input_value(wrapped, *args, **kwargs),
                 **dict(get_attributes_from_context()),
                 **dict(_get_raw_input(args, **kwargs)),
@@ -187,7 +187,7 @@ class _StepWrapper:
         ) as span:
             result = wrapped(*args, **kwargs)
             step_log = args[0]  # ActionStep
-            span.set_attribute(RAW_OUTPUT, _get_raw_output(result))
+            span.set_attribute(OUTPUT_VALUE, _get_raw_output(result))
             span.set_attribute(OUTPUT_VALUE, step_log.observations)
             if step_log.error is not None:
                 span.record_exception(step_log.error)
@@ -200,57 +200,57 @@ def _llm_input_messages(messages: list[Any]) -> Iterator[Tuple[str, Any]]:
         content = message.get("content")
         if content:
             if isinstance(content, str):
-                yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}", content
+                yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}", content
             elif isinstance(content, list):
                 for index, subcontent in enumerate(content):
                     if subcontent.get("type") == "text":
-                        yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "text"
-                        yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TEXT}", subcontent.get(
+                        yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "text"
+                        yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TEXT}", subcontent.get(
                             "text"
                         )
                     elif subcontent.get("type") == "image_url":
                         if image_url := subcontent.get("image_url"):
-                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "image"
-                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_IMAGE}", image_url.get(
+                            yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "image"
+                            yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_IMAGE}", image_url.get(
                                 "url"
                             )
                     elif subcontent.get("type") == "input_audio":
                         if input_audio := subcontent.get("input_audio"):
-                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "audio"
-                            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_AUDIO}", input_audio.get(
+                            yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_TYPE}", "audio"
+                            yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}.{index}.{MESSAGE_CONTENT_AUDIO}", input_audio.get(
                                 "data"
                             )
 
-            yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_ROLE}", message.get("role", "")
+            yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_ROLE}", message.get("role", "")
 
 
 def _llm_output_messages(output_message: Any) -> Iterator[Tuple[str, Any]]:
     if (role := getattr(output_message, "role", None)) is not None:
         yield (
-            f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}",
+            f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}",
             role,
         )
     if (content := getattr(output_message, "content", None)) is not None:
         yield (
-            f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}",
+            f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}",
             content,
         )
     if isinstance(tool_calls := getattr(output_message, "tool_calls", None), list):
         for tool_call_index, tool_call in enumerate(tool_calls):
             if (tool_call_id := getattr(tool_call, "id", None)) is not None:
                 yield (
-                    f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_ID}",
+                    f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_ID}",
                     tool_call_id,
                 )
             if (function := getattr(tool_call, "function", None)) is not None:
                 if (name := getattr(function, "name", None)) is not None:
                     yield (
-                        f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_NAME}",
+                        f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_NAME}",
                         name,
                     )
                 if isinstance(arguments := getattr(function, "arguments", None), dict):
                     yield (
-                        f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
+                        f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.{tool_call_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
                         safe_json_dumps(arguments),
                     )
 
@@ -265,7 +265,7 @@ def _llm_invocation_parameters(
 ) -> Iterator[Tuple[str, Any]]:
     model_kwargs = _ if isinstance(_ := getattr(model, "kwargs", {}), dict) else {}
     kwargs = _ if isinstance(_ := arguments.get("kwargs"), dict) else {}
-    yield LLM_INVOCATION_PARAMETERS, safe_json_dumps(model_kwargs | kwargs)
+    yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(model_kwargs | kwargs)
 
 
 def _llm_tools(tools_to_call_from: list[Any]) -> Iterator[Tuple[str, Any]]:
@@ -277,16 +277,16 @@ def _llm_tools(tools_to_call_from: list[Any]) -> Iterator[Tuple[str, Any]]:
     for tool_index, tool in enumerate(tools_to_call_from):
         if isinstance(tool, Tool):
             yield (
-                f"{LLM_TOOLS}.{tool_index}.{TOOL_JSON_SCHEMA}",
+                f"{GEN_AI_TOOL_DEFINITIONS}.{tool_index}.{TOOL_JSON_SCHEMA}",
                 safe_json_dumps(get_tool_json_schema(tool)),
             )
 
 
 def _tools(tool: "Tool") -> Iterator[Tuple[str, Any]]:
     if tool_name := getattr(tool, "name", None):
-        yield TOOL_NAME, tool_name
+        yield GEN_AI_TOOL_NAME, tool_name
     if tool_description := getattr(tool, "description", None):
-        yield TOOL_DESCRIPTION, tool_description
+        yield GEN_AI_TOOL_DESCRIPTION, tool_description
     yield TOOL_PARAMETERS, safe_json_dumps(tool.inputs)
 
 
@@ -316,7 +316,7 @@ class _ModelWrapper:
         with self._tracer.start_as_current_span(
             span_name,
             attributes={
-                FI_SPAN_KIND: LLM,
+                GEN_AI_SPAN_KIND: LLM,
                 **dict(_input_value_and_mime_type(arguments)),
                 **dict(_llm_invocation_parameters(instance, arguments)),
                 **dict(_llm_input_messages(kwargs.get("messages", []))),
@@ -326,14 +326,14 @@ class _ModelWrapper:
         ) as span:
             output_message = wrapped(*args, **kwargs)
             span.set_status(trace_api.StatusCode.OK)
-            span.set_attribute(RAW_OUTPUT, _get_raw_output(output_message))
-            span.set_attribute(LLM_TOKEN_COUNT_PROMPT, model.last_input_token_count)
+            span.set_attribute(OUTPUT_VALUE, _get_raw_output(output_message))
+            span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, model.last_input_token_count)
             span.set_attribute(
-                LLM_TOKEN_COUNT_COMPLETION, model.last_output_token_count
+                GEN_AI_USAGE_OUTPUT_TOKENS, model.last_output_token_count
             )
-            span.set_attribute(LLM_MODEL_NAME, model.model_id)
+            span.set_attribute(GEN_AI_REQUEST_MODEL, model.model_id)
             span.set_attribute(
-                LLM_TOKEN_COUNT_TOTAL,
+                GEN_AI_USAGE_TOTAL_TOKENS,
                 model.last_input_token_count + model.last_output_token_count,
             )
             span.set_attributes(dict(_llm_output_messages(output_message)))
@@ -361,7 +361,7 @@ class _ToolCallWrapper:
         with self._tracer.start_as_current_span(
             span_name,
             attributes={
-                FI_SPAN_KIND: TOOL,
+                GEN_AI_SPAN_KIND: TOOL,
                 INPUT_VALUE: _get_input_value(
                     wrapped,
                     *args,
@@ -373,7 +373,7 @@ class _ToolCallWrapper:
             },
         ) as span:
             response = wrapped(*args, **kwargs)
-            span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
+            span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
             span.set_status(trace_api.StatusCode.OK)
             span.set_attributes(
                 dict(
@@ -407,7 +407,7 @@ def _output_value_and_mime_type_for_tool_span(
 def _get_raw_input(args: Any, **kwargs: Any) -> Iterator[Tuple[str, Any]]:
     raw_input = safe_json_dumps({"args": _to_dict(args), **(_to_dict(kwargs) or {})})
 
-    yield RAW_INPUT, raw_input
+    yield INPUT_VALUE, raw_input
 
 
 def _get_raw_output(response: Any):
@@ -437,23 +437,21 @@ def _to_dict(result: Any) -> Any:
 # span attributes
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
-LLM_TOOLS = SpanAttributes.LLM_TOOLS
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+GEN_AI_TOOL_DEFINITIONS = SpanAttributes.GEN_AI_TOOL_DEFINITIONS
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
-TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
-TOOL_NAME = SpanAttributes.TOOL_NAME
+GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
+GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
 
 # message attributes
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT

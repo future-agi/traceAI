@@ -31,9 +31,9 @@ class _RequestAttributesExtractor:
         self,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield SpanAttributes.FI_SPAN_KIND, FiSpanKindValues.LLM.value
+        yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
         try:
-            yield SpanAttributes.RAW_INPUT, safe_json_dumps(request_parameters)
+            yield SpanAttributes.INPUT_VALUE, safe_json_dumps(request_parameters)
 
             messages = request_parameters.get("messages")
             input_data = messages if messages is not None else request_parameters
@@ -63,11 +63,11 @@ class _RequestAttributesExtractor:
 
         if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
             for i, tool in enumerate(tools):
-                yield f"{SpanAttributes.LLM_TOOLS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}", safe_json_dumps(
+                yield f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.{ToolAttributes.TOOL_JSON_SCHEMA}", safe_json_dumps(
                     tool
                 )
 
-        yield SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_json_dumps(
+        yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(
             invocation_params
         )
 
@@ -78,7 +78,7 @@ class _RequestAttributesExtractor:
                 for key, value in self._get_attributes_from_message_param(
                     input_message
                 ):
-                    yield f"{SpanAttributes.LLM_INPUT_MESSAGES}.{index}.{key}", value
+                    yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{key}", value
 
     def _get_attributes_from_message_param(
         self,

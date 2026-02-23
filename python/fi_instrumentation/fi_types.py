@@ -12,277 +12,611 @@ logger = logging.getLogger(__name__)
 
 
 class SpanAttributes:
+    """
+    OpenTelemetry GenAI Semantic Conventions for span attributes.
+
+    Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/
+    """
+
+    # =============================================================================
+    # OTEL GenAI Core Attributes (gen_ai.*)
+    # =============================================================================
+
+    # --- Operation & Provider ---
+    GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+    """The name of the operation being performed (chat, embeddings, text_completion, etc.)"""
+
+    GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
+    """The GenAI provider (openai, anthropic, google, aws.bedrock, etc.)"""
+
+    GEN_AI_SYSTEM = "gen_ai.system"
+    """Deprecated: Use GEN_AI_PROVIDER_NAME instead."""
+
+    # --- Request Attributes ---
+    GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+    """The name of the GenAI model a request is being made to."""
+
+    GEN_AI_REQUEST_TEMPERATURE = "gen_ai.request.temperature"
+    """The temperature setting for the GenAI request."""
+
+    GEN_AI_REQUEST_TOP_P = "gen_ai.request.top_p"
+    """The top_p (nucleus) sampling setting for the GenAI request."""
+
+    GEN_AI_REQUEST_TOP_K = "gen_ai.request.top_k"
+    """The top_k sampling setting for the GenAI request."""
+
+    GEN_AI_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
+    """The maximum number of tokens the model generates for a request."""
+
+    GEN_AI_REQUEST_FREQUENCY_PENALTY = "gen_ai.request.frequency_penalty"
+    """The frequency penalty setting for the GenAI request."""
+
+    GEN_AI_REQUEST_PRESENCE_PENALTY = "gen_ai.request.presence_penalty"
+    """The presence penalty setting for the GenAI request."""
+
+    GEN_AI_REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences"
+    """List of sequences that the model will use to stop generating further tokens."""
+
+    GEN_AI_REQUEST_SEED = "gen_ai.request.seed"
+    """Requests with same seed value more likely to return same result."""
+
+    # --- Response Attributes ---
+    GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
+    """The name of the model that generated the response."""
+
+    GEN_AI_RESPONSE_ID = "gen_ai.response.id"
+    """The unique identifier for the completion."""
+
+    GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+    """Array of reasons the model stopped generating tokens."""
+
+    # --- Output Attributes ---
+    GEN_AI_OUTPUT_TYPE = "gen_ai.output.type"
+    """The type of the output (text, json, image, audio, etc.)."""
+
+    # --- Token Usage Attributes ---
+    GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+    """The number of tokens used in the GenAI input (prompt)."""
+
+    GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+    """The number of tokens used in the GenAI response (completion)."""
+
+    GEN_AI_USAGE_CACHE_READ_TOKENS = "gen_ai.usage.cache_read_tokens"
+    """The number of tokens read from cache."""
+
+    GEN_AI_USAGE_CACHE_WRITE_TOKENS = "gen_ai.usage.cache_write_tokens"
+    """The number of tokens written to cache."""
+
+    # --- Message Attributes ---
+    GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
+    """The chat history provided to the model as an input."""
+
+    GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
+    """Messages returned by the model."""
+
+    GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
+    """The system message or instructions provided to the GenAI model."""
+
+    # --- Tool/Function Attributes ---
+    GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+    """Name of the tool utilized by the agent."""
+
+    GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
+    """The tool description."""
+
+    GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
+    """The tool call identifier."""
+
+    GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
+    """Parameters passed to the tool call."""
+
+    GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
+    """The result returned by the tool call."""
+
+    GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
+    """The type of tool (function, retrieval, code_interpreter, etc.)."""
+
+    GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
+    """The list of tool definitions available to the GenAI agent or model."""
+
+    # --- Context Attributes ---
+    GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
+    """The unique identifier for a conversation (session, thread)."""
+
+    GEN_AI_PROMPT_NAME = "gen_ai.prompt.name"
+    """Name that uniquely identifies a prompt."""
+
+    # --- Agent Attributes ---
+    GEN_AI_AGENT_ID = "gen_ai.agent.id"
+    """The unique identifier of the GenAI agent."""
+
+    GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+    """Human-readable name of the GenAI agent."""
+
+    GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
+    """Free-form description of the GenAI agent."""
+
+    # --- Evaluation Attributes ---
+    GEN_AI_EVALUATION_NAME = "gen_ai.evaluation.name"
+    """Name of the evaluation metric used."""
+
+    GEN_AI_EVALUATION_SCORE_VALUE = "gen_ai.evaluation.score.value"
+    """The evaluation score returned by the evaluator."""
+
+    GEN_AI_EVALUATION_SCORE_LABEL = "gen_ai.evaluation.score.label"
+    """Human-readable label for evaluation results."""
+
+    GEN_AI_EVALUATION_EXPLANATION = "gen_ai.evaluation.explanation"
+    """Free-form explanation for the assigned evaluation score."""
+
+    # --- Embeddings Attributes ---
+    GEN_AI_EMBEDDINGS_DIMENSION_COUNT = "gen_ai.embeddings.dimension.count"
+    """The number of dimensions the resulting output embeddings should have."""
+
+    GEN_AI_REQUEST_ENCODING_FORMATS = "gen_ai.request.encoding_formats"
+    """Requested encoding formats for embeddings operations."""
+
+    # =============================================================================
+    # GenAI Extensions (gen_ai.* namespace for uniformity)
+    # =============================================================================
+
+    # --- Span Classification ---
+    GEN_AI_SPAN_KIND = "gen_ai.span.kind"
+    """Span classification (LLM, TOOL, CHAIN, AGENT, RETRIEVER, EMBEDDING, etc.)"""
+
+    # --- Cost Attributes (server-computed) ---
+    GEN_AI_COST_TOTAL = "gen_ai.cost.total"
+    """Total cost in USD."""
+
+    GEN_AI_COST_INPUT = "gen_ai.cost.input"
+    """Input token cost in USD."""
+
+    GEN_AI_COST_OUTPUT = "gen_ai.cost.output"
+    """Output token cost in USD."""
+
+    GEN_AI_COST_CACHE_WRITE = "gen_ai.cost.cache_write"
+    """Cache write cost in USD."""
+
+    GEN_AI_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
+    """Total token count (input + output)."""
+
+    # =============================================================================
+    # Additional Attributes
+    # =============================================================================
+
+    # Tool call (function-level)
+    GEN_AI_TOOL_CALL = "gen_ai.tool.call"
+    """Tool call identifier prefix."""
+
+    TOOL_PARAMETERS = "gen_ai.tool.parameters"
+    """Tool parameters schema."""
+
+    # Request parameters
+    GEN_AI_REQUEST_PARAMETERS = "gen_ai.request.parameters"
+    """Invocation parameters passed to the LLM or API."""
+
+    GEN_AI_PROMPTS = "gen_ai.prompts"
+    """Prompts provided to a completions API."""
+
+    # Input/Output values (OpenInference compat)
     OUTPUT_VALUE = "output.value"
     OUTPUT_MIME_TYPE = "output.mime_type"
-    """
-    The type of output.value. If unspecified, the type is plain text by default.
-    If type is JSON, the value is a string representing a JSON object.
-    """
     INPUT_VALUE = "input.value"
     INPUT_MIME_TYPE = "input.mime_type"
-    """
-    The type of input.value. If unspecified, the type is plain text by default.
-    If type is JSON, the value is a string representing a JSON object.
-    """
 
+    # Embeddings
     EMBEDDING_EMBEDDINGS = "embedding.embeddings"
-    """
-    A list of objects containing embedding data, including the vector and represented piece of text.
-    """
     EMBEDDING_MODEL_NAME = "embedding.model_name"
-    """
-    The name of the embedding model.
-    """
 
-    LLM_FUNCTION_CALL = "llm.function_call"
-    """
-    For models and APIs that support function calling. Records attributes such as the function
-    name and arguments to the called function.
-    """
-    LLM_INVOCATION_PARAMETERS = "llm.invocation_parameters"
-    """
-    Invocation parameters passed to the LLM or API, such as the model name, temperature, etc.
-    """
-    LLM_INPUT_MESSAGES = "llm.input_messages"
-    """
-    Messages provided to a chat API.
-    """
-    LLM_OUTPUT_MESSAGES = "llm.output_messages"
-    """
-    Messages received from a chat API.
-    """
-    LLM_MODEL_NAME = "llm.model_name"
-    """
-    The name of the model being used.
-    """
-    LLM_PROVIDER = "llm.provider"
-    """
-    The provider of the model, such as OpenAI, Azure, Google, etc.
-    """
-    LLM_SYSTEM = "llm.system"
-    """
-    The AI product as identified by the client or server
-    """
-    LLM_PROMPTS = "llm.prompts"
-    """
-    Prompts provided to a completions API.
-    """
-    LLM_PROMPT_TEMPLATE = "llm.prompt_template.name"
-    """
-    The name/identifier of the prompt template being used.
-    """
-    LLM_PROMPT_TEMPLATE_LABEL = "llm.prompt_template.label"
-    """
-    A human-readable label or category for the prompt template.
-    """
-    LLM_PROMPT_TEMPLATE_VARIABLES = "llm.prompt_template.variables"
-    """
-    A list of input variables to the prompt template.
-    """
-    LLM_PROMPT_TEMPLATE_VERSION = "llm.prompt_template.version"
-    """
-    The version of the prompt template being used.
-    """
-    LLM_TOKEN_COUNT_COMPLETION = "llm.token_count.completion"
-    """
-    Number of tokens in the completion (in tokens).
-    """
-    LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO = "llm.token_count.completion_details.audio"
-    """
-    The number of audio tokens in the completion (in tokens).
-    """
-    LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING = "llm.token_count.completion_details.reasoning"
-    """
-    Number of tokens used for reasoning steps in the completion (in tokens).
-    """
-    LLM_TOKEN_COUNT_PROMPT = "llm.token_count.prompt"
-    """
-    Number of tokens in the prompt.
-    """
-    LLM_TOKEN_COUNT_PROMPT_DETAILS = "llm.token_count.prompt_details"
-    """
-    Key prefix for additional prompt token count details. Each detail should be a separate attribute
-    with this prefix, e.g. llm.token_count.prompt_details.reasoning,
-    llm.token_count.prompt_details.audio. All values should be in tokens.
-    """
-    LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO = "llm.token_count.prompt_details.audio"
-    """
-    The number of audio tokens in the prompt (in tokens).
-    """
-    LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_INPUT = "llm.token_count.prompt_details.cache_input"
-    """
-    Number of input tokens in the prompt that were cached (in tokens).
-    """
-    LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ = "llm.token_count.prompt_details.cache_read"
-    """
-    Number of tokens in the prompt that were read from cache (in tokens).
-    """
-    LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE = "llm.token_count.prompt_details.cache_write"
-    """
-    Number of tokens in the prompt that were written to cache (in tokens).
-    """
-    LLM_TOKEN_COUNT_TOTAL = "llm.token_count.total"
-    """
-    Total number of tokens, including both prompt and completion (in tokens).
-    """
+    # Token count details (extended)
+    GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO = "gen_ai.usage.output_tokens.audio"
+    GEN_AI_USAGE_OUTPUT_TOKENS_REASONING = "gen_ai.usage.output_tokens.reasoning"
+    GEN_AI_USAGE_INPUT_TOKENS_DETAILS = "gen_ai.usage.input_tokens.details"
+    GEN_AI_USAGE_INPUT_TOKENS_AUDIO = "gen_ai.usage.input_tokens.audio"
+    GEN_AI_USAGE_INPUT_TOKENS_CACHE_INPUT = "gen_ai.usage.input_tokens.cache_input"
+    GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ = "gen_ai.usage.input_tokens.cache_read"
+    GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE = "gen_ai.usage.input_tokens.cache_write"
 
-    LLM_COST_COMPLETION = "llm.cost.completion"
-    """
-    Total cost of all output tokens generated by the LLM in USD. This includes all tokens that were
-    generated in response to the prompt, including the main response and any additional output.
-    """
-    LLM_COST_COMPLETION_DETAILS = "llm.cost.completion_details"
-    """
-    Key prefix for additional completion cost details. Each detail should be a separate attribute
-    with this prefix, e.g. llm.cost.completion_details.reasoning,
-    llm.cost.completion_details.audio. All values should be in USD.
-    """
-    LLM_COST_COMPLETION_DETAILS_AUDIO = "llm.cost.completion_details.audio"
-    """
-    Cost of audio tokens in the completion in USD.
-    """
-    LLM_COST_COMPLETION_DETAILS_OUTPUT = "llm.cost.completion_details.output"
-    """
-    Total cost of output tokens in USD. This represents the cost of tokens that were generated
-    as output by the model, which may be different from the completion cost if there are
-    additional processing steps.
-    """
-    LLM_COST_COMPLETION_DETAILS_REASONING = "llm.cost.completion_details.reasoning"
-    """
-    Cost of reasoning steps in the completion in USD.
-    """
-    LLM_COST_PROMPT = "llm.cost.prompt"
-    """
-    Total cost of all input tokens sent to the LLM in USD. This includes all tokens that were
-    processed as part of the prompt, including system messages, user messages, and any other input.
-    """
-    LLM_COST_PROMPT_DETAILS = "llm.cost.prompt_details"
-    """
-    Key prefix for additional prompt cost details. Each detail should be a separate attribute
-    with this prefix, e.g. llm.cost.prompt_details.reasoning,
-    llm.cost.prompt_details.audio. All values should be in USD.
-    """
-    LLM_COST_PROMPT_DETAILS_AUDIO = "llm.cost.prompt_details.audio"
-    """
-    Cost of audio tokens in the prompt in USD.
-    """
-    LLM_COST_PROMPT_DETAILS_CACHE_INPUT = "llm.cost.prompt_details.cache_input"
-    """
-    Cost of input tokens in the prompt that were cached in USD.
-    """
-    LLM_COST_PROMPT_DETAILS_CACHE_READ = "llm.cost.prompt_details.cache_read"
-    """
-    Cost of prompt tokens read from cache in USD.
-    """
-    LLM_COST_PROMPT_DETAILS_CACHE_WRITE = "llm.cost.prompt_details.cache_write"
-    """
-    Cost of prompt tokens written to cache in USD.
-    """
-    LLM_COST_PROMPT_DETAILS_INPUT = "llm.cost.prompt_details.input"
-    """
-    Total cost of input tokens in USD. This represents the cost of tokens that were used as
-    input to the model, which may be different from the prompt cost if there are additional
-    processing steps.
-    """
-    LLM_COST_TOTAL = "llm.cost.total"
-    """
-    Total cost of the LLM call in USD (prompt + completion).
-    """
-
-    LLM_TOOLS = "llm.tools"
-    """
-    List of tools that are advertised to the LLM to be able to call
-    """
-
-    TOOL_NAME = "tool.name"
-    """
-    Name of the tool being used.
-    """
-    TOOL_DESCRIPTION = "tool.description"
-    """
-    Description of the tool's purpose, typically used to select the tool.
-    """
-    TOOL_PARAMETERS = "tool.parameters"
-    """
-    Parameters of the tool represented a dictionary JSON string, e.g.
-    see https://platform.openai.com/docs/guides/gpt/function-calling
-    """
-
+    # Retrieval (OpenInference compat)
     RETRIEVAL_DOCUMENTS = "retrieval.documents"
 
+    # Metadata & Tags
     METADATA = "metadata"
-    """
-    Metadata attributes are used to store user-defined key-value pairs.
-    For example, LangChain uses metadata to store user-defined attributes for a chain.
-    """
-
     TAG_TAGS = "tag.tags"
-    """
-    Custom categorical tags for the span.
-    """
 
-    FI_SPAN_KIND = "fi.span.kind"
-
-    SESSION_ID = "session.id"
-    """
-    The id of the session
-    """
+    # User attributes
     USER_ID = "user.id"
-    """
-    The id of the user
-    """
-    INPUT_IMAGES = "llm.input.images"
-    """
-    A list of input images provided to the model.
-    """
-    EVAL_INPUT = "eval.input"
-    """
-    Input being sent to the eval
-    """
-    RAW_INPUT = "raw.input"
-    """
-    Raw input being sent to otel
-    """
-    RAW_OUTPUT = "raw.output"
-    """
-    Raw output being sent from otel
-    """
-    QUERY = "query"
-    """
-    The query being sent to the model
-    """
-    RESPONSE = "response"
-    """
-    The response being sent from the model
-    """
-    AGENT_NAME = "agent.name"
-    """
-    The name of the agent. Agents that perform the same functions should have the same name.
-    """
+
+    # Input images
+    INPUT_IMAGES = "gen_ai.input.images"
+
+    # Graph/workflow attributes
     GRAPH_NODE_ID = "graph.node.id"
-    """
-    The id of the node in the execution graph. This along with graph.node.parent_id are used to visualize the execution graph.
-    """
     GRAPH_NODE_NAME = "graph.node.name"
-    """
-    The name of the node in the execution graph. Use this to present a human readable name for the node. Optional
-    """
     GRAPH_NODE_PARENT_ID = "graph.node.parent_id"
+
+    # Prompt management
+    PROMPT_VENDOR = "gen_ai.prompt.vendor"
+    PROMPT_ID = "gen_ai.prompt.id"
+    PROMPT_URL = "gen_ai.prompt.url"
+
+    # =============================================================================
+    # Unified Tracing Convention Attributes
+    # =============================================================================
+
+    # --- Error ---
+    ERROR_TYPE = "error.type"
+    """The type of error (e.g., ValueError, TimeoutError)."""
+
+    ERROR_MESSAGE = "error.message"
+    """The error message text."""
+
+    # --- Duration ---
+    GEN_AI_CLIENT_OPERATION_DURATION = "gen_ai.client.operation.duration"
+    """Duration of the GenAI operation in milliseconds."""
+
+    # --- Prompt Template (unified naming) ---
+    GEN_AI_PROMPT_TEMPLATE_NAME = "gen_ai.prompt.template.name"
+    """Name of the prompt template."""
+
+    GEN_AI_PROMPT_TEMPLATE_VERSION = "gen_ai.prompt.template.version"
+    """Version of the prompt template."""
+
+    GEN_AI_PROMPT_TEMPLATE_LABEL = "gen_ai.prompt.template.label"
+    """Label for the prompt template."""
+
+    GEN_AI_PROMPT_TEMPLATE_VARIABLES = "gen_ai.prompt.template.variables"
+    """Variables used in the prompt template."""
+
+    # --- Agent Graph ---
+    GEN_AI_AGENT_GRAPH_NODE_ID = "gen_ai.agent.graph.node_id"
+    """Node identifier in an agent graph."""
+
+    GEN_AI_AGENT_GRAPH_NODE_NAME = "gen_ai.agent.graph.node_name"
+    """Node name in an agent graph."""
+
+    GEN_AI_AGENT_GRAPH_PARENT_NODE_ID = "gen_ai.agent.graph.parent_node_id"
+    """Parent node identifier in an agent graph."""
+
+    # --- Evaluation (additional) ---
+    GEN_AI_EVALUATION_TARGET_SPAN_ID = "gen_ai.evaluation.target_span_id"
+    """The span ID that this evaluation targets."""
+
+    # --- Retriever (gen_ai.* namespace) ---
+    GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents"
+    """Retrieved documents."""
+
+    GEN_AI_RETRIEVAL_QUERY = "gen_ai.retrieval.query"
+    """The retrieval query string."""
+
+    GEN_AI_RETRIEVAL_TOP_K = "gen_ai.retrieval.top_k"
+    """Number of top results to retrieve."""
+
+    # --- Embedding (additional) ---
+    GEN_AI_EMBEDDINGS_VECTORS = "gen_ai.embeddings.vectors"
+    """The embedding vectors."""
+
+    # --- Guardrail ---
+    GEN_AI_GUARDRAIL_NAME = "gen_ai.guardrail.name"
+    """Name of the guardrail."""
+
+    GEN_AI_GUARDRAIL_TYPE = "gen_ai.guardrail.type"
+    """Type of guardrail (content_filter, pii, toxicity, etc.)."""
+
+    GEN_AI_GUARDRAIL_RESULT = "gen_ai.guardrail.result"
+    """Guardrail decision result (allow, block, warn)."""
+
+    GEN_AI_GUARDRAIL_SCORE = "gen_ai.guardrail.score"
+    """Guardrail confidence score."""
+
+    GEN_AI_GUARDRAIL_CATEGORIES = "gen_ai.guardrail.categories"
+    """Categories flagged by the guardrail."""
+
+    GEN_AI_GUARDRAIL_MODIFIED_OUTPUT = "gen_ai.guardrail.modified_output"
+    """Output modified by the guardrail."""
+
+    # --- Voice / Conversation ---
+    GEN_AI_VOICE_CALL_ID = "gen_ai.voice.call_id"
+    """Unique identifier for a voice call."""
+
+    GEN_AI_VOICE_PROVIDER = "gen_ai.voice.provider"
+    """Voice service provider."""
+
+    GEN_AI_VOICE_CALL_DURATION_SECS = "gen_ai.voice.call_duration_secs"
+    """Total call duration in seconds."""
+
+    GEN_AI_VOICE_ENDED_REASON = "gen_ai.voice.ended_reason"
+    """Reason the voice call ended."""
+
+    GEN_AI_VOICE_FROM_NUMBER = "gen_ai.voice.from_number"
+    """Originating phone number."""
+
+    GEN_AI_VOICE_TO_NUMBER = "gen_ai.voice.to_number"
+    """Destination phone number."""
+
+    GEN_AI_VOICE_CHANNEL_TYPE = "gen_ai.voice.channel_type"
+    """Voice channel type (phone, webrtc, sip, etc.)."""
+
+    GEN_AI_VOICE_TRANSCRIPT = "gen_ai.voice.transcript"
+    """Full conversation transcript."""
+
+    GEN_AI_VOICE_RECORDING_URL = "gen_ai.voice.recording.url"
+    """URL of the call recording."""
+
+    GEN_AI_VOICE_RECORDING_STEREO_URL = "gen_ai.voice.recording.stereo_url"
+    """URL of stereo recording."""
+
+    GEN_AI_VOICE_RECORDING_CUSTOMER_URL = "gen_ai.voice.recording.customer_url"
+    """URL of customer-only recording."""
+
+    GEN_AI_VOICE_RECORDING_ASSISTANT_URL = "gen_ai.voice.recording.assistant_url"
+    """URL of assistant-only recording."""
+
+    GEN_AI_VOICE_STT_MODEL = "gen_ai.voice.stt.model"
+    """Speech-to-text model used."""
+
+    GEN_AI_VOICE_STT_PROVIDER = "gen_ai.voice.stt.provider"
+    """Speech-to-text provider."""
+
+    GEN_AI_VOICE_STT_LANGUAGE = "gen_ai.voice.stt.language"
+    """Speech-to-text language."""
+
+    GEN_AI_VOICE_TTS_MODEL = "gen_ai.voice.tts.model"
+    """Text-to-speech model used."""
+
+    GEN_AI_VOICE_TTS_PROVIDER = "gen_ai.voice.tts.provider"
+    """Text-to-speech provider."""
+
+    GEN_AI_VOICE_TTS_VOICE_ID = "gen_ai.voice.tts.voice_id"
+    """Text-to-speech voice identifier."""
+
+    GEN_AI_VOICE_LATENCY_MODEL_AVG_MS = "gen_ai.voice.latency.model_avg_ms"
+    """Average LLM model latency in milliseconds."""
+
+    GEN_AI_VOICE_LATENCY_VOICE_AVG_MS = "gen_ai.voice.latency.voice_avg_ms"
+    """Average voice synthesis latency in milliseconds."""
+
+    GEN_AI_VOICE_LATENCY_TRANSCRIBER_AVG_MS = "gen_ai.voice.latency.transcriber_avg_ms"
+    """Average transcription latency in milliseconds."""
+
+    GEN_AI_VOICE_LATENCY_TURN_AVG_MS = "gen_ai.voice.latency.turn_avg_ms"
+    """Average conversational turn latency in milliseconds."""
+
+    GEN_AI_VOICE_LATENCY_TTFB_MS = "gen_ai.voice.latency.ttfb_ms"
+    """Time to first byte in milliseconds."""
+
+    GEN_AI_VOICE_INTERRUPTIONS_USER_COUNT = "gen_ai.voice.interruptions.user_count"
+    """Number of user interruptions."""
+
+    GEN_AI_VOICE_INTERRUPTIONS_ASSISTANT_COUNT = "gen_ai.voice.interruptions.assistant_count"
+    """Number of assistant interruptions."""
+
+    GEN_AI_VOICE_COST_TOTAL = "gen_ai.voice.cost.total"
+    """Total voice call cost."""
+
+    GEN_AI_VOICE_COST_STT = "gen_ai.voice.cost.stt"
+    """Speech-to-text cost."""
+
+    GEN_AI_VOICE_COST_TTS = "gen_ai.voice.cost.tts"
+    """Text-to-speech cost."""
+
+    GEN_AI_VOICE_COST_LLM = "gen_ai.voice.cost.llm"
+    """LLM cost within voice call."""
+
+    GEN_AI_VOICE_COST_TELEPHONY = "gen_ai.voice.cost.telephony"
+    """Telephony cost."""
+
+    # --- Image Generation ---
+    GEN_AI_IMAGE_PROMPT = "gen_ai.image.prompt"
+    """The prompt used for image generation."""
+
+    GEN_AI_IMAGE_NEGATIVE_PROMPT = "gen_ai.image.negative_prompt"
+    """Negative prompt for image generation."""
+
+    GEN_AI_IMAGE_WIDTH = "gen_ai.image.width"
+    """Generated image width in pixels."""
+
+    GEN_AI_IMAGE_HEIGHT = "gen_ai.image.height"
+    """Generated image height in pixels."""
+
+    GEN_AI_IMAGE_SIZE = "gen_ai.image.size"
+    """Image size string (e.g., 1024x1024)."""
+
+    GEN_AI_IMAGE_QUALITY = "gen_ai.image.quality"
+    """Image quality setting (standard, hd, etc.)."""
+
+    GEN_AI_IMAGE_STYLE = "gen_ai.image.style"
+    """Image style (vivid, natural, etc.)."""
+
+    GEN_AI_IMAGE_STEPS = "gen_ai.image.steps"
+    """Number of diffusion steps."""
+
+    GEN_AI_IMAGE_GUIDANCE_SCALE = "gen_ai.image.guidance_scale"
+    """Guidance scale / CFG scale."""
+
+    GEN_AI_IMAGE_SEED = "gen_ai.image.seed"
+    """Seed for image generation reproducibility."""
+
+    GEN_AI_IMAGE_FORMAT = "gen_ai.image.format"
+    """Output image format (png, jpeg, webp, etc.)."""
+
+    GEN_AI_IMAGE_COUNT = "gen_ai.image.count"
+    """Number of images generated."""
+
+    GEN_AI_IMAGE_REVISED_PROMPT = "gen_ai.image.revised_prompt"
+    """The revised prompt returned by the model."""
+
+    GEN_AI_IMAGE_OUTPUT_URLS = "gen_ai.image.output_urls"
+    """URLs of generated images."""
+
+    # --- Computer Use ---
+    GEN_AI_COMPUTER_USE_ACTION = "gen_ai.computer_use.action"
+    """Action type (click, type, scroll, screenshot, etc.)."""
+
+    GEN_AI_COMPUTER_USE_COORDINATE_X = "gen_ai.computer_use.coordinate_x"
+    """X coordinate for mouse actions."""
+
+    GEN_AI_COMPUTER_USE_COORDINATE_Y = "gen_ai.computer_use.coordinate_y"
+    """Y coordinate for mouse actions."""
+
+    GEN_AI_COMPUTER_USE_TEXT = "gen_ai.computer_use.text"
+    """Text input for type actions."""
+
+    GEN_AI_COMPUTER_USE_KEY = "gen_ai.computer_use.key"
+    """Key for keyboard actions."""
+
+    GEN_AI_COMPUTER_USE_BUTTON = "gen_ai.computer_use.button"
+    """Mouse button (left, right, middle)."""
+
+    GEN_AI_COMPUTER_USE_SCROLL_DIRECTION = "gen_ai.computer_use.scroll_direction"
+    """Scroll direction (up, down, left, right)."""
+
+    GEN_AI_COMPUTER_USE_SCROLL_AMOUNT = "gen_ai.computer_use.scroll_amount"
+    """Scroll amount in pixels."""
+
+    GEN_AI_COMPUTER_USE_SCREENSHOT = "gen_ai.computer_use.screenshot"
+    """Screenshot data or URL."""
+
+    GEN_AI_COMPUTER_USE_ENVIRONMENT = "gen_ai.computer_use.environment"
+    """Environment type (browser, desktop, terminal, etc.)."""
+
+    GEN_AI_COMPUTER_USE_VIEWPORT_WIDTH = "gen_ai.computer_use.viewport_width"
+    """Viewport width in pixels."""
+
+    GEN_AI_COMPUTER_USE_VIEWPORT_HEIGHT = "gen_ai.computer_use.viewport_height"
+    """Viewport height in pixels."""
+
+    GEN_AI_COMPUTER_USE_CURRENT_URL = "gen_ai.computer_use.current_url"
+    """Current browser URL."""
+
+    GEN_AI_COMPUTER_USE_ELEMENT_SELECTOR = "gen_ai.computer_use.element_selector"
+    """CSS/XPath selector for targeted element."""
+
+    GEN_AI_COMPUTER_USE_RESULT = "gen_ai.computer_use.result"
+    """Result of the computer use action."""
+
+    # --- Performance & Streaming ---
+    GEN_AI_SERVER_TIME_TO_FIRST_TOKEN = "gen_ai.server.time_to_first_token"
+    """Time to first token in milliseconds."""
+
+    GEN_AI_SERVER_TIME_PER_OUTPUT_TOKEN = "gen_ai.server.time_per_output_token"
+    """Average time per output token in milliseconds."""
+
+    GEN_AI_SERVER_QUEUE_TIME = "gen_ai.server.queue_time"
+    """Server queue wait time in milliseconds."""
+
+    # --- Reranker (gen_ai.* namespace) ---
+    GEN_AI_RERANKER_MODEL = "gen_ai.reranker.model"
+    """Reranker model name."""
+
+    GEN_AI_RERANKER_QUERY = "gen_ai.reranker.query"
+    """Reranker query string."""
+
+    GEN_AI_RERANKER_TOP_N = "gen_ai.reranker.top_n"
+    """Number of top results to rerank."""
+
+    GEN_AI_RERANKER_INPUT_DOCUMENTS = "gen_ai.reranker.input_documents"
+    """Input documents to the reranker."""
+
+    GEN_AI_RERANKER_OUTPUT_DOCUMENTS = "gen_ai.reranker.output_documents"
+    """Output documents from the reranker."""
+
+    # --- Audio (gen_ai.* namespace) ---
+    GEN_AI_AUDIO_URL = "gen_ai.audio.url"
+    """URL of the audio file."""
+
+    GEN_AI_AUDIO_MIME_TYPE = "gen_ai.audio.mime_type"
+    """MIME type of the audio file."""
+
+    GEN_AI_AUDIO_TRANSCRIPT = "gen_ai.audio.transcript"
+    """Transcript of the audio."""
+
+    GEN_AI_AUDIO_DURATION_SECS = "gen_ai.audio.duration_secs"
+    """Audio duration in seconds."""
+
+    GEN_AI_AUDIO_LANGUAGE = "gen_ai.audio.language"
+    """Language of the audio."""
+
+    # --- Server / Infrastructure ---
+    SERVER_ADDRESS = "server.address"
+    """Server hostname or IP address."""
+
+    SERVER_PORT = "server.port"
+    """Server port number."""
+
+
+class VectorDBAttributes:
     """
-    This references the id of the parent node. Leaving this unset or set as empty string implies that the current span is the root node.
+    Semantic conventions for vector database operations.
+
+    Based on OpenTelemetry database semantic conventions with extensions
+    for vector-specific operations.
     """
 
-    PROMPT_VENDOR = "prompt.vendor"
+    # Core DB attributes (OTEL standard)
+    DB_SYSTEM = "db.system"
+    DB_OPERATION_NAME = "db.operation.name"
+    DB_NAMESPACE = "db.namespace"
+
+    # Query attributes
+    QUERY_TOP_K = "db.vector.query.top_k"
+    QUERY_FILTER = "db.vector.query.filter"
+    QUERY_INCLUDE_METADATA = "db.vector.query.include_metadata"
+    QUERY_INCLUDE_VECTORS = "db.vector.query.include_vectors"
+    QUERY_SCORE_THRESHOLD = "db.vector.query.score_threshold"
+    QUERY_METRIC = "db.vector.query.metric"
+
+    # Result attributes
+    RESULTS_COUNT = "db.vector.results.count"
+    RESULTS_SCORES = "db.vector.results.scores"
+    RESULTS_IDS = "db.vector.results.ids"
+
+    # Upsert/Insert attributes
+    UPSERT_COUNT = "db.vector.upsert.count"
+    UPSERT_DIMENSIONS = "db.vector.upsert.dimensions"
+
+    # Delete attributes
+    DELETE_COUNT = "db.vector.delete.count"
+    DELETE_ALL = "db.vector.delete.all"
+
+    # Index/Collection attributes
+    INDEX_NAME = "db.vector.index.name"
+    COLLECTION_NAME = "db.vector.collection.name"
+    INDEX_METRIC = "db.vector.index.metric"
+    INDEX_DIMENSIONS = "db.vector.index.dimensions"
+
+    # Namespace
+    NAMESPACE = "db.vector.namespace"
+
+
+class SimulatorAttributes:
     """
-    The vendor or origin of the prompt, e.g. a prompt library, a specialized service, etc.
+    Semantic conventions for Simulator spans and traces.
+    Using gen_ai.simulator.* namespace for uniformity.
     """
-    PROMPT_ID = "prompt.id"
+
+    RUN_TEST_ID = "gen_ai.simulator.run_test_id"
     """
-    The id of the prompt
+    The unique identifier of the RunTest definition.
+    Type: str (UUID)
     """
-    PROMPT_URL = "prompt.url"
+
+    TEST_EXECUTION_ID = "gen_ai.simulator.test_execution_id"
     """
-    A vendor-specific url used to locate the prompt.
+    The unique identifier of a specific test execution instance.
+    Type: str (UUID)
+    """
+
+    CALL_EXECUTION_ID = "gen_ai.simulator.call_execution_id"
+    """
+    The unique identifier of an individual call execution.
+    Type: str (UUID)
+    """
+
+    IS_SIMULATOR_TRACE = "gen_ai.simulator.is_simulator_trace"
+    """
+    Boolean flag indicating this trace originated from the simulator.
+    Type: bool
     """
 
 
@@ -513,6 +847,31 @@ class FiSpanKindValues(Enum):
     UNKNOWN = "UNKNOWN"
     GUARDRAIL = "GUARDRAIL"
     EVALUATOR = "EVALUATOR"
+    CONVERSATION = "CONVERSATION"
+    VECTOR_DB = "VECTOR_DB"
+
+
+class VectorDBSystemValues(Enum):
+    """Supported vector database systems."""
+    CHROMADB = "chromadb"
+    PINECONE = "pinecone"
+    QDRANT = "qdrant"
+    WEAVIATE = "weaviate"
+    MILVUS = "milvus"
+    PGVECTOR = "pgvector"
+    REDIS = "redis"
+    MONGODB = "mongodb"
+    LANCEDB = "lancedb"
+
+
+class VectorMetricValues(Enum):
+    """Vector distance/similarity metrics."""
+    COSINE = "cosine"
+    EUCLIDEAN = "euclidean"
+    DOT_PRODUCT = "dot_product"
+    L2 = "l2"
+    IP = "ip"
+    HAMMING = "hamming"
 
 
 class FiMimeTypeValues(Enum):
@@ -560,11 +919,16 @@ class ModelChoices(Enum):
 
 class EvalSpanKind(Enum):
     TOOL = "TOOL"
+    CHAIN = "CHAIN"
     LLM = "LLM"
     RETRIEVER = "RETRIEVER"
     EMBEDDING = "EMBEDDING"
     AGENT = "AGENT"
     RERANKER = "RERANKER"
+    UNKNOWN = "UNKNOWN"
+    GUARDRAIL = "GUARDRAIL"
+    EVALUATOR = "EVALUATOR"
+    CONVERSATION = "CONVERSATION"
 
 class EvalName(Enum):
     CONVERSATION_COHERENCE = "conversation_coherence"
