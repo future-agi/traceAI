@@ -145,14 +145,14 @@ def _get_llm_input_messages(
         if isinstance(message, dict):
             content = message.get("content", "")
             if content and isinstance(content, str):
-                yield f"{LLM_INPUT_MESSAGES}.{index}.{MESSAGE_ROLE}", message["role"]
-                yield f"{LLM_INPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}", content
+                yield f"{GEN_AI_INPUT_MESSAGES}.{index}.{MESSAGE_ROLE}", message["role"]
+                yield f"{GEN_AI_INPUT_MESSAGES}.{index}.{MESSAGE_CONTENT}", content
 
 
 def _get_llm_output_messages(output: Any) -> Iterator[Tuple[str, AttributeValue]]:
     if output and isinstance(output, str):
-        yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_ROLE}", "assistant"
-        yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_CONTENT}", output
+        yield f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_ROLE}", "assistant"
+        yield f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_CONTENT}", output
 
 
 class _WithTracer(ABC):
@@ -182,13 +182,13 @@ class _GuardCallWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: GUARDRAIL,
+                        GEN_AI_SPAN_KIND: GUARDRAIL,
                         INPUT_VALUE: _get_input_value(
                             wrapped,
                             *args,
                             **kwargs,
                         ),
-                        RAW_INPUT: _get_raw_input(
+                        INPUT_VALUE: _get_raw_input(
                             args,
                             **kwargs,
                         ),
@@ -199,7 +199,7 @@ class _GuardCallWrapper(_WithTracer):
             span.set_attributes(dict(get_attributes_from_context()))
             try:
                 response = wrapped(*args, **kwargs)
-                span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
+                span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
@@ -230,13 +230,13 @@ class _PromptCallableWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: LLM,
+                        GEN_AI_SPAN_KIND: LLM,
                         INPUT_VALUE: _get_input_value(
                             wrapped,
                             *args,
                             **kwargs,
                         ),
-                        RAW_INPUT: _get_raw_input(
+                        INPUT_VALUE: _get_raw_input(
                             args,
                             **kwargs,
                         ),
@@ -268,7 +268,7 @@ class _PromptCallableWrapper(_WithTracer):
                 ):
                     span.set_attribute(COMPLETION_TOKENS, response.response_token_count)
 
-                span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
+                span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
@@ -299,13 +299,13 @@ class _ParseCallableWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: GUARDRAIL,
+                        GEN_AI_SPAN_KIND: GUARDRAIL,
                         INPUT_VALUE: _get_input_value(
                             wrapped,
                             *args,
                             **kwargs,
                         ),
-                        RAW_INPUT: _get_raw_input(
+                        INPUT_VALUE: _get_raw_input(
                             args,
                             **kwargs,
                         ),
@@ -316,7 +316,7 @@ class _ParseCallableWrapper(_WithTracer):
             span.set_attributes(dict(get_attributes_from_context()))
             try:
                 response = wrapped(*args, **kwargs)
-                span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
+                span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
@@ -347,7 +347,7 @@ class _PostValidationWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        RAW_INPUT: _get_raw_input(args, **kwargs),
+                        INPUT_VALUE: _get_raw_input(args, **kwargs),
                     }
                 )
             ),
@@ -383,7 +383,7 @@ class _PostValidationWrapper(_WithTracer):
                     )
                 )
                 response = wrapped(*args, **kwargs)
-                span.set_attribute(RAW_OUTPUT, _get_raw_output(response))
+                span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
@@ -395,15 +395,13 @@ class _PostValidationWrapper(_WithTracer):
 
 
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
 GUARDRAIL = FiSpanKindValues.GUARDRAIL
 LLM = FiSpanKindValues.LLM
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-PROMPT_TOKENS = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-COMPLETION_TOKENS = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+PROMPT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+COMPLETION_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE

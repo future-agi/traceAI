@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "traceAI-together"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Together AI - chat, completions, and embeddings"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "traceai_together" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+fi-instrumentation-otel = ">=0.1.11"
+together = ">=1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

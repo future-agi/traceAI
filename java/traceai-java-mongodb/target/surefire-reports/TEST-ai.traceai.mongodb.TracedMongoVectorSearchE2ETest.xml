@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.002" tests="7" errors="0" skipped="7" failures="0">
+  <properties/>
+  <testcase name="shouldInitializeTraceAI" classname="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.0">
+    <skipped message="Environment variable [MONGODB_URI] does not exist"/>
+  </testcase>
+  <testcase name="shouldInsertOneDocument" classname="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.0">
+    <skipped message="Environment variable [MONGODB_URI] does not exist"/>
+  </testcase>
+  <testcase name="shouldInsertManyDocuments" classname="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.0">
+    <skipped message="Environment variable [MONGODB_URI] does not exist"/>
+  </testcase>
+  <testcase name="shouldPerformVectorSearch" classname="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.0">
+    <skipped message="Environment variable [MONGODB_URI] does not exist"/>
+  </testcase>
+  <testcase name="shouldPerformVectorSearchWithFilter" classname="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.0">
+    <skipped message="Environment variable [MONGODB_URI] does not exist"/>
+  </testcase>
+  <testcase name="shouldDeleteDocuments" classname="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.0">
+    <skipped message="Environment variable [MONGODB_URI] does not exist"/>
+  </testcase>
+  <testcase name="shouldExposeUnwrappedCollection" classname="ai.traceai.mongodb.TracedMongoVectorSearchE2ETest" time="0.0">
+    <skipped message="Environment variable [MONGODB_URI] does not exist"/>
+  </testcase>
+</testsuite>

@@ -29,7 +29,20 @@ jest.mock('@grpc/grpc-js', () => ({
     createSsl: jest.fn(),
     createInsecure: jest.fn(),
   },
-  Metadata: jest.fn(),
+  Metadata: jest.fn().mockImplementation(() => ({
+    set: jest.fn(),
+    get: jest.fn(),
+    add: jest.fn(),
+  })),
+}));
+
+// Mock the OTLP HTTP trace exporter
+jest.mock('@opentelemetry/exporter-trace-otlp-http', () => ({
+  OTLPTraceExporter: jest.fn().mockImplementation(() => ({
+    export: jest.fn((_spans: any, callback: any) => callback({ code: 0 })),
+    shutdown: jest.fn(() => Promise.resolve()),
+    forceFlush: jest.fn(() => Promise.resolve()),
+  })),
 }));
 
 // Mock the generated client

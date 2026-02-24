@@ -103,7 +103,7 @@ class _ChatCompletionAccumulator:
         output_value = "".join(self._content)
         raw_output = safe_json_dumps(self._raw_data)
         yield SpanAttributes.OUTPUT_VALUE, output_value
-        yield SpanAttributes.RAW_OUTPUT, raw_output
+        yield SpanAttributes.OUTPUT_VALUE, raw_output
         yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:

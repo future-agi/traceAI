@@ -13,6 +13,7 @@ import { Span, diag } from "@opentelemetry/api";
 import {
   withSafety,
   isObjectWithStringKeys,
+  safelyJSONStringify,
 } from "@traceai/fi-core";
 import {
   SemanticConventions,
@@ -380,7 +381,7 @@ function setStreamingOutputAttributes({
     streaming: true,
   };
 
-  // Set output value as JSON (matching original behavior)
+  // Set output value as JSON
   setSpanAttribute(
     span,
     SemanticConventions.OUTPUT_VALUE,
@@ -392,45 +393,30 @@ function setStreamingOutputAttributes({
     "application/json",
   );
 
-  // Set the message role
-  setSpanAttribute(
-    span,
-    `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_ROLE}`,
-    "assistant",
-  );
-
-  // Set the main accumulated text content
+  // Build output message as JSON blob
+  const outputMessage: Record<string, unknown> = { role: "assistant" };
   if (outputText) {
-    setSpanAttribute(
-      span,
-      `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_CONTENT}`,
-      outputText,
-    );
+    outputMessage.content = outputText;
   }
 
-  // Set tool call attributes with sequential indexing
   const toolUseBlocks = contentBlocks.filter(
     (block) => block.type === "tool_use",
   );
-  toolUseBlocks.forEach((block, toolCallIndex) => {
-    const toolCallPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.${SemanticConventions.MESSAGE_TOOL_CALLS}.${toolCallIndex}`;
+  if (toolUseBlocks.length > 0) {
+    outputMessage.tool_calls = toolUseBlocks.map((block) => ({
+      id: block.id || "unknown",
+      function: {
+        name: block.name || "unknown",
+        arguments: JSON.stringify(block.input || {}),
+      },
+    }));
+  }
 
-    setSpanAttribute(
-      span,
-      `${toolCallPrefix}.${SemanticConventions.TOOL_CALL_ID}`,
-      block.id || "unknown",
-    );
-    setSpanAttribute(
-      span,
-      `${toolCallPrefix}.${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`,
-      block.name || "unknown",
-    );
-    setSpanAttribute(
-      span,
-      `${toolCallPrefix}.${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`,
-      JSON.stringify(block.input || {}),
-    );
-  });
+  setSpanAttribute(
+    span,
+    SemanticConventions.LLM_OUTPUT_MESSAGES,
+    safelyJSONStringify([outputMessage]) ?? "[]",
+  );
 
   // Set usage attributes
   if (usage.input_tokens !== undefined) {
