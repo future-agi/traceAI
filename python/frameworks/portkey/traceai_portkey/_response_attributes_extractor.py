@@ -32,7 +32,7 @@ class _ResponseAttributesExtractor:
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if model := getattr(completion, "model", None):
-            yield SpanAttributes.LLM_MODEL_NAME, model
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         if usage := getattr(completion, "usage", None):
             yield from self._get_attributes_from_completion_usage(usage)
         if (choices := getattr(completion, "choices", None)) and isinstance(choices, Iterable):
@@ -41,7 +41,7 @@ class _ResponseAttributesExtractor:
                     continue
                 if message := getattr(choice, "message", None):
                     for key, value in self._get_attributes_from_chat_completion_message(message):
-                        yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{key}", value
+                        yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
 
     def _get_attributes_from_chat_completion_message(
         self,
@@ -62,8 +62,8 @@ class _ResponseAttributesExtractor:
         usage: object,
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if (total_tokens := getattr(usage, "total_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_tokens
+            yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
         if (prompt_tokens := getattr(usage, "prompt_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+            yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
         if (completion_tokens := getattr(usage, "completion_tokens", None)) is not None:
-            yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+            yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens

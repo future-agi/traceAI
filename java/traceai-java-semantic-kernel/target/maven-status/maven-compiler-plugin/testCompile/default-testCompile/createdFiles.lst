@@ -1,0 +1,3 @@
+ai/traceai/semantickernel/TracedSemanticKernelE2ETest.class
+ai/traceai/semantickernel/TracedSemanticKernelE2ETest$DummyChatCompletionService.class
+ai/traceai/semantickernel/TracedSemanticKernelE2ETest$DummyEmbeddingService.class

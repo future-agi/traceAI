@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.004" tests="7" errors="0" skipped="7" failures="0">
+  <properties/>
+  <testcase name="shouldInitializeTraceAI" classname="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.0">
+    <skipped message="Environment variable [QDRANT_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldCreateCollection" classname="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.0">
+    <skipped message="Environment variable [QDRANT_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldListCollections" classname="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.0">
+    <skipped message="Environment variable [QDRANT_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldUpsertPoints" classname="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.0">
+    <skipped message="Environment variable [QDRANT_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldSearchVectors" classname="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.0">
+    <skipped message="Environment variable [QDRANT_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldGetPointsByIds" classname="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.0">
+    <skipped message="Environment variable [QDRANT_URL] does not exist"/>
+  </testcase>
+  <testcase name="shouldExposeUnwrappedClient" classname="ai.traceai.qdrant.TracedQdrantClientE2ETest" time="0.0">
+    <skipped message="Environment variable [QDRANT_URL] does not exist"/>
+  </testcase>
+</testsuite>

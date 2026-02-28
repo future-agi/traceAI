@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: ai.traceai.vertexai.TracedGenerativeModelE2ETest
+-------------------------------------------------------------------------------
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.435 s -- in ai.traceai.vertexai.TracedGenerativeModelE2ETest

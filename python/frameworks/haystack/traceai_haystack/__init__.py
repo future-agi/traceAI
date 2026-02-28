@@ -88,6 +88,8 @@ class HaystackInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                 name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(tracer=self._tracer),
             )
+        else:
+            self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
 

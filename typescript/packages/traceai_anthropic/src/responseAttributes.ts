@@ -3,96 +3,88 @@ import { Attributes, AttributeValue } from "@opentelemetry/api";
 import Anthropic from "@anthropic-ai/sdk";
 import { safelyJSONStringify } from "@traceai/fi-core";
 
-// Using Anthropic.TypeName based on SDK documentation for v0.27.3
-
 /**
- * Extracts attributes from Anthropic's MessageParam array and system prompt for LLM input.
+ * Extracts input messages as a JSON blob from Anthropic's MessageParam array and system prompt.
  */
 export function getAnthropicInputMessagesAttributes(
   params: Anthropic.MessageCreateParams,
 ): Attributes {
-  const attributes: Attributes = {};
-  let messageIndex = 0;
+  const messages: Record<string, unknown>[] = [];
 
   if (params.system) {
-    const systemMessagePrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${messageIndex}.`;
-    attributes[`${systemMessagePrefix}${SemanticConventions.MESSAGE_ROLE}`] = "system";
-    attributes[`${systemMessagePrefix}${SemanticConventions.MESSAGE_CONTENT}`] = 
-        typeof params.system === 'string' ? params.system : safelyJSONStringify(params.system) ?? "";
-    messageIndex++;
+    messages.push({
+      role: "system",
+      content: typeof params.system === 'string' ? params.system : params.system,
+    });
   }
 
   params.messages.forEach((message: Anthropic.MessageParam) => {
-    const currentMessagePrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${messageIndex}.`;
-    attributes[`${currentMessagePrefix}${SemanticConventions.MESSAGE_ROLE}`] = message.role;
+    const obj: Record<string, unknown> = { role: message.role };
 
     if (typeof message.content === "string") {
-      attributes[`${currentMessagePrefix}${SemanticConventions.MESSAGE_CONTENT}`] = message.content;
+      obj.content = message.content;
     } else if (Array.isArray(message.content)) {
-      message.content.forEach((contentBlock: Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam, blockIndex: number) => {
-        const contentBlockPrefix = `${currentMessagePrefix}${SemanticConventions.MESSAGE_CONTENTS}.${blockIndex}.`;
-        attributes[`${contentBlockPrefix}${SemanticConventions.MESSAGE_CONTENT_TYPE}`] = contentBlock.type;
-        
+      obj.content = message.content.map((contentBlock: any) => {
         if (contentBlock.type === "text") {
-          attributes[`${contentBlockPrefix}${SemanticConventions.MESSAGE_CONTENT_TEXT}`] = contentBlock.text;
+          return { type: "text", text: contentBlock.text };
         } else if (contentBlock.type === "image") {
-          attributes[`${contentBlockPrefix}${SemanticConventions.MESSAGE_CONTENT_IMAGE}`] = safelyJSONStringify(contentBlock.source) ?? "";
+          return { type: "image", source: contentBlock.source };
         } else if (contentBlock.type === "tool_use") {
-             attributes[`${contentBlockPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = safelyJSONStringify(contentBlock) ?? "";
+          return contentBlock;
         } else if (contentBlock.type === "tool_result") {
-             attributes[`${contentBlockPrefix}${SemanticConventions.MESSAGE_CONTENT}`] = safelyJSONStringify(contentBlock) ?? "";
+          return contentBlock;
         }
+        return { type: contentBlock.type };
       });
     }
-    messageIndex++;
+    messages.push(obj);
   });
-  return attributes;
+
+  return {
+    [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]",
+  };
 }
 
 /**
- * Extracts attributes from an Anthropic Message object for LLM output.
- * This is simplified to match Python SDK's output structure.
+ * Extracts output messages as a JSON blob from an Anthropic Message object.
  */
 export function getAnthropicOutputMessagesAttributes(
   response: Anthropic.Message,
 ): Attributes {
-  const attributes: Attributes = {};
-  const messagePrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`; 
-
-  attributes[`${messagePrefix}${SemanticConventions.MESSAGE_ROLE}`] = response.role;
-
+  const outputMessage: Record<string, unknown> = { role: response.role };
   let lastTextContent = "";
+  const toolCalls: Record<string, unknown>[] = [];
 
   if (response.content && Array.isArray(response.content)) {
-    let toolCallCounter = 0;
     response.content.forEach((contentBlock: Anthropic.ContentBlock) => {
       if (contentBlock.type === "text") {
         lastTextContent = (contentBlock as Anthropic.TextBlock).text;
       } else if (contentBlock.type === "tool_use") {
-        const toolCallPrefix = `${messagePrefix}${SemanticConventions.MESSAGE_TOOL_CALLS}.${toolCallCounter}.`;
         const toolUseBlock = contentBlock as Anthropic.ToolUseBlock;
-        // Python SDK does not seem to add TOOL_CALL_ID for output tool_use in _get_output_messages.
-        // attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_ID}`] = toolUseBlock.id;
-        attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`] = toolUseBlock.name;
-        attributes[`${toolCallPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`] = safelyJSONStringify(toolUseBlock.input) ?? "";
-        toolCallCounter++;
+        toolCalls.push({
+          function: { name: toolUseBlock.name, arguments: safelyJSONStringify(toolUseBlock.input) ?? "{}" },
+        });
       }
     });
   }
-  
-  if (lastTextContent) {
-    attributes[`${messagePrefix}${SemanticConventions.MESSAGE_CONTENT}`] = lastTextContent;
-  }
-  // If only tool_calls and no text, MESSAGE_CONTENT remains unset, matching Python behavior.
 
-  return attributes;
+  if (lastTextContent) {
+    outputMessage.content = lastTextContent;
+  }
+  if (toolCalls.length > 0) {
+    outputMessage.tool_calls = toolCalls;
+  }
+
+  return {
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
+  };
 }
 
 /**
  * Extracts usage attributes from an Anthropic API response.
  */
 export function getAnthropicUsageAttributes(
-  response: Anthropic.Message | { usage?: Anthropic.Usage }, 
+  response: Anthropic.Message | { usage?: Anthropic.Usage },
 ): Attributes {
   const usage = response.usage;
   if (usage) {
@@ -109,23 +101,17 @@ export function getAnthropicUsageAttributes(
 }
 
 /**
- * Extracts attributes from Anthropic tool definitions if provided in params.
+ * Extracts tool definitions as a JSON blob from Anthropic params.
  */
 export function getAnthropicToolsAttributes(
   params: Anthropic.MessageCreateParams,
 ): Attributes {
-  const attributes: Attributes = {};
   if (params.tools && Array.isArray(params.tools)) {
-    params.tools.forEach((tool: Anthropic.Tool, index: number) => {
-      const toolPrefix = `${SemanticConventions.LLM_TOOLS}.${index}.`;
-      attributes[`${toolPrefix}${SemanticConventions.TOOL_NAME}`] = tool.name;
-      if (tool.description) {
-        attributes[`${toolPrefix}${SemanticConventions.TOOL_DESCRIPTION}`] = tool.description;
-      }
-      attributes[`${toolPrefix}${SemanticConventions.TOOL_JSON_SCHEMA}`] = safelyJSONStringify(tool.input_schema) ?? "";
-    });
+    return {
+      [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(params.tools) ?? "[]",
+    };
   }
-  return attributes;
+  return {};
 }
 
 /**

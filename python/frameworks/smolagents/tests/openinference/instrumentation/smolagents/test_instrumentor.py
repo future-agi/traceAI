@@ -147,7 +147,7 @@ class TestModels:
         assert span.name == "OpenAIServerModel.__call__"
         assert span.status.is_ok
         attributes = dict(span.attributes or {})
-        assert attributes.pop(FI_SPAN_KIND) == LLM
+        assert attributes.pop(GEN_AI_SPAN_KIND) == LLM
         assert attributes.pop(INPUT_MIME_TYPE) == JSON
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         input_data = json.loads(input_value)
@@ -155,20 +155,20 @@ class TestModels:
         assert attributes.pop(OUTPUT_MIME_TYPE) == JSON
         assert isinstance(output_value := attributes.pop(OUTPUT_VALUE), str)
         assert isinstance(json.loads(output_value), dict)
-        assert attributes.pop(LLM_MODEL_NAME) == "gpt-4o"
-        assert isinstance(inv_params := attributes.pop(LLM_INVOCATION_PARAMETERS), str)
+        assert attributes.pop(GEN_AI_REQUEST_MODEL) == "gpt-4o"
+        assert isinstance(inv_params := attributes.pop(GEN_AI_REQUEST_PARAMETERS), str)
         assert json.loads(inv_params) == {}
-        assert attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "user"
+        assert attributes.pop(f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "user"
         assert (
-            attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
+            attributes.pop(f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
             == input_message_content
         )
-        assert isinstance(attributes.pop(LLM_TOKEN_COUNT_PROMPT), int)
-        assert isinstance(attributes.pop(LLM_TOKEN_COUNT_COMPLETION), int)
-        assert isinstance(attributes.pop(LLM_TOKEN_COUNT_TOTAL), int)
-        assert attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "assistant"
+        assert isinstance(attributes.pop(GEN_AI_USAGE_INPUT_TOKENS), int)
+        assert isinstance(attributes.pop(GEN_AI_USAGE_OUTPUT_TOKENS), int)
+        assert isinstance(attributes.pop(GEN_AI_USAGE_TOTAL_TOKENS), int)
+        assert attributes.pop(f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "assistant"
         assert (
-            attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
+            attributes.pop(f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
             == output_message_content
         )
         assert not attributes
@@ -228,7 +228,7 @@ class TestModels:
         assert span.name == "OpenAIServerModel.__call__"
         assert span.status.is_ok
         attributes = dict(span.attributes or {})
-        assert attributes.pop(FI_SPAN_KIND) == LLM
+        assert attributes.pop(GEN_AI_SPAN_KIND) == LLM
         assert attributes.pop(INPUT_MIME_TYPE) == JSON
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         input_data = json.loads(input_value)
@@ -236,16 +236,16 @@ class TestModels:
         assert attributes.pop(OUTPUT_MIME_TYPE) == JSON
         assert isinstance(output_value := attributes.pop(OUTPUT_VALUE), str)
         assert isinstance(json.loads(output_value), dict)
-        assert attributes.pop(LLM_MODEL_NAME) == "gpt-4o"
-        assert isinstance(inv_params := attributes.pop(LLM_INVOCATION_PARAMETERS), str)
+        assert attributes.pop(GEN_AI_REQUEST_MODEL) == "gpt-4o"
+        assert isinstance(inv_params := attributes.pop(GEN_AI_REQUEST_PARAMETERS), str)
         assert json.loads(inv_params) == {}
-        assert attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "user"
+        assert attributes.pop(f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "user"
         assert (
-            attributes.pop(f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
+            attributes.pop(f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}")
             == input_message_content
         )
         assert isinstance(
-            tool_json_schema := attributes.pop(f"{LLM_TOOLS}.0.{TOOL_JSON_SCHEMA}"), str
+            tool_json_schema := attributes.pop(f"{GEN_AI_TOOL_DEFINITIONS}.0.{TOOL_JSON_SCHEMA}"), str
         )
         assert json.loads(tool_json_schema) == {
             "type": "function",
@@ -264,25 +264,25 @@ class TestModels:
                 },
             },
         }
-        assert isinstance(attributes.pop(LLM_TOKEN_COUNT_PROMPT), int)
-        assert isinstance(attributes.pop(LLM_TOKEN_COUNT_COMPLETION), int)
-        assert isinstance(attributes.pop(LLM_TOKEN_COUNT_TOTAL), int)
-        assert attributes.pop(f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "assistant"
+        assert isinstance(attributes.pop(GEN_AI_USAGE_INPUT_TOKENS), int)
+        assert isinstance(attributes.pop(GEN_AI_USAGE_OUTPUT_TOKENS), int)
+        assert isinstance(attributes.pop(GEN_AI_USAGE_TOTAL_TOKENS), int)
+        assert attributes.pop(f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_ROLE}") == "assistant"
         assert (
             attributes.pop(
-                f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_ID}"
+                f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_ID}"
             )
             == tool_call.id
         )
         assert (
             attributes.pop(
-                f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_FUNCTION_NAME}"
+                f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_FUNCTION_NAME}"
             )
             == "get_weather"
         )
         assert isinstance(
             tool_call_arguments_json := attributes.pop(
-                f"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}"
+                f"{GEN_AI_OUTPUT_MESSAGES}.0.{MESSAGE_TOOL_CALLS}.0.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}"
             ),
             str,
         )
@@ -443,7 +443,7 @@ class TestTools:
         span = spans[0]
         attributes = dict(span.attributes or {})
 
-        assert attributes.pop(FI_SPAN_KIND) == TOOL
+        assert attributes.pop(GEN_AI_SPAN_KIND) == TOOL
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         assert json.loads(input_value) == {
             "args": ["Paris"],
@@ -452,8 +452,8 @@ class TestTools:
         }
         assert attributes.pop(OUTPUT_VALUE) == "sunny"
         assert attributes.pop(OUTPUT_MIME_TYPE) == TEXT
-        assert attributes.pop(TOOL_NAME) == "get_weather"
-        assert attributes.pop(TOOL_DESCRIPTION) == "Get the weather for a given city"
+        assert attributes.pop(GEN_AI_TOOL_NAME) == "get_weather"
+        assert attributes.pop(GEN_AI_TOOL_DESCRIPTION) == "Get the weather for a given city"
         assert isinstance(tool_parameters := attributes.pop(TOOL_PARAMETERS), str)
         assert json.loads(tool_parameters) == {
             "location": {
@@ -490,7 +490,7 @@ class TestTools:
         span = spans[0]
         attributes = dict(span.attributes or {})
 
-        assert attributes.pop(FI_SPAN_KIND) == TOOL
+        assert attributes.pop(GEN_AI_SPAN_KIND) == TOOL
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         assert json.loads(input_value) == {
             "args": ["Paris"],
@@ -504,9 +504,9 @@ class TestTools:
             "humidity": 60,
         }
         assert attributes.pop(OUTPUT_MIME_TYPE) == JSON
-        assert attributes.pop(TOOL_NAME) == "get_weather"
+        assert attributes.pop(GEN_AI_TOOL_NAME) == "get_weather"
         assert (
-            attributes.pop(TOOL_DESCRIPTION)
+            attributes.pop(GEN_AI_TOOL_DESCRIPTION)
             == "Get detailed weather information for a given city"
         )
         assert isinstance(tool_parameters := attributes.pop(TOOL_PARAMETERS), str)
@@ -541,20 +541,20 @@ TOOL = FiSpanKindValues.TOOL.value
 # span attributes
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
-LLM_TOOLS = SpanAttributes.LLM_TOOLS
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+GEN_AI_TOOL_DEFINITIONS = SpanAttributes.GEN_AI_TOOL_DEFINITIONS
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
-TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
-TOOL_NAME = SpanAttributes.TOOL_NAME
+GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
+GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS
 
 # tool attributes

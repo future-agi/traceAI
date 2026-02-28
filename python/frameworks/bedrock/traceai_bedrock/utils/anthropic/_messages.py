@@ -84,9 +84,9 @@ class _AnthropicMessagesCallback:
                     metrics := payload.get("amazon-bedrock-invocationMetrics"), dict
                 ):
                     if isinstance(v := metrics.get("inputTokenCount"), int):
-                        span.set_attribute(LLM_TOKEN_COUNT_PROMPT, v)
+                        span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, v)
                     if isinstance(v := metrics.get("outputTokenCount"), int):
-                        span.set_attribute(LLM_TOKEN_COUNT_COMPLETION, v)
+                        span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, v)
                 try:
                     self._snapshot = accumulate_event(
                         event=parse_event(payload),
@@ -99,7 +99,7 @@ class _AnthropicMessagesCallback:
             if (message := self._snapshot) is None:
                 _finish(span, None, self._request_attributes)
             else:
-                for k, v in _attributes_from_message(message, f"{LLM_OUTPUT_MESSAGES}.{0}."):
+                for k, v in _attributes_from_message(message, f"{GEN_AI_OUTPUT_MESSAGES}.{0}."):
                     span.set_attribute(k, v)
                 _finish(span, asdict(message), self._request_attributes)
         elif isinstance(obj, BaseException):
@@ -206,9 +206,9 @@ def _attributes_from_message(
         + (usage.cache_creation_input_tokens or 0)
         + (usage.cache_read_input_tokens or 0)
     ):
-        yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
     if usage.output_tokens:
-        yield LLM_TOKEN_COUNT_COMPLETION, usage.output_tokens
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, usage.output_tokens
 
 
 @_stop_on_exception
@@ -321,24 +321,24 @@ def _attributes_from_request(
     request: Mapping[str, Any],
 ) -> Iterator[tuple[str, AttributeValue]]:
     try:
-        yield LLM_MODEL_NAME, request["modelId"]
+        yield GEN_AI_REQUEST_MODEL, request["modelId"]
     except KeyError:
         pass
     num_messages = 0
     body = request["body"]
     if system := body.get("system"):
-        yield from _attributes_from_system_message(system, f"{LLM_INPUT_MESSAGES}.0.")
+        yield from _attributes_from_system_message(system, f"{GEN_AI_INPUT_MESSAGES}.0.")
         num_messages += 1
     if isinstance(messages := body.get("messages"), list):
         for i, message in enumerate(messages, num_messages):
-            yield from _attributes_from_message_param(message, f"{LLM_INPUT_MESSAGES}.{i}.")
-    yield LLM_INVOCATION_PARAMETERS, _invocation_parameters(body)
+            yield from _attributes_from_message_param(message, f"{GEN_AI_INPUT_MESSAGES}.{i}.")
+    yield GEN_AI_REQUEST_PARAMETERS, _invocation_parameters(body)
     if tools := body.get("tools"):
         for i, tool in enumerate(tools):
-            yield from _attributes_from_tool(tool, f"{LLM_TOOLS}.{i}.")
+            yield from _attributes_from_tool(tool, f"{GEN_AI_TOOL_DEFINITIONS}.{i}.")
     yield INPUT_MIME_TYPE, JSON
     yield INPUT_VALUE, safe_json_dumps(body)
-    yield FI_SPAN_KIND, LLM
+    yield GEN_AI_SPAN_KIND, LLM
 
 
 def _invocation_parameters(
@@ -356,14 +356,14 @@ INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 JSON = FiMimeTypeValues.JSON.value
 LLM = FiSpanKindValues.LLM.value
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
-LLM_TOOLS = SpanAttributes.LLM_TOOLS
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+GEN_AI_TOOL_DEFINITIONS = SpanAttributes.GEN_AI_TOOL_DEFINITIONS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENTS = MessageAttributes.MESSAGE_CONTENTS
 MESSAGE_CONTENT_IMAGE = MessageContentAttributes.MESSAGE_CONTENT_IMAGE
@@ -373,7 +373,7 @@ MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON

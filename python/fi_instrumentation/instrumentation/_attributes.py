@@ -172,7 +172,7 @@ def get_context_attributes(
 
 
 def get_session_attributes(*, session_id: str) -> Dict[str, AttributeValue]:
-    return {SESSION_ID: session_id}
+    return {GEN_AI_CONVERSATION_ID: session_id}
 
 
 def get_tag_attributes(*, tags: List[str]) -> Dict[str, AttributeValue]:
@@ -195,7 +195,7 @@ def get_user_id_attributes(*, user_id: str) -> Dict[str, AttributeValue]:
 def get_span_kind_attributes(kind: "FiSpanKind", /) -> Dict[str, AttributeValue]:
     normalized_kind = _normalize_fi_span_kind(kind)
     return {
-        FI_SPAN_KIND: normalized_kind.value,
+        GEN_AI_SPAN_KIND: normalized_kind.value,
     }
 
 
@@ -298,11 +298,11 @@ def get_tool_attributes(
     else:
         raise ValueError(f"Invalid parameters type: {type(parameters)}")
     attributes: Dict[str, AttributeValue] = {
-        TOOL_NAME: name,
+        GEN_AI_TOOL_NAME: name,
         TOOL_PARAMETERS: parameters_json,
     }
     if description is not None:
-        attributes[TOOL_DESCRIPTION] = description
+        attributes[GEN_AI_TOOL_DESCRIPTION] = description
     return attributes
 
 
@@ -366,9 +366,9 @@ def get_llm_provider_attributes(
     provider: Optional[FiLLMProvider],
 ) -> "Mapping[str, AttributeValue]":
     if isinstance(provider, FiLLMProviderValues):
-        return {LLM_PROVIDER: provider.value}
+        return {GEN_AI_PROVIDER_NAME: provider.value}
     if isinstance(provider, str):
-        return {LLM_PROVIDER: provider.lower()}
+        return {GEN_AI_PROVIDER_NAME: provider.lower()}
     return {}
 
 
@@ -376,9 +376,9 @@ def get_llm_system_attributes(
     system: Optional[FiLLMSystem],
 ) -> "Mapping[str, AttributeValue]":
     if isinstance(system, FiLLMSystemValues):
-        return {LLM_SYSTEM: system.value}
+        return {GEN_AI_PROVIDER_NAME: system.value}
     if isinstance(system, str):
-        return {LLM_SYSTEM: system.lower()}
+        return {GEN_AI_PROVIDER_NAME: system.lower()}
     return {}
 
 
@@ -386,7 +386,7 @@ def get_llm_model_name_attributes(
     model_name: Optional[str],
 ) -> "Mapping[str, AttributeValue]":
     if isinstance(model_name, str):
-        return {LLM_MODEL_NAME: model_name}
+        return {GEN_AI_REQUEST_MODEL: model_name}
     return {}
 
 
@@ -394,9 +394,9 @@ def get_llm_invocation_parameter_attributes(
     invocation_parameters: Optional[Union[str, Dict[str, Any]]],
 ) -> "Mapping[str, AttributeValue]":
     if isinstance(invocation_parameters, str):
-        return {LLM_INVOCATION_PARAMETERS: invocation_parameters}
+        return {GEN_AI_REQUEST_PARAMETERS: invocation_parameters}
     elif isinstance(invocation_parameters, Dict):
-        return {LLM_INVOCATION_PARAMETERS: _json_serialize(invocation_parameters)}
+        return {GEN_AI_REQUEST_PARAMETERS: _json_serialize(invocation_parameters)}
     return {}
 
 
@@ -420,7 +420,7 @@ def _llm_messages_attributes(
     messages: Optional["Sequence[Message]"],
     message_type: Literal["input", "output"],
 ) -> Iterator[Tuple[str, AttributeValue]]:
-    base_key = LLM_INPUT_MESSAGES if message_type == "input" else LLM_OUTPUT_MESSAGES
+    base_key = GEN_AI_INPUT_MESSAGES if message_type == "input" else GEN_AI_OUTPUT_MESSAGES
     if not isinstance(messages, Sequence):
         return
     for message_index, message in enumerate(messages):
@@ -486,19 +486,19 @@ def get_llm_token_count_attributes(
     attributes: Dict[str, AttributeValue] = {}
     if isinstance(token_count, dict):
         if (prompt := token_count.get("prompt")) is not None:
-            attributes[LLM_TOKEN_COUNT_PROMPT] = prompt
+            attributes[GEN_AI_USAGE_INPUT_TOKENS] = prompt
         if (completion := token_count.get("completion")) is not None:
-            attributes[LLM_TOKEN_COUNT_COMPLETION] = completion
+            attributes[GEN_AI_USAGE_OUTPUT_TOKENS] = completion
         if (total := token_count.get("total")) is not None:
-            attributes[LLM_TOKEN_COUNT_TOTAL] = total
+            attributes[GEN_AI_USAGE_TOTAL_TOKENS] = total
         if (prompt_details := token_count.get("prompt_details")) is not None:
             if isinstance(prompt_details, dict):
                 if (cache_write := prompt_details.get("cache_write")) is not None:
-                    attributes[LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE] = cache_write
+                    attributes[GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE] = cache_write
                 if (cache_read := prompt_details.get("cache_read")) is not None:
-                    attributes[LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ] = cache_read
+                    attributes[GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ] = cache_read
                 if (audio := prompt_details.get("audio")) is not None:
-                    attributes[LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO] = audio
+                    attributes[GEN_AI_USAGE_INPUT_TOKENS_AUDIO] = audio
     return attributes
 
 
@@ -512,9 +512,9 @@ def get_llm_tool_attributes(
         if not isinstance(tool, dict):
             continue
         if isinstance(tool_json_schema := tool.get("json_schema"), str):
-            attributes[f"{LLM_TOOLS}.{tool_index}.{TOOL_JSON_SCHEMA}"] = tool_json_schema
+            attributes[f"{GEN_AI_TOOL_DEFINITIONS}.{tool_index}.{TOOL_JSON_SCHEMA}"] = tool_json_schema
         elif isinstance(tool_json_schema, dict):
-            attributes[f"{LLM_TOOLS}.{tool_index}.{TOOL_JSON_SCHEMA}"] = _json_serialize(
+            attributes[f"{GEN_AI_TOOL_DEFINITIONS}.{tool_index}.{TOOL_JSON_SCHEMA}"] = _json_serialize(
                 tool_json_schema
             )
     return attributes
@@ -557,30 +557,30 @@ EMBEDDING_EMBEDDINGS = SpanAttributes.EMBEDDING_EMBEDDINGS
 EMBEDDING_MODEL_NAME = SpanAttributes.EMBEDDING_MODEL_NAME
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_PROVIDER = SpanAttributes.LLM_PROVIDER
-LLM_SYSTEM = SpanAttributes.LLM_SYSTEM
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO = SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO
-LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ = SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ
-LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE = (
-    SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_PROVIDER_NAME = SpanAttributes.GEN_AI_PROVIDER_NAME
+GEN_AI_PROVIDER_NAME = SpanAttributes.GEN_AI_PROVIDER_NAME
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS_AUDIO = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_AUDIO
+GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ
+GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE = (
+    SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_WRITE
 )
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
-LLM_TOOLS = SpanAttributes.LLM_TOOLS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+GEN_AI_TOOL_DEFINITIONS = SpanAttributes.GEN_AI_TOOL_DEFINITIONS
 METADATA = SpanAttributes.METADATA
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
-SESSION_ID = SpanAttributes.SESSION_ID
+GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
 TAG_TAGS = SpanAttributes.TAG_TAGS
-TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
-TOOL_NAME = SpanAttributes.TOOL_NAME
+GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
+GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS
 USER_ID = SpanAttributes.USER_ID
 

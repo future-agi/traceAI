@@ -40,7 +40,7 @@ class _ResponseAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         # https://github.com/googleapis/python-genai/blob/e9e84aa38726e7b65796812684d9609461416b11/google/genai/types.py#L2981  # noqa: E501
         if model_version := getattr(response, "model_version", None):
-            yield SpanAttributes.LLM_MODEL_NAME, model_version
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model_version
         if usage_metadata := getattr(response, "usage_metadata", None):
             yield from self._get_attributes_from_generate_content_usage(usage_metadata)
         if (candidates := getattr(response, "candidates", None)) and isinstance(
@@ -58,7 +58,7 @@ class _ResponseAttributesExtractor:
                 )
                 if content := getattr(candidate, "content", None):
                     for key, value in self._get_attributes_from_generate_content_content(content):
-                        yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{key}", value
+                        yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
 
         # Handle automatic function calling history
         # For automatic function calling, the function call details are stored separately
@@ -132,7 +132,7 @@ class _ResponseAttributesExtractor:
         obj: types.GenerateContentResponseUsageMetadata,
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if total := obj.total_token_count:
-            yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total
+            yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total
         if obj.prompt_tokens_details:
             prompt_details_audio = 0
             for modality_token_count in obj.prompt_tokens_details:
@@ -143,11 +143,11 @@ class _ResponseAttributesExtractor:
                     prompt_details_audio += modality_token_count.token_count
             if prompt_details_audio:
                 yield (
-                    SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO,
+                    SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_AUDIO,
                     prompt_details_audio,
                 )
         if prompt := obj.prompt_token_count:
-            yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt
+            yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt
         if obj.candidates_tokens_details:
             completion_details_audio = 0
             for modality_token_count in obj.candidates_tokens_details:
@@ -158,17 +158,17 @@ class _ResponseAttributesExtractor:
                     completion_details_audio += modality_token_count.token_count
             if completion_details_audio:
                 yield (
-                    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO,
+                    SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_AUDIO,
                     completion_details_audio,
                 )
         completion = 0
         if candidates := obj.candidates_token_count:
             completion += candidates
         if thoughts := obj.thoughts_token_count:
-            yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, thoughts
+            yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING, thoughts
             completion += thoughts
         if completion:
-            yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion
+            yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion
 
     def _get_attributes_from_automatic_function_calling_history(
         self,

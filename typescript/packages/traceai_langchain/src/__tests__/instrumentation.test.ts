@@ -1,15 +1,11 @@
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 let LangChainInstrumentation: any;
 let isPatched: any;
+let _resetPatchedStateForTesting: any;
 let FITracer: any;
 
-// Mock LangChain CallbackManager module
-const mockCallbackManagerModule = {
-  CallbackManager: {
-    configure: jest.fn(),
-    _configureSync: jest.fn(),
-  },
-};
+// Mock LangChain CallbackManager module — fresh mocks are created in beforeEach
+let mockCallbackManagerModule: any;
 
 // Mock FITracer
 jest.mock('@traceai/fi-core', () => ({
@@ -47,17 +43,16 @@ jest.mock('@traceai/fi-core', () => ({
   TraceConfigOptions: {},
 }));
 
-// Mock addTracerToHandlers utility by resolved path so it applies to instrumentation's import as well
-const addTracerToHandlersMock = jest.fn((tracer: any, handlers: any) => {
-  const list = Array.isArray(handlers) ? handlers : [];
-  return [...list, { tracer }];
-});
-jest.doMock(require.resolve('../instrumentationUtils'), () => ({
-  addTracerToHandlers: addTracerToHandlersMock,
+// Mock addTracerToHandlers — use the path as it appears in the source file's import
+jest.mock('../instrumentationUtils', () => ({
+  addTracerToHandlers: jest.fn((tracer: any, handlers: any) => {
+    const list = Array.isArray(handlers) ? handlers : [];
+    return [...list, { tracer }];
+  }),
 }));
 
 // Now import after mocks so the implementation uses mocked dependencies
-({ LangChainInstrumentation, isPatched } = require('../instrumentation'));
+({ LangChainInstrumentation, isPatched, _resetPatchedStateForTesting } = require('../instrumentation'));
 ({ FITracer } = require('@traceai/fi-core'));
 
 describe('LangChain Instrumentation', () => {
@@ -66,7 +61,16 @@ describe('LangChain Instrumentation', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    
+    _resetPatchedStateForTesting();
+
+    // Create a fresh mock module for each test to avoid cross-test contamination
+    mockCallbackManagerModule = {
+      CallbackManager: {
+        configure: jest.fn(),
+        _configureSync: jest.fn(),
+      },
+    };
+
     // Create a mock tracer
     mockTracer = {
       startSpan: jest.fn().mockReturnValue((global as any).testUtils.createMockSpan()),
@@ -128,17 +132,17 @@ describe('LangChain Instrumentation', () => {
 
     it('should patch CallbackManager module', () => {
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
+
       expect(mockCallbackManagerModule.CallbackManager.configure).toBeDefined();
     });
 
     it('should not double-patch', () => {
       // First patch
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
+
       // Second patch attempt
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
+
       // Should still be defined and not throw
       expect(mockCallbackManagerModule.CallbackManager.configure).toBeDefined();
       expect(isPatched()).toBe(true);
@@ -146,26 +150,30 @@ describe('LangChain Instrumentation', () => {
   });
 
   describe('CallbackManager _configureSync Patching (v0.2.0+)', () => {
+    let originalConfigureSync: jest.Mock;
+
     beforeEach(() => {
-      // Reset the mock to have _configureSync (v0.2.0+ behavior)
-      mockCallbackManagerModule.CallbackManager._configureSync = jest.fn();
+      // Keep a reference to the original mock before patching replaces it
+      originalConfigureSync = mockCallbackManagerModule.CallbackManager._configureSync;
     });
 
     it('should patch _configureSync when available', () => {
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
+
       // Should call _configureSync with modified handlers
       const testHandlers = [{ name: 'existing-handler' }];
       mockCallbackManagerModule.CallbackManager._configureSync(testHandlers);
-      
-      expect(mockCallbackManagerModule.CallbackManager._configureSync).toHaveBeenCalled();
+
+      // The original should have been called (via the wrapper)
+      expect(originalConfigureSync).toHaveBeenCalled();
     });
 
     it('should add tracer to handlers in _configureSync', () => {
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
       const testHandlers = [{ name: 'existing-handler' }];
       mockCallbackManagerModule.CallbackManager._configureSync(testHandlers);
-      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      // The original jest.fn is called with the modified handlers (tracer appended by the mock)
+      const calledWith = originalConfigureSync.mock.calls[0][0] as any[];
       expect(Array.isArray(calledWith)).toBe(true);
       expect(calledWith.length).toBe(testHandlers.length + 1);
     });
@@ -180,36 +188,44 @@ describe('LangChain Instrumentation', () => {
 
     it('should patch configure when _configureSync is not available', () => {
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
+
       expect(mockCallbackManagerModule.CallbackManager.configure).toBeDefined();
     });
   });
 
   describe('Handler Integration', () => {
+    let originalConfigureSync: jest.Mock;
+
+    beforeEach(() => {
+      // Keep a reference to the original mock before patching replaces it
+      originalConfigureSync = mockCallbackManagerModule.CallbackManager._configureSync;
+    });
+
     it('should integrate with existing handlers', () => {
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
       const existingHandlers = [
         { name: 'console-handler' },
         { name: 'file-handler' },
       ];
-      mockCallbackManagerModule.CallbackManager._configureSync?.(existingHandlers);
-      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      mockCallbackManagerModule.CallbackManager._configureSync(existingHandlers);
+      // Check the original mock was called with the modified handlers
+      const calledWith = originalConfigureSync.mock.calls[0][0] as any[];
       expect(Array.isArray(calledWith)).toBe(true);
       expect(calledWith.length).toBe(existingHandlers.length + 1);
     });
 
     it('should handle empty handlers array', () => {
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      mockCallbackManagerModule.CallbackManager._configureSync?.([]);
-      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      mockCallbackManagerModule.CallbackManager._configureSync([]);
+      const calledWith = originalConfigureSync.mock.calls[0][0] as any[];
       expect(Array.isArray(calledWith)).toBe(true);
       expect(calledWith.length).toBe(1);
     });
 
     it('should handle undefined handlers', () => {
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      mockCallbackManagerModule.CallbackManager._configureSync?.(undefined);
-      const calledWith = mockCallbackManagerModule.CallbackManager._configureSync.mock.calls[0][0] as any[];
+      mockCallbackManagerModule.CallbackManager._configureSync(undefined);
+      const calledWith = originalConfigureSync.mock.calls[0][0] as any[];
       expect(Array.isArray(calledWith)).toBe(true);
       expect(calledWith.length).toBe(1);
     });
@@ -255,8 +271,6 @@ describe('LangChain Instrumentation', () => {
 
   describe('Unpatch', () => {
     it('should properly unpatch _configureSync', () => {
-      // Ensure method exists even if previous tests deleted it
-      mockCallbackManagerModule.CallbackManager._configureSync = jest.fn();
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
       expect(isPatched()).toBe(true);
       instrumentation.disable();
@@ -267,15 +281,15 @@ describe('LangChain Instrumentation', () => {
       // Remove _configureSync to simulate older version
       delete (mockCallbackManagerModule.CallbackManager as any)._configureSync;
       mockCallbackManagerModule.CallbackManager.configure = jest.fn();
-      
+
       instrumentation.manuallyInstrument(mockCallbackManagerModule as any);
-      
+
       // Verify it's patched
       expect(isPatched()).toBe(true);
-      
+
       // Unpatch
       instrumentation.disable();
-      
+
       // Should still be defined but restored
       expect(mockCallbackManagerModule.CallbackManager.configure).toBeDefined();
     });
@@ -298,7 +312,7 @@ describe('LangChain Instrumentation', () => {
       };
 
       instrumentation.manuallyInstrument(v01Module as any);
-      
+
       expect(v01Module.CallbackManager.configure).toBeDefined();
       expect((v01Module as any).CallbackManager._configureSync).toBeUndefined();
     });
@@ -312,7 +326,7 @@ describe('LangChain Instrumentation', () => {
       };
 
       instrumentation.manuallyInstrument(v02Module as any);
-      
+
       expect(v02Module.CallbackManager.configure).toBeDefined();
       expect(v02Module.CallbackManager._configureSync).toBeDefined();
     });
@@ -380,4 +394,4 @@ describe('LangChain Instrumentation', () => {
       }).not.toThrow();
     });
   });
-}); 
+});

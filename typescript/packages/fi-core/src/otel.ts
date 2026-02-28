@@ -15,6 +15,7 @@ import {
   SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter as _OTLPGRPCTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
+import { OTLPTraceExporter as _OTLPHTTPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import {
   BasicTracerProvider,
   BatchSpanProcessor as OTelBatchSpanProcessor,
@@ -41,7 +42,7 @@ export const SESSION_NAME = "session_name";
 
 // Default base URL if not overridden by environment or direct config
 const DEFAULT_FI_COLLECTOR_BASE_URL = "https://api.futureagi.com";
-const FI_COLLECTOR_PATH = "/tracer/observation-span/create_otel_span/";
+const FI_COLLECTOR_PATH = "/tracer/v1/traces";
 const FI_CUSTOM_EVAL_CONFIG_CHECK_PATH = "/tracer/custom-eval-config/check_exists/";
 const FI_CUSTOM_EVAL_TEMPLATE_CHECK_PATH = "/tracer/custom-eval-config/get_custom_eval_by_name/";
 
@@ -76,7 +77,10 @@ class UuidIdGenerator implements IdGenerator {
   }
 }
 
-// --- Custom HTTPSpanExporter ---
+/**
+ * @deprecated Use the standard OTLPTraceExporter from `@opentelemetry/exporter-trace-otlp-http` instead.
+ * This custom exporter sent a proprietary JSON format. The SDK now uses standard OTLP HTTP protobuf.
+ */
 class HTTPSpanExporter implements SpanExporter {
   private readonly endpoint: string;
   private readonly headers: FIHeaders;
@@ -375,7 +379,7 @@ class FITracerProvider extends BasicTracerProvider {
     if (transport === Transport.GRPC) {
       exporter = new GRPCSpanExporter({ endpoint, headers, verbose: config.verbose });
     } else {
-      exporter = new HTTPSpanExporter({ endpoint, headers, verbose: config.verbose });
+      exporter = new _OTLPHTTPTraceExporter({ url: endpoint, headers });
     }
     
     const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
@@ -585,10 +589,9 @@ if (!projectName) {
         verbose: verbose
       });
     } else {
-      batchExporter = new HTTPSpanExporter({
-        endpoint: (tracerProvider as any).endpoint,
+      batchExporter = new _OTLPHTTPTraceExporter({
+        url: (tracerProvider as any).endpoint,
         headers: exporterHeaders,
-        verbose: verbose
       });
     }
     const batchProcessor = new OTelBatchSpanProcessor(batchExporter);

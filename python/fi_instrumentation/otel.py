@@ -40,6 +40,7 @@ from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor as _BatchSpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.trace import Status, StatusCode
 
 try:
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -69,6 +70,25 @@ class Transport(str, Enum):
     HTTP = "http"
 
 
+class SemanticConvention(str, Enum):
+    """
+    Semantic convention standard to use for span attributes.
+
+    This determines how trace attributes are named and structured:
+    - FI: FutureAGI native convention (default) - uses fi.* namespace
+    - OTEL_GENAI: OpenTelemetry GenAI SIG convention - uses gen_ai.* namespace
+    - OPENINFERENCE: Arize Phoenix convention - uses openinference.* namespace
+    - OPENLLMETRY: Traceloop convention - uses traceloop.* namespace
+    """
+    FI = "fi"
+    OTEL_GENAI = "otel_genai"
+    OPENINFERENCE = "openinference"
+    OPENLLMETRY = "openllmetry"
+
+
+SEMANTIC_CONVENTION = "semantic_convention"
+
+
 def register(
     *,
     project_name: Optional[str] = None,
@@ -81,6 +101,7 @@ def register(
     headers: Optional[Dict[str, str]] = None,
     verbose: bool = True,
     transport: Transport = Transport.HTTP,
+    semantic_convention: SemanticConvention = SemanticConvention.FI,
 ) -> _TracerProvider:
 
     eval_tags = eval_tags or []
@@ -128,6 +149,7 @@ def register(
         PROJECT_VERSION_ID: project_version_id,
         EVAL_TAGS: json.dumps(eval_tags),
         METADATA: json.dumps(metadata),
+        SEMANTIC_CONVENTION: semantic_convention.value,
     }
 
     resource = Resource(attributes=resource_attributes)
@@ -334,6 +356,25 @@ class TracerProvider(_TracerProvider):
         return self
 
 
+def _auto_set_ok_status(span: Any) -> None:
+    """
+    Auto-set OK status on spans that have UNSET status and no error events.
+
+    Called in SpanProcessor.on_end() before the span is exported. At this point
+    the span is no longer recording so we set _status directly.
+    """
+    if not hasattr(span, "status"):
+        return
+    if span.status.status_code != StatusCode.UNSET:
+        return
+    has_error = any(
+        event.name in ("exception", "error")
+        for event in (getattr(span, "events", None) or [])
+    )
+    if not has_error:
+        span._status = Status(StatusCode.OK)
+
+
 class SimpleSpanProcessor(_SimpleSpanProcessor):
     """
     Simple SpanProcessor implementation.
@@ -385,7 +426,9 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
         super().on_start(span, parent_context)
 
     def on_end(self, span: Any) -> None:
-        """Remove span from tracking when it ends naturally"""
+        """Auto-set OK status for UNSET spans and remove from tracking."""
+        _auto_set_ok_status(span)
+
         if hasattr(span, "context") and hasattr(span.context, "span_id"):
             self._active_spans.pop(span.context.span_id, None)
 
@@ -406,7 +449,7 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
                     if hasattr(span, "is_recording") and span.is_recording():
                         try:
                             # Mark the span as leaked
-                            span.set_attribute("fi.span.leaked", True)
+                            span.set_attribute("gen_ai.span.leaked", True)
                             span.end()
                         except Exception as e:
                             pass
@@ -466,6 +509,11 @@ class BatchSpanProcessor(_BatchSpanProcessor):
                 span_exporter = GRPCSpanExporter(endpoint=endpoint, headers=headers)
 
         super().__init__(span_exporter)
+
+    def on_end(self, span: Any) -> None:
+        """Auto-set OK status for UNSET spans before batching."""
+        _auto_set_ok_status(span)
+        super().on_end(span)
 
 
 class GRPCSpanExporter(_GRPCSpanExporter):
