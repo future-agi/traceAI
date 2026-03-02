@@ -81,13 +81,9 @@ class TracedChatModelE2ETest {
         ChatModel stubModel = new StubChatModel();
         TracedChatModel traced = new TracedChatModel(stubModel, tracer, "stub-provider");
 
-        try {
-            ChatResponse response = traced.call(new Prompt("Hello, world!"));
-            // The stub returns null, but the span should still be exported
-        } catch (Exception e) {
-            // Even error spans get exported -- this is fine for E2E verification
-            System.out.println("Expected error from stub model: " + e.getMessage());
-        }
+        ChatResponse response = traced.call(new Prompt("Hello, world!"));
+        // The stub returns null; verify the traced wrapper handles it gracefully
+        System.out.println("[E2E] Spring AI call response: " + response);
     }
 
     @Test
@@ -96,16 +92,11 @@ class TracedChatModelE2ETest {
         ChatModel stubModel = new StubChatModel();
         TracedChatModel traced = new TracedChatModel(stubModel, tracer, "stub-provider");
 
-        try {
-            Flux<ChatResponse> stream = traced.stream(new Prompt("Stream test"));
-            if (stream != null) {
-                // Subscribe to trigger the stream span
-                stream.blockFirst();
-            }
-        } catch (Exception e) {
-            // Even error spans get exported
-            System.out.println("Expected error from stub stream: " + e.getMessage());
-        }
+        Flux<ChatResponse> stream = traced.stream(new Prompt("Stream test"));
+        assertThat(stream).isNotNull();
+        // Subscribe to trigger the stream span; stub returns Flux.empty() so blockFirst returns null
+        ChatResponse first = stream.blockFirst();
+        System.out.println("[E2E] Spring AI stream first element: " + first);
     }
 
     @Test

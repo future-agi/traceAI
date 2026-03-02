@@ -95,13 +95,12 @@ class TracedAzureOpenAIClientE2ETest {
         ));
         options.setMaxTokens(50);
 
-        try {
-            ChatCompletions result = tracedClient.getChatCompletions(deploymentName, options);
-            System.out.println("[E2E] Azure OpenAI chat response: " +
-                result.getChoices().get(0).getMessage().getContent());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        ChatCompletions result = tracedClient.getChatCompletions(deploymentName, options);
+        assertThat(result).isNotNull();
+        assertThat(result.getChoices()).isNotEmpty();
+        String content = result.getChoices().get(0).getMessage().getContent();
+        assertThat(content).isNotEmpty();
+        System.out.println("[E2E] Azure OpenAI chat response: " + content);
     }
 
     @Test
@@ -111,13 +110,12 @@ class TracedAzureOpenAIClientE2ETest {
             List.of("Hello from Java E2E test")
         );
 
-        try {
-            Embeddings result = tracedClient.getEmbeddings("text-embedding-ada-002", options);
-            System.out.println("[E2E] Azure OpenAI embedding dimensions: " +
-                result.getData().get(0).getEmbedding().size());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        Embeddings result = tracedClient.getEmbeddings("text-embedding-ada-002", options);
+        assertThat(result).isNotNull();
+        assertThat(result.getData()).isNotEmpty();
+        assertThat(result.getData().get(0).getEmbedding()).isNotEmpty();
+        System.out.println("[E2E] Azure OpenAI embedding dimensions: " +
+            result.getData().get(0).getEmbedding().size());
     }
 
     @Test
@@ -128,13 +126,12 @@ class TracedAzureOpenAIClientE2ETest {
         );
         options.setMaxTokens(20);
 
-        try {
-            Completions result = tracedClient.getCompletions(deploymentName, options);
-            System.out.println("[E2E] Azure OpenAI completions response: " +
-                result.getChoices().get(0).getText());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        Completions result = tracedClient.getCompletions(deploymentName, options);
+        assertThat(result).isNotNull();
+        assertThat(result.getChoices()).isNotEmpty();
+        String text = result.getChoices().get(0).getText();
+        assertThat(text).isNotEmpty();
+        System.out.println("[E2E] Azure OpenAI completions response: " + text);
     }
 
     @Test

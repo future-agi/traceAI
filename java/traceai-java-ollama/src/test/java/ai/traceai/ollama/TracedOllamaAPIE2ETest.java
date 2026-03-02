@@ -83,53 +83,44 @@ class TracedOllamaAPIE2ETest {
 
     @Test
     @Order(1)
-    void shouldExportGenerateSpan() {
-        try {
-            OllamaResult result = tracedApi.generate(modelName,
-                "Say 'Hello from Java E2E test' and nothing else.");
-            System.out.println("[E2E] Ollama generate response: " + result.getResponse());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+    void shouldExportGenerateSpan() throws Exception {
+        OllamaResult result = tracedApi.generate(modelName,
+            "Say 'Hello from Java E2E test' and nothing else.");
+        assertThat(result).isNotNull();
+        assertThat(result.getResponse()).isNotEmpty();
+        System.out.println("[E2E] Ollama generate response: " + result.getResponse());
     }
 
     @Test
     @Order(2)
-    void shouldExportChatSpan() {
-        try {
-            List<OllamaChatMessage> messages = List.of(
-                new OllamaChatMessage(OllamaChatMessageRole.USER,
-                    "What is 2 + 2? Reply with just the number.")
-            );
+    void shouldExportChatSpan() throws Exception {
+        List<OllamaChatMessage> messages = List.of(
+            new OllamaChatMessage(OllamaChatMessageRole.USER,
+                "What is 2 + 2? Reply with just the number.")
+        );
 
-            OllamaChatResult result = tracedApi.chat(modelName, messages);
-            System.out.println("[E2E] Ollama chat response: " + result.getResponse());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        OllamaChatResult result = tracedApi.chat(modelName, messages);
+        assertThat(result).isNotNull();
+        assertThat(result.getResponse()).isNotEmpty();
+        System.out.println("[E2E] Ollama chat response: " + result.getResponse());
     }
 
     @Test
     @Order(3)
-    void shouldExportEmbedSpan() {
-        try {
-            List<Double> embedding = tracedApi.embed(modelName,
-                "Hello from Java E2E test");
-            System.out.println("[E2E] Ollama embedding dimensions: " + embedding.size());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+    void shouldExportEmbedSpan() throws Exception {
+        List<Double> embedding = tracedApi.embed(modelName,
+            "Hello from Java E2E test");
+        assertThat(embedding).isNotNull();
+        assertThat(embedding).isNotEmpty();
+        System.out.println("[E2E] Ollama embedding dimensions: " + embedding.size());
     }
 
     @Test
     @Order(4)
-    void shouldExportListModelsSpan() {
-        try {
-            List<String> models = tracedApi.listModels();
-            System.out.println("[E2E] Ollama models available: " + models);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+    void shouldExportListModelsSpan() throws Exception {
+        List<String> models = tracedApi.listModels();
+        assertThat(models).isNotNull();
+        System.out.println("[E2E] Ollama models available: " + models);
     }
 
     @Test

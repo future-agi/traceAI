@@ -83,12 +83,10 @@ class TracedCohereClientE2ETest {
             .maxTokens(50)
             .build();
 
-        try {
-            NonStreamedChatResponse response = tracedClient.chat(request);
-            System.out.println("[E2E] Cohere chat response: " + response.getText());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        NonStreamedChatResponse response = tracedClient.chat(request);
+        assertThat(response).isNotNull();
+        assertThat(response.getText()).isNotEmpty();
+        System.out.println("[E2E] Cohere chat response: " + response.getText());
     }
 
     @Test
@@ -101,12 +99,10 @@ class TracedCohereClientE2ETest {
             .maxTokens(10)
             .build();
 
-        try {
-            NonStreamedChatResponse response = tracedClient.chat(request);
-            System.out.println("[E2E] Cohere deterministic chat response: " + response.getText());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        NonStreamedChatResponse response = tracedClient.chat(request);
+        assertThat(response).isNotNull();
+        assertThat(response.getText()).isNotEmpty();
+        System.out.println("[E2E] Cohere deterministic chat response: " + response.getText());
     }
 
     @Test
@@ -118,12 +114,9 @@ class TracedCohereClientE2ETest {
             .inputType(EmbedInputType.SEARCH_DOCUMENT)
             .build();
 
-        try {
-            EmbedResponse response = tracedClient.embed(request);
-            System.out.println("[E2E] Cohere embed response received");
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        EmbedResponse response = tracedClient.embed(request);
+        assertThat(response).isNotNull();
+        System.out.println("[E2E] Cohere embed response received");
     }
 
     @Test
@@ -140,13 +133,11 @@ class TracedCohereClientE2ETest {
             .topN(2)
             .build();
 
-        try {
-            RerankResponse response = tracedClient.rerank(request);
-            System.out.println("[E2E] Cohere rerank top result index: " +
-                response.getResults().get(0).getIndex());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        RerankResponse response = tracedClient.rerank(request);
+        assertThat(response).isNotNull();
+        assertThat(response.getResults()).isNotEmpty();
+        System.out.println("[E2E] Cohere rerank top result index: " +
+            response.getResults().get(0).getIndex());
     }
 
     @Test

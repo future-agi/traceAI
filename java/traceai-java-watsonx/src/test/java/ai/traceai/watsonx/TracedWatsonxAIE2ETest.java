@@ -72,35 +72,32 @@ class TracedWatsonxAIE2ETest {
     @Test
     @Order(1)
     void shouldExportGenerateTextSpan() {
-        try {
-            // The dummy client will fail on reflection call, but the span is exported
+        // The dummy client will fail on reflection call, but the span is exported
+        Exception thrown = Assertions.assertThrows(Exception.class, () -> {
             tracedClient.generateText("dummy-request");
-            System.out.println("[E2E] Watsonx generateText succeeded");
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        });
+        assertThat(thrown).isNotNull();
+        System.out.println("[E2E] Watsonx generateText error (expected with dummy client): " + thrown.getMessage());
     }
 
     @Test
     @Order(2)
     void shouldExportChatSpan() {
-        try {
+        Exception thrown = Assertions.assertThrows(Exception.class, () -> {
             tracedClient.chat("dummy-request");
-            System.out.println("[E2E] Watsonx chat succeeded");
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        });
+        assertThat(thrown).isNotNull();
+        System.out.println("[E2E] Watsonx chat error (expected with dummy client): " + thrown.getMessage());
     }
 
     @Test
     @Order(3)
     void shouldExportEmbedTextSpan() {
-        try {
+        Exception thrown = Assertions.assertThrows(Exception.class, () -> {
             tracedClient.embedText("dummy-request");
-            System.out.println("[E2E] Watsonx embedText succeeded");
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        });
+        assertThat(thrown).isNotNull();
+        System.out.println("[E2E] Watsonx embedText error (expected with dummy client): " + thrown.getMessage());
     }
 
     @Test

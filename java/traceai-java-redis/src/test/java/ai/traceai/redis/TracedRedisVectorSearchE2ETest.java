@@ -56,16 +56,12 @@ class TracedRedisVectorSearchE2ETest {
         testIndexName = "e2e_idx_" + UUID.randomUUID().toString().substring(0, 8);
 
         if (redisUrl != null) {
-            try {
-                URI uri = URI.create(redisUrl);
-                String host = uri.getHost() != null ? uri.getHost() : "localhost";
-                int port = uri.getPort() > 0 ? uri.getPort() : 6379;
+            URI uri = URI.create(redisUrl);
+            String host = uri.getHost() != null ? uri.getHost() : "localhost";
+            int port = uri.getPort() > 0 ? uri.getPort() : 6379;
 
-                JedisPooled jedis = new JedisPooled(host, port);
-                tracedRedis = new TracedRedisVectorSearch(jedis, tracer);
-            } catch (Exception e) {
-                System.out.println("Failed to create Redis client: " + e.getMessage());
-            }
+            JedisPooled jedis = new JedisPooled(host, port);
+            tracedRedis = new TracedRedisVectorSearch(jedis, tracer);
         }
     }
 
@@ -100,12 +96,8 @@ class TracedRedisVectorSearchE2ETest {
     void shouldCreateIndex() {
         Assumptions.assumeTrue(tracedRedis != null, "Redis client not configured");
 
-        try {
-            tracedRedis.createIndex(testIndexName, "embedding", VECTOR_DIM, "COSINE", "FLAT");
-            System.out.println("Created index: " + testIndexName);
-        } catch (Exception e) {
-            System.out.println("Create index error (span still exported): " + e.getMessage());
-        }
+        tracedRedis.createIndex(testIndexName, "embedding", VECTOR_DIM, "COSINE", "FLAT");
+        System.out.println("Created index: " + testIndexName);
     }
 
     @Test
@@ -113,26 +105,22 @@ class TracedRedisVectorSearchE2ETest {
     void shouldAddDocuments() {
         Assumptions.assumeTrue(tracedRedis != null, "Redis client not configured");
 
-        try {
-            Map<String, String> metadata1 = new HashMap<>();
-            metadata1.put("title", "First document");
-            metadata1.put("category", "tech");
-            tracedRedis.addDocument("doc:e2e-1", new float[]{0.1f, 0.2f, 0.3f, 0.4f}, metadata1);
+        Map<String, String> metadata1 = new HashMap<>();
+        metadata1.put("title", "First document");
+        metadata1.put("category", "tech");
+        tracedRedis.addDocument("doc:e2e-1", new float[]{0.1f, 0.2f, 0.3f, 0.4f}, metadata1);
 
-            Map<String, String> metadata2 = new HashMap<>();
-            metadata2.put("title", "Second document");
-            metadata2.put("category", "science");
-            tracedRedis.addDocument("doc:e2e-2", new float[]{0.5f, 0.6f, 0.7f, 0.8f}, metadata2);
+        Map<String, String> metadata2 = new HashMap<>();
+        metadata2.put("title", "Second document");
+        metadata2.put("category", "science");
+        tracedRedis.addDocument("doc:e2e-2", new float[]{0.5f, 0.6f, 0.7f, 0.8f}, metadata2);
 
-            Map<String, String> metadata3 = new HashMap<>();
-            metadata3.put("title", "Third document");
-            metadata3.put("category", "tech");
-            tracedRedis.addDocument("doc:e2e-3", new float[]{0.9f, 0.1f, 0.2f, 0.3f}, metadata3);
+        Map<String, String> metadata3 = new HashMap<>();
+        metadata3.put("title", "Third document");
+        metadata3.put("category", "tech");
+        tracedRedis.addDocument("doc:e2e-3", new float[]{0.9f, 0.1f, 0.2f, 0.3f}, metadata3);
 
-            System.out.println("Added 3 documents with embeddings");
-        } catch (Exception e) {
-            System.out.println("Add document error (span still exported): " + e.getMessage());
-        }
+        System.out.println("Added 3 documents with embeddings");
     }
 
     @Test
@@ -140,14 +128,10 @@ class TracedRedisVectorSearchE2ETest {
     void shouldPerformVectorSearch() {
         Assumptions.assumeTrue(tracedRedis != null, "Redis client not configured");
 
-        try {
-            float[] queryVector = {0.1f, 0.2f, 0.3f, 0.4f};
-            SearchResult result = tracedRedis.vectorSearch(testIndexName, queryVector, 3);
-            assertThat(result).isNotNull();
-            System.out.println("Vector search returned " + result.getTotalResults() + " results");
-        } catch (Exception e) {
-            System.out.println("Vector search error (span still exported): " + e.getMessage());
-        }
+        float[] queryVector = {0.1f, 0.2f, 0.3f, 0.4f};
+        SearchResult result = tracedRedis.vectorSearch(testIndexName, queryVector, 3);
+        assertThat(result).isNotNull();
+        System.out.println("Vector search returned " + result.getTotalResults() + " results");
     }
 
     @Test
@@ -155,15 +139,11 @@ class TracedRedisVectorSearchE2ETest {
     void shouldPerformVectorSearchWithFilter() {
         Assumptions.assumeTrue(tracedRedis != null, "Redis client not configured");
 
-        try {
-            float[] queryVector = {0.1f, 0.2f, 0.3f, 0.4f};
-            SearchResult result = tracedRedis.vectorSearch(
-                    testIndexName, queryVector, 3, "@category:{tech}");
-            assertThat(result).isNotNull();
-            System.out.println("Filtered search returned " + result.getTotalResults() + " results");
-        } catch (Exception e) {
-            System.out.println("Filtered search error (span still exported): " + e.getMessage());
-        }
+        float[] queryVector = {0.1f, 0.2f, 0.3f, 0.4f};
+        SearchResult result = tracedRedis.vectorSearch(
+                testIndexName, queryVector, 3, "@category:{tech}");
+        assertThat(result).isNotNull();
+        System.out.println("Filtered search returned " + result.getTotalResults() + " results");
     }
 
     @Test
@@ -171,12 +151,8 @@ class TracedRedisVectorSearchE2ETest {
     void shouldDeleteDocument() {
         Assumptions.assumeTrue(tracedRedis != null, "Redis client not configured");
 
-        try {
-            tracedRedis.deleteDocument("doc:e2e-3");
-            System.out.println("Deleted doc:e2e-3");
-        } catch (Exception e) {
-            System.out.println("Delete error (span still exported): " + e.getMessage());
-        }
+        tracedRedis.deleteDocument("doc:e2e-3");
+        System.out.println("Deleted doc:e2e-3");
     }
 
     @Test

@@ -97,20 +97,15 @@ class TracedPineconeIndexE2ETest {
     void shouldUpsertVectors() {
         Assumptions.assumeTrue(tracedIndex != null, "Pinecone index not configured");
 
-        try {
-            List<VectorWithUnsignedIndices> vectors = new ArrayList<>();
-            // Create test vectors (dimension must match the index configuration)
-            // Using 3-dimensional vectors as a minimal example
-            vectors.add(new VectorWithUnsignedIndices("e2e-vec-1", Arrays.asList(0.1f, 0.2f, 0.3f)));
-            vectors.add(new VectorWithUnsignedIndices("e2e-vec-2", Arrays.asList(0.4f, 0.5f, 0.6f)));
+        List<VectorWithUnsignedIndices> vectors = new ArrayList<>();
+        // Create test vectors (dimension must match the index configuration)
+        // Using 3-dimensional vectors as a minimal example
+        vectors.add(new VectorWithUnsignedIndices("e2e-vec-1", Arrays.asList(0.1f, 0.2f, 0.3f)));
+        vectors.add(new VectorWithUnsignedIndices("e2e-vec-2", Arrays.asList(0.4f, 0.5f, 0.6f)));
 
-            int upsertedCount = tracedIndex.upsert(vectors, testNamespace);
-            assertThat(upsertedCount).isEqualTo(2);
-            System.out.println("Upserted " + upsertedCount + " vectors to namespace: " + testNamespace);
-        } catch (Exception e) {
-            // Even error spans get exported
-            System.out.println("Upsert error (span still exported): " + e.getMessage());
-        }
+        int upsertedCount = tracedIndex.upsert(vectors, testNamespace);
+        assertThat(upsertedCount).isEqualTo(2);
+        System.out.println("Upserted " + upsertedCount + " vectors to namespace: " + testNamespace);
     }
 
     @Test
@@ -118,16 +113,11 @@ class TracedPineconeIndexE2ETest {
     void shouldQueryVectors() {
         Assumptions.assumeTrue(tracedIndex != null, "Pinecone index not configured");
 
-        try {
-            List<Float> queryVector = Arrays.asList(0.1f, 0.2f, 0.3f);
-            QueryResponseWithUnsignedIndices response = tracedIndex.query(queryVector, 5);
-            assertThat(response).isNotNull();
-            System.out.println("Query returned matches: " +
-                    (response.getMatchesList() != null ? response.getMatchesList().size() : 0));
-        } catch (Exception e) {
-            // Even error spans get exported
-            System.out.println("Query error (span still exported): " + e.getMessage());
-        }
+        List<Float> queryVector = Arrays.asList(0.1f, 0.2f, 0.3f);
+        QueryResponseWithUnsignedIndices response = tracedIndex.query(queryVector, 5);
+        assertThat(response).isNotNull();
+        System.out.println("Query returned matches: " +
+                (response.getMatchesList() != null ? response.getMatchesList().size() : 0));
     }
 
     @Test
@@ -135,16 +125,12 @@ class TracedPineconeIndexE2ETest {
     void shouldQueryWithNamespaceAndFilter() {
         Assumptions.assumeTrue(tracedIndex != null, "Pinecone index not configured");
 
-        try {
-            List<Float> queryVector = Arrays.asList(0.1f, 0.2f, 0.3f);
-            QueryResponseWithUnsignedIndices response = tracedIndex.query(
-                    queryVector, 5, testNamespace, null);
-            assertThat(response).isNotNull();
-            System.out.println("Namespaced query returned matches: " +
-                    (response.getMatchesList() != null ? response.getMatchesList().size() : 0));
-        } catch (Exception e) {
-            System.out.println("Namespaced query error (span still exported): " + e.getMessage());
-        }
+        List<Float> queryVector = Arrays.asList(0.1f, 0.2f, 0.3f);
+        QueryResponseWithUnsignedIndices response = tracedIndex.query(
+                queryVector, 5, testNamespace, null);
+        assertThat(response).isNotNull();
+        System.out.println("Namespaced query returned matches: " +
+                (response.getMatchesList() != null ? response.getMatchesList().size() : 0));
     }
 
     @Test
@@ -152,14 +138,10 @@ class TracedPineconeIndexE2ETest {
     void shouldFetchVectors() {
         Assumptions.assumeTrue(tracedIndex != null, "Pinecone index not configured");
 
-        try {
-            java.util.Map<String, Object> response = tracedIndex.fetch(
-                    Arrays.asList("e2e-vec-1", "e2e-vec-2"), testNamespace);
-            assertThat(response).isNotNull();
-            System.out.println("Fetch returned: " + response.size() + " entries");
-        } catch (Exception e) {
-            System.out.println("Fetch error (span still exported): " + e.getMessage());
-        }
+        java.util.Map<String, Object> response = tracedIndex.fetch(
+                Arrays.asList("e2e-vec-1", "e2e-vec-2"), testNamespace);
+        assertThat(response).isNotNull();
+        System.out.println("Fetch returned: " + response.size() + " entries");
     }
 
     @Test
@@ -167,12 +149,8 @@ class TracedPineconeIndexE2ETest {
     void shouldDeleteVectors() {
         Assumptions.assumeTrue(tracedIndex != null, "Pinecone index not configured");
 
-        try {
-            tracedIndex.deleteByIds(Arrays.asList("e2e-vec-3"), testNamespace);
-            System.out.println("Delete completed for namespace: " + testNamespace);
-        } catch (Exception e) {
-            System.out.println("Delete error (span still exported): " + e.getMessage());
-        }
+        tracedIndex.deleteByIds(Arrays.asList("e2e-vec-3"), testNamespace);
+        System.out.println("Delete completed for namespace: " + testNamespace);
     }
 
     @Test

@@ -88,45 +88,37 @@ class TracedSemanticKernelE2ETest {
     @Test
     @Order(1)
     void shouldExportChatCompletionSpan() {
-        try {
-            ChatHistory chatHistory = new ChatHistory();
-            chatHistory.addUserMessage("Say 'Hello from Java E2E test' and nothing else.");
+        ChatHistory chatHistory = new ChatHistory();
+        chatHistory.addUserMessage("Say 'Hello from Java E2E test' and nothing else.");
 
-            List<ChatMessageContent<?>> result = tracedChatService
-                .getChatMessageContentsAsync(chatHistory, null, null)
-                .block();
+        List<ChatMessageContent<?>> result = tracedChatService
+            .getChatMessageContentsAsync(chatHistory, null, null)
+            .block();
 
-            System.out.println("[E2E] Semantic Kernel chat response: " +
-                (result != null && !result.isEmpty() ? result.get(0).getContent() : "(empty)"));
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        assertThat(result).isNotNull();
+        assertThat(result).isNotEmpty();
+        assertThat(result.get(0).getContent()).isNotEmpty();
+        System.out.println("[E2E] Semantic Kernel chat response: " + result.get(0).getContent());
     }
 
     @Test
     @Order(2)
     void shouldExportEmbeddingGenerationSpan() {
-        try {
-            List<Embedding> result = tracedEmbeddingService
-                .generateEmbeddingsAsync(List.of("Hello from Java E2E test"))
-                .block();
+        List<Embedding> result = tracedEmbeddingService
+            .generateEmbeddingsAsync(List.of("Hello from Java E2E test"))
+            .block();
 
-            System.out.println("[E2E] Semantic Kernel embedding count: " +
-                (result != null ? result.size() : 0));
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        assertThat(result).isNotNull();
+        assertThat(result).isNotEmpty();
+        System.out.println("[E2E] Semantic Kernel embedding count: " + result.size());
     }
 
     @Test
     @Order(3)
     void shouldExportKernelInvokePromptSpan() {
-        try {
-            tracedKernel.invokePromptAsync("What is 2 + 2?").block();
-            System.out.println("[E2E] Semantic Kernel invokePromptAsync succeeded");
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        var result = tracedKernel.invokePromptAsync("What is 2 + 2?").block();
+        assertThat(result).isNotNull();
+        System.out.println("[E2E] Semantic Kernel invokePromptAsync result: " + result);
     }
 
     @Test
