@@ -1,6 +1,0 @@
-ai/traceai/TraceAI.class
-ai/traceai/SemanticConventions.class
-ai/traceai/FITracer.class
-ai/traceai/FISpanKind.class
-ai/traceai/TraceConfig.class
-ai/traceai/TraceConfig$Builder.class
