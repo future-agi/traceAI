@@ -35,7 +35,7 @@ langgraph>=0.0.20
 llama-index>=0.10.0
 llama-index-llms-openai>=0.1.0
 crewai>=0.30.0
-pyautogen==0.2.35
+pyautogen>=0.2.0
 pydantic-ai>=0.0.10
 instructor>=1.0.0
 dspy>=2.0.0
