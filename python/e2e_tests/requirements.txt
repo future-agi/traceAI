@@ -53,7 +53,7 @@ weaviate-client>=4.0.0
 pymilvus>=2.3.0
 
 # ── Infrastructure & Specialty ──
-guardrails-ai>=0.4.5,<0.5.1
+guardrails-ai>=0.5.0
 portkey-ai>=1.0.0
 
 # FutureAGI SDK (local install)
