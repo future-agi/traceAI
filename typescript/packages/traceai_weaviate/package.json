@@ -37,8 +37,8 @@
   "dependencies": {
     "@opentelemetry/api": "^1.7.0",
     "@opentelemetry/instrumentation": "^0.46.0",
-    "@traceai/fi-core": "workspace:*",
-    "@traceai/fi-semantic-conventions": "workspace:*"
+    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

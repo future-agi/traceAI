@@ -51,8 +51,8 @@ describeE2E("LangChain E2E Tests", () => {
       const { ChatOpenAI } = await import("@langchain/openai");
 
       const model = new ChatOpenAI({
-        modelName: "gemini-2.0-flash",
-        openAIApiKey: GOOGLE_API_KEY,
+        model: "gemini-2.0-flash",
+        apiKey: GOOGLE_API_KEY,
         configuration: {
           baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
         },
@@ -70,8 +70,8 @@ describeE2E("LangChain E2E Tests", () => {
       const { HumanMessage, AIMessage, SystemMessage } = await import("@langchain/core/messages");
 
       const model = new ChatOpenAI({
-        modelName: "gemini-2.0-flash",
-        openAIApiKey: GOOGLE_API_KEY,
+        model: "gemini-2.0-flash",
+        apiKey: GOOGLE_API_KEY,
         configuration: {
           baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
         },
@@ -79,10 +79,10 @@ describeE2E("LangChain E2E Tests", () => {
       });
 
       const response = await model.invoke([
-        new SystemMessage("You are a helpful assistant."),
-        new HumanMessage("My name is TestUser."),
-        new AIMessage("Hello TestUser! Nice to meet you."),
-        new HumanMessage("What is my name?"),
+        new SystemMessage("You are a helpful assistant.") as any,
+        new HumanMessage("My name is TestUser.") as any,
+        new AIMessage("Hello TestUser! Nice to meet you.") as any,
+        new HumanMessage("What is my name?") as any,
       ]);
 
       expect(String(response.content).toLowerCase()).toContain("testuser");
@@ -93,8 +93,8 @@ describeE2E("LangChain E2E Tests", () => {
       const { ChatOpenAI } = await import("@langchain/openai");
 
       const model = new ChatOpenAI({
-        modelName: "gemini-2.0-flash",
-        openAIApiKey: GOOGLE_API_KEY,
+        model: "gemini-2.0-flash",
+        apiKey: GOOGLE_API_KEY,
         configuration: {
           baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
         },
@@ -120,8 +120,8 @@ describeE2E("LangChain E2E Tests", () => {
       const { ChatOpenAI } = await import("@langchain/openai");
 
       const model = new ChatOpenAI({
-        modelName: "non-existent-model-12345",
-        openAIApiKey: GOOGLE_API_KEY,
+        model: "non-existent-model-12345",
+        apiKey: GOOGLE_API_KEY,
         configuration: {
           baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
         },

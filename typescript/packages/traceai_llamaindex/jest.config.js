@@ -15,11 +15,13 @@ module.exports = {
   setupFilesAfterEnv: ['<rootDir>/../../jest.setup.js'],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
+  transformIgnorePatterns: ['node_modules/(?!\\.pnpm|@llamaindex)'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', {
+    '^.+\\.[jt]s$': ['ts-jest', {
       tsconfig: {
         module: 'commonjs'
-      }
+      },
+      diagnostics: false,
     }]
   },
   moduleNameMapper: {

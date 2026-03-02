@@ -194,8 +194,8 @@ importers:
         specifier: ^2.11.0
         version: 2.11.1
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.10
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
       uuid:
         specifier: ^11.1.0
         version: 11.1.0
@@ -274,10 +274,10 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@anthropic-ai/sdk':
@@ -314,10 +314,10 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@aws-sdk/client-bedrock-runtime':
@@ -363,14 +363,14 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
       beeai-framework:
         specifier: ^0.1.0
-        version: 0.1.27(@aws-sdk/client-bedrock-runtime@3.975.0)(@langchain/core@0.2.36(openai@6.22.0(ws@8.19.0)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.26.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@qdrant/js-client-rest@1.16.2(typescript@5.8.3))(@zilliz/milvus2-sdk-node@2.6.9)(express@5.2.1)(ollama-ai-provider-v2@3.3.1(ai@6.0.97(zod@4.3.6))(zod@4.3.6))(yaml@2.8.0)(zod@4.3.6)
+        version: 0.1.27(@ai-sdk/openai@3.0.37(zod@4.3.6))(@aws-sdk/client-bedrock-runtime@3.975.0)(@langchain/core@0.2.36(openai@6.22.0(ws@8.19.0)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.26.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@qdrant/js-client-rest@1.16.2(typescript@5.8.3))(@zilliz/milvus2-sdk-node@2.6.9)(express@5.2.1)(ollama-ai-provider-v2@3.3.1(ai@6.0.97(zod@4.3.6))(zod@4.3.6))(yaml@2.8.0)(zod@4.3.6)
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^1.30.0
@@ -412,10 +412,10 @@ importers:
         specifier: ^0.56.0
         version: 0.56.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@cerebras/cerebras_cloud_sdk':
@@ -455,11 +455,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.10
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^2.0.1
@@ -498,10 +498,10 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/exporter-trace-otlp-proto':
@@ -550,10 +550,10 @@ importers:
         specifier: ^0.56.0
         version: 0.56.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
@@ -596,10 +596,10 @@ importers:
         specifier: ^0.56.0
         version: 0.56.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
@@ -642,10 +642,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
@@ -685,10 +685,10 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@google/generative-ai':
@@ -737,10 +737,10 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/exporter-trace-otlp-proto':
@@ -789,54 +789,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
-    devDependencies:
-      '@opentelemetry/sdk-trace-base':
-        specifier: ^1.30.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/sdk-trace-node':
-        specifier: ^1.30.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
-      '@types/jest':
-        specifier: ^29.5.14
-        version: 29.5.14
-      '@types/node':
-        specifier: ^22.10.10
-        version: 22.15.33
-      jest:
-        specifier: ^29.7.0
-        version: 29.7.0(@types/node@22.15.33)(ts-node@10.9.2(@types/node@22.15.33)(typescript@5.8.3))
-      rimraf:
-        specifier: ^6.0.1
-        version: 6.1.2
-      ts-jest:
-        specifier: ^29.2.5
-        version: 29.4.6(@babel/core@7.27.1)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.27.1))(jest-util@29.7.0)(jest@29.7.0(@types/node@22.15.33)(ts-node@10.9.2(@types/node@22.15.33)(typescript@5.8.3)))(typescript@5.8.3)
-      tsc-alias:
-        specifier: ^1.8.10
-        version: 1.8.16
-      typescript:
-        specifier: ^5.7.3
-        version: 5.8.3
-
-  packages/traceai_haystack:
-    dependencies:
-      '@opentelemetry/api':
-        specifier: ^1.9.0
-        version: 1.9.0
-      '@opentelemetry/instrumentation':
-        specifier: ^0.202.0
-        version: 0.202.0(@opentelemetry/api@1.9.0)
-      '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
-      '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^1.30.0
@@ -878,10 +835,10 @@ importers:
         specifier: ^0.57.0
         version: 0.57.2(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@huggingface/inference':
@@ -915,11 +872,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^1.30.0
@@ -958,10 +915,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@lancedb/lancedb':
@@ -1001,12 +958,15 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.16
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.10
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
+      '@langchain/openai':
+        specifier: 0.3.16
+        version: 0.3.16(@langchain/core@0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4)))(ws@8.19.0)
       '@opentelemetry/exporter-trace-otlp-proto':
         specifier: ^0.50.0
         version: 0.50.0(@opentelemetry/api@1.9.0)
@@ -1062,10 +1022,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@livekit/rtc-node':
@@ -1111,15 +1071,18 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.16
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.10
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
       lodash:
         specifier: ^4.17.21
         version: 4.17.23
     devDependencies:
+      '@llamaindex/openai':
+        specifier: ^0.4.0
+        version: 0.4.22(@llamaindex/core@0.6.22)(@llamaindex/env@0.1.30)(ws@8.19.0)(zod@4.3.6)
       '@types/jest':
         specifier: ^29.5.12
         version: 29.5.14
@@ -1166,14 +1129,14 @@ importers:
         specifier: ^1.34.0
         version: 1.34.0
       '@traceai/fi-core':
-        specifier: ^0.1.16
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.10
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
       '@traceai/vercel':
-        specifier: ^0.1.0
-        version: 0.1.0(@opentelemetry/api@1.9.0)
+        specifier: workspace:^
+        version: link:../traceai_vercel
     devDependencies:
       vitest:
         specifier: ^3.1.3
@@ -1188,11 +1151,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.15
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.10.2
@@ -1237,10 +1200,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@types/jest':
@@ -1280,10 +1243,10 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@mistralai/mistralai':
@@ -1329,10 +1292,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@types/jest':
@@ -1372,10 +1335,10 @@ importers:
         specifier: ^0.57.0
         version: 0.57.2(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@types/jest':
@@ -1406,11 +1369,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/exporter-trace-otlp-proto':
         specifier: ^0.50.0
@@ -1458,11 +1421,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^1.30.0
@@ -1501,10 +1464,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@types/jest':
@@ -1544,11 +1507,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.10
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^2.0.1
@@ -1587,10 +1550,10 @@ importers:
         specifier: '>=0.2.0'
         version: 1.6.0
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
@@ -1627,11 +1590,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
       portkey-ai:
         specifier: ^1.0.0
         version: 1.10.4(zod@3.25.76)
@@ -1673,11 +1636,11 @@ importers:
         specifier: ^0.202.0
         version: 0.202.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.10
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^2.0.1
@@ -1713,10 +1676,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@types/jest':
@@ -1756,11 +1719,11 @@ importers:
         specifier: ^0.1.0
         version: 0.1.6(@cfworker/json-schema@4.1.1)(ws@8.19.0)
       '@traceai/fi-core':
-        specifier: ^0.1.13
-        version: 0.1.16
+        specifier: workspace:^
+        version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
         specifier: ^1.30.0
@@ -1802,10 +1765,10 @@ importers:
         specifier: ^0.57.0
         version: 0.57.2(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@types/jest':
@@ -1833,9 +1796,12 @@ importers:
         specifier: ^1.30.1
         version: 1.30.1(@opentelemetry/api@1.9.0)
       '@traceai/fi-semantic-conventions':
-        specifier: ^0.1.9
-        version: 0.1.10
+        specifier: workspace:^
+        version: link:../fi-semantic-conventions
     devDependencies:
+      '@ai-sdk/openai':
+        specifier: ^3.0.0
+        version: 3.0.37(zod@4.3.6)
       '@opentelemetry/api':
         specifier: '>=1.7.0 <2.0.0'
         version: 1.9.0
@@ -1845,6 +1811,9 @@ importers:
       '@types/jest':
         specifier: ^29.5.12
         version: 29.5.14
+      ai:
+        specifier: ^6.0.0
+        version: 6.0.97(zod@4.3.6)
       jest:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@24.10.9)(ts-node@10.9.2(@types/node@24.10.9)(typescript@5.8.3))
@@ -1858,10 +1827,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@google-cloud/vertexai':
@@ -1904,10 +1873,10 @@ importers:
         specifier: ^0.56.0
         version: 0.56.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
@@ -1947,10 +1916,10 @@ importers:
         specifier: ^0.46.0
         version: 0.46.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@types/jest':
@@ -1990,10 +1959,10 @@ importers:
         specifier: ^0.56.0
         version: 0.56.0(@opentelemetry/api@1.9.0)
       '@traceai/fi-core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-core
       '@traceai/fi-semantic-conventions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
       '@opentelemetry/sdk-trace-base':
@@ -2032,8 +2001,20 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  '@ai-sdk/openai@3.0.37':
+    resolution: {integrity: sha512-bcYjT3/58i/C0DN3AnrjiGsAb0kYivZLWWUtgTjsBurHSht/LTEy+w3dw5XQe3FmZwX7Z/mUQCiA3wB/5Kf7ow==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   '@ai-sdk/provider-utils@4.0.15':
     resolution: {integrity: sha512-8XiKWbemmCbvNN0CLR9u3PQiet4gtEVIrX4zzLxnCj06AwsEDJwJVBbKrEI4t6qE8XRSIvU2irka0dcpziKW6w==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/provider-utils@4.0.16':
+    resolution: {integrity: sha512-kBvDqNkt5EwlzF9FujmNhhtl8FYg3e8FO8P5uneKliqfRThWemzBj+wfYr7ZCymAQhTRnwSSz1/SOqhOAwmx9g==}
     engines: {node: '>=18'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -3159,11 +3140,11 @@ packages:
     resolution: {integrity: sha512-Pu8+WfJojCgSf0bAsXb4AjqvcDyAWyoEB1AoCRNACgEnBWZuitz3hLwCo9I+6hAbeg3QJ37g82yKcmvKAg1feg==}
     engines: {node: '>=18'}
 
-  '@langchain/openai@0.3.17':
-    resolution: {integrity: sha512-uw4po32OKptVjq+CYHrumgbfh4NuD7LqyE+ZgqY9I/LrLc6bHLMc+sisHmI17vgek0K/yqtarI0alPJbzrwyag==}
+  '@langchain/openai@0.3.16':
+    resolution: {integrity: sha512-Om9HRlTeI0Ou6D4pfxbWHop4WGfkCdV/7v1W/+Jr7NSf0BNoA9jk5GqGms8ZtOYSGgPvizDu3i0TrM3B4cN4NA==}
     engines: {node: '>=18'}
     peerDependencies:
-      '@langchain/core': '>=0.3.29 <0.4.0'
+      '@langchain/core': '>=0.2.26 <0.4.0'
 
   '@langchain/textsplitters@0.0.3':
     resolution: {integrity: sha512-cXWgKE3sdWLSqAa8ykbCcUsUF1Kyr5J3HOWYGuobhPEycXW4WI++d5DhzdpL238mzoEXTi90VqfSCra37l5YqA==}
@@ -3238,6 +3219,12 @@ packages:
       '@llamaindex/env': 0.1.30
       tree-sitter: ^0.22.0
       web-tree-sitter: ^0.24.3
+
+  '@llamaindex/openai@0.4.22':
+    resolution: {integrity: sha512-jVaSscK7kyBM0wj3vceG2HPnFreSuOvkBYGFovFdS1heCyahlGDoQ1cLAUWqQ/J9Njfrt/PZTp3ICP+APl+zig==}
+    peerDependencies:
+      '@llamaindex/core': 0.6.22
+      '@llamaindex/env': 0.1.30
 
   '@llamaindex/workflow-core@1.3.3':
     resolution: {integrity: sha512-WJIcD4K2suGbNkwU5CC70jKKrA5tARba42nMs8Pou1RGzmoxqg+K+b7vyLBmiDtImR8P40YLmkayCIRVQPBmsg==}
@@ -4154,17 +4141,6 @@ packages:
   '@tootallnate/once@2.0.0':
     resolution: {integrity: sha512-XCuKFP5PS55gnMVu3dty8KPatLqUoy/ZYzDzAGCQ8JNFCkLXzmI7vNHCR+XpbZaMWQK/vQubr7PkYq8g470J/A==}
     engines: {node: '>= 10'}
-
-  '@traceai/fi-core@0.1.16':
-    resolution: {integrity: sha512-jPOGcq4B+TtKUoYFODE9Yj6RYn8KYzdMZ5Mr+2CM324Mm9YyGOQc8LMub6il0/wU3o9n2E9+PDS0HqsR8ljO6g==}
-
-  '@traceai/fi-semantic-conventions@0.1.10':
-    resolution: {integrity: sha512-hK2DcsAVhKtH+FzuKdksa6YKY5tw8Kipt98EGIuUncLTxg3q0BVFcfKCoRT5QDuRtUiNOkO7Q+K7/fAPK3zx1g==}
-
-  '@traceai/vercel@0.1.0':
-    resolution: {integrity: sha512-rnYQ1XWGJi5EDpB69QObIk2/SE8/j0PZ/F/1wHXwiyCCT+ybPoJwxbKxE9Jv+3m7RaOiF5XoDQyc1a2rz3RQMA==}
-    peerDependencies:
-      '@opentelemetry/api': '>=1.7.0 <2.0.0'
 
   '@tsconfig/node10@1.0.11':
     resolution: {integrity: sha512-DcRjDCujK/kCk/cUe8Xz8ZSpm8mS3mNNpta+jGCA6USEDfktlNvm1+IuZ9eTcDbNk41BHwpHHeW+N1lKCz4zOw==}
@@ -6603,6 +6579,18 @@ packages:
       zod:
         optional: true
 
+  openai@5.23.2:
+    resolution: {integrity: sha512-MQBzmTulj+MM5O8SKEk/gL8a7s5mktS9zUtAkU257WjvobGc9nKcBuVwjyEEcb9SI8a8Y2G/mzn3vm9n1Jlleg==}
+    hasBin: true
+    peerDependencies:
+      ws: ^8.18.0
+      zod: ^3.23.8
+    peerDependenciesMeta:
+      ws:
+        optional: true
+      zod:
+        optional: true
+
   openai@6.22.0:
     resolution: {integrity: sha512-7Yvy17F33Bi9RutWbsaYt5hJEEJ/krRPOrwan+f9aCPuMat1WVsb2VNSII5W1EksKT6fF69TG/xj4XzodK3JZw==}
     hasBin: true
@@ -7736,7 +7724,20 @@ snapshots:
       '@vercel/oidc': 3.1.0
       zod: 4.3.6
 
+  '@ai-sdk/openai@3.0.37(zod@4.3.6)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.8
+      '@ai-sdk/provider-utils': 4.0.16(zod@4.3.6)
+      zod: 4.3.6
+
   '@ai-sdk/provider-utils@4.0.15(zod@4.3.6)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.8
+      '@standard-schema/spec': 1.1.0
+      eventsource-parser: 3.0.6
+      zod: 4.3.6
+
+  '@ai-sdk/provider-utils@4.0.16(zod@4.3.6)':
     dependencies:
       '@ai-sdk/provider': 3.0.8
       '@standard-schema/spec': 1.1.0
@@ -9264,8 +9265,8 @@ snapshots:
       flat: 5.0.2
       langsmith: 0.1.68(openai@4.98.0(ws@8.19.0)(zod@3.24.4))
       uuid: 9.0.1
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     optionalDependencies:
       '@aws-crypto/sha256-js': 5.2.0
       '@aws-sdk/client-bedrock-runtime': 3.975.0
@@ -9300,8 +9301,24 @@ snapshots:
       p-queue: 6.6.2
       p-retry: 4.6.2
       uuid: 9.0.1
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
+    transitivePeerDependencies:
+      - openai
+
+  '@langchain/core@0.2.36(openai@4.104.0(ws@8.19.0)(zod@3.25.76))':
+    dependencies:
+      ansi-styles: 5.2.0
+      camelcase: 6.3.0
+      decamelize: 1.2.0
+      js-tiktoken: 1.0.20
+      langsmith: 0.1.68(openai@4.104.0(ws@8.19.0)(zod@3.25.76))
+      mustache: 4.2.0
+      p-queue: 6.6.2
+      p-retry: 4.6.2
+      uuid: 10.0.0
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - openai
 
@@ -9316,8 +9333,8 @@ snapshots:
       p-queue: 6.6.2
       p-retry: 4.6.2
       uuid: 10.0.0
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - openai
 
@@ -9332,8 +9349,8 @@ snapshots:
       p-queue: 6.6.2
       p-retry: 4.6.2
       uuid: 10.0.0
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - openai
     optional: true
@@ -9357,33 +9374,33 @@ snapshots:
 
   '@langchain/openai@0.0.34(ws@8.19.0)':
     dependencies:
-      '@langchain/core': 0.2.36(openai@4.98.0(ws@8.19.0)(zod@3.24.4))
+      '@langchain/core': 0.2.36(openai@4.104.0(ws@8.19.0)(zod@3.25.76))
       js-tiktoken: 1.0.20
-      openai: 4.98.0(ws@8.19.0)(zod@3.24.4)
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      openai: 4.104.0(ws@8.19.0)(zod@3.25.76)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - encoding
       - ws
 
   '@langchain/openai@0.2.11(ws@8.19.0)':
     dependencies:
-      '@langchain/core': 0.2.36(openai@4.98.0(ws@8.19.0)(zod@3.24.4))
+      '@langchain/core': 0.2.36(openai@4.104.0(ws@8.19.0)(zod@3.25.76))
       js-tiktoken: 1.0.20
-      openai: 4.98.0(ws@8.19.0)(zod@3.24.4)
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      openai: 4.104.0(ws@8.19.0)(zod@3.25.76)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - encoding
       - ws
 
-  '@langchain/openai@0.3.17(@langchain/core@0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4)))(ws@8.19.0)':
+  '@langchain/openai@0.3.16(@langchain/core@0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4)))(ws@8.19.0)':
     dependencies:
       '@langchain/core': 0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4))
       js-tiktoken: 1.0.20
-      openai: 4.98.0(ws@8.19.0)(zod@3.24.4)
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      openai: 4.104.0(ws@8.19.0)(zod@3.25.76)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - encoding
       - ws
@@ -9456,6 +9473,15 @@ snapshots:
       html-to-text: 9.0.5
       tree-sitter: 0.22.4
       web-tree-sitter: 0.24.7
+
+  '@llamaindex/openai@0.4.22(@llamaindex/core@0.6.22)(@llamaindex/env@0.1.30)(ws@8.19.0)(zod@4.3.6)':
+    dependencies:
+      '@llamaindex/core': 0.6.22
+      '@llamaindex/env': 0.1.30
+      openai: 5.23.2(ws@8.19.0)(zod@4.3.6)
+    transitivePeerDependencies:
+      - ws
+      - zod
 
   '@llamaindex/workflow-core@1.3.3(@modelcontextprotocol/sdk@1.26.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(hono@4.11.5)(rxjs@7.8.2)(zod@4.3.6)':
     optionalDependencies:
@@ -10572,35 +10598,6 @@ snapshots:
 
   '@tootallnate/once@2.0.0': {}
 
-  '@traceai/fi-core@0.1.16':
-    dependencies:
-      '@grpc/grpc-js': 1.14.3
-      '@grpc/proto-loader': 0.7.15
-      '@opentelemetry/api': 1.9.0
-      '@opentelemetry/context-async-hooks': 2.0.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/core': 2.0.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/exporter-trace-otlp-grpc': 0.202.0(@opentelemetry/api@1.9.0)
-      '@opentelemetry/resources': 2.0.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/sdk-trace-base': 2.0.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/sdk-trace-node': 2.0.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/semantic-conventions': 1.34.0
-      '@protobuf-ts/grpc-transport': 2.11.1(@grpc/grpc-js@1.14.3)
-      '@protobuf-ts/runtime': 2.11.1
-      '@protobuf-ts/runtime-rpc': 2.11.1
-      '@traceai/fi-semantic-conventions': 0.1.10
-      uuid: 11.1.0
-
-  '@traceai/fi-semantic-conventions@0.1.10':
-    dependencies:
-      '@opentelemetry/api': 1.9.0
-      uuid: 11.1.0
-
-  '@traceai/vercel@0.1.0(@opentelemetry/api@1.9.0)':
-    dependencies:
-      '@opentelemetry/api': 1.9.0
-      '@opentelemetry/core': 1.30.1(@opentelemetry/api@1.9.0)
-      '@traceai/fi-semantic-conventions': 0.1.10
-
   '@tsconfig/node10@1.0.11': {}
 
   '@tsconfig/node12@1.0.11': {}
@@ -11022,7 +11019,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  beeai-framework@0.1.27(@aws-sdk/client-bedrock-runtime@3.975.0)(@langchain/core@0.2.36(openai@6.22.0(ws@8.19.0)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.26.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@qdrant/js-client-rest@1.16.2(typescript@5.8.3))(@zilliz/milvus2-sdk-node@2.6.9)(express@5.2.1)(ollama-ai-provider-v2@3.3.1(ai@6.0.97(zod@4.3.6))(zod@4.3.6))(yaml@2.8.0)(zod@4.3.6):
+  beeai-framework@0.1.27(@ai-sdk/openai@3.0.37(zod@4.3.6))(@aws-sdk/client-bedrock-runtime@3.975.0)(@langchain/core@0.2.36(openai@6.22.0(ws@8.19.0)(zod@4.3.6)))(@modelcontextprotocol/sdk@1.26.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@qdrant/js-client-rest@1.16.2(typescript@5.8.3))(@zilliz/milvus2-sdk-node@2.6.9)(express@5.2.1)(ollama-ai-provider-v2@3.3.1(ai@6.0.97(zod@4.3.6))(zod@4.3.6))(yaml@2.8.0)(zod@4.3.6):
     dependencies:
       '@ai-zen/node-fetch-event-source': 2.1.4
       '@aws-sdk/client-bedrock-runtime': 3.975.0
@@ -11052,6 +11049,7 @@ snapshots:
       wikipedia: 2.4.2
       zod-to-json-schema: 3.25.1(zod@4.3.6)
     optionalDependencies:
+      '@ai-sdk/openai': 3.0.37(zod@4.3.6)
       '@langchain/core': 0.2.36(openai@6.22.0(ws@8.19.0)(zod@4.3.6))
       '@modelcontextprotocol/sdk': 1.26.0(@cfworker/json-schema@4.1.1)(zod@4.3.6)
       '@qdrant/js-client-rest': 1.16.2(typescript@5.8.3)
@@ -13025,7 +13023,7 @@ snapshots:
   langchain@0.3.26(@langchain/core@0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4)))(axios@1.13.5)(handlebars@4.7.8)(openai@4.98.0(ws@8.19.0)(zod@3.24.4))(ws@8.19.0):
     dependencies:
       '@langchain/core': 0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4))
-      '@langchain/openai': 0.3.17(@langchain/core@0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4)))(ws@8.19.0)
+      '@langchain/openai': 0.3.16(@langchain/core@0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4)))(ws@8.19.0)
       '@langchain/textsplitters': 0.1.0(@langchain/core@0.3.56(openai@4.98.0(ws@8.19.0)(zod@3.24.4)))
       js-tiktoken: 1.0.20
       js-yaml: 4.1.0
@@ -13046,6 +13044,17 @@ snapshots:
       - ws
 
   langchainhub@0.0.11: {}
+
+  langsmith@0.1.68(openai@4.104.0(ws@8.19.0)(zod@3.25.76)):
+    dependencies:
+      '@types/uuid': 10.0.0
+      commander: 10.0.1
+      p-queue: 6.6.2
+      p-retry: 4.6.2
+      semver: 7.7.3
+      uuid: 10.0.0
+    optionalDependencies:
+      openai: 4.104.0(ws@8.19.0)(zod@3.25.76)
 
   langsmith@0.1.68(openai@4.98.0(ws@8.19.0)(zod@3.24.4)):
     dependencies:
@@ -13366,7 +13375,7 @@ snapshots:
   ollama-ai-provider-v2@3.3.1(ai@6.0.97(zod@4.3.6))(zod@4.3.6):
     dependencies:
       '@ai-sdk/provider': 3.0.8
-      '@ai-sdk/provider-utils': 4.0.15(zod@4.3.6)
+      '@ai-sdk/provider-utils': 4.0.16(zod@4.3.6)
       ai: 6.0.97(zod@4.3.6)
       zod: 4.3.6
 
@@ -13436,6 +13445,11 @@ snapshots:
       zod: 3.25.76
     transitivePeerDependencies:
       - encoding
+
+  openai@5.23.2(ws@8.19.0)(zod@4.3.6):
+    optionalDependencies:
+      ws: 8.19.0
+      zod: 4.3.6
 
   openai@6.22.0(ws@8.19.0)(zod@4.3.6):
     optionalDependencies:

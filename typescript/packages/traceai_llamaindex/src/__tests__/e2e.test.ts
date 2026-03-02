@@ -47,7 +47,7 @@ describeE2E("LlamaIndex E2E Tests", () => {
 
   describe("OpenAI LLM", () => {
     it("should complete a basic LLM request via OpenAI-compatible endpoint", async () => {
-      const { OpenAI } = await import("llamaindex");
+      const { OpenAI } = await import("@llamaindex/openai");
 
       const llm = new OpenAI({
         model: "gemini-2.0-flash",
@@ -65,7 +65,7 @@ describeE2E("LlamaIndex E2E Tests", () => {
     }, 30000);
 
     it("should handle chat messages", async () => {
-      const { OpenAI } = await import("llamaindex");
+      const { OpenAI } = await import("@llamaindex/openai");
 
       const llm = new OpenAI({
         model: "gemini-2.0-flash",
@@ -90,7 +90,7 @@ describeE2E("LlamaIndex E2E Tests", () => {
 
   describe("Error Handling", () => {
     it("should handle invalid configuration gracefully", async () => {
-      const { OpenAI } = await import("llamaindex");
+      const { OpenAI } = await import("@llamaindex/openai");
 
       const llm = new OpenAI({
         model: "non-existent-model-12345",

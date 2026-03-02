@@ -13,7 +13,7 @@ import { OpenAIAgentsInstrumentation } from "../instrumentation";
 const FI_API_KEY = process.env.FI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
-const describeE2E = FI_API_KEY ? describe : describe.skip;
+const describeE2E = (FI_API_KEY && OPENAI_API_KEY) ? describe : describe.skip;
 
 describeE2E("OpenAI Agents E2E Tests", () => {
   let provider: FITracerProvider;
@@ -44,7 +44,8 @@ describeE2E("OpenAI Agents E2E Tests", () => {
   describe("Agent", () => {
     it("should create and run a basic agent", async () => {
       const agentsModule = await import("@openai/agents");
-      const { Agent, run } = agentsModule;
+      const Agent = (agentsModule as any).Agent;
+      const run = (agentsModule as any).run;
 
       const agent = new Agent({
         name: "test-agent",
@@ -59,19 +60,20 @@ describeE2E("OpenAI Agents E2E Tests", () => {
 
     it("should handle agent with tools", async () => {
       const agentsModule = await import("@openai/agents");
-      const { Agent, run } = agentsModule;
+      const Agent = (agentsModule as any).Agent;
+      const run = (agentsModule as any).run;
 
       const agent = new Agent({
         name: "tool-agent",
         instructions: "You are a helpful assistant.",
         model: OPENAI_API_KEY ? "gpt-4o-mini" : "gemini-2.0-flash",
         tools: [
-          {
+          (agentsModule as any).tool({
             name: "get_time",
             description: "Get the current time",
             parameters: { type: "object", properties: {} },
             execute: async () => new Date().toISOString(),
-          },
+          }),
         ],
       });
 
@@ -83,7 +85,8 @@ describeE2E("OpenAI Agents E2E Tests", () => {
   describe("Error Handling", () => {
     it("should handle invalid configuration gracefully", async () => {
       const agentsModule = await import("@openai/agents");
-      const { Agent, run } = agentsModule;
+      const Agent = (agentsModule as any).Agent;
+      const run = (agentsModule as any).run;
 
       const agent = new Agent({
         name: "error-agent",

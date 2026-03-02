@@ -56,7 +56,7 @@ describeE2E("Vertex AI E2E Tests", () => {
   describe("Content Generation", () => {
     it("should complete a basic content generation request", async () => {
       try {
-        const model = vertexAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = vertexAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const result = await model.generateContent("What is 2 + 2? Answer with just the number.");
         const response = await result.response;
 
@@ -71,7 +71,7 @@ describeE2E("Vertex AI E2E Tests", () => {
     it("should handle system instructions", async () => {
       try {
         const model = vertexAI.getGenerativeModel({
-          model: "gemini-1.5-flash",
+          model: "gemini-2.5-flash",
           systemInstruction: "You are a helpful assistant. Always respond with exactly one word.",
         });
         const result = await model.generateContent("Say hello");
@@ -86,7 +86,7 @@ describeE2E("Vertex AI E2E Tests", () => {
 
     it("should handle multi-turn chat", async () => {
       try {
-        const model = vertexAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = vertexAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const chat = model.startChat({
           history: [
             { role: "user", parts: [{ text: "My name is TestUser." }] },
@@ -106,7 +106,7 @@ describeE2E("Vertex AI E2E Tests", () => {
 
     it("should handle streaming responses", async () => {
       try {
-        const model = vertexAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = vertexAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const result = await model.generateContentStream("Count from 1 to 3.");
 
         const chunks: string[] = [];

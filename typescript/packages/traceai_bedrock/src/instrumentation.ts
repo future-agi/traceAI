@@ -26,7 +26,9 @@ import {
   ConverseResponse,
 } from "@aws-sdk/client-bedrock-runtime";
 import { extractInvokeModelRequestAttributes } from "./attributes/invoke-model-request-attributes";
+import { extractInvokeModelResponseAttributes } from "./attributes/invoke-model-response-attributes";
 import { extractConverseRequestAttributes } from "./attributes/converse-request-attributes";
+import { extractConverseResponseAttributes } from "./attributes/converse-response-attributes";
 import {
   consumeBedrockStreamChunks,
   safelySplitStream,
@@ -273,7 +275,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
       // AWS SDK v3 send() method always returns a Promise
           return result
         .then((response: InvokeModelResponse) => {
-          // Response attribute extraction handled by request path helpers
+          extractInvokeModelResponseAttributes({ span, response, system });
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;
@@ -438,7 +440,7 @@ export class BedrockInstrumentation extends InstrumentationBase {
       // AWS SDK v3 send() method always returns a Promise
       return result
         .then((response: ConverseResponse) => {
-          // Response attribute extraction handled by request path helpers
+          extractConverseResponseAttributes({ span, response });
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;

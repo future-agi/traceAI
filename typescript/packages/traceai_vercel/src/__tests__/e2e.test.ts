@@ -9,7 +9,8 @@
 
 import { register, FITracerProvider, ProjectType } from "@traceai/fi-core";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
-import { FISimpleSpanProcessor, isFISpan } from "../FISpanProcessor";
+import { FISimpleSpanProcessor } from "../FISpanProcessor";
+import { isFISpan } from "../utils";
 
 const FI_API_KEY = process.env.FI_API_KEY;
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
@@ -43,9 +44,9 @@ describeE2E("Vercel AI SDK E2E Tests", () => {
       });
 
       const result = await generateText({
-        model: openai("gemini-2.0-flash"),
+        model: openai.chat("gemini-2.0-flash"),
         prompt: "What is 2 + 2? Answer with just the number.",
-        maxTokens: 10,
+        maxOutputTokens: 10,
       });
 
       expect(result.text).toBeDefined();
@@ -62,10 +63,10 @@ describeE2E("Vercel AI SDK E2E Tests", () => {
       });
 
       const result = await generateText({
-        model: openai("gemini-2.0-flash"),
+        model: openai.chat("gemini-2.0-flash"),
         system: "You are a helpful assistant. Always respond with exactly one word.",
         prompt: "Say hello",
-        maxTokens: 10,
+        maxOutputTokens: 10,
       });
 
       expect(result.text).toBeDefined();
@@ -83,9 +84,9 @@ describeE2E("Vercel AI SDK E2E Tests", () => {
       });
 
       const result = streamText({
-        model: openai("gemini-2.0-flash"),
+        model: openai.chat("gemini-2.0-flash"),
         prompt: "Count from 1 to 3.",
-        maxTokens: 50,
+        maxOutputTokens: 50,
       });
 
       const chunks: string[] = [];
@@ -122,7 +123,7 @@ describeE2E("Vercel AI SDK E2E Tests", () => {
 
       await expect(
         generateText({
-          model: openai("non-existent-model-12345"),
+          model: openai.chat("non-existent-model-12345"),
           prompt: "Hello",
         })
       ).rejects.toThrow();
