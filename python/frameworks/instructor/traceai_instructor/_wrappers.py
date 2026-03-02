@@ -190,7 +190,6 @@ class _HandleResponseWrapper:
                         resp = await wrapped(*args, **kwargs)
 
                         if resp:
-                            span.set_attribute(OUTPUT_VALUE, json.dumps(resp))
                             span.set_attribute(OUTPUT_MIME_TYPE, "application/json")
                             span.set_attribute(OUTPUT_VALUE, _raw_output(resp))
                         span.set_status(trace_api.StatusCode.OK)
@@ -214,11 +213,8 @@ class _HandleResponseWrapper:
                     resp = wrapped(*args, **kwargs)
 
                     if resp:
-                        span.set_attribute(
-                            OUTPUT_VALUE, safe_json_dumps(resp[0].model_json_schema())
-                        )
                         span.set_attribute(OUTPUT_MIME_TYPE, "application/json")
-                        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(resp))
+                        span.set_attribute(OUTPUT_VALUE, _raw_output(resp))
                     span.set_status(trace_api.StatusCode.OK)
                     return resp
                 except Exception as e:
