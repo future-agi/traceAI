@@ -149,6 +149,14 @@ public class TracedBedrockRuntimeClient {
 
             tracer.setInputMessages(span, inputMsgs);
 
+            // Set input.value from user messages
+            StringBuilder inputText = new StringBuilder();
+            for (Map<String, String> msg : inputMsgs) {
+                if (inputText.length() > 0) inputText.append("\n");
+                inputText.append(msg.get("content"));
+            }
+            tracer.setInputValue(span, inputText.toString());
+
             // Capture inference config
             if (request.inferenceConfig() != null) {
                 InferenceConfiguration config = request.inferenceConfig();
@@ -163,18 +171,19 @@ public class TracedBedrockRuntimeClient {
                 }
             }
 
-            tracer.setRawInput(span, request);
+            tracer.setRawInput(span, request.toBuilder().build().toString());
 
             // Execute request
             ConverseResponse response = client.converse(request);
 
             // Capture output
+            String outputContent = null;
             if (response.output() != null && response.output().message() != null) {
                 Message outputMsg = response.output().message();
                 String role = outputMsg.roleAsString();
-                String content = extractMessageContent(outputMsg);
-                tracer.setOutputValue(span, content);
-                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message(role, content)));
+                outputContent = extractMessageContent(outputMsg);
+                tracer.setOutputValue(span, outputContent);
+                tracer.setOutputMessages(span, Collections.singletonList(FITracer.message(role, outputContent)));
             }
 
             // Capture stop reason
@@ -193,7 +202,7 @@ public class TracedBedrockRuntimeClient {
                 );
             }
 
-            tracer.setRawOutput(span, response);
+            tracer.setRawOutput(span, response.toBuilder().build().toString());
 
             span.setStatus(StatusCode.OK);
             return response;

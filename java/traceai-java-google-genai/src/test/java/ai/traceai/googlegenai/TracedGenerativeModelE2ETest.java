@@ -76,43 +76,40 @@ class TracedGenerativeModelE2ETest {
     @Test
     @Order(1)
     void shouldExportGenerateContentSpan() {
-        try {
-            GenerateContentResponse response = tracedModel.generateContent(
-                "Say 'Hello from Java E2E test' and nothing else.");
-            String text = response.text();
-            System.out.println("[E2E] Google GenAI response: " + text);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        GenerateContentResponse response = tracedModel.generateContent(
+            "Say 'Hello from Java E2E test' and nothing else.");
+        assertThat(response).isNotNull();
+        String text = response.text();
+        assertThat(text).isNotEmpty();
+        System.out.println("[E2E] Google GenAI response: " + text);
     }
 
     @Test
     @Order(2)
     void shouldExportCountTokensSpan() {
-        try {
-            CountTokensResponse response = tracedModel.countTokens(
-                "Hello from Java E2E test, count my tokens please.");
-            response.totalTokens().ifPresent(total ->
-                System.out.println("[E2E] Google GenAI token count: " + total));
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        CountTokensResponse response = tracedModel.countTokens(
+            "Hello from Java E2E test, count my tokens please.");
+        assertThat(response).isNotNull();
+        assertThat(response.totalTokens()).isPresent();
+        response.totalTokens().ifPresent(total ->
+            System.out.println("[E2E] Google GenAI token count: " + total));
     }
 
     @Test
     @Order(3)
     void shouldExportChatSessionSpan() {
-        try {
-            TracedGenerativeModel.TracedChat chat = tracedModel.startChat();
+        TracedGenerativeModel.TracedChat chat = tracedModel.startChat();
+        assertThat(chat).isNotNull();
 
-            GenerateContentResponse response1 = chat.sendMessage("My name is Java E2E Tester.");
-            System.out.println("[E2E] Chat turn 1: " + response1.text());
+        GenerateContentResponse response1 = chat.sendMessage("My name is Java E2E Tester.");
+        assertThat(response1).isNotNull();
+        assertThat(response1.text()).isNotEmpty();
+        System.out.println("[E2E] Chat turn 1: " + response1.text());
 
-            GenerateContentResponse response2 = chat.sendMessage("What is my name?");
-            System.out.println("[E2E] Chat turn 2: " + response2.text());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        GenerateContentResponse response2 = chat.sendMessage("What is my name?");
+        assertThat(response2).isNotNull();
+        assertThat(response2.text()).isNotEmpty();
+        System.out.println("[E2E] Chat turn 2: " + response2.text());
     }
 
     @Test

@@ -6,5 +6,6 @@
     "baseUrl": "./src"
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
   "references": []
 }

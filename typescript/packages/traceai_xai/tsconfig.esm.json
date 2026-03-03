@@ -3,5 +3,9 @@
   "compilerOptions": {
     "module": "ES2020",
     "outDir": "./dist/esm"
-  }
+  },
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/__tests__/**"
+  ]
 }

@@ -14,8 +14,9 @@ module.exports = {
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
+  transformIgnorePatterns: ['node_modules/(?!\\.pnpm|@strands-agents)'],
   transform: {
-    '^.+\\.ts$': 'ts-jest'
+    '^.+\\.[jt]s$': ['ts-jest', { diagnostics: false }]
   },
   moduleNameMapper: {
     '^@traceai/fi-core$': '<rootDir>/../fi-core/src',

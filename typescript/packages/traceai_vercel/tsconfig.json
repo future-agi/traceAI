@@ -6,6 +6,7 @@
     "baseUrl": "./src"
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "test/**/*.ts"],
   "references": [
     { "path": "../fi-core" },
     { "path": "../fi-semantic-conventions" }

@@ -61,18 +61,14 @@ class TracedQdrantClientE2ETest {
 
         String qdrantUrl = System.getenv("QDRANT_URL");
         if (qdrantUrl != null) {
-            try {
-                URI uri = URI.create(qdrantUrl);
-                String host = uri.getHost() != null ? uri.getHost() : "localhost";
-                int port = uri.getPort() > 0 ? uri.getPort() : 6334;
-                boolean useTls = "https".equalsIgnoreCase(uri.getScheme());
+            URI uri = URI.create(qdrantUrl);
+            String host = uri.getHost() != null ? uri.getHost() : "localhost";
+            int port = uri.getPort() > 0 ? uri.getPort() : 6334;
+            boolean useTls = "https".equalsIgnoreCase(uri.getScheme());
 
-                QdrantClient client = new QdrantClient(
-                        QdrantGrpcClient.newBuilder(host, port, useTls).build());
-                tracedClient = new TracedQdrantClient(client, tracer);
-            } catch (Exception e) {
-                System.out.println("Failed to create Qdrant client: " + e.getMessage());
-            }
+            QdrantClient client = new QdrantClient(
+                    QdrantGrpcClient.newBuilder(host, port, useTls).build());
+            tracedClient = new TracedQdrantClient(client, tracer);
         }
 
         testCollection = "e2e_test_" + UUID.randomUUID().toString().substring(0, 8);
@@ -101,90 +97,70 @@ class TracedQdrantClientE2ETest {
 
     @Test
     @Order(2)
-    void shouldCreateCollection() {
+    void shouldCreateCollection() throws Exception {
         Assumptions.assumeTrue(tracedClient != null, "Qdrant client not configured");
 
-        try {
-            tracedClient.createCollection(testCollection, 4, Distance.Cosine);
-            System.out.println("Created collection: " + testCollection);
-        } catch (Exception e) {
-            System.out.println("Create collection error (span still exported): " + e.getMessage());
-        }
+        tracedClient.createCollection(testCollection, 4, Distance.Cosine);
+        System.out.println("Created collection: " + testCollection);
     }
 
     @Test
     @Order(3)
-    void shouldListCollections() {
+    void shouldListCollections() throws Exception {
         Assumptions.assumeTrue(tracedClient != null, "Qdrant client not configured");
 
-        try {
-            List<String> collections = tracedClient.listCollections();
-            assertThat(collections).isNotNull();
-            System.out.println("Listed " + collections.size() + " collections");
-        } catch (Exception e) {
-            System.out.println("List collections error (span still exported): " + e.getMessage());
-        }
+        List<String> collections = tracedClient.listCollections();
+        assertThat(collections).isNotNull();
+        System.out.println("Listed " + collections.size() + " collections");
     }
 
     @Test
     @Order(4)
-    void shouldUpsertPoints() {
+    void shouldUpsertPoints() throws Exception {
         Assumptions.assumeTrue(tracedClient != null, "Qdrant client not configured");
 
-        try {
-            List<PointStruct> points = Arrays.asList(
-                    PointStruct.newBuilder()
-                            .setId(id(1))
-                            .setVectors(vectors(Arrays.asList(0.1f, 0.2f, 0.3f, 0.4f)))
-                            .putPayload("text", value("first document"))
-                            .build(),
-                    PointStruct.newBuilder()
-                            .setId(id(2))
-                            .setVectors(vectors(Arrays.asList(0.5f, 0.6f, 0.7f, 0.8f)))
-                            .putPayload("text", value("second document"))
-                            .build()
-            );
+        List<PointStruct> points = Arrays.asList(
+                PointStruct.newBuilder()
+                        .setId(id(1))
+                        .setVectors(vectors(Arrays.asList(0.1f, 0.2f, 0.3f, 0.4f)))
+                        .putPayload("text", value("first document"))
+                        .build(),
+                PointStruct.newBuilder()
+                        .setId(id(2))
+                        .setVectors(vectors(Arrays.asList(0.5f, 0.6f, 0.7f, 0.8f)))
+                        .putPayload("text", value("second document"))
+                        .build()
+        );
 
-            UpdateResult result = tracedClient.upsert(testCollection, points);
-            assertThat(result).isNotNull();
-            System.out.println("Upserted 2 points, status: " + result.getStatus().name());
-        } catch (Exception e) {
-            System.out.println("Upsert error (span still exported): " + e.getMessage());
-        }
+        UpdateResult result = tracedClient.upsert(testCollection, points);
+        assertThat(result).isNotNull();
+        System.out.println("Upserted 2 points, status: " + result.getStatus().name());
     }
 
     @Test
     @Order(5)
-    void shouldSearchVectors() {
+    void shouldSearchVectors() throws Exception {
         Assumptions.assumeTrue(tracedClient != null, "Qdrant client not configured");
 
-        try {
-            List<Float> queryVector = Arrays.asList(0.1f, 0.2f, 0.3f, 0.4f);
-            List<ScoredPoint> results = tracedClient.search(testCollection, queryVector, 5);
-            assertThat(results).isNotNull();
-            System.out.println("Search returned " + results.size() + " results");
-        } catch (Exception e) {
-            System.out.println("Search error (span still exported): " + e.getMessage());
-        }
+        List<Float> queryVector = Arrays.asList(0.1f, 0.2f, 0.3f, 0.4f);
+        List<ScoredPoint> results = tracedClient.search(testCollection, queryVector, 5);
+        assertThat(results).isNotNull();
+        System.out.println("Search returned " + results.size() + " results");
     }
 
     @Test
     @Order(6)
-    void shouldGetPointsByIds() {
+    void shouldGetPointsByIds() throws Exception {
         Assumptions.assumeTrue(tracedClient != null, "Qdrant client not configured");
 
-        try {
-            List<RetrievedPoint> results = tracedClient.get(
-                    testCollection,
-                    Arrays.asList(id(1), id(2)),
-                    true,
-                    false
-            );
-            assertThat(results).isNotNull();
-            System.out.println("Retrieved " + results.size() + " points");
-        } catch (Exception e) {
-            System.out.println("Get error (span still exported): " + e.getMessage());
-        }
+        List<RetrievedPoint> results = tracedClient.get(
+                testCollection,
+                Arrays.asList(id(1), id(2)),
+                true,
+                false
+        );
+        assertThat(results).isNotNull();
+        System.out.println("Retrieved " + results.size() + " points");
     }
 
     @Test

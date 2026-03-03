@@ -81,38 +81,35 @@ class TracedAnthropicClientE2ETest {
 
     @Test
     @Order(1)
-    void shouldExportMessageCreationSpan() {
+    void shouldExportMessageCreationSpan() throws Exception {
         Assumptions.assumeTrue(clientAvailable, "Anthropic client not available");
 
-        try {
-            Class<?> paramsClass = Class.forName("com.anthropic.models.MessageCreateParams");
-            Object builder = paramsClass.getMethod("builder").invoke(null);
+        Class<?> paramsClass = Class.forName("com.anthropic.models.MessageCreateParams");
+        Object builder = paramsClass.getMethod("builder").invoke(null);
 
-            builder.getClass().getMethod("model", String.class)
-                .invoke(builder, "claude-3-haiku-20240307");
-            builder.getClass().getMethod("maxTokens", long.class)
-                .invoke(builder, 100L);
+        builder.getClass().getMethod("model", String.class)
+            .invoke(builder, "claude-3-haiku-20240307");
+        builder.getClass().getMethod("maxTokens", long.class)
+            .invoke(builder, 100L);
 
-            Class<?> messageParamClass = Class.forName("com.anthropic.models.MessageParam");
-            Object msgBuilder = messageParamClass.getMethod("builder").invoke(null);
-            msgBuilder.getClass().getMethod("role", String.class).invoke(msgBuilder, "user");
-            msgBuilder.getClass().getMethod("content", String.class)
-                .invoke(msgBuilder, "Say 'Hello from Java E2E test' and nothing else.");
-            Object messageParam = msgBuilder.getClass().getMethod("build").invoke(msgBuilder);
+        Class<?> messageParamClass = Class.forName("com.anthropic.models.MessageParam");
+        Object msgBuilder = messageParamClass.getMethod("builder").invoke(null);
+        msgBuilder.getClass().getMethod("role", String.class).invoke(msgBuilder, "user");
+        msgBuilder.getClass().getMethod("content", String.class)
+            .invoke(msgBuilder, "Say 'Hello from Java E2E test' and nothing else.");
+        Object messageParam = msgBuilder.getClass().getMethod("build").invoke(msgBuilder);
 
-            for (Method m : builder.getClass().getMethods()) {
-                if (m.getName().equals("addMessage") && m.getParameterCount() == 1) {
-                    m.invoke(builder, messageParam);
-                    break;
-                }
+        for (Method m : builder.getClass().getMethods()) {
+            if (m.getName().equals("addMessage") && m.getParameterCount() == 1) {
+                m.invoke(builder, messageParam);
+                break;
             }
-
-            Object params = builder.getClass().getMethod("build").invoke(builder);
-            Object result = tracedClient.createMessage(params);
-            System.out.println("[E2E] Anthropic message result: " + result);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
         }
+
+        Object params = builder.getClass().getMethod("build").invoke(builder);
+        Object result = tracedClient.createMessage(params);
+        assertThat(result).isNotNull();
+        System.out.println("[E2E] Anthropic message result: " + result);
     }
 
     @Test
@@ -131,7 +128,9 @@ class TracedAnthropicClientE2ETest {
 
         try {
             dummyClient.createMessage("dummy-params");
+            Assertions.fail("Expected RuntimeException for dummy client");
         } catch (RuntimeException e) {
+            assertThat(e).isNotNull();
             System.out.println("[E2E] Expected error with dummy client: " + e.getMessage());
         }
     }

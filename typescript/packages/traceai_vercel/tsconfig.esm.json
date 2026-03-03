@@ -6,6 +6,12 @@
     "tsBuildInfoFile": "dist/esm/tsconfig.esm.tsbuildinfo",
     "baseUrl": "./src"
   },
-  "include": ["src/**/*.ts"],
-  "references": []
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/__tests__/**"
+  ]
 }

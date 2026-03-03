@@ -94,7 +94,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
     const module =
       new InstrumentationNodeModuleDefinition(
         "@langchain/core/dist/callbacks/manager.cjs",
-        ["^0.1.0", "^0.2.0"],
+        ["^0.1.0", "^0.2.0", "^0.3.0"],
         this.patch.bind(this),
         this.unpatch.bind(this),
       );

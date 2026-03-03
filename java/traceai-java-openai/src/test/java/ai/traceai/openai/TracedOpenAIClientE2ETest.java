@@ -91,13 +91,12 @@ class TracedOpenAIClientE2ETest {
             .maxTokens(50)
             .build();
 
-        try {
-            ChatCompletion result = tracedClient.createChatCompletion(params);
-            System.out.println("[E2E] Chat response: " +
-                result.choices().get(0).message().content().orElse("(empty)"));
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        ChatCompletion result = tracedClient.createChatCompletion(params);
+        assertThat(result).isNotNull();
+        assertThat(result.choices()).isNotEmpty();
+        String content = result.choices().get(0).message().content().orElse("(empty)");
+        assertThat(content).isNotEmpty();
+        System.out.println("[E2E] Chat response: " + content);
     }
 
     @Test
@@ -115,13 +114,12 @@ class TracedOpenAIClientE2ETest {
             .maxTokens(10)
             .build();
 
-        try {
-            ChatCompletion result = tracedClient.createChatCompletion(params);
-            System.out.println("[E2E] Deterministic chat response: " +
-                result.choices().get(0).message().content().orElse("(empty)"));
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        ChatCompletion result = tracedClient.createChatCompletion(params);
+        assertThat(result).isNotNull();
+        assertThat(result.choices()).isNotEmpty();
+        String content = result.choices().get(0).message().content().orElse("(empty)");
+        assertThat(content).isNotEmpty();
+        System.out.println("[E2E] Deterministic chat response: " + content);
     }
 
     @Test
@@ -132,18 +130,17 @@ class TracedOpenAIClientE2ETest {
             .input(EmbeddingCreateParams.Input.ofString("Hello from Java E2E test"))
             .build();
 
-        try {
-            CreateEmbeddingResponse result = tracedClient.createEmbedding(params);
-            System.out.println("[E2E] Embedding dimensions: " +
-                result.data().get(0).embedding().size());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        CreateEmbeddingResponse result = tracedClient.createEmbedding(params);
+        assertThat(result).isNotNull();
+        assertThat(result.data()).isNotEmpty();
+        assertThat(result.data().get(0).embedding()).isNotEmpty();
+        System.out.println("[E2E] Embedding dimensions: " +
+            result.data().get(0).embedding().size());
     }
 
     @Test
     @Order(4)
-    void shouldExportStreamingChatCompletionSpan() {
+    void shouldExportStreamingChatCompletionSpan() throws Exception {
         ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
             .model("gpt-4o-mini")
             .addMessage(ChatCompletionMessageParam.ofChatCompletionUserMessageParam(
@@ -155,16 +152,14 @@ class TracedOpenAIClientE2ETest {
             .maxTokens(30)
             .build();
 
-        try {
-            Iterable<ChatCompletionChunk> chunks = tracedClient.streamChatCompletion(params);
-            int chunkCount = 0;
-            for (ChatCompletionChunk chunk : chunks) {
-                chunkCount++;
-            }
-            System.out.println("[E2E] Streaming chunks received: " + chunkCount);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
+        Iterable<ChatCompletionChunk> chunks = tracedClient.streamChatCompletion(params);
+        assertThat(chunks).isNotNull();
+        int chunkCount = 0;
+        for (ChatCompletionChunk chunk : chunks) {
+            chunkCount++;
         }
+        assertThat(chunkCount).isGreaterThan(0);
+        System.out.println("[E2E] Streaming chunks received: " + chunkCount);
     }
 
     @Test

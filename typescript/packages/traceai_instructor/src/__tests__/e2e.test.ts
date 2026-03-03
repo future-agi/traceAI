@@ -75,8 +75,8 @@ describeE2E("Instructor E2E Tests", () => {
       });
 
       expect(result).toBeDefined();
-      expect(result.name).toBeDefined();
-      expect(result.age).toBeDefined();
+      expect((result as any).name).toBeDefined();
+      expect((result as any).age).toBeDefined();
     }, 30000);
   });
 

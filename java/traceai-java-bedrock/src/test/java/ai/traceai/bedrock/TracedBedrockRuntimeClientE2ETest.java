@@ -111,17 +111,16 @@ class TracedBedrockRuntimeClientE2ETest {
                 .build())
             .build();
 
-        try {
-            ConverseResponse response = tracedClient.converse(request);
-            String outputText = response.output().message().content().stream()
-                .filter(block -> block.text() != null)
-                .map(ContentBlock::text)
-                .findFirst()
-                .orElse("(no text)");
-            System.out.println("[E2E] Bedrock converse response: " + outputText);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        ConverseResponse response = tracedClient.converse(request);
+        assertThat(response).isNotNull();
+        assertThat(response.output()).isNotNull();
+        String outputText = response.output().message().content().stream()
+            .filter(block -> block.text() != null)
+            .map(ContentBlock::text)
+            .findFirst()
+            .orElse("(no text)");
+        assertThat(outputText).isNotEmpty();
+        System.out.println("[E2E] Bedrock converse response: " + outputText);
     }
 
     @Test
@@ -149,13 +148,12 @@ class TracedBedrockRuntimeClientE2ETest {
                 .build())
             .build();
 
-        try {
-            ConverseResponse response = tracedClient.converse(request);
-            System.out.println("[E2E] Bedrock converse with system prompt: " +
-                response.output().message().content().get(0).text());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        ConverseResponse response = tracedClient.converse(request);
+        assertThat(response).isNotNull();
+        assertThat(response.output()).isNotNull();
+        String outputText = response.output().message().content().get(0).text();
+        assertThat(outputText).isNotEmpty();
+        System.out.println("[E2E] Bedrock converse with system prompt: " + outputText);
     }
 
     @Test
@@ -174,13 +172,11 @@ class TracedBedrockRuntimeClientE2ETest {
             .body(SdkBytes.fromUtf8String(requestBody))
             .build();
 
-        try {
-            InvokeModelResponse response = tracedClient.invokeModel(request);
-            String responseBody = response.body().asUtf8String();
-            System.out.println("[E2E] Bedrock invokeModel response: " + responseBody);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        InvokeModelResponse response = tracedClient.invokeModel(request);
+        assertThat(response).isNotNull();
+        String responseBody = response.body().asUtf8String();
+        assertThat(responseBody).isNotEmpty();
+        System.out.println("[E2E] Bedrock invokeModel response: " + responseBody);
     }
 
     @Test

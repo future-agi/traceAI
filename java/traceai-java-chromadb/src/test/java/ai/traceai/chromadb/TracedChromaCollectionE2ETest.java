@@ -35,7 +35,7 @@ class TracedChromaCollectionE2ETest {
     private static String testCollectionName;
 
     @BeforeAll
-    static void setUp() {
+    static void setUp() throws Exception {
         String baseUrl = System.getenv("FI_BASE_URL") != null
                 ? System.getenv("FI_BASE_URL")
                 : "https://api.futureagi.com";
@@ -55,14 +55,10 @@ class TracedChromaCollectionE2ETest {
         testCollectionName = "e2e_test_" + UUID.randomUUID().toString().substring(0, 8);
 
         if (chromaUrl != null) {
-            try {
-                chromaClient = new Client(chromaUrl);
-                Collection collection = chromaClient.createCollection(
-                        testCollectionName, null, true, null);
-                tracedCollection = new TracedChromaCollection(collection, tracer, testCollectionName);
-            } catch (Exception e) {
-                System.out.println("Failed to create ChromaDB client: " + e.getMessage());
-            }
+            chromaClient = new Client(chromaUrl);
+            Collection collection = chromaClient.createCollection(
+                    testCollectionName, null, true, null);
+            tracedCollection = new TracedChromaCollection(collection, tracer, testCollectionName);
         }
     }
 
@@ -88,108 +84,84 @@ class TracedChromaCollectionE2ETest {
 
     @Test
     @Order(2)
-    void shouldAddDocuments() {
+    void shouldAddDocuments() throws Exception {
         Assumptions.assumeTrue(tracedCollection != null, "ChromaDB collection not configured");
 
-        try {
-            List<String> documents = Arrays.asList(
-                    "The quick brown fox jumps over the lazy dog",
-                    "Machine learning is a subset of artificial intelligence",
-                    "Vector databases store high-dimensional data"
-            );
-            List<String> ids = Arrays.asList("doc-1", "doc-2", "doc-3");
-            List<Map<String, String>> metadatas = Arrays.asList(
-                    Collections.singletonMap("category", "animals"),
-                    Collections.singletonMap("category", "tech"),
-                    Collections.singletonMap("category", "tech")
-            );
+        List<String> documents = Arrays.asList(
+                "The quick brown fox jumps over the lazy dog",
+                "Machine learning is a subset of artificial intelligence",
+                "Vector databases store high-dimensional data"
+        );
+        List<String> ids = Arrays.asList("doc-1", "doc-2", "doc-3");
+        List<Map<String, String>> metadatas = Arrays.asList(
+                Collections.singletonMap("category", "animals"),
+                Collections.singletonMap("category", "tech"),
+                Collections.singletonMap("category", "tech")
+        );
 
-            tracedCollection.add(null, metadatas, documents, ids);
-            System.out.println("Added 3 documents to collection: " + testCollectionName);
-        } catch (Exception e) {
-            System.out.println("Add error (span still exported): " + e.getMessage());
-        }
+        tracedCollection.add(null, metadatas, documents, ids);
+        System.out.println("Added 3 documents to collection: " + testCollectionName);
     }
 
     @Test
     @Order(3)
-    void shouldCountDocuments() {
+    void shouldCountDocuments() throws Exception {
         Assumptions.assumeTrue(tracedCollection != null, "ChromaDB collection not configured");
 
-        try {
-            int count = tracedCollection.count();
-            assertThat(count).isGreaterThanOrEqualTo(0);
-            System.out.println("Collection count: " + count);
-        } catch (Exception e) {
-            System.out.println("Count error (span still exported): " + e.getMessage());
-        }
+        int count = tracedCollection.count();
+        assertThat(count).isGreaterThanOrEqualTo(0);
+        System.out.println("Collection count: " + count);
     }
 
     @Test
     @Order(4)
-    void shouldQueryByText() {
+    void shouldQueryByText() throws Exception {
         Assumptions.assumeTrue(tracedCollection != null, "ChromaDB collection not configured");
 
-        try {
-            List<String> queryTexts = Collections.singletonList("artificial intelligence");
-            Collection.QueryResponse response = tracedCollection.query(
-                    queryTexts, 2, null, null, null);
-            assertThat(response).isNotNull();
-            if (response.getIds() != null && !response.getIds().isEmpty()) {
-                System.out.println("Query returned " + response.getIds().get(0).size() + " results");
-            }
-        } catch (Exception e) {
-            System.out.println("Query error (span still exported): " + e.getMessage());
+        List<String> queryTexts = Collections.singletonList("artificial intelligence");
+        Collection.QueryResponse response = tracedCollection.query(
+                queryTexts, 2, null, null, null);
+        assertThat(response).isNotNull();
+        if (response.getIds() != null && !response.getIds().isEmpty()) {
+            System.out.println("Query returned " + response.getIds().get(0).size() + " results");
         }
     }
 
     @Test
     @Order(5)
-    void shouldGetDocumentsById() {
+    void shouldGetDocumentsById() throws Exception {
         Assumptions.assumeTrue(tracedCollection != null, "ChromaDB collection not configured");
 
-        try {
-            Collection.GetResult result = tracedCollection.get(
-                    Arrays.asList("doc-1", "doc-2"), null, null);
-            assertThat(result).isNotNull();
-            if (result.getIds() != null) {
-                System.out.println("Get returned " + result.getIds().size() + " documents");
-            }
-        } catch (Exception e) {
-            System.out.println("Get error (span still exported): " + e.getMessage());
+        Collection.GetResult result = tracedCollection.get(
+                Arrays.asList("doc-1", "doc-2"), null, null);
+        assertThat(result).isNotNull();
+        if (result.getIds() != null) {
+            System.out.println("Get returned " + result.getIds().size() + " documents");
         }
     }
 
     @Test
     @Order(6)
-    void shouldUpsertDocuments() {
+    void shouldUpsertDocuments() throws Exception {
         Assumptions.assumeTrue(tracedCollection != null, "ChromaDB collection not configured");
 
-        try {
-            List<String> documents = Collections.singletonList("Updated document content");
-            List<String> ids = Collections.singletonList("doc-1");
-            List<Map<String, String>> metadatas = Collections.singletonList(
-                    Collections.singletonMap("category", "updated")
-            );
+        List<String> documents = Collections.singletonList("Updated document content");
+        List<String> ids = Collections.singletonList("doc-1");
+        List<Map<String, String>> metadatas = Collections.singletonList(
+                Collections.singletonMap("category", "updated")
+        );
 
-            tracedCollection.upsert(null, metadatas, documents, ids);
-            System.out.println("Upserted 1 document");
-        } catch (Exception e) {
-            System.out.println("Upsert error (span still exported): " + e.getMessage());
-        }
+        tracedCollection.upsert(null, metadatas, documents, ids);
+        System.out.println("Upserted 1 document");
     }
 
     @Test
     @Order(7)
-    void shouldDeleteDocuments() {
+    void shouldDeleteDocuments() throws Exception {
         Assumptions.assumeTrue(tracedCollection != null, "ChromaDB collection not configured");
 
-        try {
-            tracedCollection.delete(Arrays.asList("doc-3"), null, null);
-            System.out.println("Deleted doc-3");
-        } catch (Exception e) {
-            System.out.println("Delete error (span still exported): " + e.getMessage());
-        }
+        tracedCollection.delete(Arrays.asList("doc-3"), null, null);
+        System.out.println("Deleted doc-3");
     }
 
     @Test

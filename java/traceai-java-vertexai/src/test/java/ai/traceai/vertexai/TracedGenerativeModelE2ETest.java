@@ -83,28 +83,25 @@ class TracedGenerativeModelE2ETest {
 
     @Test
     @Order(1)
-    void shouldExportGenerateContentSpan() {
-        try {
-            GenerateContentResponse response = tracedModel.generateContent(
-                "Say 'Hello from Java E2E test' and nothing else.");
-            String text = response.getCandidatesList().get(0)
-                .getContent().getPartsList().get(0).getText();
-            System.out.println("[E2E] Vertex AI response: " + text);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+    void shouldExportGenerateContentSpan() throws Exception {
+        GenerateContentResponse response = tracedModel.generateContent(
+            "Say 'Hello from Java E2E test' and nothing else.");
+        assertThat(response).isNotNull();
+        assertThat(response.getCandidatesList()).isNotEmpty();
+        String text = response.getCandidatesList().get(0)
+            .getContent().getPartsList().get(0).getText();
+        assertThat(text).isNotEmpty();
+        System.out.println("[E2E] Vertex AI response: " + text);
     }
 
     @Test
     @Order(2)
-    void shouldExportCountTokensSpan() {
-        try {
-            CountTokensResponse response = tracedModel.countTokens(
-                "Hello from Java E2E test, count my tokens please.");
-            System.out.println("[E2E] Vertex AI token count: " + response.getTotalTokens());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+    void shouldExportCountTokensSpan() throws Exception {
+        CountTokensResponse response = tracedModel.countTokens(
+            "Hello from Java E2E test, count my tokens please.");
+        assertThat(response).isNotNull();
+        assertThat(response.getTotalTokens()).isGreaterThan(0);
+        System.out.println("[E2E] Vertex AI token count: " + response.getTotalTokens());
     }
 
     @Test

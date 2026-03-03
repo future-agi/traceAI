@@ -44,8 +44,8 @@
     "@opentelemetry/api": "^1.4.0",
     "@opentelemetry/core": "^1.30.0",
     "@opentelemetry/instrumentation": "^0.57.0",
-    "@traceai/fi-core": "workspace:*",
-    "@traceai/fi-semantic-conventions": "workspace:*"
+    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
     "@huggingface/inference": "^2.8.0",

@@ -12,6 +12,7 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.output.Response;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import java.util.List;
@@ -67,18 +68,12 @@ class TracedChatLanguageModelE2ETest {
             ? System.getenv("OPENAI_API_KEY")
             : "dummy-key-for-e2e";
 
-        try {
-            ChatLanguageModel delegate = createOpenAiChatModel(openaiApiKey);
-            if (delegate != null) {
-                tracedModel = new TracedChatLanguageModel(delegate, tracer, "openai");
-                modelAvailable = true;
-                System.out.println("[E2E] LangChain4j OpenAI model created successfully");
-            }
-        } catch (Exception e) {
-            System.out.println("[E2E] Could not create LangChain4j OpenAI model: " + e.getMessage());
-        }
-
-        if (!modelAvailable) {
+        ChatLanguageModel delegate = createOpenAiChatModel(openaiApiKey);
+        if (delegate != null) {
+            tracedModel = new TracedChatLanguageModel(delegate, tracer, "openai");
+            modelAvailable = true;
+            System.out.println("[E2E] LangChain4j OpenAI model created successfully");
+        } else {
             tracedModel = new TracedChatLanguageModel(new DummyChatLanguageModel(), tracer, "dummy");
             System.out.println("[E2E] Using dummy LangChain4j model");
         }
@@ -92,39 +87,35 @@ class TracedChatLanguageModelE2ETest {
     @Test
     @Order(1)
     void shouldExportChatGenerationSpan() {
-        try {
-            Response<AiMessage> response = tracedModel.generate(List.of(
-                UserMessage.from("Say 'Hello from Java E2E test' and nothing else.")
-            ));
-            System.out.println("[E2E] LangChain4j response: " + response.content().text());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        Response<AiMessage> response = tracedModel.generate(List.of(
+            UserMessage.from("Say 'Hello from Java E2E test' and nothing else.")
+        ));
+        assertThat(response).isNotNull();
+        assertThat(response.content()).isNotNull();
+        assertThat(response.content().text()).isNotEmpty();
+        System.out.println("[E2E] LangChain4j response: " + response.content().text());
     }
 
     @Test
     @Order(2)
     void shouldExportChatWithSystemMessageSpan() {
-        try {
-            Response<AiMessage> response = tracedModel.generate(List.of(
-                SystemMessage.from("You always reply in exactly 3 words."),
-                UserMessage.from("What is Java?")
-            ));
-            System.out.println("[E2E] LangChain4j response with system: " + response.content().text());
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        Response<AiMessage> response = tracedModel.generate(List.of(
+            SystemMessage.from("You always reply in exactly 3 words."),
+            UserMessage.from("What is Java?")
+        ));
+        assertThat(response).isNotNull();
+        assertThat(response.content()).isNotNull();
+        assertThat(response.content().text()).isNotEmpty();
+        System.out.println("[E2E] LangChain4j response with system: " + response.content().text());
     }
 
     @Test
     @Order(3)
     void shouldExportStringGenerateSpan() {
-        try {
-            String response = tracedModel.generate("What is 2 + 2? Reply with just the number.");
-            System.out.println("[E2E] LangChain4j string response: " + response);
-        } catch (Exception e) {
-            System.out.println("[E2E] Error (span still exported): " + e.getMessage());
-        }
+        String response = tracedModel.generate("What is 2 + 2? Reply with just the number.");
+        assertThat(response).isNotNull();
+        assertThat(response).isNotEmpty();
+        System.out.println("[E2E] LangChain4j string response: " + response);
     }
 
     @Test
@@ -153,6 +144,7 @@ class TracedChatLanguageModelE2ETest {
             return (ChatLanguageModel) builder.getClass().getMethod("build").invoke(builder);
         } catch (ClassNotFoundException e) {
             System.out.println("[E2E] langchain4j-openai not on classpath: " + e.getMessage());
+            Assumptions.assumeTrue(false, "langchain4j-openai not on classpath, skipping OpenAI model creation");
             return null;
         } catch (Exception e) {
             System.out.println("[E2E] Error creating OpenAiChatModel: " + e.getMessage());

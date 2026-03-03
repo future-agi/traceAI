@@ -40,8 +40,8 @@
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
     "@opentelemetry/core": "^2.0.1",
-    "@traceai/fi-core": "workspace:*",
-    "@traceai/fi-semantic-conventions": "workspace:*"
+    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "peerDependencies": {
     "cohere-ai": ">=7.0.0"

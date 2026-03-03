@@ -69,7 +69,17 @@ planning/
 
 # Java build artifacts
 **/target/
+**/.settings/
+**/.project
+**/.classpath
+**/.factorypath
+*.class
+*.jar
+*.war
 
 # C# build artifacts
 **/bin/
 **/obj/
+
+# Python
+**/uv.lock
