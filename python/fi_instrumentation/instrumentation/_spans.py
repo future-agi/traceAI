@@ -14,7 +14,7 @@ from ._types import FiMimeType
 from .config import TraceConfig
 
 _IMPORTANT_ATTRIBUTES = [
-    SpanAttributes.FI_SPAN_KIND,
+    SpanAttributes.GEN_AI_SPAN_KIND,
 ]
 
 
@@ -54,7 +54,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         *,
         mime_type: Optional[FiMimeType] = None,
     ) -> None:
-        if FI_SPAN_KIND not in self._self_important_attributes:
+        if GEN_AI_SPAN_KIND not in self._self_important_attributes:
             raise ValueError("Cannot set input attributes on a non-Fi span")
         self.set_attributes(get_input_attributes(value, mime_type=mime_type))
 
@@ -64,7 +64,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         *,
         mime_type: Optional[FiMimeType] = None,
     ) -> None:
-        if FI_SPAN_KIND not in self._self_important_attributes:
+        if GEN_AI_SPAN_KIND not in self._self_important_attributes:
             raise ValueError("Cannot set output attributes on a non-Fi span")
         self.set_attributes(get_output_attributes(value, mime_type=mime_type))
 
@@ -75,7 +75,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         description: Optional[str] = None,
         parameters: Union[str, Dict[str, Any]],
     ) -> None:
-        if self._self_important_attributes.get(FI_SPAN_KIND) != TOOL:
+        if self._self_important_attributes.get(GEN_AI_SPAN_KIND) != TOOL:
             raise ValueError("Cannot set tool attributes on a non-tool span")
         self.set_attributes(
             get_tool_attributes(
@@ -90,4 +90,4 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
 TOOL = FiSpanKindValues.TOOL.value
 
 # span attributes
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND

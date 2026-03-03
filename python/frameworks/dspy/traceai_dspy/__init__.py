@@ -230,7 +230,7 @@ class _LMCallWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: LLM,
+                        GEN_AI_SPAN_KIND: LLM,
                         **dict(_input_value_and_mime_type(messages)),
                         **dict(_eval_input(messages)),
                         **dict(_llm_prompt(prompts)),
@@ -307,7 +307,7 @@ class _PredictForwardWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: CHAIN,
+                        GEN_AI_SPAN_KIND: CHAIN,
                         INPUT_VALUE: _get_input_value(
                             wrapped,
                             *args,
@@ -374,7 +374,7 @@ class _ModuleForwardWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: CHAIN,
+                        GEN_AI_SPAN_KIND: CHAIN,
                         **dict(_raw_input(arguments)),
                         # At this time, dspy.Module does not have an abstract forward
                         # method, but assumes that user-defined subclasses implement the
@@ -441,7 +441,7 @@ class _RetrieverForwardWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: RETRIEVER.value,
+                        GEN_AI_SPAN_KIND: RETRIEVER.value,
                         INPUT_VALUE: _get_input_value(wrapped, *args, **kwargs),
                         INPUT_MIME_TYPE: JSON,
                         **dict(_raw_output(arguments)),
@@ -492,7 +492,7 @@ class _RetrieverModelCallWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: RETRIEVER.value,
+                        GEN_AI_SPAN_KIND: RETRIEVER.value,
                         INPUT_VALUE: (_get_input_value(wrapped, *args, **kwargs)),
                         INPUT_MIME_TYPE: JSON,
                         **dict(_raw_input(arguments)),
@@ -540,7 +540,7 @@ class _AdapterCallWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: CHAIN,
+                        GEN_AI_SPAN_KIND: CHAIN,
                         **dict(_input_value_and_mime_type(arguments)),
                         **dict(_raw_input(arguments)),
                         **dict(get_attributes_from_context()),
@@ -586,7 +586,7 @@ class _EmbedderCallWrapper(_WithTracer):
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: EMBEDDING,
+                        GEN_AI_SPAN_KIND: EMBEDDING,
                         INPUT_VALUE: safe_json_dumps(input_texts),
                         INPUT_MIME_TYPE: TEXT,
                         **dict(_raw_input(arguments)),
@@ -739,7 +739,7 @@ def _input_value_and_mime_type(
 
 def _llm_prompt(prompts: Any) -> Iterator[Tuple[str, Any]]:
     if prompts:
-        yield LLM_PROMPTS, safe_json_dumps(prompts)
+        yield GEN_AI_PROMPTS, safe_json_dumps(prompts)
 
 
 def _eval_input(messages: list) -> Iterator[Tuple[str, Any]]:
@@ -751,10 +751,10 @@ def _eval_input(messages: list) -> Iterator[Tuple[str, Any]]:
             eval_input.append(message["content"])
 
     if eval_input and len(eval_input) > 0:
-        yield QUERY, safe_json_dumps(eval_input[0])
+        yield INPUT_VALUE, safe_json_dumps(eval_input[0])
 
     eval_input = "\n".join(eval_input)
-    yield EVAL_INPUT, safe_json_dumps(eval_input)
+    yield INPUT_VALUE, safe_json_dumps(eval_input)
 
 
 def _convert_to_dict(obj: Any) -> Any:
@@ -775,12 +775,12 @@ def _convert_to_dict(obj: Any) -> Any:
 
 def _raw_input(raw_input: Any) -> Iterator[Tuple[str, Any]]:
     if raw_input:
-        yield RAW_INPUT, safe_json_dumps(_convert_to_dict(raw_input))
+        yield INPUT_VALUE, safe_json_dumps(_convert_to_dict(raw_input))
 
 
 def _raw_output(raw_output: Any) -> Iterator[Tuple[str, Any]]:
     if raw_output:
-        yield RAW_OUTPUT, safe_json_dumps(_convert_to_dict(raw_output))
+        yield OUTPUT_VALUE, safe_json_dumps(_convert_to_dict(raw_output))
 
 
 def _output_value_and_mime_type(response: Any) -> Iterator[Tuple[str, Any]]:
@@ -790,29 +790,29 @@ def _output_value_and_mime_type(response: Any) -> Iterator[Tuple[str, Any]]:
 
 def _llm_model_name(lm: "LM") -> Iterator[Tuple[str, Any]]:
     if (model_name := getattr(lm, "model_name", None)) is not None:
-        yield LLM_MODEL_NAME, model_name
+        yield GEN_AI_REQUEST_MODEL, model_name
 
 
 def _llm_input_messages(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
     if isinstance(prompt := arguments.get("prompt"), str):
-        yield f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_ROLE}", "user"
-        yield f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}", prompt
+        yield f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_ROLE}", "user"
+        yield f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}", prompt
     elif isinstance(messages := arguments.get("messages"), list):
         for i, message in enumerate(messages):
             if not isinstance(message, dict):
                 continue
             if (role := message.get("role", None)) is not None:
-                yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_ROLE}", role
+                yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_ROLE}", role
             if (content := message.get("content", None)) is not None:
-                yield f"{LLM_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}", content
+                yield f"{GEN_AI_INPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}", content
 
 
 def _llm_output_messages(response: Any) -> Iterator[Tuple[str, Any]]:
     if isinstance(response, Iterable):
         for i, message in enumerate(response):
             if isinstance(message, str):
-                yield f"{LLM_OUTPUT_MESSAGES}.{i}.{MESSAGE_ROLE}", "assistant"
-                yield f"{LLM_OUTPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}", message
+                yield f"{GEN_AI_OUTPUT_MESSAGES}.{i}.{MESSAGE_ROLE}", "assistant"
+                yield f"{GEN_AI_OUTPUT_MESSAGES}.{i}.{MESSAGE_CONTENT}", message
 
 
 def _llm_invocation_parameters(
@@ -820,7 +820,7 @@ def _llm_invocation_parameters(
 ) -> Iterator[Tuple[str, Any]]:
     lm_kwargs = _ if isinstance(_ := getattr(lm, "kwargs", {}), dict) else {}
     kwargs = _ if isinstance(_ := arguments.get("kwargs"), dict) else {}
-    yield LLM_INVOCATION_PARAMETERS, safe_json_dumps(lm_kwargs | kwargs)
+    yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(lm_kwargs | kwargs)
 
 
 def _bind_arguments(
@@ -849,7 +849,7 @@ def _get_embedding_output(response: list) -> Iterator[Tuple[str, Any]]:
     yield OUTPUT_VALUE, safe_json_dumps(safe_json_dumps(output))
 
     raw_output = {"embeddings": output}
-    yield RAW_OUTPUT, safe_json_dumps(raw_output)
+    yield OUTPUT_VALUE, safe_json_dumps(raw_output)
 
 
 def _embedder_model_name(embedder: Any) -> Iterator[Tuple[str, Any]]:
@@ -861,22 +861,18 @@ JSON = FiMimeTypeValues.JSON.value
 TEXT = FiMimeTypeValues.TEXT.value
 LLM = FiSpanKindValues.LLM
 EMBEDDING = FiSpanKindValues.EMBEDDING
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 RETRIEVER = FiSpanKindValues.RETRIEVER
 CHAIN = FiSpanKindValues.CHAIN.value
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
-EVAL_INPUT = SpanAttributes.EVAL_INPUT
-QUERY = SpanAttributes.QUERY
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE

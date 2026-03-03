@@ -131,7 +131,7 @@ class _ExecuteCoreWrapper:
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: FiSpanKindValues.AGENT,
+                        GEN_AI_SPAN_KIND: FiSpanKindValues.AGENT,
                         SpanAttributes.INPUT_VALUE: _get_input_value(
                             wrapped,
                             *args,
@@ -148,7 +148,7 @@ class _ExecuteCoreWrapper:
             task = instance
 
             span.set_attribute(
-                SpanAttributes.RAW_INPUT,
+                SpanAttributes.INPUT_VALUE,
                 safe_json_dumps(_prepare_args_kwargs(args=args, **kwargs)),
             )
 
@@ -197,7 +197,7 @@ class _KickoffWrapper:
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: FiSpanKindValues.CHAIN,
+                        GEN_AI_SPAN_KIND: FiSpanKindValues.CHAIN,
                     }
                 )
             ),
@@ -208,7 +208,7 @@ class _KickoffWrapper:
             span.set_attribute("crew_id", str(crew.id))
             span.set_attribute("crew_inputs", json.dumps(inputs) if inputs else "")
             span.set_attribute(
-                SpanAttributes.RAW_INPUT,
+                SpanAttributes.INPUT_VALUE,
                 safe_json_dumps(_prepare_args_kwargs(args=args, **kwargs)),
             )
             span.set_attribute(
@@ -266,25 +266,25 @@ class _KickoffWrapper:
                     if (
                         prompt_tokens := usage_metrics.get("prompt_tokens")
                     ) is not None:
-                        span.set_attribute(LLM_TOKEN_COUNT_PROMPT, int(prompt_tokens))
+                        span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, int(prompt_tokens))
                     if (
                         completion_tokens := usage_metrics.get("completion_tokens")
                     ) is not None:
                         span.set_attribute(
-                            LLM_TOKEN_COUNT_COMPLETION, int(completion_tokens)
+                            GEN_AI_USAGE_OUTPUT_TOKENS, int(completion_tokens)
                         )
                     if (total_tokens := usage_metrics.get("total_tokens")) is not None:
-                        span.set_attribute(LLM_TOKEN_COUNT_TOTAL, int(total_tokens))
+                        span.set_attribute(GEN_AI_USAGE_TOTAL_TOKENS, int(total_tokens))
                 else:
                     # version 0.51 and onwards
                     span.set_attribute(
-                        LLM_TOKEN_COUNT_PROMPT, usage_metrics.prompt_tokens
+                        GEN_AI_USAGE_INPUT_TOKENS, usage_metrics.prompt_tokens
                     )
                     span.set_attribute(
-                        LLM_TOKEN_COUNT_COMPLETION, usage_metrics.completion_tokens
+                        GEN_AI_USAGE_OUTPUT_TOKENS, usage_metrics.completion_tokens
                     )
                     span.set_attribute(
-                        LLM_TOKEN_COUNT_TOTAL, usage_metrics.total_tokens
+                        GEN_AI_USAGE_TOTAL_TOKENS, usage_metrics.total_tokens
                     )
 
             except Exception as exception:
@@ -326,7 +326,7 @@ class _ToolUseWrapper:
             attributes=dict(
                 _flatten(
                     {
-                        FI_SPAN_KIND: FiSpanKindValues.TOOL,
+                        GEN_AI_SPAN_KIND: FiSpanKindValues.TOOL,
                         SpanAttributes.INPUT_VALUE: _get_input_value(
                             wrapped,
                             *args,
@@ -343,10 +343,10 @@ class _ToolUseWrapper:
             if tool:
                 tool_name = tool.name
             span.set_attribute("function_calling_llm", instance.function_calling_llm)
-            span.set_attribute(SpanAttributes.TOOL_NAME, tool_name)
+            span.set_attribute(SpanAttributes.GEN_AI_TOOL_NAME, tool_name)
 
             span.set_attribute(
-                SpanAttributes.RAW_INPUT,
+                SpanAttributes.INPUT_VALUE,
                 safe_json_dumps(_prepare_args_kwargs(args=args, **kwargs)),
             )
 
@@ -359,7 +359,7 @@ class _ToolUseWrapper:
                 span.record_exception(exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
-            span.set_attribute(RAW_OUTPUT, safe_json_dumps(response))
+            span.set_attribute(OUTPUT_VALUE, safe_json_dumps(response))
             span.set_attribute(OUTPUT_VALUE, safe_json_dumps(response))
             span.set_attributes(dict(get_attributes_from_context()))
         return response
@@ -395,11 +395,9 @@ def _prepare_args_kwargs(args: Tuple[Any, ...], **kwargs: Any) -> dict:
 
 
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": ".",
+    "baseUrl": "./src"
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["src/**/*.e2e.test.ts", "src/**/e2e.test.ts"],
+  "references": [
+    { "path": "../fi-core" },
+    { "path": "../fi-semantic-conventions" }
+  ]
+}

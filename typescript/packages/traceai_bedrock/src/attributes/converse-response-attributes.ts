@@ -1,164 +1,83 @@
 import { Span, diag } from "@opentelemetry/api";
-import {
-  ConverseCommand,
-  ConverseRequest,
-  ToolConfiguration,
-  SystemContentBlock,
-  Message,
-} from "@aws-sdk/client-bedrock-runtime";
+import { ConverseResponse } from "@aws-sdk/client-bedrock-runtime";
 import {
   SemanticConventions,
   MimeType,
 } from "@traceai/fi-semantic-conventions";
-import {
-  withSafety,
-  isObjectWithStringKeys,
-} from "@traceai/fi-core";
-import {
-  setSpanAttribute,
-  aggregateMessages,
-  processMessages,
-  extractModelName,
-} from "./attribute-helpers";
+import { withSafety, safelyJSONStringify } from "@traceai/fi-core";
+import { setSpanAttribute, processMessages } from "./attribute-helpers";
 
 /**
- * Type guard to safely validate ConverseRequest structure
- * Ensures the input object has required modelId and messages properties for processing
- *
- * @param input The input object to validate
- * @returns {boolean} True if input is a valid ConverseRequest, false otherwise
- */
-function isConverseRequest(input: unknown): input is ConverseRequest {
-  if (!isObjectWithStringKeys(input)) {
-    return false;
-  }
-
-  return (
-    "modelId" in input &&
-    typeof input.modelId === "string" &&
-    "messages" in input &&
-    Array.isArray(input.messages)
-  );
-}
-
-/**
- * Extracts base request attributes for FI semantic conventions
- * Sets fundamental LLM attributes including model, system, provider, and invocation parameters
+ * Extracts response attributes from a Bedrock Converse API response
+ * Sets output messages, token usage, and raw output on the span
  *
  * @param params Object containing extraction parameters
  * @param params.span The OpenTelemetry span to set attributes on
- * @param params.input The validated ConverseRequest to extract attributes from
+ * @param params.response The ConverseResponse from the Bedrock API
  */
-function extractBaseRequestAttributes({
-  span,
-  input,
-}: {
-  span: Span;
-  input: ConverseRequest;
-}): void {
-  const modelId = input.modelId || "unknown";
-
-  setSpanAttribute(
+export const extractConverseResponseAttributes = withSafety({
+  fn: ({
     span,
-    SemanticConventions.LLM_MODEL_NAME,
-    extractModelName(modelId),
-  );
-
-  if (input.inferenceConfig && Object.keys(input.inferenceConfig).length > 0) {
+    response,
+  }: {
+    span: Span;
+    response: ConverseResponse;
+  }): void => {
+    // Set raw output
     setSpanAttribute(
       span,
-      SemanticConventions.LLM_INVOCATION_PARAMETERS,
-      JSON.stringify(input.inferenceConfig),
+      SemanticConventions.OUTPUT_VALUE,
+      safelyJSONStringify(response) ?? "",
     );
-  }
+    setSpanAttribute(span, SemanticConventions.OUTPUT_MIME_TYPE, MimeType.JSON);
 
-  setSpanAttribute(
-    span,
-    SemanticConventions.INPUT_VALUE,
-    JSON.stringify(input),
-  );
-  setSpanAttribute(span, SemanticConventions.INPUT_MIME_TYPE, MimeType.JSON);
-}
-
-/**
- * Extracts input messages attributes with system prompt aggregation
- * Processes system prompts and conversation messages into FI message format
- *
- * @param params Object containing extraction parameters
- * @param params.span The OpenTelemetry span to set attributes on
- * @param params.input The ConverseRequest containing messages and system prompts
- */
-function extractInputMessagesAttributes({
-  span,
-  input,
-}: {
-  span: Span;
-  input: ConverseRequest;
-}): void {
-  const systemPrompts: SystemContentBlock[] = input.system || [];
-  const messages: Message[] = input.messages || [];
-
-  const aggregatedMessages = aggregateMessages(systemPrompts, messages);
-
-  processMessages({
-    span,
-    messages: aggregatedMessages,
-    baseKey: SemanticConventions.LLM_INPUT_MESSAGES,
-  });
-}
-
-/**
- * Extracts tool configuration attributes from Converse request
- * Processes tool definitions and sets them as JSON schema attributes
- *
- * @param params Object containing extraction parameters
- * @param params.span The OpenTelemetry span to set attributes on
- * @param params.input The ConverseRequest containing tool configuration
- */
-function extractInputToolAttributes({
-  span,
-  input,
-}: {
-  span: Span;
-  input: ConverseRequest;
-}): void {
-  const toolConfig: ToolConfiguration | undefined = input.toolConfig;
-  if (!toolConfig?.tools) return;
-
-  toolConfig.tools.forEach((tool, index: number) => {
-    setSpanAttribute(
-      span,
-      `${SemanticConventions.LLM_TOOLS}.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`,
-      JSON.stringify(tool),
-    );
-  });
-}
-
-/**
- * Extracts semantic convention attributes from Converse command and sets them on the span
- * Main entry point for processing Converse API requests with comprehensive error handling
- *
- * Processes:
- * - Base model and system attributes
- * - Input messages with system prompt aggregation
- * - Tool configuration definitions
- *
- * @param params Object containing extraction parameters
- * @param params.span The OpenTelemetry span to set attributes on
- * @param params.command The ConverseCommand to extract attributes from
- */
-export const extractConverseRequestAttributes = withSafety({
-  fn: ({ span, command }: { span: Span; command: ConverseCommand }): void => {
-    const input = command.input;
-    if (!input || !isConverseRequest(input)) {
-      return;
+    // Extract output messages
+    if (response.output?.message) {
+      processMessages({
+        span,
+        messages: [response.output.message],
+        baseKey: SemanticConventions.LLM_OUTPUT_MESSAGES,
+      });
     }
 
-    extractBaseRequestAttributes({ span, input });
-    extractInputMessagesAttributes({ span, input });
-    extractInputToolAttributes({ span, input });
+    // Extract token usage
+    if (response.usage) {
+      if (response.usage.inputTokens != null) {
+        setSpanAttribute(
+          span,
+          SemanticConventions.LLM_TOKEN_COUNT_PROMPT,
+          response.usage.inputTokens,
+        );
+      }
+      if (response.usage.outputTokens != null) {
+        setSpanAttribute(
+          span,
+          SemanticConventions.LLM_TOKEN_COUNT_COMPLETION,
+          response.usage.outputTokens,
+        );
+      }
+      if (
+        response.usage.inputTokens != null &&
+        response.usage.outputTokens != null
+      ) {
+        setSpanAttribute(
+          span,
+          SemanticConventions.LLM_TOKEN_COUNT_TOTAL,
+          response.usage.inputTokens + response.usage.outputTokens,
+        );
+      }
+    }
+
+    // Extract response model if available
+    if (response.metrics) {
+      setSpanAttribute(
+        span,
+        SemanticConventions.RAW_OUTPUT,
+        safelyJSONStringify(response) ?? "",
+      );
+    }
   },
   onError: (error) => {
-    diag.warn("Error extracting Converse request attributes:", error);
+    diag.warn("Error extracting Converse response attributes:", error);
   },
 });

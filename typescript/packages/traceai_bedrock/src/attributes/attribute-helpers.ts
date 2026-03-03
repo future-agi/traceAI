@@ -3,7 +3,6 @@ import {
   SemanticConventions,
   LLMSystem,
   FISpanKind,
-  LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import {
   Message,
@@ -18,6 +17,7 @@ import {
   isConverseToolResultContent,
 } from "../types/bedrock-types";
 import { formatImageUrl } from "./invoke-model-helpers";
+import { safelyJSONStringify } from "@traceai/fi-core";
 
 /**
  * Sets a span attribute only if the value is not null, undefined, or empty string
@@ -55,15 +55,14 @@ export function getSystemFromModelId(modelId: string): LLMSystem {
 }
 
 export function setBasicSpanAttributes(span: Span, llm_system: LLMSystem) {
-  setSpanAttribute(span, SemanticConventions.LLM_PROVIDER, LLMProvider.AWS);
-
   setSpanAttribute(
     span,
     SemanticConventions.FI_SPAN_KIND,
     FISpanKind.LLM,
   );
 
-  setSpanAttribute(span, SemanticConventions.LLM_SYSTEM, llm_system);
+  setSpanAttribute(span, SemanticConventions.LLM_PROVIDER, llm_system);
+  setSpanAttribute(span, SemanticConventions.GEN_AI_OPERATION_NAME, "chat");
 }
 
 /**
@@ -107,98 +106,77 @@ export function aggregateMessages(
 }
 
 /**
- * Extracts OpenInference semantic convention attributes from message content blocks
- * Handles text, image, and tool content types with appropriate attribute mapping
- *
- * Note: Uses custom content type guards since AWS SDK ContentBlock union types
- * require additional processing for reliable type detection
- *
- * @param content The content block to extract attributes from
- * @returns {Record<string, AttributeValue>} Object containing content-specific attributes
+ * Serializes a message content block to a plain object for JSON blob format
  */
-export function getAttributesFromMessageContent(
+export function serializeMessageContent(
   content: ContentBlock,
-): Attributes {
-  const attributes: Attributes = {};
-
+): Record<string, unknown> {
   if (isConverseTextContent(content)) {
-    attributes[SemanticConventions.MESSAGE_CONTENT_TYPE] = "text";
-    attributes[SemanticConventions.MESSAGE_CONTENT_TEXT] = content.text;
+    return { type: "text", text: content.text };
   } else if (isConverseImageContent(content)) {
-    attributes[SemanticConventions.MESSAGE_CONTENT_TYPE] = "image";
     if (content.image.source.bytes) {
-      // Convert bytes to base64 data URL using the helper function
       const base64 = Buffer.from(content.image.source.bytes).toString("base64");
       const mimeType = `image/${content.image.format}`;
-
-      attributes[
-        `${SemanticConventions.MESSAGE_CONTENT_IMAGE}.${SemanticConventions.IMAGE_URL}`
-      ] = formatImageUrl({
-        type: "base64",
-        data: base64,
-        media_type: mimeType,
-      });
+      return {
+        type: "image",
+        image_url: formatImageUrl({ type: "base64", data: base64, media_type: mimeType }),
+      };
     }
+    return { type: "image" };
+  } else if (isConverseToolUseContent(content)) {
+    return {
+      type: "tool_use",
+      id: content.toolUse.toolUseId,
+      name: content.toolUse.name,
+      input: content.toolUse.input,
+    };
+  } else if (isConverseToolResultContent(content)) {
+    return {
+      type: "tool_result",
+      tool_use_id: content.toolResult.toolUseId,
+      content: content.toolResult.content,
+    };
   }
-
-  return attributes;
+  return {};
 }
 
 /**
- * Extracts OpenInference semantic convention attributes from a single Bedrock message
- * Handles role, content, tool calls, and tool results following the OpenInference specification
- *
- * @param message The Bedrock message to extract attributes from
- * @returns {Record<string, AttributeValue>} Object containing semantic convention attributes
+ * Serializes a single Bedrock message to a plain object for JSON blob format
  */
-export function getAttributesFromMessage(message: Message): Attributes {
-  const attributes: Attributes = {};
-
+export function serializeMessage(message: Message): Record<string, unknown> {
+  const obj: Record<string, unknown> = {};
   if (message.role) {
-    attributes[SemanticConventions.MESSAGE_ROLE] = message.role;
+    obj.role = message.role;
   }
-
   if (message.content) {
-    let toolCallIndex = 0;
+    const textParts: string[] = [];
+    const toolCalls: Record<string, unknown>[] = [];
 
-    for (const [index, content] of message.content.entries()) {
-      // Process content as our custom types for attribute extraction
-      const contentAttributes = getAttributesFromMessageContent(content);
-      for (const [key, value] of Object.entries(contentAttributes)) {
-        attributes[`${SemanticConventions.MESSAGE_CONTENTS}.${index}.${key}`] =
-          value as AttributeValue;
-      }
-
-      // Handle tool calls at the message level using proper semantic conventions
-      if (isConverseToolUseContent(content)) {
-        const toolCallPrefix = `${SemanticConventions.MESSAGE_TOOL_CALLS}.${toolCallIndex}`;
-        attributes[`${toolCallPrefix}.${SemanticConventions.TOOL_CALL_ID}`] =
-          content.toolUse.toolUseId;
-        attributes[
-          `${toolCallPrefix}.${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`
-        ] = content.toolUse.name;
-        attributes[
-          `${toolCallPrefix}.${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`
-        ] = JSON.stringify(content.toolUse.input);
-        toolCallIndex++;
+    for (const content of message.content) {
+      if (isConverseTextContent(content)) {
+        textParts.push(content.text);
+      } else if (isConverseToolUseContent(content)) {
+        toolCalls.push({
+          id: content.toolUse.toolUseId,
+          function: { name: content.toolUse.name, arguments: JSON.stringify(content.toolUse.input) },
+        });
       } else if (isConverseToolResultContent(content)) {
-        attributes[SemanticConventions.MESSAGE_TOOL_CALL_ID] =
-          content.toolResult.toolUseId;
+        obj.tool_call_id = content.toolResult.toolUseId;
       }
     }
-  }
 
-  return attributes;
+    if (textParts.length > 0) {
+      obj.content = textParts.join("\n");
+    }
+    if (toolCalls.length > 0) {
+      obj.tool_calls = toolCalls;
+    }
+  }
+  return obj;
 }
 
 /**
- * Processes multiple messages and sets OpenInference attributes on span with proper indexing
- * Iterates through messages array and applies semantic convention attributes with message index
- *
- * @param params Object containing processing parameters
- * @param params.span The OpenTelemetry span to set attributes on
- * @param params.messages Array of messages to process
- * @param params.baseKey Base semantic convention key (either input or output messages)
+ * Processes multiple messages and sets a single JSON blob attribute on span
  */
 export function processMessages({
   span,
@@ -211,12 +189,62 @@ export function processMessages({
     | typeof SemanticConventions.LLM_INPUT_MESSAGES
     | typeof SemanticConventions.LLM_OUTPUT_MESSAGES;
 }): void {
-  for (const [index, message] of messages.entries()) {
-    const messageAttributes = getAttributesFromMessage(message);
-    for (const [key, value] of Object.entries(messageAttributes)) {
-      setSpanAttribute(span, `${baseKey}.${index}.${key}`, value);
+  const serialized = messages.map((msg) => serializeMessage(msg));
+  setSpanAttribute(span, baseKey, safelyJSONStringify(serialized) ?? "[]");
+}
+
+// --- Legacy functions kept for backward compatibility with invoke-model paths ---
+
+/**
+ * @deprecated Use serializeMessageContent instead
+ */
+export function getAttributesFromMessageContent(
+  content: ContentBlock,
+): Attributes {
+  const attributes: Attributes = {};
+  if (isConverseTextContent(content)) {
+    attributes[SemanticConventions.MESSAGE_CONTENT_TYPE] = "text";
+    attributes[SemanticConventions.MESSAGE_CONTENT_TEXT] = content.text;
+  } else if (isConverseImageContent(content)) {
+    attributes[SemanticConventions.MESSAGE_CONTENT_TYPE] = "image";
+    if (content.image.source.bytes) {
+      const base64 = Buffer.from(content.image.source.bytes).toString("base64");
+      const mimeType = `image/${content.image.format}`;
+      attributes[
+        `${SemanticConventions.MESSAGE_CONTENT_IMAGE}.${SemanticConventions.IMAGE_URL}`
+      ] = formatImageUrl({ type: "base64", data: base64, media_type: mimeType });
     }
   }
+  return attributes;
+}
+
+/**
+ * @deprecated Use serializeMessage instead
+ */
+export function getAttributesFromMessage(message: Message): Attributes {
+  const attributes: Attributes = {};
+  if (message.role) {
+    attributes[SemanticConventions.MESSAGE_ROLE] = message.role;
+  }
+  if (message.content) {
+    let toolCallIndex = 0;
+    for (const [index, content] of message.content.entries()) {
+      const contentAttributes = getAttributesFromMessageContent(content);
+      for (const [key, value] of Object.entries(contentAttributes)) {
+        attributes[`${SemanticConventions.MESSAGE_CONTENTS}.${index}.${key}`] = value as AttributeValue;
+      }
+      if (isConverseToolUseContent(content)) {
+        const toolCallPrefix = `${SemanticConventions.MESSAGE_TOOL_CALLS}.${toolCallIndex}`;
+        attributes[`${toolCallPrefix}.${SemanticConventions.TOOL_CALL_ID}`] = content.toolUse.toolUseId;
+        attributes[`${toolCallPrefix}.${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`] = content.toolUse.name;
+        attributes[`${toolCallPrefix}.${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`] = JSON.stringify(content.toolUse.input);
+        toolCallIndex++;
+      } else if (isConverseToolResultContent(content)) {
+        attributes[SemanticConventions.MESSAGE_TOOL_CALL_ID] = content.toolResult.toolUseId;
+      }
+    }
+  }
+  return attributes;
 }
 
 /**

@@ -12,6 +12,7 @@ import {
 import { safeExecuteInTheMiddle } from "@opentelemetry/instrumentation";
 
 import { SemanticConventions, FISpanKind } from "@traceai/fi-semantic-conventions";
+import { safelyJSONStringify } from "@traceai/fi-core";
 
 import { LlamaIndexInstrumentationConfig } from "./types";
 import { shouldSendPrompts, llmGeneratorWrapper, generatorWrapper } from "./utils";
@@ -40,22 +41,16 @@ function handleResponse<T extends ResponseType>(
 
     try {
       if ((result as llamaindex.ChatResponse).message) {
+        const chatResult = result as llamaindex.ChatResponse;
+        const outputContent = typeof chatResult.message.content === "string"
+          ? chatResult.message.content
+          : chatResult.message.content[0]?.type === "text"
+            ? (chatResult.message.content[0] as llamaindex.MessageContentTextDetail).text
+            : undefined;
         span.setAttribute(
-          `${SemanticConventions.LLM_INPUT_MESSAGES}.0.role`,
-          (result as llamaindex.ChatResponse).message.role,
+          SemanticConventions.LLM_OUTPUT_MESSAGES,
+          safelyJSONStringify([{ role: chatResult.message.role, content: outputContent }]) ?? "[]",
         );
-        const content = (result as llamaindex.ChatResponse).message.content;
-        if (typeof content === "string") {
-          span.setAttribute(
-            `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.content`,
-            content,
-          );
-        } else if (content[0].type === "text") {
-          span.setAttribute(
-            `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.content`,
-            content[0].text,
-          );
-        }
         span.setStatus({ code: SpanStatusCode.OK });
       }
     } catch (e) {
@@ -83,7 +78,10 @@ function handleStreamingResponse<T extends AsyncResponseType>(
     }
 
     return llmGeneratorWrapper(result, execContext, (message) => {
-      span.setAttribute(`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.content`, message);
+      span.setAttribute(
+        SemanticConventions.LLM_OUTPUT_MESSAGES,
+        safelyJSONStringify([{ role: "assistant", content: message }]) ?? "[]",
+      );
       span.setStatus({ code: SpanStatusCode.OK });
       span.end();
     }) as any;
@@ -106,35 +104,26 @@ export function chatWrapper({ className }: { className: string },
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, FISpanKind.LLM);
 
         try {
-          span.setAttribute(SemanticConventions.LLM_SYSTEM, className);
+          span.setAttribute(SemanticConventions.LLM_PROVIDER, className);
 
           span.setAttribute(
             SemanticConventions.LLM_MODEL_NAME,
             this.metadata.model,
           );
-          if (shouldSendPrompts()) {
-            for (const messageIdx in messages) {
-              const content = messages[messageIdx].content;
-              if (typeof content === "string") {
-                span.setAttribute(
-                  `${SemanticConventions.LLM_INPUT_MESSAGES}.${messageIdx}.content`,
-                  content as string,
-                );
-              } else if (
-                (content as llamaindex.MessageContentDetail[])[0].type ===
-                "text"
-              ) {
-                span.setAttribute(
-                  `${SemanticConventions.LLM_INPUT_MESSAGES}.${messageIdx}.content`,
-                  (content as llamaindex.MessageContentTextDetail[])[0].text,
-                );
-              }
-
-              span.setAttribute(
-                `${SemanticConventions.LLM_INPUT_MESSAGES}.${messageIdx}.role`,
-                messages[messageIdx].role,
-              );
-            }
+          if (shouldSendPrompts() && messages) {
+            const serialized = messages.map((msg: any) => {
+              const content = msg.content;
+              const textContent = typeof content === "string"
+                ? content
+                : Array.isArray(content) && content[0]?.type === "text"
+                  ? content[0].text
+                  : undefined;
+              return { role: msg.role, content: textContent };
+            });
+            span.setAttribute(
+              SemanticConventions.LLM_INPUT_MESSAGES,
+              safelyJSONStringify(serialized) ?? "[]",
+            );
           }
         } catch (e) {
           diag.warn(e as any);

@@ -1,0 +1,20 @@
+{
+  "name": "@traceai/cerebras-examples",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Examples for @traceai/cerebras",
+  "scripts": {
+    "example": "ts-node example.ts"
+  },
+  "dependencies": {
+    "@traceai/cerebras": "workspace:*",
+    "@opentelemetry/sdk-trace-node": "^1.21.0",
+    "@opentelemetry/sdk-trace-base": "^1.21.0",
+    "@cerebras/cerebras_cloud_sdk": "^1.0.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
+  }
+}

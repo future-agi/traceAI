@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "traceAI-milvus"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Milvus vector database"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [{ include = "traceai_milvus" }]
+keywords = ["opentelemetry", "milvus", "vector-database", "tracing", "observability", "rag"]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.14"
+fi-instrumentation-otel = ">=0.1.11"
+pymilvus = ">=2.3.0"
+wrapt = ">=1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

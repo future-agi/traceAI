@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>ai.traceai.examples</groupId>
+    <artifactId>semantic-kernel-example</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <name>TraceAI Semantic Kernel Example</name>
+    <description>Example demonstrating TraceAI instrumentation with Microsoft Semantic Kernel</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <semantic-kernel.version>1.3.0</semantic-kernel.version>
+    </properties>
+
+    <dependencies>
+        <!-- TraceAI Semantic Kernel instrumentation -->
+        <dependency>
+            <groupId>ai.traceai</groupId>
+            <artifactId>traceai-java-semantic-kernel</artifactId>
+            <version>0.1.0-SNAPSHOT</version>
+        </dependency>
+
+        <!-- Microsoft Semantic Kernel API -->
+        <dependency>
+            <groupId>com.microsoft.semantic-kernel</groupId>
+            <artifactId>semantickernel-api</artifactId>
+            <version>${semantic-kernel.version}</version>
+        </dependency>
+
+        <!-- Semantic Kernel AI Services - OpenAI -->
+        <dependency>
+            <groupId>com.microsoft.semantic-kernel</groupId>
+            <artifactId>semantickernel-aiservices-openai</artifactId>
+            <version>${semantic-kernel.version}</version>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.9</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <mainClass>ai.traceai.examples.semantickernel.SemanticKernelExample</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

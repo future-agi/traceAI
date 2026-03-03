@@ -13,6 +13,7 @@ import {
 import {
   withSafety,
   isObjectWithStringKeys,
+  safelyJSONStringify,
 } from "@traceai/fi-core";
 import {
   setSpanAttribute,
@@ -123,15 +124,13 @@ function extractInputToolAttributes({
   input: ConverseRequest;
 }): void {
   const toolConfig: ToolConfiguration | undefined = input.toolConfig;
-  if (!toolConfig?.tools) return;
+  if (!toolConfig?.tools || toolConfig.tools.length === 0) return;
 
-  toolConfig.tools.forEach((tool, index: number) => {
-    setSpanAttribute(
-      span,
-      `${SemanticConventions.LLM_TOOLS}.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`,
-      JSON.stringify(tool),
-    );
-  });
+  setSpanAttribute(
+    span,
+    SemanticConventions.LLM_TOOLS,
+    safelyJSONStringify(toolConfig.tools) ?? "[]",
+  );
 }
 
 /**

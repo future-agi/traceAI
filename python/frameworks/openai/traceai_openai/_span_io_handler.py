@@ -58,9 +58,9 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
             span.set_attribute(SpanAttributes.INPUT_IMAGES, images_value)
         if eval_input:
             eval_input_str = " \n ".join(map(str, eval_input))
-            span.set_attribute(SpanAttributes.EVAL_INPUT, eval_input_str)
+            span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
         if eval_input and len(eval_input) > 0:
-            span.set_attribute(SpanAttributes.QUERY, eval_input[0])
+            span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input[0])
     else:
         try:
             input_str = json.dumps(input_data, ensure_ascii=False).strip()
@@ -130,10 +130,9 @@ def add_io_to_span_attributes(
             else:
                 output_content = str(output_data)
 
-            if output_content and output_content.strip():
-                # Clean output data - remove any newlines and extra whitespace
-                output_text = output_content.strip().replace("\n", " ")
-                span.set_attribute("fi.llm.output", output_text)
+            # Set output.value to just the assistant's response content
+            if output_content:
+                span.set_attribute(SpanAttributes.OUTPUT_VALUE, output_content)
 
     except Exception as e:
         logger.exception(f"Error adding I/O to span attributes: {e}")

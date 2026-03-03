@@ -27,14 +27,14 @@ GUARDRAIL_REASON_FLAG = "guardrail.reason_flag"
 
 def _get_raw_input(inputs: Any) -> Iterator[Tuple[str, Any]]:
     try:
-        yield SpanAttributes.RAW_INPUT, safe_json_dumps(inputs)
+        yield SpanAttributes.INPUT_VALUE, safe_json_dumps(inputs)
     except Exception as e:
         logger.warning(f"Failed to serialize raw guardrail inputs: {e}", exc_info=True)
 
 
 def _get_raw_output(result: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
     try:
-        yield SpanAttributes.RAW_OUTPUT, safe_json_dumps(result)
+        yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(result)
     except Exception as e:
         logger.warning(f"Failed to serialize raw guardrail output: {e}", exc_info=True)
 
@@ -140,7 +140,7 @@ class GuardrailProtectWrapper:
             attributes=dict(
                 chain(
                     get_attributes_from_context(),
-                    [(SpanAttributes.FI_SPAN_KIND, FiSpanKindValues.GUARDRAIL.value)],
+                    [(SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.GUARDRAIL.value)],
                     [(GUARDRAIL_TYPE, "protect")],
                     _get_protect_input(inputs),
                     _get_protect_rules(protect_rules),

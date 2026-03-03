@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  # ChromaDB for E2E tests
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+      - ANONYMIZED_TELEMETRY=false
+    volumes:
+      - chromadb_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant for E2E tests
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Note: Pinecone is a managed service, so we use mock server for E2E tests
+  # For real Pinecone tests, set PINECONE_API_KEY and PINECONE_INDEX environment variables
+
+volumes:
+  chromadb_data:
+  qdrant_data:

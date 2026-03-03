@@ -40,6 +40,7 @@
   - [TypeScript](#typescript)
 - [Compatibility Matrix](#-compatibility-matrix)
 - [Architecture](#-architecture)
+- [Roadmap](#-roadmap)
 - [Contributing](#-contributing)
 - [Resources](#-resources)
 - [Connect With Us](#-connect-with-us)
@@ -166,6 +167,16 @@ const response = await openai.chat.completions.create({
 | `traceAI-pipecat` | traceAI Instrumentation for Pipecat. | [![PyPI](https://img.shields.io/pypi/v/traceAI-pipecat)](https://pypi.org/project/traceAI-pipecat)|
 | `traceAI-portkey` | traceAI Instrumentation for Portkey. | [![PyPI](https://img.shields.io/pypi/v/traceAI-portkey)](https://pypi.org/project/traceAI-portkey)|
 | `traceAI-mcp` | traceAI Instrumentation for Model Context Protocol. | [![PyPI](https://img.shields.io/pypi/v/traceAI-mcp)](https://pypi.org/project/traceAI-mcp)|
+| `traceAI-livekit` | traceAI Instrumentation for LiveKit (Real-time). | [![PyPI](https://img.shields.io/pypi/v/traceAI-livekit)](https://pypi.org/project/traceAI-livekit)|
+| `traceAI-pinecone` | traceAI Instrumentation for Pinecone vector database. | [![PyPI](https://img.shields.io/pypi/v/traceAI-pinecone)](https://pypi.org/project/traceAI-pinecone)|
+| `traceAI-chromadb` | traceAI Instrumentation for ChromaDB vector database. | [![PyPI](https://img.shields.io/pypi/v/traceAI-chromadb)](https://pypi.org/project/traceAI-chromadb)|
+| `traceAI-qdrant` | traceAI Instrumentation for Qdrant vector database. | [![PyPI](https://img.shields.io/pypi/v/traceAI-qdrant)](https://pypi.org/project/traceAI-qdrant)|
+| `traceAI-weaviate` | traceAI Instrumentation for Weaviate vector database. | [![PyPI](https://img.shields.io/pypi/v/traceAI-weaviate)](https://pypi.org/project/traceAI-weaviate)|
+| `traceAI-milvus` | traceAI Instrumentation for Milvus vector database. | [![PyPI](https://img.shields.io/pypi/v/traceAI-milvus)](https://pypi.org/project/traceAI-milvus)|
+| `traceAI-lancedb` | traceAI Instrumentation for LanceDB vector database. | [![PyPI](https://img.shields.io/pypi/v/traceAI-lancedb)](https://pypi.org/project/traceAI-lancedb)|
+| `traceAI-mongodb` | traceAI Instrumentation for MongoDB Atlas Vector Search. | [![PyPI](https://img.shields.io/pypi/v/traceAI-mongodb)](https://pypi.org/project/traceAI-mongodb)|
+| `traceAI-pgvector` | traceAI Instrumentation for pgvector PostgreSQL extension. | [![PyPI](https://img.shields.io/pypi/v/traceAI-pgvector)](https://pypi.org/project/traceAI-pgvector)|
+| `traceAI-redis` | traceAI Instrumentation for Redis Vector Search. | [![PyPI](https://img.shields.io/pypi/v/traceAI-redis)](https://pypi.org/project/traceAI-redis)|
 
 ### TypeScript
 
@@ -207,8 +218,18 @@ const response = await openai.chat.completions.create({
 | | Instructor | ✅ | - |
 | | Portkey | ✅ | - |
 | | Pipecat | ✅ | - |
+| | LiveKit | ✅ | - |
 | | Vercel AI SDK | - | ✅ |
 | **Standards** | Model Context Protocol (MCP) | ✅ | ✅ |
+| **Vector Databases** | Pinecone | ✅ | - |
+| | ChromaDB | ✅ | - |
+| | Qdrant | ✅ | - |
+| | Weaviate | ✅ | - |
+| | Milvus | ✅ | - |
+| | LanceDB | ✅ | - |
+| | MongoDB Atlas Vector | ✅ | - |
+| | pgvector | ✅ | - |
+| | Redis Vector | ✅ | - |
 
 > **Legend:** ✅ Supported | - Not yet available
 
@@ -312,6 +333,33 @@ traceAI automatically captures rich telemetry data:
 
 All data follows [OpenTelemetry Semantic Conventions for GenAI](https://opentelemetry.io/docs/specs/semconv/gen-ai/).
 
+---
+
+## 🗺️ Roadmap
+
+See our **[ROADMAP.md](ROADMAP.md)** for planned features and integrations:
+
+### Coming Soon
+| Category | Integrations |
+|----------|-------------|
+| **LLM Providers** | Ollama, Cohere, Together AI, HuggingFace |
+| **Agent Frameworks** | LangGraph, Claude Agent SDK, Pydantic AI |
+| **Enterprise SDKs** | Java (LangChain4j, Spring AI), Go |
+| **Platform Features** | LLM Playground, Datasets & Experiments |
+
+### Recently Added
+| Category | Integrations |
+|----------|-------------|
+| **Vector DBs** | Pinecone, ChromaDB, Qdrant, Weaviate, Milvus, LanceDB, MongoDB Atlas, pgvector, Redis |
+
+### Technical Documentation
+
+For implementation details and architecture:
+- [knowledge_base/INDEX.md](knowledge_base/INDEX.md) - Technical knowledge base
+- [docs/SCHEMA_SEMANTIC_CONVENTIONS.md](docs/SCHEMA_SEMANTIC_CONVENTIONS.md) - Schema reference
+
+---
+
 ## 🤝 Contributing
 
 We welcome contributions from the community! 
@@ -350,7 +398,9 @@ We welcome contributions from the community!
 | 🌐 [Website](https://www.futureagi.com/) | Learn more about Future AGI |
 | 📖 [Documentation](https://docs.futureagi.com/) | Complete guides and API reference |
 | 👨‍🍳 [Cookbooks](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability) | Step-by-step implementation examples |
+| 🗺️ [Roadmap](ROADMAP.md) | Planned features and integrations |
 | 📝 [Changelog](CHANGELOG.md) | All release notes and updates |
+| 📚 [Knowledge Base](knowledge_base/INDEX.md) | Technical documentation and architecture |
 | 🤝 [Contributing Guide](CONTRIBUTING.md) | How to contribute to traceAI |
 | 💬 [Slack](https://join.slack.com/t/future-agi/shared_invite/zt-3gqwrdf2p-4oj1LVPqkQIoiS_OSrFL2A) | Join our community |
 | 🐛 [Issues](https://github.com/future-agi/traceAI/issues) | Report bugs or request features |

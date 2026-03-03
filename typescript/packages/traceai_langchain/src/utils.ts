@@ -317,7 +317,28 @@ function formatInputMessages(
   });
 
   if (parsedMessages.length > 0) {
-    return { [SemanticConventions.LLM_INPUT_MESSAGES]: parsedMessages };
+    // Convert to JSON blob format for gen_ai.input.messages
+    const serialized = parsedMessages.map((msg) => {
+      const obj: Record<string, unknown> = {};
+      if (msg[SemanticConventions.MESSAGE_ROLE]) obj.role = msg[SemanticConventions.MESSAGE_ROLE];
+      if (msg[SemanticConventions.MESSAGE_CONTENT]) obj.content = msg[SemanticConventions.MESSAGE_CONTENT];
+      if (msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME]) {
+        obj.function_call = {
+          name: msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME],
+          arguments: msg[SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON],
+        };
+      }
+      if (msg[SemanticConventions.MESSAGE_TOOL_CALLS]) {
+        obj.tool_calls = msg[SemanticConventions.MESSAGE_TOOL_CALLS]?.map((tc) => ({
+          function: {
+            name: tc[SemanticConventions.TOOL_CALL_FUNCTION_NAME],
+            arguments: tc[SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON],
+          },
+        }));
+      }
+      return obj;
+    });
+    return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" } as LLMMessagesAttributes;
   }
 
   return null;
@@ -365,7 +386,28 @@ function formatOutputMessages(
   });
 
   if (parsedMessages.length > 0) {
-    return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: parsedMessages };
+    // Convert to JSON blob format for gen_ai.output.messages
+    const serialized = parsedMessages.map((msg) => {
+      const obj: Record<string, unknown> = {};
+      if (msg[SemanticConventions.MESSAGE_ROLE]) obj.role = msg[SemanticConventions.MESSAGE_ROLE];
+      if (msg[SemanticConventions.MESSAGE_CONTENT]) obj.content = msg[SemanticConventions.MESSAGE_CONTENT];
+      if (msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME]) {
+        obj.function_call = {
+          name: msg[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME],
+          arguments: msg[SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON],
+        };
+      }
+      if (msg[SemanticConventions.MESSAGE_TOOL_CALLS]) {
+        obj.tool_calls = msg[SemanticConventions.MESSAGE_TOOL_CALLS]?.map((tc) => ({
+          function: {
+            name: tc[SemanticConventions.TOOL_CALL_FUNCTION_NAME],
+            arguments: tc[SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON],
+          },
+        }));
+      }
+      return obj;
+    });
+    return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" } as LLMMessagesAttributes;
   }
 
   return null;
@@ -437,17 +479,8 @@ function formatLLMParams(
 
   // add tool json schema if present in the invocation params
   const tools = runExtra.invocation_params.tools;
-  if (Array.isArray(tools)) {
-      tools.forEach((tool, index) => {
-        const toolJsonSchema = safelyJSONStringify(tool);
-        if (toolJsonSchema) {
-          const key: `${typeof SemanticConventions.LLM_TOOLS}.${number}.${
-            typeof SemanticConventions.TOOL_JSON_SCHEMA}` = `${
-            SemanticConventions.LLM_TOOLS
-          }.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`;
-          fiParams[key] = toolJsonSchema;
-        }
-      });
+  if (Array.isArray(tools) && tools.length > 0) {
+    fiParams[SemanticConventions.LLM_TOOLS] = safelyJSONStringify(tools) ?? undefined;
   }
   return fiParams;
 }

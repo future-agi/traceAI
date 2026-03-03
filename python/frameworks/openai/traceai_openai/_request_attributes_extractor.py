@@ -79,7 +79,7 @@ class _RequestAttributesExtractor:
             yield from _get_attributes_from_completion_create_param(request_parameters)
         else:
             try:
-                yield SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_json_dumps(
+                yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(
                     request_parameters
                 )
             except Exception:
@@ -98,8 +98,8 @@ class _RequestAttributesExtractor:
         invocation_params.pop("functions", None)
         if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
             for i, tool in enumerate(tools):
-                yield f"llm.tools.{i}.tool.json_schema", safe_json_dumps(tool)
-        yield SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_json_dumps(
+                yield f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.tool.json_schema", safe_json_dumps(tool)
+        yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(
             invocation_params
         )
 
@@ -110,7 +110,7 @@ class _RequestAttributesExtractor:
                 for key, value in self._get_attributes_from_message_param(
                     input_message
                 ):
-                    yield f"{SpanAttributes.LLM_INPUT_MESSAGES}.{index}.{key}", value
+                    yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{key}", value
 
     def _get_attributes_from_message_param(
         self,
@@ -228,7 +228,7 @@ def _get_attributes_from_completion_create_param(
         return
     invocation_params = dict(params)
     invocation_params.pop("prompt", None)
-    yield SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_json_dumps(invocation_params)
+    yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_params)
 
 
 def _get_attributes_from_embedding_create_param(
@@ -240,7 +240,7 @@ def _get_attributes_from_embedding_create_param(
         return
     invocation_params = dict(params)
     invocation_params.pop("input", None)
-    yield SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_json_dumps(invocation_params)
+    yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_params)
 
 
 T = TypeVar("T", bound=type)

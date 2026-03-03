@@ -1,0 +1,22 @@
+{
+  "name": "traceai-huggingface-example",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Example usage of @traceai/huggingface instrumentation",
+  "main": "example.js",
+  "scripts": {
+    "start": "ts-node example.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-trace-base": "^1.29.0",
+    "@opentelemetry/sdk-trace-node": "^1.29.0",
+    "@traceai/huggingface": "workspace:*",
+    "@huggingface/inference": ">=2.0.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
+  }
+}

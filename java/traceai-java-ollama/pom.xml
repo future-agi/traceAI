@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>ai.traceai</groupId>
+        <artifactId>traceai-java-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>traceai-java-ollama</artifactId>
+    <name>TraceAI Java Ollama</name>
+    <description>Ollama instrumentation for TraceAI Java SDK using Ollama4j</description>
+
+    <dependencies>
+        <!-- TraceAI Core -->
+        <dependency>
+            <groupId>ai.traceai</groupId>
+            <artifactId>traceai-java-core</artifactId>
+        </dependency>
+
+        <!-- Ollama4j (provided - user brings their own) -->
+        <dependency>
+            <groupId>io.github.ollama4j</groupId>
+            <artifactId>ollama4j</artifactId>
+            <version>1.0.79</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

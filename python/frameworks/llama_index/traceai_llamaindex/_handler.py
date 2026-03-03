@@ -204,7 +204,7 @@ class _Span(BaseSpan):
             # https://github.com/open-telemetry/opentelemetry-python/blob/2b9dcfc5d853d1c10176937a6bcaade54cda1a31/opentelemetry-api/src/opentelemetry/trace/__init__.py#L588  # noqa E501
             description = f"{type(exception).__name__}: {exception}"
             status = Status(status_code=StatusCode.ERROR, description=description)
-        self[FI_SPAN_KIND] = self._span_kind or CHAIN
+        self[GEN_AI_SPAN_KIND] = self._span_kind or CHAIN
         self._otel_span.set_status(status=status)
         self._otel_span.set_attributes(self._attributes)
         self._otel_span.end(end_time=self._end_time)
@@ -226,7 +226,7 @@ class _Span(BaseSpan):
             self[INPUT_VALUE] = safe_json_dumps(bound_args.arguments)
             self[INPUT_MIME_TYPE] = JSON
             # Add raw input
-            self[RAW_INPUT] = safe_json_dumps(bound_args.arguments)
+            self[INPUT_VALUE] = safe_json_dumps(bound_args.arguments)
         except BaseException as e:
             logger.exception(str(e))
             pass
@@ -241,7 +241,7 @@ class _Span(BaseSpan):
         if repr_str := _show_repr_str(result):
             self[OUTPUT_VALUE] = repr_str
             # Add raw output
-            self[RAW_OUTPUT] = repr_str
+            self[OUTPUT_VALUE] = repr_str
             return
         if isinstance(result, (Generator, AsyncGenerator)):
             return
@@ -250,14 +250,14 @@ class _Span(BaseSpan):
             return
         if isinstance(result, (str, SupportsFloat, bool)):
             self[OUTPUT_VALUE] = str(result)
-            self[RAW_OUTPUT] = str(result)
+            self[OUTPUT_VALUE] = str(result)
         elif isinstance(result, BaseModel):
             _ensure_result_model_is_serializable(result)
             try:
                 self[OUTPUT_VALUE] = result.model_dump_json(exclude_unset=True)
                 self[OUTPUT_MIME_TYPE] = JSON
                 # Add raw output
-                self[RAW_OUTPUT] = result.model_dump_json(exclude_unset=True)
+                self[OUTPUT_VALUE] = result.model_dump_json(exclude_unset=True)
             except BaseException as e:
                 logger.exception(str(e))
         else:
@@ -265,7 +265,7 @@ class _Span(BaseSpan):
                 self[OUTPUT_VALUE] = safe_json_dumps(result)
                 self[OUTPUT_MIME_TYPE] = JSON
                 # Add raw output
-                self[RAW_OUTPUT] = safe_json_dumps(result)
+                self[OUTPUT_VALUE] = safe_json_dumps(result)
             except BaseException as e:
                 logger.exception(str(e))
 
@@ -276,8 +276,8 @@ class _Span(BaseSpan):
     @process_instance.register(MultiModalLLM)
     def _(self, instance: Union[BaseLLM, MultiModalLLM]) -> None:
         if metadata := instance.metadata:
-            self[LLM_MODEL_NAME] = metadata.model_name
-            self[LLM_INVOCATION_PARAMETERS] = metadata.json(exclude_unset=True)
+            self[GEN_AI_REQUEST_MODEL] = metadata.model_name
+            self[GEN_AI_REQUEST_PARAMETERS] = metadata.json(exclude_unset=True)
 
     @process_instance.register
     def _(self, instance: BaseEmbedding) -> None:
@@ -287,9 +287,9 @@ class _Span(BaseSpan):
     @process_instance.register
     def _(self, instance: BaseTool) -> None:
         metadata = instance.metadata
-        self[TOOL_DESCRIPTION] = metadata.description
+        self[GEN_AI_TOOL_DESCRIPTION] = metadata.description
         try:
-            self[TOOL_NAME] = metadata.get_name()
+            self[GEN_AI_TOOL_NAME] = metadata.get_name()
         except BaseException:
             pass
         try:
@@ -332,7 +332,7 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: ExceptionEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentChatWithStepStartEvent) -> None:
@@ -340,12 +340,12 @@ class _Span(BaseSpan):
             self._span_kind = AGENT
         self[INPUT_VALUE] = event.user_msg
         self._attributes.pop(INPUT_MIME_TYPE, None)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentChatWithStepEndEvent) -> None:
         self[OUTPUT_VALUE] = str(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: AgentRunStepStartEvent) -> None:
@@ -354,11 +354,11 @@ class _Span(BaseSpan):
         if input := event.input:
             self[INPUT_VALUE] = input
             self._attributes.pop(INPUT_MIME_TYPE, None)
-            self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+            self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: AgentRunStepEndEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
         # FIXME: not sure what to do here with interim outputs since
         # there is no corresponding semantic convention.
         ...
@@ -367,16 +367,16 @@ class _Span(BaseSpan):
     def _(self, event: AgentToolCallEvent) -> None:
         tool = event.tool
         if name := tool.name:
-            self[TOOL_NAME] = name
-        self[TOOL_DESCRIPTION] = tool.description
+            self[GEN_AI_TOOL_NAME] = name
+        self[GEN_AI_TOOL_DESCRIPTION] = tool.description
         self[TOOL_PARAMETERS] = safe_json_dumps(tool.get_parameters_dict())
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: EmbeddingStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = EMBEDDING
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: EmbeddingEndEvent) -> None:
@@ -388,13 +388,13 @@ class _Span(BaseSpan):
         self._list_attr_len[EMBEDDING_EMBEDDINGS] = i
         self[OUTPUT_VALUE] = safe_json_dumps(event.embeddings)
         self[EMBEDDING_EMBEDDINGS] = safe_json_dumps(event.embeddings)
-        self[RAW_OUTPUT] = event.model_dump_json()
+        self[OUTPUT_VALUE] = event.model_dump_json()
 
     @_process_event.register
     def _(self, event: StreamChatStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: StreamChatDeltaReceivedEvent) -> None:
@@ -409,11 +409,11 @@ class _Span(BaseSpan):
     @_process_event.register
     def _(self, event: StreamChatErrorEvent) -> None:
         self.record_exception(event.exception)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: StreamChatEndEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(self._stream_chunks)
+        self[OUTPUT_VALUE] = safe_json_dumps(self._stream_chunks)
         self[OUTPUT_VALUE] = self._stream_content
         self._stream_content.clear()
         self._stream_chunks.clear()
@@ -423,7 +423,7 @@ class _Span(BaseSpan):
         if not self._span_kind:
             self._span_kind = LLM
         template = event.template
-        self[LLM_PROMPT_TEMPLATE] = template.get_template()
+        self[GEN_AI_PROMPT_TEMPLATE_NAME] = template.get_template()
         variable_names: List[str] = template.template_vars
         argument_values: Dict[str, str] = {
             **template.kwargs,
@@ -434,57 +434,57 @@ class _Span(BaseSpan):
             for variable_name in variable_names
         }
         if template_arguments:
-            self[LLM_PROMPT_TEMPLATE_VARIABLES] = safe_json_dumps(template_arguments)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+            self[GEN_AI_PROMPT_TEMPLATE_VARIABLES] = safe_json_dumps(template_arguments)
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMPredictEndEvent) -> None:
         self[OUTPUT_VALUE] = event.output
-        self[RAW_OUTPUT] = event.model_dump_json()
+        self[OUTPUT_VALUE] = event.model_dump_json()
 
     @_process_event.register
     def _(self, event: LLMStructuredPredictStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMStructuredPredictEndEvent) -> None:
         self[OUTPUT_VALUE] = event.output.json(exclude_unset=True)
         self[OUTPUT_MIME_TYPE] = JSON
-        self[RAW_OUTPUT] = event.output.json(exclude_unset=True)
+        self[OUTPUT_VALUE] = event.output.json(exclude_unset=True)
 
     @_process_event.register
     def _(self, event: LLMCompletionStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
-        self[LLM_PROMPTS] = [event.prompt]
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[GEN_AI_PROMPTS] = [event.prompt]
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMCompletionInProgressEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMCompletionEndEvent) -> None:
         self[OUTPUT_VALUE] = event.response.text
         self._extract_token_counts(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: LLMChatStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = LLM
         self._process_messages(
-            LLM_INPUT_MESSAGES,
+            GEN_AI_INPUT_MESSAGES,
             *event.messages,
         )
         self[INPUT_VALUE] = safe_json_dumps(event.messages)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMChatInProgressEvent) -> None:
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: LLMChatEndEvent) -> None:
@@ -493,10 +493,10 @@ class _Span(BaseSpan):
         self[OUTPUT_VALUE] = str(response)
         self._extract_token_counts(response)
         self._process_messages(
-            LLM_OUTPUT_MESSAGES,
+            GEN_AI_OUTPUT_MESSAGES,
             response.message,
         )
-        self[RAW_OUTPUT] = safe_json_dumps(
+        self[OUTPUT_VALUE] = safe_json_dumps(
             {
                 "message": _to_dict(response.message),
                 "response": _to_dict(response),
@@ -506,12 +506,12 @@ class _Span(BaseSpan):
     @_process_event.register
     def _(self, event: QueryStartEvent) -> None:
         self._process_query_type(event.query)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: QueryEndEvent) -> None:
         self._process_response_type(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: ReRankStartEvent) -> None:
@@ -528,24 +528,24 @@ class _Span(BaseSpan):
         self[RERANKER_TOP_K] = event.top_n
         self[RERANKER_MODEL_NAME] = event.model_name
         self._process_nodes(RERANKER_INPUT_DOCUMENTS, *event.nodes)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: ReRankEndEvent) -> None:
         self._process_nodes(RERANKER_OUTPUT_DOCUMENTS, *event.nodes)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.nodes))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.nodes))
 
     @_process_event.register
     def _(self, event: RetrievalStartEvent) -> None:
         if not self._span_kind:
             self._span_kind = RETRIEVER
         self._process_query_type(event.str_or_query_bundle)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: RetrievalEndEvent) -> None:
         self._process_nodes(RETRIEVAL_DOCUMENTS, *event.nodes)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.nodes))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.nodes))
 
     @_process_event.register
     def _(self, event: SpanDropEvent) -> None:
@@ -557,12 +557,12 @@ class _Span(BaseSpan):
         if not self._span_kind:
             self._span_kind = CHAIN
         self._process_query_type(event.query)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: SynthesizeEndEvent) -> None:
         self._process_response_type(event.response)
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: GetResponseStartEvent) -> None:
@@ -570,7 +570,7 @@ class _Span(BaseSpan):
             self._span_kind = CHAIN
         self[INPUT_VALUE] = event.query_str
         self._attributes.pop(INPUT_MIME_TYPE, None)
-        self[RAW_INPUT] = safe_json_dumps(_to_dict(event))
+        self[INPUT_VALUE] = safe_json_dumps(_to_dict(event))
 
     @_process_event.register
     def _(self, event: GetResponseEndEvent) -> None:
@@ -581,8 +581,8 @@ class _Span(BaseSpan):
         if not hasattr(event, "response"):
             return
         self._process_response_text_type(event.response)
-        # Add RAW_OUTPUT
-        self[RAW_OUTPUT] = safe_json_dumps(_to_dict(event.response))
+        # Add OUTPUT_VALUE
+        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
 
     def _extract_token_counts(
         self, response: Union[ChatResponse, CompletionResponse]
@@ -666,7 +666,7 @@ class _Span(BaseSpan):
 
             self[INPUT_VALUE] = query.query_str
             self._attributes.pop(INPUT_MIME_TYPE, None)
-            self[RAW_INPUT] = safe_json_dumps(_to_dict(query_dict))
+            self[INPUT_VALUE] = safe_json_dumps(_to_dict(query_dict))
         else:
             assert_never(query)
 
@@ -675,8 +675,8 @@ class _Span(BaseSpan):
             return
         if isinstance(response, (Response, PydanticResponse)):
             self._process_response_text_type(response.response)
-            # Add RAW_OUTPUT
-            self[RAW_OUTPUT] = safe_json_dumps(_to_dict(response.response))
+            # Add OUTPUT_VALUE
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(response.response))
         elif isinstance(response, (StreamingResponse, AsyncStreamingResponse)):
             pass
         else:
@@ -928,22 +928,22 @@ def _get_token_counts(
 
 def _get_token_counts_from_object(usage: object) -> Iterator[Tuple[str, Any]]:
     if (prompt_tokens := getattr(usage, "prompt_tokens", None)) is not None:
-        yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
     if (completion_tokens := getattr(usage, "completion_tokens", None)) is not None:
-        yield LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
     if (total_tokens := getattr(usage, "total_tokens", None)) is not None:
-        yield LLM_TOKEN_COUNT_TOTAL, total_tokens
+        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
 
 
 def _get_token_counts_from_mapping(
     usage_mapping: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
     if (prompt_tokens := usage_mapping.get("prompt_tokens")) is not None:
-        yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
     if (completion_tokens := usage_mapping.get("completion_tokens")) is not None:
-        yield LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
     if (total_tokens := usage_mapping.get("total_tokens")) is not None:
-        yield LLM_TOKEN_COUNT_TOTAL, total_tokens
+        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
 
 
 @singledispatch
@@ -1116,16 +1116,16 @@ EMBEDDING_TEXT = EmbeddingAttributes.EMBEDDING_TEXT
 EMBEDDING_VECTOR = EmbeddingAttributes.EMBEDDING_VECTOR
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
-LLM_PROMPT_TEMPLATE = SpanAttributes.LLM_PROMPT_TEMPLATE
-LLM_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
+GEN_AI_PROMPT_TEMPLATE_NAME = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME
+GEN_AI_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENTS = MessageAttributes.MESSAGE_CONTENTS
 MESSAGE_CONTENT_TYPE = MessageContentAttributes.MESSAGE_CONTENT_TYPE
@@ -1140,7 +1140,7 @@ MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 RERANKER_INPUT_DOCUMENTS = RerankerAttributes.RERANKER_INPUT_DOCUMENTS
@@ -1152,12 +1152,9 @@ RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
 TOOL_CALL_ID = ToolCallAttributes.TOOL_CALL_ID
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
-TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
-TOOL_NAME = SpanAttributes.TOOL_NAME
+GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
+GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
-QUERY = SpanAttributes.QUERY
 
 JSON = FiMimeTypeValues.JSON.value
 

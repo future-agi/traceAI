@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "traceAI-autogen"
-version = "0.1.4"
-description = "OpenTelemetry instrumentation for Autogen"
+version = "0.2.0"
+description = "OpenTelemetry instrumentation for AutoGen (v0.2 and v0.4)"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
 
@@ -11,9 +11,20 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">3.9, <3.14"
-autogen = ">=0.5.0"
 fi-instrumentation-otel = ">=0.1.11"
+# Supports either v0.2 (autogen) or v0.4 (autogen-agentchat)
+# autogen = ">=0.2.0"  # For v0.2
+# autogen-agentchat = ">=0.4.0"  # For v0.4
 
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0.0"
+pytest-asyncio = ">=0.23.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests (require autogen and API keys)",
+]
 
 [build-system]
 requires = ["poetry-core"]

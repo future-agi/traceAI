@@ -94,9 +94,9 @@ class _PatchWrapper:
         attributes = dict(
             _flatten(
                 {
-                    FI_SPAN_KIND: FiSpanKindValues.TOOL,
+                    GEN_AI_SPAN_KIND: FiSpanKindValues.TOOL,
                     INPUT_VALUE_MIME_TYPE: "application/json",
-                    RAW_INPUT: safe_json_dumps(raw_input),
+                    INPUT_VALUE: safe_json_dumps(raw_input),
                     INPUT_VALUE: safe_json_dumps(raw_input.get("messages", "")),
                 }
             )
@@ -116,7 +116,7 @@ class _PatchWrapper:
                         if resp:
                             span.set_attribute(OUTPUT_VALUE, safe_json_dumps(resp))
                             span.set_attribute(OUTPUT_MIME_TYPE, "application/json")
-                            span.set_attribute(RAW_OUTPUT, _raw_output(resp))
+                            span.set_attribute(OUTPUT_VALUE, _raw_output(resp))
                         span.set_status(trace_api.StatusCode.OK)
                         return resp
                     except Exception as e:
@@ -139,7 +139,7 @@ class _PatchWrapper:
                     if resp:
                         span.set_attribute(OUTPUT_VALUE, safe_json_dumps(resp))
                         span.set_attribute(OUTPUT_MIME_TYPE, "application/json")
-                        span.set_attribute(RAW_OUTPUT, _raw_output(resp))
+                        span.set_attribute(OUTPUT_VALUE, _raw_output(resp))
                     span.set_status(trace_api.StatusCode.OK)
                     return resp
                 except Exception as e:
@@ -169,9 +169,9 @@ class _HandleResponseWrapper:
         attributes = dict(
             _flatten(
                 {
-                    FI_SPAN_KIND: FiSpanKindValues.TOOL,
+                    GEN_AI_SPAN_KIND: FiSpanKindValues.TOOL,
                     INPUT_VALUE_MIME_TYPE: "application/json",
-                    RAW_INPUT: safe_json_dumps(raw_input),
+                    INPUT_VALUE: safe_json_dumps(raw_input),
                     INPUT_VALUE: safe_json_dumps(raw_input.get("messages", "")),
                 }
             )
@@ -192,7 +192,7 @@ class _HandleResponseWrapper:
                         if resp:
                             span.set_attribute(OUTPUT_VALUE, json.dumps(resp))
                             span.set_attribute(OUTPUT_MIME_TYPE, "application/json")
-                            span.set_attribute(RAW_OUTPUT, _raw_output(resp))
+                            span.set_attribute(OUTPUT_VALUE, _raw_output(resp))
                         span.set_status(trace_api.StatusCode.OK)
                         return resp
                     except Exception as e:
@@ -218,7 +218,7 @@ class _HandleResponseWrapper:
                             OUTPUT_VALUE, safe_json_dumps(resp[0].model_json_schema())
                         )
                         span.set_attribute(OUTPUT_MIME_TYPE, "application/json")
-                        span.set_attribute(RAW_OUTPUT, safe_json_dumps(resp))
+                        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(resp))
                     span.set_status(trace_api.StatusCode.OK)
                     return resp
                 except Exception as e:
@@ -262,10 +262,6 @@ def _raw_output(response: Any) -> str:
 
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
 INPUT_VALUE_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
-QUERY = SpanAttributes.QUERY
-EVAL_INPUT = SpanAttributes.EVAL_INPUT

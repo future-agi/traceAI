@@ -85,13 +85,9 @@ class _BaseWrapper(_WithTracer):
         output_data: Optional[Any] = None,
     ) -> None:
         """Add input/output data to span attributes"""
-        try:
-            if input_data is not None:
-                span.set_attributes({"fi.llm.input": str(input_data)})
-            if output_data is not None:
-                span.set_attributes({"fi.llm.output": str(output_data)})
-        except Exception as e:
-            print(f"Error adding I/O to span attributes: {e}")
+        # Input/output are already captured in gen_ai.input/output.messages
+        # No need for redundant attributes
+        pass
 
 
 class _CompletionsWrapper(_BaseWrapper):
@@ -472,7 +468,7 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
             self._add_io_to_span_attributes(span=span, output_data=output_data)
 
             if output_data is not None:
-                span.set_attribute(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, output_data)
+                span.set_attribute(SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, output_data)
             span.finish_tracing()
             return response
 
@@ -483,24 +479,24 @@ def _get_inputs(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
 
 
 def _get_raw_input(arguments: Mapping[str, Any]) -> Iterator[Tuple[str, Any]]:
-    yield RAW_INPUT, safe_json_dumps(arguments)
+    yield INPUT_VALUE, safe_json_dumps(arguments)
 
 
 def _get_raw_output(response) -> Iterator[Tuple[str, Any]]:
     if isinstance(response, (Message, MessageTokensCount)):
-        yield RAW_OUTPUT, safe_json_dumps(response.to_dict())
+        yield OUTPUT_VALUE, safe_json_dumps(response.to_dict())
     elif hasattr(response, "to_dict"):
-        yield RAW_OUTPUT, safe_json_dumps(response.to_dict())
+        yield OUTPUT_VALUE, safe_json_dumps(response.to_dict())
     else:
-        yield RAW_OUTPUT, safe_json_dumps(response)
+        yield OUTPUT_VALUE, safe_json_dumps(response)
 
 
 def _get_query(query: str) -> Iterator[Tuple[str, Any]]:
-    yield QUERY, query
+    yield INPUT_VALUE, query
 
 
 def _get_response(response: Any) -> Iterator[Tuple[str, Any]]:
-    yield RESPONSE, response
+    yield OUTPUT_VALUE, response
 
 
 def class_to_dict(obj: Any) -> Dict[str, Any]:
@@ -589,7 +585,7 @@ def _get_image_inputs(input_images: Optional[List[str]]) -> Iterator[Tuple[str, 
 
 def _get_eval_input(input: Any) -> Iterator[Tuple[str, Any]]:
     if input is not None:
-        yield SpanAttributes.EVAL_INPUT, safe_json_dumps(input)
+        yield SpanAttributes.INPUT_VALUE, safe_json_dumps(input)
 
 
 def _get_outputs(response: "BaseModel") -> Iterator[Tuple[str, Any]]:
@@ -618,57 +614,57 @@ def _get_llm_tools(
     invocation_parameters: Mapping[str, Any]
 ) -> Iterator[Tuple[str, Any]]:
     if isinstance(tools := invocation_parameters.get("tools"), list):
-        yield LLM_TOOLS, safe_json_dumps(tools)
+        yield GEN_AI_TOOL_DEFINITIONS, safe_json_dumps(tools)
         for tool_index, tool_schema in enumerate(tools):
-            yield f"{LLM_TOOLS}.{tool_index}.{TOOL_JSON_SCHEMA}", safe_json_dumps(
+            yield f"{GEN_AI_TOOL_DEFINITIONS}.{tool_index}.{TOOL_JSON_SCHEMA}", safe_json_dumps(
                 tool_schema
             )
 
 
 def _get_llm_span_kind() -> Iterator[Tuple[str, Any]]:
-    yield FI_SPAN_KIND, LLM
+    yield GEN_AI_SPAN_KIND, LLM
 
 
 def _get_llm_provider() -> Iterator[Tuple[str, Any]]:
-    yield LLM_PROVIDER, LLM_PROVIDER_ANTHROPIC
+    yield GEN_AI_PROVIDER_NAME, LLM_PROVIDER_ANTHROPIC
 
 
 def _get_llm_system() -> Iterator[Tuple[str, Any]]:
-    yield LLM_SYSTEM, LLM_SYSTEM_ANTHROPIC
+    yield GEN_AI_PROVIDER_NAME, LLM_SYSTEM_ANTHROPIC
 
 
 def _get_llm_token_counts(usage: "Usage") -> Iterator[Tuple[str, Any]]:
-    yield LLM_TOKEN_COUNT_PROMPT, usage.input_tokens
-    yield LLM_TOKEN_COUNT_COMPLETION, usage.output_tokens
-    yield LLM_TOKEN_COUNT_TOTAL, usage.input_tokens + usage.output_tokens
+    yield GEN_AI_USAGE_INPUT_TOKENS, usage.input_tokens
+    yield GEN_AI_USAGE_OUTPUT_TOKENS, usage.output_tokens
+    yield GEN_AI_USAGE_TOTAL_TOKENS, usage.input_tokens + usage.output_tokens
 
 
 def _get_llm_model_name_from_input(
     arguments: Mapping[str, Any]
 ) -> Iterator[Tuple[str, Any]]:
     if model_name := arguments.get("model"):
-        yield LLM_MODEL_NAME, model_name
+        yield GEN_AI_REQUEST_MODEL, model_name
 
 
 def _get_llm_model_name_from_response(message: "Message") -> Iterator[Tuple[str, Any]]:
     if model_name := getattr(message, "model"):
-        yield LLM_MODEL_NAME, model_name
+        yield GEN_AI_REQUEST_MODEL, model_name
 
 
 def _get_llm_invocation_parameters(
     invocation_parameters: Mapping[str, Any],
 ) -> Iterator[Tuple[str, Any]]:
-    yield LLM_INVOCATION_PARAMETERS, safe_json_dumps(invocation_parameters)
+    yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_parameters)
 
 
 def _get_llm_prompts(prompt: str) -> Iterator[Tuple[str, Any]]:
-    yield LLM_PROMPTS, safe_json_dumps(prompt)
+    yield GEN_AI_PROMPTS, safe_json_dumps(prompt)
 
 
 def _get_llm_input_messages(messages: List[Dict[str, str]]) -> Any:
     for i, message in enumerate(messages):
         tool_index = 0
-        msg_prefix = f"{LLM_INPUT_MESSAGES}.{i}"
+        msg_prefix = f"{GEN_AI_INPUT_MESSAGES}.{i}"
 
         if content := message.get("content"):
             if isinstance(content, str):
@@ -778,19 +774,19 @@ def _get_output_messages(response: Any) -> Any:
 
     tool_index = 0
     for block in response.content:
-        yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_ROLE}", response.role
+        yield f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_ROLE}", response.role
         if isinstance(block, ToolUseBlock):
             yield (
-                f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_NAME}",
+                f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_NAME}",
                 block.name,
             )
             yield (
-                f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
+                f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_TOOL_CALLS}.{tool_index}.{TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
                 safe_json_dumps(block.input),
             )
             tool_index += 1
         if isinstance(block, TextBlock):
-            yield f"{LLM_OUTPUT_MESSAGES}.{0}.{MESSAGE_CONTENT}", block.text
+            yield f"{GEN_AI_OUTPUT_MESSAGES}.{0}.{MESSAGE_CONTENT}", block.text
 
 
 def _validate_invocation_parameter(parameter: Any) -> bool:
@@ -833,22 +829,19 @@ EMBEDDING_TEXT = EmbeddingAttributes.EMBEDDING_TEXT
 EMBEDDING_VECTOR = EmbeddingAttributes.EMBEDDING_VECTOR
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
-QUERY = SpanAttributes.QUERY
-RESPONSE = SpanAttributes.RESPONSE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
-LLM_PROMPT_TEMPLATE = SpanAttributes.LLM_PROMPT_TEMPLATE
-LLM_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES
-LLM_PROMPT_TEMPLATE_VERSION = SpanAttributes.LLM_PROMPT_TEMPLATE_VERSION
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
-LLM_TOOLS = SpanAttributes.LLM_TOOLS
+OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
+GEN_AI_PROMPT_TEMPLATE_NAME = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME
+GEN_AI_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES
+GEN_AI_PROMPT_TEMPLATE_VERSION = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VERSION
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+GEN_AI_TOOL_DEFINITIONS = SpanAttributes.GEN_AI_TOOL_DEFINITIONS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_CONTENTS = MessageAttributes.MESSAGE_CONTENTS
 MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
@@ -859,19 +852,17 @@ MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
 MESSAGE_TOOL_CALL_ID = MessageAttributes.MESSAGE_TOOL_CALL_ID
 METADATA = SpanAttributes.METADATA
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
-OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
-SESSION_ID = SpanAttributes.SESSION_ID
+GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
 TAG_TAGS = SpanAttributes.TAG_TAGS
 TOOL_CALL_ID = ToolCallAttributes.TOOL_CALL_ID
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
 TOOL_JSON_SCHEMA = ToolAttributes.TOOL_JSON_SCHEMA
 USER_ID = SpanAttributes.USER_ID
-LLM_PROVIDER = SpanAttributes.LLM_PROVIDER
-LLM_SYSTEM = SpanAttributes.LLM_SYSTEM
+GEN_AI_PROVIDER_NAME = SpanAttributes.GEN_AI_PROVIDER_NAME
 LLM_PROVIDER_ANTHROPIC = FiLLMProviderValues.ANTHROPIC.value
 LLM_SYSTEM_ANTHROPIC = FiLLMSystemValues.ANTHROPIC.value
 MESSAGE_CONTENT_TEXT = MessageContentAttributes.MESSAGE_CONTENT_TEXT

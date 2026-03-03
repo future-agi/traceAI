@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "traceAI-deepseek"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for DeepSeek - chat completions and reasoning models"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "traceai_deepseek" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+fi-instrumentation-otel = ">=0.1.11"
+openai = ">=1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

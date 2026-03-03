@@ -216,8 +216,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_SYSTEM]: LLMSystem.OPENAI,
                 [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                 ...getLLMInputMessagesAttributes(body),
                 ...getLLMToolsJSONSchema(body),
                 [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -251,33 +251,34 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           );
 
           const wrappedPromise = execPromise.then((result) => {
-            // --- ADD LOG ---
-            // diag.debug(`@traceai/openai: ChatCompletion promise resolved. Result type: ${typeof result}`);
-
             if (isChatCompletionResponse(result)) {
-              // --- ADD LOG ---
-              // diag.debug(`@traceai/openai: ChatCompletion is NON-STREAM. Ending span: ${span.spanContext().spanId}`);
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
                 // Override the model from the value sent by the server
                 [SemanticConventions.LLM_MODEL_NAME]: result.model,
+                [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+                [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
+                [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(
+                  result.choices.map((c) => c.finish_reason).filter(Boolean),
+                ),
                 ...getChatCompletionLLMOutputMessagesAttributes(result),
                 ...getUsageAttributes(result),
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
               });
               span.setStatus({ code: SpanStatusCode.OK });
-              span.end(); // Non-streaming end
-              // --- ADD LOG ---
-              // diag.debug(`@traceai/openai: ChatCompletion NON-STREAM span ENDED: ${span.spanContext().spanId}`);
+              span.end();
             } else {
-              // --- ADD LOG ---
-              // diag.debug(`@traceai/openai: ChatCompletion IS STREAM. Consuming stream for span: ${span.spanContext().spanId}`);
               const [leftStream, rightStream] = result.tee();
-              consumeChatCompletionStreamChunks(rightStream, span); // This function now MUST ensure span.end() is called
+              consumeChatCompletionStreamChunks(rightStream, span);
               result = leftStream;
             }
             return result;
+          }).catch((error: Error) => {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            span.end();
+            throw error;
           });
           return context.bind(execContext, wrappedPromise);
         };
@@ -309,8 +310,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.LLM_MODEL_NAME]: body.model,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_SYSTEM]: LLMSystem.OPENAI,
                 [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
                 ...getCompletionInputValueAndMimeType(body),
                 [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
               },
@@ -340,12 +341,15 @@ export class OpenAIInstrumentation extends InstrumentationBase{
           );
           const wrappedPromise = execPromise.then((result) => {
             if (isCompletionResponse(result)) {
-              // Record the results
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                 [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                // Override the model from the value sent by the server
                 [SemanticConventions.LLM_MODEL_NAME]: result.model,
+                [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+                [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
+                [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify(
+                  result.choices.map((c) => c.finish_reason).filter(Boolean),
+                ),
                 ...getCompletionOutputValueAndMimeType(result),
                 ...getUsageAttributes(result),
                 [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -354,6 +358,11 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.end();
             }
             return result;
+          }).catch((error: Error) => {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            span.end();
+            throw error;
           });
           return context.bind(execContext, wrappedPromise);
         };
@@ -387,6 +396,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               [SemanticConventions.INPUT_MIME_TYPE]: isStringInput
                 ? MimeType.TEXT
                 : MimeType.JSON,
+              [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
               ...getEmbeddingTextAttributes(body),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
@@ -424,6 +434,11 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             return result;
+          }).catch((error: Error) => {
+            span.recordException(error);
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+            span.end();
+            throw error;
           });
           return context.bind(execContext, wrappedPromise);
         };
@@ -458,8 +473,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                     JSON.stringify(invocationParameters),
-                  [SemanticConventions.LLM_SYSTEM]: LLMSystem.OPENAI,
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                  [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getResponsesInputMessagesAttributes(body),
                   ...getLLMToolsJSONSchema(body),
                   [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -497,8 +512,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 span.setAttributes({
                   [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
                   [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                  // Override the model from the value sent by the server
                   [SemanticConventions.LLM_MODEL_NAME]: result.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
+                  [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
                   ...getResponsesOutputMessagesAttributes(result),
                   ...getResponsesUsageAttributes(result),
                   [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
@@ -507,20 +523,19 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 span.end();
               };
               if (isResponseCreateResponse(result)) {
-                // Record the results, as we have the final result
                 recordSpan(result);
               } else {
-                // This is a streaming response
-                // First split the stream via tee
                 const [leftStream, rightStream] = result.tee();
-                // take the right stream, consuming it and then recording the final chunk
-                // into the span
                 consumeResponseStreamEvents(rightStream).then(recordSpan);
-                // give the left stream back to the caller
                 result = leftStream;
               }
 
               return result;
+            }).catch((error: Error) => {
+              span.recordException(error);
+              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+              span.end();
+              throw error;
             });
             return context.bind(execContext, wrappedPromise);
           };
@@ -597,119 +612,82 @@ function isPromptStringArray(
 }
 
 /**
- * Converts the body of a chat completions request to LLM input messages
+ * Converts the body of a chat completions request to LLM input messages (JSON blob)
  */
 function getLLMInputMessagesAttributes(
   body: ChatCompletionCreateParamsBase,
 ): Attributes {
-  return body.messages.reduce((acc, message, index) => {
-    const messageAttributes = getChatCompletionInputMessageAttributes(message);
-    const indexPrefix = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.`;
-    // Flatten the attributes on the index prefix
-    for (const [key, value] of Object.entries(messageAttributes)) {
-      acc[`${indexPrefix}${key}`] = value;
-    }
-    return acc;
-  }, {} as Attributes);
+  const messages = body.messages.map((message) => {
+    return serializeChatCompletionInputMessage(message);
+  });
+  return {
+    [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]",
+  };
 }
 
 /**
- * Converts each tool definition into a json schema
+ * Converts tool definitions into a JSON blob
  */
 function getLLMToolsJSONSchema(
   body: ChatCompletionCreateParamsBase | ResponseCreateParamsBase,
 ): Attributes {
   if (!body.tools) {
-    // If tools is undefined, return an empty object
     return {};
   }
-  return body.tools.reduce((acc: Attributes, tool, index) => {
-    const toolJsonSchema = safelyJSONStringify(tool);
-    const key = `${SemanticConventions.LLM_TOOLS}.${index}.${SemanticConventions.TOOL_JSON_SCHEMA}`;
-    if (toolJsonSchema) {
-      acc[key] = toolJsonSchema;
-    }
-    return acc;
-  }, {});
+  return {
+    [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(body.tools) ?? "[]",
+  };
 }
 
-function getChatCompletionInputMessageAttributes(
+/**
+ * Serializes a ChatCompletionMessageParam into a plain object for JSON blob format.
+ */
+function serializeChatCompletionInputMessage(
   message: ChatCompletionMessageParam,
-): Attributes {
+): Record<string, unknown> {
   const role = message.role;
-  const attributes: Attributes = {
-    [SemanticConventions.MESSAGE_ROLE]: role,
-  };
-  // Add the content only if it is a string
+  const obj: Record<string, unknown> = { role };
+
   if (typeof message.content === "string") {
-    attributes[SemanticConventions.MESSAGE_CONTENT] = message.content;
+    obj.content = message.content;
   } else if (Array.isArray(message.content)) {
-    message.content.forEach((part, index) => {
-      const contentsIndexPrefix = `${SemanticConventions.MESSAGE_CONTENTS}.${index}.`;
+    obj.content = message.content.map((part) => {
       if (part.type === "text") {
-        attributes[
-          `${contentsIndexPrefix}${SemanticConventions.MESSAGE_CONTENT_TYPE}`
-        ] = "text";
-        attributes[
-          `${contentsIndexPrefix}${SemanticConventions.MESSAGE_CONTENT_TEXT}`
-        ] = part.text;
+        return { type: "text", text: part.text };
       } else if (part.type === "image_url") {
-        attributes[
-          `${contentsIndexPrefix}${SemanticConventions.MESSAGE_CONTENT_TYPE}`
-        ] = "image";
-        attributes[
-          `${contentsIndexPrefix}${SemanticConventions.MESSAGE_CONTENT_IMAGE}.${SemanticConventions.IMAGE_URL}`
-        ] = part.image_url.url;
+        return { type: "image_url", image_url: { url: part.image_url.url } };
       }
+      return { type: part.type };
     });
   }
+
   switch (role) {
-    case "user":
-      // There's nothing to add for the user
-      break;
     case "assistant":
       if (message.tool_calls) {
-        message.tool_calls.forEach((toolCall, index) => {
-          const toolCallIndexPrefix = `${SemanticConventions.MESSAGE_TOOL_CALLS}.${index}.`;
-
-          // Add the tool call id if it exists
-          if (toolCall.id) {
-            attributes[
-              `${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_ID}`
-            ] = toolCall.id;
-          }
-          // Make sure the tool call has a function
-          if (toolCall.function) {
-            attributes[
-              `${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`
-            ] = toolCall.function.name;
-            attributes[
-              `${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`
-            ] = toolCall.function.arguments;
-          }
-        });
+        obj.tool_calls = message.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: tc.type,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        }));
       }
       break;
     case "function":
-      attributes[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME] = message.name;
+      obj.name = message.name;
       break;
     case "tool":
       if (message.tool_call_id) {
-        attributes[`${SemanticConventions.MESSAGE_TOOL_CALL_ID}`] =
-          message.tool_call_id;
+        obj.tool_call_id = message.tool_call_id;
       }
       break;
+    case "user":
     case "system":
-      // There's nothing to add for the system. Content is captured above
-      break;
     case "developer":
-      // There's nothing to add for the developer. Content is captured above
       break;
     default:
       assertUnreachable(role);
       break;
   }
-  return attributes;
+  return obj;
 }
 
 /**
@@ -766,66 +744,45 @@ function getUsageAttributes(
 }
 
 /**
- * Converts the chat completion result to LLM output attributes
+ * Converts the chat completion result to LLM output messages (JSON blob)
  */
 function getChatCompletionLLMOutputMessagesAttributes(
   chatCompletion: ChatCompletion,
 ): Attributes {
-  // Right now support just the first choice
   const choice = chatCompletion.choices[0];
   if (!choice) {
     return {};
   }
-  return [choice.message].reduce((acc, message, index) => {
-    const indexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.${index}.`;
-    const messageAttributes = getChatCompletionOutputMessageAttributes(message);
-    // Flatten the attributes on the index prefix
-    for (const [key, value] of Object.entries(messageAttributes)) {
-      acc[`${indexPrefix}${key}`] = value;
-    }
-    return acc;
-  }, {} as Attributes);
+  const messages = [serializeChatCompletionOutputMessage(choice.message)];
+  return {
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify(messages) ?? "[]",
+  };
 }
 
-function getChatCompletionOutputMessageAttributes(
+/**
+ * Serializes a ChatCompletionMessage into a plain object for JSON blob format.
+ */
+function serializeChatCompletionOutputMessage(
   message: ChatCompletionMessage,
-): Attributes {
-  const role = message.role;
-  const attributes: Attributes = {
-    [SemanticConventions.MESSAGE_ROLE]: role,
-  };
+): Record<string, unknown> {
+  const obj: Record<string, unknown> = { role: message.role };
   if (message.content) {
-    attributes[SemanticConventions.MESSAGE_CONTENT] = message.content;
+    obj.content = message.content;
   }
   if (message.tool_calls) {
-    message.tool_calls.forEach((toolCall, index) => {
-      const toolCallIndexPrefix = `${SemanticConventions.MESSAGE_TOOL_CALLS}.${index}.`;
-      // Add the tool call id if it exists
-      if (toolCall.id) {
-        attributes[
-          `${toolCallIndexPrefix}${SemanticConventions.TOOL_CALL_ID}`
-        ] = toolCall.id;
-      }
-      // Double check that the tool call has a function
-      // NB: OpenAI only supports tool calls with functions right now but this may change
-      if (toolCall.function) {
-        attributes[
-          toolCallIndexPrefix + SemanticConventions.TOOL_CALL_FUNCTION_NAME
-        ] = toolCall.function.name;
-        attributes[
-          toolCallIndexPrefix +
-            SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
-        ] = toolCall.function.arguments;
-      }
-    });
+    obj.tool_calls = message.tool_calls.map((tc) => ({
+      id: tc.id,
+      type: tc.type,
+      function: { name: tc.function.name, arguments: tc.function.arguments },
+    }));
   }
   if (message.function_call) {
-    attributes[SemanticConventions.MESSAGE_FUNCTION_CALL_NAME] =
-      message.function_call.name;
-    attributes[SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON] =
-      message.function_call.arguments;
+    obj.function_call = {
+      name: message.function_call.name,
+      arguments: message.function_call.arguments,
+    };
   }
-  return attributes;
+  return obj;
 }
 
 /**
@@ -924,21 +881,48 @@ async function consumeChatCompletionStreamChunks(
       }
     }
   }
-  const messageIndexPrefix = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0.`;
+  // Build the output message as a JSON blob
+  const outputMessage: Record<string, unknown> = {
+    role: "assistant",
+    content: streamResponse,
+  };
+  // Aggregate tool calls from stream attributes into structured format
+  const toolCalls: Record<number, Record<string, unknown>> = {};
+  for (const [key, value] of Object.entries(toolAndFunctionCallAttributes)) {
+    // Parse tool call attributes from the nested format
+    const toolCallMatch = key.match(/^message\.tool_calls\.(\d+)\./);
+    if (toolCallMatch) {
+      const idx = parseInt(toolCallMatch[1]);
+      if (!toolCalls[idx]) toolCalls[idx] = {};
+      if (key.endsWith("tool_call.id")) toolCalls[idx].id = value;
+      if (key.endsWith("tool_call.function.name")) {
+        if (!toolCalls[idx].function) toolCalls[idx].function = {};
+        (toolCalls[idx].function as Record<string, unknown>).name = value;
+      }
+      if (key.endsWith("tool_call.function.arguments")) {
+        if (!toolCalls[idx].function) toolCalls[idx].function = {};
+        (toolCalls[idx].function as Record<string, unknown>).arguments = value;
+      }
+    }
+    // Handle legacy function_call
+    if (key === SemanticConventions.MESSAGE_FUNCTION_CALL_NAME) {
+      outputMessage.function_call_name = value;
+    }
+    if (key === SemanticConventions.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON) {
+      outputMessage.function_call_arguments = value;
+    }
+  }
+  const toolCallArray = Object.values(toolCalls);
+  if (toolCallArray.length > 0) {
+    outputMessage.tool_calls = toolCallArray;
+  }
 
-  // Append the attributes to the span as a message
   const attributes: Attributes = {
     [SemanticConventions.OUTPUT_VALUE]: streamResponse,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_CONTENT}`]:
-      streamResponse,
-    [`${messageIndexPrefix}${SemanticConventions.MESSAGE_ROLE}`]: "assistant",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "", // Store stringified all chunks
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([outputMessage]) ?? "[]",
+    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
-  // Add the tool and function call attributes
-  for (const [key, value] of Object.entries(toolAndFunctionCallAttributes)) {
-    attributes[`${messageIndexPrefix}${key}`] = value;
-  }
   span.setAttributes(attributes);
   span.end(); // Streaming end
   // --- ADD LOG ---

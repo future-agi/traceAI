@@ -15,8 +15,22 @@ from traceai_langchain.package import _instruments
 from traceai_langchain.version import __version__
 from wrapt import wrap_function_wrapper  # type: ignore
 
+# LangGraph instrumentation exports
+from traceai_langchain._langgraph import (
+    LangGraphInstrumentor,
+    LangGraphAttributes,
+)
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+__all__ = [
+    "LangChainInstrumentor",
+    "LangGraphInstrumentor",
+    "LangGraphAttributes",
+    "get_current_span",
+    "get_ancestor_spans",
+]
 
 _MODULE = "langchain_core"
 
@@ -56,7 +70,6 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
             name="BaseCallbackManager.__init__",
             wrapper=_BaseCallbackManagerInit(self._tracer),
         )
-
         if Protect is not None:
             self._original_protect = Protect.protect
             wrap_function_wrapper(
@@ -64,6 +77,8 @@ class LangChainInstrumentor(BaseInstrumentor):  # type: ignore
                 name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(self._tracer),
             )
+        else:
+            self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
         langchain_core.callbacks.BaseCallbackManager.__init__ = self._original_callback_manager_init  # type: ignore

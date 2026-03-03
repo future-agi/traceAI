@@ -15,7 +15,7 @@ jest.mock('@traceai/fi-core', () => ({
 
 describe('Anthropic Response Attributes', () => {
   describe('getAnthropicInputMessagesAttributes', () => {
-    it('should extract attributes from simple text messages', () => {
+    it('should extract attributes from simple text messages as a JSON blob', () => {
       const params = {
         model: 'claude-3-sonnet-20240229',
         max_tokens: 1000,
@@ -27,12 +27,13 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicInputMessagesAttributes(params);
 
-      expect(attributes).toEqual({
-        'llm.input_messages.0.message.role': 'user',
-        'llm.input_messages.0.message.content': 'Hello, how are you?',
-        'llm.input_messages.1.message.role': 'assistant',
-        'llm.input_messages.1.message.content': 'I am doing well, thank you!',
-      });
+      expect(Object.keys(attributes)).toHaveLength(1);
+      expect(attributes).toHaveProperty([SemanticConventions.LLM_INPUT_MESSAGES]);
+
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0]).toEqual({ role: 'user', content: 'Hello, how are you?' });
+      expect(parsed[1]).toEqual({ role: 'assistant', content: 'I am doing well, thank you!' });
     });
 
     it('should extract attributes from messages with system prompt', () => {
@@ -47,12 +48,10 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicInputMessagesAttributes(params);
 
-      expect(attributes).toEqual({
-        'llm.input_messages.0.message.role': 'system',
-        'llm.input_messages.0.message.content': 'You are a helpful assistant.',
-        'llm.input_messages.1.message.role': 'user',
-        'llm.input_messages.1.message.content': 'Hello!',
-      });
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0]).toEqual({ role: 'system', content: 'You are a helpful assistant.' });
+      expect(parsed[1]).toEqual({ role: 'user', content: 'Hello!' });
     });
 
     it('should handle empty messages array', () => {
@@ -64,7 +63,8 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicInputMessagesAttributes(params);
 
-      expect(Object.keys(attributes)).toHaveLength(0);
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(0);
     });
 
     it('should handle complex content blocks', () => {
@@ -91,11 +91,13 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicInputMessagesAttributes(params);
 
-      expect(attributes['llm.input_messages.0.message.role']).toBe('user');
-      expect(attributes['llm.input_messages.0.message.contents.0.message_content.type']).toBe('text');
-      expect(attributes['llm.input_messages.0.message.contents.0.message_content.text']).toBe('What do you see in this image?');
-      expect(attributes['llm.input_messages.0.message.contents.1.message_content.type']).toBe('image');
-      expect(attributes['llm.input_messages.0.message.contents.1.message_content.image']).toContain('base64');
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('user');
+      expect(parsed[0].content).toHaveLength(2);
+      expect(parsed[0].content[0]).toEqual({ type: 'text', text: 'What do you see in this image?' });
+      expect(parsed[0].content[1].type).toBe('image');
+      expect(parsed[0].content[1].source.type).toBe('base64');
     });
 
     it('should handle tool use content blocks', () => {
@@ -120,11 +122,15 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicInputMessagesAttributes(params);
 
-      expect(attributes['llm.input_messages.0.message.role']).toBe('assistant');
-      expect(attributes['llm.input_messages.0.message.contents.0.message_content.type']).toBe('text');
-      expect(attributes['llm.input_messages.0.message.contents.0.message_content.text']).toBe('I\'ll get the weather for you.');
-      expect(attributes['llm.input_messages.0.message.contents.1.message_content.type']).toBe('tool_use');
-      expect(attributes['llm.input_messages.0.message.contents.1.message.content']).toContain('get_weather');
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('assistant');
+      expect(parsed[0].content).toHaveLength(2);
+      expect(parsed[0].content[0]).toEqual({ type: 'text', text: 'I\'ll get the weather for you.' });
+      expect(parsed[0].content[1].type).toBe('tool_use');
+      expect(parsed[0].content[1].id).toBe('toolu_123');
+      expect(parsed[0].content[1].name).toBe('get_weather');
+      expect(parsed[0].content[1].input).toEqual({ location: 'San Francisco' });
     });
 
     it('should handle tool result content blocks', () => {
@@ -138,7 +144,7 @@ describe('Anthropic Response Attributes', () => {
               {
                 type: 'tool_result',
                 tool_use_id: 'toolu_123',
-                content: 'The weather in San Francisco is sunny and 72°F.',
+                content: 'The weather in San Francisco is sunny and 72\u00b0F.',
               },
             ],
           },
@@ -147,9 +153,12 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicInputMessagesAttributes(params);
 
-      expect(attributes['llm.input_messages.0.message.role']).toBe('user');
-      expect(attributes['llm.input_messages.0.message.contents.0.message_content.type']).toBe('tool_result');
-      expect(attributes['llm.input_messages.0.message.contents.0.message.content']).toContain('tool_use_id');
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('user');
+      expect(parsed[0].content).toHaveLength(1);
+      expect(parsed[0].content[0].type).toBe('tool_result');
+      expect(parsed[0].content[0].tool_use_id).toBe('toolu_123');
     });
 
     it('should handle complex system prompt objects', () => {
@@ -157,7 +166,7 @@ describe('Anthropic Response Attributes', () => {
         { type: 'text', text: 'You are an assistant.' },
         { type: 'text', text: 'Be helpful and concise.' },
       ];
-      
+
       const params = {
         model: 'claude-3-sonnet-20240229',
         max_tokens: 1000,
@@ -169,14 +178,16 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicInputMessagesAttributes(params);
 
-      expect(attributes['llm.input_messages.0.message.role']).toBe('system');
-      expect(attributes['llm.input_messages.0.message.content']).toContain('type');
-      expect(attributes['llm.input_messages.1.message.role']).toBe('user');
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_INPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0].role).toBe('system');
+      expect(parsed[0].content).toEqual(systemPrompt);
+      expect(parsed[1]).toEqual({ role: 'user', content: 'Hello!' });
     });
   });
 
   describe('getAnthropicOutputMessagesAttributes', () => {
-    it('should extract attributes from text response', () => {
+    it('should extract attributes from text response as a JSON blob', () => {
       const response = {
         id: 'msg_123',
         type: 'message',
@@ -192,10 +203,13 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicOutputMessagesAttributes(response);
 
-      expect(attributes).toEqual({
-        'llm.output_messages.0.message.role': 'assistant',
-        'llm.output_messages.0.message.content': 'Hello! How can I help you today?',
-      });
+      expect(Object.keys(attributes)).toHaveLength(1);
+      expect(attributes).toHaveProperty([SemanticConventions.LLM_OUTPUT_MESSAGES]);
+
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('assistant');
+      expect(parsed[0].content).toBe('Hello! How can I help you today?');
     });
 
     it('should extract attributes from tool use response', () => {
@@ -219,11 +233,12 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicOutputMessagesAttributes(response);
 
-      expect(attributes).toEqual({
-        'llm.output_messages.0.message.role': 'assistant',
-        'llm.output_messages.0.message.tool_calls.0.tool_call.function.name': 'get_weather',
-        'llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments': '{"location":"San Francisco"}',
-      });
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('assistant');
+      expect(parsed[0].tool_calls).toHaveLength(1);
+      expect(parsed[0].tool_calls[0].function.name).toBe('get_weather');
+      expect(parsed[0].tool_calls[0].function.arguments).toBe('{"location":"San Francisco"}');
     });
 
     it('should extract attributes from mixed content response', () => {
@@ -249,12 +264,14 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicOutputMessagesAttributes(response);
 
-      expect(attributes).toEqual({
-        'llm.output_messages.0.message.role': 'assistant',
-        'llm.output_messages.0.message.content': 'Let me get that information.',
-        'llm.output_messages.0.message.tool_calls.0.tool_call.function.name': 'get_weather',
-        'llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments': '{"location":"New York"}',
-      });
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('assistant');
+      // The implementation keeps the *last* text content
+      expect(parsed[0].content).toBe('Let me get that information.');
+      expect(parsed[0].tool_calls).toHaveLength(1);
+      expect(parsed[0].tool_calls[0].function.name).toBe('get_weather');
+      expect(parsed[0].tool_calls[0].function.arguments).toBe('{"location":"New York"}');
     });
 
     it('should handle multiple tool uses', () => {
@@ -284,11 +301,14 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicOutputMessagesAttributes(response);
 
-      expect(attributes['llm.output_messages.0.message.role']).toBe('assistant');
-      expect(attributes['llm.output_messages.0.message.tool_calls.0.tool_call.function.name']).toBe('get_weather');
-      expect(attributes['llm.output_messages.0.message.tool_calls.1.tool_call.function.name']).toBe('get_time');
-      expect(attributes['llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments']).toBe('{"location":"San Francisco"}');
-      expect(attributes['llm.output_messages.0.message.tool_calls.1.tool_call.function.arguments']).toBe('{"timezone":"PST"}');
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('assistant');
+      expect(parsed[0].tool_calls).toHaveLength(2);
+      expect(parsed[0].tool_calls[0].function.name).toBe('get_weather');
+      expect(parsed[0].tool_calls[0].function.arguments).toBe('{"location":"San Francisco"}');
+      expect(parsed[0].tool_calls[1].function.name).toBe('get_time');
+      expect(parsed[0].tool_calls[1].function.arguments).toBe('{"timezone":"PST"}');
     });
 
     it('should handle response with no content', () => {
@@ -305,9 +325,11 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicOutputMessagesAttributes(response);
 
-      expect(attributes).toEqual({
-        'llm.output_messages.0.message.role': 'assistant',
-      });
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_OUTPUT_MESSAGES] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].role).toBe('assistant');
+      expect(parsed[0].content).toBeUndefined();
+      expect(parsed[0].tool_calls).toBeUndefined();
     });
   });
 
@@ -357,7 +379,7 @@ describe('Anthropic Response Attributes', () => {
   });
 
   describe('getAnthropicToolsAttributes', () => {
-    it('should extract attributes from tool definitions', () => {
+    it('should extract tool definitions as a JSON blob', () => {
       const params = {
         model: 'claude-3-sonnet-20240229',
         max_tokens: 1000,
@@ -379,9 +401,14 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicToolsAttributes(params);
 
-      expect(attributes['llm.tools.0.tool.name']).toBe('get_weather');
-      expect(attributes['llm.tools.0.tool.description']).toBe('Get current weather information');
-      expect(attributes['llm.tools.0.tool.json_schema']).toContain('location');
+      expect(Object.keys(attributes)).toHaveLength(1);
+      expect(attributes).toHaveProperty([SemanticConventions.LLM_TOOLS]);
+
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_TOOLS] as string);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].name).toBe('get_weather');
+      expect(parsed[0].description).toBe('Get current weather information');
+      expect(parsed[0].input_schema.properties.location.type).toBe('string');
     });
 
     it('should handle params without tools', () => {
@@ -406,7 +433,9 @@ describe('Anthropic Response Attributes', () => {
 
       const attributes = getAnthropicToolsAttributes(params);
 
-      expect(attributes).toEqual({});
+      // Empty array is truthy, so the implementation still serializes it
+      const parsed = JSON.parse(attributes[SemanticConventions.LLM_TOOLS] as string);
+      expect(parsed).toEqual([]);
     });
   });
 
@@ -579,7 +608,7 @@ describe('Anthropic Response Attributes', () => {
 
     it('should handle invalid JSON in tool use', () => {
       const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-      
+
       const chunks = [
         {
           type: 'message_start',
@@ -632,8 +661,8 @@ describe('Anthropic Response Attributes', () => {
         'Failed to parse tool_use input JSON from stream:',
         expect.any(Error)
       );
-      
+
       consoleSpy.mockRestore();
     });
   });
-}); 
+});

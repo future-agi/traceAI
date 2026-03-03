@@ -10,7 +10,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">3.9, <3.14"
+python = ">=3.10"
 google-genai = ">=1.8.0"
 fi-instrumentation-otel = ">=0.1.11"
 

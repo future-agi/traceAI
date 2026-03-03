@@ -116,12 +116,12 @@ def payload_to_semantic_attributes(
             for node_with_score in payload[EventPayload.NODES]
         ]
     if EventPayload.PROMPT in payload:
-        attributes[LLM_PROMPTS] = [payload[EventPayload.PROMPT]]
+        attributes[GEN_AI_PROMPTS] = [payload[EventPayload.PROMPT]]
     if EventPayload.MESSAGES in payload:
         messages = payload[EventPayload.MESSAGES]
         # Messages is only relevant to the LLM invocation
         if event_type is CBEventType.LLM:
-            attributes[LLM_INPUT_MESSAGES] = [
+            attributes[GEN_AI_INPUT_MESSAGES] = [
                 _message_payload_to_attributes(message_data)
                 for message_data in messages
             ]
@@ -175,8 +175,8 @@ def payload_to_semantic_attributes(
             ]
     if EventPayload.TOOL in payload:
         tool_metadata = cast(ToolMetadata, payload.get(EventPayload.TOOL))
-        attributes[TOOL_NAME] = tool_metadata.name
-        attributes[TOOL_DESCRIPTION] = tool_metadata.description
+        attributes[GEN_AI_TOOL_NAME] = tool_metadata.name
+        attributes[GEN_AI_TOOL_DESCRIPTION] = tool_metadata.description
         if tool_parameters := tool_metadata.to_openai_tool(skip_length_check=True)[
             "function"
         ]["parameters"]:
@@ -188,10 +188,10 @@ def payload_to_semantic_attributes(
                 attributes[EMBEDDING_MODEL_NAME] = model_name
         if event_type is CBEventType.LLM:
             if model_name := serialized.get("model"):
-                attributes[LLM_MODEL_NAME] = model_name
+                attributes[GEN_AI_REQUEST_MODEL] = model_name
                 invocation_parameters = _extract_invocation_parameters(serialized)
                 invocation_parameters["model"] = model_name
-                attributes[LLM_INVOCATION_PARAMETERS] = safe_json_dumps(
+                attributes[GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(
                     invocation_parameters
                 )
     return attributes
@@ -297,7 +297,7 @@ class FiTraceCallbackHandler(BaseCallbackHandler):
             start_time=start_time,
             context=context,
         )
-        span.set_attribute(FI_SPAN_KIND, _get_span_kind(event_type).value)
+        span.set_attribute(GEN_AI_SPAN_KIND, _get_span_kind(event_type).value)
         new_context = trace_api.set_span_in_context(span)
         # The following line of code is commented out to serve as a reminder that in a system
         # of callbacks, attaching the context can be hazardous because there is no guarantee
@@ -638,7 +638,7 @@ def _get_output_messages(raw: Any) -> Iterator[Tuple[str, Any]]:
         for choice in choices
         if (message := getattr(choice, "message", None)) is not None
     ]:
-        yield LLM_OUTPUT_MESSAGES, messages
+        yield GEN_AI_OUTPUT_MESSAGES, messages
 
 
 def _get_token_counts(
@@ -659,11 +659,11 @@ def _get_token_counts_from_object(usage: object) -> Iterator[Tuple[str, Any]]:
     Yields token count attributes from response.raw.usage
     """
     if (prompt_tokens := getattr(usage, "prompt_tokens", None)) is not None:
-        yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
     if (completion_tokens := getattr(usage, "completion_tokens", None)) is not None:
-        yield LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
     if (total_tokens := getattr(usage, "total_tokens", None)) is not None:
-        yield LLM_TOKEN_COUNT_TOTAL, total_tokens
+        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
 
 
 def _get_token_counts_from_mapping(
@@ -673,11 +673,11 @@ def _get_token_counts_from_mapping(
     Yields token count attributes from a mapping (e.x. completion kwargs payload)
     """
     if (prompt_tokens := usage_mapping.get("prompt_tokens")) is not None:
-        yield LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+        yield GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
     if (completion_tokens := usage_mapping.get("completion_tokens")) is not None:
-        yield LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
     if (total_tokens := usage_mapping.get("total_tokens")) is not None:
-        yield LLM_TOKEN_COUNT_TOTAL, total_tokens
+        yield GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
 
 
 def _template_attributes(payload: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
@@ -685,9 +685,9 @@ def _template_attributes(payload: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
     Yields template attributes if present
     """
     if template := payload.get(EventPayload.TEMPLATE):
-        yield LLM_PROMPT_TEMPLATE, template
+        yield GEN_AI_PROMPT_TEMPLATE_NAME, template
     if template_vars := payload.get(EventPayload.TEMPLATE_VARS):
-        yield LLM_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(template_vars)
+        yield GEN_AI_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(template_vars)
 
 
 def _get_tool_call(tool_call: object) -> Iterator[Tuple[str, Any]]:
@@ -757,16 +757,16 @@ EMBEDDING_TEXT = EmbeddingAttributes.EMBEDDING_TEXT
 EMBEDDING_VECTOR = EmbeddingAttributes.EMBEDDING_VECTOR
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROMPTS = SpanAttributes.LLM_PROMPTS
-LLM_PROMPT_TEMPLATE = SpanAttributes.LLM_PROMPT_TEMPLATE
-LLM_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROMPTS = SpanAttributes.GEN_AI_PROMPTS
+GEN_AI_PROMPT_TEMPLATE_NAME = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_NAME
+GEN_AI_PROMPT_TEMPLATE_VARIABLES = SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
 MESSAGE_CONTENT = MessageAttributes.MESSAGE_CONTENT
 MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON = (
     MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON
@@ -775,7 +775,7 @@ MESSAGE_FUNCTION_CALL_NAME = MessageAttributes.MESSAGE_FUNCTION_CALL_NAME
 MESSAGE_NAME = MessageAttributes.MESSAGE_NAME
 MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
 RERANKER_INPUT_DOCUMENTS = RerankerAttributes.RERANKER_INPUT_DOCUMENTS
@@ -786,6 +786,6 @@ RERANKER_TOP_K = RerankerAttributes.RERANKER_TOP_K
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
-TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
-TOOL_NAME = SpanAttributes.TOOL_NAME
+GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
+GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS

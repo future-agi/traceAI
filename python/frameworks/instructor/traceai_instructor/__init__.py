@@ -60,6 +60,8 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
                 name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(tracer=self._tracer),
             )
+        else:
+            self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._original_patch is not None:

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>ai.traceai</groupId>
+        <artifactId>traceai-java-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>traceai-java-semantic-kernel</artifactId>
+    <name>TraceAI Java Semantic Kernel</name>
+    <description>Microsoft Semantic Kernel instrumentation for TraceAI Java SDK</description>
+
+    <properties>
+        <semantic-kernel.version>1.3.0</semantic-kernel.version>
+    </properties>
+
+    <dependencies>
+        <!-- TraceAI Core -->
+        <dependency>
+            <groupId>ai.traceai</groupId>
+            <artifactId>traceai-java-core</artifactId>
+        </dependency>
+
+        <!-- Microsoft Semantic Kernel API (provided - user brings their own) -->
+        <dependency>
+            <groupId>com.microsoft.semantic-kernel</groupId>
+            <artifactId>semantickernel-api</artifactId>
+            <version>${semantic-kernel.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Semantic Kernel AI Services - OpenAI (provided - user brings their own) -->
+        <dependency>
+            <groupId>com.microsoft.semantic-kernel</groupId>
+            <artifactId>semantickernel-aiservices-openai</artifactId>
+            <version>${semantic-kernel.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
