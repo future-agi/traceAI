@@ -50,7 +50,9 @@ class _UsingAttributesContextManager(ContextDecorator):
     def attach_context(self) -> None:
         ctx = get_current()
         if self._session_id:
-            ctx = set_value(SpanAttributes.GEN_AI_CONVERSATION_ID, self._session_id, ctx)
+            ctx = set_value(
+                SpanAttributes.GEN_AI_CONVERSATION_ID, self._session_id, ctx
+            )
         if self._user_id:
             ctx = set_value(SpanAttributes.USER_ID, self._user_id, ctx)
         if self._metadata:
@@ -65,7 +67,9 @@ class _UsingAttributesContextManager(ContextDecorator):
             )
         if self._prompt_template_label:
             ctx = set_value(
-                SpanAttributes.GEN_AI_PROMPT_TEMPLATE_LABEL, self._prompt_template_label, ctx
+                SpanAttributes.GEN_AI_PROMPT_TEMPLATE_LABEL,
+                self._prompt_template_label,
+                ctx,
             )
         if self._prompt_template_version:
             ctx = set_value(
@@ -85,14 +89,20 @@ class _UsingAttributesContextManager(ContextDecorator):
                 ctx = set_value(SimulatorAttributes.RUN_TEST_ID, run_test_id, ctx)
             test_execution_id = self._simulator_attributes.get("test_execution_id")
             if test_execution_id is not None:
-                ctx = set_value(SimulatorAttributes.TEST_EXECUTION_ID, test_execution_id, ctx)
+                ctx = set_value(
+                    SimulatorAttributes.TEST_EXECUTION_ID, test_execution_id, ctx
+                )
             call_execution_id = self._simulator_attributes.get("call_execution_id")
             if call_execution_id is not None:
-                ctx = set_value(SimulatorAttributes.CALL_EXECUTION_ID, call_execution_id, ctx)
+                ctx = set_value(
+                    SimulatorAttributes.CALL_EXECUTION_ID, call_execution_id, ctx
+                )
             is_simulator_trace = self._simulator_attributes.get("is_simulator_trace")
             # Explicitly check for None, not truthiness, since False is a valid boolean value
             if is_simulator_trace is not None:
-                ctx = set_value(SimulatorAttributes.IS_SIMULATOR_TRACE, is_simulator_trace, ctx)
+                ctx = set_value(
+                    SimulatorAttributes.IS_SIMULATOR_TRACE, is_simulator_trace, ctx
+                )
         self._token = attach(ctx)
 
     def __enter__(self) -> Self:
@@ -249,8 +259,10 @@ class using_simulator_attributes(_UsingAttributesContextManager):
             # "gen_ai.simulator.is_simulator_trace" = True
             ...
     """
+
     def __init__(self, simulator_attributes: Dict[str, Any]) -> None:
         super().__init__(simulator_attributes=simulator_attributes)
+
 
 class using_attributes(_UsingAttributesContextManager):
     """
@@ -343,3 +355,8 @@ def get_attributes_from_context() -> Iterator[Tuple[str, AttributeValue]]:
     for ctx_attr in CONTEXT_ATTRIBUTES:
         if (val := get_value(ctx_attr)) is not None:
             yield ctx_attr, val
+            # Backend expects "session.id" but SDK context uses
+            # "gen_ai.conversation.id". Emit both so the session
+            # is linked correctly during trace ingestion.
+            if ctx_attr == SpanAttributes.GEN_AI_CONVERSATION_ID:
+                yield "session.id", val
