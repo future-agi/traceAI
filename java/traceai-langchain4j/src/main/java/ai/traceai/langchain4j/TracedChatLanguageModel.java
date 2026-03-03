@@ -93,9 +93,12 @@ public class TracedChatLanguageModel implements ChatLanguageModel {
                     List<ToolExecutionRequest> toolRequests = response.content().toolExecutionRequests();
                     for (int i = 0; i < toolRequests.size(); i++) {
                         ToolExecutionRequest request = toolRequests.get(i);
-                        span.setAttribute("llm.tool_calls." + i + ".id", request.id());
-                        span.setAttribute("llm.tool_calls." + i + ".name", request.name());
-                        span.setAttribute("llm.tool_calls." + i + ".arguments", request.arguments());
+                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                            + SemanticConventions.TOOL_CALL_ID, request.id());
+                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                            + SemanticConventions.TOOL_CALL_FUNCTION_NAME, request.name());
+                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                            + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS, request.arguments());
                     }
                 }
             }

@@ -101,7 +101,6 @@ class TestInstructorExtraction:
     def test_nested_extraction(self, instructor_client):
         """Test nested structured extraction."""
         from pydantic import BaseModel
-        from typing import Optional
 
         class Address(BaseModel):
             city: str
@@ -109,19 +108,18 @@ class TestInstructorExtraction:
 
         class Person(BaseModel):
             name: str
-            address: Optional[Address] = None
+            address: Address
 
         response = instructor_client.chat.completions.create(
             model=config.google_model,
             messages=[
-                {"role": "user", "content": "Alice lives in Paris, France."}
+                {"role": "user", "content": "Alice lives in Paris, France. Extract her name and address."}
             ],
             response_model=Person,
         )
 
         assert isinstance(response, Person)
         assert response.name == "Alice"
-        assert response.address is not None
         assert "Paris" in response.address.city
         print(f"Person: {response}")
 

@@ -92,8 +92,8 @@ public class TracedQdrantClient {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
-            span.setAttribute("qdrant.collection", searchRequest.getCollectionName());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, searchRequest.getCollectionName());
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, searchRequest.getLimit());
 
             // Capture vector dimensions from the repeated vector field
@@ -110,7 +110,7 @@ public class TracedQdrantClient {
             List<ScoredPoint> results = client.searchAsync(searchRequest).get();
 
             // Capture results
-            span.setAttribute("qdrant.results_count", (long) results.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) results.size());
             if (!results.isEmpty()) {
                 span.setAttribute("qdrant.top_score", results.get(0).getScore());
             }
@@ -137,13 +137,13 @@ public class TracedQdrantClient {
      */
     public UpdateResult upsert(String collectionName, List<PointStruct> points)
             throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Upsert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Qdrant Upsert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
-            span.setAttribute("qdrant.collection", collectionName);
-            span.setAttribute("qdrant.points_count", (long) points.size());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) points.size());
 
             // Try to capture vector dimensions from the first point
             if (!points.isEmpty() && points.get(0).hasVectors()) {
@@ -183,12 +183,12 @@ public class TracedQdrantClient {
      */
     public UpdateResult delete(String collectionName, Filter filter)
             throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Delete", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Qdrant Delete", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
-            span.setAttribute("qdrant.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
             span.setAttribute("qdrant.has_filter", true);
 
             // Execute delete
@@ -220,12 +220,12 @@ public class TracedQdrantClient {
     public List<RetrievedPoint> get(String collectionName, List<PointId> pointIds,
                                      boolean withPayload, boolean withVectors)
             throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Get", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Qdrant Get", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
-            span.setAttribute("qdrant.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
             span.setAttribute("qdrant.requested_count", (long) pointIds.size());
 
             // Execute get
@@ -260,12 +260,12 @@ public class TracedQdrantClient {
      */
     public void createCollection(String collectionName, int vectorSize, Distance distance)
             throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Create Collection", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Qdrant Create Collection", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
-            span.setAttribute("qdrant.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
             span.setAttribute("qdrant.vector_size", (long) vectorSize);
             span.setAttribute("qdrant.distance", distance.name());
 
@@ -296,10 +296,10 @@ public class TracedQdrantClient {
      * @throws InterruptedException if interrupted
      */
     public List<String> listCollections() throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant List Collections", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Qdrant List Collections", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "qdrant");
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
 
             List<String> collections = client.listCollectionsAsync().get();
 

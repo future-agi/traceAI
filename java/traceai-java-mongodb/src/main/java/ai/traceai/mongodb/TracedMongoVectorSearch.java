@@ -76,9 +76,9 @@ public class TracedMongoVectorSearch {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "mongodb");
-            span.setAttribute("mongodb.collection", collectionName);
-            span.setAttribute("mongodb.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "mongodb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) limit);
             span.setAttribute("mongodb.num_candidates", (long) numCandidates);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.size());
@@ -111,7 +111,7 @@ public class TracedMongoVectorSearch {
             }
 
             // Capture results
-            span.setAttribute("mongodb.results_count", (long) documents.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) documents.size());
 
             // Capture top score if available
             if (!documents.isEmpty() && documents.get(0).containsKey("score")) {
@@ -154,9 +154,9 @@ public class TracedMongoVectorSearch {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "mongodb");
-            span.setAttribute("mongodb.collection", collectionName);
-            span.setAttribute("mongodb.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "mongodb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) limit);
             span.setAttribute("mongodb.num_candidates", (long) numCandidates);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.size());
@@ -196,7 +196,7 @@ public class TracedMongoVectorSearch {
             }
 
             // Capture results
-            span.setAttribute("mongodb.results_count", (long) documents.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) documents.size());
 
             span.setStatus(StatusCode.OK);
             return documents;
@@ -215,11 +215,11 @@ public class TracedMongoVectorSearch {
      * @param document the document to insert
      */
     public void insertOne(Document document) {
-        Span span = tracer.startSpan("MongoDB Insert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("MongoDB Insert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "mongodb");
-            span.setAttribute("mongodb.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "mongodb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
 
             collection.insertOne(document);
 
@@ -239,12 +239,12 @@ public class TracedMongoVectorSearch {
      * @param documents the documents to insert
      */
     public void insertMany(List<Document> documents) {
-        Span span = tracer.startSpan("MongoDB Insert Many", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("MongoDB Insert Many", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "mongodb");
-            span.setAttribute("mongodb.collection", collectionName);
-            span.setAttribute("mongodb.insert_count", (long) documents.size());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "mongodb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documents.size());
 
             collection.insertMany(documents);
 
@@ -265,15 +265,15 @@ public class TracedMongoVectorSearch {
      * @return number of deleted documents
      */
     public long deleteMany(Document filter) {
-        Span span = tracer.startSpan("MongoDB Delete", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("MongoDB Delete", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "mongodb");
-            span.setAttribute("mongodb.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "mongodb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
 
             long deletedCount = collection.deleteMany(filter).getDeletedCount();
 
-            span.setAttribute("mongodb.deleted_count", deletedCount);
+            span.setAttribute(SemanticConventions.DB_VECTOR_DELETE_COUNT, deletedCount);
             span.setStatus(StatusCode.OK);
             return deletedCount;
 

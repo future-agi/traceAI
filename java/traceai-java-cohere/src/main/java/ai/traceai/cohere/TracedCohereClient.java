@@ -130,8 +130,10 @@ public class TracedCohereClient {
             response.getToolCalls().ifPresent(toolCalls -> {
                 for (int i = 0; i < toolCalls.size(); i++) {
                     ToolCall toolCall = toolCalls.get(i);
-                    span.setAttribute("llm.tool_calls." + i + ".name", toolCall.getName());
-                    span.setAttribute("llm.tool_calls." + i + ".parameters",
+                    span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                        + SemanticConventions.TOOL_CALL_FUNCTION_NAME, toolCall.getName());
+                    span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                        + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
                         tracer.toJson(toolCall.getParameters()));
                 }
             });
@@ -253,16 +255,16 @@ public class TracedCohereClient {
 
             // Capture query
             tracer.setInputValue(span, request.getQuery());
-            span.setAttribute("cohere.rerank.query", request.getQuery());
+            span.setAttribute(SemanticConventions.GEN_AI_RERANKER_QUERY, request.getQuery());
 
             // Capture documents count
             if (request.getDocuments() != null) {
-                span.setAttribute("cohere.rerank.documents_count", (long) request.getDocuments().size());
+                span.setAttribute(SemanticConventions.GEN_AI_RERANKER_INPUT_DOCUMENTS, (long) request.getDocuments().size());
             }
 
             // Capture top_n
             request.getTopN().ifPresent(topN ->
-                span.setAttribute("cohere.rerank.top_n", topN.longValue()));
+                span.setAttribute(SemanticConventions.GEN_AI_RERANKER_TOP_N, topN.longValue()));
 
             tracer.setRawInput(span, request);
 
@@ -271,7 +273,7 @@ public class TracedCohereClient {
 
             // Capture output
             if (response.getResults() != null) {
-                span.setAttribute("cohere.rerank.results_count", (long) response.getResults().size());
+                span.setAttribute(SemanticConventions.GEN_AI_RERANKER_OUTPUT_DOCUMENTS, (long) response.getResults().size());
 
                 // Capture top result
                 if (!response.getResults().isEmpty()) {

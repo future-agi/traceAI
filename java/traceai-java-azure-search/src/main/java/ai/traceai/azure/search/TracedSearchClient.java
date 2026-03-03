@@ -41,8 +41,7 @@ public class TracedSearchClient {
     private final FITracer tracer;
     private final String indexName;
 
-    private static final String LLM_SYSTEM = "azure-search";
-    private static final String DB_SYSTEM = "azure-ai-search";
+    private static final String DB_SYSTEM_VALUE = "azure-ai-search";
 
     /**
      * Creates a new traced Azure Search client with the given client and tracer.
@@ -244,16 +243,15 @@ public class TracedSearchClient {
      * @return the index documents result
      */
     public <T> IndexDocumentsResult uploadDocuments(Iterable<T> documents) {
-        Span span = tracer.startSpan("Azure Search Upload Documents", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Azure Search Upload Documents", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute("db.system", DB_SYSTEM);
-            span.setAttribute("azure_search.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, DB_SYSTEM_VALUE);
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "upload");
 
             int documentCount = countDocuments(documents);
-            span.setAttribute("azure_search.documents_count", (long) documentCount);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documentCount);
 
             // Execute upload
             IndexDocumentsResult result = searchClient.uploadDocuments(documents);
@@ -279,16 +277,15 @@ public class TracedSearchClient {
      * @return the index documents result
      */
     public <T> IndexDocumentsResult mergeOrUploadDocuments(Iterable<T> documents) {
-        Span span = tracer.startSpan("Azure Search Merge or Upload Documents", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Azure Search Merge or Upload Documents", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute("db.system", DB_SYSTEM);
-            span.setAttribute("azure_search.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, DB_SYSTEM_VALUE);
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "merge_or_upload");
 
             int documentCount = countDocuments(documents);
-            span.setAttribute("azure_search.documents_count", (long) documentCount);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documentCount);
 
             // Execute merge or upload
             IndexDocumentsResult result = searchClient.mergeOrUploadDocuments(documents);
@@ -314,16 +311,15 @@ public class TracedSearchClient {
      * @return the index documents result
      */
     public <T> IndexDocumentsResult deleteDocuments(Iterable<T> documents) {
-        Span span = tracer.startSpan("Azure Search Delete Documents", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Azure Search Delete Documents", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute("db.system", DB_SYSTEM);
-            span.setAttribute("azure_search.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, DB_SYSTEM_VALUE);
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "delete");
 
             int documentCount = countDocuments(documents);
-            span.setAttribute("azure_search.documents_count", (long) documentCount);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documentCount);
 
             // Execute delete
             IndexDocumentsResult result = searchClient.deleteDocuments(documents);
@@ -350,12 +346,11 @@ public class TracedSearchClient {
      * @return the retrieved document
      */
     public <T> T getDocument(String key, Class<T> modelClass) {
-        Span span = tracer.startSpan("Azure Search Get Document", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Azure Search Get Document", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute("db.system", DB_SYSTEM);
-            span.setAttribute("azure_search.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, DB_SYSTEM_VALUE);
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "get_document");
             span.setAttribute("azure_search.document_key", key);
 
@@ -385,12 +380,11 @@ public class TracedSearchClient {
      * @return the document count
      */
     public long getDocumentCount() {
-        Span span = tracer.startSpan("Azure Search Get Document Count", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Azure Search Get Document Count", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-            span.setAttribute("db.system", DB_SYSTEM);
-            span.setAttribute("azure_search.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, DB_SYSTEM_VALUE);
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("azure_search.operation", "get_document_count");
 
             // Execute get document count
@@ -431,9 +425,8 @@ public class TracedSearchClient {
      * Sets common attributes for search operations.
      */
     private void setCommonAttributes(Span span, int topK, int embeddingDimensions, String searchMode) {
-        span.setAttribute(SemanticConventions.LLM_SYSTEM, LLM_SYSTEM);
-        span.setAttribute("db.system", DB_SYSTEM);
-        span.setAttribute("azure_search.index", indexName);
+        span.setAttribute(SemanticConventions.DB_SYSTEM, DB_SYSTEM_VALUE);
+        span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
         span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
         span.setAttribute("azure_search.search_mode", searchMode);
 
@@ -447,7 +440,7 @@ public class TracedSearchClient {
      */
     private void captureSearchResults(Span span, SearchPagedIterable results) {
         if (results == null) {
-            span.setAttribute("azure_search.results_count", 0L);
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, 0L);
             return;
         }
 
@@ -462,7 +455,7 @@ public class TracedSearchClient {
             }
         });
 
-        span.setAttribute("azure_search.results_count", (long) count.get());
+        span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) count.get());
         if (topScore.get() != null) {
             span.setAttribute("azure_search.top_score", topScore.get());
         }

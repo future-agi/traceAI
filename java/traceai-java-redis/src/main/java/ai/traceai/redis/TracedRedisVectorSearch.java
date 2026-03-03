@@ -68,12 +68,12 @@ public class TracedRedisVectorSearch {
             int dimensions,
             String distanceMetric,
             String algorithm) {
-        Span span = tracer.startSpan("Redis Create Index", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Redis Create Index", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "redis");
-            span.setAttribute("redis.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "redis");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("redis.vector_field", vectorField);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) dimensions);
             span.setAttribute("redis.distance_metric", distanceMetric);
@@ -124,8 +124,8 @@ public class TracedRedisVectorSearch {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "redis");
-            span.setAttribute("redis.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "redis");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.length);
 
@@ -145,7 +145,7 @@ public class TracedRedisVectorSearch {
             SearchResult result = jedis.ftSearch(indexName, query);
 
             // Capture results
-            span.setAttribute("redis.results_count", result.getTotalResults());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, result.getTotalResults());
 
             // Capture top score if available
             if (!result.getDocuments().isEmpty()) {
@@ -181,8 +181,8 @@ public class TracedRedisVectorSearch {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "redis");
-            span.setAttribute("redis.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "redis");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.length);
 
@@ -208,7 +208,7 @@ public class TracedRedisVectorSearch {
             SearchResult result = jedis.ftSearch(indexName, query);
 
             // Capture results
-            span.setAttribute("redis.results_count", result.getTotalResults());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, result.getTotalResults());
 
             span.setStatus(StatusCode.OK);
             return result;
@@ -229,11 +229,11 @@ public class TracedRedisVectorSearch {
      * @param metadata  additional metadata fields
      */
     public void addDocument(String key, float[] vector, Map<String, String> metadata) {
-        Span span = tracer.startSpan("Redis Add Document", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Redis Add Document", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "redis");
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "redis");
             span.setAttribute("redis.key", key);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) vector.length);
 
@@ -269,10 +269,10 @@ public class TracedRedisVectorSearch {
      * @param key the document key
      */
     public void deleteDocument(String key) {
-        Span span = tracer.startSpan("Redis Delete Document", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Redis Delete Document", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "redis");
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "redis");
             span.setAttribute("redis.key", key);
 
             jedis.del(key);
