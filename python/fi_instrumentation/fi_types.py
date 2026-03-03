@@ -224,6 +224,9 @@ class SpanAttributes:
     METADATA = "metadata"
     TAG_TAGS = "tag.tags"
 
+    # Session attributes
+    SESSION_ID = "session.id"
+
     # User attributes
     USER_ID = "user.id"
 
