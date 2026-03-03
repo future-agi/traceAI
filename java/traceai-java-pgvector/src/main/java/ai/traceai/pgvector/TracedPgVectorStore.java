@@ -215,11 +215,11 @@ public class TracedPgVectorStore {
      * @throws SQLException if a database error occurs
      */
     public void createTable(String tableName, int dimensions) throws SQLException {
-        Span span = tracer.startSpan("PgVector Create Table", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("PgVector Create Table", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) dimensions);
             span.setAttribute("db.operation", "CREATE TABLE");
 
@@ -275,11 +275,11 @@ public class TracedPgVectorStore {
      */
     public void createIndex(String tableName, String indexType, int lists, DistanceFunction distanceFunction)
             throws SQLException {
-        Span span = tracer.startSpan("PgVector Create Index", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("PgVector Create Index", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute("pgvector.index_type", indexType);
             span.setAttribute("pgvector.index_lists", (long) lists);
             span.setAttribute("pgvector.distance_function", distanceFunction.getName());
@@ -333,11 +333,11 @@ public class TracedPgVectorStore {
      */
     public void insert(String tableName, String id, float[] embedding, Map<String, Object> metadata)
             throws SQLException {
-        Span span = tracer.startSpan("PgVector Insert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("PgVector Insert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute("pgvector.vector_id", id);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) embedding.length);
             span.setAttribute("db.operation", "INSERT");
@@ -403,7 +403,7 @@ public class TracedPgVectorStore {
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.length);
             span.setAttribute("db.operation", "SELECT");
@@ -459,7 +459,7 @@ public class TracedPgVectorStore {
                 }
             }
 
-            span.setAttribute("pgvector.results_count", (long) results.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) results.size());
 
             if (!results.isEmpty()) {
                 span.setAttribute("pgvector.top_distance", results.get(0).getDistance());
@@ -485,11 +485,11 @@ public class TracedPgVectorStore {
      * @throws SQLException if a database error occurs
      */
     public boolean delete(String tableName, String id) throws SQLException {
-        Span span = tracer.startSpan("PgVector Delete", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("PgVector Delete", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute("pgvector.vector_id", id);
             span.setAttribute("db.operation", "DELETE");
 
@@ -503,7 +503,7 @@ public class TracedPgVectorStore {
                     pstmt.setString(1, id);
                     int rowsAffected = pstmt.executeUpdate();
 
-                    span.setAttribute("pgvector.rows_deleted", (long) rowsAffected);
+                    span.setAttribute(SemanticConventions.DB_VECTOR_DELETE_COUNT, (long) rowsAffected);
                     span.setStatus(StatusCode.OK);
 
                     return rowsAffected > 0;
@@ -526,11 +526,11 @@ public class TracedPgVectorStore {
      * @throws SQLException if a database error occurs
      */
     public int deleteAll(String tableName) throws SQLException {
-        Span span = tracer.startSpan("PgVector Delete All", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("PgVector Delete All", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute("db.operation", "DELETE");
 
             try (Connection conn = getConnection();
@@ -543,7 +543,7 @@ public class TracedPgVectorStore {
 
                 int rowsAffected = stmt.executeUpdate(sql);
 
-                span.setAttribute("pgvector.rows_deleted", (long) rowsAffected);
+                span.setAttribute(SemanticConventions.DB_VECTOR_DELETE_COUNT, (long) rowsAffected);
                 span.setStatus(StatusCode.OK);
 
                 return rowsAffected;
@@ -572,12 +572,12 @@ public class TracedPgVectorStore {
             throw new IllegalArgumentException("ids and embeddings must have the same size");
         }
 
-        Span span = tracer.startSpan("PgVector Batch Insert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("PgVector Batch Insert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
-            span.setAttribute("pgvector.batch_size", (long) ids.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) ids.size());
             span.setAttribute("db.operation", "INSERT");
 
             if (!embeddings.isEmpty()) {
@@ -624,11 +624,11 @@ public class TracedPgVectorStore {
      * @throws SQLException if a database error occurs
      */
     public long count(String tableName) throws SQLException {
-        Span span = tracer.startSpan("PgVector Count", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("PgVector Count", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute("db.operation", "SELECT COUNT");
 
             try (Connection conn = getConnection();
@@ -667,11 +667,11 @@ public class TracedPgVectorStore {
      * @throws SQLException if a database error occurs
      */
     public void dropTable(String tableName) throws SQLException {
-        Span span = tracer.startSpan("PgVector Drop Table", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("PgVector Drop Table", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             setCommonAttributes(span);
-            span.setAttribute("pgvector.table_name", tableName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, tableName);
             span.setAttribute("db.operation", "DROP TABLE");
 
             try (Connection conn = getConnection();
@@ -708,8 +708,7 @@ public class TracedPgVectorStore {
     }
 
     private void setCommonAttributes(Span span) {
-        span.setAttribute(SemanticConventions.LLM_SYSTEM, "pgvector");
-        span.setAttribute("db.system", "postgresql");
+        span.setAttribute(SemanticConventions.DB_SYSTEM, "pgvector");
         if (databaseName != null) {
             span.setAttribute("db.name", databaseName);
         }

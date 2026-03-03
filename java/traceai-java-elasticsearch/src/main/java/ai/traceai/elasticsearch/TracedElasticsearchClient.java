@@ -74,9 +74,8 @@ public class TracedElasticsearchClient {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "elasticsearch");
-            span.setAttribute("db.system", "elasticsearch");
-            span.setAttribute("elasticsearch.index", index);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "elasticsearch");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, index);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) k);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.length);
             span.setAttribute("elasticsearch.num_candidates", (long) numCandidates);
@@ -102,7 +101,7 @@ public class TracedElasticsearchClient {
 
             // Capture results
             List<Hit<Map<String, Object>>> hits = response.hits().hits();
-            span.setAttribute("elasticsearch.results_count", (long) hits.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) hits.size());
             if (!hits.isEmpty() && hits.get(0).score() != null) {
                 span.setAttribute("elasticsearch.top_score", hits.get(0).score());
             }
@@ -141,9 +140,8 @@ public class TracedElasticsearchClient {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "elasticsearch");
-            span.setAttribute("db.system", "elasticsearch");
-            span.setAttribute("elasticsearch.index", index);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "elasticsearch");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, index);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) k);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.length);
             span.setAttribute("elasticsearch.num_candidates", (long) numCandidates);
@@ -171,7 +169,7 @@ public class TracedElasticsearchClient {
 
             // Capture results
             List<Hit<Map<String, Object>>> hits = response.hits().hits();
-            span.setAttribute("elasticsearch.results_count", (long) hits.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) hits.size());
             if (!hits.isEmpty() && hits.get(0).score() != null) {
                 span.setAttribute("elasticsearch.top_score", hits.get(0).score());
             }
@@ -200,13 +198,12 @@ public class TracedElasticsearchClient {
      * @throws IOException if indexing fails
      */
     public IndexResponse index(String indexName, String id, Map<String, Object> document) throws IOException {
-        Span span = tracer.startSpan("Elasticsearch Index Document", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Elasticsearch Index Document", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "elasticsearch");
-            span.setAttribute("db.system", "elasticsearch");
-            span.setAttribute("elasticsearch.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "elasticsearch");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("elasticsearch.document_id", id);
 
             // Try to capture vector dimensions if present
@@ -254,14 +251,13 @@ public class TracedElasticsearchClient {
      * @throws IOException if bulk indexing fails
      */
     public BulkResponse bulkIndex(String indexName, List<Map<String, Object>> documents) throws IOException {
-        Span span = tracer.startSpan("Elasticsearch Bulk Index", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Elasticsearch Bulk Index", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "elasticsearch");
-            span.setAttribute("db.system", "elasticsearch");
-            span.setAttribute("elasticsearch.index", indexName);
-            span.setAttribute("elasticsearch.bulk_count", (long) documents.size());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "elasticsearch");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) documents.size());
 
             // Try to capture vector dimensions from first document
             if (!documents.isEmpty()) {
@@ -338,13 +334,12 @@ public class TracedElasticsearchClient {
      * @throws IOException if deletion fails
      */
     public DeleteResponse delete(String indexName, String id) throws IOException {
-        Span span = tracer.startSpan("Elasticsearch Delete Document", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Elasticsearch Delete Document", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "elasticsearch");
-            span.setAttribute("db.system", "elasticsearch");
-            span.setAttribute("elasticsearch.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "elasticsearch");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("elasticsearch.document_id", id);
 
             // Execute delete
@@ -376,13 +371,12 @@ public class TracedElasticsearchClient {
      * @throws IOException if index creation fails
      */
     public CreateIndexResponse createIndex(String indexName, Map<String, Property> mappings) throws IOException {
-        Span span = tracer.startSpan("Elasticsearch Create Index", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Elasticsearch Create Index", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "elasticsearch");
-            span.setAttribute("db.system", "elasticsearch");
-            span.setAttribute("elasticsearch.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "elasticsearch");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("elasticsearch.mappings_count", (long) mappings.size());
 
             // Try to capture vector dimensions from dense_vector mapping

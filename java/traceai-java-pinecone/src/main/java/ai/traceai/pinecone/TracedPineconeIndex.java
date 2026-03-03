@@ -64,8 +64,8 @@ public class TracedPineconeIndex {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "pinecone");
-            span.setAttribute("pinecone.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "pinecone");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.size());
 
@@ -84,7 +84,7 @@ public class TracedPineconeIndex {
 
             // Capture results
             if (response.getMatchesList() != null) {
-                span.setAttribute("pinecone.matches_count", (long) response.getMatchesList().size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) response.getMatchesList().size());
 
                 // Capture top match score
                 if (!response.getMatchesList().isEmpty()) {
@@ -122,13 +122,13 @@ public class TracedPineconeIndex {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "pinecone");
-            span.setAttribute("pinecone.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "pinecone");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) topK);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) queryVector.size());
 
             if (namespace != null) {
-                span.setAttribute("pinecone.namespace", namespace);
+                span.setAttribute(SemanticConventions.DB_VECTOR_NAMESPACE, namespace);
             }
             if (filter != null) {
                 span.setAttribute("pinecone.filter", tracer.toJson(filter));
@@ -155,7 +155,7 @@ public class TracedPineconeIndex {
 
             // Capture results
             if (response.getMatchesList() != null) {
-                span.setAttribute("pinecone.matches_count", (long) response.getMatchesList().size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) response.getMatchesList().size());
             }
 
             span.setStatus(StatusCode.OK);
@@ -178,16 +178,16 @@ public class TracedPineconeIndex {
      * @return the number of vectors submitted for upsert
      */
     public int upsert(List<VectorWithUnsignedIndices> vectors, String namespace) {
-        Span span = tracer.startSpan("Pinecone Upsert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Pinecone Upsert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "pinecone");
-            span.setAttribute("pinecone.index", indexName);
-            span.setAttribute("pinecone.vectors_count", (long) vectors.size());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "pinecone");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) vectors.size());
 
             if (namespace != null) {
-                span.setAttribute("pinecone.namespace", namespace);
+                span.setAttribute(SemanticConventions.DB_VECTOR_NAMESPACE, namespace);
             }
 
             if (!vectors.isEmpty()) {
@@ -200,7 +200,7 @@ public class TracedPineconeIndex {
 
             // Capture result
             int upsertedCount = vectors.size();
-            span.setAttribute("pinecone.upserted_count", (long) upsertedCount);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) upsertedCount);
 
             span.setStatus(StatusCode.OK);
             return upsertedCount;
@@ -220,16 +220,16 @@ public class TracedPineconeIndex {
      * @param namespace the namespace (optional)
      */
     public void deleteByIds(List<String> ids, String namespace) {
-        Span span = tracer.startSpan("Pinecone Delete", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Pinecone Delete", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "pinecone");
-            span.setAttribute("pinecone.index", indexName);
-            span.setAttribute("pinecone.delete_count", (long) ids.size());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "pinecone");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_DELETE_COUNT, (long) ids.size());
 
             if (namespace != null) {
-                span.setAttribute("pinecone.namespace", namespace);
+                span.setAttribute(SemanticConventions.DB_VECTOR_NAMESPACE, namespace);
             }
 
             // Execute delete
@@ -254,16 +254,16 @@ public class TracedPineconeIndex {
      * @return the fetched vectors as a map
      */
     public java.util.Map<String, Object> fetch(List<String> ids, String namespace) {
-        Span span = tracer.startSpan("Pinecone Fetch", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Pinecone Fetch", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "pinecone");
-            span.setAttribute("pinecone.index", indexName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "pinecone");
+            span.setAttribute(SemanticConventions.DB_VECTOR_INDEX_NAME, indexName);
             span.setAttribute("pinecone.fetch_ids_count", (long) ids.size());
 
             if (namespace != null) {
-                span.setAttribute("pinecone.namespace", namespace);
+                span.setAttribute(SemanticConventions.DB_VECTOR_NAMESPACE, namespace);
             }
 
             // Execute fetch - use reflection to safely handle the return type

@@ -57,7 +57,30 @@ public enum FISpanKind {
      * Represents a generic workflow operation.
      * Used for custom pipeline steps.
      */
-    WORKFLOW("WORKFLOW");
+    WORKFLOW("WORKFLOW"),
+
+    /**
+     * Represents an unknown or unspecified operation type.
+     */
+    UNKNOWN("UNKNOWN"),
+
+    /**
+     * Represents an evaluation/assessment operation.
+     * Used for quality scoring and assessment of AI outputs.
+     */
+    EVALUATOR("EVALUATOR"),
+
+    /**
+     * Represents a conversation operation.
+     * Used for voice and conversational AI sessions.
+     */
+    CONVERSATION("CONVERSATION"),
+
+    /**
+     * Represents a vector database operation.
+     * Used for vector store queries, upserts, and deletes.
+     */
+    VECTOR_DB("VECTOR_DB");
 
     private final String value;
 
