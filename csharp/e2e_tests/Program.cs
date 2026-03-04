@@ -241,6 +241,195 @@ await RunTest("Nested Spans (4-level hierarchy)", () =>
     return Task.CompletedTask;
 });
 
+// ─── Test 6: Session - Single Call ──────────────────────────────────
+await RunTest("Session - Single LLM Call with session.id", async () =>
+{
+    var sessionId = $"e2e-session-{Guid.NewGuid().ToString("N")[..8]}";
+
+    using (ContextAttributes.UsingSession(sessionId))
+    {
+        await tracer.ChainAsync("session-single-chain", async span =>
+        {
+            span.SetInput("Say 'session test' and nothing else.");
+
+            await tracer.LlmAsync("gemini-session-single", async llmSpan =>
+            {
+                llmSpan.SetAttribute(SemanticConventions.GenAiRequestModel, model);
+                llmSpan.SetAttribute(SemanticConventions.GenAiProviderName, "google");
+
+                var messages = new[]
+                {
+                    new { role = "user", content = "Say 'session test' and nothing else." }
+                };
+                llmSpan.SetInputMessages(messages.Select(m =>
+                    new Dictionary<string, string> { ["role"] = m.role, ["content"] = m.content }).ToList());
+
+                var body = JsonSerializer.Serialize(new { model, messages });
+                var resp = await httpClient.PostAsync(googleEndpoint,
+                    new StringContent(body, Encoding.UTF8, "application/json"));
+                var respBody = await resp.Content.ReadAsStringAsync();
+
+                Console.WriteLine($"  [session={sessionId}] Status: {resp.StatusCode}");
+                llmSpan.SetOutput(respBody);
+                return respBody;
+            });
+
+            span.SetOutput("Session single call complete");
+        });
+    }
+});
+
+// ─── Test 7: Session - Multi-turn Same Session ──────────────────────
+await RunTest("Session - Multi-turn Same Session", async () =>
+{
+    var sessionId = $"e2e-multiturn-{Guid.NewGuid().ToString("N")[..8]}";
+
+    using (ContextAttributes.UsingSession(sessionId))
+    {
+        // Turn 1
+        await tracer.LlmAsync("gemini-turn-1", async llmSpan =>
+        {
+            llmSpan.SetAttribute(SemanticConventions.GenAiRequestModel, model);
+            var messages = new[]
+            {
+                new { role = "user", content = "My name is Alice. Remember it." }
+            };
+            llmSpan.SetInputMessages(messages.Select(m =>
+                new Dictionary<string, string> { ["role"] = m.role, ["content"] = m.content }).ToList());
+
+            var body = JsonSerializer.Serialize(new { model, messages });
+            var resp = await httpClient.PostAsync(googleEndpoint,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            var respBody = await resp.Content.ReadAsStringAsync();
+
+            Console.WriteLine($"  [session={sessionId}] Turn 1 status: {resp.StatusCode}");
+            llmSpan.SetOutput(respBody);
+            return respBody;
+        });
+
+        // Turn 2 - same session
+        await tracer.LlmAsync("gemini-turn-2", async llmSpan =>
+        {
+            llmSpan.SetAttribute(SemanticConventions.GenAiRequestModel, model);
+            var messages = new[]
+            {
+                new { role = "user", content = "What name did I just tell you?" }
+            };
+            llmSpan.SetInputMessages(messages.Select(m =>
+                new Dictionary<string, string> { ["role"] = m.role, ["content"] = m.content }).ToList());
+
+            var body = JsonSerializer.Serialize(new { model, messages });
+            var resp = await httpClient.PostAsync(googleEndpoint,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+            var respBody = await resp.Content.ReadAsStringAsync();
+
+            Console.WriteLine($"  [session={sessionId}] Turn 2 status: {resp.StatusCode}");
+            llmSpan.SetOutput(respBody);
+            return respBody;
+        });
+    }
+});
+
+// ─── Test 8: Session - Different Sessions Are Separate ──────────────
+await RunTest("Session - Different Sessions Are Separate", async () =>
+{
+    var sessionA = $"e2e-sess-a-{Guid.NewGuid().ToString("N")[..8]}";
+    var sessionB = $"e2e-sess-b-{Guid.NewGuid().ToString("N")[..8]}";
+
+    using (ContextAttributes.UsingSession(sessionA))
+    {
+        await tracer.LlmAsync("gemini-session-a", async llmSpan =>
+        {
+            llmSpan.SetAttribute(SemanticConventions.GenAiRequestModel, model);
+            var messages = new[] { new { role = "user", content = "Say 'session A'." } };
+            llmSpan.SetInputMessages(messages.Select(m =>
+                new Dictionary<string, string> { ["role"] = m.role, ["content"] = m.content }).ToList());
+
+            var body = JsonSerializer.Serialize(new { model, messages });
+            var resp = await httpClient.PostAsync(googleEndpoint,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+
+            Console.WriteLine($"  [session={sessionA}] Status: {resp.StatusCode}");
+            llmSpan.SetOutput(await resp.Content.ReadAsStringAsync());
+        });
+    }
+
+    using (ContextAttributes.UsingSession(sessionB))
+    {
+        await tracer.LlmAsync("gemini-session-b", async llmSpan =>
+        {
+            llmSpan.SetAttribute(SemanticConventions.GenAiRequestModel, model);
+            var messages = new[] { new { role = "user", content = "Say 'session B'." } };
+            llmSpan.SetInputMessages(messages.Select(m =>
+                new Dictionary<string, string> { ["role"] = m.role, ["content"] = m.content }).ToList());
+
+            var body = JsonSerializer.Serialize(new { model, messages });
+            var resp = await httpClient.PostAsync(googleEndpoint,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+
+            Console.WriteLine($"  [session={sessionB}] Status: {resp.StatusCode}");
+            llmSpan.SetOutput(await resp.Content.ReadAsStringAsync());
+        });
+    }
+});
+
+// ─── Test 9: Session with User + Metadata + Tags ────────────────────
+await RunTest("Session with User, Metadata, and Tags", async () =>
+{
+    var sessionId = $"e2e-attrs-{Guid.NewGuid().ToString("N")[..8]}";
+
+    using (ContextAttributes.UsingAttributes(
+        sessionId: sessionId,
+        userId: "e2e-test-user",
+        metadata: new Dictionary<string, object>
+        {
+            ["test_run"] = "session_e2e",
+            ["framework"] = "csharp"
+        },
+        tags: new List<string> { "session-test", "e2e" }))
+    {
+        await tracer.LlmAsync("gemini-session-attrs", async llmSpan =>
+        {
+            llmSpan.SetAttribute(SemanticConventions.GenAiRequestModel, model);
+            var messages = new[]
+            {
+                new { role = "user", content = "What is 2 + 2? Reply with just the number." }
+            };
+            llmSpan.SetInputMessages(messages.Select(m =>
+                new Dictionary<string, string> { ["role"] = m.role, ["content"] = m.content }).ToList());
+
+            var body = JsonSerializer.Serialize(new { model, messages });
+            var resp = await httpClient.PostAsync(googleEndpoint,
+                new StringContent(body, Encoding.UTF8, "application/json"));
+
+            Console.WriteLine($"  [session={sessionId}] Status: {resp.StatusCode}");
+            llmSpan.SetOutput(await resp.Content.ReadAsStringAsync());
+        });
+    }
+});
+
+// ─── Test 10: No Session Still Works ────────────────────────────────
+await RunTest("No Session - Trace works without session context", async () =>
+{
+    await tracer.LlmAsync("gemini-no-session", async llmSpan =>
+    {
+        llmSpan.SetAttribute(SemanticConventions.GenAiRequestModel, model);
+        var messages = new[]
+        {
+            new { role = "user", content = "Say 'no session' and nothing else." }
+        };
+        llmSpan.SetInputMessages(messages.Select(m =>
+            new Dictionary<string, string> { ["role"] = m.role, ["content"] = m.content }).ToList());
+
+        var body = JsonSerializer.Serialize(new { model, messages });
+        var resp = await httpClient.PostAsync(googleEndpoint,
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        Console.WriteLine($"  [no session] Status: {resp.StatusCode}");
+        llmSpan.SetOutput(await resp.Content.ReadAsStringAsync());
+    });
+});
+
 // ─── Summary ────────────────────────────────────────────────────────
 // Give batch processor a moment to flush
 await Task.Delay(2000);
