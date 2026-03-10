@@ -6,7 +6,7 @@
 
     <groupId>ai.traceai.examples</groupId>
     <artifactId>elasticsearch-example</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
     <name>TraceAI Elasticsearch Example</name>
     <description>Example demonstrating TraceAI instrumentation with Elasticsearch vector search</description>
 
@@ -21,7 +21,7 @@
         <dependency>
             <groupId>ai.traceai</groupId>
             <artifactId>traceai-java-elasticsearch</artifactId>
-            <version>0.1.0-SNAPSHOT</version>
+            <version>1.0.0</version>
         </dependency>
 
         <!-- Elasticsearch Java Client -->

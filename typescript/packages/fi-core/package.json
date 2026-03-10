@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-core",
-  "version": "0.1.16",
+  "version": "1.0.0",
   "description": "Core OpenTelemetry instrumentation for TypeScript",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
