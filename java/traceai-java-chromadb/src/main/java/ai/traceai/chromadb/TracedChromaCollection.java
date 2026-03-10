@@ -78,8 +78,8 @@ public class TracedChromaCollection {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
-            span.setAttribute("chromadb.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "chromadb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) nResults);
 
             if (queryTexts != null) {
@@ -107,7 +107,7 @@ public class TracedChromaCollection {
 
             // Capture results
             if (response != null && response.getIds() != null && !response.getIds().isEmpty()) {
-                span.setAttribute("chromadb.results_count", (long) response.getIds().get(0).size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) response.getIds().get(0).size());
 
                 // Capture top distance if available
                 if (response.getDistances() != null && !response.getDistances().isEmpty()
@@ -142,13 +142,13 @@ public class TracedChromaCollection {
             List<Map<String, String>> metadatas,
             List<String> documents,
             List<String> ids) throws Exception {
-        Span span = tracer.startSpan("ChromaDB Add", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("ChromaDB Add", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
-            span.setAttribute("chromadb.collection", collectionName);
-            span.setAttribute("chromadb.add_count", (long) ids.size());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "chromadb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) ids.size());
 
             if (embeddings != null && !embeddings.isEmpty()) {
                 span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
@@ -183,13 +183,13 @@ public class TracedChromaCollection {
             List<Map<String, String>> metadatas,
             List<String> documents,
             List<String> ids) throws Exception {
-        Span span = tracer.startSpan("ChromaDB Upsert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("ChromaDB Upsert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
-            span.setAttribute("chromadb.collection", collectionName);
-            span.setAttribute("chromadb.upsert_count", (long) ids.size());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "chromadb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+            span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) ids.size());
 
             // Execute upsert
             collection.upsert(embeddings, metadatas, documents, ids);
@@ -216,15 +216,15 @@ public class TracedChromaCollection {
             List<String> ids,
             Map<String, Object> where,
             Map<String, Object> whereDocument) throws Exception {
-        Span span = tracer.startSpan("ChromaDB Delete", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("ChromaDB Delete", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
-            span.setAttribute("chromadb.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "chromadb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
 
             if (ids != null) {
-                span.setAttribute("chromadb.delete_ids_count", (long) ids.size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_DELETE_COUNT, (long) ids.size());
             }
             if (where != null) {
                 span.setAttribute("chromadb.has_where_filter", true);
@@ -258,12 +258,12 @@ public class TracedChromaCollection {
             List<String> ids,
             Map<String, String> where,
             Map<String, Object> whereDocument) throws Exception {
-        Span span = tracer.startSpan("ChromaDB Get", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("ChromaDB Get", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
-            span.setAttribute("chromadb.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "chromadb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
 
             if (ids != null) {
                 span.setAttribute("chromadb.get_ids_count", (long) ids.size());
@@ -295,11 +295,11 @@ public class TracedChromaCollection {
      * @throws Exception if count fails
      */
     public int count() throws Exception {
-        Span span = tracer.startSpan("ChromaDB Count", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("ChromaDB Count", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "chromadb");
-            span.setAttribute("chromadb.collection", collectionName);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "chromadb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
 
             Integer count = collection.count();
 

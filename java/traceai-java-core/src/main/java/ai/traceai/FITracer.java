@@ -61,6 +61,7 @@ public class FITracer {
 
         Span span = builder.startSpan();
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind.getValue());
+        applyContextAttributes(span);
 
         return span;
     }
@@ -79,6 +80,7 @@ public class FITracer {
 
         Span span = builder.startSpan();
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind.getValue());
+        applyContextAttributes(span);
 
         return span;
     }
@@ -298,5 +300,15 @@ public class FITracer {
             return value.substring(0, maxLength - 13) + "...[truncated]";
         }
         return value;
+    }
+
+    /**
+     * Applies thread-local context attributes (session, user, metadata, tags) to a span.
+     * @param span the span to apply attributes to
+     */
+    private void applyContextAttributes(Span span) {
+        for (Map.Entry<String, String> entry : ContextAttributes.getAttributesFromContext().entrySet()) {
+            span.setAttribute(entry.getKey(), entry.getValue());
+        }
     }
 }

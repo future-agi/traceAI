@@ -342,12 +342,17 @@ public class TracedAzureOpenAIClient {
                     ChatCompletionsToolCall toolCall = message.getToolCalls().get(i);
                     if (toolCall instanceof ChatCompletionsFunctionToolCall) {
                         ChatCompletionsFunctionToolCall functionToolCall = (ChatCompletionsFunctionToolCall) toolCall;
-                        span.setAttribute("llm.output_messages." + index + ".tool_calls." + i + ".id",
-                            functionToolCall.getId());
+                        span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index
+                            + "." + SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                            + SemanticConventions.TOOL_CALL_ID, functionToolCall.getId());
                         if (functionToolCall.getFunction() != null) {
-                            span.setAttribute("llm.output_messages." + index + ".tool_calls." + i + ".function.name",
+                            span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index
+                                + "." + SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                                + SemanticConventions.TOOL_CALL_FUNCTION_NAME,
                                 functionToolCall.getFunction().getName());
-                            span.setAttribute("llm.output_messages." + index + ".tool_calls." + i + ".function.arguments",
+                            span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES + "." + index
+                                + "." + SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                                + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
                                 functionToolCall.getFunction().getArguments());
                         }
                     }

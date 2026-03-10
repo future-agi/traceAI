@@ -8,6 +8,7 @@ from opentelemetry.util.types import AttributeValue
 from typing_extensions import Self
 
 CONTEXT_ATTRIBUTES = (
+    SpanAttributes.SESSION_ID,
     SpanAttributes.GEN_AI_CONVERSATION_ID,
     SpanAttributes.USER_ID,
     SpanAttributes.METADATA,
@@ -50,6 +51,7 @@ class _UsingAttributesContextManager(ContextDecorator):
     def attach_context(self) -> None:
         ctx = get_current()
         if self._session_id:
+            ctx = set_value(SpanAttributes.SESSION_ID, self._session_id, ctx)
             ctx = set_value(SpanAttributes.GEN_AI_CONVERSATION_ID, self._session_id, ctx)
         if self._user_id:
             ctx = set_value(SpanAttributes.USER_ID, self._user_id, ctx)

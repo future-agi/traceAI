@@ -1,9 +1,10 @@
 """
 E2E Tests for Guardrails AI SDK Instrumentation
 
-Tests Guardrails AI instrumentation using Google's OpenAI-compatible endpoint.
+Tests Guardrails AI instrumentation using litellm's gemini provider.
 """
 
+import os
 import pytest
 import time
 
@@ -15,6 +16,9 @@ def setup_guardrails():
     """Set up Guardrails AI with instrumentation."""
     if not config.has_google():
         pytest.skip("GOOGLE_API_KEY not set")
+
+    # Guardrails 0.5+ uses litellm internally; set GEMINI_API_KEY for routing
+    os.environ.setdefault("GEMINI_API_KEY", config.google_api_key)
 
     from fi_instrumentation import register
     try:
@@ -43,21 +47,14 @@ class TestGuardrailsBasic:
     def test_simple_guard(self, setup_guardrails):
         """Test simple guard with string validation."""
         from guardrails import Guard
-        from openai import OpenAI
-
-        client = OpenAI(
-            base_url=config.google_openai_base_url,
-            api_key=config.google_api_key,
-        )
 
         guard = Guard()
 
         result = guard(
-            model=config.google_model,
+            model="gemini/gemini-2.0-flash",
             messages=[
                 {"role": "user", "content": "What is 2+2? Answer with just the number."}
             ],
-            client=client,
             max_tokens=10,
         )
 
@@ -69,25 +66,18 @@ class TestGuardrailsBasic:
         """Test guard with Pydantic output model."""
         from pydantic import BaseModel
         from guardrails import Guard
-        from openai import OpenAI
 
         class CityInfo(BaseModel):
             name: str
             country: str
 
-        client = OpenAI(
-            base_url=config.google_openai_base_url,
-            api_key=config.google_api_key,
-        )
-
         guard = Guard.for_pydantic(output_class=CityInfo)
 
         result = guard(
-            model=config.google_model,
+            model="gemini/gemini-2.0-flash",
             messages=[
                 {"role": "user", "content": "Tell me about Paris, the capital of France."}
             ],
-            client=client,
             max_tokens=100,
         )
 

@@ -63,8 +63,8 @@ public class TracedMilvusClient {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
-            span.setAttribute("milvus.collection", request.getCollectionName());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "milvus");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, request.getCollectionName());
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) request.getTopK());
 
             // Capture vector dimensions if available
@@ -88,7 +88,7 @@ public class TracedMilvusClient {
             // Capture results
             List<List<SearchResp.SearchResult>> results = response.getSearchResults();
             if (results != null && !results.isEmpty()) {
-                span.setAttribute("milvus.results_count", (long) results.get(0).size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) results.get(0).size());
                 if (!results.get(0).isEmpty()) {
                     span.setAttribute("milvus.top_score", results.get(0).get(0).getScore());
                 }
@@ -113,17 +113,17 @@ public class TracedMilvusClient {
      * @return the insert response
      */
     public InsertResp insert(InsertReq request) {
-        Span span = tracer.startSpan("Milvus Insert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Milvus Insert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
-            span.setAttribute("milvus.collection", request.getCollectionName());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "milvus");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, request.getCollectionName());
 
             // getData() returns List<JsonObject> in Milvus SDK v2.6.x
             List<?> data = request.getData();
             if (data != null) {
-                span.setAttribute("milvus.insert_count", (long) data.size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) data.size());
             }
 
             // Execute insert
@@ -151,17 +151,17 @@ public class TracedMilvusClient {
      * @return the upsert response
      */
     public UpsertResp upsert(UpsertReq request) {
-        Span span = tracer.startSpan("Milvus Upsert", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Milvus Upsert", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
-            span.setAttribute("milvus.collection", request.getCollectionName());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "milvus");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, request.getCollectionName());
 
             // getData() returns List<JsonObject> in Milvus SDK v2.6.x
             List<?> data = request.getData();
             if (data != null) {
-                span.setAttribute("milvus.upsert_count", (long) data.size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) data.size());
             }
 
             // Execute upsert
@@ -188,18 +188,18 @@ public class TracedMilvusClient {
      * @return the delete response
      */
     public DeleteResp delete(DeleteReq request) {
-        Span span = tracer.startSpan("Milvus Delete", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Milvus Delete", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
-            span.setAttribute("milvus.collection", request.getCollectionName());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "milvus");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, request.getCollectionName());
 
             if (request.getFilter() != null) {
                 span.setAttribute("milvus.filter", request.getFilter());
             }
             if (request.getIds() != null) {
-                span.setAttribute("milvus.delete_ids_count", (long) request.getIds().size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_DELETE_COUNT, (long) request.getIds().size());
             }
 
             // Execute delete
@@ -226,12 +226,12 @@ public class TracedMilvusClient {
      * @return the get response
      */
     public GetResp get(GetReq request) {
-        Span span = tracer.startSpan("Milvus Get", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Milvus Get", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
-            span.setAttribute("milvus.collection", request.getCollectionName());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "milvus");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, request.getCollectionName());
 
             if (request.getIds() != null) {
                 span.setAttribute("milvus.requested_ids_count", (long) request.getIds().size());
@@ -267,8 +267,8 @@ public class TracedMilvusClient {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "milvus");
-            span.setAttribute("milvus.collection", request.getCollectionName());
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "milvus");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, request.getCollectionName());
 
             if (request.getFilter() != null) {
                 span.setAttribute("milvus.filter", request.getFilter());
@@ -284,7 +284,7 @@ public class TracedMilvusClient {
 
             // Capture result
             if (response.getQueryResults() != null) {
-                span.setAttribute("milvus.results_count", (long) response.getQueryResults().size());
+                span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) response.getQueryResults().size());
             }
 
             span.setStatus(StatusCode.OK);

@@ -70,8 +70,8 @@ public class TracedWeaviateClient {
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "weaviate");
-            span.setAttribute("weaviate.class", className);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "weaviate");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, className);
             span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, (long) limit);
             span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) vector.length);
 
@@ -108,7 +108,7 @@ public class TracedWeaviateClient {
                     Map<String, Object> get = (Map<String, Object>) data.get("Get");
                     if (get.containsKey(className)) {
                         List<?> items = (List<?>) get.get(className);
-                        span.setAttribute("weaviate.results_count", (long) items.size());
+                        span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) items.size());
                     }
                 }
             }
@@ -133,12 +133,12 @@ public class TracedWeaviateClient {
      * @return the created object
      */
     public Result<WeaviateObject> createObject(String className, Map<String, Object> properties, Float[] vector) {
-        Span span = tracer.startSpan("Weaviate Create Object", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Weaviate Create Object", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "weaviate");
-            span.setAttribute("weaviate.class", className);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "weaviate");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, className);
 
             if (vector != null) {
                 span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) vector.length);
@@ -180,15 +180,15 @@ public class TracedWeaviateClient {
      * @return the batch result
      */
     public Result<ObjectGetResponse[]> batchImport(WeaviateObject... objects) {
-        Span span = tracer.startSpan("Weaviate Batch Import", FISpanKind.EMBEDDING);
+        Span span = tracer.startSpan("Weaviate Batch Import", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "weaviate");
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "weaviate");
             span.setAttribute("weaviate.batch_size", (long) objects.length);
 
             if (objects.length > 0 && objects[0].getClassName() != null) {
-                span.setAttribute("weaviate.class", objects[0].getClassName());
+                span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, objects[0].getClassName());
             }
 
             // Execute batch
@@ -222,12 +222,12 @@ public class TracedWeaviateClient {
      * @return the delete result
      */
     public Result<Boolean> deleteObject(String className, String id) {
-        Span span = tracer.startSpan("Weaviate Delete Object", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Weaviate Delete Object", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "weaviate");
-            span.setAttribute("weaviate.class", className);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "weaviate");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, className);
             span.setAttribute("weaviate.object_id", id);
 
             // Execute delete
@@ -255,12 +255,12 @@ public class TracedWeaviateClient {
      * @return the object
      */
     public Result<List<WeaviateObject>> getObject(String className, String id) {
-        Span span = tracer.startSpan("Weaviate Get Object", FISpanKind.RETRIEVER);
+        Span span = tracer.startSpan("Weaviate Get Object", FISpanKind.VECTOR_DB);
 
         try (Scope scope = span.makeCurrent()) {
             // Set attributes
-            span.setAttribute(SemanticConventions.LLM_SYSTEM, "weaviate");
-            span.setAttribute("weaviate.class", className);
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "weaviate");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, className);
             span.setAttribute("weaviate.object_id", id);
 
             // Execute get
