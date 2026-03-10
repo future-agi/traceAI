@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-anthropic"
-version = "0.1.9"
+version = "0.1.10"
 description = "OpenTelemetry instrumentation for Anthropic"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
