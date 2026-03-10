@@ -12,8 +12,6 @@ from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     SpanAttributes,
 )
-from openai._legacy_response import LegacyAPIResponse
-from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.create_embedding_response import CreateEmbeddingResponse
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
@@ -31,7 +29,6 @@ from traceai_openai._span_io_handler import add_io_to_span_attributes
 from traceai_openai._stream import _AsyncStream, _ResponseAccumulator, _Stream
 from traceai_openai._utils import (
     _as_input_attributes,
-    _as_output_attributes,
     _finish_tracing,
     _io_value_and_type,
     safe_json_dumps,
@@ -143,19 +140,19 @@ class _WithOpenAI(ABC):
         ):
             return
         if host.endswith("api.openai.com"):
-            yield SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.OPENAI.value
+            yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.OPENAI.value
         elif host.endswith("openai.azure.com"):
-            yield SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.AZURE.value
+            yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.AZURE.value
         elif host.endswith("googleapis.com"):
-            yield SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.GOOGLE.value
+            yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.GOOGLE.value
 
     def _get_attributes_from_request(
         self,
         cast_to: type,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield SpanAttributes.FI_SPAN_KIND, self._get_span_kind(cast_to=cast_to)
-        yield SpanAttributes.LLM_SYSTEM, FiLLMSystemValues.OPENAI.value
+        yield SpanAttributes.GEN_AI_SPAN_KIND, self._get_span_kind(cast_to=cast_to)
+        yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMSystemValues.OPENAI.value
         try:
             yield from _as_input_attributes(
                 _io_value_and_type(request_parameters),
@@ -298,10 +295,7 @@ class _Request(_WithTracer, _WithOpenAI):
         ) as with_span:
             # Add input data to span attributes before the request
             with_span.set_attribute(
-                SpanAttributes.RAW_INPUT, safe_json_dumps(request_parameters)
-            )
-            with_span.set_attribute(
-                SpanAttributes.LLM_TOOLS, safe_json_dumps(llm_tools)
+                SpanAttributes.GEN_AI_TOOL_DEFINITIONS, safe_json_dumps(llm_tools)
             )
             add_io_to_span_attributes(with_span, input_data, None)
             try:
@@ -315,9 +309,6 @@ class _Request(_WithTracer, _WithOpenAI):
 
                 # Add output data to span attributes after getting response
                 if not self._is_streaming(response):
-                    with_span.set_attribute(
-                        SpanAttributes.RAW_OUTPUT, _get_raw_output(response)
-                    )
                     add_io_to_span_attributes(
                         with_span,
                         None,
@@ -379,10 +370,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
         ) as with_span:
             # Add input data to span attributes before the request
             with_span.set_attribute(
-                SpanAttributes.RAW_INPUT, safe_json_dumps(request_parameters)
-            )
-            with_span.set_attribute(
-                SpanAttributes.LLM_TOOLS, safe_json_dumps(llm_tools)
+                SpanAttributes.GEN_AI_TOOL_DEFINITIONS, safe_json_dumps(llm_tools)
             )
             add_io_to_span_attributes(with_span, input_data, None)
             try:
@@ -392,11 +380,6 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                     embedding = response.to_dict()
                     with_span.set_attribute(
                         SpanAttributes.EMBEDDING_EMBEDDINGS, safe_json_dumps(embedding)
-                    )
-
-                if not self._is_streaming(response):
-                    with_span.set_attribute(
-                        SpanAttributes.RAW_OUTPUT, _get_raw_output(response)
                     )
 
                 add_io_to_span_attributes(
@@ -474,28 +457,32 @@ class _ResponseAttributes:
         self._response_attributes_extractor = response_attributes_extractor
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
-        yield from _as_output_attributes(
-            _io_value_and_type(self._response),
-        )
+        # Extract just the assistant's response content, not the full API response
+        output_content = None
+        response = self._response
+
+        if hasattr(response, "choices") and response.choices:
+            first_choice = response.choices[0]
+            if hasattr(first_choice, "message"):
+                message = first_choice.message
+                if hasattr(message, "tool_calls") and message.tool_calls:
+                    # Handle tool calls
+                    tool_calls = [
+                        f"Function: {tc.function.name}({tc.function.arguments})"
+                        for tc in message.tool_calls
+                        if tc.type == "function"
+                    ]
+                    output_content = " \n ".join(tool_calls)
+                elif getattr(message, "content", None):
+                    output_content = message.content
+            elif hasattr(first_choice, "text"):
+                output_content = first_choice.text
+
+        if output_content:
+            yield SpanAttributes.OUTPUT_VALUE, output_content
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         yield from self._response_attributes_extractor.get_attributes_from_response(
             response=self._response,
             request_parameters=self._request_parameters,
         )
-
-
-def _get_raw_output(response):
-    if isinstance(response, ChatCompletion):
-        return safe_json_dumps(response.to_dict())
-    elif isinstance(response, LegacyAPIResponse):
-        parsed_response = response.parse()
-        if hasattr(parsed_response, "dict") and callable(parsed_response.dict):
-            parsed_response = parsed_response.dict()
-            return safe_json_dumps(parsed_response)
-        else:
-            return safe_json_dumps(str(parsed_response))
-    elif hasattr(response, "to_dict") and callable(response.to_dict):
-        return safe_json_dumps(response.to_dict())
-    else:
-        return safe_json_dumps(str(response))

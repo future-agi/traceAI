@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "traceAI-cohere"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Cohere - embeddings, chat, and rerank"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "traceai_cohere" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+fi-instrumentation-otel = ">=0.1.11"
+cohere = ">=5.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

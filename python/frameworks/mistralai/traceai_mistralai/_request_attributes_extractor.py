@@ -47,7 +47,7 @@ def _get_attributes_from_chat_completion_create_param(
     invocation_params.pop("messages", None)
     invocation_params.pop("functions", None)
     invocation_params.pop("tools", None)
-    yield SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_json_dumps(invocation_params)
+    yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_params)
     if (input_messages := params.get("messages")) and isinstance(
         input_messages, Iterable
     ):
@@ -55,7 +55,7 @@ def _get_attributes_from_chat_completion_create_param(
         # 128 attributes per span, and flattening increases the number of attributes very quickly.
         for index, input_message in reversed(list(enumerate(input_messages))):
             for key, value in _get_attributes_from_message_param(input_message):
-                yield f"{SpanAttributes.LLM_INPUT_MESSAGES}.{index}.{key}", value
+                yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{key}", value
 
 
 def _get_attributes_from_message_param(

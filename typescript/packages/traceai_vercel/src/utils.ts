@@ -238,92 +238,59 @@ import {
     if (typeof promptMessages !== "string") {
       return null;
     }
-  
+
     const messages = safelyJSONParse(promptMessages);
-  
+
     if (!isArrayOfObjects(messages)) {
       return null;
     }
-  
-    return messages.reduce((acc: Attributes, message, index) => {
-      const MESSAGE_PREFIX = `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}`;
+
+    // Convert Vercel messages to JSON blob format
+    const serialized = messages.map((message) => {
+      const msg: Record<string, unknown> = {};
+      if (typeof message.role === "string") msg.role = message.role;
+
       if (message.role === "tool") {
-        return {
-          ...acc,
-          ...message,
-          [`${MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_ROLE}`]: message.role,
-          [`${MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_TOOL_CALL_ID}`]:
-            Array.isArray(message.content)
-              ? typeof message.content[0]?.toolCallId === "string"
-                ? message.content[0].toolCallId
-                : undefined
-              : typeof message.toolCallId === "string"
-                ? message.toolCallId
-                : undefined,
-          [`${MESSAGE_PREFIX}.${SemanticConventions.TOOL_NAME}`]: Array.isArray(
-            message.content,
-          )
-            ? typeof message.content[0]?.toolName === "string"
-              ? message.content[0].toolName
+        const toolContent = Array.isArray(message.content)
+          ? typeof message.content[0]?.result === "string"
+            ? message.content[0].result
+            : message.content[0]?.result
+              ? JSON.stringify(message.content[0].result)
               : undefined
-            : typeof message.toolName === "string"
-              ? message.toolName
-              : undefined,
-          [`${MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_CONTENT}`]:
-            Array.isArray(message.content)
-              ? typeof message.content[0]?.result === "string"
-                ? message.content[0].result
-                : message.content[0]?.result
-                  ? JSON.stringify(message.content[0].result)
-                  : undefined
-              : typeof message.content === "string"
-                ? message.content
-                : undefined,
-        };
+          : typeof message.content === "string"
+            ? message.content
+            : undefined;
+        if (toolContent) msg.content = toolContent;
+        const toolCallId = Array.isArray(message.content)
+          ? message.content[0]?.toolCallId
+          : message.toolCallId;
+        if (typeof toolCallId === "string") msg.tool_call_id = toolCallId;
       } else if (isArrayOfObjects(message.content)) {
-        const messageAttributes = message.content.reduce(
-          (acc: Attributes, content, contentIndex) => {
-            const CONTENTS_PREFIX = `${MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_CONTENTS}.${contentIndex}`;
-            const TOOL_CALL_PREFIX = `${MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_TOOL_CALLS}.${contentIndex}`;
-            return {
-              ...acc,
-              [`${CONTENTS_PREFIX}.${SemanticConventions.MESSAGE_CONTENT_TYPE}`]:
-                typeof content.type === "string" ? content.type : undefined,
-              [`${CONTENTS_PREFIX}.${SemanticConventions.MESSAGE_CONTENT_TEXT}`]:
-                typeof content.text === "string" ? content.text : undefined,
-              [`${CONTENTS_PREFIX}.${SemanticConventions.MESSAGE_CONTENT_IMAGE}`]:
-                typeof content.image === "string" ? content.image : undefined,
-              [`${TOOL_CALL_PREFIX}.${SemanticConventions.TOOL_CALL_ID}`]:
-                typeof content.toolCallId === "string"
-                  ? content.toolCallId
-                  : undefined,
-              [`${TOOL_CALL_PREFIX}.${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`]:
-                typeof content.toolName === "string"
-                  ? content.toolName
-                  : undefined,
-              [`${TOOL_CALL_PREFIX}.${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`]:
-                typeof content.args === "string"
-                  ? content.args
-                  : typeof content.args === "object"
-                    ? JSON.stringify(content.args)
-                    : undefined,
-            };
-          },
-          {},
-        );
-        acc = {
-          ...acc,
-          ...messageAttributes,
-        };
+        // Extract text content and tool calls from multi-part content
+        const textParts = message.content
+          .filter((c: any) => typeof c.text === "string")
+          .map((c: any) => c.text)
+          .join("");
+        if (textParts) msg.content = textParts;
+        const toolCalls = message.content
+          .filter((c: any) => c.toolName || c.toolCallId)
+          .map((c: any) => ({
+            id: c.toolCallId,
+            function: {
+              name: c.toolName,
+              arguments: typeof c.args === "string" ? c.args : typeof c.args === "object" ? JSON.stringify(c.args) : undefined,
+            },
+          }));
+        if (toolCalls.length > 0) msg.tool_calls = toolCalls;
       } else if (typeof message.content === "string") {
-        acc[`${MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_CONTENT}`] =
-          message.content;
+        msg.content = message.content;
       }
-      acc[
-        `${SemanticConventions.LLM_INPUT_MESSAGES}.${index}.${SemanticConventions.MESSAGE_ROLE}`
-      ] = typeof message.role === "string" ? message.role : undefined;
-      return acc;
-    }, {});
+      return msg;
+    });
+
+    return {
+      [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]",
+    };
   };
   
   /**
@@ -343,28 +310,26 @@ import {
     if (typeof toolCalls !== "string") {
       return null;
     }
-  
+
     const parsedToolCalls = safelyJSONParse(toolCalls);
-  
+
     if (!isArrayOfObjects(parsedToolCalls)) {
       return null;
     }
-  
-    const OUTPUT_MESSAGE_PREFIX = `${SemanticConventions.LLM_OUTPUT_MESSAGES}.0`;
+
+    // Convert to JSON blob format
+    const msg: Record<string, unknown> = {
+      role: "assistant",
+      tool_calls: parsedToolCalls.map((toolCall) => ({
+        function: {
+          name: isAttributeValue(toolCall.toolName) ? toolCall.toolName : undefined,
+          arguments: safelyJSONStringify(toolCall.args) ?? undefined,
+        },
+      })),
+    };
+
     return {
-      [`${OUTPUT_MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_ROLE}`]:
-        "assistant",
-      ...parsedToolCalls.reduce((acc: Attributes, toolCall, index) => {
-        const TOOL_CALL_PREFIX = `${OUTPUT_MESSAGE_PREFIX}.${SemanticConventions.MESSAGE_TOOL_CALLS}.${index}`;
-        const toolCallArgsJSON = safelyJSONStringify(toolCall.args);
-        return {
-          ...acc,
-          [`${TOOL_CALL_PREFIX}.${SemanticConventions.TOOL_CALL_FUNCTION_NAME}`]:
-            isAttributeValue(toolCall.toolName) ? toolCall.toolName : undefined,
-          [`${TOOL_CALL_PREFIX}.${SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}`]:
-            toolCallArgsJSON != null ? toolCallArgsJSON : undefined,
-        };
-      }, {}),
+      [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
     };
   };
   

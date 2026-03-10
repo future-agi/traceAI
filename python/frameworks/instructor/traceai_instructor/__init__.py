@@ -16,13 +16,14 @@ from traceai_instructor._wrappers import _HandleResponseWrapper, _PatchWrapper
 from traceai_instructor.version import __version__
 from wrapt import wrap_function_wrapper
 
-_instruments = ("instructor >= 0.0.1",)
+_instruments = ("instructor >= 1.0.0",)
 
 
 class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
     __slots__ = (
         "_tracer",
-        "_original_handle_response_model",
+        "_original_create",
+        "_original_async_create",
         "_original_patch",
     )
 
@@ -45,12 +46,18 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
         patch_wrapper = _PatchWrapper(tracer=self._tracer)
         wrap_function_wrapper("instructor", "patch", patch_wrapper)
 
-        self._original_handle_response_model = getattr(
-            import_module("instructor.patch"), "handle_response_model", None
-        )
-        process_resp_wrapper = _HandleResponseWrapper(tracer=self._tracer)
+        # Wrap Instructor.create and AsyncInstructor.create — these are the
+        # actual entry points for structured-output LLM calls in instructor 1.x+.
+        # (The old instructor.patch.handle_response_model was removed in 1.0.)
+        create_wrapper = _HandleResponseWrapper(tracer=self._tracer)
+        client_module = import_module("instructor.core.client")
+        self._original_create = getattr(client_module.Instructor, "create", None)
+        self._original_async_create = getattr(client_module.AsyncInstructor, "create", None)
         wrap_function_wrapper(
-            "instructor.patch", "handle_response_model", process_resp_wrapper
+            "instructor.core.client", "Instructor.create", create_wrapper
+        )
+        wrap_function_wrapper(
+            "instructor.core.client", "AsyncInstructor.create", create_wrapper
         )
 
         if Protect is not None:
@@ -60,6 +67,8 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
                 name="Protect.protect",
                 wrapper=GuardrailProtectWrapper(tracer=self._tracer),
             )
+        else:
+            self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
         if self._original_patch is not None:
@@ -67,7 +76,10 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
             instructor_module.patch = self._original_patch  # type: ignore[attr-defined]
             self._original_patch = None
 
-        if self._original_handle_response_model is not None:
-            patch_module = import_module("instructor.patch")
-            patch_module.handle_response_model = self._original_handle_response_model  # type: ignore[attr-defined]
-            self._original_handle_response_model = None
+        client_module = import_module("instructor.core.client")
+        if self._original_create is not None:
+            client_module.Instructor.create = self._original_create
+            self._original_create = None
+        if self._original_async_create is not None:
+            client_module.AsyncInstructor.create = self._original_async_create
+            self._original_async_create = None

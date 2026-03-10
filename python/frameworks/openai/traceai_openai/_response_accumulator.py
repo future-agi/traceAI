@@ -81,9 +81,26 @@ class _ResponsesAccumulator:
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
             return
-        yield from _as_output_attributes(
-            _io_value_and_type(result),
-        )
+        # Extract just the assistant's response content, not the full API response
+        output_content = None
+        if hasattr(result, "output") and result.output:
+            # For Responses API, extract output items
+            output_items = []
+            for item in result.output:
+                if hasattr(item, "content") and item.content:
+                    for content in item.content:
+                        if hasattr(content, "text"):
+                            output_items.append(content.text)
+            if output_items:
+                output_content = " ".join(output_items)
+
+        if output_content:
+            yield SpanAttributes.OUTPUT_VALUE, output_content
+        else:
+            # Fallback to full response if we can't extract content
+            yield from _as_output_attributes(
+                _io_value_and_type(result),
+            )
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -161,27 +178,26 @@ class _ChatCompletionAccumulator:
         return self._cached_result
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
-        # Combine the accumulated content and raw data
+        # Combine the accumulated content
         output_value = "".join(self._content)
-        raw_output = safe_json_dumps(self._raw_data)
 
-        last_chunk = self._raw_data[-1]
-        if "usage" in last_chunk:
-            usage = last_chunk["usage"]
-            total_tokens = usage.get("total_tokens")
-            prompt_tokens = usage.get("prompt_tokens")
-            completion_tokens = usage.get("completion_tokens")
+        if self._raw_data:
+            last_chunk = self._raw_data[-1]
+            if "usage" in last_chunk:
+                usage = last_chunk["usage"]
+                total_tokens = usage.get("total_tokens")
+                prompt_tokens = usage.get("prompt_tokens")
+                completion_tokens = usage.get("completion_tokens")
 
-            if total_tokens is not None:
-                yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_tokens
-            if prompt_tokens is not None:
-                yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
-            if completion_tokens is not None:
-                yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+                if total_tokens is not None:
+                    yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
+                if prompt_tokens is not None:
+                    yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
+                if completion_tokens is not None:
+                    yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
 
+        # Only yield the assistant's response content, not the raw API response
         yield SpanAttributes.OUTPUT_VALUE, output_value
-        yield SpanAttributes.RAW_OUTPUT, raw_output
-        yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
@@ -239,10 +255,22 @@ class _CompletionAccumulator:
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
             return
-        json_string = safe_json_dumps(result)
-        yield from _as_output_attributes(
-            _ValueAndType(json_string, FiMimeTypeValues.JSON),
-        )
+        # Extract just the text content for legacy completions API
+        output_content = None
+        choices = result.get("choices", [])
+        if choices:
+            texts = [c.get("text", "") for c in choices if c.get("text")]
+            if texts:
+                output_content = "".join(texts)
+
+        if output_content:
+            yield SpanAttributes.OUTPUT_VALUE, output_content
+        else:
+            # Fallback to full response
+            json_string = safe_json_dumps(result)
+            yield from _as_output_attributes(
+                _ValueAndType(json_string, FiMimeTypeValues.JSON),
+            )
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):

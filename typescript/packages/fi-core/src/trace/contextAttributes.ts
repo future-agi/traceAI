@@ -122,6 +122,7 @@ import {
     if (typeof maybeSessionId === "string") {
       return { sessionId: maybeSessionId };
     }
+    return undefined;
   }
   
   export function setMetadata(context: Context, attributes: Metadata): Context {
@@ -139,6 +140,7 @@ import {
       const parsedMetadata = safelyJSONParse(maybeMetadata);
       return isObjectWithStringKeys(parsedMetadata) ? parsedMetadata : undefined;
     }
+    return undefined;
   }
   
   export function setUser(context: Context, attributes: User): Context {
@@ -155,6 +157,7 @@ import {
     if (typeof maybeUserId === "string") {
       return { userId: maybeUserId };
     }
+    return undefined;
   }
   
   export function setTags(context: Context, attributes: Tags): Context {
@@ -171,6 +174,7 @@ import {
       const parsedTags = safelyJSONParse(maybeTags);
       return isStringArray(parsedTags) ? parsedTags : undefined;
     }
+    return undefined;
   }
   
   export function setAttributes(
@@ -190,6 +194,7 @@ import {
       const parsedAttributes = safelyJSONParse(maybeAttributes);
       return isAttributes(parsedAttributes) ? parsedAttributes : undefined;
     }
+    return undefined;
   }
   
   /**

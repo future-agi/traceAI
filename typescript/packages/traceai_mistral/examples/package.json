@@ -1,0 +1,23 @@
+{
+  "name": "@traceai/mistral-examples",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Examples for @traceai/mistral instrumentation",
+  "scripts": {
+    "example": "npx ts-node example.ts"
+  },
+  "dependencies": {
+    "@mistralai/mistralai": "^1.0.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/instrumentation": "^0.200.0",
+    "@opentelemetry/sdk-trace-node": "^2.0.0",
+    "@traceai/fi-core": "workspace:*",
+    "@traceai/mistral": "workspace:*",
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,12 +1,11 @@
 import contextvars
 import logging
-from importlib import import_module, metadata
+from importlib import import_module
 from typing import Any, Collection
 
 from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
-from packaging.version import Version
 from traceai_guardrails._wrap_guard_call import (
     _ParseCallableWrapper,
     _PostValidationWrapper,
@@ -17,7 +16,7 @@ from wrapt import ObjectProxy, wrap_function_wrapper
 
 logger = logging.getLogger(__name__)
 
-_instruments = ("guardrails-ai>=0.4.5,<0.5.1",)
+_instruments = ("guardrails-ai>=0.5.0",)
 
 _VALIDATION_MODULE = "guardrails.validator_service"
 _LLM_PROVIDERS_MODULE = "guardrails.llm_providers"
@@ -48,13 +47,6 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
 
     def _instrument(self, **kwargs: Any) -> None:
         try:
-            version = Version(metadata.version("guardrails-ai"))
-            if (version.major, version.minor, version.micro) >= (0, 5, 1):
-                logger.info(
-                    "Guardrails version >= 0.5.1 detected, skipping instrumentation"
-                )
-                return
-
             import guardrails as gd
 
             if not (tracer_provider := kwargs.get("tracer_provider")):
@@ -70,14 +62,6 @@ class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
 
             gd.guard.contextvars = _Contextvars(gd.guard.contextvars)
             gd.async_guard.contextvars = _Contextvars(gd.async_guard.contextvars)
-            for name in ("pydantic", "string", "rail_string", "rail"):
-                wrap_function_wrapper(
-                    module="guardrails.guard",
-                    name=f"Guard.from_{name}",
-                    wrapper=lambda f, _, args, kwargs: f(
-                        *args, **{**kwargs, "tracer": self._tracer}
-                    ),
-                )
 
             runner_module = import_module(_RUNNER_MODULE)
             self._original_guardrails_runner_step = runner_module.Runner.step

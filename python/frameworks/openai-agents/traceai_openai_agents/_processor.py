@@ -85,7 +85,7 @@ class FiTracingProcessor(TracingProcessor):
         otel_span = self._tracer.start_span(
             name=trace.name,
             attributes={
-                FI_SPAN_KIND: FiSpanKindValues.AGENT.value,
+                GEN_AI_SPAN_KIND: FiSpanKindValues.AGENT.value,
             },
         )
         self._root_spans[trace.trace_id] = otel_span
@@ -106,7 +106,7 @@ class FiTracingProcessor(TracingProcessor):
                     for k, v in _get_attributes_from_input(initial_input):
                         root_span.set_attribute(k, v)
             if final_output := self._trace_outputs.pop(trace.trace_id, None):
-                root_span.set_attribute(RAW_OUTPUT, final_output.model_dump_json())
+                root_span.set_attribute(OUTPUT_VALUE, final_output.model_dump_json())
                 if text_output := _get_text_from_response(final_output):
                     root_span.set_attribute(OUTPUT_VALUE, text_output)
                 for k, v in _get_attributes_from_response(final_output):
@@ -136,9 +136,9 @@ class FiTracingProcessor(TracingProcessor):
             context=context,
             start_time=_as_utc_nano(start_time),
             attributes={
-                FI_SPAN_KIND: _get_span_kind(span.span_data),
-                LLM_SYSTEM: FiLLMSystemValues.OPENAI.value,
-                RAW_INPUT: safe_json_dumps(_to_dict(span.span_data)),
+                GEN_AI_SPAN_KIND: _get_span_kind(span.span_data),
+                GEN_AI_PROVIDER_NAME: FiLLMSystemValues.OPENAI.value,
+                INPUT_VALUE: safe_json_dumps(_to_dict(span.span_data)),
             },
         )
         self._otel_spans[span.span_id] = otel_span
@@ -165,13 +165,13 @@ class FiTracingProcessor(TracingProcessor):
             if hasattr(data, "response") and isinstance(response := data.response, Response):
                 self._trace_outputs[span.trace_id] = response
                 otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
-                otel_span.set_attribute(RAW_OUTPUT, response.model_dump_json())
+                otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
                 if text_output := _get_text_from_response(response):
                     otel_span.set_attribute(OUTPUT_VALUE, text_output)
                 for k, v in _get_attributes_from_response(response):
                     otel_span.set_attribute(k, v)
             if hasattr(data, "input") and (input := data.input):
-                otel_span.set_attribute(RAW_INPUT, safe_json_dumps(input))
+                otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(input))
                 if isinstance(input, str):
                     otel_span.set_attribute(INPUT_VALUE, input)
                 elif isinstance(input, list):
@@ -196,14 +196,14 @@ class FiTracingProcessor(TracingProcessor):
                 if hasattr(data, "response") and isinstance(
                     response := data.response, Response
                 ):
-                    parent_otel_span.set_attribute(RAW_OUTPUT, response.model_dump_json())
+                    parent_otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
                     if text_output := _get_text_from_response(response):
                         parent_otel_span.set_attribute(OUTPUT_VALUE, text_output)
                     for k, v in _get_attributes_from_response(response):
                         parent_otel_span.set_attribute(k, v)
         elif isinstance(data, GenerationSpanData):
-            otel_span.set_attribute(RAW_INPUT, safe_json_dumps(data.input))
-            otel_span.set_attribute(RAW_OUTPUT, safe_json_dumps(data.output))
+            otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(data.input))
+            otel_span.set_attribute(OUTPUT_VALUE, safe_json_dumps(data.output))
             for k, v in _get_attributes_from_generation_span_data(data):
                 otel_span.set_attribute(k, v)
         elif isinstance(data, FunctionSpanData):
@@ -282,7 +282,7 @@ def _get_attributes_from_input(
     msg_idx: int = 1,
 ) -> Iterator[tuple[str, AttributeValue]]:
     for i, item in enumerate(obj, msg_idx):
-        prefix = f"{LLM_INPUT_MESSAGES}.{i}."
+        prefix = f"{GEN_AI_INPUT_MESSAGES}.{i}."
         if "type" not in item:
             if "role" in item and "content" in item:
                 yield from _get_attributes_from_message_param(
@@ -408,14 +408,14 @@ def _get_attributes_from_generation_span_data(
     obj: GenerationSpanData,
 ) -> Iterator[tuple[str, AttributeValue]]:
     if isinstance(model := obj.model, str):
-        yield LLM_MODEL_NAME, model
+        yield GEN_AI_REQUEST_MODEL, model
     if isinstance(obj.model_config, dict) and (
         param := {k: v for k, v in obj.model_config.items() if v is not None}
     ):
-        yield LLM_INVOCATION_PARAMETERS, safe_json_dumps(param)
+        yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(param)
         if base_url := param.get("base_url"):
             if "api.openai.com" in base_url:
-                yield LLM_PROVIDER, FiLLMProviderValues.OPENAI.value
+                yield GEN_AI_PROVIDER_NAME, FiLLMProviderValues.OPENAI.value
     yield from _get_attributes_from_chat_completions_input(obj.input)
     yield from _get_attributes_from_chat_completions_output(obj.output)
     yield from _get_attributes_from_chat_completions_usage(obj.usage)
@@ -440,7 +440,7 @@ def _get_attributes_from_chat_completions_input(
         pass
     yield from _get_attributes_from_chat_completions_message_dicts(
         obj,
-        f"{LLM_INPUT_MESSAGES}.",
+        f"{GEN_AI_INPUT_MESSAGES}.",
     )
 
 
@@ -456,7 +456,7 @@ def _get_attributes_from_chat_completions_output(
         pass
     yield from _get_attributes_from_chat_completions_message_dicts(
         obj,
-        f"{LLM_OUTPUT_MESSAGES}.",
+        f"{GEN_AI_OUTPUT_MESSAGES}.",
     )
 
 
@@ -533,9 +533,9 @@ def _get_attributes_from_chat_completions_usage(
     if not obj:
         return
     if input_tokens := obj.get("input_tokens"):
-        yield LLM_TOKEN_COUNT_PROMPT, input_tokens
+        yield GEN_AI_USAGE_INPUT_TOKENS, input_tokens
     if output_tokens := obj.get("output_tokens"):
-        yield LLM_TOKEN_COUNT_COMPLETION, output_tokens
+        yield GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens
 
 
 # convert dict, tuple, etc into one of these types ['bool', 'str', 'bytes', 'int', 'float']
@@ -552,7 +552,7 @@ def _convert_to_primitive(value: Any) -> Union[bool, str, bytes, int, float]:
 def _get_attributes_from_function_span_data(
     obj: FunctionSpanData,
 ) -> Iterator[tuple[str, AttributeValue]]:
-    yield TOOL_NAME, obj.name
+    yield GEN_AI_TOOL_NAME, obj.name
     if obj.input:
         yield INPUT_VALUE, obj.input
         yield INPUT_MIME_TYPE, JSON
@@ -612,12 +612,12 @@ def _get_attributes_from_response(obj: Response) -> Iterator[tuple[str, Attribut
         yield from _get_attributes_from_response_instruction(obj.instructions)
     else:
         pass  # TODO: handle list instructions
-    yield LLM_MODEL_NAME, obj.model
+    yield GEN_AI_REQUEST_MODEL, obj.model
     param = obj.model_dump(
         exclude_none=True,
         exclude={"object", "tools", "usage", "output", "error", "status"},
     )
-    yield LLM_INVOCATION_PARAMETERS, safe_json_dumps(param)
+    yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(param)
 
 
 def _get_attributes_from_tools(
@@ -628,7 +628,7 @@ def _get_attributes_from_tools(
     for i, tool in enumerate(tools):
         if isinstance(tool, FunctionTool):
             yield (
-                f"{LLM_TOOLS}.{i}.{TOOL_JSON_SCHEMA}",
+                f"{GEN_AI_TOOL_DEFINITIONS}.{i}.{TOOL_JSON_SCHEMA}",
                 safe_json_dumps(
                     {
                         "type": "function",
@@ -652,12 +652,12 @@ def _get_attributes_from_response_output(
     tool_call_idx = 0
     for i, item in enumerate(obj):
         if item.type == "message":
-            prefix = f"{LLM_OUTPUT_MESSAGES}.{msg_idx}."
+            prefix = f"{GEN_AI_OUTPUT_MESSAGES}.{msg_idx}."
             yield from _get_attributes_from_message(item, prefix)
             msg_idx += 1
         elif item.type == "function_call":
-            yield f"{LLM_OUTPUT_MESSAGES}.{msg_idx}.{MESSAGE_ROLE}", "assistant"
-            prefix = f"{LLM_OUTPUT_MESSAGES}.{msg_idx}.{MESSAGE_TOOL_CALLS}.{tool_call_idx}."
+            yield f"{GEN_AI_OUTPUT_MESSAGES}.{msg_idx}.{MESSAGE_ROLE}", "assistant"
+            prefix = f"{GEN_AI_OUTPUT_MESSAGES}.{msg_idx}.{MESSAGE_TOOL_CALLS}.{tool_call_idx}."
             yield from _get_attributes_from_function_tool_call(item, prefix)
             tool_call_idx += 1
         elif item.type == "custom_tool_call":
@@ -695,8 +695,8 @@ def _get_attributes_from_response_instruction(
 ) -> Iterator[tuple[str, AttributeValue]]:
     if not instructions:
         return
-    yield f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_ROLE}", "system"
-    yield f"{LLM_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}", instructions
+    yield f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_ROLE}", "system"
+    yield f"{GEN_AI_INPUT_MESSAGES}.0.{MESSAGE_CONTENT}", instructions
 
 
 def _get_attributes_from_function_tool_call(
@@ -745,11 +745,11 @@ def _get_attributes_from_usage(
 ) -> Iterator[tuple[str, AttributeValue]]:
     if not obj:
         return
-    yield LLM_TOKEN_COUNT_COMPLETION, obj.output_tokens
-    yield LLM_TOKEN_COUNT_PROMPT, obj.input_tokens
-    yield LLM_TOKEN_COUNT_TOTAL, obj.total_tokens
-    yield LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, obj.input_tokens_details.cached_tokens
-    yield LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, obj.output_tokens_details.reasoning_tokens
+    yield GEN_AI_USAGE_OUTPUT_TOKENS, obj.output_tokens
+    yield GEN_AI_USAGE_INPUT_TOKENS, obj.input_tokens
+    yield GEN_AI_USAGE_TOTAL_TOKENS, obj.total_tokens
+    yield GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ, obj.input_tokens_details.cached_tokens
+    yield GEN_AI_USAGE_OUTPUT_TOKENS_REASONING, obj.output_tokens_details.reasoning_tokens
 
 
 def _get_span_status(obj: Span[Any]) -> Status:
@@ -790,29 +790,27 @@ def _to_dict(result: Any) -> Any:
         
 INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
 INPUT_VALUE = SpanAttributes.INPUT_VALUE
-LLM_INPUT_MESSAGES = SpanAttributes.LLM_INPUT_MESSAGES
-LLM_INVOCATION_PARAMETERS = SpanAttributes.LLM_INVOCATION_PARAMETERS
-LLM_MODEL_NAME = SpanAttributes.LLM_MODEL_NAME
-LLM_OUTPUT_MESSAGES = SpanAttributes.LLM_OUTPUT_MESSAGES
-LLM_PROVIDER = SpanAttributes.LLM_PROVIDER
-LLM_SYSTEM = SpanAttributes.LLM_SYSTEM
-LLM_TOKEN_COUNT_COMPLETION = SpanAttributes.LLM_TOKEN_COUNT_COMPLETION
-LLM_TOKEN_COUNT_PROMPT = SpanAttributes.LLM_TOKEN_COUNT_PROMPT
-LLM_TOKEN_COUNT_TOTAL = SpanAttributes.LLM_TOKEN_COUNT_TOTAL
-LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ = SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ
-LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING = (
-    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING
+GEN_AI_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES
+GEN_AI_REQUEST_PARAMETERS = SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+GEN_AI_REQUEST_MODEL = SpanAttributes.GEN_AI_REQUEST_MODEL
+GEN_AI_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES
+GEN_AI_PROVIDER_NAME = SpanAttributes.GEN_AI_PROVIDER_NAME
+GEN_AI_PROVIDER_NAME = SpanAttributes.GEN_AI_PROVIDER_NAME
+GEN_AI_USAGE_OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
+GEN_AI_USAGE_TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ
+GEN_AI_USAGE_OUTPUT_TOKENS_REASONING = (
+    SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING
 )
-LLM_TOOLS = SpanAttributes.LLM_TOOLS
+GEN_AI_TOOL_DEFINITIONS = SpanAttributes.GEN_AI_TOOL_DEFINITIONS
 METADATA = SpanAttributes.METADATA
-FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
-TOOL_DESCRIPTION = SpanAttributes.TOOL_DESCRIPTION
-TOOL_NAME = SpanAttributes.TOOL_NAME
+GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
+GEN_AI_TOOL_NAME = SpanAttributes.GEN_AI_TOOL_NAME
 TOOL_PARAMETERS = SpanAttributes.TOOL_PARAMETERS
-RAW_INPUT = SpanAttributes.RAW_INPUT
-RAW_OUTPUT = SpanAttributes.RAW_OUTPUT
 GRAPH_NODE_ID = SpanAttributes.GRAPH_NODE_ID
 GRAPH_NODE_PARENT_ID = SpanAttributes.GRAPH_NODE_PARENT_ID
 

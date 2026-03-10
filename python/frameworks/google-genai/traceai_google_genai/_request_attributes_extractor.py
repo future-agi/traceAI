@@ -35,8 +35,8 @@ class _RequestAttributesExtractor:
         self,
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield SpanAttributes.FI_SPAN_KIND, FiSpanKindValues.LLM.value
-        yield SpanAttributes.LLM_PROVIDER, FiLLMProviderValues.GOOGLE.value
+        yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
+        yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.GOOGLE.value
         try:
             yield from _as_input_attributes(
                 _io_value_and_type(request_parameters),
@@ -70,7 +70,7 @@ class _RequestAttributesExtractor:
             else:
                 config_json = self._serialize_config_safely(config)
             yield (
-                SpanAttributes.LLM_INVOCATION_PARAMETERS,
+                SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
                 config_json,
             )
 
@@ -78,11 +78,11 @@ class _RequestAttributesExtractor:
             system_instruction = getattr(config, "system_instruction", None)
             if system_instruction:
                 yield (
-                    f"{SpanAttributes.LLM_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_CONTENT}",
+                    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_CONTENT}",
                     system_instruction,
                 )
                 yield (
-                    f"{SpanAttributes.LLM_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_ROLE}",
+                    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.{MessageAttributes.MESSAGE_ROLE}",
                     "system",
                 )
                 input_messages_index += 1
@@ -94,7 +94,7 @@ class _RequestAttributesExtractor:
                 for input_content in input_contents:
                     for attr, value in self._get_attributes_from_message_param(input_content):
                         yield (
-                            f"{SpanAttributes.LLM_INPUT_MESSAGES}.{input_messages_index}.{attr}",
+                            f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.{attr}",
                             value,
                         )
                     # Move on to the next message
@@ -103,7 +103,7 @@ class _RequestAttributesExtractor:
                 for attr, value in self._get_attributes_from_message_param(input_contents):
                     # Default to index 0 for a single message
                     yield (
-                        f"{SpanAttributes.LLM_INPUT_MESSAGES}.{input_messages_index}.{attr}",
+                        f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.{attr}",
                         value,
                     )
 
@@ -165,14 +165,14 @@ class _RequestAttributesExtractor:
                             # Convert Google GenAI format to flattened format
                             flattened_format = self._convert_to_flattened_format(func_decl)
                             yield (
-                                f"{SpanAttributes.LLM_TOOLS}.{tool_index}.{ToolAttributes.TOOL_JSON_SCHEMA}",
+                                f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{tool_index}.{ToolAttributes.TOOL_JSON_SCHEMA}",
                                 safe_json_dumps(flattened_format),
                             )
                             tool_index += 1
                 else:
                     # Tool doesn't have function_declarations, use as-is
                     yield (
-                        f"{SpanAttributes.LLM_TOOLS}.{tool_index}.{ToolAttributes.TOOL_JSON_SCHEMA}",
+                        f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{tool_index}.{ToolAttributes.TOOL_JSON_SCHEMA}",
                         safe_json_dumps(tool_dict),
                     )
                     tool_index += 1

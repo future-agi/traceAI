@@ -428,7 +428,6 @@ def _chain_context(
     ) as span:
         context = _ChainContext(span=span)
         yield context
-        span.set_status(Status(StatusCode.OK))
 
 
 class _ToolContext:
@@ -481,7 +480,6 @@ def _tool_context(
     ) as span:
         context = _ToolContext(span=span)
         yield context
-        span.set_status(Status(StatusCode.OK))
 
 
 def _infer_span_name(*, instance: Any, callable: Callable[..., Any]) -> str:

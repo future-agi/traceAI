@@ -105,7 +105,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
     # 1. LLM & Model Info
     if ATTR_GEN_AI_REQUEST_MODEL in attributes:
-        mapped[SpanAttributes.LLM_MODEL_NAME] = attributes.get(ATTR_GEN_AI_REQUEST_MODEL)
+        mapped[SpanAttributes.GEN_AI_REQUEST_MODEL] = attributes.get(ATTR_GEN_AI_REQUEST_MODEL)
 
     # 2. Inputs & Outputs
     # LiveKit separates User Input (in Assistant Turn) vs LLM Response vs TTS Input
@@ -171,10 +171,10 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
     # --- Set Input/Output Attributes ---
     if raw_input_val is not None:
-        mapped[SpanAttributes.RAW_INPUT] = _ensure_json_string(raw_input_val)
+        mapped[SpanAttributes.INPUT_VALUE] = _ensure_json_string(raw_input_val)
 
     if raw_output_val is not None:
-        mapped[SpanAttributes.RAW_OUTPUT] = _ensure_json_string(raw_output_val)
+        mapped[SpanAttributes.OUTPUT_VALUE] = _ensure_json_string(raw_output_val)
 
     if input_val is not None and SpanAttributes.INPUT_VALUE not in mapped:
         mime_type = _detect_mime_type(input_val)
@@ -193,31 +193,31 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
     # 3. Token Usage
     if ATTR_GEN_AI_USAGE_INPUT_TOKENS in attributes:
-        mapped[SpanAttributes.LLM_TOKEN_COUNT_PROMPT] = attributes.get(ATTR_GEN_AI_USAGE_INPUT_TOKENS)
+        mapped[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = attributes.get(ATTR_GEN_AI_USAGE_INPUT_TOKENS)
     if ATTR_GEN_AI_USAGE_OUTPUT_TOKENS in attributes:
-        mapped[SpanAttributes.LLM_TOKEN_COUNT_COMPLETION] = attributes.get(ATTR_GEN_AI_USAGE_OUTPUT_TOKENS)
+        mapped[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = attributes.get(ATTR_GEN_AI_USAGE_OUTPUT_TOKENS)
     
     # Calculate total if not present
     try:
-        prompt_tokens = mapped.get(SpanAttributes.LLM_TOKEN_COUNT_PROMPT)
-        completion_tokens = mapped.get(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION)
+        prompt_tokens = mapped.get(SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+        completion_tokens = mapped.get(SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
         if isinstance(prompt_tokens, (int, float)) and isinstance(completion_tokens, (int, float)):
-            mapped[SpanAttributes.LLM_TOKEN_COUNT_TOTAL] = int(prompt_tokens) + int(completion_tokens)
+            mapped[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = int(prompt_tokens) + int(completion_tokens)
     except Exception:
         pass
 
     # 4. Tools
     if LK_FUNCTION_TOOL_NAME in attributes:
-        mapped[SpanAttributes.TOOL_NAME] = attributes.get(LK_FUNCTION_TOOL_NAME)
+        mapped[SpanAttributes.GEN_AI_TOOL_NAME] = attributes.get(LK_FUNCTION_TOOL_NAME)
         mapped["tool_call.function.name"] = attributes.get(LK_FUNCTION_TOOL_NAME) # Standardize
 
     if LK_FUNCTION_TOOLS in attributes:
         # List of available tools provided to LLM
-        mapped[SpanAttributes.LLM_TOOLS] = _ensure_json_string(attributes.get(LK_FUNCTION_TOOLS))
+        mapped[SpanAttributes.GEN_AI_TOOL_DEFINITIONS] = _ensure_json_string(attributes.get(LK_FUNCTION_TOOLS))
 
     # 5. Session & User Info
     if LK_ROOM_NAME in attributes:
-        mapped[SpanAttributes.SESSION_ID] = attributes.get(LK_ROOM_NAME)
+        mapped[SpanAttributes.GEN_AI_CONVERSATION_ID] = attributes.get(LK_ROOM_NAME)
     
     if LK_PARTICIPANT_IDENTITY in attributes:
         mapped[SpanAttributes.USER_ID] = attributes.get(LK_PARTICIPANT_IDENTITY)
@@ -258,7 +258,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         mapped[SpanAttributes.METADATA] = _ensure_json_string(metadata)
 
     # 7. Span Kind Determination (fi.span.kind)
-    if SpanAttributes.FI_SPAN_KIND not in mapped:
+    if SpanAttributes.GEN_AI_SPAN_KIND not in mapped:
         span_kind = "UNKNOWN"
         
         # Check based on attribute presence or span name (if available in attributes? No, span name is on the Span object)
@@ -278,7 +278,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
              # Session Start -> AGENT
              span_kind = "AGENT"
 
-        mapped[SpanAttributes.FI_SPAN_KIND] = span_kind
+        mapped[SpanAttributes.GEN_AI_SPAN_KIND] = span_kind
 
     return mapped
 

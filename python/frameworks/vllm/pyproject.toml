@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "traceAI-vllm"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for vLLM"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "traceai_vllm" }
+]
+
+[tool.poetry.dependencies]
+python = ">3.9,<3.14"
+fi-instrumentation-otel = ">=0.1.11"
+openai = ">=1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+pytest-asyncio = ">=0.21.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

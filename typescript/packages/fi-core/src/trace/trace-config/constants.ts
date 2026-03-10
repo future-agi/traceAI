@@ -23,6 +23,8 @@ export const FI_HIDE_EMBEDDING_VECTORS =
 /** Limits characters of a base64 encoding of an image */
 export const FI_BASE64_IMAGE_MAX_LENGTH =
   "FI_BASE64_IMAGE_MAX_LENGTH";
+/** Enables regex-based PII redaction on attribute values */
+export const FI_PII_REDACTION = "FI_PII_REDACTION";
 
 export const DEFAULT_HIDE_INPUTS = false;
 export const DEFAULT_HIDE_OUTPUTS = false;
@@ -36,6 +38,7 @@ export const DEFAULT_HIDE_OUTPUT_TEXT = false;
 
 export const DEFAULT_HIDE_EMBEDDING_VECTORS = false;
 export const DEFAULT_BASE64_IMAGE_MAX_LENGTH = 32000;
+export const DEFAULT_PII_REDACTION = false;
 
 /** When a value is hidden, it will be replaced by this redacted value */
 export const REDACTED_VALUE = "__REDACTED__";
@@ -92,6 +95,11 @@ export const traceConfigMetadata: Readonly<
     envKey: FI_BASE64_IMAGE_MAX_LENGTH,
     type: "number",
   },
+  piiRedaction: {
+    default: DEFAULT_PII_REDACTION,
+    envKey: FI_PII_REDACTION,
+    type: "boolean",
+  },
 };
 
 export const DefaultTraceConfig: TraceConfig = {
@@ -104,4 +112,5 @@ export const DefaultTraceConfig: TraceConfig = {
   hideOutputText: DEFAULT_HIDE_OUTPUT_TEXT,
   hideEmbeddingVectors: DEFAULT_HIDE_EMBEDDING_VECTORS,
   base64ImageMaxLength: DEFAULT_BASE64_IMAGE_MAX_LENGTH,
+  piiRedaction: DEFAULT_PII_REDACTION,
 };

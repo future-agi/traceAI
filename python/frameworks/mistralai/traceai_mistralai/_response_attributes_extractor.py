@@ -30,7 +30,7 @@ def _get_attributes_from_chat_completion_response(
     response: "ChatCompletionResponse",
 ) -> Iterator[Tuple[str, AttributeValue]]:
     if model := getattr(response, "model", None):
-        yield SpanAttributes.LLM_MODEL_NAME, model
+        yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
     if usage := getattr(response, "usage", None):
         yield from _get_attributes_from_completion_usage(usage)
     if (choices := getattr(response, "choices", None)) and isinstance(
@@ -41,7 +41,7 @@ def _get_attributes_from_chat_completion_response(
                 continue
             if message := _get_attribute_or_value(choice, "message"):
                 for key, value in _get_attributes_from_chat_completion_message(message):
-                    yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{key}", value
+                    yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
 
 
 class _StreamResponseAttributesExtractor:
@@ -58,7 +58,7 @@ def _get_attributes_from_stream_chat_completion_response(
 ) -> Iterator[Tuple[str, AttributeValue]]:
     data = response.data
     if model := data.get("model", None):
-        yield SpanAttributes.LLM_MODEL_NAME, model
+        yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
     if usage := data.get("usage", None):
         yield from _get_attributes_from_completion_usage(usage)
     if (choices := data.get("choices", None)) and isinstance(choices, Iterable):
@@ -67,7 +67,7 @@ def _get_attributes_from_stream_chat_completion_response(
                 continue
             if message := _get_attribute_or_value(choice, "message"):
                 for key, value in _get_attributes_from_chat_completion_message(message):
-                    yield f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{index}.{key}", value
+                    yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{index}.{key}", value
 
 
 def _get_attributes_from_chat_completion_message(
@@ -104,13 +104,13 @@ def _get_attributes_from_completion_usage(
     # openai.types.CompletionUsage
     # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/completion_usage.py#L8  # noqa: E501
     if (total_tokens := _get_attribute_or_value(usage, "total_tokens")) is not None:
-        yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, total_tokens
+        yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_tokens
     if (prompt_tokens := _get_attribute_or_value(usage, "prompt_tokens")) is not None:
-        yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+        yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens
     if (
         completion_tokens := _get_attribute_or_value(usage, "completion_tokens")
     ) is not None:
-        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
 
 
 def _get_attribute_or_value(

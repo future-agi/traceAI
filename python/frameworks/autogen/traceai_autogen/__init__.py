@@ -1,51 +1,59 @@
 import json
 import logging
 from importlib import import_module
-from typing import Any, Callable, Collection, Dict, Optional, Union
+from typing import Any, Callable, Collection, Dict, Optional
 
 from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from opentelemetry.trace import Link, SpanContext, Status, StatusCode
-from traceai_autogen.utils import _to_dict
+from opentelemetry.trace import Status, StatusCode
+from traceai_autogen._v04_wrapper import (
+    wrap_agent_on_messages,
+    wrap_team_run,
+    wrap_tool_execution,
+)
+from traceai_autogen._attributes import AutoGenAttributes, AutoGenSpanKind, get_model_provider
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_MODULE = "autogen"
-__version__ = "0.1.0"
+_MODULE_V04_AGENTS = "autogen_agentchat.agents"
+_MODULE_V04_TEAMS = "autogen_agentchat.teams"
+__version__ = "0.2.0"
+
+_instruments = ("autogen-agentchat>=0.4.0",)
 
 
 class AutogenInstrumentor(BaseInstrumentor):
     """
-    An instrumentor for autogen
+    An instrumentor for AutoGen v0.4+ (AgentChat).
+
+    Instruments:
+    - autogen_agentchat.agents: AssistantAgent, BaseChatAgent
+    - autogen_agentchat.teams: RoundRobinGroupChat, SelectorGroupChat, etc.
     """
 
     __slots__ = (
-        "_original_generate",
-        "_original_initiate_chat",
-        "_original_execute_function",
+        "_tracer",
+        "_v04_original_on_messages",
+        "_v04_original_team_run",
+        "_v04_original_team_run_stream",
+        "_v04_instrumented_classes",
     )
 
     def __init__(self) -> None:
         super().__init__()
-        self._original_generate: Optional[Callable[..., Any]] = None
-        self._original_initiate_chat: Optional[Callable[..., Any]] = None
-        self._original_execute_function: Optional[Callable[..., Any]] = None
-        self.tracer = None
-
-    def _safe_json_dumps(self, obj: Any) -> str:
-        try:
-            return json.dumps(obj)
-        except (TypeError, ValueError):
-            return json.dumps(str(obj))
+        self._v04_original_on_messages: Dict[type, Callable] = {}
+        self._v04_original_team_run: Dict[type, Callable] = {}
+        self._v04_original_team_run_stream: Dict[type, Callable] = {}
+        self._v04_instrumented_classes: list = []
+        self._tracer = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
-        return [_MODULE]
+        return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        # Get tracer provider and config
         if not (tracer_provider := kwargs.get("tracer_provider")):
             tracer_provider = trace_api.get_tracer_provider()
         if not (config := kwargs.get("config")):
@@ -53,247 +61,130 @@ class AutogenInstrumentor(BaseInstrumentor):
         else:
             assert isinstance(config, TraceConfig)
 
-        # Create tracer
-        self.tracer = FITracer(
+        self._tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
 
-        autogen = import_module(_MODULE)
-        ConversableAgent = autogen.ConversableAgent
+        raw_tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
 
-        # Save original methods
-        self._original_generate = ConversableAgent.generate_reply
-        self._original_initiate_chat = ConversableAgent.initiate_chat
-        self._original_execute_function = ConversableAgent.execute_function
+        # Instrument agent classes
+        try:
+            agents_module = import_module(_MODULE_V04_AGENTS)
 
-        instrumentor = self
-
-        def wrapped_generate(
-            agent_self: Any,
-            messages: Optional[Any] = None,
-            sender: Optional[str] = None,
-            **kwargs: Any,
-        ) -> Any:
-            try:
-                current_span = trace_api.get_current_span()
-                current_context: SpanContext = current_span.get_span_context()
-
-                with instrumentor.tracer.start_as_current_span(
-                    agent_self.__class__.__name__,
-                    context=trace_api.set_span_in_context(current_span),
-                    links=[Link(current_context)],
-                ) as span:
-                    span.set_attribute(SpanAttributes.FI_SPAN_KIND, "AGENT")
-                    span.set_attribute(
-                        SpanAttributes.RAW_INPUT,
-                        instrumentor._safe_json_dumps(messages),
+            if hasattr(agents_module, "BaseChatAgent"):
+                BaseChatAgent = agents_module.BaseChatAgent
+                if hasattr(BaseChatAgent, "on_messages"):
+                    self._v04_original_on_messages[BaseChatAgent] = BaseChatAgent.on_messages
+                    BaseChatAgent.on_messages = wrap_agent_on_messages(
+                        BaseChatAgent.on_messages, raw_tracer
                     )
-                    span.set_attribute(
-                        SpanAttributes.INPUT_VALUE,
-                        instrumentor._safe_json_dumps(messages),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.INPUT_MIME_TYPE, "application/json"
-                    )
-                    span.set_attribute("agent.type", agent_self.__class__.__name__)
+                    self._v04_instrumented_classes.append(("BaseChatAgent", BaseChatAgent))
+                    logger.debug("Instrumented BaseChatAgent.on_messages")
 
-                    response = instrumentor._original_generate(
-                        agent_self, messages=messages, sender=sender, **kwargs
-                    )
+            if hasattr(agents_module, "AssistantAgent"):
+                AssistantAgent = agents_module.AssistantAgent
+                self._v04_instrumented_classes.append(("AssistantAgent", AssistantAgent))
+                logger.debug("AssistantAgent tracked (inherits BaseChatAgent instrumentation)")
 
-                    span.set_attribute(
-                        SpanAttributes.RAW_OUTPUT,
-                        instrumentor._safe_json_dumps(response),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.OUTPUT_VALUE,
-                        instrumentor._safe_json_dumps(response),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
-                    )
+        except ImportError as e:
+            logger.debug(f"Could not import autogen_agentchat.agents: {e}")
 
-                    span.set_status(Status(StatusCode.OK))
-                    return response
-            except Exception as e:
-                if span is not None:
-                    span.set_status(Status(StatusCode.ERROR))
-                    span.record_exception(e)
-                raise
+        # Instrument team classes
+        try:
+            teams_module = import_module(_MODULE_V04_TEAMS)
 
-        def wrapped_initiate_chat(
-            agent_self: Any, recipient: Any, *args: Any, **kwargs: Any
-        ) -> Any:
-            try:
-                message = kwargs.get("message", args[0] if args else None)
-                current_span = trace_api.get_current_span()
-                current_context: SpanContext = current_span.get_span_context()
+            team_classes = [
+                "BaseGroupChat",
+                "RoundRobinGroupChat",
+                "SelectorGroupChat",
+                "Swarm",
+                "MagenticOneGroupChat",
+            ]
 
-                with instrumentor.tracer.start_as_current_span(
-                    "Autogen",
-                    context=trace_api.set_span_in_context(current_span),
-                    links=[Link(current_context)],
-                ) as span:
-                    span.set_attribute(SpanAttributes.FI_SPAN_KIND, "AGENT")
-                    span.set_attribute(
-                        SpanAttributes.RAW_INPUT,
-                        instrumentor._safe_json_dumps(
-                            {
-                                "args": args,
-                                **kwargs,
-                            }
-                        ),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.INPUT_VALUE,
-                        instrumentor._safe_json_dumps(message),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.INPUT_MIME_TYPE, "application/json"
-                    )
+            for class_name in team_classes:
+                if hasattr(teams_module, class_name):
+                    TeamClass = getattr(teams_module, class_name)
 
-                    result = instrumentor._original_initiate_chat(
-                        agent_self, recipient, *args, **kwargs
-                    )
+                    if hasattr(TeamClass, "run"):
+                        if TeamClass not in self._v04_original_team_run:
+                            self._v04_original_team_run[TeamClass] = TeamClass.run
+                            TeamClass.run = wrap_team_run(TeamClass.run, raw_tracer, "run")
+                            logger.debug(f"Instrumented {class_name}.run")
 
-                    span.set_attribute(
-                        SpanAttributes.RAW_OUTPUT,
-                        instrumentor._safe_json_dumps(_to_dict(result)),
-                    )
-                    if hasattr(result, "chat_history") and result.chat_history:
-                        last_message = result.chat_history[-1]["content"]
-                        span.set_attribute(
-                            SpanAttributes.OUTPUT_VALUE,
-                            instrumentor._safe_json_dumps(last_message),
-                        )
-                    else:
-                        span.set_attribute(
-                            SpanAttributes.OUTPUT_VALUE,
-                            instrumentor._safe_json_dumps(result),
-                        )
-
-                    span.set_attribute(
-                        SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
-                    )
-
-                    span.set_status(Status(StatusCode.OK))
-                    return result
-            except Exception as e:
-                if span is not None:
-                    span.set_status(Status(StatusCode.ERROR))
-                    span.record_exception(e)
-                raise
-
-        def wrapped_execute_function(
-            agent_self: Any,
-            func_call: Union[str, Dict[str, Any]],
-            call_id: Optional[str] = None,
-            verbose: bool = False,
-        ) -> Any:
-            try:
-                current_span = trace_api.get_current_span()
-                current_context: SpanContext = current_span.get_span_context()
-
-                # Handle both dictionary and string inputs
-                if isinstance(func_call, str):
-                    function_name = func_call
-                    func_call = {"name": function_name}
-                else:
-                    function_name = func_call.get("name", "unknown")
-
-                with instrumentor.tracer.start_as_current_span(
-                    f"{function_name}",
-                    context=trace_api.set_span_in_context(current_span),
-                    links=[Link(current_context)],
-                ) as span:
-                    span.set_attribute(SpanAttributes.FI_SPAN_KIND, "TOOL")
-                    span.set_attribute(SpanAttributes.TOOL_NAME, function_name)
-
-                    # Record input
-                    span.set_attribute(
-                        SpanAttributes.RAW_INPUT,
-                        instrumentor._safe_json_dumps(func_call),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.INPUT_VALUE,
-                        instrumentor._safe_json_dumps(func_call),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.INPUT_MIME_TYPE, "application/json"
-                    )
-
-                    # If the agent stores a function map, you can store annotations
-                    if hasattr(agent_self, "_function_map"):
-                        function_map = getattr(agent_self, "_function_map", {})
-                        if function_name in function_map:
-                            func = function_map[function_name]
-                            if hasattr(func, "__annotations__"):
-                                span.set_attribute(
-                                    SpanAttributes.TOOL_PARAMETERS,
-                                    instrumentor._safe_json_dumps(func.__annotations__),
-                                )
-
-                    # Record function call details
-                    if isinstance(func_call, dict):
-                        # Record function arguments
-                        if "arguments" in func_call:
-                            span.set_attribute(
-                                SpanAttributes.TOOL_CALL_FUNCTION_ARGUMENTS,
-                                instrumentor._safe_json_dumps(func_call["arguments"]),
+                    if hasattr(TeamClass, "run_stream"):
+                        if TeamClass not in self._v04_original_team_run_stream:
+                            self._v04_original_team_run_stream[TeamClass] = TeamClass.run_stream
+                            TeamClass.run_stream = wrap_team_run(
+                                TeamClass.run_stream, raw_tracer, "run_stream"
                             )
+                            logger.debug(f"Instrumented {class_name}.run_stream")
 
-                        # Record function name
-                        span.set_attribute(
-                            SpanAttributes.TOOL_CALL_FUNCTION_NAME, function_name
-                        )
+                    self._v04_instrumented_classes.append((class_name, TeamClass))
 
-                    # Execute function
-                    result = instrumentor._original_execute_function(
-                        agent_self, func_call, call_id=call_id, verbose=verbose
-                    )
+        except ImportError as e:
+            logger.debug(f"Could not import autogen_agentchat.teams: {e}")
 
-                    # Record output
-                    span.set_attribute(
-                        SpanAttributes.RAW_OUTPUT,
-                        instrumentor._safe_json_dumps(result),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.OUTPUT_VALUE,
-                        instrumentor._safe_json_dumps(result),
-                    )
-                    span.set_attribute(
-                        SpanAttributes.OUTPUT_MIME_TYPE, "application/json"
-                    )
-
-                    span.set_status(Status(StatusCode.OK))
-                    return result
-
-            except Exception as e:
-                if span is not None:
-                    span.set_status(Status(StatusCode.ERROR))
-                    span.record_exception(e)
-                raise
-
-        # Replace methods on ConversableAgent with wrapped versions
-        ConversableAgent.generate_reply = wrapped_generate
-        ConversableAgent.initiate_chat = wrapped_initiate_chat
-        ConversableAgent.execute_function = wrapped_execute_function
+        logger.info(f"AutoGen v0.4 instrumentation complete. "
+                   f"Instrumented {len(self._v04_instrumented_classes)} classes.")
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Restore original behavior."""
-        if (
-            self._original_generate
-            and self._original_initiate_chat
-            and self._original_execute_function
-        ):
-            # Import autogen module safely to avoid circular imports
-            autogen = import_module(_MODULE)
-            ConversableAgent = autogen.ConversableAgent
+        for agent_class, original_method in self._v04_original_on_messages.items():
+            if hasattr(agent_class, "on_messages"):
+                agent_class.on_messages = original_method
 
-            ConversableAgent.generate_reply = self._original_generate
-            ConversableAgent.initiate_chat = self._original_initiate_chat
-            ConversableAgent.execute_function = self._original_execute_function
-            self._original_generate = None
-            self._original_initiate_chat = None
-            self._original_execute_function = None
+        for team_class, original_method in self._v04_original_team_run.items():
+            if hasattr(team_class, "run"):
+                team_class.run = original_method
+
+        for team_class, original_method in self._v04_original_team_run_stream.items():
+            if hasattr(team_class, "run_stream"):
+                team_class.run_stream = original_method
+
+        self._v04_original_on_messages.clear()
+        self._v04_original_team_run.clear()
+        self._v04_original_team_run_stream.clear()
+        self._v04_instrumented_classes.clear()
+
+
+def instrument_autogen(
+    tracer_provider: Optional[Any] = None,
+    config: Optional[TraceConfig] = None,
+) -> AutogenInstrumentor:
+    """Convenience function to instrument AutoGen v0.4+.
+
+    Args:
+        tracer_provider: Optional OpenTelemetry tracer provider
+        config: Optional trace configuration
+
+    Returns:
+        The instrumentor instance
+
+    Example:
+        >>> from traceai_autogen import instrument_autogen
+        >>> instrumentor = instrument_autogen()
+        >>> from autogen_agentchat.agents import AssistantAgent
+        >>> from autogen_agentchat.teams import RoundRobinGroupChat
+        >>> agent = AssistantAgent("assistant", ...)
+        >>> team = RoundRobinGroupChat([agent], ...)
+        >>> await team.run(task="...")  # Automatically traced
+    """
+    instrumentor = AutogenInstrumentor()
+    kwargs = {}
+    if tracer_provider:
+        kwargs["tracer_provider"] = tracer_provider
+    if config:
+        kwargs["config"] = config
+    instrumentor.instrument(**kwargs)
+    return instrumentor
+
+
+__all__ = [
+    "AutogenInstrumentor",
+    "instrument_autogen",
+    "AutoGenAttributes",
+    "AutoGenSpanKind",
+    "get_model_provider",
+    "wrap_tool_execution",
+]

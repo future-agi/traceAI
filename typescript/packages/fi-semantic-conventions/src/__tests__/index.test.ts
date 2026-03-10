@@ -61,19 +61,20 @@ describe('Semantic Conventions Package Integration', () => {
 
   describe('Cross-Module Integration', () => {
     it('should construct valid attributes using prefixes and postfixes', () => {
-      // Test that prefix + postfix combinations match expected constants
+      // LLM constants now use gen_ai.* namespace, not llm.* prefix+postfix
       const constructedLLMModel = `${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.model_name}`;
-      expect(constructedLLMModel).toBe(LLM_MODEL_NAME);
       expect(constructedLLMModel).toBe('llm.model_name');
+      // LLM_MODEL_NAME is now a gen_ai constant
+      expect(LLM_MODEL_NAME).toBe('gen_ai.request.model');
     });
 
     it('should have consistent attribute naming patterns', () => {
-      // Test that all constants follow expected patterns
+      // Test that non-LLM constants still follow prefix patterns
       expect(INPUT_VALUE).toBe(`${SemanticAttributePrefixes.input}.value`);
       expect(OUTPUT_VALUE).toBe(`${SemanticAttributePrefixes.output}.value`);
-      
-      // Test LLM-related constants
-      expect(LLM_MODEL_NAME).toBe(`${SemanticAttributePrefixes.llm}.${LLMAttributePostfixes.model_name}`);
+
+      // LLM constants now use OTEL GenAI convention
+      expect(LLM_MODEL_NAME).toBe('gen_ai.request.model');
     });
 
     it('should have enum values that work with semantic constants', () => {

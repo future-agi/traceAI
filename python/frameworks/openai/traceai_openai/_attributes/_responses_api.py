@@ -129,20 +129,20 @@ class _ResponsesApiAttributes:
         cls,
         obj: responses.response.Response,
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield SpanAttributes.LLM_MODEL_NAME, obj.model
+        yield SpanAttributes.GEN_AI_REQUEST_MODEL, obj.model
         if obj.usage:
             yield from cls._get_attributes_from_response_usage(obj.usage)
         if isinstance(obj.output, Iterable):
             for i, item in enumerate(obj.output):
                 yield from cls._get_attributes_from_response_output_item(
                     item,
-                    f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{i}.",
+                    f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{i}.",
                 )
         if isinstance(obj.tools, Iterable):
             for i, tool in enumerate(obj.tools):
                 yield from cls._get_attributes_from_response_tool(
                     tool,
-                    f"{SpanAttributes.LLM_TOOLS}.{i}.",
+                    f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.",
                 )
 
     @classmethod
@@ -179,28 +179,28 @@ class _ResponsesApiAttributes:
         if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
             for i, tool in enumerate(tools):
                 yield from cls._get_attributes_from_response_tool_param(
-                    tool, f"{SpanAttributes.LLM_TOOLS}.{i}."
+                    tool, f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}."
                 )
-        yield SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_json_dumps(invocation_params)
+        yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_params)
         if (model := obj.get("model")) is not None:
-            yield SpanAttributes.LLM_MODEL_NAME, model
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         if (instructions := obj.get("instructions")) is not None:
             yield (
-                f"{SpanAttributes.LLM_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}",
+                f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}",
                 "system",
             )
             yield (
-                f"{SpanAttributes.LLM_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}",
+                f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}",
                 instructions,
             )
         if (input := obj.get("input")) is not None:
             if isinstance(input, str):
                 yield (
-                    f"{SpanAttributes.LLM_INPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_ROLE}",
+                    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_ROLE}",
                     "user",
                 )
                 yield (
-                    f"{SpanAttributes.LLM_INPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_CONTENT}",
+                    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.1.{MessageAttributes.MESSAGE_CONTENT}",
                     input,
                 )
             elif isinstance(input, list):
@@ -428,7 +428,7 @@ class _ResponsesApiAttributes:
         msg_idx: int = 1,
     ) -> Iterator[Tuple[str, AttributeValue]]:
         for i, item in enumerate(obj, msg_idx):
-            prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{i}."
+            prefix = f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}."
             yield from cls._get_attributes_from_response_input_item_param(item, prefix)
 
     @classmethod
@@ -639,14 +639,14 @@ class _ResponsesApiAttributes:
         cls,
         obj: responses.response_usage.ResponseUsage,
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        yield SpanAttributes.LLM_TOKEN_COUNT_TOTAL, obj.total_tokens
-        yield SpanAttributes.LLM_TOKEN_COUNT_PROMPT, obj.input_tokens
-        yield SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, obj.output_tokens
+        yield SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, obj.total_tokens
+        yield SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, obj.input_tokens
+        yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, obj.output_tokens
         yield (
-            SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS_REASONING,
             obj.output_tokens_details.reasoning_tokens,
         )
         yield (
-            SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+            SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ,
             obj.input_tokens_details.cached_tokens,
         )

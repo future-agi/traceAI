@@ -1,0 +1,1 @@
+_instruments = ("redis >= 4.5.0",)

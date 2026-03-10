@@ -2,13 +2,15 @@
 Base exporter for Pipecat integration with Future AGI.
 
 This module provides the base class for mapped span exporters that convert
-Pipecat attributes to Future AGI conventions.
+Pipecat attributes to OpenTelemetry GenAI conventions (Future AGI standard).
 """
 
 import json
 from typing import Any, Dict
 
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
+from fi_instrumentation.fi_types import MessageAttributes, SpanAttributes
 
 
 def _ensure_json_string(value: Any) -> str:
@@ -43,12 +45,12 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
     mapped: Dict[str, Any] = dict(attributes)  # start by preserving originals
 
-    # Pipecat → FI LLM basics
+    # Pipecat → OTEL GenAI basics
     if "gen_ai.system" in attributes:
-        mapped["llm.provider"] = attributes.get("gen_ai.system")
+        mapped[SpanAttributes.GEN_AI_PROVIDER_NAME] = attributes.get("gen_ai.system")
 
     if "gen_ai.request.model" in attributes:
-        mapped["llm.model_name"] = attributes.get("gen_ai.request.model")
+        mapped[SpanAttributes.GEN_AI_REQUEST_MODEL] = attributes.get("gen_ai.request.model")
 
     # Inputs / Outputs
     if "input" in attributes and "input.value" not in mapped:
@@ -80,10 +82,10 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
                 role = message.get("role")
                 content = message.get("content")
                 if role is not None:
-                    mapped[f"llm.input_messages.{index}.message.role"] = role
+                    mapped[f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_ROLE}"] = role
                 if content is not None:
                     # Content may be str or structured; serialize non-str to JSON
-                    mapped[f"llm.input_messages.{index}.message.content"] = (
+                    mapped[f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{MessageAttributes.MESSAGE_CONTENT}"] = (
                         content
                         if isinstance(content, str)
                         else _ensure_json_string(content)
@@ -96,9 +98,10 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         mapped["output.mime_type"] = _detect_mime_type(out_val)
 
         # Also expose output as enumerated LLM output message 0
-        if "llm.output_messages.0.message.content" not in mapped:
-            mapped["llm.output_messages.0.message.role"] = "assistant"
-            mapped["llm.output_messages.0.message.content"] = (
+        output_content_key = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"
+        if output_content_key not in mapped:
+            mapped[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}"] = "assistant"
+            mapped[output_content_key] = (
                 out_val if isinstance(out_val, str) else _ensure_json_string(out_val)
             )
 
@@ -113,23 +116,23 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         if key.startswith("gen_ai.request.") and key not in ("gen_ai.request.model",):
             invocation_params[key.split("gen_ai.request.", 1)[1]] = val
     if invocation_params:
-        mapped["llm.invocation_parameters"] = _ensure_json_string(invocation_params)
+        mapped[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = _ensure_json_string(invocation_params)
 
     # Token usage
     if "gen_ai.usage.input_tokens" in attributes:
-        mapped["llm.token_count.prompt"] = attributes.get("gen_ai.usage.input_tokens")
+        mapped[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS] = attributes.get("gen_ai.usage.input_tokens")
     if "gen_ai.usage.output_tokens" in attributes:
-        mapped["llm.token_count.completion"] = attributes.get(
+        mapped[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] = attributes.get(
             "gen_ai.usage.output_tokens"
         )
     # Total tokens
     try:
-        prompt_tokens = mapped.get("llm.token_count.prompt")
-        completion_tokens = mapped.get("llm.token_count.completion")
+        prompt_tokens = mapped.get(SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS)
+        completion_tokens = mapped.get(SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS)
         if isinstance(prompt_tokens, (int, float)) and isinstance(
             completion_tokens, (int, float)
         ):
-            mapped["llm.token_count.total"] = int(prompt_tokens) + int(
+            mapped[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = int(prompt_tokens) + int(
                 completion_tokens
             )
     except Exception:
@@ -137,7 +140,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
     # Tools
     if "tools" in attributes:
-        mapped["llm.tools"] = (
+        mapped[SpanAttributes.GEN_AI_TOOL_DEFINITIONS] = (
             attributes.get("tools")
             if isinstance(attributes.get("tools"), str)
             else _ensure_json_string(attributes.get("tools"))
@@ -170,8 +173,8 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         )
 
     # Session / conversation mapping
-    if "conversation.id" in attributes and "session.id" not in mapped:
-        mapped["session.id"] = attributes.get("conversation.id")
+    if "conversation.id" in attributes and SpanAttributes.GEN_AI_CONVERSATION_ID not in mapped:
+        mapped[SpanAttributes.GEN_AI_CONVERSATION_ID] = attributes.get("conversation.id")
 
     # Consolidate assorted fields under metadata as a JSON string
     metadata: Dict[str, Any] = {}
@@ -219,9 +222,9 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
             pass
         mapped["metadata"] = _ensure_json_string(metadata)
 
-    # Determine fi.span.kind from context
+    # Determine gen_ai.span.kind from context
     # Defaults: LLM for LLM/STT/TTS-like spans; TOOL for tool spans; AGENT for setup; CHAIN for turn/conversation
-    if "fi.span.kind" not in mapped:
+    if "gen_ai.span.kind" not in mapped:
         span_kind = None
         # Tool call/result spans
         if any(
@@ -247,7 +250,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         else:
             # Treat gen ai operations, STT, TTS as LLM by convention
             span_kind = "LLM"
-        mapped["fi.span.kind"] = span_kind
+        mapped["gen_ai.span.kind"] = span_kind
 
     return mapped
 

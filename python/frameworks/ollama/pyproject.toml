@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "traceAI-ollama"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Ollama - local LLM runner"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "traceai_ollama" }
+]
+
+[tool.poetry.dependencies]
+python = ">3.9,<3.14"
+fi-instrumentation-otel = ">=0.1.11"
+ollama = ">=0.3.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

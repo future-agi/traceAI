@@ -27,6 +27,13 @@ export function isPatched() {
   return _isFIPatched;
 }
 
+/**
+ * Resets the internal patched state. Intended for testing only.
+ */
+export function _resetPatchedStateForTesting(): void {
+  _isFIPatched = false;
+}
+
 type CallbackManagerModule = typeof CallbackManagerModuleV02;
 
 /**
@@ -76,6 +83,9 @@ export class LangChainInstrumentation extends InstrumentationBase {
   }
 
   manuallyInstrument(module: CallbackManagerModule) {
+    if (module == null) {
+      return;
+    }
     diag.debug(`Manually instrumenting ${MODULE_NAME}`);
     this.patch(module);
   }
@@ -84,7 +94,7 @@ export class LangChainInstrumentation extends InstrumentationBase {
     const module =
       new InstrumentationNodeModuleDefinition(
         "@langchain/core/dist/callbacks/manager.cjs",
-        ["^0.1.0", "^0.2.0"],
+        ["^0.1.0", "^0.2.0", "^0.3.0"],
         this.patch.bind(this),
         this.unpatch.bind(this),
       );
@@ -122,6 +132,9 @@ export class LangChainInstrumentation extends InstrumentationBase {
       }`,
     );
     if (module?.fiPatched || _isFIPatched) {
+      return module;
+    }
+    if (module?.CallbackManager == null) {
       return module;
     }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
