@@ -6,7 +6,7 @@
 
     <groupId>ai.traceai.examples</groupId>
     <artifactId>pgvector-example</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
     <name>TraceAI PgVector Example</name>
     <description>Example demonstrating TraceAI instrumentation with PostgreSQL pgvector</description>
 
@@ -21,7 +21,7 @@
         <dependency>
             <groupId>ai.traceai</groupId>
             <artifactId>traceai-java-pgvector</artifactId>
-            <version>0.1.0-SNAPSHOT</version>
+            <version>1.0.0</version>
         </dependency>
 
         <!-- pgvector Java library -->
