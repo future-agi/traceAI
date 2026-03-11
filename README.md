@@ -4,7 +4,7 @@
 
 # traceAI
 
-**Open-source observability for AI applications — trace every LLM call, prompt, token, retrieval step, and agent decision.**
+**Open-source observability for AI applications - trace every LLM call, prompt, token, retrieval step, and agent decision.**
 
 Built on [OpenTelemetry](https://opentelemetry.io/), traceAI sends structured traces to any OTel-compatible backend (Datadog, Grafana, Jaeger, Future AGI, and more). No new vendor. No new dashboard.
 
