@@ -29,10 +29,10 @@ Built on [OpenTelemetry](https://opentelemetry.io/), traceAI sends structured tr
 
 **traceAI** is an open-source library that gives you full visibility into your AI applications. It captures every LLM call, prompt, token count, retrieval step, and agent decision as structured traces and sends them to whatever observability tool you already use.
 
-It is built on **OpenTelemetry**, the industry standard for application observability. Your AI traces live natively in Datadog, Grafana, Jaeger, or any OTel-compatible backend.
+It is built on **OpenTelemetry**, the industry standard for application observability. Your AI traces live natively in Datadog, Grafana, Future AGI, Jaeger, or any OTel-compatible backend. No new vendor. No new dashboard.
 
 - **Zero-config tracing** for 50+ AI frameworks across 4 languages
-- **OpenTelemetry-native** — works with any OTel-compatible backend
+- **OpenTelemetry-native** - works with any OTel-compatible backend
 - **Semantic conventions** for LLM calls, agents, tools, retrieval, and vector databases
 - **Python, TypeScript, Java, and C#** support with consistent APIs
 
