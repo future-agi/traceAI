@@ -1,3 +1,5 @@
+jdk:
+  - openjdk17
 before_install:
   - cd java
 install:
