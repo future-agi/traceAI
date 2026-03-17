@@ -61,6 +61,7 @@ public class FITracer {
 
         Span span = builder.startSpan();
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind.getValue());
+        span.setAttribute(SemanticConventions.GEN_AI_SPAN_KIND, kind.getValue().toLowerCase());
         applyContextAttributes(span);
 
         return span;
@@ -80,6 +81,7 @@ public class FITracer {
 
         Span span = builder.startSpan();
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind.getValue());
+        span.setAttribute(SemanticConventions.GEN_AI_SPAN_KIND, kind.getValue().toLowerCase());
         applyContextAttributes(span);
 
         return span;
