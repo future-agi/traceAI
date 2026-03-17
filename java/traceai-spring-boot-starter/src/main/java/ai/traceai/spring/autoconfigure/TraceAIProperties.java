@@ -35,6 +35,11 @@ public class TraceAIProperties {
     private String apiKey;
 
     /**
+     * The secret key for authentication.
+     */
+    private String secretKey;
+
+    /**
      * The project name for trace attribution.
      */
     private String projectName;
@@ -104,6 +109,14 @@ public class TraceAIProperties {
 
     public void setApiKey(String apiKey) {
         this.apiKey = apiKey;
+    }
+
+    public String getSecretKey() {
+        return secretKey;
+    }
+
+    public void setSecretKey(String secretKey) {
+        this.secretKey = secretKey;
     }
 
     public String getProjectName() {
