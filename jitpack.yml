@@ -1,0 +1,4 @@
+before_install:
+  - cd java
+install:
+  - mvn install -DskipTests
