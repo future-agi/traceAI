@@ -55,6 +55,7 @@ public class TraceAIAutoConfiguration {
         TraceConfig config = TraceConfig.builder()
             .baseUrl(properties.getBaseUrl())
             .apiKey(properties.getApiKey())
+            .secretKey(properties.getSecretKey())
             .projectName(properties.getProjectName())
             .serviceName(serviceName)
             .hideInputs(properties.isHideInputs())

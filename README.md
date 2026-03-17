@@ -19,7 +19,7 @@ Built on [OpenTelemetry](https://opentelemetry.io/), traceAI sends structured tr
 [![npm Downloads](https://img.shields.io/npm/dm/@traceai/fi-core?label=npm%20downloads)](https://www.npmjs.com/package/@traceai/fi-core)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/fi-instrumentation-otel?label=NuGet%20downloads)](https://www.nuget.org/packages/fi-instrumentation-otel)
 
-[Documentation](https://docs.futureagi.com/) • [Examples](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability) • [Slack](https://join.slack.com/t/future-agi/shared_invite/zt-3gqwrdf2p-4oj1LVPqkQIoiS_OSrFL2A) • [PyPI](https://pypi.org/project/fi-instrumentation-otel/) • [npm](https://www.npmjs.com/package/@traceai/fi-core) • [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel)
+[Documentation](https://docs.futureagi.com/integrations/overview) • [Examples](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability) • [Slack](https://join.slack.com/t/future-agi/shared_invite/zt-3gqwrdf2p-4oj1LVPqkQIoiS_OSrFL2A) • [PyPI](https://pypi.org/project/fi-instrumentation-otel/) • [npm](https://www.npmjs.com/package/@traceai/fi-core) • [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel)
 
 </div>
 

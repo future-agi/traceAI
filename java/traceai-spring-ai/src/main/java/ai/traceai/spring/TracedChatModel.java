@@ -66,23 +66,30 @@ public class TracedChatModel implements ChatModel {
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "spring-ai");
             span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
 
-            // Capture input messages
+            // Capture input messages and input.value
             if (prompt != null && prompt.getInstructions() != null) {
                 List<Message> messages = prompt.getInstructions();
                 List<Map<String, String>> inputMessages = new ArrayList<>();
+                StringBuilder inputValueBuilder = new StringBuilder();
                 for (Message msg : messages) {
                     String role = msg.getMessageType().getValue();
                     String content = msg.getContent();
                     inputMessages.add(FITracer.message(role, content));
+                    if (content != null) {
+                        if (inputValueBuilder.length() > 0) {
+                            inputValueBuilder.append("\n");
+                        }
+                        inputValueBuilder.append(content);
+                    }
                 }
                 tracer.setInputMessages(span, inputMessages);
+                tracer.setInputValue(span, inputValueBuilder.toString());
             }
 
             // Capture prompt options if available
             if (prompt != null && prompt.getOptions() != null) {
                 var options = prompt.getOptions();
                 if (options.getModel() != null) {
-                    span.setAttribute(SemanticConventions.LLM_MODEL_NAME, options.getModel());
                     span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, options.getModel());
                 }
                 if (options.getTemperature() != null) {
@@ -95,6 +102,18 @@ public class TracedChatModel implements ChatModel {
 
             // Execute call
             ChatResponse response = delegate.call(prompt);
+
+            // Extract model from response metadata (fallback when not in prompt options)
+            if (response != null && response.getMetadata() != null) {
+                String responseModel = response.getMetadata().getModel();
+                if (responseModel != null && !responseModel.isEmpty()) {
+                    span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, responseModel);
+                    // Also set request model if it wasn't set from options
+                    if (prompt == null || prompt.getOptions() == null || prompt.getOptions().getModel() == null) {
+                        span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, responseModel);
+                    }
+                }
+            }
 
             // Capture output
             if (response != null && response.getResult() != null) {
@@ -136,16 +155,32 @@ public class TracedChatModel implements ChatModel {
             span.setAttribute(SemanticConventions.LLM_SYSTEM, "spring-ai");
             span.setAttribute(SemanticConventions.LLM_PROVIDER, provider);
 
-            // Capture input messages
+            // Capture input messages and input.value
             if (prompt != null && prompt.getInstructions() != null) {
                 List<Message> messages = prompt.getInstructions();
                 List<Map<String, String>> inputMessages = new ArrayList<>();
+                StringBuilder inputValueBuilder = new StringBuilder();
                 for (Message msg : messages) {
                     String role = msg.getMessageType().getValue();
                     String content = msg.getContent();
                     inputMessages.add(FITracer.message(role, content));
+                    if (content != null) {
+                        if (inputValueBuilder.length() > 0) {
+                            inputValueBuilder.append("\n");
+                        }
+                        inputValueBuilder.append(content);
+                    }
                 }
                 tracer.setInputMessages(span, inputMessages);
+                tracer.setInputValue(span, inputValueBuilder.toString());
+            }
+
+            // Capture prompt options if available
+            if (prompt != null && prompt.getOptions() != null) {
+                var options = prompt.getOptions();
+                if (options.getModel() != null) {
+                    span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, options.getModel());
+                }
             }
 
             // Get the stream

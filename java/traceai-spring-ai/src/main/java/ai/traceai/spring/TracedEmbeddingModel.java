@@ -82,10 +82,21 @@ public class TracedEmbeddingModel implements EmbeddingModel {
             // Capture model if available
             if (request != null && request.getOptions() != null && request.getOptions().getModel() != null) {
                 span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, request.getOptions().getModel());
+                span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, request.getOptions().getModel());
             }
 
             // Execute embedding
             EmbeddingResponse response = delegate.call(request);
+
+            // Extract model from response metadata as fallback
+            if (response != null && response.getMetadata() != null && response.getMetadata().getModel() != null) {
+                String responseModel = response.getMetadata().getModel();
+                span.setAttribute(SemanticConventions.LLM_RESPONSE_MODEL, responseModel);
+                if (request == null || request.getOptions() == null || request.getOptions().getModel() == null) {
+                    span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, responseModel);
+                    span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, responseModel);
+                }
+            }
 
             // Capture output
             if (response != null && response.getResults() != null && !response.getResults().isEmpty()) {

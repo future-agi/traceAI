@@ -10,6 +10,7 @@ public final class SemanticConventions {
 
     // ── FI Span Kind ─────────────────────────────────────────────────
     public static final String FI_SPAN_KIND = "fi.span.kind";
+    public static final String GEN_AI_SPAN_KIND = "gen_ai.span.kind";
 
     // ── GenAI Core ───────────────────────────────────────────────────
     public static final String GEN_AI_OPERATION_NAME = "gen_ai.operation.name";
