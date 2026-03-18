@@ -11,7 +11,7 @@ pip install traceai-minimax
 ## Features
 
 - Automatic tracing of MiniMax API calls via OpenAI SDK
-- Support for MiniMax-M2.5 and MiniMax-M2.5-highspeed models (204K context)
+- Support for MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, and MiniMax-M2.5-highspeed models
 - Streaming response support
 - Token usage tracking
 - Function/tool calling support
@@ -44,7 +44,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="MiniMax-M2.5",
+    model="MiniMax-M2.7",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 print(response.choices[0].message.content)
@@ -62,7 +62,7 @@ client = OpenAI(
 
 # Simple chat
 response = client.chat.completions.create(
-    model="MiniMax-M2.5",
+    model="MiniMax-M2.7",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What is machine learning?"}
@@ -85,7 +85,7 @@ client = OpenAI(
 
 # Streaming chat
 stream = client.chat.completions.create(
-    model="MiniMax-M2.5",
+    model="MiniMax-M2.7",
     messages=[{"role": "user", "content": "Tell me a story"}],
     stream=True
 )
@@ -133,7 +133,7 @@ tools = [
 ]
 
 response = client.chat.completions.create(
-    model="MiniMax-M2.5",
+    model="MiniMax-M2.7",
     messages=[{"role": "user", "content": "What's the weather in Paris?"}],
     tools=tools,
     tool_choice="auto"
@@ -159,7 +159,7 @@ async def main():
     )
 
     response = await client.chat.completions.create(
-        model="MiniMax-M2.5",
+        model="MiniMax-M2.7",
         messages=[{"role": "user", "content": "Hello!"}]
     )
     print(response.choices[0].message.content)
@@ -178,7 +178,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="MiniMax-M2.5",
+    model="MiniMax-M2.7",
     messages=[
         {"role": "system", "content": "Output valid JSON only."},
         {"role": "user", "content": "List 3 programming languages with their main use cases"}
@@ -219,7 +219,7 @@ MiniMaxInstrumentor().instrument(
 | `fi.span.kind` | "LLM" |
 | `llm.system` | "minimax" |
 | `llm.provider` | "minimax" |
-| `llm.model` | Model name (MiniMax-M2.5, MiniMax-M2.5-highspeed) |
+| `llm.model` | Model name (MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, MiniMax-M2.5-highspeed) |
 | `llm.token_count.prompt` | Input token count |
 | `llm.token_count.completion` | Output token count |
 | `llm.token_count.total` | Total token count |
@@ -237,6 +237,8 @@ MiniMaxInstrumentor().instrument(
 
 | Model | Description |
 |-------|-------------|
+| `MiniMax-M2.7` | Latest flagship model with enhanced reasoning and coding |
+| `MiniMax-M2.7-highspeed` | High-speed version of M2.7 for low-latency scenarios |
 | `MiniMax-M2.5` | General-purpose model with 204K context window |
 | `MiniMax-M2.5-highspeed` | Faster inference variant with 204K context window |
 

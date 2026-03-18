@@ -30,7 +30,7 @@ def simple_chat():
     """Simple chat completion."""
     print("=== Simple Chat ===")
     response = client.chat.completions.create(
-        model="MiniMax-M2.5",
+        model="MiniMax-M2.7",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "What is machine learning?"},
@@ -46,7 +46,7 @@ def streaming_chat():
     """Streaming chat completion."""
     print("=== Streaming Chat ===")
     stream = client.chat.completions.create(
-        model="MiniMax-M2.5",
+        model="MiniMax-M2.7",
         messages=[{"role": "user", "content": "Tell me a short story"}],
         stream=True,
     )
@@ -81,7 +81,7 @@ def function_calling():
     ]
 
     response = client.chat.completions.create(
-        model="MiniMax-M2.5",
+        model="MiniMax-M2.7",
         messages=[{"role": "user", "content": "What's the weather in Paris?"}],
         tools=tools,
         tool_choice="auto",
@@ -98,10 +98,10 @@ def function_calling():
 
 
 def highspeed_chat():
-    """Using MiniMax-M2.5-highspeed for faster inference."""
+    """Using MiniMax-M2.7-highspeed for faster inference."""
     print("=== Highspeed Chat ===")
     response = client.chat.completions.create(
-        model="MiniMax-M2.5-highspeed",
+        model="MiniMax-M2.7-highspeed",
         messages=[
             {"role": "user", "content": "Summarize the key features of Python in 3 bullet points."},
         ],

@@ -26,7 +26,7 @@ class TestChatCompletionRequestAttributesExtractor:
 
         extractor = _ChatCompletionRequestAttributesExtractor()
         request_params = {
-            "model": "MiniMax-M2.5",
+            "model": "MiniMax-M2.7",
             "messages": [
                 {"role": "user", "content": "Hello!"}
             ],
@@ -37,7 +37,34 @@ class TestChatCompletionRequestAttributesExtractor:
 
         assert attributes["fi.span.kind"] == "LLM"
         assert attributes["llm.provider"] == "minimax"
-        assert attributes["llm.model"] == "MiniMax-M2.5"
+        assert attributes["llm.model"] == "MiniMax-M2.7"
+
+    def test_default_model_is_m27(self):
+        """Test that default model is MiniMax-M2.7 when not specified."""
+        from traceai_minimax._request_attributes_extractor import _ChatCompletionRequestAttributesExtractor
+
+        extractor = _ChatCompletionRequestAttributesExtractor()
+        request_params = {
+            "messages": [{"role": "user", "content": "Hello!"}],
+        }
+
+        attributes = dict(extractor.get_attributes_from_request(request_params))
+
+        assert attributes["llm.model"] == "MiniMax-M2.7"
+
+    def test_extract_m27_highspeed_model(self):
+        """Test extracting attributes for MiniMax-M2.7-highspeed model."""
+        from traceai_minimax._request_attributes_extractor import _ChatCompletionRequestAttributesExtractor
+
+        extractor = _ChatCompletionRequestAttributesExtractor()
+        request_params = {
+            "model": "MiniMax-M2.7-highspeed",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+
+        attributes = dict(extractor.get_attributes_from_request(request_params))
+
+        assert attributes["llm.model"] == "MiniMax-M2.7-highspeed"
 
     def test_extract_chat_with_system_message(self):
         """Test extracting chat with system message."""

@@ -24,7 +24,7 @@ class _ChatCompletionRequestAttributesExtractor:
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "minimax"
 
-        model = request_parameters.get("model", "MiniMax-M2.5")
+        model = request_parameters.get("model", "MiniMax-M2.7")
         yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
 
         yield SpanAttributes.INPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
