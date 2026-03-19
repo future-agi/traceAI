@@ -1,7 +1,6 @@
 import logging
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
-from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import (
     MessageAttributes,
     SpanAttributes,
@@ -93,9 +92,6 @@ class _ChatCompletionResponseAttributesExtractor:
             content = message.get("content", "")
             if content:
                 yield SpanAttributes.OUTPUT_VALUE, content
-
-        # Raw output
-        yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(response)
 
 
 class _StreamingChatCompletionResponseExtractor:
@@ -192,11 +188,3 @@ class _StreamingChatCompletionResponseExtractor:
         # Finish reason
         if self._finish_reason:
             yield "minimax.finish_reason", self._finish_reason
-
-        # Raw output summary
-        output_summary = {
-            "content": content[:500] if len(content) > 500 else content,
-            "tool_calls": list(self._tool_calls.values()),
-            "finish_reason": self._finish_reason
-        }
-        yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(output_summary)

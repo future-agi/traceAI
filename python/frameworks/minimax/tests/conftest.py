@@ -80,23 +80,9 @@ def setup_mocks():
     mock_fi_instrumentation.get_attributes_from_context = MagicMock(return_value={})
     mock_fi_instrumentation.fi_types = mock_fi_types
 
-    # Mock fi_instrumentation.instrumentation submodule
-    mock_fi_instr_instr = create_mock_module("fi_instrumentation.instrumentation")
-    mock_fi_instr_protect = create_mock_module("fi_instrumentation.instrumentation._protect_wrapper")
-    mock_fi_instr_protect.GuardrailProtectWrapper = MagicMock()
-
-    # Mock fi.evals
-    mock_fi = create_mock_module("fi")
-    mock_fi_evals = create_mock_module("fi.evals")
-    mock_fi_evals.Protect = None
-
     # Register fi mocks
     sys.modules["fi_instrumentation"] = mock_fi_instrumentation
     sys.modules["fi_instrumentation.fi_types"] = mock_fi_types
-    sys.modules["fi_instrumentation.instrumentation"] = mock_fi_instr_instr
-    sys.modules["fi_instrumentation.instrumentation._protect_wrapper"] = mock_fi_instr_protect
-    sys.modules["fi"] = mock_fi
-    sys.modules["fi.evals"] = mock_fi_evals
 
     # Mock opentelemetry - comprehensive mock
     mock_otel = create_mock_module("opentelemetry")

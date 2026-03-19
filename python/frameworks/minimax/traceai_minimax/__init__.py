@@ -4,14 +4,7 @@ from typing import Any, Collection
 
 logger = logging.getLogger(__name__)
 
-try:
-    from fi.evals import Protect
-except ImportError:
-    logger.debug("ai-evaluation is not installed")
-    Protect = None
-
 from fi_instrumentation import FITracer, TraceConfig
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
@@ -100,17 +93,6 @@ class MiniMaxInstrumentor(BaseInstrumentor):
                 )
         except Exception as e:
             logger.warning(f"Failed to instrument OpenAI for MiniMax: {e}")
-
-        # Wrap Protect if available
-        if Protect is not None:
-            self._original_protect = Protect.protect
-            wrap_function_wrapper(
-                module="fi.evals",
-                name="Protect.protect",
-                wrapper=GuardrailProtectWrapper(tracer=self._tracer),
-            )
-        else:
-            self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
         try:

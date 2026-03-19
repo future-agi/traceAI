@@ -1,5 +1,7 @@
 import logging
+from enum import Enum
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
+from urllib.parse import urlparse
 
 from fi_instrumentation import safe_json_dumps
 from opentelemetry import trace as trace_api
@@ -10,11 +12,11 @@ from traceai_minimax._with_span import _WithSpan
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-# MiniMax base URL patterns
-MINIMAX_BASE_URLS = [
-    "api.minimax.io",
-    "api.minimax.chat",
-]
+
+class MiniMaxBaseURL(str, Enum):
+    """MiniMax API base URL hostnames."""
+    API_IO = "api.minimax.io"
+    API_CHAT = "api.minimax.chat"
 
 
 def is_minimax_client(instance: Any) -> bool:
@@ -28,8 +30,9 @@ def is_minimax_client(instance: Any) -> bool:
                 base_url = getattr(client, "base_url", None)
 
         if base_url is not None:
-            base_url_str = str(base_url).lower()
-            return any(url in base_url_str for url in MINIMAX_BASE_URLS)
+            parsed = urlparse(str(base_url))
+            hostname = (parsed.hostname or "").lower()
+            return hostname in {url.value for url in MiniMaxBaseURL}
     except Exception:
         pass
     return False
