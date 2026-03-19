@@ -232,6 +232,7 @@ var tracer = FITracer.Initialize(new FITracerOptions
 | [`traceAI-huggingface`](https://pypi.org/project/traceAI-huggingface/) | HuggingFace | [![PyPI](https://img.shields.io/pypi/v/traceAI-huggingface)](https://pypi.org/project/traceAI-huggingface/) |
 | [`traceAI-xai`](https://pypi.org/project/traceAI-xai/) | xAI (Grok) | [![PyPI](https://img.shields.io/pypi/v/traceAI-xai)](https://pypi.org/project/traceAI-xai/) |
 | [`traceAI-vllm`](https://pypi.org/project/traceAI-vllm/) | vLLM | [![PyPI](https://img.shields.io/pypi/v/traceAI-vllm)](https://pypi.org/project/traceAI-vllm/) |
+| [`traceAI-minimax`](https://pypi.org/project/traceAI-minimax/) | MiniMax | [![PyPI](https://img.shields.io/pypi/v/traceAI-minimax)](https://pypi.org/project/traceAI-minimax/) |
 
 #### Agent Frameworks
 
@@ -434,6 +435,7 @@ Available on [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel).
 | | HuggingFace | ✅ | ✅ | | |
 | | xAI (Grok) | ✅ | ✅ | | |
 | | vLLM | ✅ | ✅ | | |
+| | MiniMax | ✅ | | | |
 | | Azure OpenAI | | | ✅ | |
 | | IBM Watsonx | | | ✅ | |
 | **Agent Frameworks** | LangChain | ✅ | ✅ | | |
