@@ -613,6 +613,7 @@ We welcome contributions! Read our **[Contributing Guide](CONTRIBUTING.md)** for
 | [Contributing Guide](CONTRIBUTING.md) | How to contribute to traceAI |
 | [Slack](https://join.slack.com/t/future-agi/shared_invite/zt-3gqwrdf2p-4oj1LVPqkQIoiS_OSrFL2A) | Join our community |
 | [Issues](https://github.com/future-agi/traceAI/issues) | Report bugs or request features |
+| [TraceAI Workshop](https://colab.research.google.com/drive/1Z6QFUhxZir5lFemmfjF3NqOBIP6CYUWb#scrollTo=LZbiyQ2KwD-B) | Workshop on tracing and evaluation |
 
 ---
 
