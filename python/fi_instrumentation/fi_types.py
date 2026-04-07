@@ -203,6 +203,7 @@ class SpanAttributes:
     OUTPUT_MIME_TYPE = "output.mime_type"
     INPUT_VALUE = "input.value"
     INPUT_MIME_TYPE = "input.mime_type"
+    INPUT_RAW = "input.raw"
 
     # Embeddings
     EMBEDDING_EMBEDDINGS = "embedding.embeddings"

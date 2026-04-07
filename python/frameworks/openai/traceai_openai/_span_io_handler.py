@@ -51,21 +51,22 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
                     input_content.append(msg)
                     eval_input.append(msg_content)
         if input_content:
-            input_value = json.dumps(input_content, ensure_ascii=False)
-            span.set_attribute(SpanAttributes.INPUT_VALUE, input_value)
+            input_raw = json.dumps(input_content, ensure_ascii=False)
+            span.set_attribute(SpanAttributes.INPUT_RAW, input_raw)
         if input_images:
             images_value = json.dumps(input_images, ensure_ascii=False)
             span.set_attribute(SpanAttributes.INPUT_IMAGES, images_value)
         if eval_input:
             eval_input_str = " \n ".join(map(str, eval_input))
             span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
-        if eval_input and len(eval_input) > 0:
-            span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input[0])
     else:
-        try:
-            input_str = json.dumps(input_data, ensure_ascii=False).strip()
-        except (TypeError, ValueError):
-            input_str = str(input_data).strip()
+        if isinstance(input_data, str):
+            input_str = input_data.strip()
+        else:
+            try:
+                input_str = json.dumps(input_data, ensure_ascii=False).strip()
+            except (TypeError, ValueError):
+                input_str = str(input_data).strip()
         span.set_attribute(SpanAttributes.INPUT_VALUE, input_str)
 
 

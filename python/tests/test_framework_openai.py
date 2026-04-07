@@ -290,4 +290,79 @@ class TestOpenAIFramework:
         
         # Methods should be restored (back to functions)
         assert openai.OpenAI.request == original_request
-        assert openai.AsyncOpenAI.request == original_async_request 
+        assert openai.AsyncOpenAI.request == original_async_request
+
+
+class TestSpanIOHandler:
+    """Test the span I/O handler functions."""
+
+    def test_process_input_data_multi_message(self):
+        """Test _process_input_data with multiple messages preserves full context."""
+        from traceai_openai._span_io_handler import _process_input_data
+        from fi_instrumentation.fi_types import SpanAttributes
+        from unittest.mock import MagicMock
+
+        # Create mock span
+        mock_span = MagicMock()
+
+        # Test input with multiple messages
+        input_data = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "How are you?"}
+        ]
+
+        _process_input_data(input_data, mock_span)
+
+        # Verify INPUT_VALUE contains full joined text
+        expected_value = "You are a helpful assistant. \n Hello \n Hi there! \n How are you?"
+        mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_VALUE, expected_value)
+
+        # Verify INPUT_RAW contains structured JSON
+        import json
+        expected_raw = json.dumps([
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "How are you?"}
+        ], ensure_ascii=False)
+        mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_RAW, expected_raw)
+
+    def test_process_input_data_single_message(self):
+        """Test _process_input_data with single message for regression."""
+        from traceai_openai._span_io_handler import _process_input_data
+        from fi_instrumentation.fi_types import SpanAttributes
+        from unittest.mock import MagicMock
+
+        mock_span = MagicMock()
+
+        input_data = [
+            {"role": "user", "content": "Hello world"}
+        ]
+
+        _process_input_data(input_data, mock_span)
+
+        # Should still set INPUT_VALUE to the single message
+        expected_value = "Hello world"
+        mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_VALUE, expected_value)
+
+        # And INPUT_RAW
+        import json
+        expected_raw = json.dumps([{"role": "user", "content": "Hello world"}], ensure_ascii=False)
+        mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_RAW, expected_raw)
+
+    def test_process_input_data_non_list(self):
+        """Test _process_input_data with non-list input (string prompt)."""
+        from traceai_openai._span_io_handler import _process_input_data
+        from fi_instrumentation.fi_types import SpanAttributes
+        from unittest.mock import MagicMock
+
+        mock_span = MagicMock()
+
+        input_data = "What is the capital of France?"
+
+        _process_input_data(input_data, mock_span)
+
+        # Should set INPUT_VALUE to the string
+        mock_span.set_attribute.assert_called_once_with(SpanAttributes.INPUT_VALUE, "What is the capital of France?") 
