@@ -547,6 +547,40 @@ class SpanAttributes:
     SERVER_PORT = "server.port"
     """Server port number."""
 
+    # --- Agent-to-Agent (A2A) Protocol ---
+    GEN_AI_A2A_TASK_ID = "gen_ai.a2a.task.id"
+    """Unique identifier for an A2A task."""
+
+    GEN_AI_A2A_TASK_STATE = "gen_ai.a2a.task.state"
+    """State of the A2A task (submitted, working, completed, failed, canceled)."""
+
+    GEN_AI_A2A_AGENT_URL = "gen_ai.a2a.agent.url"
+    """URL of the remote A2A agent being called."""
+
+    GEN_AI_A2A_AGENT_CARD_NAME = "gen_ai.a2a.agent.card.name"
+    """Human-readable name from the remote agent's AgentCard."""
+
+    GEN_AI_A2A_AGENT_CARD_VERSION = "gen_ai.a2a.agent.card.version"
+    """Version string from the remote agent's AgentCard."""
+
+    GEN_AI_A2A_MESSAGE_ROLE = "gen_ai.a2a.message.role"
+    """Role of the A2A message sender (user or agent)."""
+
+    GEN_AI_A2A_MESSAGE_PARTS_COUNT = "gen_ai.a2a.message.parts.count"
+    """Number of parts in an A2A message."""
+
+    GEN_AI_A2A_ARTIFACT_TYPE = "gen_ai.a2a.artifact.type"
+    """Type of A2A artifact streamed back (text, file, data)."""
+
+    GEN_AI_A2A_STREAMING = "gen_ai.a2a.streaming"
+    """Boolean: whether the A2A call uses server-sent event streaming."""
+
+    GEN_AI_A2A_PUSH_NOTIFICATION_URL = "gen_ai.a2a.push_notification.url"
+    """Push notification webhook URL, if configured on the task."""
+
+    GEN_AI_A2A_PROPAGATED_TRACE_ID = "gen_ai.a2a.propagated_trace_id"
+    """W3C traceparent trace-id propagated to the remote agent via HTTP header."""
+
 
 class VectorDBAttributes:
     """
@@ -882,6 +916,8 @@ class FiSpanKindValues(Enum):
     EVALUATOR = "EVALUATOR"
     CONVERSATION = "CONVERSATION"
     VECTOR_DB = "VECTOR_DB"
+    A2A_CLIENT = "A2A_CLIENT"  # Outbound: this agent is calling a remote A2A agent
+    A2A_SERVER = "A2A_SERVER"  # Inbound: this agent is receiving an A2A task
 
 
 class VectorDBSystemValues(Enum):
@@ -1025,6 +1061,13 @@ class EvalName(Enum):
     EMBEDDING_SIMILARITY = "embedding_similarity"
     SEMANTIC_LIST_CONTAINS = "semantic_list_contains"
     IS_AI_GENERATED_IMAGE = "is_AI_generated_image"
+    # --- Agent-to-Agent (A2A) Evaluations ---
+    A2A_TASK_COMPLETION = "a2a_task_completion"
+    """Did the remote agent complete the delegated task as instructed?"""
+    A2A_RESPONSE_ALIGNMENT = "a2a_response_alignment"
+    """Does the remote agent's response align with the original task instructions?"""
+    A2A_SAFETY_PASS_THROUGH = "a2a_safety_pass_through"
+    """Did the remote agent uphold safety guardrails when processing the delegated task?"""
 
 @dataclass
 class ConfigField:
