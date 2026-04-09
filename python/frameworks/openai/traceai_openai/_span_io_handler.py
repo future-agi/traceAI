@@ -50,9 +50,6 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
                 else:
                     input_content.append(msg)
                     eval_input.append(msg_content)
-        if input_content:
-            input_raw = json.dumps(input_content, ensure_ascii=False)
-            span.set_attribute(SpanAttributes.INPUT_RAW, input_raw)
         if input_images:
             images_value = json.dumps(input_images, ensure_ascii=False)
             span.set_attribute(SpanAttributes.INPUT_IMAGES, images_value)

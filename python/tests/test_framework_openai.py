@@ -319,16 +319,6 @@ class TestSpanIOHandler:
         expected_value = "You are a helpful assistant. \n Hello \n Hi there! \n How are you?"
         mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_VALUE, expected_value)
 
-        # Verify INPUT_RAW contains structured JSON
-        import json
-        expected_raw = json.dumps([
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
-            {"role": "user", "content": "How are you?"}
-        ], ensure_ascii=False)
-        mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_RAW, expected_raw)
-
     def test_process_input_data_single_message(self):
         """Test _process_input_data with single message for regression."""
         from traceai_openai._span_io_handler import _process_input_data
@@ -346,11 +336,6 @@ class TestSpanIOHandler:
         # Should still set INPUT_VALUE to the single message
         expected_value = "Hello world"
         mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_VALUE, expected_value)
-
-        # And INPUT_RAW
-        import json
-        expected_raw = json.dumps([{"role": "user", "content": "Hello world"}], ensure_ascii=False)
-        mock_span.set_attribute.assert_any_call(SpanAttributes.INPUT_RAW, expected_raw)
 
     def test_process_input_data_non_list(self):
         """Test _process_input_data with non-list input (string prompt)."""
