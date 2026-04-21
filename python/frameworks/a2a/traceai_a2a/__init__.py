@@ -23,6 +23,7 @@ from opentelemetry.trace import TracerProvider
 
 from traceai_a2a._a2a_client import A2AClientWrapper
 from traceai_a2a._a2a_server import A2ATracingMiddleware
+from traceai_a2a.package import _instruments
 from traceai_a2a.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -63,12 +64,7 @@ class A2AInstrumentor(BaseInstrumentor):
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:
-        """
-        Declare soft dependency on the A2A SDK.
-        If a2a-sdk is not installed, A2AInstrumentor will still import cleanly
-        but will log a warning when instrument() is called.
-        """
-        return ("a2a-sdk >= 0.2.0",)
+        return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
         tracer_provider: Optional[TracerProvider] = kwargs.get("tracer_provider")

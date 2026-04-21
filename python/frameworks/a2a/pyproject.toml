@@ -2,7 +2,7 @@
 name = "traceAI-a2a"
 version = "0.1.0"
 description = "OpenTelemetry instrumentation for Google Agent-to-Agent (A2A) Protocol — distributed tracing across multi-agent boundaries"
-authors = ["Future AGI <eng@futureagi.com>"]
+authors = ["Future AGI <no-reply@futureagi.com>"]
 license = "MIT"
 readme = "README.md"
 keywords = ["opentelemetry", "tracing", "a2a", "agents", "multi-agent", "futureagi", "llm"]
@@ -19,11 +19,11 @@ classifiers = [
 packages = [{ include = "traceai_a2a" }]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4.0"
+python = ">3.9,<3.14"
 opentelemetry-api = ">=1.26.0"
 opentelemetry-sdk = ">=1.26.0"
 opentelemetry-instrumentation = ">=0.47b0"
-fi-instrumentation-otel = ">=0.1.0"
+fi-instrumentation-otel = ">=0.1.11"
 wrapt = ">=1.14"
 
 [tool.poetry.extras]

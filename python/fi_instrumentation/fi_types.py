@@ -1061,13 +1061,6 @@ class EvalName(Enum):
     EMBEDDING_SIMILARITY = "embedding_similarity"
     SEMANTIC_LIST_CONTAINS = "semantic_list_contains"
     IS_AI_GENERATED_IMAGE = "is_AI_generated_image"
-    # --- Agent-to-Agent (A2A) Evaluations ---
-    A2A_TASK_COMPLETION = "a2a_task_completion"
-    """Did the remote agent complete the delegated task as instructed?"""
-    A2A_RESPONSE_ALIGNMENT = "a2a_response_alignment"
-    """Does the remote agent's response align with the original task instructions?"""
-    A2A_SAFETY_PASS_THROUGH = "a2a_safety_pass_through"
-    """Did the remote agent uphold safety guardrails when processing the delegated task?"""
 
 @dataclass
 class ConfigField:

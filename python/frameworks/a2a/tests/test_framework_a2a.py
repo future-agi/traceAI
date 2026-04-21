@@ -12,6 +12,7 @@ Test coverage:
   - A2AInstrumentor: lifecycle (instrument / uninstrument)
   - Error handling: exception recording and ERROR status
   - Semantic conventions: all A2A span attributes present and correct
+  - Streaming span lifecycle: span.end() called even on early-exit (break)
 """
 
 import asyncio
@@ -148,16 +149,13 @@ def _remove_mock_a2a_module():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Import traceai_a2a modules (after adding to sys.path if needed)
+# Imports — traceai_a2a lives one level up from this tests/ directory
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
-# Ensure traceai_a2a is importable from frameworks/a2a
-_A2A_FRAMEWORK_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "frameworks", "a2a"
-)
+_A2A_FRAMEWORK_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _A2A_FRAMEWORK_DIR not in sys.path:
-    sys.path.insert(0, os.path.abspath(_A2A_FRAMEWORK_DIR))
+    sys.path.insert(0, _A2A_FRAMEWORK_DIR)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -328,17 +326,16 @@ async def test_a2a_send_task_streaming_creates_span(in_memory_exporter, tracer):
 
     fake_send_task_streaming._a2a_streaming = True
 
-    # Consume the streaming result
+    # Consume the streaming result via the wrapper object's __aiter__
     result = await wrapper.__call_async__(
         wrapped=fake_send_task_streaming,
         instance=instance,
         args=({"message": {"role": "user", "parts": [{"type": "text", "text": "stream this"}]}},),
         kwargs={},
     )
-    # Stream result is an async generator — consume it
-    if hasattr(result, "__aiter__"):
-        async for _ in result:
-            pass
+    # result is an _AsyncStreamingSpanWrapper — consume it
+    async for _ in result:
+        pass
 
     spans = get_spans(in_memory_exporter)
     assert len(spans) >= 1
@@ -376,15 +373,61 @@ async def test_a2a_send_task_streaming_records_artifacts(in_memory_exporter, tra
         args=({"message": {"role": "user", "parts": []}},),
         kwargs={},
     )
-    if hasattr(result, "__aiter__"):
-        async for _ in result:
-            pass
+    async for _ in result:
+        pass
 
     attrs = get_span_attrs(in_memory_exporter)
     # Artifact type should be recorded from the SSE event
     assert attrs.get(A2A_ARTIFACT_TYPE) == "text"
     # Final task state should be recorded from the status event
     assert attrs.get(A2A_TASK_STATE) == "completed"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST 6b: streaming span is ended even when caller breaks early (span-leak fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a2a_streaming_span_ends_on_early_break(in_memory_exporter, tracer):
+    """
+    Regression test for the span-leak fix.
+    If a caller exits the async-for loop early (break), the span must still
+    be ended via aclose() on the _AsyncStreamingSpanWrapper.
+    """
+    from traceai_a2a._a2a_client import A2AClientWrapper, _AsyncStreamingSpanWrapper
+
+    many_events = [_MockArtifactEvent("text")] * 10 + [_MockStatusEvent("completed")]
+    MockClient = _make_mock_a2a_client_class(streaming_events=many_events)
+    instance = MockClient(url="http://streaming-agent:8080")
+    wrapper = A2AClientWrapper(tracer=tracer)
+
+    async def fake_stream(payload=None, **kwargs):
+        async for event in instance.send_task_streaming(payload, **kwargs):
+            yield event
+
+    fake_stream._a2a_streaming = True
+
+    result = await wrapper.__call_async__(
+        wrapped=fake_stream,
+        instance=instance,
+        args=({},),
+        kwargs={},
+    )
+    assert isinstance(result, _AsyncStreamingSpanWrapper), (
+        "Streaming result must be an _AsyncStreamingSpanWrapper"
+    )
+
+    # Simulate a consumer that breaks after first event
+    async for _ in result:
+        break  # early exit — previously leaked the span
+
+    # Explicitly close (mimics what asyncio does when the generator is discarded)
+    await result.aclose()
+
+    # Span must be finished
+    spans = get_spans(in_memory_exporter)
+    assert len(spans) == 1
+    assert spans[0].end_time is not None, "Span was not ended after early break + aclose()"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,7 +457,6 @@ async def test_a2a_server_middleware_extracts_context(in_memory_exporter, tracer
     )
 
     # Create a fake ASGI scope with a traceparent header
-    # We'll use a real trace to generate a valid traceparent
     tracer = tracer_provider.get_tracer("test_server")
     with tracer.start_as_current_span("fake_orchestrator_span") as parent_span:
         from opentelemetry import propagate
@@ -443,8 +485,6 @@ async def test_a2a_server_middleware_extracts_context(in_memory_exporter, tracer
 
     await middleware(scope, mock_receive, mock_send)
 
-    # The middleware should have extracted the traceparent and the nested app
-    # should have been called inside a span that shares the same trace_id
     assert expected_trace_id is not None
     assert len(received_trace_ids) == 1
     assert received_trace_ids[0] == expected_trace_id, (
@@ -473,7 +513,6 @@ def test_a2a_instrumentor_instrument_uninstrument(tracer_provider):
     original_send_task = MockClient.send_task
 
     # Use _client_class kwarg to bypass BaseInstrumentor dependency checking
-    # (a2a-sdk is a soft dep; real code path uses _get_a2a_module / _get_client_class)
     instrumentor._instrument(
         tracer_provider=tracer_provider,
         _client_class=MockClient,
@@ -485,9 +524,6 @@ def test_a2a_instrumentor_instrument_uninstrument(tracer_provider):
         "A2AInstrumentor._instrument() did not wrap A2AClient.send_task with wrapt. "
         f"Got: {wrapped_send_task!r}"
     )
-
-    # Store the client class on the instrumentor so uninstrument can find it
-    instrumentor._instrumented_client_class = MockClient
 
     # Manually uninstrument
     for method_name in ("send_task", "send_task_streaming"):
@@ -537,7 +573,6 @@ async def test_a2a_send_task_error_sets_error_status(in_memory_exporter, tracer)
     assert span.status.status_code == StatusCode.ERROR, (
         "Span should have ERROR status when A2A call raises an exception"
     )
-    # Exception should be recorded as a span event
     event_names = [e.name for e in span.events]
     assert "exception" in event_names, (
         "Exception should be recorded as a span event"
@@ -639,13 +674,3 @@ def test_a2a_fi_types_has_new_span_kinds():
     assert hasattr(FiSpanKindValues, "A2A_SERVER")
     assert FiSpanKindValues.A2A_CLIENT.value == "A2A_CLIENT"
     assert FiSpanKindValues.A2A_SERVER.value == "A2A_SERVER"
-
-
-def test_a2a_fi_types_has_new_eval_names():
-    """New A2A eval names must exist in EvalName."""
-    from fi_instrumentation.fi_types import EvalName
-
-    assert hasattr(EvalName, "A2A_TASK_COMPLETION")
-    assert hasattr(EvalName, "A2A_RESPONSE_ALIGNMENT")
-    assert hasattr(EvalName, "A2A_SAFETY_PASS_THROUGH")
-    assert EvalName.A2A_TASK_COMPLETION.value == "a2a_task_completion"
