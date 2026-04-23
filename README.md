@@ -8,8 +8,8 @@
 
 Built on [OpenTelemetry](https://opentelemetry.io/), traceAI sends structured traces to any OTel-compatible backend (Datadog, Grafana, Jaeger, Future AGI, and more). No new vendor. No new dashboard.
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![TypeScript](https://img.shields.io/badge/typescript-5.0%2B-blue)](https://www.typescriptlang.org/)
 [![Java](https://img.shields.io/badge/java-17%2B-orange)](https://openjdk.org/)
 [![C#](https://img.shields.io/badge/C%23-.NET%2010-purple)](https://dotnet.microsoft.com/)
@@ -33,14 +33,14 @@ Built on [OpenTelemetry](https://opentelemetry.io/), traceAI sends structured tr
 
 ## What is traceAI?
 
-**traceAI** is an open-source library that gives you full visibility into your AI applications. It captures every LLM call, prompt, token count, retrieval step, and agent decision as structured traces and sends them to whatever observability tool you already use.
+Your agent calls an LLM, retrieves context, invokes a tool, and returns an answer. When that answer is wrong, you need to know exactly where it broke - which retrieval missed, which tool returned stale data, which prompt drifted.
 
-It is built on **OpenTelemetry**, the industry standard for application observability. Your AI traces live natively in Datadog, Grafana, Future AGI, Jaeger, or any OTel-compatible backend. No new vendor. No new dashboard.
+**traceAI** captures every LLM call, prompt, token count, retrieval step, and agent decision as structured OpenTelemetry traces. Your traces live natively in Datadog, Grafana, Future AGI, Jaeger, or any OTel-compatible backend. No new vendor. No new dashboard.
 
-- **Zero-config tracing** for 50+ AI frameworks across 4 languages
+- **Drop-in instrumentation** for 50+ AI frameworks across 4 languages
 - **OpenTelemetry-native** - works with any OTel-compatible backend
 - **Semantic conventions** for LLM calls, agents, tools, retrieval, and vector databases
-- **Python, TypeScript, Java, and C#** support with consistent APIs
+- **Python, TypeScript, Java, and C#** with consistent APIs
 
 ---
 
@@ -70,11 +70,11 @@ It is built on **OpenTelemetry**, the industry standard for application observab
 | Feature | Description |
 |---------|-------------|
 | **Standardized Tracing** | Maps AI workflows to consistent OpenTelemetry spans and attributes |
-| **Zero-Config Setup** | Drop-in instrumentation with minimal code changes |
+| **Drop-in Setup** | Add 3 lines to your existing code - no refactoring needed |
 | **Multi-Framework** | 50+ integrations across Python, TypeScript, Java, and C# |
 | **Vendor Agnostic** | Works with any OpenTelemetry-compatible backend |
 | **Rich Context** | Captures prompts, completions, tokens, model params, tool calls, and more |
-| **Production Ready** | Async support, streaming, error handling, and performance optimized |
+| **Production-grade** | Async support, streaming, error handling, and low-overhead tracing |
 
 ---
 
@@ -109,7 +109,7 @@ trace_provider = register(
 # Instrument OpenAI
 OpenAIInstrumentor().instrument(tracer_provider=trace_provider)
 
-# Use OpenAI as normal - tracing happens automatically!
+# Use OpenAI as normal - traces are captured automatically
 response = openai.chat.completions.create(
     model="gpt-4.1",
     messages=[{"role": "user", "content": "Hello!"}]
@@ -146,7 +146,7 @@ registerInstrumentations({
   instrumentations: [new OpenAIInstrumentation()],
 });
 
-// Use OpenAI as normal - tracing happens automatically!
+// Use OpenAI as normal - traces are captured automatically
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const response = await openai.chat.completions.create({
@@ -170,17 +170,22 @@ const response = await openai.chat.completions.create({
 
 **2. Instrument your application**
 ```java
-import ai.traceai.core.TraceAI;
+import ai.traceai.TraceAI;
+import ai.traceai.TraceConfig;
 import ai.traceai.openai.TracedOpenAIClient;
 
 // Initialize tracing
-TraceAI.init("my_ai_app", "your-api-key", "your-secret-key");
+TraceAI.init(TraceConfig.builder()
+    .apiKey("your-api-key")
+    .secretKey("your-secret-key")
+    .projectName("my_ai_app")
+    .build());
 
 // Wrap your OpenAI client
 var tracedClient = new TracedOpenAIClient(openAIClient);
 
-// Use as normal - tracing happens automatically!
-var response = tracedClient.chatCompletion(request);
+// Use as normal - traces are captured automatically
+var response = tracedClient.createChatCompletion(request);
 ```
 
 ---
@@ -195,13 +200,15 @@ dotnet add package fi-instrumentation-otel
 **2. Instrument your application**
 ```csharp
 using FIInstrumentation;
+using FIInstrumentation.Types;
 
-// Initialize tracing
-var tracer = FITracer.Initialize(new FITracerOptions
+// Register tracer
+var tracer = TraceAI.Register(opts =>
 {
-    ProjectName = "my_ai_app",
-    ApiKey = "your-api-key",
-    SecretKey = "your-secret-key"
+    opts.ProjectName = "my_ai_app";
+    opts.ProjectType = ProjectType.Observe;
+    opts.ApiKey = "your-api-key";
+    opts.SecretKey = "your-secret-key";
 });
 
 // Use the tracer with your AI calls
@@ -581,7 +588,7 @@ All data follows [OpenTelemetry Semantic Conventions for GenAI](https://opentele
 - **Evaluation integration** connecting traces to quality measurement pipelines
 - **Expanded agent framework coverage**
 
-See our **[ROADMAP.md](ROADMAP.md)** for the full roadmap.
+Request features or report bugs on [GitHub Issues](https://github.com/future-agi/traceAI/issues).
 
 ---
 
@@ -614,7 +621,7 @@ We welcome contributions! Read our **[Contributing Guide](CONTRIBUTING.md)** for
 | [Website](https://www.futureagi.com/) | Learn more about Future AGI |
 | [Documentation](https://docs.futureagi.com/) | Complete guides and API reference |
 | [Cookbooks](https://docs.futureagi.com/cookbook/cookbook8/How-To-Implement-Observability) | Step-by-step implementation examples |
-| [Roadmap](ROADMAP.md) | Planned features and integrations |
+| [Feature Requests & Bugs](https://github.com/future-agi/traceAI/issues) | Request features or report issues |
 | [Changelog](CHANGELOG.md) | All release notes and updates |
 | [Contributing Guide](CONTRIBUTING.md) | How to contribute to traceAI |
 | [Slack](https://join.slack.com/t/future-agi/shared_invite/zt-3gqwrdf2p-4oj1LVPqkQIoiS_OSrFL2A) | Join our community |
@@ -639,8 +646,10 @@ We welcome contributions! Read our **[Contributing Guide](CONTRIBUTING.md)** for
 
 <div align="center">
 
-**Built with care by the [Future AGI](https://www.futureagi.com/) team**
+**Built with ❤️ by the [Future AGI](https://www.futureagi.com/) team and [contributors](https://github.com/future-agi/traceAI/graphs/contributors).**
 
-[Star us on GitHub](https://github.com/future-agi/traceAI) | [Report Bug](https://github.com/future-agi/traceAI/issues) | [Request Feature](https://github.com/future-agi/traceAI/issues)
+If traceAI helps you debug faster, a ⭐ helps more teams find us.
+
+[🌐 futureagi.com](https://futureagi.com) · [📖 docs.futureagi.com](https://docs.futureagi.com) · [☁️ app.futureagi.com](https://app.futureagi.com)
 
 </div>
