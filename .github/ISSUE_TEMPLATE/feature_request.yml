@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose a new framework integration or capability for traceAI.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For big proposals (new framework integrations, API surface changes), consider opening a [Discussion](https://github.com/orgs/future-agi/discussions) first — it's easier to iterate on design before a PR exists.
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Which package(s) does this touch?
+      multiple: true
+      options:
+        - fi-instrumentation-otel (Python)
+        - "@traceai/fi-core (TypeScript)"
+        - "@traceai/openai (TypeScript)"
+        - traceai-java-core (Java)
+        - fi-instrumentation-otel (C# NuGet)
+        - Other traceai-* package
+        - New package / integration
+        - Docs / examples only
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do, and what's getting in your way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should the SDK do? A rough API sketch is worth a thousand words.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What have you tried? Why doesn't it work well enough?
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Are you willing to open a PR?
+      options:
+        - "Yes — I'd like to implement this"
+        - "Maybe — I could help with parts"
+        - "No — hoping someone else picks it up"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
