@@ -1,0 +1,15 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Ask a question / start a discussion
+    url: https://github.com/orgs/future-agi/discussions
+    about: Questions, design ideas, and general help — better than an issue for open-ended topics.
+  - name: Join Discord
+    url: https://discord.gg/UjZ2gRT5p
+    about: Real-time help from the team and community.
+  - name: Report a security vulnerability
+    url: https://github.com/future-agi/traceAI/blob/main/SECURITY.md
+    about: Please report security issues privately — do not open a public issue.
+  - name: Full documentation
+    url: https://docs.futureagi.com
+    about: Guides, API reference, and cookbook.
