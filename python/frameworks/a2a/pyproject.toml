@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "traceAI-a2a"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Google Agent-to-Agent (A2A) Protocol — distributed tracing across multi-agent boundaries"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "MIT"
+readme = "README.md"
+keywords = ["opentelemetry", "tracing", "a2a", "agents", "multi-agent", "futureagi", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+packages = [{ include = "traceai_a2a" }]
+
+[tool.poetry.dependencies]
+python = ">3.9,<3.14"
+opentelemetry-api = ">=1.26.0"
+opentelemetry-sdk = ">=1.26.0"
+opentelemetry-instrumentation = ">=0.47b0"
+fi-instrumentation-otel = ">=0.1.11"
+wrapt = ">=1.14"
+
+[tool.poetry.extras]
+a2a = ["a2a-sdk"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-asyncio = ">=0.21"
+opentelemetry-sdk = ">=1.26.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

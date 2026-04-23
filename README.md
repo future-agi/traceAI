@@ -25,6 +25,12 @@ Built on [OpenTelemetry](https://opentelemetry.io/), traceAI sends structured tr
 
 ---
 
+<div align="center">
+  <img src="trace-repo.gif" alt="traceAI Demo" width="70%" />
+</div>
+
+---
+
 ## What is traceAI?
 
 **traceAI** is an open-source library that gives you full visibility into your AI applications. It captures every LLM call, prompt, token count, retrieval step, and agent decision as structured traces and sends them to whatever observability tool you already use.
