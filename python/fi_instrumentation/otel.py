@@ -441,7 +441,7 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
         try:
             with self._shutdown_lock:
                 if self._active_spans:
-                    print(f"Ending {len(self._active_spans)} active spans during shutdown")
+                    logger.warning("Ending %d active spans during shutdown", len(self._active_spans))
                     active_spans = list(self._active_spans.values())
 
                     for span in active_spans:
@@ -563,7 +563,7 @@ class GRPCSpanExporter(_GRPCSpanExporter):
             if hasattr(self, "_session") and self._session:
                 self._session.close()
         except Exception as e:
-            print(f"Error during shutdown: {e}")
+            logger.error("Error during gRPC exporter shutdown: %s", e)
         finally:
             super().shutdown()
 
@@ -606,7 +606,7 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             if hasattr(self, "_session") and self._session:
                 self._session.close()
         except Exception as e:
-            print(f"Error during shutdown: {e}")
+            logger.error("Error during HTTP exporter shutdown: %s", e)
         finally:
             super().shutdown()
 
