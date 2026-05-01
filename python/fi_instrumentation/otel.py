@@ -568,6 +568,8 @@ class GRPCSpanExporter(_GRPCSpanExporter):
                 self._session.close()
         except Exception as e:
             print(f"Error during shutdown: {e}")
+        finally:
+            super().shutdown()
 
 
 class HTTPSpanExporter(_HTTPSpanExporter):
@@ -609,6 +611,8 @@ class HTTPSpanExporter(_HTTPSpanExporter):
                 self._session.close()
         except Exception as e:
             print(f"Error during shutdown: {e}")
+        finally:
+            super().shutdown()
 
 
 def _exporter_transport(exporter: SpanExporter) -> str:
