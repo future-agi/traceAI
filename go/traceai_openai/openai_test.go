@@ -73,20 +73,16 @@ func TestMiddleware_NonAIEndpoint(t *testing.T) {
 	defer tp.Shutdown(context.Background())
 
 	mw := Middleware(WithTracerProvider(tp))
-
 	req, _ := http.NewRequest("GET", "https://api.openai.com/v1/models", nil)
-	mockNext := func(req *http.Request) (*http.Response, error) {
+
+	_, err := mw(req, func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
-	}
-
-	_, err := mw(req, mockNext)
+	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-
-	spans := exporter.GetSpans()
-	if len(spans) != 0 {
-		t.Errorf("expected 0 spans for non-AI endpoint, got %d", len(spans))
+	if n := len(exporter.GetSpans()); n != 0 {
+		t.Fatalf("got %d spans, want 0", n)
 	}
 }
 
@@ -144,7 +140,7 @@ func TestMiddleware_ContentCaptureDisabled(t *testing.T) {
 
 	_, err := mw(req, mockNext)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 
 	spans := exporter.GetSpans()
@@ -152,7 +148,6 @@ func TestMiddleware_ContentCaptureDisabled(t *testing.T) {
 		t.Fatalf("expected 1 span, got %d", len(spans))
 	}
 
-	// with content capture off, prompt and completion should not be in attributes
 	for _, a := range spans[0].Attributes {
 		if string(a.Key) == "gen_ai.prompt" || string(a.Key) == "gen_ai.completion" {
 			t.Errorf("content capture disabled but found attribute %s", a.Key)
