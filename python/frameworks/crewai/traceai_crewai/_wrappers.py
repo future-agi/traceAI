@@ -11,6 +11,20 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
 
+# In crewai 1.x `i18n` is no longer an attribute on `Agent`; it's a module-level
+# singleton. Older crewai versions still expose `agent.i18n`, so we try the
+# attribute first and fall back to the singleton when it's missing.
+try:
+    from crewai.utilities.i18n import I18N_DEFAULT as _I18N_DEFAULT
+except ImportError:  # pragma: no cover - very old crewai path
+    _I18N_DEFAULT = None  # type: ignore[assignment]
+
+
+def _agent_i18n_prompt_file(agent: Any) -> Any:
+    """Return the agent's i18n prompt_file across crewai 0.x/1.x layouts."""
+    i18n = getattr(agent, "i18n", None) or _I18N_DEFAULT
+    return getattr(i18n, "prompt_file", None) if i18n is not None else None
+
 
 class SafeJSONEncoder(json.JSONEncoder):
     """
@@ -224,7 +238,7 @@ class _KickoffWrapper:
                             "verbose?": agent.verbose,
                             "max_iter": agent.max_iter,
                             "max_rpm": agent.max_rpm,
-                            "i18n": agent.i18n.prompt_file,
+                            "i18n": _agent_i18n_prompt_file(agent),
                             "delegation_enabled": agent.allow_delegation,
                             "tools_names": [
                                 tool.name.casefold() for tool in agent.tools or []
@@ -246,9 +260,12 @@ class _KickoffWrapper:
                             "human_input?": task.human_input,
                             "agent_role": task.agent.role if task.agent else "None",
                             "agent_key": task.agent.key if task.agent else None,
+                            # crewai 1.x defaults `Task.context` to a
+                            # `_NotSpecified` sentinel (truthy but not
+                            # iterable), so guard with an isinstance check.
                             "context": (
-                                [task.description for task in task.context]
-                                if task.context
+                                [t.description for t in task.context]
+                                if isinstance(task.context, list)
                                 else None
                             ),
                             "tools_names": [
@@ -262,6 +279,9 @@ class _KickoffWrapper:
             try:
                 crew_output = wrapped(*args, **kwargs)
                 usage_metrics = crew.usage_metrics
+                # crewai 1.x returns a `CrewStreamingOutput` immediately when
+                # `crew.stream=True`; usage metrics aren't populated yet in
+                # that case. Guard so streaming runs don't crash the wrapper.
                 if isinstance(usage_metrics, dict):
                     if (
                         prompt_tokens := usage_metrics.get("prompt_tokens")
@@ -275,7 +295,7 @@ class _KickoffWrapper:
                         )
                     if (total_tokens := usage_metrics.get("total_tokens")) is not None:
                         span.set_attribute(GEN_AI_USAGE_TOTAL_TOKENS, int(total_tokens))
-                else:
+                elif usage_metrics is not None:
                     # version 0.51 and onwards
                     span.set_attribute(
                         GEN_AI_USAGE_INPUT_TOKENS, usage_metrics.prompt_tokens
@@ -294,8 +314,10 @@ class _KickoffWrapper:
                 span.record_exception(exception)
                 raise
             span.set_status(trace_api.StatusCode.OK)
-            if crew_output_dict := crew_output.to_dict():
-
+            # `CrewStreamingOutput` (crewai 1.x stream=True) has no `to_dict`.
+            to_dict = getattr(crew_output, "to_dict", None)
+            crew_output_dict = to_dict() if callable(to_dict) else None
+            if crew_output_dict:
                 span.set_attribute(OUTPUT_VALUE, json.dumps(crew_output_dict))
                 span.set_attribute(OUTPUT_MIME_TYPE, "application/json")
             else:
