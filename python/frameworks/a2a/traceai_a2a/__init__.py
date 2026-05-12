@@ -14,7 +14,7 @@ For server-side (receiving agent):
 """
 
 import logging
-from typing import Any, Collection, Optional
+from typing import Any, Collection, List, Optional, Tuple
 
 import wrapt
 from opentelemetry import trace as trace_api
@@ -34,9 +34,19 @@ __all__ = [
     "__version__",
 ]
 
-# These are the methods we patch on A2AClient
+# a2a-sdk 0.x client: `A2AClient.send_task` / `A2AClient.send_task_streaming`.
 _SEND_TASK_METHOD = "send_task"
 _SEND_TASK_STREAMING_METHOD = "send_task_streaming"
+
+# a2a-sdk 1.x client: `Client.send_message` (always async, always streaming —
+# returns AsyncIterator[StreamResponse]). The streaming/non-streaming
+# distinction collapsed into a single method.
+_SEND_MESSAGE_METHOD = "send_message"
+
+# Tag attached to the resolved target tuple so the wrapper knows whether to
+# extract payload as a dict (v0) or a protobuf SendMessageRequest (v1).
+_API_V0 = "v0"
+_API_V1 = "v1"
 
 
 class A2AInstrumentor(BaseInstrumentor):
@@ -77,8 +87,11 @@ class A2AInstrumentor(BaseInstrumentor):
             schema_url="https://opentelemetry.io/schemas/1.11.0",
         )
 
-        # Allow tests to pass a pre-resolved client_class directly
+        # Allow tests to pass a pre-resolved client_class directly. When a
+        # tester supplies one we default to the v0 method set; if they need
+        # v1 they can pass `_api_version` too.
         client_class = kwargs.get("_client_class")
+        api_version: Optional[str] = kwargs.get("_api_version")
 
         if client_class is None:
             a2a_module = self._get_a2a_module()
@@ -90,39 +103,38 @@ class A2AInstrumentor(BaseInstrumentor):
                 )
                 return
 
-            client_class = self._get_client_class(a2a_module)
-            if client_class is None:
+            resolved = self._resolve_client_class(a2a_module)
+            if resolved is None:
                 logger.warning(
-                    "traceai-a2a: Could not locate A2AClient class in a2a module. "
-                    "The SDK structure may have changed. Please file an issue."
+                    "traceai-a2a: Could not locate an A2A client class in the "
+                    "installed a2a-sdk. The SDK structure may have changed. "
+                    "Please file an issue."
                 )
                 return
+            client_class, api_version = resolved
+        elif api_version is None:
+            api_version = _API_V0
 
-        wrapper = A2AClientWrapper(tracer=tracer)
+        wrapper = A2AClientWrapper(tracer=tracer, api_version=api_version)
 
-        # Patch send_task (sync/async) — marks it as non-streaming
-        if hasattr(client_class, _SEND_TASK_METHOD):
-            original_send_task = getattr(client_class, _SEND_TASK_METHOD)
-            original_send_task._a2a_streaming = False
-            wrapt.wrap_function_wrapper(
-                client_class,
-                _SEND_TASK_METHOD,
-                wrapper,
+        for method_name, is_streaming in self._methods_for_api(api_version):
+            if not hasattr(client_class, method_name):
+                continue
+            original = getattr(client_class, method_name)
+            # Marker the wrapper reads to pick streaming vs non-streaming
+            # handling. Safe to attach to a function object; for the v1 entry
+            # point it's always True so the marker is redundant but kept
+            # uniform with the v0 path.
+            try:
+                original._a2a_streaming = is_streaming
+            except (AttributeError, TypeError):
+                pass
+            wrapt.wrap_function_wrapper(client_class, method_name, wrapper)
+            logger.debug(
+                "traceai-a2a: Patched %s.%s",
+                client_class.__name__,
+                method_name,
             )
-            logger.debug("traceai-a2a: Patched A2AClient.send_task")
-
-        # Patch send_task_streaming (sync/async) — marks it as streaming
-        if hasattr(client_class, _SEND_TASK_STREAMING_METHOD):
-            original_send_task_streaming = getattr(
-                client_class, _SEND_TASK_STREAMING_METHOD
-            )
-            original_send_task_streaming._a2a_streaming = True
-            wrapt.wrap_function_wrapper(
-                client_class,
-                _SEND_TASK_STREAMING_METHOD,
-                wrapper,
-            )
-            logger.debug("traceai-a2a: Patched A2AClient.send_task_streaming")
 
         logger.info(
             "traceai-a2a v%s: A2AInstrumentor active — "
@@ -135,19 +147,35 @@ class A2AInstrumentor(BaseInstrumentor):
         if a2a_module is None:
             return
 
-        client_class = self._get_client_class(a2a_module)
-        if client_class is None:
+        resolved = self._resolve_client_class(a2a_module)
+        if resolved is None:
             return
+        client_class, api_version = resolved
 
-        for method_name in (_SEND_TASK_METHOD, _SEND_TASK_STREAMING_METHOD):
+        for method_name, _ in self._methods_for_api(api_version):
             patched = getattr(client_class, method_name, None)
             if patched and hasattr(patched, "__wrapped__"):
                 setattr(client_class, method_name, patched.__wrapped__)
-                logger.debug("traceai-a2a: Unpatched A2AClient.%s", method_name)
+                logger.debug(
+                    "traceai-a2a: Unpatched %s.%s",
+                    client_class.__name__,
+                    method_name,
+                )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _methods_for_api(api_version: str) -> List[Tuple[str, bool]]:
+        """Return the (method_name, is_streaming) pairs to patch per API."""
+        if api_version == _API_V1:
+            # `Client.send_message` always returns an AsyncIterator.
+            return [(_SEND_MESSAGE_METHOD, True)]
+        return [
+            (_SEND_TASK_METHOD, False),
+            (_SEND_TASK_STREAMING_METHOD, True),
+        ]
 
     def _get_a2a_module(self) -> Optional[Any]:
         """
@@ -160,21 +188,38 @@ class A2AInstrumentor(BaseInstrumentor):
         except ImportError:
             return None
 
-    def _get_client_class(self, a2a_module: Any) -> Optional[type]:
+    def _resolve_client_class(
+        self, a2a_module: Any
+    ) -> Optional[Tuple[type, str]]:
         """
-        Locate the A2AClient class in the a2a module.
-        Tries common locations used across SDK versions.
+        Locate the A2A client class and report which API generation it is.
+
+        Returns (class, api_version) where api_version is "v0" for the old
+        ``A2AClient.send_task`` shape and "v1" for the post-rename
+        ``Client.send_message`` shape. The v1 lookup is tried first because
+        installs of a2a-sdk >= 1.0 re-export the new ``Client`` class while
+        no longer providing ``A2AClient``.
         """
-        # a2a-sdk >= 0.2.x: a2a.client.A2AClient
+        # a2a-sdk >= 1.0: a2a.client.Client (send_message / async streaming)
         try:
-            from a2a.client import A2AClient
-            return A2AClient
+            from a2a.client import Client as _Client  # type: ignore[attr-defined]
+
+            if isinstance(_Client, type):
+                return _Client, _API_V1
         except ImportError:
             pass
 
-        # Fallback: a2a.A2AClient (flat namespace in older versions)
+        # a2a-sdk >= 0.2: a2a.client.A2AClient
+        try:
+            from a2a.client import A2AClient  # type: ignore[attr-defined]
+
+            return A2AClient, _API_V0
+        except ImportError:
+            pass
+
+        # Older flat-namespace fallback
         client_class = getattr(a2a_module, "A2AClient", None)
-        if client_class is not None and isinstance(client_class, type):
-            return client_class
+        if isinstance(client_class, type):
+            return client_class, _API_V0
 
         return None
