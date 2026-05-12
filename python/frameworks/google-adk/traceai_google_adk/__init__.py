@@ -74,104 +74,169 @@ class GoogleADKInstrumentor(BaseInstrumentor):  # type: ignore
             setattr(parent, attribute, original)
 
     def _patch_trace_call_llm(self) -> None:
-        """Patch the LLM call tracing functionality to use our tracer."""
-        from google.adk.flows.llm_flows import base_llm_flow
+        """Patch the LLM call tracing functionality to use our tracer.
 
+        Prefers patching ``google.adk.telemetry.tracing`` (the source of
+        truth in google-adk >= 1.x where the trace functions were
+        centralized). Falls back to the older
+        ``google.adk.flows.llm_flows.base_llm_flow`` re-export for old
+        google-adk versions where ``telemetry.tracing`` doesn't exist.
+        """
         from traceai_google_adk._wrappers import _TraceCallLlm
 
-        setattr(base_llm_flow, "tracer", self._tracer)
+        target, attr = self._resolve_trace_call_llm_target()
+        if target is None:
+            return
+        setattr(target, "tracer", self._tracer)
         setattr(
-            base_llm_flow,
-            "trace_call_llm",
-            _TraceCallLlm(self._tracer)(base_llm_flow.trace_call_llm),  # type: ignore[attr-defined]
+            target,
+            attr,
+            _TraceCallLlm(self._tracer)(getattr(target, attr)),  # type: ignore[attr-defined]
         )
 
     def _unpatch_trace_call_llm(self) -> None:
         """Restore the original LLM call tracing functionality."""
-        from google.adk.flows.llm_flows import base_llm_flow
+        target, attr = self._resolve_trace_call_llm_target()
+        if target is None:
+            return
+        current = getattr(target, attr, None)
+        if callable(original := getattr(current, "__wrapped__", None)):
+            setattr(target, attr, original)
 
-        if callable(
-            original := getattr(base_llm_flow.trace_call_llm, "__wrapped__"),  # type: ignore[attr-defined]
-        ):
-            from google.adk.flows.llm_flows import (
-                base_llm_flow,
-            )
+        try:
+            from google.adk.telemetry import tracer  # type: ignore[attr-defined]
 
-            setattr(base_llm_flow, "trace_call_llm", original)
+            setattr(target, "tracer", tracer)
+        except ImportError:
+            pass
 
-        from google.adk.telemetry import tracer
+    @staticmethod
+    def _resolve_trace_call_llm_target() -> Tuple[Any, str]:
+        """Return the (module, attr_name) to patch for trace_call_llm.
 
-        setattr(base_llm_flow, "tracer", tracer)
+        google-adk 1.x exposes the canonical definition at
+        ``google.adk.telemetry.tracing``; older versions only re-export
+        it through ``google.adk.flows.llm_flows.base_llm_flow``.
+        """
+        try:
+            from google.adk.telemetry import tracing as adk_tracing
+
+            if hasattr(adk_tracing, "trace_call_llm"):
+                return adk_tracing, "trace_call_llm"
+        except ImportError:
+            pass
+
+        try:
+            from google.adk.flows.llm_flows import base_llm_flow
+
+            if hasattr(base_llm_flow, "trace_call_llm"):
+                return base_llm_flow, "trace_call_llm"
+        except ImportError:
+            pass
+        return None, "trace_call_llm"  # type: ignore[return-value]
 
     def _patch_trace_tool_call(self) -> None:
-        """Patch the tool call tracing functionality to use our tracer."""
-        from google.adk.flows.llm_flows import functions
+        """Patch the tool call tracing functionality to use our tracer.
 
+        In google-adk 1.x the rich per-tool tracing function moved to
+        ``google.adk.telemetry.tracing.trace_tool_call`` (with its
+        original signature). The old patch target
+        ``google.adk.flows.llm_flows.functions.trace_tool_call`` was
+        renamed away, so we prefer the new location and fall back to
+        the old one for compatibility with pre-1.x ADK.
+        """
         from traceai_google_adk._wrappers import _TraceToolCall
 
-        setattr(functions, "tracer", self._tracer)
+        target, attr = self._resolve_trace_tool_call_target()
+        if target is None:
+            return
+        setattr(target, "tracer", self._tracer)
         setattr(
-            functions,
-            "trace_tool_call",
-            _TraceToolCall(self._tracer)(functions.trace_tool_call),  # type: ignore[attr-defined]
+            target,
+            attr,
+            _TraceToolCall(self._tracer)(getattr(target, attr)),  # type: ignore[attr-defined]
         )
 
     def _unpatch_trace_tool_call(self) -> None:
         """Restore the original tool call tracing functionality."""
-        from google.adk.flows.llm_flows.base_llm_flow import functions  # type: ignore[attr-defined]
+        target, attr = self._resolve_trace_tool_call_target()
+        if target is None:
+            return
+        current = getattr(target, attr, None)
+        if callable(original := getattr(current, "__wrapped__", None)):
+            setattr(target, attr, original)
 
-        if callable(
-            original := getattr(functions.trace_tool_call, "__wrapped__"),  # type: ignore[attr-defined]
-        ):
-            from google.adk.flows.llm_flows.base_llm_flow import (  # type: ignore[attr-defined]
-                functions,
-            )
+        try:
+            from google.adk.telemetry import tracer  # type: ignore[attr-defined]
 
-            setattr(functions, "trace_tool_call", original)
+            setattr(target, "tracer", tracer)
+        except ImportError:
+            pass
 
-        from google.adk.telemetry import tracer
+    @staticmethod
+    def _resolve_trace_tool_call_target() -> Tuple[Any, str]:
+        """Return the (module, attr_name) to patch for trace_tool_call.
 
-        setattr(functions, "tracer", tracer)
+        google-adk 1.x keeps the rich-signature ``trace_tool_call`` in
+        ``google.adk.telemetry.tracing`` (called from
+        ``record_tool_execution``). Older ADK had it re-exported from
+        ``google.adk.flows.llm_flows.functions``.
+        """
+        try:
+            from google.adk.telemetry import tracing as adk_tracing
+
+            if hasattr(adk_tracing, "trace_tool_call"):
+                return adk_tracing, "trace_tool_call"
+        except ImportError:
+            pass
+
+        try:
+            from google.adk.flows.llm_flows import functions
+
+            if hasattr(functions, "trace_tool_call"):
+                return functions, "trace_tool_call"
+        except ImportError:
+            pass
+        return None, "trace_tool_call"  # type: ignore[return-value]
 
     def _disable_existing_tracers(self) -> None:
         """Disable existing tracers to prevent double-instrumentation."""
-        from google.adk.runners import (  # type: ignore[attr-defined]
-            tracer,  # pyright: ignore[reportPrivateImportUsage]
-        )
+        from google.adk import runners
 
-        if isinstance(tracer, Tracer):
-            from google.adk import runners
+        if isinstance(getattr(runners, "tracer", None), Tracer):
+            setattr(runners, "tracer", _PassthroughTracer(runners.tracer))
 
-            setattr(runners, "tracer", _PassthroughTracer(tracer))
-
-        from google.adk.agents.base_agent import (
-            tracer,  # pyright: ignore[reportPrivateImportUsage]
-        )
-
-        if isinstance(tracer, Tracer):
+        # google-adk 1.x removed the module-level `tracer` from
+        # base_agent. Guard so the import error doesn't kill instrument().
+        try:
             from google.adk.agents import base_agent
-
-            setattr(base_agent, "tracer", _PassthroughTracer(tracer))
+        except ImportError:
+            base_agent = None  # type: ignore[assignment]
+        if base_agent is not None and isinstance(
+            getattr(base_agent, "tracer", None), Tracer
+        ):
+            setattr(base_agent, "tracer", _PassthroughTracer(base_agent.tracer))
 
     def _restore_existing_tracers(self) -> None:
         """Restore original tracers that were disabled during instrumentation."""
-        from google.adk.runners import (  # type: ignore[attr-defined]
-            tracer,  # pyright: ignore[reportPrivateImportUsage]
-        )
+        from google.adk import runners
 
-        if isinstance(original := getattr(tracer, "__wrapped__"), Tracer):
-            from google.adk import runners
-
+        runners_tracer = getattr(runners, "tracer", None)
+        if isinstance(
+            original := getattr(runners_tracer, "__wrapped__", None), Tracer
+        ):
             setattr(runners, "tracer", original)
 
-        from google.adk.agents.base_agent import (
-            tracer,  # pyright: ignore[reportPrivateImportUsage]
-        )
-
-        if isinstance(original := getattr(tracer, "__wrapped__"), Tracer):
+        try:
             from google.adk.agents import base_agent
-
-            setattr(base_agent, "tracer", original)
+        except ImportError:
+            base_agent = None  # type: ignore[assignment]
+        if base_agent is not None:
+            base_agent_tracer = getattr(base_agent, "tracer", None)
+            if isinstance(
+                original := getattr(base_agent_tracer, "__wrapped__", None), Tracer
+            ):
+                setattr(base_agent, "tracer", original)
 
 
 class _PassthroughTracer(wrapt.ObjectProxy):  # type: ignore[misc]
