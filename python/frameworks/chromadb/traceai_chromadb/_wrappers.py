@@ -15,6 +15,25 @@ from traceai_chromadb._attributes import (
     safe_json_dumps,
 )
 
+# FI canonical span-kind / IO keys. Optional dependency — gracefully degrade
+# if fi-instrumentation isn't installed so the wrapper still loads.
+try:
+    from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
+
+    _FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+    _FI_INPUT_VALUE = SpanAttributes.INPUT_VALUE
+    _FI_INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
+    _FI_OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+    _FI_OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
+    _FI_RETRIEVER = FiSpanKindValues.RETRIEVER.value
+except Exception:  # pragma: no cover
+    _FI_SPAN_KIND = "gen_ai.span.kind"
+    _FI_INPUT_VALUE = "input.value"
+    _FI_INPUT_MIME_TYPE = "input.mime_type"
+    _FI_OUTPUT_VALUE = "output.value"
+    _FI_OUTPUT_MIME_TYPE = "output.mime_type"
+    _FI_RETRIEVER = "RETRIEVER"
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,6 +169,22 @@ class QueryWrapper(BaseWrapper):
             attributes["db.vector.query.type"] = "text"
             attributes["db.vector.query.text_count"] = len(query_texts)
 
+        # FI canonical retriever attributes — without these the Future AGI
+        # dashboard renders Type=unknown and leaves Input/Output panels blank.
+        attributes[_FI_SPAN_KIND] = _FI_RETRIEVER
+        if query_texts:
+            attributes[_FI_INPUT_VALUE] = (
+                query_texts[0]
+                if len(query_texts) == 1
+                else safe_json_dumps(query_texts)
+            )
+            attributes[_FI_INPUT_MIME_TYPE] = "text/plain"
+        elif query_embeddings:
+            attributes[_FI_INPUT_VALUE] = safe_json_dumps(
+                {"query_embeddings_count": len(query_embeddings), "n_results": n_results}
+            )
+            attributes[_FI_INPUT_MIME_TYPE] = "application/json"
+
         with self._tracer.start_as_current_span(
             span_name,
             kind=SpanKind.CLIENT,
@@ -172,6 +207,17 @@ class QueryWrapper(BaseWrapper):
                         first_query_distances = result["distances"][0] if result["distances"] else []
                         if first_query_distances:
                             span.set_attribute(Attrs.RESULTS_SCORES, safe_json_dumps(first_query_distances[:10]))
+
+                    # FI canonical output.value — prefer the document texts so
+                    # the dashboard's Output panel shows the retrieved content.
+                    documents = result.get("documents")
+                    if documents and documents[0]:
+                        span.set_attribute(
+                            _FI_OUTPUT_VALUE, safe_json_dumps(documents[0])
+                        )
+                        span.set_attribute(
+                            _FI_OUTPUT_MIME_TYPE, "application/json"
+                        )
 
                 span.set_status(Status(StatusCode.OK))
                 return result
