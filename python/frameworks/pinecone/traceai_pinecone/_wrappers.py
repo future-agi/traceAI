@@ -15,6 +15,24 @@ from traceai_pinecone._attributes import (
     safe_json_dumps,
 )
 
+# FI canonical span-kind / IO keys. Optional dependency.
+try:
+    from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
+
+    _FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+    _FI_INPUT_VALUE = SpanAttributes.INPUT_VALUE
+    _FI_INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
+    _FI_OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+    _FI_OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
+    _FI_RETRIEVER = FiSpanKindValues.RETRIEVER.value
+except Exception:  # pragma: no cover
+    _FI_SPAN_KIND = "gen_ai.span.kind"
+    _FI_INPUT_VALUE = "input.value"
+    _FI_INPUT_MIME_TYPE = "input.mime_type"
+    _FI_OUTPUT_VALUE = "output.value"
+    _FI_OUTPUT_MIME_TYPE = "output.mime_type"
+    _FI_RETRIEVER = "RETRIEVER"
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,6 +106,23 @@ class QueryWrapper(BaseWrapper):
         if host:
             attributes[Attrs.INDEX_HOST] = host
 
+        # FI canonical retriever attributes.
+        attributes[_FI_SPAN_KIND] = _FI_RETRIEVER
+        query_id = kwargs.get("id")
+        query_vector = kwargs.get("vector")
+        input_summary = {
+            "top_k": top_k,
+            "namespace": namespace or None,
+            "filter": filter_dict,
+            "id": query_id,
+        }
+        if isinstance(query_vector, list):
+            input_summary["vector_dim"] = len(query_vector)
+        attributes[_FI_INPUT_VALUE] = safe_json_dumps(
+            {k: v for k, v in input_summary.items() if v is not None}
+        )
+        attributes[_FI_INPUT_MIME_TYPE] = "application/json"
+
         with self._tracer.start_as_current_span(
             span_name,
             kind=SpanKind.CLIENT,
@@ -111,6 +146,27 @@ class QueryWrapper(BaseWrapper):
                         ids = [m.id for m in matches[:10] if hasattr(m, "id")]
                         if ids:
                             span.set_attribute(Attrs.RESULTS_IDS, safe_json_dumps(ids))
+
+                        # FI canonical output.value — surface matches with
+                        # id/score (and metadata when requested) for the
+                        # Output panel.
+                        output_payload = []
+                        for m in matches[:50]:
+                            entry = {
+                                "id": getattr(m, "id", None),
+                                "score": getattr(m, "score", None),
+                            }
+                            md = getattr(m, "metadata", None)
+                            if md:
+                                entry["metadata"] = md
+                            output_payload.append(entry)
+                        if output_payload:
+                            span.set_attribute(
+                                _FI_OUTPUT_VALUE, safe_json_dumps(output_payload)
+                            )
+                            span.set_attribute(
+                                _FI_OUTPUT_MIME_TYPE, "application/json"
+                            )
 
                 span.set_status(Status(StatusCode.OK))
                 return result
