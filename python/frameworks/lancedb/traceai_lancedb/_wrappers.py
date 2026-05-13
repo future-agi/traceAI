@@ -6,6 +6,24 @@ from typing import Any, Callable
 
 from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
 
+# FI canonical span-kind / IO keys. Optional dependency.
+try:
+    from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
+
+    _FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+    _FI_INPUT_VALUE = SpanAttributes.INPUT_VALUE
+    _FI_INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
+    _FI_OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+    _FI_OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
+    _FI_RETRIEVER = FiSpanKindValues.RETRIEVER.value
+except Exception:  # pragma: no cover
+    _FI_SPAN_KIND = "gen_ai.span.kind"
+    _FI_INPUT_VALUE = "input.value"
+    _FI_INPUT_MIME_TYPE = "input.mime_type"
+    _FI_OUTPUT_VALUE = "output.value"
+    _FI_OUTPUT_MIME_TYPE = "output.mime_type"
+    _FI_RETRIEVER = "RETRIEVER"
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,14 +72,53 @@ class SearchWrapper(BaseWrapper):
         attributes["db.vector.query.top_k"] = limit
         attributes["db.vector.search.output_format"] = self._method
 
+        # FI canonical retriever attributes.
+        attributes[_FI_SPAN_KIND] = _FI_RETRIEVER
+        # LanceDB uses a query-builder pattern; the actual query data is on
+        # the builder instance. Surface what we can find safely.
+        query_value = getattr(instance, "_query", None) or getattr(
+            instance, "_text", None
+        )
+        input_summary: dict = {"limit": limit, "output_format": self._method}
+        if isinstance(query_value, str):
+            input_summary["query"] = query_value[:500]
+        elif isinstance(query_value, (list, tuple)):
+            input_summary["vector_dim"] = len(query_value)
+        attributes[_FI_INPUT_VALUE] = safe_json_dumps(input_summary)
+        attributes[_FI_INPUT_MIME_TYPE] = "application/json"
+
         with self._tracer.start_as_current_span("lancedb search", kind=SpanKind.CLIENT, attributes=attributes) as span:
             try:
                 result = wrapped(*args, **kwargs)
                 if result is not None:
                     if self._method == "to_list":
                         span.set_attribute("db.vector.results.count", len(result))
+                        span.set_attribute(
+                            _FI_OUTPUT_VALUE, safe_json_dumps(result[:50])
+                        )
+                        span.set_attribute(
+                            _FI_OUTPUT_MIME_TYPE, "application/json"
+                        )
                     elif hasattr(result, "num_rows"):
                         span.set_attribute("db.vector.results.count", result.num_rows)
+                        # Best-effort: convert pyarrow table to a dict list.
+                        try:
+                            if hasattr(result, "to_pylist"):
+                                rows = result.to_pylist()
+                            elif hasattr(result, "to_pydict"):
+                                rows = result.to_pydict()
+                            else:
+                                rows = None
+                            if rows is not None:
+                                span.set_attribute(
+                                    _FI_OUTPUT_VALUE,
+                                    safe_json_dumps(rows[:50] if isinstance(rows, list) else rows),
+                                )
+                                span.set_attribute(
+                                    _FI_OUTPUT_MIME_TYPE, "application/json"
+                                )
+                        except Exception:
+                            pass
                 span.set_status(Status(StatusCode.OK))
                 return result
             except Exception as e:
