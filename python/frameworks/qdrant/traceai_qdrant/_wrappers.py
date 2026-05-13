@@ -6,6 +6,24 @@ from typing import Any, Callable, Optional
 
 from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
 
+# FI canonical span-kind / IO keys. Optional dependency.
+try:
+    from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
+
+    _FI_SPAN_KIND = SpanAttributes.FI_SPAN_KIND
+    _FI_INPUT_VALUE = SpanAttributes.INPUT_VALUE
+    _FI_INPUT_MIME_TYPE = SpanAttributes.INPUT_MIME_TYPE
+    _FI_OUTPUT_VALUE = SpanAttributes.OUTPUT_VALUE
+    _FI_OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
+    _FI_RETRIEVER = FiSpanKindValues.RETRIEVER.value
+except Exception:  # pragma: no cover
+    _FI_SPAN_KIND = "gen_ai.span.kind"
+    _FI_INPUT_VALUE = "input.value"
+    _FI_INPUT_MIME_TYPE = "input.mime_type"
+    _FI_OUTPUT_VALUE = "output.value"
+    _FI_OUTPUT_MIME_TYPE = "output.mime_type"
+    _FI_RETRIEVER = "RETRIEVER"
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,6 +32,21 @@ def safe_json_dumps(obj: Any) -> str:
         return json.dumps(obj)
     except (TypeError, ValueError):
         return str(obj)
+
+
+def _qdrant_points_summary(points: Any) -> Optional[str]:
+    """Render an (id, score, payload) summary of a list of qdrant points."""
+    try:
+        out = []
+        for p in points[:50]:
+            entry = {"id": getattr(p, "id", None), "score": getattr(p, "score", None)}
+            payload = getattr(p, "payload", None)
+            if payload:
+                entry["payload"] = payload
+            out.append(entry)
+        return safe_json_dumps(out) if out else None
+    except Exception:
+        return None
 
 
 class BaseWrapper:
@@ -51,20 +84,43 @@ class QueryPointsWrapper(BaseWrapper):
         if query_filter:
             attributes["db.vector.query.filter"] = safe_json_dumps(query_filter)
 
+        # FI canonical retriever attributes.
+        attributes[_FI_SPAN_KIND] = _FI_RETRIEVER
+        query = kwargs.get("query")
+        input_summary = {
+            "limit": limit,
+            "filter": query_filter,
+            "score_threshold": score_threshold,
+        }
+        if isinstance(query, list):
+            input_summary["vector_dim"] = len(query)
+        elif query is not None:
+            input_summary["query"] = str(query)[:200]
+        attributes[_FI_INPUT_VALUE] = safe_json_dumps(
+            {k: v for k, v in input_summary.items() if v is not None}
+        )
+        attributes[_FI_INPUT_MIME_TYPE] = "application/json"
+
         with self._tracer.start_as_current_span("qdrant query", kind=SpanKind.CLIENT, attributes=attributes) as span:
             try:
                 result = wrapped(*args, **kwargs)
                 # Handle both QueryResponse (query_points) and list results
+                points = None
                 if result:
                     if hasattr(result, 'points'):
                         points = result.points
                         span.set_attribute("db.vector.results.count", len(points))
                         scores = [p.score for p in points[:10] if hasattr(p, "score")]
                     else:
+                        points = result
                         span.set_attribute("db.vector.results.count", len(result))
                         scores = [p.score for p in result[:10] if hasattr(p, "score")]
                     if scores:
                         span.set_attribute("db.vector.results.scores", safe_json_dumps(scores))
+                    summary = _qdrant_points_summary(points) if points else None
+                    if summary:
+                        span.set_attribute(_FI_OUTPUT_VALUE, summary)
+                        span.set_attribute(_FI_OUTPUT_MIME_TYPE, "application/json")
                 span.set_status(Status(StatusCode.OK))
                 return result
             except Exception as e:
@@ -173,11 +229,26 @@ class RecommendWrapper(BaseWrapper):
             "db.vector.query.top_k": limit,
         })
 
+        # FI canonical retriever attributes.
+        attributes[_FI_SPAN_KIND] = _FI_RETRIEVER
+        attributes[_FI_INPUT_VALUE] = safe_json_dumps(
+            {
+                "positive_count": len(positive),
+                "negative_count": len(negative),
+                "limit": limit,
+            }
+        )
+        attributes[_FI_INPUT_MIME_TYPE] = "application/json"
+
         with self._tracer.start_as_current_span("qdrant recommend", kind=SpanKind.CLIENT, attributes=attributes) as span:
             try:
                 result = wrapped(*args, **kwargs)
                 if result:
                     span.set_attribute("db.vector.results.count", len(result))
+                    summary = _qdrant_points_summary(result)
+                    if summary:
+                        span.set_attribute(_FI_OUTPUT_VALUE, summary)
+                        span.set_attribute(_FI_OUTPUT_MIME_TYPE, "application/json")
                 span.set_status(Status(StatusCode.OK))
                 return result
             except Exception as e:
