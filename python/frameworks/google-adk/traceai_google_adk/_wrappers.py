@@ -25,6 +25,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools import BaseTool
 from google.genai import types
+from google.genai.types import Blob
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
@@ -39,11 +40,12 @@ from fi_instrumentation import (
     using_user,
 )
 from fi_instrumentation.fi_types import (
-    MessageAttributes,
-    MessageContentAttributes,
     FiLLMProviderValues,
     FiMimeTypeValues,
     FiSpanKindValues,
+    ImageAttributes,
+    MessageAttributes,
+    MessageContentAttributes,
     SpanAttributes,
     ToolAttributes,
     ToolCallAttributes,
@@ -159,6 +161,7 @@ class _BaseAgentRunAsync(_WithTracer):
         name = f"agent_run [{instance.name}]"
         attributes = dict(get_attributes_from_context())
         attributes[SpanAttributes.GEN_AI_SPAN_KIND] = FiSpanKindValues.AGENT.value
+        attributes[SpanAttributes.GEN_AI_AGENT_NAME] = instance.name
 
         class _AsyncGenerator(wrapt.ObjectProxy):  # type: ignore[misc]
             __wrapped__: AsyncGenerator[Event, None]
@@ -260,7 +263,8 @@ class _TraceCallLlm(_WithTracer):
                         if system_instruction.parts:
                             for k, v in _get_attributes_from_parts(
                                 system_instruction.parts,
-                                prefix=f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{input_messages_index}.",
+                                span_attribute=SpanAttributes.GEN_AI_INPUT_MESSAGES,
+                                message_index=input_messages_index,
                                 text_only=True,
                             ):
                                 span.set_attribute(k, v)
@@ -273,7 +277,8 @@ class _TraceCallLlm(_WithTracer):
                 for i, content in enumerate(contents, input_messages_index):
                     for k, v in _get_attributes_from_content(
                         content,
-                        prefix=f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.",
+                        span_attribute=SpanAttributes.GEN_AI_INPUT_MESSAGES,
+                        message_index=i,
                     ):
                         span.set_attribute(k, v)
         if llm_response:
@@ -372,7 +377,7 @@ def _get_attributes_from_llm_response(
         yield from _get_attributes_from_usage_metadata(obj.usage_metadata)
     if obj.content:
         yield from _get_attributes_from_content(
-            obj.content, prefix=f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0."
+            obj.content, span_attribute=SpanAttributes.GEN_AI_OUTPUT_MESSAGES, message_index=0
         )
 
 
@@ -425,12 +430,34 @@ def _get_attributes_from_content(
     obj: types.Content,
     /,
     *,
-    prefix: str = "",
+    span_attribute: str = SpanAttributes.GEN_AI_INPUT_MESSAGES,
+    message_index: int = 0,
 ) -> Iterator[tuple[str, AttributeValue]]:
     role = obj.role or "user"
+    prefix = f"{span_attribute}.{message_index}."
     yield f"{prefix}{MessageAttributes.MESSAGE_ROLE}", role
     if parts := obj.parts:
-        yield from _get_attributes_from_parts(parts, prefix=prefix)
+        yield from _get_attributes_from_parts(
+            parts, span_attribute=span_attribute, message_index=message_index
+        )
+
+
+def _get_attributes_from_inline_data(
+    inline_data: Blob, prefix: str = ""
+) -> Iterator[tuple[str, AttributeValue]]:
+    try:
+        mime_type = inline_data.mime_type
+        data = inline_data.data
+        if data and mime_type and "image" in mime_type:
+            image_url = f"data:{inline_data.mime_type};base64,{base64.b64encode(data).decode()}"
+            yield (
+                f"{prefix}{MessageContentAttributes.MESSAGE_CONTENT_IMAGE}.{ImageAttributes.IMAGE_URL}",
+                image_url,
+            )
+            yield f"{prefix}{MessageContentAttributes.MESSAGE_CONTENT_TYPE}", "image"
+
+    except Exception:
+        logger.debug("Failed to extract file data attributes.")
 
 
 @stop_on_exception
@@ -438,23 +465,27 @@ def _get_attributes_from_parts(
     obj: Iterable[types.Part],
     /,
     *,
-    prefix: str = "",
+    span_attribute: str = SpanAttributes.GEN_AI_INPUT_MESSAGES,
+    message_index: int = 0,
     text_only: bool = False,
 ) -> Iterator[tuple[str, AttributeValue]]:
     for i, part in enumerate(obj):
         if (text := part.text) is not None:
+            prefix = f"{span_attribute}.{message_index}.{MessageAttributes.MESSAGE_CONTENTS}.{i}."
             yield from _get_attributes_from_text_part(
                 text,
-                prefix=f"{prefix}{MessageAttributes.MESSAGE_CONTENTS}.{i}.",
+                prefix=prefix,
             )
         elif text_only:
             continue
         elif (function_call := part.function_call) is not None:
+            prefix = f"{span_attribute}.{message_index}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{i}."
             yield from _get_attributes_from_function_call(
                 function_call,
-                prefix=f"{prefix}{MessageAttributes.MESSAGE_TOOL_CALLS}.{i}.",
+                prefix=prefix,
             )
         elif (function_response := part.function_response) is not None:
+            prefix = f"{span_attribute}.{message_index}."
             yield f"{prefix}{MessageAttributes.MESSAGE_ROLE}", "tool"
             if function_response.name:
                 yield f"{prefix}{MessageAttributes.MESSAGE_NAME}", function_response.name
@@ -463,6 +494,10 @@ def _get_attributes_from_parts(
                     f"{prefix}{MessageAttributes.MESSAGE_CONTENT}",
                     safe_json_dumps(function_response.response),
                 )
+            message_index += 1
+        elif inline_data := part.inline_data:
+            prefix = f"{span_attribute}.{message_index}.{MessageAttributes.MESSAGE_CONTENTS}.{i}."
+            yield from _get_attributes_from_inline_data(inline_data, prefix)
 
 
 @stop_on_exception
