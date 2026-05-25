@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "traceAI-agent-framework"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for Microsoft Agent Framework"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [
+    { include = "traceai_agent_framework" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.15"
+fi-instrumentation-otel = ">=0.1.14"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.0"
+agent-framework = ">=1.0.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
