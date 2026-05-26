@@ -522,3 +522,408 @@ def test_processor_shutdown_clears_state():
     )
     processor.on_end(after)
     assert "gen_ai.span.kind" not in after._attributes
+
+
+# ---------------------------------------------------------------------------
+# Multi-part message flattening: tool_call / tool_call_response / reasoning
+# ---------------------------------------------------------------------------
+
+
+def test_flatten_extracts_tool_call_response_content():
+    out = _flatten_messages(
+        json.dumps([
+            {"role": "tool", "parts": [
+                {"type": "tool_call_response", "id": "call_abc", "response": "sunny in Paris, 22°C"}
+            ]}
+        ]),
+        "gen_ai.output.messages",
+    )
+    assert out["gen_ai.output.messages.0.message.role"] == "tool"
+    assert out["gen_ai.output.messages.0.message.content"] == "sunny in Paris, 22°C"
+    assert out["gen_ai.output.messages.0.message.tool_call_id"] == "call_abc"
+
+
+def test_flatten_extracts_tool_call_args_and_id():
+    out = _flatten_messages(
+        json.dumps([
+            {"role": "assistant", "parts": [
+                {"type": "tool_call", "id": "call_xyz",
+                 "name": "get_weather", "arguments": {"city": "Paris"}}
+            ]}
+        ]),
+        "gen_ai.output.messages",
+    )
+    tc_prefix = "gen_ai.output.messages.0.message.tool_calls.0"
+    assert out[f"{tc_prefix}.tool_call.id"] == "call_xyz"
+    assert out[f"{tc_prefix}.tool_call.function.name"] == "get_weather"
+    assert out[f"{tc_prefix}.tool_call.function.arguments"] == '{"city": "Paris"}'
+
+
+def test_flatten_extracts_reasoning_parts_as_text():
+    """Reasoning parts should join into message.content like text parts do."""
+    out = _flatten_messages(
+        json.dumps([
+            {"role": "assistant", "parts": [
+                {"type": "reasoning", "content": "I should call get_weather"},
+                {"type": "text", "content": "Calling tool now."},
+            ]}
+        ]),
+        "gen_ai.output.messages",
+    )
+    content = out["gen_ai.output.messages.0.message.content"]
+    assert "I should call get_weather" in content
+    assert "Calling tool now." in content
+
+
+def test_flatten_handles_mixed_text_and_tool_call_parts():
+    """A single message can contain text AND a tool_call — flatten both."""
+    out = _flatten_messages(
+        json.dumps([
+            {"role": "assistant", "parts": [
+                {"type": "text", "content": "Let me check that."},
+                {"type": "tool_call", "id": "c1", "name": "get_weather",
+                 "arguments": {"city": "Tokyo"}},
+            ]}
+        ]),
+        "gen_ai.output.messages",
+    )
+    assert out["gen_ai.output.messages.0.message.role"] == "assistant"
+    assert out["gen_ai.output.messages.0.message.content"] == "Let me check that."
+    assert out["gen_ai.output.messages.0.message.tool_calls.0.tool_call.id"] == "c1"
+    assert out["gen_ai.output.messages.0.message.tool_calls.0.tool_call.function.name"] == "get_weather"
+
+
+# ---------------------------------------------------------------------------
+# graph.node.* per kind
+# ---------------------------------------------------------------------------
+
+
+def test_graph_node_for_llm_uses_response_id():
+    out = _map_attributes_to_fi_conventions({
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "gpt-4o",
+        "gen_ai.response.id": "resp-abc",
+    })
+    assert out["graph.node.id"] == "llm_resp-abc"
+    assert out["graph.node.name"] == "gpt-4o"
+
+
+def test_graph_node_for_llm_falls_back_to_model_when_no_response_id():
+    out = _map_attributes_to_fi_conventions({
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "gpt-4o",
+    })
+    assert out["graph.node.id"] == "llm_gpt-4o"
+
+
+def test_graph_node_for_agent_uses_agent_id():
+    out = _map_attributes_to_fi_conventions({
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.agent.id": "ag-1",
+        "gen_ai.agent.name": "weather_agent",
+    })
+    assert out["graph.node.id"] == "agent_ag-1"
+    assert out["graph.node.name"] == "weather_agent"
+
+
+def test_graph_node_for_tool_uses_name_and_call_id():
+    out = _map_attributes_to_fi_conventions({
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": "get_weather",
+        "gen_ai.tool.call.id": "call-1",
+    })
+    assert out["graph.node.id"] == "tool_get_weather_call-1"
+    assert out["graph.node.name"] == "get_weather"
+
+
+def test_graph_node_for_chain_uses_workflow_id():
+    out = _map_attributes_to_fi_conventions({
+        "workflow.id": "wf-99",
+        "workflow.name": "MyFlow",
+    })
+    assert out["graph.node.id"] == "workflow_wf-99"
+    assert out["graph.node.name"] == "MyFlow"
+
+
+def test_graph_node_for_chain_uses_executor_id_when_no_workflow_id():
+    out = _map_attributes_to_fi_conventions({
+        "executor.id": "exec-5",
+        "executor.type": "FunctionExecutor",
+    })
+    assert out["graph.node.id"] == "executor_exec-5"
+    assert out["graph.node.name"] == "FunctionExecutor"
+
+
+def test_graph_node_for_chain_uses_edge_group_id_when_no_workflow_or_executor():
+    out = _map_attributes_to_fi_conventions({
+        "edge_group.id": "eg-7",
+        "edge_group.type": "SingleEdgeGroup",
+    })
+    assert out["graph.node.id"] == "edge_group_eg-7"
+    assert out["graph.node.name"] == "SingleEdgeGroup"
+
+
+# ---------------------------------------------------------------------------
+# gen_ai.request.parameters bundling
+# ---------------------------------------------------------------------------
+
+
+def test_request_params_bundled_for_llm():
+    attrs = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "gpt-4o",
+        "gen_ai.request.temperature": 0.7,
+        "gen_ai.request.top_p": 0.9,
+        "gen_ai.request.max_tokens": 1000,
+        "gen_ai.request.choice.count": 1,
+    }
+    out = _map_attributes_to_fi_conventions(attrs)
+    params = json.loads(out["gen_ai.request.parameters"])
+    assert params["temperature"] == 0.7
+    assert params["top_p"] == 0.9
+    assert params["max_tokens"] == 1000
+    assert params["choice.count"] == 1
+
+
+def test_request_params_excludes_model_key():
+    attrs = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "gpt-4o",
+        "gen_ai.request.temperature": 0.5,
+    }
+    out = _map_attributes_to_fi_conventions(attrs)
+    params = json.loads(out["gen_ai.request.parameters"])
+    assert "model" not in params  # gen_ai.request.model is excluded
+
+
+def test_request_params_skipped_when_no_request_attrs():
+    """LLM span with only model + nothing else should NOT have a parameters bundle."""
+    attrs = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": "gpt-4o",
+    }
+    out = _map_attributes_to_fi_conventions(attrs)
+    assert "gen_ai.request.parameters" not in out
+
+
+# ---------------------------------------------------------------------------
+# Cross-batch bubble-up (state preservation across on_end calls)
+# ---------------------------------------------------------------------------
+
+
+def test_bubble_state_isolated_across_traces():
+    """A descendant from trace A must not bubble into trace B's parent."""
+    processor = AgentFrameworkSpanProcessor()
+
+    agent_a = _FakeReadableSpan(
+        span_id=10, parent_id=1, start_time=10, end_time=50,
+        attrs={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.input.messages": '[{"role":"user","parts":[{"type":"text","content":"trace A"}]}]',
+        },
+    )
+    workflow_a = _FakeReadableSpan(
+        span_id=1, parent_id=None, start_time=0, end_time=100,
+        attrs={"workflow.id": "wf-a"},
+    )
+    workflow_b = _FakeReadableSpan(
+        span_id=2, parent_id=None, start_time=200, end_time=300,
+        attrs={"workflow.id": "wf-b"},
+    )
+
+    processor.on_end(agent_a)
+    processor.on_end(workflow_a)
+    processor.on_end(workflow_b)
+
+    # workflow_a should have bubbled-in input from its descendant
+    assert "trace A" in workflow_a._attributes["input.value"]
+    # workflow_b had no descendants — must not pick up A's data
+    assert "input.value" not in workflow_b._attributes
+
+
+def test_bubble_up_works_when_descendants_end_long_before_parent():
+    """Descendants from earlier on_end calls should still bubble into a later parent."""
+    processor = AgentFrameworkSpanProcessor()
+
+    # Imagine 3 separate invocations of on_end before the workflow ends
+    child1 = _FakeReadableSpan(
+        span_id=20, parent_id=2, start_time=10, end_time=20,
+        attrs={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.input.messages": '[{"role":"user","parts":[{"type":"text","content":"first"}]}]',
+            "gen_ai.output.messages": '[{"role":"assistant","parts":[{"type":"text","content":"early"}]}]',
+        },
+    )
+    executor1 = _FakeReadableSpan(
+        span_id=2, parent_id=1, start_time=5, end_time=25,
+        attrs={"executor.id": "e1"},
+    )
+    child2 = _FakeReadableSpan(
+        span_id=30, parent_id=3, start_time=40, end_time=80,
+        attrs={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.output.messages": '[{"role":"assistant","parts":[{"type":"text","content":"late"}]}]',
+        },
+    )
+    executor2 = _FakeReadableSpan(
+        span_id=3, parent_id=1, start_time=35, end_time=85,
+        attrs={"executor.id": "e2"},
+    )
+    workflow = _FakeReadableSpan(
+        span_id=1, parent_id=None, start_time=0, end_time=100,
+        attrs={"workflow.id": "wf"},
+    )
+
+    # End them in their natural order: deepest first, root last
+    processor.on_end(child1)
+    processor.on_end(executor1)
+    processor.on_end(child2)
+    processor.on_end(executor2)
+    processor.on_end(workflow)
+
+    # workflow gets first input (from child1) and last output (from child2)
+    assert "first" in workflow._attributes["input.value"]
+    assert "late" in workflow._attributes["output.value"]
+
+
+# ---------------------------------------------------------------------------
+# embeddings + create_agent classification
+# ---------------------------------------------------------------------------
+
+
+def test_classify_embeddings_is_embedding_kind():
+    assert _classify_span_kind({"gen_ai.operation.name": "embeddings"}) == "EMBEDDING"
+
+
+def test_embedding_span_gets_messages_lifted_like_llm():
+    attrs = {
+        "gen_ai.operation.name": "embeddings",
+        "gen_ai.request.model": "text-embedding-3",
+        "gen_ai.input.messages": '[{"role":"user","parts":[{"type":"text","content":"embed me"}]}]',
+        "gen_ai.usage.input_tokens": 5,
+    }
+    out = _map_attributes_to_fi_conventions(attrs)
+    assert out["gen_ai.span.kind"] == "EMBEDDING"
+    assert out["input.value"] == "embed me"  # single-text → plain text
+    assert "gen_ai.input.messages.0.message.content" in out
+
+
+def test_classify_create_agent_is_agent_kind():
+    assert _classify_span_kind({"gen_ai.operation.name": "create_agent"}) == "AGENT"
+
+
+# ---------------------------------------------------------------------------
+# Smart formatting branches
+# ---------------------------------------------------------------------------
+
+
+def test_output_value_is_plain_text_for_single_text_assistant_msg():
+    attrs = _make_chat_attrs(
+        [{"role": "user", "parts": [{"type": "text", "content": "hi"}]}],
+        [{"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}],
+    )
+    out = _map_attributes_to_fi_conventions(attrs)
+    assert out["output.value"] == "hello"
+    assert out["output.mime_type"] == "text/plain"
+
+
+def test_output_value_stays_json_for_multi_message_output():
+    """If output has multiple messages OR non-text parts, output.value should be raw JSON."""
+    out_msgs = [
+        {"role": "assistant", "parts": [
+            {"type": "tool_call", "id": "c1", "name": "f", "arguments": {}}
+        ]},
+        {"role": "tool", "parts": [
+            {"type": "tool_call_response", "id": "c1", "response": "ok"}
+        ]},
+        {"role": "assistant", "parts": [{"type": "text", "content": "done"}]},
+    ]
+    attrs = _make_chat_attrs(
+        [{"role": "user", "parts": [{"type": "text", "content": "hi"}]}],
+        out_msgs,
+    )
+    out = _map_attributes_to_fi_conventions(attrs)
+    # Last message is assistant with text-only → plain text is fine for output
+    assert out["output.value"] == "done"
+
+
+def test_input_with_tool_role_message_uses_json_format():
+    """If input is a tool-role message (not a single user msg), keep JSON format."""
+    in_msgs = [
+        {"role": "tool", "parts": [
+            {"type": "tool_call_response", "id": "c1", "response": "data"}
+        ]}
+    ]
+    attrs = _make_chat_attrs(
+        in_msgs,
+        [{"role": "assistant", "parts": [{"type": "text", "content": "ok"}]}],
+    )
+    out = _map_attributes_to_fi_conventions(attrs)
+    # Single-message but not a text-only message → keeps JSON
+    assert out["input.mime_type"] == "application/json"
+
+
+# ---------------------------------------------------------------------------
+# Status untouched (Phase 0 finding)
+# ---------------------------------------------------------------------------
+
+
+def test_processor_does_not_set_status_attribute():
+    """The processor must not touch span status; that's the framework's job."""
+    processor = AgentFrameworkSpanProcessor()
+    span = _FakeReadableSpan(
+        span_id=1, parent_id=None, start_time=0, end_time=100,
+        attrs={"gen_ai.operation.name": "chat", "gen_ai.request.model": "gpt-4o"},
+    )
+    # Mark a custom status sentinel on the fake before processing
+    original_status = "untouched-sentinel"
+    span._status = original_status  # type: ignore[attr-defined]
+    processor.on_end(span)
+    assert span._status == original_status, "processor must not set or clear status"
+
+
+# ---------------------------------------------------------------------------
+# Defensive: edge cases on the span itself
+# ---------------------------------------------------------------------------
+
+
+def test_processor_handles_span_with_none_attributes():
+    """Span with _attributes=None must not crash the processor."""
+    processor = AgentFrameworkSpanProcessor()
+
+    class _NoAttrsSpan:
+        instrumentation_scope = _FakeScope("agent_framework")
+        _attributes = None
+        @property
+        def parent(self): return None
+        class _Ctx:
+            span_id = 1
+        context = _Ctx()
+        start_time = 0
+        end_time = 100
+
+    # Must not raise
+    processor.on_end(_NoAttrsSpan())
+
+
+def test_processor_handles_mapping_proxy_attributes():
+    """OTel SDK sometimes wraps attrs in MappingProxyType; we should coerce safely."""
+    import types as _types
+    processor = AgentFrameworkSpanProcessor()
+    underlying = {"gen_ai.operation.name": "execute_tool"}
+
+    class _MappedSpan:
+        instrumentation_scope = _FakeScope("agent_framework")
+        _attributes = _types.MappingProxyType(underlying)
+        parent = None
+        class _Ctx:
+            span_id = 1
+        context = _Ctx()
+        start_time = 0
+        end_time = 100
+
+    span = _MappedSpan()
+    processor.on_end(span)
+    # After mutation, _attributes is a fresh dict (not the proxy) with the new keys
+    assert isinstance(span._attributes, dict)
+    assert span._attributes["gen_ai.span.kind"] == "TOOL"
