@@ -103,8 +103,9 @@ async def test_agent_run_emits_agent_span_with_fi_attrs(captured):
 
     attrs = agent_spans[0].attributes
     assert attrs["gen_ai.span.kind"] == "AGENT"
-    assert attrs["input.mime_type"] == "application/json"
-    assert attrs["output.mime_type"] == "application/json"
+    # Single text-only message on both sides → plain-text format.
+    assert attrs["input.mime_type"] == "text/plain"
+    assert attrs["output.mime_type"] == "text/plain"
     assert attrs["gen_ai.input.messages.0.message.role"] == "user"
     assert attrs["gen_ai.input.messages.0.message.content"] == "What's the weather in Paris?"
     assert attrs["gen_ai.output.messages.0.message.role"] == "assistant"
