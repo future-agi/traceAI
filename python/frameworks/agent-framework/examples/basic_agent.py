@@ -1,5 +1,8 @@
 """Minimal Microsoft Agent Framework example traced into Future AGI.
 
+Calls a real LLM (OpenAI) and a real tool (wttr.in — no API key needed).
+You should see invoke_agent / chat / execute_tool spans in the FI dashboard.
+
 Run with:
     export FI_API_KEY=...
     export FI_SECRET_KEY=...
@@ -9,6 +12,8 @@ Run with:
 
 import asyncio
 import os
+import urllib.parse
+import urllib.request
 
 from agent_framework import Agent
 from agent_framework.observability import enable_instrumentation
@@ -17,6 +22,17 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 
 from traceai_agent_framework import enable_fi_attribute_mapping
+
+
+def get_weather(city: str) -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: City name, e.g. "Paris", "Tokyo", "New York".
+    """
+    url = f"https://wttr.in/{urllib.parse.quote(city)}?format=3"
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        return resp.read().decode("utf-8").strip()
 
 
 def main() -> None:
@@ -38,16 +54,17 @@ def main() -> None:
     #    Agent Framework's gen_ai.* spans into FI conventions as they end.
     enable_fi_attribute_mapping()
 
-    # 4) Build an agent. Anything you do with it from here on emits traced spans.
+    # 4) Build an agent with a real weather tool.
     agent = Agent(
-        OpenAIChatClient(),
+        OpenAIChatClient(model="gpt-4o-mini"),
         name="weather_agent",
-        description="Answers questions about weather.",
-        instructions="You are a concise, friendly weather assistant.",
+        description="Answers questions about weather using the get_weather tool.",
+        instructions="You are a concise weather assistant. Always use get_weather.",
+        tools=[get_weather],
     )
 
     async def run() -> None:
-        response = await agent.run("What's the weather like in Paris in spring?")
+        response = await agent.run("What's the weather in Paris right now?")
         print("Agent response:\n", response)
 
     asyncio.run(run())

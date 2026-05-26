@@ -99,16 +99,31 @@ def _make_chat_attrs(input_msgs, output_msgs, input_tokens=None, output_tokens=N
 
 
 def test_llm_lifts_messages_to_input_output_value():
+    """Single text-only user message → plain text in input.value (not JSON blob)."""
     attrs = _make_chat_attrs(
         [{"role": "user", "parts": [{"type": "text", "content": "hi"}]}],
         [{"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}],
     )
     out = _map_attributes_to_fi_conventions(attrs)
     assert out["gen_ai.span.kind"] == "LLM"
+    assert out["input.value"] == "hi"
+    assert out["input.mime_type"] == "text/plain"
+    assert out["output.value"] == "hello"
+    assert out["output.mime_type"] == "text/plain"
+
+
+def test_llm_lifts_messages_keeps_json_when_complex():
+    """Multi-message input → raw JSON blob (not collapsed to plain text)."""
+    attrs = _make_chat_attrs(
+        [
+            {"role": "system", "parts": [{"type": "text", "content": "be terse"}]},
+            {"role": "user", "parts": [{"type": "text", "content": "hi"}]},
+        ],
+        [{"role": "assistant", "parts": [{"type": "text", "content": "ok"}]}],
+    )
+    out = _map_attributes_to_fi_conventions(attrs)
     assert out["input.value"] == attrs["gen_ai.input.messages"]
     assert out["input.mime_type"] == "application/json"
-    assert out["output.value"] == attrs["gen_ai.output.messages"]
-    assert out["output.mime_type"] == "application/json"
 
 
 def test_llm_flattens_messages_with_indexed_keys():
@@ -400,8 +415,9 @@ def test_chain_io_bubbles_up_from_descendant():
 
     # workflow.run got the bubbled input/output from its grandchild agent
     assert workflow._attributes["gen_ai.span.kind"] == "CHAIN"
-    assert workflow._attributes["input.value"].startswith("[{")
-    assert workflow._attributes["output.value"].startswith("[{")
+    # Single text-only user/assistant message → plain text format
+    assert workflow._attributes["input.value"] == "hi"
+    assert workflow._attributes["output.value"] == "hello"
     # executor.process also got them (still a chain)
     assert executor._attributes["gen_ai.span.kind"] == "CHAIN"
     assert "input.value" in executor._attributes

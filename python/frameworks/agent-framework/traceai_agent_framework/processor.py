@@ -30,6 +30,7 @@ from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     MessageAttributes,
     SpanAttributes,
+    ToolCallAttributes,
 )
 
 # ---------------------------------------------------------------------------
@@ -62,25 +63,62 @@ def _safe_json_loads(value: Any) -> Any:
         return None
 
 
-def _extract_text_from_parts(parts: Any) -> Optional[str]:
-    """Agent Framework messages carry content as ``parts: [{type, content}]``.
+def _flatten_message_parts(parts: Any, msg_index_prefix: str) -> Dict[str, Any]:
+    """Walk a message's ``parts`` list and emit FI-flavored sub-attributes.
 
-    Concatenates the text from ``type="text"`` parts. Non-text parts (image,
-    blob, reasoning, function-call variants) are skipped; the raw JSON blob
-    remains on the span as ``input.value`` / ``output.value`` so the
-    information is not lost.
+    Handles the part types the framework emits:
+      * ``text``               -> appended to ``message.content``
+      * ``tool_call_response`` -> appended to ``message.content`` + ``message.tool_call_id``
+      * ``tool_call``          -> ``message.tool_calls.{j}.tool_call.{id,function.name,function.arguments}``
+
+    ``msg_index_prefix`` is ``{messages_prefix}.{i}`` — e.g. ``gen_ai.output.messages.0``.
     """
     if not isinstance(parts, list):
-        return None
+        return {}
+    out: Dict[str, Any] = {}
     texts: List[str] = []
+    tool_call_idx = 0
+
     for part in parts:
         if not isinstance(part, dict):
             continue
-        if part.get("type") == "text":
+        ptype = part.get("type")
+
+        if ptype in ("text", "reasoning"):
             content = part.get("content")
             if isinstance(content, str):
                 texts.append(content)
-    return "\n".join(texts) if texts else None
+
+        elif ptype == "tool_call_response":
+            response = part.get("response")
+            if isinstance(response, str):
+                texts.append(response)
+            elif response is not None:
+                texts.append(json.dumps(response))
+            call_id = part.get("id")
+            if call_id is not None:
+                out[f"{msg_index_prefix}.{MessageAttributes.MESSAGE_TOOL_CALL_ID}"] = call_id
+
+        elif ptype == "tool_call":
+            tc_prefix = (
+                f"{msg_index_prefix}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_call_idx}"
+            )
+            call_id = part.get("id")
+            name = part.get("name")
+            arguments = part.get("arguments")
+            if call_id is not None:
+                out[f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_ID}"] = call_id
+            if name is not None:
+                out[f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}"] = name
+            if arguments is not None:
+                out[f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}"] = (
+                    arguments if isinstance(arguments, str) else json.dumps(arguments)
+                )
+            tool_call_idx += 1
+
+    if texts:
+        out[f"{msg_index_prefix}.{MessageAttributes.MESSAGE_CONTENT}"] = "\n".join(texts)
+    return out
 
 
 def _flatten_messages(messages_json: str, prefix: str) -> Dict[str, Any]:
@@ -91,7 +129,9 @@ def _flatten_messages(messages_json: str, prefix: str) -> Dict[str, Any]:
 
     Output keys:
         {prefix}.{i}.message.role
-        {prefix}.{i}.message.content   (joined text from text-type parts)
+        {prefix}.{i}.message.content                    (text + tool_call_response text)
+        {prefix}.{i}.message.tool_call_id               (when a tool_call_response is present)
+        {prefix}.{i}.message.tool_calls.{j}.tool_call.* (for tool_call parts)
     """
     parsed = _safe_json_loads(messages_json)
     if not isinstance(parsed, list):
@@ -100,12 +140,11 @@ def _flatten_messages(messages_json: str, prefix: str) -> Dict[str, Any]:
     for i, msg in enumerate(parsed):
         if not isinstance(msg, dict):
             continue
+        msg_index_prefix = f"{prefix}.{i}"
         role = msg.get("role")
         if role is not None:
-            out[f"{prefix}.{i}.{MessageAttributes.MESSAGE_ROLE}"] = role
-        text = _extract_text_from_parts(msg.get("parts"))
-        if text is not None:
-            out[f"{prefix}.{i}.{MessageAttributes.MESSAGE_CONTENT}"] = text
+            out[f"{msg_index_prefix}.{MessageAttributes.MESSAGE_ROLE}"] = role
+        out.update(_flatten_message_parts(msg.get("parts"), msg_index_prefix))
     return out
 
 
@@ -138,21 +177,77 @@ def _classify_span_kind(attributes: Dict[str, Any]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _all_text_message_content(msg: Dict[str, Any]) -> Optional[str]:
+    """If a message has only text/reasoning parts, return joined content. Else None."""
+    parts = msg.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return None
+    texts: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            return None
+        if part.get("type") not in ("text", "reasoning"):
+            return None  # has a tool_call etc.; bail
+        content = part.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+    return "\n".join(texts) if texts else None
+
+
 def _surface_messages_io(mapped: Dict[str, Any]) -> None:
-    """Lift ``gen_ai.input/output.messages`` into ``input.value``/``output.value`` + flatten."""
+    """Lift ``gen_ai.input/output.messages`` into ``input.value``/``output.value`` + flatten.
+
+    For single text-only messages we use plain text instead of the raw JSON blob —
+    matches OpenInference's UX choice and renders cleaner in the FI dashboard.
+    """
     in_msgs = mapped.get(_INPUT_MSGS)
     if isinstance(in_msgs, str):
-        mapped[SpanAttributes.INPUT_VALUE] = in_msgs
-        mapped[SpanAttributes.INPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
+        parsed = _safe_json_loads(in_msgs)
+        plain = None
+        if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+            plain = _all_text_message_content(parsed[0])
+        if plain is not None:
+            mapped[SpanAttributes.INPUT_VALUE] = plain
+            mapped[SpanAttributes.INPUT_MIME_TYPE] = FiMimeTypeValues.TEXT.value
+        else:
+            mapped[SpanAttributes.INPUT_VALUE] = in_msgs
+            mapped[SpanAttributes.INPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
         for k, v in _flatten_messages(in_msgs, _INPUT_MSGS).items():
             mapped[k] = v
 
     out_msgs = mapped.get(_OUTPUT_MSGS)
     if isinstance(out_msgs, str):
-        mapped[SpanAttributes.OUTPUT_VALUE] = out_msgs
-        mapped[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
+        parsed = _safe_json_loads(out_msgs)
+        plain = None
+        if isinstance(parsed, list) and parsed and isinstance(parsed[-1], dict):
+            plain = _all_text_message_content(parsed[-1])
+        if plain is not None:
+            mapped[SpanAttributes.OUTPUT_VALUE] = plain
+            mapped[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.TEXT.value
+        else:
+            mapped[SpanAttributes.OUTPUT_VALUE] = out_msgs
+            mapped[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
         for k, v in _flatten_messages(out_msgs, _OUTPUT_MSGS).items():
             mapped[k] = v
+
+
+def _bundle_request_parameters(mapped: Dict[str, Any]) -> None:
+    """Collect ``gen_ai.request.*`` settings (temperature, top_p, max_tokens,
+    choice.count, etc.) into a single ``gen_ai.request.parameters`` JSON so
+    the FI dashboard's "Model Parameters" panel has one key to read.
+    Excludes ``gen_ai.request.model`` — that's its own first-class attribute."""
+    if SpanAttributes.GEN_AI_REQUEST_PARAMETERS in mapped:
+        return
+    params: Dict[str, Any] = {}
+    for key, val in list(mapped.items()):
+        if (
+            isinstance(key, str)
+            and key.startswith("gen_ai.request.")
+            and key != SpanAttributes.GEN_AI_REQUEST_MODEL
+        ):
+            params[key.split("gen_ai.request.", 1)[1]] = val
+    if params:
+        mapped[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = json.dumps(params)
 
 
 def _derive_total_tokens(mapped: Dict[str, Any]) -> None:
@@ -163,6 +258,65 @@ def _derive_total_tokens(mapped: Dict[str, Any]) -> None:
     out = mapped.get(_OUTPUT_TOKENS)
     if isinstance(inp, (int, float)) and isinstance(out, (int, float)):
         mapped[_TOTAL_TOKENS] = int(inp) + int(out)
+
+
+def _add_graph_node_attrs(mapped: Dict[str, Any], kind: str) -> None:
+    """Stamp ``graph.node.id`` / ``graph.node.name`` so the FI agent-graph view
+    has stable identifiers for LLM / TOOL / AGENT spans."""
+    if kind == FiSpanKindValues.LLM.value or kind == FiSpanKindValues.EMBEDDING.value:
+        name = mapped.get("gen_ai.response.model") or mapped.get("gen_ai.request.model")
+        node_id = mapped.get("gen_ai.response.id") or name
+        if node_id is not None:
+            mapped[SpanAttributes.GRAPH_NODE_ID] = f"llm_{node_id}"
+        if name is not None:
+            mapped[SpanAttributes.GRAPH_NODE_NAME] = name
+
+    elif kind == FiSpanKindValues.AGENT.value:
+        agent_id = mapped.get("gen_ai.agent.id")
+        agent_name = mapped.get("gen_ai.agent.name")
+        if agent_id is not None:
+            mapped[SpanAttributes.GRAPH_NODE_ID] = f"agent_{agent_id}"
+        if agent_name is not None:
+            mapped[SpanAttributes.GRAPH_NODE_NAME] = agent_name
+
+    elif kind == FiSpanKindValues.TOOL.value:
+        tool_name = mapped.get("gen_ai.tool.name")
+        call_id = mapped.get("gen_ai.tool.call.id")
+        if tool_name is not None:
+            mapped[SpanAttributes.GRAPH_NODE_NAME] = tool_name
+            node_id = f"tool_{tool_name}" + (f"_{call_id}" if call_id else "")
+            mapped[SpanAttributes.GRAPH_NODE_ID] = node_id
+
+    elif kind == FiSpanKindValues.CHAIN.value:
+        if workflow_id := mapped.get("workflow.id"):
+            mapped[SpanAttributes.GRAPH_NODE_ID] = f"workflow_{workflow_id}"
+            if workflow_name := mapped.get("workflow.name"):
+                mapped[SpanAttributes.GRAPH_NODE_NAME] = workflow_name
+        elif executor_id := mapped.get("executor.id"):
+            mapped[SpanAttributes.GRAPH_NODE_ID] = f"executor_{executor_id}"
+            if executor_type := mapped.get("executor.type"):
+                mapped[SpanAttributes.GRAPH_NODE_NAME] = executor_type
+        elif edge_group_id := mapped.get("edge_group.id"):
+            mapped[SpanAttributes.GRAPH_NODE_ID] = f"edge_group_{edge_group_id}"
+            if edge_group_type := mapped.get("edge_group.type"):
+                mapped[SpanAttributes.GRAPH_NODE_NAME] = edge_group_type
+
+
+_METADATA_KEYS = (
+    "gen_ai.request.choice.count",
+    "server.address",
+    "agent_framework.function.invocation.duration",
+    "agent_framework.function.name",
+)
+
+
+def _bundle_metadata(mapped: Dict[str, Any]) -> None:
+    """Bundle a few miscellaneous attrs into a single ``metadata`` JSON string."""
+    if "metadata" in mapped:
+        return
+    extras = {k: mapped[k] for k in _METADATA_KEYS if k in mapped}
+    if extras:
+        mapped["metadata"] = json.dumps(extras)
 
 
 def _enrich_tool(mapped: Dict[str, Any]) -> None:
@@ -216,9 +370,13 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     ):
         _surface_messages_io(mapped)
         _derive_total_tokens(mapped)
+        _bundle_request_parameters(mapped)
     elif kind == FiSpanKindValues.TOOL.value:
         _enrich_tool(mapped)
     # CHAIN: stamped here; I/O bubbled in by AgentFrameworkSpanProcessor.on_end().
+
+    _add_graph_node_attrs(mapped, kind)
+    _bundle_metadata(mapped)
 
     return mapped
 

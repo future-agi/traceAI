@@ -134,3 +134,4 @@ def test_user_explicit_disable_is_respected(fresh_global_provider):
 
     # Clean up so the explicit-disable doesn't bleed into other tests.
     _af_enable(force=True)
+
