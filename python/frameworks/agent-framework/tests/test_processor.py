@@ -99,17 +99,17 @@ def _make_chat_attrs(input_msgs, output_msgs, input_tokens=None, output_tokens=N
 
 
 def test_llm_lifts_messages_to_input_output_value():
-    """Single text-only user message → plain text in input.value (not JSON blob)."""
+    """input.value/output.value mirror the raw gen_ai.*.messages JSON blob."""
     attrs = _make_chat_attrs(
         [{"role": "user", "parts": [{"type": "text", "content": "hi"}]}],
         [{"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}],
     )
     out = _map_attributes_to_fi_conventions(attrs)
     assert out["gen_ai.span.kind"] == "LLM"
-    assert out["input.value"] == "hi"
-    assert out["input.mime_type"] == "text/plain"
-    assert out["output.value"] == "hello"
-    assert out["output.mime_type"] == "text/plain"
+    assert out["input.value"] == attrs["gen_ai.input.messages"]
+    assert out["input.mime_type"] == "application/json"
+    assert out["output.value"] == attrs["gen_ai.output.messages"]
+    assert out["output.mime_type"] == "application/json"
 
 
 def test_llm_lifts_messages_keeps_json_when_complex():
@@ -413,11 +413,13 @@ def test_chain_io_bubbles_up_from_descendant():
     processor.on_end(executor)
     processor.on_end(workflow)
 
-    # workflow.run got the bubbled input/output from its grandchild agent
+    # workflow.run got the bubbled input/output from its grandchild agent.
+    # input.value/output.value are the raw gen_ai.*.messages JSON blobs.
     assert workflow._attributes["gen_ai.span.kind"] == "CHAIN"
-    # Single text-only user/assistant message → plain text format
-    assert workflow._attributes["input.value"] == "hi"
-    assert workflow._attributes["output.value"] == "hello"
+    assert "hi" in workflow._attributes["input.value"]
+    assert "hello" in workflow._attributes["output.value"]
+    assert workflow._attributes["input.mime_type"] == "application/json"
+    assert workflow._attributes["output.mime_type"] == "application/json"
     # executor.process also got them (still a chain)
     assert executor._attributes["gen_ai.span.kind"] == "CHAIN"
     assert "input.value" in executor._attributes
@@ -804,7 +806,8 @@ def test_embedding_span_gets_messages_lifted_like_llm():
     }
     out = _map_attributes_to_fi_conventions(attrs)
     assert out["gen_ai.span.kind"] == "EMBEDDING"
-    assert out["input.value"] == "embed me"  # single-text → plain text
+    assert out["input.value"] == attrs["gen_ai.input.messages"]
+    assert out["input.mime_type"] == "application/json"
     assert "gen_ai.input.messages.0.message.content" in out
 
 
@@ -813,22 +816,24 @@ def test_classify_create_agent_is_agent_kind():
 
 
 # ---------------------------------------------------------------------------
-# Smart formatting branches
+# input.value / output.value always use the raw JSON shape
 # ---------------------------------------------------------------------------
 
 
-def test_output_value_is_plain_text_for_single_text_assistant_msg():
+def test_input_output_value_always_json_mime_type():
     attrs = _make_chat_attrs(
         [{"role": "user", "parts": [{"type": "text", "content": "hi"}]}],
         [{"role": "assistant", "parts": [{"type": "text", "content": "hello"}]}],
     )
     out = _map_attributes_to_fi_conventions(attrs)
-    assert out["output.value"] == "hello"
-    assert out["output.mime_type"] == "text/plain"
+    assert out["input.value"] == attrs["gen_ai.input.messages"]
+    assert out["output.value"] == attrs["gen_ai.output.messages"]
+    assert out["input.mime_type"] == "application/json"
+    assert out["output.mime_type"] == "application/json"
 
 
-def test_output_value_stays_json_for_multi_message_output():
-    """If output has multiple messages OR non-text parts, output.value should be raw JSON."""
+def test_input_output_value_preserves_complex_message_shape():
+    """Tool-call / tool-result / multi-turn shapes pass through verbatim."""
     out_msgs = [
         {"role": "assistant", "parts": [
             {"type": "tool_call", "id": "c1", "name": "f", "arguments": {}}
@@ -843,24 +848,8 @@ def test_output_value_stays_json_for_multi_message_output():
         out_msgs,
     )
     out = _map_attributes_to_fi_conventions(attrs)
-    # Last message is assistant with text-only → plain text is fine for output
-    assert out["output.value"] == "done"
-
-
-def test_input_with_tool_role_message_uses_json_format():
-    """If input is a tool-role message (not a single user msg), keep JSON format."""
-    in_msgs = [
-        {"role": "tool", "parts": [
-            {"type": "tool_call_response", "id": "c1", "response": "data"}
-        ]}
-    ]
-    attrs = _make_chat_attrs(
-        in_msgs,
-        [{"role": "assistant", "parts": [{"type": "text", "content": "ok"}]}],
-    )
-    out = _map_attributes_to_fi_conventions(attrs)
-    # Single-message but not a text-only message → keeps JSON
-    assert out["input.mime_type"] == "application/json"
+    assert out["output.value"] == attrs["gen_ai.output.messages"]
+    assert out["output.mime_type"] == "application/json"
 
 
 # ---------------------------------------------------------------------------

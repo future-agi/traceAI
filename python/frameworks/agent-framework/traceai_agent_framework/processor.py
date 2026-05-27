@@ -177,56 +177,24 @@ def _classify_span_kind(attributes: Dict[str, Any]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _all_text_message_content(msg: Dict[str, Any]) -> Optional[str]:
-    """If a message has only text/reasoning parts, return joined content. Else None."""
-    parts = msg.get("parts")
-    if not isinstance(parts, list) or not parts:
-        return None
-    texts: List[str] = []
-    for part in parts:
-        if not isinstance(part, dict):
-            return None
-        if part.get("type") not in ("text", "reasoning"):
-            return None  # has a tool_call etc.; bail
-        content = part.get("content")
-        if isinstance(content, str):
-            texts.append(content)
-    return "\n".join(texts) if texts else None
-
-
 def _surface_messages_io(mapped: Dict[str, Any]) -> None:
     """Lift ``gen_ai.input/output.messages`` into ``input.value``/``output.value`` + flatten.
 
-    For single text-only messages we use plain text instead of the raw JSON blob —
-    matches OpenInference's UX choice and renders cleaner in the FI dashboard.
+    The raw JSON is preserved on ``input.value``/``output.value`` (mime
+    ``application/json``) so the framework's native message shape is retained,
+    matching the openai/anthropic/litellm sibling adapters.
     """
     in_msgs = mapped.get(_INPUT_MSGS)
     if isinstance(in_msgs, str):
-        parsed = _safe_json_loads(in_msgs)
-        plain = None
-        if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
-            plain = _all_text_message_content(parsed[0])
-        if plain is not None:
-            mapped[SpanAttributes.INPUT_VALUE] = plain
-            mapped[SpanAttributes.INPUT_MIME_TYPE] = FiMimeTypeValues.TEXT.value
-        else:
-            mapped[SpanAttributes.INPUT_VALUE] = in_msgs
-            mapped[SpanAttributes.INPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
+        mapped[SpanAttributes.INPUT_VALUE] = in_msgs
+        mapped[SpanAttributes.INPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
         for k, v in _flatten_messages(in_msgs, _INPUT_MSGS).items():
             mapped[k] = v
 
     out_msgs = mapped.get(_OUTPUT_MSGS)
     if isinstance(out_msgs, str):
-        parsed = _safe_json_loads(out_msgs)
-        plain = None
-        if isinstance(parsed, list) and parsed and isinstance(parsed[-1], dict):
-            plain = _all_text_message_content(parsed[-1])
-        if plain is not None:
-            mapped[SpanAttributes.OUTPUT_VALUE] = plain
-            mapped[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.TEXT.value
-        else:
-            mapped[SpanAttributes.OUTPUT_VALUE] = out_msgs
-            mapped[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
+        mapped[SpanAttributes.OUTPUT_VALUE] = out_msgs
+        mapped[SpanAttributes.OUTPUT_MIME_TYPE] = FiMimeTypeValues.JSON.value
         for k, v in _flatten_messages(out_msgs, _OUTPUT_MSGS).items():
             mapped[k] = v
 
