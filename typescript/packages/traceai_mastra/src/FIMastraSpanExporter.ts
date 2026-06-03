@@ -2,6 +2,7 @@ import { BaseExporter } from "@mastra/observability";
 import { SpanConverter } from "@mastra/otel-exporter";
 import { SpanType } from "@mastra/core/observability";
 import type { AnyExportedSpan, TracingEvent } from "@mastra/core/observability";
+import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
@@ -28,22 +29,22 @@ export interface FISpanExporterConfig {
  * (llm / agent / tool / chain / ...). Mastra emits `gen_ai.operation.name` but
  * NOT a span kind, so without this mapping every span renders as "unknown".
  */
-const SPAN_KIND_BY_TYPE: Partial<Record<SpanType, string>> = {
-  [SpanType.AGENT_RUN]: "AGENT",
-  [SpanType.MODEL_GENERATION]: "LLM",
-  [SpanType.MODEL_INFERENCE]: "LLM",
-  [SpanType.MODEL_STEP]: "CHAIN",
-  [SpanType.TOOL_CALL]: "TOOL",
-  [SpanType.MCP_TOOL_CALL]: "TOOL",
-  [SpanType.CLIENT_TOOL_CALL]: "TOOL",
-  [SpanType.WORKFLOW_RUN]: "CHAIN",
-  [SpanType.WORKFLOW_STEP]: "CHAIN",
-  [SpanType.WORKFLOW_CONDITIONAL]: "CHAIN",
-  [SpanType.WORKFLOW_PARALLEL]: "CHAIN",
-  [SpanType.WORKFLOW_LOOP]: "CHAIN",
-  [SpanType.GENERIC]: "CHAIN",
-  [SpanType.RAG_EMBEDDING]: "EMBEDDING",
-  [SpanType.RAG_VECTOR_OPERATION]: "RETRIEVER",
+const SPAN_KIND_BY_TYPE: Partial<Record<SpanType, FISpanKind>> = {
+  [SpanType.AGENT_RUN]: FISpanKind.AGENT,
+  [SpanType.MODEL_GENERATION]: FISpanKind.LLM,
+  [SpanType.MODEL_INFERENCE]: FISpanKind.LLM,
+  [SpanType.MODEL_STEP]: FISpanKind.CHAIN,
+  [SpanType.TOOL_CALL]: FISpanKind.TOOL,
+  [SpanType.MCP_TOOL_CALL]: FISpanKind.TOOL,
+  [SpanType.CLIENT_TOOL_CALL]: FISpanKind.TOOL,
+  [SpanType.WORKFLOW_RUN]: FISpanKind.CHAIN,
+  [SpanType.WORKFLOW_STEP]: FISpanKind.CHAIN,
+  [SpanType.WORKFLOW_CONDITIONAL]: FISpanKind.CHAIN,
+  [SpanType.WORKFLOW_PARALLEL]: FISpanKind.CHAIN,
+  [SpanType.WORKFLOW_LOOP]: FISpanKind.CHAIN,
+  [SpanType.GENERIC]: FISpanKind.CHAIN,
+  [SpanType.RAG_EMBEDDING]: FISpanKind.EMBEDDING,
+  [SpanType.RAG_VECTOR_OPERATION]: FISpanKind.RETRIEVER,
 };
 
 /**

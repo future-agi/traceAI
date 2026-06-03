@@ -1,6 +1,6 @@
 {
   "name": "@traceai/mastra",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenTelemetry utilities for Mastra",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
