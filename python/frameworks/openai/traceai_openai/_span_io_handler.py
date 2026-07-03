@@ -19,7 +19,6 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
     if isinstance(input_data, list):
         input_content = []
         input_images = []
-        eval_input = []
         for msg in input_data:
             if isinstance(msg, dict):
                 msg_content = msg.get("content", "")
@@ -29,18 +28,11 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
                         if isinstance(item, dict):
                             if item.get("type") == "text":
                                 filtered_content.append(item)
-                                eval_input.append(item.get("text", ""))
                             elif item.get("type") == "image_url":
                                 url_data = item.get("image_url", {})
                                 url = url_data.get("url")
                                 if url:
                                     input_images.append(url)
-                                    image_index = len(input_images) - 1
-                                    eval_input.append(
-                                        "{{"
-                                        + f"{SpanAttributes.INPUT_IMAGES}.{image_index}"
-                                        + "}}"
-                                    )
                     if filtered_content:
                         msg_dict = msg.copy()
                         msg_dict["content"] = filtered_content
@@ -49,18 +41,15 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
                         continue
                 else:
                     input_content.append(msg)
-                    eval_input.append(msg_content)
+        # INPUT_VALUE holds the full multi-message conversation as JSON.
+        # Do not overwrite it later with a single-message string; that was
+        # the cause of multi-turn context being dropped from the span (#151).
         if input_content:
             input_value = json.dumps(input_content, ensure_ascii=False)
             span.set_attribute(SpanAttributes.INPUT_VALUE, input_value)
         if input_images:
             images_value = json.dumps(input_images, ensure_ascii=False)
             span.set_attribute(SpanAttributes.INPUT_IMAGES, images_value)
-        if eval_input:
-            eval_input_str = " \n ".join(map(str, eval_input))
-            span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
-        if eval_input and len(eval_input) > 0:
-            span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input[0])
     else:
         try:
             input_str = json.dumps(input_data, ensure_ascii=False).strip()
