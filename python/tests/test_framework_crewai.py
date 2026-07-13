@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace.status import Status, StatusCode
@@ -311,9 +312,15 @@ class TestKickoffWrapper:
         assert result == mock_output
         
         # Verify token metrics are set
-        self.mock_span.set_attribute.assert_any_call("llm.token_count.prompt", 200)
-        self.mock_span.set_attribute.assert_any_call("llm.token_count.completion", 100)
-        self.mock_span.set_attribute.assert_any_call("llm.token_count.total", 300)
+        self.mock_span.set_attribute.assert_any_call(
+            SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, 200
+        )
+        self.mock_span.set_attribute.assert_any_call(
+            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, 100
+        )
+        self.mock_span.set_attribute.assert_any_call(
+            SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, 300
+        )
 
     def test_crew_kickoff_with_new_usage_metrics(self):
         """Test crew kickoff with new usage metrics format (v0.51+)."""
@@ -339,9 +346,15 @@ class TestKickoffWrapper:
         self.wrapper(wrapped_func, mock_crew, (), {})
         
         # Verify new format token metrics
-        self.mock_span.set_attribute.assert_any_call("llm.token_count.prompt", 150)
-        self.mock_span.set_attribute.assert_any_call("llm.token_count.completion", 75)
-        self.mock_span.set_attribute.assert_any_call("llm.token_count.total", 225)
+        self.mock_span.set_attribute.assert_any_call(
+            SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, 150
+        )
+        self.mock_span.set_attribute.assert_any_call(
+            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, 75
+        )
+        self.mock_span.set_attribute.assert_any_call(
+            SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, 225
+        )
 
     def test_crew_kickoff_error_handling(self):
         """Test error handling in crew kickoff."""
@@ -426,7 +439,9 @@ class TestToolUseWrapper:
         
         # Verify tool attributes
         self.mock_span.set_attribute.assert_any_call("function_calling_llm", "gpt-4")
-        self.mock_span.set_attribute.assert_any_call("tool.name", "search_tool")
+        self.mock_span.set_attribute.assert_any_call(
+            SpanAttributes.GEN_AI_TOOL_NAME, "search_tool"
+        )
 
     def test_tool_use_without_tool(self):
         """Test tool usage without tool parameter."""
@@ -441,7 +456,7 @@ class TestToolUseWrapper:
         assert result == "no tool result"
         
         # Should set empty tool name
-        self.mock_span.set_attribute.assert_any_call("tool.name", "")
+        self.mock_span.set_attribute.assert_any_call(SpanAttributes.GEN_AI_TOOL_NAME, "")
 
     def test_tool_use_error_handling(self):
         """Test error handling in tool usage."""
