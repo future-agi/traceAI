@@ -402,6 +402,93 @@ class TestKickoffWrapper:
         self.mock_span.set_attribute.assert_any_call("output.value", str(mock_output))
 
 
+class _NotSpecifiedStub:
+    """Stands in for CrewAI's NOT_SPECIFIED sentinel: truthy, but not iterable."""
+
+    def __repr__(self):
+        return "NOT_SPECIFIED"
+
+
+class TestKickoffWrapperTaskContext:
+    """Test how Task.context is recorded on the crew_tasks attribute."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.mock_tracer = MagicMock(spec=trace_api.Tracer)
+        self.mock_span = MagicMock(spec=trace_api.Span)
+        self.mock_context_manager = MagicMock()
+        self.mock_context_manager.__enter__.return_value = self.mock_span
+        self.mock_context_manager.__exit__.return_value = None
+        self.mock_tracer.start_as_current_span.return_value = self.mock_context_manager
+        self.wrapper = _KickoffWrapper(self.mock_tracer)
+
+    def _kickoff_with_task_context(self, context):
+        """Run a one-task crew through the wrapper and return its recorded crew_tasks entry."""
+        mock_task = Mock()
+        mock_task.id = "task_id_1"
+        mock_task.description = "research the topic"
+        mock_task.expected_output = "comprehensive report"
+        mock_task.async_execution = False
+        mock_task.human_input = False
+        mock_task.agent = None
+        mock_task.context = context
+        mock_task.tools = []
+
+        mock_crew = Mock()
+        mock_crew.__class__.__name__ = "Crew"
+        mock_crew.key = "crew_key"
+        mock_crew.id = "crew_id"
+        mock_crew.agents = []
+        mock_crew.tasks = [mock_task]
+        mock_crew.usage_metrics = {}
+
+        mock_output = Mock()
+        mock_output.to_dict.return_value = {"result": "success"}
+        wrapped_func = Mock(__name__="kickoff", return_value=mock_output)
+
+        self.wrapper(wrapped_func, mock_crew, (), {})
+
+        crew_tasks = next(
+            call.args[1]
+            for call in self.mock_span.set_attribute.call_args_list
+            if call.args[0] == "crew_tasks"
+        )
+        return json.loads(crew_tasks)[0]
+
+    def test_unspecified_context_does_not_crash(self):
+        """An unspecified context must not crash the kickoff span (TH-6818).
+
+        CrewAI defaults Task.context to a NOT_SPECIFIED sentinel that is truthy
+        but not iterable, so iterating it raised TypeError.
+        """
+        task = self._kickoff_with_task_context(_NotSpecifiedStub())
+
+        assert task["context"] is None
+
+    def test_none_context(self):
+        """A context of None is recorded as null."""
+        task = self._kickoff_with_task_context(None)
+
+        assert task["context"] is None
+
+    def test_empty_context(self):
+        """A context of [] is recorded as null, matching CrewAI's own None/[] handling."""
+        task = self._kickoff_with_task_context([])
+
+        assert task["context"] is None
+
+    def test_populated_context_records_descriptions(self):
+        """A populated context records the upstream task descriptions."""
+        upstream_one = Mock()
+        upstream_one.description = "first upstream task"
+        upstream_two = Mock()
+        upstream_two.description = "second upstream task"
+
+        task = self._kickoff_with_task_context([upstream_one, upstream_two])
+
+        assert task["context"] == ["first upstream task", "second upstream task"]
+
+
 class TestToolUseWrapper:
     """Test the ToolUsage._use wrapper for TOOL spans."""
 
