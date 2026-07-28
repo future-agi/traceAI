@@ -200,6 +200,9 @@ importers:
         specifier: ^11.1.0
         version: 11.1.0
     devDependencies:
+      '@jest/globals':
+        specifier: ^29.7.0
+        version: 29.7.0
       '@protobuf-ts/plugin':
         specifier: ^2.11.0
         version: 2.11.1
