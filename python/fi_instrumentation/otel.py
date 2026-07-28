@@ -629,6 +629,13 @@ def _printable_headers(
 
 
 def _construct_http_endpoint(parsed_endpoint: ParseResult) -> ParseResult:
+    # FI_COLLECTOR_ENDPOINT is documented as a full OTLP URL. Preserve an
+    # explicitly supplied path instead of appending the SDK default again.
+    if parsed_endpoint.path.rstrip("/") in {
+        "/v1/traces",
+        "/tracer/v1/traces",
+    }:
+        return parsed_endpoint
     return parsed_endpoint._replace(path="/tracer/v1/traces")
 
 

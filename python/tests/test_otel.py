@@ -461,6 +461,13 @@ class TestUtilityFunctions:
         assert "api.example.com" in normalized_endpoint
         assert parsed.scheme in ["http", "https"]
 
+    def test_normalized_endpoint_preserves_full_otlp_path(self):
+        """Full collector overrides must not receive a duplicated OTLP path."""
+        _, normalized_endpoint = _normalized_endpoint(
+            "https://collector.example.com/v1/traces"
+        )
+        assert normalized_endpoint == "https://collector.example.com/v1/traces"
+
     def test_normalized_endpoint_grpc(self):
         """Test _normalized_endpoint with gRPC URL."""
         endpoint = "grpc://api.example.com:50051"
@@ -555,6 +562,5 @@ class TestIntegration:
         # Wait for all threads
         for thread in threads:
             thread.join()
-        
         # Just verify no major crashes occurred - threading behavior is unpredictable in tests
-        assert len(results) + len(errors) == 2  # Total should equal thread count 
+        assert len(results) + len(errors) == 2  # Total should equal thread count

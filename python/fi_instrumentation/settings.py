@@ -12,11 +12,17 @@ logger = logging.getLogger(__name__)
 
 
 def get_env_collector_endpoint() -> Optional[str]:
-    return os.getenv("FI_BASE_URL", "https://api.futureagi.com")
+    return os.getenv(
+        "FI_COLLECTOR_ENDPOINT",
+        os.getenv("FI_BASE_URL", "https://api.futureagi.com"),
+    )
 
 
 def get_env_grpc_collector_endpoint() -> Optional[str]:
-    return os.getenv("FI_GRPC_URL", "https://grpc.futureagi.com")
+    return os.getenv(
+        "FI_GRPC_COLLECTOR_ENDPOINT",
+        os.getenv("FI_GRPC_URL", "https://grpc.futureagi.com"),
+    )
 
 
 def get_env_project_name() -> str:

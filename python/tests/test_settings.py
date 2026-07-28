@@ -31,6 +31,12 @@ class TestEnvironmentVariableGetters:
         result = get_env_collector_endpoint()
         assert result == "https://custom.example.com"
 
+    def test_get_env_collector_endpoint_full_override(self, clean_env):
+        """A documented full collector URL takes precedence over FI_BASE_URL."""
+        os.environ["FI_BASE_URL"] = "https://base.example.com"
+        os.environ["FI_COLLECTOR_ENDPOINT"] = "https://collector.example.com/v1/traces"
+        assert get_env_collector_endpoint() == "https://collector.example.com/v1/traces"
+
     def test_get_env_grpc_collector_endpoint_default(self, clean_env):
         """Test default gRPC collector endpoint."""
         result = get_env_grpc_collector_endpoint()
@@ -41,6 +47,12 @@ class TestEnvironmentVariableGetters:
         os.environ["FI_GRPC_URL"] = "https://custom-grpc.example.com:50051"
         result = get_env_grpc_collector_endpoint()
         assert result == "https://custom-grpc.example.com:50051"
+
+    def test_get_env_grpc_collector_endpoint_full_override(self, clean_env):
+        """A documented full gRPC URL takes precedence over FI_GRPC_URL."""
+        os.environ["FI_GRPC_URL"] = "https://base-grpc.example.com:50051"
+        os.environ["FI_GRPC_COLLECTOR_ENDPOINT"] = "https://collector.example.com:50052"
+        assert get_env_grpc_collector_endpoint() == "https://collector.example.com:50052"
 
     def test_get_env_project_name_default(self, clean_env):
         """Test default project name."""
@@ -262,7 +274,6 @@ class TestCustomEvalTemplate:
     def test_get_custom_eval_template_request_failure(self, mock_requests):
         """Test custom eval template request failure."""
         mock_requests['post'].side_effect = Exception("Network error")
-        
         with pytest.raises(ValueError, match="Failed to check custom eval template"):
             get_custom_eval_template("test_eval")
 
@@ -271,4 +282,4 @@ class TestCustomEvalTemplate:
         mock_requests['response'].raise_for_status.side_effect = Exception("HTTP 404")
         
         with pytest.raises(ValueError, match="Failed to check custom eval template"):
-            get_custom_eval_template("test_eval") 
+            get_custom_eval_template("test_eval")
