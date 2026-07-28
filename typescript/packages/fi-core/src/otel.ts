@@ -325,7 +325,23 @@ function constructFullEndpoint(customEndpoint?: string): string {
       baseUrlToUse = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
   } else {
-    baseUrlToUse = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    const configuredEndpoint = getEnv("FI_COLLECTOR_ENDPOINT");
+    if (configuredEndpoint) {
+      try {
+        const parsedConfigured = new URL(configuredEndpoint);
+        if (
+          parsedConfigured.pathname !== "/" &&
+          parsedConfigured.pathname !== ""
+        ) {
+          return configuredEndpoint;
+        }
+      } catch (e) {
+        diag.warn(
+          `Configured FI_COLLECTOR_ENDPOINT '${configuredEndpoint}' is not a valid URL. Falling back to FI_BASE_URL.`,
+        );
+      }
+    }
+    baseUrlToUse = configuredEndpoint ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
   }
   
   // Ensure no trailing slash from baseUrl before appending path
