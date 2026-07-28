@@ -313,7 +313,7 @@ function constructFullEndpoint(customEndpoint?: string): string {
       const parsedCustom = new URL(customEndpoint);
       if (!parsedCustom.protocol || !parsedCustom.host) {
         diag.warn(`Custom endpoint '${customEndpoint}' is missing protocol or host. Falling back to environment or default.`);
-        baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+        baseUrlToUse = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
       } else if (parsedCustom.pathname !== "/" && parsedCustom.pathname !== FI_COLLECTOR_PATH) {
         diag.warn(`Using custom endpoint as full URL: ${customEndpoint}`);
         return customEndpoint;
@@ -322,10 +322,10 @@ function constructFullEndpoint(customEndpoint?: string): string {
       }
     } catch (e) {
       diag.warn(`Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+      baseUrlToUse = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
   } else {
-    baseUrlToUse = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    baseUrlToUse = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
   }
   
   // Ensure no trailing slash from baseUrl before appending path
@@ -655,10 +655,10 @@ async function checkCustomEvalConfigExists(
       }
     } catch (e) {
       if (verbose) diag.warn(`checkCustomEvalConfigExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+      apiBaseUrl = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
   } else {
-    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    apiBaseUrl = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
   }
 
   if (apiBaseUrl.endsWith('/')) {
@@ -735,10 +735,10 @@ export async function checkCustomEvalTemplateExists(
       }
     } catch (e) {
       if (verbose) diag.warn(`checkCustomEvalTemplateExists: Custom endpoint '${customEndpoint}' is not a valid URL. Falling back to environment or default.`);
-      apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+      apiBaseUrl = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
     }
   } else {
-    apiBaseUrl = getEnv("FI_BASE_URL") ?? getEnv("FI_COLLECTOR_ENDPOINT") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
+    apiBaseUrl = getEnv("FI_COLLECTOR_ENDPOINT") ?? getEnv("FI_BASE_URL") ?? DEFAULT_FI_COLLECTOR_BASE_URL;
   }
 
   if (apiBaseUrl.endsWith('/')) {
@@ -811,4 +811,4 @@ export {
 // - Implement prepareEvalTags (similar to Python)
 // - Implement checkCustomEvalConfigExists
 // - Refine error handling and logging
-// - Add tests 
+// - Add tests

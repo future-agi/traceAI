@@ -90,6 +90,21 @@ describe('FI Core - OTEL Module', () => {
     });
   });
 
+  describe('collector endpoint configuration', () => {
+    it('prefers FI_COLLECTOR_ENDPOINT over FI_BASE_URL', () => {
+      process.env.FI_BASE_URL = 'https://base.example.com';
+      process.env.FI_COLLECTOR_ENDPOINT = 'https://collector.example.com/custom/v1/traces';
+
+      const provider = new FITracerProvider({ verbose: false });
+      expect((provider as any).endpoint).toBe(
+        'https://collector.example.com/custom/v1/traces',
+      );
+
+      delete process.env.FI_BASE_URL;
+      delete process.env.FI_COLLECTOR_ENDPOINT;
+    });
+  });
+
   describe('HTTPSpanExporter', () => {
     let exporter: HTTPSpanExporter;
     const mockEndpoint = 'https://test.example.com/api/spans';
@@ -463,4 +478,4 @@ describe('FI Core - OTEL Module', () => {
       expect(provider).toBeDefined();
     });
   });
-}); 
+});
