@@ -184,6 +184,9 @@ class FiTracer(BaseTracer):
             UUID, Dict[str, Any]
         ]()
         self._lock = RLock()  # handlers may be run in a thread by langchain
+        # Run ids whose chain run ended in a LangGraph interrupt (an intentional
+        # pause, not an error) — used to keep the node span status OK.
+        self._interrupt_run_ids: Dict[UUID, bool] = _DictWithLock[UUID, bool]()
 
     def get_span(self, run_id: UUID) -> Optional[Span]:
         return self._spans_by_run.get(run_id)
@@ -250,10 +253,11 @@ class FiTracer(BaseTracer):
 
         span = self._spans_by_run.pop(run.id, None)
         captured_context = self._context_by_run.pop(run.id, {})
+        is_interrupt = bool(self._interrupt_run_ids.pop(run.id, False))
 
         if span:
             try:
-                _update_span(span, run, captured_context)
+                _update_span(span, run, captured_context, is_interrupt=is_interrupt)
 
                 # Send final span data with both input and output
                 output_data = None
@@ -297,6 +301,14 @@ class FiTracer(BaseTracer):
     def on_chain_error(
         self, error: BaseException, *args: Any, run_id: UUID, **kwargs: Any
     ) -> Run:
+        # A LangGraph interrupt is an intentional pause (HITL), not a failure.
+        # Mark the span as an interrupt and keep its status OK (see _end_trace).
+        if _is_graph_interrupt(error):
+            self._interrupt_run_ids[run_id] = True
+            if span := self._spans_by_run.get(run_id):
+                span.set_attribute("langgraph.interrupt", True)
+                span.add_event("interrupt", {"langgraph.interrupt": True})
+            return super().on_chain_error(error, *args, run_id=run_id, **kwargs)
         if span := self._spans_by_run.get(run_id):
             _record_exception(span, error)
             # Send error span data
@@ -348,6 +360,18 @@ class FiTracer(BaseTracer):
         return LangChainTracer.on_chat_model_start(self, *args, **kwargs)  # type: ignore
 
 
+try:
+    from langgraph.errors import GraphBubbleUp as _GraphBubbleUp
+except Exception:  # langgraph is optional / older versions may differ
+    _GraphBubbleUp = None
+
+
+def _is_graph_interrupt(error: BaseException) -> bool:
+    """True for LangGraph control-flow signals (dynamic ``interrupt()``/HITL,
+    ``Command``, graph delegation) which are intentional pauses, not errors."""
+    return _GraphBubbleUp is not None and isinstance(error, _GraphBubbleUp)
+
+
 @audit_timing  # type: ignore
 def _record_exception(span: Span, error: BaseException) -> None:
     if isinstance(error, Exception):
@@ -371,8 +395,10 @@ def _record_exception(span: Span, error: BaseException) -> None:
 
 
 @audit_timing  # type: ignore
-def _update_span(span: Span, run: Run, captured_context: Dict[str, Any]) -> None:
-    if run.error is None:
+def _update_span(
+    span: Span, run: Run, captured_context: Dict[str, Any], is_interrupt: bool = False
+) -> None:
+    if run.error is None or is_interrupt:
         span.set_status(trace_api.StatusCode.OK)
     else:
         span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, run.error))
@@ -936,6 +962,19 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
                 yield "user.id", str_value
             elif key == "session_id":
                 yield "session.id", str_value
+            elif key == "langgraph_node":
+                # Canonical graph-node enrichment, derived from LangGraph's own
+                # callback metadata — no node-function wrapping required. Emit the
+                # node-identity attributes only on the node's OWN chain run (its run
+                # is named after the node), not on nested LLM/tool child runs which
+                # inherit this metadata — otherwise consumers that count node-id
+                # spans would over-count. Children still keep the raw `langgraph_node`
+                # attribute below. The node's parent is captured by the span
+                # hierarchy (parent_run_id).
+                if run.name == str_value:
+                    yield GRAPH_NODE_NAME, str_value
+                    yield GRAPH_NODE_ID, str_value
+                yield f"{key}", str_value
             else:
                 # Add other metadata with metadata prefix to avoid conflicts
                 yield f"{key}", str_value
@@ -1131,6 +1170,8 @@ MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
 METADATA = SpanAttributes.METADATA
 GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
+GRAPH_NODE_ID = SpanAttributes.GEN_AI_AGENT_GRAPH_NODE_ID
+GRAPH_NODE_NAME = SpanAttributes.GEN_AI_AGENT_GRAPH_NODE_NAME
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 RERANKER_INPUT_DOCUMENTS = RerankerAttributes.RERANKER_INPUT_DOCUMENTS
 RERANKER_MODEL_NAME = RerankerAttributes.RERANKER_MODEL_NAME

@@ -58,6 +58,7 @@ class LangGraphInstrumentor(BaseInstrumentor):
 
     _instance: Optional["LangGraphInstrumentor"] = None
     _is_instrumented: bool = False
+    _deprecation_logged: bool = False
 
     def __new__(cls) -> "LangGraphInstrumentor":
         """Singleton pattern to ensure single instrumentation."""
@@ -143,92 +144,26 @@ class LangGraphInstrumentor(BaseInstrumentor):
             state_tracker=self._state_tracker,
         )
 
-        # Try to import and patch LangGraph
-        try:
-            self._patch_langgraph()
-            self._is_instrumented = True
-            logger.info("LangGraph instrumentation enabled")
-        except ImportError as e:
-            logger.warning(f"LangGraph not installed, instrumentation skipped: {e}")
-        except Exception as e:
-            logger.error(f"Failed to instrument LangGraph: {e}")
-            raise
-
-    def _patch_langgraph(self) -> None:
-        """Patch LangGraph classes and methods."""
-        try:
-            from langgraph.graph import StateGraph
-            from langgraph.graph.state import CompiledStateGraph
-        except ImportError:
-            # Try alternative import paths
-            try:
-                from langgraph.graph.state import StateGraph, CompiledStateGraph
-            except ImportError:
-                raise ImportError("Could not import LangGraph StateGraph")
-
-        # Store original methods
-        self._original_compile = StateGraph.compile
-
-        # Patch compile method
-        wrapper = self._graph_wrapper
-
-        def patched_compile(self_graph, *args, **kwargs):
-            return wrapper.wrap_compile(self._original_compile)(self_graph, *args, **kwargs)
-
-        StateGraph.compile = patched_compile
-
-        logger.debug("Patched StateGraph.compile")
-
-        # Also try to patch add_node to wrap node functions
-        if hasattr(StateGraph, 'add_node'):
-            self._original_add_node = StateGraph.add_node
-
-            def patched_add_node(self_graph, node_name, action, *args, **kwargs):
-                # Wrap the action function if it's callable
-                if callable(action) and not getattr(action, '_langgraph_wrapped', False):
-                    node_wrapper = NodeWrapper(
-                        tracer=wrapper._tracer,
-                        state_tracker=wrapper._state_tracker,
-                    )
-
-                    # Determine node type
-                    is_entry = (hasattr(self_graph, 'entry_point') and
-                               self_graph.entry_point == node_name)
-
-                    wrapped_action = node_wrapper.wrap_node(
-                        node_name=node_name,
-                        node_func=action,
-                        is_entry=is_entry,
-                        node_type="intermediate",
-                    )
-                    return self._original_add_node(self_graph, node_name, wrapped_action, *args, **kwargs)
-
-                return self._original_add_node(self_graph, node_name, action, *args, **kwargs)
-
-            StateGraph.add_node = patched_add_node
-            logger.debug("Patched StateGraph.add_node")
+        # Deprecated: this instrumentor no longer patches LangGraph. Node, tool and
+        # LLM spans (plus session grouping) are captured automatically by
+        # LangChainInstrumentor's callback handler. The previous approach patched
+        # StateGraph.add_node/compile and wrapped node functions, which broke async
+        # nodes (INVALID_GRAPH_NODE_RETURN_VALUE) and corrupted per-request state under
+        # concurrency, so it has been removed. Kept as an importable no-op for
+        # backward compatibility.
+        self._is_instrumented = True
+        if not LangGraphInstrumentor._deprecation_logged:
+            LangGraphInstrumentor._deprecation_logged = True
+            logger.warning(
+                "LangGraphInstrumentor is deprecated and is now a no-op. LangGraph "
+                "node/tool/LLM spans are captured automatically by LangChainInstrumentor; "
+                "you can remove the LangGraphInstrumentor().instrument() call."
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        """Remove LangGraph instrumentation."""
+        """Remove LangGraph instrumentation (no-op shim: nothing was patched)."""
         if not self._is_instrumented:
             return
-
-        try:
-            from langgraph.graph import StateGraph
-        except ImportError:
-            try:
-                from langgraph.graph.state import StateGraph
-            except ImportError:
-                return
-
-        # Restore original methods
-        if self._original_compile:
-            StateGraph.compile = self._original_compile
-            self._original_compile = None
-
-        if self._original_add_node:
-            StateGraph.add_node = self._original_add_node
-            self._original_add_node = None
 
         self._is_instrumented = False
         self._tracer = None
