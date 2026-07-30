@@ -1,6 +1,17 @@
-langchain >=0.2.11
-langchain-experimental >=0.0.63
-langchain_community >=0.2.10
-langchain-openai >=0.1.19
-langchain-google-vertexai >=1.0.7
-langgraph >=0.1.16
+# Dependencies for running the scripts in this examples/ directory.
+#
+# These demos use pre-1.0 LangChain APIs (e.g. langchain.chains.LLMChain,
+# langchain.agents.AgentExecutor, langchain.memory.ConversationBufferMemory,
+# langchain.schema / langchain.vectorstores / langchain.embeddings) that were
+# removed in LangChain 1.0, so the langchain family is pinned to the 0.3 line here.
+#
+# NOTE: this pin only affects running these example scripts. The traceAI-langchain
+# instrumentation package itself supports LangChain / LangGraph 1.x (it depends only
+# on langchain-core); see the package pyproject.toml.
+langchain>=0.3,<1.0
+langchain-core>=0.3,<0.4
+langchain-community>=0.3,<1.0
+langchain-experimental>=0.3,<1.0
+langchain-openai>=0.2,<1.0
+langchain-cohere>=0.3,<0.4
+langgraph>=0.2,<1.0

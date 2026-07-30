@@ -246,9 +246,16 @@ class _KickoffWrapper:
                             "human_input?": task.human_input,
                             "agent_role": task.agent.role if task.agent else "None",
                             "agent_key": task.agent.key if task.agent else None,
+                            # CrewAI defaults Task.context to a NOT_SPECIFIED
+                            # sentinel that is truthy but not iterable, so this
+                            # must guard on type before iterating.
                             "context": (
-                                [task.description for task in task.context]
-                                if task.context
+                                [
+                                    context_task.description
+                                    for context_task in task.context
+                                ]
+                                if isinstance(task.context, (list, tuple))
+                                and task.context
                                 else None
                             ),
                             "tools_names": [
