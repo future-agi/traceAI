@@ -47,63 +47,6 @@ class TestLangGraphInstrumentor:
         instrumentor = LangGraphInstrumentor()
         assert instrumentor.is_instrumented is False
 
-    def test_graph_wrapper_property_before_instrument(self):
-        """Test graph_wrapper property before instrumentation."""
-        from traceai_langchain._langgraph._instrumentor import LangGraphInstrumentor
-
-        # Reset singleton for testing
-        LangGraphInstrumentor._instance = None
-        LangGraphInstrumentor._is_instrumented = False
-
-        instrumentor = LangGraphInstrumentor()
-        assert instrumentor.graph_wrapper is None
-
-    def test_state_tracker_property_before_instrument(self):
-        """Test state_tracker property before instrumentation."""
-        from traceai_langchain._langgraph._instrumentor import LangGraphInstrumentor
-
-        # Reset singleton for testing
-        LangGraphInstrumentor._instance = None
-        LangGraphInstrumentor._is_instrumented = False
-
-        instrumentor = LangGraphInstrumentor()
-        assert instrumentor.state_tracker is None
-
-    def test_get_topology_before_instrument(self):
-        """Test get_topology before instrumentation."""
-        from traceai_langchain._langgraph._instrumentor import LangGraphInstrumentor
-
-        # Reset singleton for testing
-        LangGraphInstrumentor._instance = None
-        LangGraphInstrumentor._is_instrumented = False
-
-        instrumentor = LangGraphInstrumentor()
-        assert instrumentor.get_topology() is None
-
-    def test_get_state_history_before_instrument(self):
-        """Test get_state_history before instrumentation."""
-        from traceai_langchain._langgraph._instrumentor import LangGraphInstrumentor
-
-        # Reset singleton for testing
-        LangGraphInstrumentor._instance = None
-        LangGraphInstrumentor._is_instrumented = False
-
-        instrumentor = LangGraphInstrumentor()
-        history = instrumentor.get_state_history()
-        assert history == []
-
-    def test_get_memory_stats_before_instrument(self):
-        """Test get_memory_stats before instrumentation."""
-        from traceai_langchain._langgraph._instrumentor import LangGraphInstrumentor
-
-        # Reset singleton for testing
-        LangGraphInstrumentor._instance = None
-        LangGraphInstrumentor._is_instrumented = False
-
-        instrumentor = LangGraphInstrumentor()
-        stats = instrumentor.get_memory_stats()
-        assert stats == {}
-
     # --- Shim contract -----------------------------------------------------
     # LangGraphInstrumentor is now a deprecated no-op: node/tool/LLM spans are
     # captured automatically by LangChainInstrumentor's callback handler. These

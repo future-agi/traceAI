@@ -26,8 +26,10 @@ from ._helpers import (
     build_error_graph,
     build_interrupt_graph,
     build_llm_node_graph,
+    build_command_handoff_graph,
     build_sync_graph,
     build_tool_graph,
+    build_tool_interrupt_graph,
     span_names,
     spans_named,
 )
@@ -129,6 +131,65 @@ def test_real_error_still_marks_span_error(lc_tracing):
     assert all(any(e.name == "exception" for e in s.events) for s in node_spans), (
         "no exception event recorded on the errored node span"
     )
+
+
+def test_interrupt_in_tool_span_is_not_error(lc_tracing):
+    """A dynamic ``interrupt()`` inside a ``@tool`` (LangGraph's documented HITL-approval
+    pattern) must keep the TOOL span OK — the interrupt guard covers tool/llm/retriever
+    runs, not only chain runs."""
+    app = build_tool_interrupt_graph()
+    app.invoke(INPUT, {"configurable": {"thread_id": "tool-hitl"}})
+    tool_spans = spans_named(lc_tracing, "ask_approval")
+    assert tool_spans, "no tool span named 'ask_approval'"
+    for s in tool_spans:
+        assert s.status.status_code.name != "ERROR", "tool interrupt marked the span ERROR"
+        assert (s.attributes or {}).get("langgraph.interrupt") is True
+
+
+def test_command_handoff_not_marked_as_interrupt(lc_tracing):
+    """A `Command(goto=...)` handoff (a `ParentCommand` control-flow bubble-up) keeps its
+    spans OK but must NOT get the `langgraph.interrupt` marker — that is reserved for a
+    real HITL `interrupt()`, so consumers don't over-count HITL pauses."""
+    app = build_command_handoff_graph()
+    app.invoke(INPUT)
+    handoff_spans = [s for s in lc_tracing.get_finished_spans() if s.name in ("route", "done")]
+    assert handoff_spans, "no route/done spans"
+    for s in handoff_spans:
+        assert s.status.status_code.name != "ERROR"
+        assert (s.attributes or {}).get("langgraph.interrupt") is None, (
+            "a Command handoff was wrongly tagged langgraph.interrupt"
+        )
+
+
+def test_interrupt_bookkeeping_is_drained(lc_tracing):
+    """The tracer's interrupt bookkeeping must not leak — including when instrumentation
+    is suppressed only at end time (a run started unsuppressed, ended suppressed)."""
+    from fi_instrumentation import suppress_tracing
+    from traceai_langchain import LangChainInstrumentor
+
+    tracer = LangChainInstrumentor()._tracer
+    app = build_interrupt_graph()
+    app.invoke(INPUT, {"configurable": {"thread_id": "drain-normal"}})
+    assert len(tracer._interrupt_run_ids) == 0, "interrupt ids leaked on a normal turn"
+    with suppress_tracing():
+        app.invoke(INPUT, {"configurable": {"thread_id": "drain-suppressed"}})
+    assert len(tracer._interrupt_run_ids) == 0, "interrupt ids leaked under suppression"
+
+
+def test_hitl_turn_logs_no_on_interrupt_error(lc_tracing, caplog):
+    """The tracer implements ``on_interrupt``/``on_resume`` so langgraph (>=1.2) does not
+    log an ``AttributeError`` on every HITL turn. (No-op on older langgraph that doesn't
+    dispatch the callback, but a real guard on the pinned 1.x line.)"""
+    import logging
+
+    app = build_tool_interrupt_graph()
+    with caplog.at_level(logging.ERROR):
+        app.invoke(INPUT, {"configurable": {"thread_id": "hitl-log"}})
+    offending = [
+        r for r in caplog.records
+        if "on_interrupt" in r.getMessage() and "AttributeError" in r.getMessage()
+    ]
+    assert not offending, f"on_interrupt error logged: {[r.getMessage() for r in offending]}"
 
 
 @pytest.mark.asyncio

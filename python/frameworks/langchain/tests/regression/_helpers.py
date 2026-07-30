@@ -160,6 +160,57 @@ def build_llm_node_graph():
     return g.compile()
 
 
+def build_tool_interrupt_graph():
+    """seed -> ToolNode whose tool calls interrupt() (LangGraph HITL-approval pattern)."""
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.prebuilt import ToolNode
+    from langgraph.types import interrupt
+
+    @tool
+    def ask_approval(item: str) -> str:
+        """Human-in-the-loop approval tool."""
+        interrupt({"q": item})
+        return "approved"
+
+    def seed(state: State):
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "ask_approval", "args": {"item": "x"}, "id": "c1", "type": "tool_call"}
+                    ],
+                )
+            ]
+        }
+
+    g = StateGraph(State)
+    g.add_node("seed", seed)
+    g.add_node("tools", ToolNode([ask_approval]))
+    g.add_edge(START, "seed")
+    g.add_edge("seed", "tools")
+    g.add_edge("tools", END)
+    return g.compile(checkpointer=MemorySaver())
+
+
+def build_command_handoff_graph():
+    """route -> Command(goto='done'): a ParentCommand control-flow bubble-up (not HITL)."""
+    from langgraph.types import Command
+
+    def route(state: State):
+        return Command(goto="done")
+
+    def done(state: State):
+        return {"value": 9}
+
+    g = StateGraph(State)
+    g.add_node("route", route)
+    g.add_node("done", done)
+    g.add_edge(START, "route")
+    g.add_edge("done", END)
+    return g.compile()
+
+
 def build_store_graph():
     """Node whose signature requests LangGraph's injected `store`."""
     from langgraph.store.memory import InMemoryStore

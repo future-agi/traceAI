@@ -11,11 +11,7 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
-fi-instrumentation-otel = ">=0.1.11"
-# The instrumentation only imports langchain-core (+ optional langgraph). The
-# `langchain` / `langchain-community` meta-packages are intentionally not required:
-# pinning them (esp. langchain-community <0.4) transitively caps langchain-core and
-# blocks LangChain/LangGraph 1.x. Users who need those install them directly.
+fi-instrumentation-otel = ">=1.0.0"
 langchain-core = ">=0.2.43"
 langgraph = {version = ">=0.2.0", optional = true}
 
@@ -25,6 +21,8 @@ langgraph = ["langgraph"]
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 pytest-asyncio = "^0.23.0"
+langgraph = ">=0.2.0"
+packaging = ">=21.0"
 
 [build-system]
 requires = ["poetry-core"]
