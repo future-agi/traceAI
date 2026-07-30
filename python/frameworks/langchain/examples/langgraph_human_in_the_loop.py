@@ -44,7 +44,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 # TraceAI imports
-from traceai_langchain import LangGraphInstrumentor
+from traceai_langchain import LangChainInstrumentor, LangGraphInstrumentor
 
 
 # State definition
@@ -205,9 +205,10 @@ def main():
     # Set up tracing
     provider = setup_tracing()
 
-    # Instrument LangGraph
-    instrumentor = LangGraphInstrumentor()
-    instrumentor.instrument(tracer_provider=provider)
+    # Instrument LangChain — LangGraph is traced through it automatically.
+    LangChainInstrumentor().instrument(tracer_provider=provider)
+    # LangGraphInstrumentor is a deprecated no-op, kept here only to show it is safe.
+    LangGraphInstrumentor().instrument(tracer_provider=provider)
 
     print("\n[OK] TraceAI instrumentation enabled")
 
@@ -269,53 +270,12 @@ def main():
     for msg in result_2["messages"]:
         print(f"  {msg}")
 
-    # Record the interrupt event using TraceAI
-    # This is the key differentiator - we mark interrupts as intentional (OK status)
-    interrupt_info = instrumentor.on_interrupt(
-        thread_id="request-002",
-        node_name="human_review",
-        reason="High-value equipment purchase requires senior approval",
-        state=result_2,
-        is_intentional=True,  # Marked as intentional, NOT an error
-    )
-
-    if interrupt_info:
-        print(f"\n[INTERRUPT] Workflow paused for human review")
-        print(f"  Interrupt ID: {interrupt_info.interrupt_id}")
-        print(f"  Reason: {interrupt_info.reason}")
-
-    # Simulate human review process
+    # With traceAI, HITL interrupts are traced automatically: the interrupted
+    # node/tool span is kept OK (not ERROR) and marked with `langgraph.interrupt`,
+    # and langgraph's on_interrupt/on_resume lifecycle callbacks are handled — no
+    # manual instrumentor calls are needed.
     print("\n... Human reviewing request ...")
     print("... Manager checks budget and approves ...")
-
-    # Record the human decision
-    decision = instrumentor.record_human_decision(
-        decision="approved",
-        thread_id="request-002",
-        approver_id="manager@company.com",
-        feedback="Approved after budget review. Equipment is necessary for Q2 project.",
-    )
-
-    if decision:
-        print(f"\n[DECISION] Human decision recorded")
-        print(f"  Decision: {decision.decision}")
-        print(f"  Approver: {decision.approver_id}")
-
-    # Record resume and continue
-    resume_info = instrumentor.on_resume(
-        thread_id="request-002",
-        resume_input={
-            "status": "approved",
-            "approved_by": "manager@company.com",
-            "approval_notes": "Approved after budget review. Equipment is necessary for Q2 project.",
-        },
-    )
-
-    if resume_info:
-        print(f"\n[RESUME] Workflow resumed")
-        print(f"  Resume ID: {resume_info.resume_id}")
-        if resume_info.interrupt_id:
-            print(f"  Linked to interrupt: {resume_info.interrupt_id}")
 
     # Continue execution with the approval
     result_2_continued = app.invoke(
@@ -332,30 +292,9 @@ def main():
     for msg in result_2_continued["messages"][-2:]:  # Last 2 messages
         print(f"  {msg}")
 
-    # Show interrupt/resume statistics
-    print("\n" + "-" * 40)
-    print("Interrupt/Resume Statistics")
-    print("-" * 40)
-
-    stats = instrumentor.get_interrupt_stats()
-    if "error" not in stats:
-        print(f"Total interrupts: {stats.get('total_interrupts', 0)}")
-        print(f"Total resumes: {stats.get('total_resumes', 0)}")
-        print(f"Pending interrupts: {stats.get('pending_interrupts', 0)}")
-        print(f"Human decisions: {stats.get('total_human_decisions', 0)}")
-
-        if stats.get("decisions_by_type"):
-            print("\nDecisions by type:")
-            for decision_type, count in stats["decisions_by_type"].items():
-                print(f"  {decision_type}: {count}")
-
-    # Show cost statistics (if any LLM calls were tracked)
-    cost_stats = instrumentor.get_cost_stats()
-    if "error" not in cost_stats:
-        print("\n" + "-" * 40)
-        print("Cost Statistics")
-        print("-" * 40)
-        print(f"Total cost: ${cost_stats.get('total_cost_usd', 0):.4f}")
+    # Interrupt / resume are visible directly on the exported spans (the interrupted
+    # span has status OK plus `langgraph.interrupt` / `langgraph.resume` events) —
+    # there is no manual stats API.
 
     print("\n" + "=" * 60)
     print("Example completed!")

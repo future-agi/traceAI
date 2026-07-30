@@ -184,6 +184,9 @@ class FiTracer(BaseTracer):
             UUID, Dict[str, Any]
         ]()
         self._lock = RLock()  # handlers may be run in a thread by langchain
+        # Run ids whose chain run ended in a LangGraph interrupt (an intentional
+        # pause, not an error) — used to keep the node span status OK.
+        self._interrupt_run_ids: Dict[UUID, bool] = _DictWithLock[UUID, bool]()
 
     def get_span(self, run_id: UUID) -> Optional[Span]:
         return self._spans_by_run.get(run_id)
@@ -245,15 +248,19 @@ class FiTracer(BaseTracer):
     @audit_timing  # type: ignore
     def _end_trace(self, run: Run) -> None:
         self.run_map.pop(str(run.id), None)
-        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return
-
+        # Drain all per-run bookkeeping BEFORE any early return so nothing leaks if
+        # instrumentation is suppressed only at end time (started unsuppressed).
         span = self._spans_by_run.pop(run.id, None)
         captured_context = self._context_by_run.pop(run.id, {})
+        is_interrupt = bool(self._interrupt_run_ids.pop(run.id, False))
+        if span is None:
+            return
 
-        if span:
+        # Skip the export/processing work while suppressed, but still end the span —
+        # an already-started span must be closed or it leaks.
+        if not context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             try:
-                _update_span(span, run, captured_context)
+                _update_span(span, run, captured_context, is_interrupt=is_interrupt)
 
                 # Send final span data with both input and output
                 output_data = None
@@ -273,65 +280,85 @@ class FiTracer(BaseTracer):
 
             except Exception:
                 logger.exception("Failed to update span with run data.")
-            # We can't use real time because the handler may be
-            # called in a background thread.
-            end_time_utc_nano = _as_utc_nano(run.end_time) if run.end_time else None
-            span.end(end_time=end_time_utc_nano)
+        # We can't use real time because the handler may be
+        # called in a background thread.
+        end_time_utc_nano = _as_utc_nano(run.end_time) if run.end_time else None
+        span.end(end_time=end_time_utc_nano)
 
     def _persist_run(self, run: Run) -> None:
         pass
 
+    def _handle_error(
+        self,
+        error: BaseException,
+        run_id: UUID,
+        forward: Callable[..., Run],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Run:
+        """Shared handling for the llm/chain/tool/retriever error callbacks.
+
+        A LangGraph control-flow signal (dynamic ``interrupt()`` / HITL, ``Command``,
+        graph delegation) is an intentional pause, not a failure: mark the span as an
+        interrupt and keep its status OK (finalized in ``_end_trace``). Genuine errors
+        are recorded as exceptions.
+        """
+        span = self._spans_by_run.get(run_id)
+        if _is_graph_interrupt(error):
+            # Any control-flow bubble-up (interrupt/HITL, Command, delegation) is
+            # intentional, not a failure: keep the span OK. Guard on a tracked span so
+            # the flag can't leak for an untracked run, and tag the `langgraph.interrupt`
+            # marker only for an actual HITL interrupt() (not Command/delegation).
+            if span is not None:
+                self._interrupt_run_ids[run_id] = True
+                if _is_hitl_interrupt(error):
+                    span.set_attribute("langgraph.interrupt", True)
+                    span.add_event("interrupt", {"langgraph.interrupt": True})
+        elif span is not None:
+            _record_exception(span, error)
+        return forward(error, *args, run_id=run_id, **kwargs)
+
     def on_llm_error(
         self, error: BaseException, *args: Any, run_id: UUID, **kwargs: Any
     ) -> Run:
-        if span := self._spans_by_run.get(run_id):
-            _record_exception(span, error)
-            # Send error span data
-            self._send_span_data_to_api(
-                span=span,
-                input_data=kwargs.get("inputs"),
-                output_data={"error": str(error)},
-            )
-        return super().on_llm_error(error, *args, run_id=run_id, **kwargs)
+        return self._handle_error(error, run_id, super().on_llm_error, *args, **kwargs)
 
     def on_chain_error(
         self, error: BaseException, *args: Any, run_id: UUID, **kwargs: Any
     ) -> Run:
-        if span := self._spans_by_run.get(run_id):
-            _record_exception(span, error)
-            # Send error span data
-            self._send_span_data_to_api(
-                span=span,
-                input_data=kwargs.get("inputs"),
-                output_data={"error": str(error)},
-            )
-        return super().on_chain_error(error, *args, run_id=run_id, **kwargs)
+        return self._handle_error(error, run_id, super().on_chain_error, *args, **kwargs)
 
     def on_retriever_error(
         self, error: BaseException, *args: Any, run_id: UUID, **kwargs: Any
     ) -> Run:
-        if span := self._spans_by_run.get(run_id):
-            _record_exception(span, error)
-            # Send error span data
-            self._send_span_data_to_api(
-                span=span,
-                input_data=kwargs.get("inputs"),
-                output_data={"error": str(error)},
-            )
-        return super().on_retriever_error(error, *args, run_id=run_id, **kwargs)
+        return self._handle_error(
+            error, run_id, super().on_retriever_error, *args, **kwargs
+        )
 
     def on_tool_error(
         self, error: BaseException, *args: Any, run_id: UUID, **kwargs: Any
     ) -> Run:
-        if span := self._spans_by_run.get(run_id):
-            _record_exception(span, error)
-            # Send error span data
-            self._send_span_data_to_api(
-                span=span,
-                input_data=kwargs.get("inputs"),
-                output_data={"error": str(error)},
-            )
-        return super().on_tool_error(error, *args, run_id=run_id, **kwargs)
+        return self._handle_error(error, run_id, super().on_tool_error, *args, **kwargs)
+
+    def on_interrupt(self, event: Any = None, *args: Any, **kwargs: Any) -> None:
+        """Handle LangGraph's graph-lifecycle interrupt callback (langgraph >= 1.2).
+
+        LangGraph dispatches ``on_interrupt`` to every registered callback handler on
+        a HITL pause; implementing it avoids an ``AttributeError`` log each interrupt
+        and marks the graph run's span. The permissive signature tolerates callback
+        shape differences across langgraph versions.
+        """
+        self._mark_graph_lifecycle(event, "interrupt")
+
+    def on_resume(self, event: Any = None, *args: Any, **kwargs: Any) -> None:
+        """Handle LangGraph's graph-lifecycle resume callback (langgraph >= 1.2)."""
+        self._mark_graph_lifecycle(event, "resume")
+
+    def _mark_graph_lifecycle(self, event: Any, kind: str) -> None:
+        run_id = getattr(event, "run_id", None)
+        span = self._spans_by_run.get(run_id) if run_id is not None else None
+        if span is not None:
+            span.add_event(f"langgraph.{kind}")
 
     def on_chat_model_start(self, *args: Any, **kwargs: Any) -> Run:
         """
@@ -346,6 +373,30 @@ class FiTracer(BaseTracer):
         https://github.com/langchain-ai/langchain/blob/c01467b1f4f9beae8f1edb105b17aa4f36bf6573/libs/core/langchain_core/tracers/base.py#L60
         """  # noqa: E501
         return LangChainTracer.on_chat_model_start(self, *args, **kwargs)  # type: ignore
+
+
+try:
+    from langgraph.errors import GraphBubbleUp as _GraphBubbleUp
+except Exception:  # langgraph is optional / older versions may differ
+    _GraphBubbleUp = None
+
+try:
+    from langgraph.errors import GraphInterrupt as _GraphInterrupt
+except Exception:
+    _GraphInterrupt = None
+
+
+def _is_hitl_interrupt(error: BaseException) -> bool:
+    """True only for a dynamic ``interrupt()`` (HITL pause) — a subset of the
+    control-flow bubble-ups; used to scope the ``langgraph.interrupt`` marker so it
+    does not also tag ``Command``/graph-delegation handoffs."""
+    return _GraphInterrupt is not None and isinstance(error, _GraphInterrupt)
+
+
+def _is_graph_interrupt(error: BaseException) -> bool:
+    """True for LangGraph control-flow signals (dynamic ``interrupt()``/HITL,
+    ``Command``, graph delegation) which are intentional pauses, not errors."""
+    return _GraphBubbleUp is not None and isinstance(error, _GraphBubbleUp)
 
 
 @audit_timing  # type: ignore
@@ -371,8 +422,10 @@ def _record_exception(span: Span, error: BaseException) -> None:
 
 
 @audit_timing  # type: ignore
-def _update_span(span: Span, run: Run, captured_context: Dict[str, Any]) -> None:
-    if run.error is None:
+def _update_span(
+    span: Span, run: Run, captured_context: Dict[str, Any], is_interrupt: bool = False
+) -> None:
+    if run.error is None or is_interrupt:
         span.set_status(trace_api.StatusCode.OK)
     else:
         span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, run.error))
@@ -936,6 +989,19 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
                 yield "user.id", str_value
             elif key == "session_id":
                 yield "session.id", str_value
+            elif key == "langgraph_node":
+                # Canonical graph-node enrichment, derived from LangGraph's own
+                # callback metadata — no node-function wrapping required. Emit the
+                # node-identity attributes only on the node's OWN chain run (its run
+                # is named after the node), not on nested LLM/tool child runs which
+                # inherit this metadata — otherwise consumers that count node-id
+                # spans would over-count. Children still keep the raw `langgraph_node`
+                # attribute below. The node's parent is captured by the span
+                # hierarchy (parent_run_id).
+                if run.name == str_value:
+                    yield GRAPH_NODE_NAME, str_value
+                    yield GRAPH_NODE_ID, str_value
+                yield f"{key}", str_value
             else:
                 # Add other metadata with metadata prefix to avoid conflicts
                 yield f"{key}", str_value
@@ -1131,6 +1197,8 @@ MESSAGE_ROLE = MessageAttributes.MESSAGE_ROLE
 MESSAGE_TOOL_CALLS = MessageAttributes.MESSAGE_TOOL_CALLS
 METADATA = SpanAttributes.METADATA
 GEN_AI_SPAN_KIND = SpanAttributes.GEN_AI_SPAN_KIND
+GRAPH_NODE_ID = SpanAttributes.GEN_AI_AGENT_GRAPH_NODE_ID
+GRAPH_NODE_NAME = SpanAttributes.GEN_AI_AGENT_GRAPH_NODE_NAME
 OUTPUT_MIME_TYPE = SpanAttributes.OUTPUT_MIME_TYPE
 RERANKER_INPUT_DOCUMENTS = RerankerAttributes.RERANKER_INPUT_DOCUMENTS
 RERANKER_MODEL_NAME = RerankerAttributes.RERANKER_MODEL_NAME

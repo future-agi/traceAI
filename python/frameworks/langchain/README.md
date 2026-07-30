@@ -81,114 +81,64 @@ if __name__ == "__main__":
 
 ## LangGraph Instrumentation
 
-LangGraph instrumentation provides comprehensive tracing for graph-based workflows, including:
+LangGraph tracing is **automatic**: LangGraph runs each node, tool and LLM through
+LangChain's callback system, so `LangChainInstrumentor` captures them with no
+LangGraph-specific setup. You get:
 
-- **Graph Topology Capture**: Automatically captures graph structure (nodes, edges, entry points)
-- **Node Execution Tracing**: Tracks each node execution with state transitions
-- **Conditional Edge Decisions**: Records branch decisions at routing nodes
-- **State Transition Tracking**: Tracks state changes through graph execution with diffs
-- **Performance Metrics**: Duration, memory usage, and execution counts
-- **Memory Tracking**: Detects potential memory leaks in state growth
+- **Per-node spans** named after the graph node (`agent`, `tools`, `ask_human`, …)
+- **Tool and LLM spans** nested under their node
+- **Graph-node enrichment** — the node's own span carries `gen_ai.agent.graph.node_name` and `gen_ai.agent.graph.node_id`
+- **Session grouping** — bind `session.id = thread_id` (see the quickstart)
+- **HITL interrupts** traced correctly — an interrupted node/tool span stays `OK` (not `ERROR`) and is marked with `langgraph.interrupt`
+
+> **`LangGraphInstrumentor` is a deprecated no-op** kept for backwards compatibility.
+> You can remove any `LangGraphInstrumentor().instrument()` call — tracing happens
+> through `LangChainInstrumentor`.
 
 ### LangGraph Quickstart
 
 ```python
-from typing import TypedDict
+from typing import Annotated, TypedDict
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
-from langgraph.graph import StateGraph, END
-from traceai_langchain import LangChainInstrumentor, LangGraphInstrumentor
+from fi_instrumentation.instrumentation.context_attributes import using_session
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from traceai_langchain import LangChainInstrumentor
 
-# Define state schema
 class MyState(TypedDict):
-    messages: list
-    current_step: str
+    messages: Annotated[list, add_messages]
 
-# Register trace provider
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
     project_name="langgraph_app",
-    session_name="workflow"
 )
 
-# Instrument both LangChain and LangGraph
+# Instrument LangChain — LangGraph is traced through it automatically.
 LangChainInstrumentor().instrument(tracer_provider=trace_provider)
-LangGraphInstrumentor().instrument(tracer_provider=trace_provider)
 
-# Build your graph
 workflow = StateGraph(MyState)
-workflow.add_node("process", process_node)
-workflow.add_node("analyze", analyze_node)
-workflow.add_edge("process", "analyze")
-workflow.add_edge("analyze", END)
-workflow.set_entry_point("process")
-
-# Compile and run - traces are automatically captured
+workflow.add_node("agent", agent_node)   # sync or async nodes both work
+workflow.add_edge(START, "agent")
+workflow.add_edge("agent", END)
 app = workflow.compile()
-result = app.invoke({"messages": [], "current_step": "start"})
+
+# Group every span of a conversation under one session:
+with using_session("thread-123"):
+    result = app.invoke(
+        {"messages": []}, {"configurable": {"thread_id": "thread-123"}}
+    )
 ```
 
 ### LangGraph Span Attributes
 
-The instrumentation captures rich attributes for debugging and monitoring:
+Node, tool and LLM runs are standard LangChain spans (`gen_ai.span.kind` =
+`CHAIN` / `TOOL` / `LLM` / `AGENT`) with these LangGraph additions:
 
-#### Graph Structure
-- `langgraph.graph.name` - Graph name
-- `langgraph.graph.node_count` - Number of nodes
-- `langgraph.graph.edge_count` - Number of edges
-- `langgraph.graph.topology` - Full topology as JSON
-- `langgraph.graph.entry_point` - Entry point node
-
-#### Node Execution
-- `langgraph.node.name` - Node name
-- `langgraph.node.type` - Node type (start/end/intermediate)
-- `langgraph.node.is_entry` - Whether this is the entry node
-- `langgraph.node.is_end` - Whether this is an end node
-
-#### State Management
-- `langgraph.state.input` - Input state (JSON)
-- `langgraph.state.output` - Output state (JSON)
-- `langgraph.state.updates` - State updates from node
-- `langgraph.state.changed_fields` - List of changed fields
-- `langgraph.state.diff` - State diff (JSON)
-
-#### Conditional Edges
-- `langgraph.conditional.source` - Source node
-- `langgraph.conditional.result` - Selected branch
-- `langgraph.conditional.available_branches` - All available branches
-
-#### Performance
-- `langgraph.perf.duration_ms` - Execution duration
-- `langgraph.perf.node` - Node name for performance metric
-
-#### Memory Tracking
-- `langgraph.memory.state_size_bytes` - Current state size
-- `langgraph.memory.peak_bytes` - Peak memory usage
-- `langgraph.memory.growth_warning` - Memory growth alert
-
-### Advanced: Accessing State and Topology
-
-```python
-# Get the instrumentor instance
-instrumentor = LangGraphInstrumentor()
-
-# After graph execution, access captured data
-topology = instrumentor.get_topology()
-if topology:
-    print(f"Nodes: {topology.nodes}")
-    print(f"Edges: {topology.edges}")
-    print(f"Entry point: {topology.entry_point}")
-
-# Get state transition history
-history = instrumentor.get_state_history()
-for transition in history:
-    print(f"Node: {transition['node']}")
-    print(f"Diff: {transition['diff']}")
-
-# Get memory statistics
-memory_stats = instrumentor.get_memory_stats()
-print(f"Peak memory: {memory_stats.get('peak_bytes', 0)} bytes")
-```
+- `gen_ai.agent.graph.node_name`, `gen_ai.agent.graph.node_id` — the graph node (on the node's own span)
+- `langgraph_node`, `langgraph_step`, `langgraph_triggers`, `langgraph_path`, `langgraph_checkpoint_ns` — LangGraph's raw callback metadata
+- `session.id` — when set via `using_session(...)` or `config={"metadata": {"session_id": ...}}`
+- `langgraph.interrupt` (attribute + event) on a HITL pause; a `langgraph.resume` event on resume
 
 ---
 
@@ -203,6 +153,7 @@ print(f"Peak memory: {memory_stats.get('peak_bytes', 0)} bytes")
 ### LangGraph Examples
 - `examples/langgraph_simple_workflow.py` - Simple state machine workflow
 - `examples/langgraph_agent_supervisor.py` - Multi-agent supervisor pattern
+- `examples/langgraph_human_in_the_loop.py` - Human-in-the-loop interrupt workflow
 
 ---
 
@@ -229,42 +180,9 @@ ancestors = instrumentor.get_ancestors(run_id)
 ```python
 from traceai_langchain import LangGraphInstrumentor
 
-# Initialize and instrument
-instrumentor = LangGraphInstrumentor()
-instrumentor.instrument(
-    tracer_provider=trace_provider,
-    enable_memory_tracking=True,  # default: True
-    max_state_history=100,        # default: 100
-)
-
-# Check instrumentation status
-is_active = instrumentor.is_instrumented
-
-# Get captured topology
-topology = instrumentor.get_topology()
-
-# Get state history
-history = instrumentor.get_state_history()
-
-# Get memory statistics
-stats = instrumentor.get_memory_stats()
-
-# Uninstrument when done
-instrumentor.uninstrument()
-```
-
-### LangGraphAttributes
-
-All span attributes are defined as constants:
-
-```python
-from traceai_langchain import LangGraphAttributes
-
-# Use in custom spans or queries
-attrs = {
-    LangGraphAttributes.NODE_NAME: "my_node",
-    LangGraphAttributes.EXECUTION_MODE: "invoke",
-}
+# Deprecated no-op — LangGraph is traced automatically by LangChainInstrumentor.
+# instrument() only logs a one-time deprecation notice; you can remove this call.
+LangGraphInstrumentor().instrument(tracer_provider=trace_provider)
 ```
 
 ---
@@ -272,15 +190,6 @@ attrs = {
 ## Troubleshooting
 
 ### LangGraph not being traced
-1. Ensure you've installed the langgraph extra: `pip install traceAI-langchain[langgraph]`
-2. Initialize `LangGraphInstrumentor` before creating any graphs
-3. Check that `langgraph` is installed: `pip show langgraph`
-
-### State diffs not appearing
-State diffs only appear when there are actual changes between before and after states. If a node returns the same state, no diff will be recorded.
-
-### Memory tracking overhead
-If memory tracking causes performance issues, disable it:
-```python
-LangGraphInstrumentor().instrument(enable_memory_tracking=False)
-```
+1. Make sure you instrumented **`LangChainInstrumentor`** — LangGraph is traced through it (`LangGraphInstrumentor` is a no-op).
+2. Install the langgraph extra if you use LangGraph: `pip install traceAI-langchain[langgraph]`.
+3. Check that `langgraph` is installed: `pip show langgraph`.
