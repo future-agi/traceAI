@@ -17,15 +17,15 @@ import (
 )
 
 const (
-	envAPIKey           = "FI_API_KEY"
-	envSecretKey        = "FI_SECRET_KEY"
-	envBaseURL          = "FI_BASE_URL"
-	envGRPCURL          = "FI_GRPC_URL"
-	envProjectName      = "FI_PROJECT_NAME"
+	envAPIKey      = "FI_API_KEY"
+	envSecretKey   = "FI_SECRET_KEY"
+	envBaseURL     = "FI_BASE_URL"
+	envGRPCURL     = "FI_GRPC_URL"
+	envProjectName = "FI_PROJECT_NAME"
 
-	defaultBaseURL      = "https://api.futureagi.com"
-	defaultGRPCURL      = "https://grpc.futureagi.com"
-	defaultProjectName  = "DEFAULT_PROJECT_NAME"
+	defaultBaseURL     = "https://api.futureagi.com"
+	defaultGRPCURL     = "https://grpc.futureagi.com"
+	defaultProjectName = "DEFAULT_PROJECT_NAME"
 
 	headerAPIKey    = "X-Api-Key"
 	headerSecretKey = "X-Secret-Key"
@@ -41,14 +41,14 @@ const (
 
 // Config holds the options for initializing a traceAI TracerProvider.
 type Config struct {
-	ProjectName  string
-	Transport    Transport
-	BaseURL      string
-	GRPCURL      string
-	APIKey       string
-	SecretKey    string
-	BatchExport  bool
-	SetGlobal    bool
+	ProjectName     string
+	Transport       Transport
+	BaseURL         string
+	GRPCURL         string
+	APIKey          string
+	SecretKey       string
+	BatchExport     bool
+	SetGlobal       bool
 	ShutdownTimeout time.Duration
 }
 
@@ -184,8 +184,9 @@ func newExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 
 	switch cfg.Transport {
 	case TransportGRPC:
+		// WithEndpoint wants host:port, GRPCURL has a scheme
 		return otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpoint(cfg.GRPCURL),
+			otlptracegrpc.WithEndpointURL(cfg.GRPCURL),
 			otlptracegrpc.WithHeaders(headers),
 		)
 	default:

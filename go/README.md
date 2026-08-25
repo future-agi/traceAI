@@ -53,7 +53,7 @@ func main() {
 
 ## Span Attributes
 
-Spans follow the [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.*` tokens, `gen_ai.response.*`, etc. Prompt and completion content is captured by default; disable with `WithContentCapture(false)` for PII-sensitive workloads.
+Spans follow the [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.*` tokens, `gen_ai.response.*`, etc. Prompt and completion content is captured by default; disable with `WithContentCapture(false)` for PII-sensitive workloads. Only `gen_ai.prompt` and `gen_ai.completion` are gated by that toggle — model, token usage, response id and finish reasons are always recorded.
 
 ## Configuration
 

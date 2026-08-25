@@ -61,6 +61,7 @@ func TestMiddleware_ChatCompletion(t *testing.T) {
 	}
 
 	assertAttr(t, span.Attributes, "gen_ai.system", "openai")
+	assertAttr(t, span.Attributes, "gen_ai.span.kind", "LLM")
 	assertAttr(t, span.Attributes, "gen_ai.request.model", "gpt-4")
 	assertAttr(t, span.Attributes, "gen_ai.response.model", "gpt-4")
 	assertAttr(t, span.Attributes, "gen_ai.response.id", "chatcmpl-abc")
@@ -153,6 +154,13 @@ func TestMiddleware_ContentCaptureDisabled(t *testing.T) {
 			t.Errorf("content capture disabled but found attribute %s", a.Key)
 		}
 	}
+
+	// model and usage aren't content, they stay
+	assertAttr(t, spans[0].Attributes, "gen_ai.request.model", "gpt-4")
+	assertAttr(t, spans[0].Attributes, "gen_ai.response.model", "gpt-4")
+	assertAttr(t, spans[0].Attributes, "gen_ai.response.id", "chatcmpl-abc")
+	assertIntAttr(t, spans[0].Attributes, "gen_ai.usage.input_tokens", 5)
+	assertIntAttr(t, spans[0].Attributes, "gen_ai.usage.output_tokens", 3)
 }
 
 func assertAttr(t *testing.T, attrs []attribute.KeyValue, key, want string) {

@@ -11,11 +11,11 @@
 package traceai_openai
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/future-agi/traceAI/go/traceai"
 	"go.opentelemetry.io/otel"
@@ -60,23 +60,20 @@ func Middleware(opts ...Option) func(req *http.Request, next func(req *http.Requ
 		span.SetAttributes(
 			traceai.AttrGenAISystem.String(traceai.GenAISystemOpenAI),
 			traceai.AttrGenAIOperationName.String(opName),
+			traceai.AttrGenAISpanKind.String(traceai.SpanKindLLM),
 		)
 
-		if req.Body != nil && cfg.captureContent {
+		if req.Body != nil {
 			bodyBytes, err := io.ReadAll(req.Body)
 			if err == nil {
-				req.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-				extractRequestAttributes(span, bodyBytes)
+				req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				extractRequestAttributes(span, bodyBytes, cfg.captureContent)
 			}
 		}
 
 		req = req.WithContext(ctx)
-		start := time.Now()
 
 		resp, err := next(req)
-
-		span.SetAttributes(attribute.Float64("gen_ai.request.duration_ms",
-			float64(time.Since(start).Milliseconds())))
 
 		if err != nil {
 			span.RecordError(err)
@@ -90,12 +87,12 @@ func Middleware(opts ...Option) func(req *http.Request, next func(req *http.Requ
 			return resp, err
 		}
 
-		// read response for token counts
-		if resp != nil && resp.Body != nil && cfg.captureContent {
+		// model and usage live in the body too, only the text is gated
+		if resp != nil && resp.Body != nil {
 			bodyBytes, readErr := io.ReadAll(resp.Body)
 			if readErr == nil {
-				resp.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
-				extractResponseAttributes(span, bodyBytes)
+				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				extractResponseAttributes(span, bodyBytes, cfg.captureContent)
 			}
 		}
 
@@ -125,7 +122,7 @@ type chatRequest struct {
 	TopP        *float64        `json:"top_p,omitempty"`
 }
 
-func extractRequestAttributes(span trace.Span, body []byte) {
+func extractRequestAttributes(span trace.Span, body []byte, captureContent bool) {
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return
@@ -143,7 +140,7 @@ func extractRequestAttributes(span trace.Span, body []byte) {
 	if req.TopP != nil {
 		span.SetAttributes(traceai.AttrGenAIRequestTopP.Float64(*req.TopP))
 	}
-	if len(req.Messages) > 0 {
+	if captureContent && len(req.Messages) > 0 {
 		span.SetAttributes(traceai.AttrGenAIPrompt.String(string(req.Messages)))
 	}
 }
@@ -163,7 +160,7 @@ type chatResponse struct {
 	} `json:"usage"`
 }
 
-func extractResponseAttributes(span trace.Span, body []byte) {
+func extractResponseAttributes(span trace.Span, body []byte, captureContent bool) {
 	var resp chatResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return
@@ -196,7 +193,7 @@ func extractResponseAttributes(span trace.Span, body []byte) {
 		if len(reasons) > 0 {
 			span.SetAttributes(traceai.AttrGenAIResponseFinishReasons.StringSlice(reasons))
 		}
-		if len(completions) > 0 {
+		if captureContent && len(completions) > 0 {
 			span.SetAttributes(traceai.AttrGenAICompletion.String(strings.Join(completions, "\n")))
 		}
 	}
