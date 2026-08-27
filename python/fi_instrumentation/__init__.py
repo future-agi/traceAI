@@ -16,6 +16,7 @@ from fi_instrumentation.instrumentation.context_attributes import (
 )
 from fi_instrumentation.instrumentation.helpers import safe_json_dumps
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from .otel import (
     PROJECT_NAME,
@@ -24,8 +25,10 @@ from .otel import (
     SEMANTIC_CONVENTION,
     BatchSpanProcessor,
     HTTPSpanExporter,
+    Sampler,
     SemanticConvention,
     SimpleSpanProcessor,
+    SpanLimits,
     TracerProvider,
     Transport,
     register,
@@ -52,6 +55,10 @@ __all__ = [
     "SimpleSpanProcessor",
     "BatchSpanProcessor",
     "HTTPSpanExporter",
+    "Sampler",
+    "ParentBased",
+    "TraceIdRatioBased",
+    "SpanLimits",
     "Resource",
     "PROJECT_NAME",
     "PROJECT_TYPE",

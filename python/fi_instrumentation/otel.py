@@ -7,6 +7,7 @@ import signal
 import sys
 import threading
 import uuid
+import warnings
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
@@ -36,11 +37,12 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as _HTTPSpanExporter,
 )
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.sdk.trace import SpanLimits, SpanProcessor
 from opentelemetry.sdk.trace import TracerProvider as _TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor as _BatchSpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SimpleSpanProcessor
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import Status, StatusCode
 
 try:
@@ -103,7 +105,47 @@ def register(
     verbose: bool = True,
     transport: Transport = Transport.HTTP,
     semantic_convention: SemanticConvention = SemanticConvention.FI,
+    max_queue_size: Optional[int] = None,
+    schedule_delay_millis: Optional[float] = None,
+    max_export_batch_size: Optional[int] = None,
+    export_timeout_millis: Optional[float] = None,
+    span_exporter: Optional[SpanExporter] = None,
+    timeout: Optional[float] = None,
+    sampler: Optional[Sampler] = None,
+    span_limits: Optional[SpanLimits] = None,
 ) -> _TracerProvider:
+    """Configure and return a Future AGI `TracerProvider`.
+
+    All tuning args below default to `None`, meaning the corresponding OpenTelemetry
+    environment variable / upstream default applies (no behavior change when unset).
+
+    Args:
+        project_name, project_type, project_version_name, eval_tags, metadata:
+            Future AGI project/eval configuration.
+        batch (bool): Use `BatchSpanProcessor` (default) vs `SimpleSpanProcessor`.
+        set_global_tracer_provider (bool): Register as the global OTel provider.
+        headers (dict): Extra headers sent to the collector.
+        verbose (bool): Print configuration details to stdout.
+        transport (Transport): HTTP (default) or gRPC.
+        semantic_convention (SemanticConvention): Attribute naming convention.
+
+        Batch processor tuning (ignored unless `batch=True`):
+        max_queue_size (int): Max spans buffered before overflow drops
+            (`OTEL_BSP_MAX_QUEUE_SIZE`, upstream default 2048).
+        schedule_delay_millis (float): Delay between exports, in **milliseconds**.
+        max_export_batch_size (int): Max spans per export batch (upstream default 512).
+        export_timeout_millis (float): Batch export timeout, in **milliseconds**.
+
+        Exporter tuning (used only when `span_exporter` is not provided):
+        span_exporter (SpanExporter): Pre-built exporter; bypasses the default one
+            (and `timeout` below).
+        timeout (float): Per-export timeout, in **seconds** (note: seconds here vs
+            milliseconds for the batch params above).
+
+        Provider tuning:
+        sampler (Sampler): Head sampler (e.g. `TraceIdRatioBased`) to shed volume.
+        span_limits (SpanLimits): Caps on attributes/events/links per span.
+    """
 
     eval_tags = eval_tags or []
     metadata = metadata or {}
@@ -155,20 +197,48 @@ def register(
 
     resource = Resource(attributes=resource_attributes)
 
+    # Only forward provider tuning when set, so unset -> upstream env/default.
+    provider_kwargs: Dict[str, Any] = {}
+    if sampler is not None:
+        provider_kwargs["sampler"] = sampler
+    if span_limits is not None:
+        provider_kwargs["span_limits"] = span_limits
+
     tracer_provider = TracerProvider(
         resource=resource, verbose=False, id_generator=UuidIdGenerator(),
-        transport=transport
+        transport=transport, **provider_kwargs,
     )
     span_processor: SpanProcessor
     if batch:
         span_processor = BatchSpanProcessor(
+            span_exporter=span_exporter,
             headers=headers,
             transport=transport,
+            max_queue_size=max_queue_size,
+            schedule_delay_millis=schedule_delay_millis,
+            max_export_batch_size=max_export_batch_size,
+            export_timeout_millis=export_timeout_millis,
+            timeout=timeout,
         )
     else:
+        batch_only = {
+            "max_queue_size": max_queue_size,
+            "schedule_delay_millis": schedule_delay_millis,
+            "max_export_batch_size": max_export_batch_size,
+            "export_timeout_millis": export_timeout_millis,
+        }
+        ignored = [name for name, value in batch_only.items() if value is not None]
+        if ignored:
+            warnings.warn(
+                f"batch=False: ignoring batch-only tuning {ignored}; "
+                "these apply only to BatchSpanProcessor.",
+                stacklevel=2,
+            )
         span_processor = SimpleSpanProcessor(
+            span_exporter=span_exporter,
             headers=headers,
             transport=transport,
+            timeout=timeout,
         )
     tracer_provider.add_span_processor(span_processor)
     tracer_provider._default_processor = True
@@ -199,13 +269,15 @@ class TracerProvider(_TracerProvider):
     Extended keyword arguments are documented in the `Args` section. For further documentation, see
     the OpenTelemetry documentation at https://opentelemetry.io/docs/specs/otel/trace/sdk/.
 
+    On construction a default `SimpleSpanProcessor` is added, exporting over `transport`.
+    The collector endpoint is inferred from `transport` and the `FI_BASE_URL`/`FI_GRPC_URL`
+    environment variables. Call `add_span_processor` to replace the default. In addition to
+    the arguments below, all upstream `opentelemetry.sdk.trace.TracerProvider` keyword
+    arguments (`sampler`, `resource`, `span_limits`, `id_generator`, ...) are accepted and
+    forwarded.
+
     Args:
-        endpoint (str, optional): The collector endpoint to which spans will be exported. If
-            specified, a default SpanProcessor will be created and added to this TracerProvider.
-            If not provided, the `BASE_URL` environment variable will be
-            used to infer which collector endpoint to use, defaults to the gRPC endpoint. When
-            specifying the endpoint, the transport method (HTTP or gRPC) will be inferred from the
-            URL.
+        transport (Transport): Transport (HTTP or gRPC) used for the default exporter.
         verbose (bool): If True, configuration details will be printed to stdout.
     """
 
@@ -283,11 +355,11 @@ class TracerProvider(_TracerProvider):
             if processors := self._active_span_processor._span_processors:
                 if len(processors) == 1:
                     span_processor = self._active_span_processor._span_processors[0]
-                    if exporter := getattr(span_processor, "span_exporter"):
+                    if exporter := getattr(span_processor, "span_exporter", None):
                         processor_name = span_processor.__class__.__name__
-                        endpoint = exporter._endpoint
+                        endpoint = getattr(exporter, "_endpoint", None)
                         transport = _exporter_transport(exporter)
-                        headers = _printable_headers(exporter._headers)
+                        headers = _printable_headers(getattr(exporter, "_headers", {}) or {})
                 else:
                     processor_name = "Multiple Span Processors"
                     endpoint = "Multiple Span Exporters"
@@ -376,6 +448,21 @@ def _auto_set_ok_status(span: Any) -> None:
         span._status = Status(StatusCode.OK)
 
 
+def _build_default_exporter(
+    transport: Transport,
+    headers: Optional[Dict[str, str]],
+    timeout: Optional[float],
+) -> SpanExporter:
+    """Build the default OTLP exporter for `transport` (endpoint from env)."""
+    if transport == Transport.HTTP:
+        _, endpoint = _normalized_endpoint(get_env_collector_endpoint())
+        return HTTPSpanExporter(endpoint=endpoint, headers=headers, timeout=timeout)
+    if transport == Transport.GRPC:
+        endpoint = get_env_grpc_collector_endpoint()
+        return GRPCSpanExporter(endpoint=endpoint, headers=headers, timeout=timeout)
+    raise ValueError(f"Invalid transport: {transport}")
+
+
 class SimpleSpanProcessor(_SimpleSpanProcessor):
     """
     Simple SpanProcessor implementation.
@@ -385,14 +472,14 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
 
     Args:
         span_exporter (SpanExporter, optional): The `SpanExporter` to which ended spans will be
-            passed.
-        endpoint (str, optional): The collector endpoint to which spans will be exported. If not
-            provided, the `BASE_URL` environment variable will be used to
-            infer which collector endpoint to use, defaults to the gRPC endpoint. When specifying
-            the endpoint, the transport method (HTTP or gRPC) will be inferred from the URL.
+            passed. If not provided, a default OTLP exporter is created for `transport`; its
+            collector endpoint is taken from the `FI_BASE_URL`/`FI_GRPC_URL` environment
+            variables.
         headers (dict, optional): Optional headers to include in the request to the collector.
             If not provided, the `FI_API_KEY` and `FI_SECRET_KEY`
             environment variable will be used.
+        transport (Transport, optional): Transport (HTTP or gRPC) used for the default exporter.
+        timeout (float, optional): Per-export timeout in seconds for the default exporter.
     """
 
     def __init__(
@@ -400,18 +487,13 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
         span_exporter: Optional[SpanExporter] = None,
         headers: Optional[Dict[str, str]] = None,
         transport: Transport = Transport.HTTP,
+        timeout: Optional[float] = None,
     ):
         self._active_spans = {}
         self._shutdown_lock = threading.Lock()
 
         if span_exporter is None:
-            if transport == Transport.HTTP:
-                endpoint = get_env_collector_endpoint()
-                parsed_url, endpoint = _normalized_endpoint(endpoint)
-                span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
-            elif transport == Transport.GRPC:
-                endpoint = get_env_grpc_collector_endpoint()
-                span_exporter = GRPCSpanExporter(endpoint=endpoint, headers=headers)
+            span_exporter = _build_default_exporter(transport, headers, timeout)
 
         super().__init__(span_exporter)
 
@@ -474,19 +556,19 @@ class BatchSpanProcessor(_BatchSpanProcessor):
 
     Args:
         span_exporter (SpanExporter, optional): The `SpanExporter` to which ended spans will be
-            passed.
-        endpoint (str, optional): The collector endpoint to which spans will be exported. If not
-            provided, the `BASE_URL` environment variable will be used to
-            infer which collector endpoint to use, defaults to the gRPC endpoint. When specifying
-            the endpoint, the transport method (HTTP or gRPC) will be inferred from the URL.
+            passed. If not provided, a default OTLP exporter is created for `transport`; its
+            collector endpoint is taken from the `FI_BASE_URL`/`FI_GRPC_URL` environment
+            variables.
         headers (dict, optional): Optional headers to include in the request to the collector.
             If not provided, the `FI_API_KEY` and `FI_SECRET_KEY`
             environment variable will be used.
+        transport (Transport, optional): Transport (HTTP or gRPC) used for the default exporter.
         max_queue_size (int, optional): The maximum queue size.
         schedule_delay_millis (float, optional): The delay between two consecutive exports in
             milliseconds.
         max_export_batch_size (int, optional): The maximum batch size.
-        export_timeout_millis (float, optional): The batch timeout in milliseconds.
+        export_timeout_millis (float, optional): The batch export timeout in milliseconds.
+        timeout (float, optional): Per-export timeout in seconds for the default exporter.
     """
 
     def __init__(
@@ -494,17 +576,22 @@ class BatchSpanProcessor(_BatchSpanProcessor):
         span_exporter: Optional[SpanExporter] = None,
         headers: Optional[Dict[str, str]] = None,
         transport: Transport = Transport.HTTP,
+        max_queue_size: Optional[int] = None,
+        schedule_delay_millis: Optional[float] = None,
+        max_export_batch_size: Optional[int] = None,
+        export_timeout_millis: Optional[float] = None,
+        timeout: Optional[float] = None,
     ):
         if span_exporter is None:
-            if transport == Transport.HTTP:
-                endpoint = get_env_collector_endpoint()
-                parsed_url, endpoint = _normalized_endpoint(endpoint)
-                span_exporter = HTTPSpanExporter(endpoint=endpoint, headers=headers)
-            elif transport == Transport.GRPC:
-                endpoint = get_env_grpc_collector_endpoint()
-                span_exporter = GRPCSpanExporter(endpoint=endpoint, headers=headers)
+            span_exporter = _build_default_exporter(transport, headers, timeout)
 
-        super().__init__(span_exporter)
+        super().__init__(
+            span_exporter,
+            max_queue_size=max_queue_size,
+            schedule_delay_millis=schedule_delay_millis,
+            max_export_batch_size=max_export_batch_size,
+            export_timeout_millis=export_timeout_millis,
+        )
 
     def on_end(self, span: Any) -> None:
         """Auto-set OK status for UNSET spans before batching."""
