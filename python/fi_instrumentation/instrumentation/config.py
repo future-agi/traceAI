@@ -283,7 +283,13 @@ class TraceConfig:
         ):
             return None
         resolved = value() if callable(value) else value
-        if self.pii_redaction and resolved is not None:
+        if (
+            self.pii_redaction
+            and resolved is not None
+            and key != SpanAttributes.SESSION_ID
+            and key != SpanAttributes.USER_ID
+            and key != SpanAttributes.GEN_AI_CONVERSATION_ID
+        ):
             resolved = redact_pii_in_value(resolved)
         return resolved
 
