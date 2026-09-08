@@ -262,6 +262,7 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-claude-agent-sdk`](https://pypi.org/project/traceAI-claude-agent-sdk/) | Claude Agent SDK | [![PyPI](https://img.shields.io/pypi/v/traceAI-claude-agent-sdk)](https://pypi.org/project/traceAI-claude-agent-sdk/) |
 | [`traceAI-strands`](https://pypi.org/project/traceAI-strands/) | AWS Strands Agents | [![PyPI](https://img.shields.io/pypi/v/traceAI-strands)](https://pypi.org/project/traceAI-strands/) |
 | [`traceAI-beeai`](https://pypi.org/project/traceAI-beeai/) | IBM BeeAI | [![PyPI](https://img.shields.io/pypi/v/traceAI-beeai)](https://pypi.org/project/traceAI-beeai/) |
+| [`traceai-semantic-kernel`](https://pypi.org/project/traceai-semantic-kernel/) | Microsoft Semantic Kernel | [![PyPI](https://img.shields.io/pypi/v/traceai-semantic-kernel)](https://pypi.org/project/traceai-semantic-kernel/) |
 
 #### Tools and Libraries
 
