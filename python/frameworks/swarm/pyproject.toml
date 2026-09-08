@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "traceai-swarm"
+version = "0.1.0"
+description = "TraceAI Instrumentation for OpenAI Swarm"
+authors = ["Future AGI <hello@futureagi.com>"]
+readme = "README.md"
+packages = [{include = "traceai_swarm"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+traceai-instrumentation = "^0.1.0"
+wrapt = "^1.16.0"
+
+[tool.poetry.group.dev.dependencies]
+swarm = "^0.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
