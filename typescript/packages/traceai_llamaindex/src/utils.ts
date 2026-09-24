@@ -1,12 +1,7 @@
 import type * as llamaindex from "llamaindex";
 import { context, Context } from "@opentelemetry/api";
 
-import {
-  BaseEmbedding,
-  BaseSynthesizer,
-  LLM,
-  BaseRetriever,
-} from "llamaindex";
+import { LLM } from "llamaindex";
 
 export const shouldSendPrompts = () => {
   return true;
@@ -43,28 +38,47 @@ export async function* generatorWrapper(
   fn();
 }
 
-export async function* llmGeneratorWrapper(
-  streamingResult:
-    | AsyncIterable<llamaindex.ChatResponseChunk>
-    | AsyncIterable<llamaindex.CompletionResponse>,
-  ctx: Context,
-  fn: (message: string) => void,
-) {
-  let message = "";
+export interface StreamedChatOutput {
+  message: llamaindex.ChatMessage;
+  raw: object | null;
+}
 
-  for await (const messageChunk of bindAsyncGenerator(
-    ctx,
-    streamingResult as AsyncGenerator,
-  )) {
-    if ((messageChunk as llamaindex.ChatResponseChunk).delta) {
-      message += (messageChunk as llamaindex.ChatResponseChunk).delta;
+export async function* llmGeneratorWrapper(
+  streamingResult: AsyncIterable<llamaindex.ChatResponseChunk>,
+  ctx: Context,
+  onEnd: (output: StreamedChatOutput) => void,
+  onError: (error: Error) => void,
+) {
+  let content = "";
+  let options: object | undefined;
+  let usageRaw: object | null = null;
+  let failed = false;
+
+  try {
+    for await (const chunk of bindAsyncGenerator(
+      ctx,
+      streamingResult as AsyncGenerator,
+    )) {
+      const { delta, options: chunkOptions, raw } =
+        chunk as llamaindex.ChatResponseChunk;
+      content += delta ?? "";
+      if (chunkOptions && "toolCall" in chunkOptions) {
+        options = chunkOptions;
+      }
+      if (raw && (raw as { usage?: unknown }).usage) {
+        usageRaw = raw;
+      }
+      yield chunk;
     }
-    if ((messageChunk as llamaindex.CompletionResponse).text) {
-      message += (messageChunk as llamaindex.CompletionResponse).text;
+  } catch (error) {
+    failed = true;
+    onError(error as Error);
+    throw error;
+  } finally {
+    if (!failed) {
+      onEnd({ message: { role: "assistant", content, options }, raw: usageRaw });
     }
-    yield messageChunk;
   }
-  fn(message);
 }
 
 export function isLLM(llm: any): llm is LLM {
@@ -73,18 +87,4 @@ export function isLLM(llm: any): llm is LLM {
     (llm as LLM).complete !== undefined &&
     (llm as LLM).chat !== undefined
   );
-}
-
-export function isEmbedding(embedding: any): embedding is BaseEmbedding {
-  return !!(embedding as BaseEmbedding)?.getQueryEmbedding;
-}
-
-export function isSynthesizer(synthesizer: any): synthesizer is BaseSynthesizer {
-  return (
-    synthesizer && (synthesizer as BaseSynthesizer).synthesize !== undefined
-  );
-}
-
-export function isRetriever(retriever: any): retriever is BaseRetriever {
-  return retriever && (retriever as BaseRetriever).retrieve !== undefined;
 }

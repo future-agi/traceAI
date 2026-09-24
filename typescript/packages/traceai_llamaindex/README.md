@@ -22,7 +22,7 @@ process.env["OPENAI_API_KEY"] = "your-openai-api-key";
 
 import { register, ProjectType } from "@traceai/fi-core";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
-import { OpenAI, OpenAIEmbedding } from "@llamaindex/openai";
+import * as LlamaIndexOpenAI from "@llamaindex/openai";
 import * as LlamaIndex from "llamaindex";
 import { LlamaIndexInstrumentation } from "@traceai/llamaindex";
 
@@ -30,21 +30,24 @@ import { LlamaIndexInstrumentation } from "@traceai/llamaindex";
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.INFO);
 
 async function main() {
-  // 1. Configure LlamaIndex Settings
-  const { Settings } = LlamaIndex;
-  Settings.llm = new OpenAI({ model: "gpt-3.5-turbo" });
-  Settings.embedModel = new OpenAIEmbedding({ model: "text-embedding-ada-002" });
-
-  // 2. Register FI Core TracerProvider
+  // 1. Register FI Core TracerProvider
   const tracerProvider = register({
     projectName: "your-project-name",
     projectType: ProjectType.OBSERVE,
     setGlobalTracerProvider: true,
   });
 
-  // 3. Initialize and register LlamaIndex Instrumentation
+  // 2. Initialize LlamaIndex Instrumentation, passing every LlamaIndex
+  //    provider package you use (LLM classes live in those packages).
+  //    Do this before creating any LLM: instances created earlier are not traced.
   const instrumentation = new LlamaIndexInstrumentation({});
-  instrumentation.manuallyInstrument(LlamaIndex);
+  instrumentation.manuallyInstrument(LlamaIndex, LlamaIndexOpenAI);
+
+  // 3. Configure LlamaIndex Settings
+  const { Settings } = LlamaIndex;
+  const { OpenAI, OpenAIEmbedding } = LlamaIndexOpenAI;
+  Settings.llm = new OpenAI({ model: "gpt-3.5-turbo" });
+  Settings.embedModel = new OpenAIEmbedding({ model: "text-embedding-ada-002" });
 
   // 4. Use LlamaIndex as normal
   const { Document, VectorStoreIndex } = LlamaIndex;
@@ -95,7 +98,7 @@ OPENAI_API_KEY=your_openai_api_key
   - Query engine execution
   - Retrieval operations
   - Embedding generation
-  - LLM chat completions
+  - LLM chat completions, including streaming, token counts and tool calls
 - Support for both ESM and CommonJS modules
 - Compatible with LlamaIndex.js
 - Integration with TraceAI's observability platform
@@ -115,6 +118,7 @@ This instrumentation automatically traces:
 
 This package requires the following peer dependencies:
 - `llamaindex`: >=0.1.0
+- `@llamaindex/openai`: >=0.3.0 (or any other LlamaIndex provider package, passed to `manuallyInstrument`)
 
 ## Development
 
