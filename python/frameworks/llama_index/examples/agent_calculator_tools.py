@@ -1,3 +1,5 @@
+import asyncio
+
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import (
     EvalName,
@@ -6,8 +8,7 @@ from fi_instrumentation.fi_types import (
     EvalTagType,
     ProjectType,
 )
-from llama_index.agent.openai import OpenAIAgent
-from llama_index.core import Settings
+from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.tools import FunctionTool
 from llama_index.llms.openai import OpenAI
 from traceai_llamaindex import LlamaIndexInstrumentor
@@ -48,11 +49,16 @@ def add(a: int, b: int) -> int:
     return a + b
 
 
-multiply_tool = FunctionTool.from_defaults(fn=multiply)
-add_tool = FunctionTool.from_defaults(fn=add)
-agent = OpenAIAgent.from_tools([multiply_tool, add_tool])
-Settings.llm = OpenAI(model="gpt-3.5-turbo")
+agent = FunctionAgent(
+    tools=[FunctionTool.from_defaults(fn=multiply), FunctionTool.from_defaults(fn=add)],
+    llm=OpenAI(model="gpt-4o-mini"),
+)
+
+
+async def main():
+    response = await agent.run("What is (121 * 3) + 42?")
+    print(response)
+
 
 if __name__ == "__main__":
-    response = agent.query("What is (121 * 3) + 42?")
-    print(response)
+    asyncio.run(main())

@@ -6,10 +6,10 @@ from fi_instrumentation.fi_types import (
     EvalTagType,
     ProjectType,
 )
-from llama_index import SimpleDirectoryReader, VectorStoreIndex
-from llama_index.postprocessor import SimilarityPostprocessor
-from llama_index.query_engine import RetrieverQueryEngine
-from llama_index.retrievers import VectorIndexRetriever
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core.postprocessor import SimilarityPostprocessor
+from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.core.retrievers import VectorIndexRetriever
 from traceai_llamaindex import LlamaIndexInstrumentor
 
 eval_tags = [

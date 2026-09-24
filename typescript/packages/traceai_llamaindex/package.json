@@ -1,6 +1,6 @@
 {
   "name": "@traceai/llamaindex",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OpenTelemetry instrumentation for LlamaIndex",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -17,9 +17,9 @@
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
-    "test": "jest --passWithNoTests",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "pnpm run test --watch",
+    "test:coverage": "pnpm run test --coverage",
     "lint": "eslint . --ext .ts",
     "prepare": "pnpm run build"
   },
@@ -49,6 +49,8 @@
   },
   "devDependencies": {
     "@llamaindex/openai": "^0.4.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@opentelemetry/sdk-trace-node": "^2.0.1",
     "@types/node": "^22.15.29",
     "@types/jest": "^29.5.12",
     "llamaindex": ">=0.1.0",

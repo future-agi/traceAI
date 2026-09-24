@@ -1,13 +1,6 @@
 import logging
 from typing import Any, Collection, Optional
-logger = logging.getLogger(__name__)
 
-try:
-    from fi.evals import Protect
-except ImportError:
-    logger.warning("ai-evaluation is not installed, please install it to trace protect")
-    Protect = None
-    pass
 from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
@@ -17,6 +10,7 @@ from traceai_llamaindex.package import _instruments
 from traceai_llamaindex.version import __version__
 from wrapt import wrap_function_wrapper
 
+logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
@@ -43,6 +37,11 @@ class LlamaIndexInstrumentor(BaseInstrumentor):  # type: ignore
             config = TraceConfig()
         else:
             assert isinstance(config, TraceConfig)
+        try:
+            from fi.evals import Protect
+        except ImportError:
+            logger.warning("ai-evaluation is not installed, please install it to trace protect")
+            Protect = None
         self._use_legacy_callback_handler = bool(
             kwargs.get("use_legacy_callback_handler")
         )

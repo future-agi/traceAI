@@ -1,9 +1,12 @@
 [tool.poetry]
 name = "traceAI-llamaindex"
-version = "0.1.9"
+version = "0.2.0"
 description = "OpenTelemetry instrumentation for Llama Index"
 authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
 readme = "README.md"
+homepage = "https://github.com/future-agi/traceAI"
+repository = "https://github.com/future-agi/traceAI"
 
 packages = [
     { include = "traceai_llamaindex" },
@@ -12,7 +15,11 @@ packages = [
 [tool.poetry.dependencies]
 python = ">3.9, <3.14"
 fi-instrumentation-otel = ">=0.1.11"
-llama-index-core = ">=0.10.43"
+llama-index-core = ">=0.12.3"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+llama-index-llms-openai = ">=0.3.0"
 
 
 [build-system]

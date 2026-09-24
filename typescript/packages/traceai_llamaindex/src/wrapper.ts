@@ -8,6 +8,7 @@ import {
   trace,
   context,
   DiagLogger,
+  Attributes,
 } from "@opentelemetry/api";
 import { safeExecuteInTheMiddle } from "@opentelemetry/instrumentation";
 
@@ -15,22 +16,107 @@ import { SemanticConventions, FISpanKind } from "@traceai/fi-semantic-convention
 import { safelyJSONStringify } from "@traceai/fi-core";
 
 import { LlamaIndexInstrumentationConfig } from "./types";
-import { shouldSendPrompts, llmGeneratorWrapper, generatorWrapper } from "./utils";
+import {
+  shouldSendPrompts,
+  llmGeneratorWrapper,
+  generatorWrapper,
+  StreamedChatOutput,
+} from "./utils";
 
 type LLM = llamaindex.LLM;
 
-type ResponseType = llamaindex.ChatResponse | llamaindex.CompletionResponse;
-type AsyncResponseType =
-  | AsyncIterable<llamaindex.ChatResponseChunk>
-  | AsyncIterable<llamaindex.CompletionResponse>;
+type AsyncResponseType = AsyncIterable<llamaindex.ChatResponseChunk>;
 
-function handleResponse<T extends ResponseType>(
-    result: T,
+// eslint-disable-next-line
+export type Method = Function;
+export type MethodWrapper = (original: Method) => Method;
+
+interface TokenUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+interface SerializedToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+interface SerializedMessage {
+  role: string;
+  content?: string;
+  tool_calls?: SerializedToolCall[];
+}
+
+function getTextContent(content: llamaindex.MessageContent): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  const first = Array.isArray(content) ? content[0] : undefined;
+  return first?.type === "text"
+    ? (first as llamaindex.MessageContentTextDetail).text
+    : undefined;
+}
+
+function getToolCalls(options: object | undefined): SerializedToolCall[] | undefined {
+  const toolCalls = (options as Partial<llamaindex.ToolCallOptions> | undefined)?.toolCall;
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+    return undefined;
+  }
+  return toolCalls.map(({ id, name, input }) => ({
+    id,
+    type: "function",
+    function: {
+      name,
+      arguments: typeof input === "string" ? input : JSON.stringify(input),
+    },
+  }));
+}
+
+function serializeMessage(message: llamaindex.ChatMessage): SerializedMessage {
+  const serialized: SerializedMessage = {
+    role: message.role,
+    content: getTextContent(message.content),
+  };
+  const toolCalls = getToolCalls(message.options);
+  if (toolCalls) {
+    serialized.tool_calls = toolCalls;
+  }
+  return serialized;
+}
+
+function getOutputAttributes(
+  message: llamaindex.ChatMessage,
+  raw: object | null,
+): Attributes {
+  const usage = (raw as { usage?: TokenUsage | null } | null)?.usage;
+  return {
+    [SemanticConventions.LLM_OUTPUT_MESSAGES]:
+      safelyJSONStringify([serializeMessage(message)]) ?? "[]",
+    [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]:
+      usage?.prompt_tokens ?? usage?.input_tokens,
+    [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]:
+      usage?.completion_tokens ?? usage?.output_tokens,
+    [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: usage?.total_tokens,
+  };
+}
+
+function endSpanWithError(span: Span, error: Error) {
+  span.recordException(error);
+  span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+  span.end();
+}
+
+function handleResponse(
+    result: llamaindex.ChatResponse,
     span: Span,
     metadata: llamaindex.LLMMetadata,
     config: LlamaIndexInstrumentationConfig,
     diag: DiagLogger,
-  ): T {
+  ): llamaindex.ChatResponse {
     span.setAttribute(SemanticConventions.LLM_MODEL_NAME, metadata.model);
 
     if (!shouldSendPrompts()) {
@@ -40,17 +126,8 @@ function handleResponse<T extends ResponseType>(
     }
 
     try {
-      if ((result as llamaindex.ChatResponse).message) {
-        const chatResult = result as llamaindex.ChatResponse;
-        const outputContent = typeof chatResult.message.content === "string"
-          ? chatResult.message.content
-          : chatResult.message.content[0]?.type === "text"
-            ? (chatResult.message.content[0] as llamaindex.MessageContentTextDetail).text
-            : undefined;
-        span.setAttribute(
-          SemanticConventions.LLM_OUTPUT_MESSAGES,
-          safelyJSONStringify([{ role: chatResult.message.role, content: outputContent }]) ?? "[]",
-        );
+      if (result.message) {
+        span.setAttributes(getOutputAttributes(result.message, result.raw));
         span.setStatus({ code: SpanStatusCode.OK });
       }
     } catch (e) {
@@ -77,29 +154,35 @@ function handleStreamingResponse<T extends AsyncResponseType>(
       return result;
     }
 
-    return llmGeneratorWrapper(result, execContext, (message) => {
-      span.setAttribute(
-        SemanticConventions.LLM_OUTPUT_MESSAGES,
-        safelyJSONStringify([{ role: "assistant", content: message }]) ?? "[]",
-      );
-      span.setStatus({ code: SpanStatusCode.OK });
-      span.end();
-    }) as any;
+    return llmGeneratorWrapper(
+      result,
+      execContext,
+      ({ message, raw }: StreamedChatOutput) => {
+        span.setAttributes(getOutputAttributes(message, raw));
+        span.setStatus({ code: SpanStatusCode.OK });
+        span.end();
+      },
+      (error) => endSpanWithError(span, error),
+    ) as unknown as T;
   }
 
 export function chatWrapper({ className }: { className: string },
     config: LlamaIndexInstrumentationConfig,
     diag: DiagLogger,
     tracer: () => Tracer,
-) {
-    return (original: LLM["chat"]) => {
+): MethodWrapper {
+    return (original: Method) => {
       return function method(this: LLM, ...args: Parameters<LLM["chat"]>) {
-        const params = args[0] as any;
+        const params = args[0] as
+          | llamaindex.LLMChatParamsStreaming
+          | llamaindex.LLMChatParamsNonStreaming
+          | undefined;
         const messages = params?.messages;
         const streaming = params?.stream;
 
-        const span = tracer()
-          .startSpan(`llamaindex.${className}.chat`);
+        const span = tracer().startSpan(
+          `llamaindex.${this?.constructor?.name || className}.chat`,
+        );
 
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, FISpanKind.LLM);
 
@@ -111,18 +194,9 @@ export function chatWrapper({ className }: { className: string },
             this.metadata.model,
           );
           if (shouldSendPrompts() && messages) {
-            const serialized = messages.map((msg: any) => {
-              const content = msg.content;
-              const textContent = typeof content === "string"
-                ? content
-                : Array.isArray(content) && content[0]?.type === "text"
-                  ? content[0].text
-                  : undefined;
-              return { role: msg.role, content: textContent };
-            });
             span.setAttribute(
               SemanticConventions.LLM_INPUT_MESSAGES,
-              safelyJSONStringify(serialized) ?? "[]",
+              safelyJSONStringify(messages.map(serializeMessage)) ?? "[]",
             );
           }
         } catch (e) {
@@ -159,11 +233,7 @@ export function chatWrapper({ className }: { className: string },
           })
           .catch((error: Error) => {
             return new Promise((_, reject) => {
-              span.setStatus({
-                code: SpanStatusCode.ERROR,
-                message: error.message,
-              });
-              span.end();
+              endSpanWithError(span, error);
               reject(error);
             });
           });
@@ -177,14 +247,13 @@ export function genericWrapper(
     methodName: string,
     kind: FISpanKind,
     tracer: () => Tracer,
-  ) {
-    // eslint-disable-next-line
-    return (original: Function) => {
+  ): MethodWrapper {
+    return (original: Method) => {
       return function method(this: any, ...args: unknown[]) {
         const params = args[0];
         const streaming = params && (params as any).stream;
   
-        const name = `${className}.${methodName}`;
+        const name = `${this?.constructor?.name || className}.${methodName}`;
         const span = tracer().startSpan(`${name}`, {}, context.active());
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, kind);
   
@@ -261,11 +330,7 @@ export function genericWrapper(
           })
           .catch((error: Error) => {
             return new Promise((_, reject) => {
-              span.setStatus({
-                code: SpanStatusCode.ERROR,
-                message: error.message,
-              });
-              span.end();
+              endSpanWithError(span, error);
               reject(error);
             });
           });
