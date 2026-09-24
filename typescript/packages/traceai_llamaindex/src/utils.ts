@@ -50,7 +50,8 @@ export async function* llmGeneratorWrapper(
   onError: (error: Error) => void,
 ) {
   let content = "";
-  let options: object | undefined;
+  // keyed by id: a call streams in partial chunks, the last chunk for an id is the complete one
+  const toolCalls = new Map<string, llamaindex.PartialToolCall | llamaindex.ToolCall>();
   let usageRaw: object | null = null;
   let failed = false;
 
@@ -63,7 +64,9 @@ export async function* llmGeneratorWrapper(
         chunk as llamaindex.ChatResponseChunk;
       content += delta ?? "";
       if (chunkOptions && "toolCall" in chunkOptions) {
-        options = chunkOptions;
+        for (const toolCall of (chunkOptions as llamaindex.ToolCallOptions).toolCall) {
+          toolCalls.set(toolCall.id, { ...toolCall });
+        }
       }
       if (raw && (raw as { usage?: unknown }).usage) {
         usageRaw = raw;
@@ -76,6 +79,9 @@ export async function* llmGeneratorWrapper(
     throw error;
   } finally {
     if (!failed) {
+      const options = toolCalls.size
+        ? { toolCall: Array.from(toolCalls.values()) }
+        : undefined;
       onEnd({ message: { role: "assistant", content, options }, raw: usageRaw });
     }
   }

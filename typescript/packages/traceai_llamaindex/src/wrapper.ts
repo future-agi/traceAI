@@ -180,8 +180,9 @@ export function chatWrapper({ className }: { className: string },
         const messages = params?.messages;
         const streaming = params?.stream;
 
-        const span = tracer()
-          .startSpan(`llamaindex.${className}.chat`);
+        const span = tracer().startSpan(
+          `llamaindex.${this?.constructor?.name || className}.chat`,
+        );
 
         span.setAttribute(SemanticConventions.FI_SPAN_KIND, FISpanKind.LLM);
 

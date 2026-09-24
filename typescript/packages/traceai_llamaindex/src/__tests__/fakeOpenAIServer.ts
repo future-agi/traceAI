@@ -5,6 +5,7 @@ export const FAKE_REPLY = "Hello from fake";
 export const FAKE_USAGE = { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 };
 export const FAKE_TOOL_ARGUMENTS = { city: "Paris" };
 export const BROKEN_STREAM_PATH = "/broken";
+export const NO_USAGE_STREAM_PATH = "/no-usage";
 
 interface ChatRequest {
   model: string;
@@ -16,6 +17,7 @@ interface ChatRequest {
 export interface FakeOpenAIServer {
   baseURL: string;
   brokenStreamBaseURL: string;
+  noUsageStreamBaseURL: string;
   close: () => Promise<void>;
 }
 
@@ -63,6 +65,25 @@ function handleChat(req: http.IncomingMessage, body: ChatRequest, res: http.Serv
 
   res.setHeader("content-type", "text/event-stream");
   const chunk = { ...base, object: "chat.completion.chunk" };
+  const usage = req.url?.startsWith(NO_USAGE_STREAM_PATH) ? {} : { usage: FAKE_USAGE };
+
+  if (toolName) {
+    // one tool call per requested tool, arguments split across chunks like OpenAI does
+    const args = JSON.stringify(FAKE_TOOL_ARGUMENTS);
+    const half = Math.floor(args.length / 2);
+    body.tools?.forEach(({ function: { name } }, index) => {
+      const call = { index, id: `call_${index + 1}`, type: "function", function: { name, arguments: args.slice(0, half) } };
+      sse(res, { ...chunk, choices: [{ index: 0, delta: { tool_calls: [call] }, finish_reason: null }] });
+      sse(res, {
+        ...chunk,
+        choices: [{ index: 0, delta: { tool_calls: [{ index, function: { arguments: args.slice(half) } }] }, finish_reason: null }],
+      });
+    });
+    sse(res, { ...chunk, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], ...usage });
+    res.end("data: [DONE]\n\n");
+    return;
+  }
+
   const words = FAKE_REPLY.split(/(?= )/);
   for (const word of words) {
     sse(res, {
@@ -74,7 +95,7 @@ function handleChat(req: http.IncomingMessage, body: ChatRequest, res: http.Serv
     res.destroy();
     return;
   }
-  sse(res, { ...chunk, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: FAKE_USAGE });
+  sse(res, { ...chunk, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], ...usage });
   res.end("data: [DONE]\n\n");
 }
 
@@ -112,6 +133,7 @@ export function startFakeOpenAIServer(): Promise<FakeOpenAIServer> {
       resolve({
         baseURL: `http://127.0.0.1:${port}/v1`,
         brokenStreamBaseURL: `http://127.0.0.1:${port}${BROKEN_STREAM_PATH}/v1`,
+        noUsageStreamBaseURL: `http://127.0.0.1:${port}${NO_USAGE_STREAM_PATH}/v1`,
         close: () =>
           new Promise((done) => {
             server.closeAllConnections();

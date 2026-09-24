@@ -42,6 +42,19 @@ function createLLM(baseURL: string) {
   });
 }
 
+function cityTool(name: string) {
+  return {
+    metadata: {
+      name,
+      description: "Look something up for a city",
+      parameters: { type: "object", properties: { city: { type: "string" } } },
+    },
+    call: () => "sunny",
+  };
+}
+
+const weatherTool = cityTool("get_weather");
+
 function spansOfKind(kind: FISpanKind): ReadableSpan[] {
   return exporter
     .getFinishedSpans()
@@ -87,6 +100,21 @@ describe("OpenAI chat through @llamaindex/openai", () => {
     ]);
   });
 
+  it("names the chat span after a subclass that inherits chat", async () => {
+    class AcmeLLM extends OpenAI {}
+    const llm = new AcmeLLM({
+      model: "gpt-4o-mini",
+      apiKey: "sk-test",
+      maxRetries: 0,
+      additionalSessionOptions: { baseURL: server.baseURL },
+    });
+
+    await llm.chat({ messages: [{ role: "user", content: "hi" }] });
+
+    const [span] = spansOfKind(FISpanKind.LLM);
+    expect(span.name).toBe("llamaindex.AcmeLLM.chat");
+  });
+
   it("records each input message with its own role", async () => {
     await createLLM(server.baseURL).chat({
       messages: [
@@ -112,15 +140,6 @@ describe("OpenAI chat through @llamaindex/openai", () => {
   });
 
   it("records the tool calls the model asks for", async () => {
-    const weatherTool = {
-      metadata: {
-        name: "get_weather",
-        description: "Current weather for a city",
-        parameters: { type: "object", properties: { city: { type: "string" } } },
-      },
-      call: () => "sunny",
-    };
-
     const response = await createLLM(server.baseURL).chat({
       messages: [{ role: "user", content: "weather in Paris?" }],
       tools: [weatherTool],
@@ -155,6 +174,43 @@ describe("OpenAI chat through @llamaindex/openai", () => {
       { role: "assistant", content: FAKE_REPLY },
     ]);
     expect(span.attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL]).toBe(FAKE_USAGE.total_tokens);
+  });
+
+  it("records every tool call from a streamed response with parallel tool calls", async () => {
+    const stream = await createLLM(server.baseURL).chat({
+      messages: [{ role: "user", content: "weather and time in Paris?" }],
+      tools: [weatherTool, cityTool("get_time")],
+      stream: true,
+    });
+    for await (const chunk of stream) {
+      void chunk;
+    }
+
+    const [span] = spansOfKind(FISpanKind.LLM);
+    const [output] = parseMessages(span, SemanticConventions.LLM_OUTPUT_MESSAGES);
+    const args = JSON.stringify(FAKE_TOOL_ARGUMENTS);
+    expect(output.tool_calls).toEqual([
+      { id: "call_1", type: "function", function: { name: "get_weather", arguments: args } },
+      { id: "call_2", type: "function", function: { name: "get_time", arguments: args } },
+    ]);
+  });
+
+  it("leaves token counts off a streamed span when the provider sends no usage", async () => {
+    const stream = await createLLM(server.noUsageStreamBaseURL).chat({
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+    let text = "";
+    for await (const chunk of stream) {
+      text += chunk.delta;
+    }
+
+    expect(text).toBe(FAKE_REPLY);
+    const [span] = spansOfKind(FISpanKind.LLM);
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(span.attributes).not.toHaveProperty(SemanticConventions.LLM_TOKEN_COUNT_PROMPT);
+    expect(span.attributes).not.toHaveProperty(SemanticConventions.LLM_TOKEN_COUNT_COMPLETION);
+    expect(span.attributes).not.toHaveProperty(SemanticConventions.LLM_TOKEN_COUNT_TOTAL);
   });
 });
 
