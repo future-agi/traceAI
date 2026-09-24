@@ -7,13 +7,11 @@ import weakref
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, auto
-from functools import singledispatch, singledispatchmethod
-from importlib.metadata import version
+from functools import lru_cache, singledispatch, singledispatchmethod
 from queue import SimpleQueue
 from threading import RLock, Thread
 from time import sleep, time, time_ns
 from typing import (
-    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     DefaultDict,
@@ -44,7 +42,6 @@ from fi_instrumentation.fi_types import (
     ToolCallAttributes,
 )
 from llama_index.core import QueryBundle
-from llama_index.core.base.agent.types import BaseAgent, BaseAgentWorker
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.base.llms.base import BaseLLM
@@ -61,6 +58,7 @@ from llama_index.core.base.response.schema import (
     StreamingResponse,
 )
 from llama_index.core.bridge.pydantic import BaseModel
+from llama_index.core.chat_engine.types import StreamingAgentChatResponse
 from llama_index.core.instrumentation.event_handlers import BaseEventHandler
 from llama_index.core.instrumentation.events import BaseEvent
 from llama_index.core.instrumentation.events.agent import (
@@ -80,6 +78,7 @@ from llama_index.core.instrumentation.events.embedding import (
     EmbeddingEndEvent,
     EmbeddingStartEvent,
 )
+from llama_index.core.instrumentation.events.exception import ExceptionEvent
 from llama_index.core.instrumentation.events.llm import (
     LLMChatEndEvent,
     LLMChatInProgressEvent,
@@ -127,8 +126,6 @@ from typing_extensions import assert_never
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-LLAMA_INDEX_VERSION = tuple(map(int, version("llama-index-core").split(".")[:3]))
-
 STREAMING_FINISHED_EVENTS = (
     LLMChatEndEvent,
     LLMCompletionEndEvent,
@@ -140,13 +137,27 @@ STREAMING_IN_PROGRESS_EVENTS = (
     StreamChatDeltaReceivedEvent,
 )
 
-if LLAMA_INDEX_VERSION < (0, 10, 44):
+UNCONSUMED_STREAM_TYPES = (
+    Generator,
+    AsyncGenerator,
+    StreamingResponse,
+    AsyncStreamingResponse,
+    StreamingAgentChatResponse,
+)
 
-    class ExceptionEvent:  # Dummy substitute
-        exception: BaseException
+AGENT_TYPES: Tuple[type, ...] = ()
+try:  # removed in llama-index-core 0.13
+    from llama_index.core.base.agent.types import BaseAgent, BaseAgentWorker
 
-elif not TYPE_CHECKING:
-    from llama_index.core.instrumentation.events.exception import ExceptionEvent
+    AGENT_TYPES += (BaseAgent, BaseAgentWorker)
+except ImportError:
+    pass
+try:
+    from llama_index.core.agent.workflow import AgentWorkflow, BaseWorkflowAgent
+
+    AGENT_TYPES += (BaseWorkflowAgent, AgentWorkflow)
+except ImportError:
+    pass
 
 
 class _StreamingStatus(Enum):
@@ -163,7 +174,7 @@ class _Span(BaseSpan):
     _first_token_timestamp: Optional[int] = PrivateAttr()
     _end_time: Optional[int] = PrivateAttr()
     _last_updated_at: float = PrivateAttr()
-    _stream_chunks: List[str] = PrivateAttr()
+    _stream_chunks: List[Dict[str, Any]] = PrivateAttr()
     _stream_content: str = PrivateAttr()
 
     def __init__(
@@ -243,7 +254,7 @@ class _Span(BaseSpan):
             # Add raw output
             self[OUTPUT_VALUE] = repr_str
             return
-        if isinstance(result, (Generator, AsyncGenerator)):
+        if isinstance(result, UNCONSUMED_STREAM_TYPES):
             return
         if isinstance(instance, (BaseEmbedding,)):
             # these outputs are too large
@@ -277,7 +288,7 @@ class _Span(BaseSpan):
     def _(self, instance: Union[BaseLLM, MultiModalLLM]) -> None:
         if metadata := instance.metadata:
             self[GEN_AI_REQUEST_MODEL] = metadata.model_name
-            self[GEN_AI_REQUEST_PARAMETERS] = metadata.json(exclude_unset=True)
+            self[GEN_AI_REQUEST_PARAMETERS] = metadata.model_dump_json(exclude_unset=True)
 
     @process_instance.register
     def _(self, instance: BaseEmbedding) -> None:
@@ -328,7 +339,7 @@ class _Span(BaseSpan):
 
     @singledispatchmethod
     def _process_event(self, event: BaseEvent) -> None:
-        logger.warning(f"Unhandled event of type {event.__class__.__qualname__}")
+        _warn_unhandled_event_once(event.__class__.__qualname__)
 
     @_process_event.register
     def _(self, event: ExceptionEvent) -> None:
@@ -415,7 +426,7 @@ class _Span(BaseSpan):
     def _(self, event: StreamChatEndEvent) -> None:
         self[OUTPUT_VALUE] = safe_json_dumps(self._stream_chunks)
         self[OUTPUT_VALUE] = self._stream_content
-        self._stream_content.clear()
+        self._stream_content = ""
         self._stream_chunks.clear()
 
     @_process_event.register
@@ -450,9 +461,9 @@ class _Span(BaseSpan):
 
     @_process_event.register
     def _(self, event: LLMStructuredPredictEndEvent) -> None:
-        self[OUTPUT_VALUE] = event.output.json(exclude_unset=True)
+        self[OUTPUT_VALUE] = event.output.model_dump_json(exclude_unset=True)
         self[OUTPUT_MIME_TYPE] = JSON
-        self[OUTPUT_VALUE] = event.output.json(exclude_unset=True)
+        self[OUTPUT_VALUE] = event.output.model_dump_json(exclude_unset=True)
 
     @_process_event.register
     def _(self, event: LLMCompletionStartEvent) -> None:
@@ -511,7 +522,8 @@ class _Span(BaseSpan):
     @_process_event.register
     def _(self, event: QueryEndEvent) -> None:
         self._process_response_type(event.response)
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
+        if not isinstance(event.response, UNCONSUMED_STREAM_TYPES):
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: ReRankStartEvent) -> None:
@@ -562,7 +574,8 @@ class _Span(BaseSpan):
     @_process_event.register
     def _(self, event: SynthesizeEndEvent) -> None:
         self._process_response_type(event.response)
-        self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
+        if not isinstance(event.response, UNCONSUMED_STREAM_TYPES):
+            self[OUTPUT_VALUE] = safe_json_dumps(_to_dict(event.response))
 
     @_process_event.register
     def _(self, event: GetResponseStartEvent) -> None:
@@ -690,7 +703,7 @@ class _Span(BaseSpan):
         if isinstance(response, str):
             self[OUTPUT_VALUE] = response
         elif isinstance(response, BaseModel):
-            self[OUTPUT_VALUE] = response.json(exclude_unset=True)
+            self[OUTPUT_VALUE] = response.model_dump_json(exclude_unset=True)
             self[OUTPUT_MIME_TYPE] = JSON
         elif isinstance(response, (Generator, AsyncGenerator)):
             pass
@@ -897,6 +910,11 @@ class EventHandler(BaseEventHandler, extra="allow"):
         return event
 
 
+@lru_cache(maxsize=None)
+def _warn_unhandled_event_once(event_type: str) -> None:
+    logger.warning(f"Unhandled event of type {event_type}")
+
+
 def _get_tool_call(tool_call: object) -> Iterator[Tuple[str, Any]]:
     if isinstance(tool_call, dict):
         if tool_call_id := tool_call.get("id"):
@@ -951,14 +969,12 @@ def _init_span_kind(_: Any) -> Optional[str]:
     return None
 
 
-@_init_span_kind.register
-def _(_: BaseAgent) -> str:
+def _agent_span_kind(_: Any) -> str:
     return AGENT
 
 
-@_init_span_kind.register
-def _(_: BaseAgentWorker) -> str:
-    return AGENT
+for _agent_type in AGENT_TYPES:
+    _init_span_kind.register(_agent_type, _agent_span_kind)
 
 
 @_init_span_kind.register

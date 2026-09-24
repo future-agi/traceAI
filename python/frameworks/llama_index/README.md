@@ -24,8 +24,9 @@ Set up your environment variables to authenticate with FutureAGI
 ```python
 import os
 
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
+os.environ["FI_API_KEY"] = "your-futureagi-api-key"
+os.environ["FI_SECRET_KEY"] = "your-futureagi-secret-key"
+os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
 ```
 
 ## Quickstart
@@ -56,8 +57,9 @@ LlamaIndexInstrumentor().instrument(tracer_provider=trace_provider)
 Set up your Llama Index client with built-in observability.
 
 ```python
-from llama_index.agent.openai import OpenAIAgent
-from llama_index.core import Settings
+import asyncio
+
+from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.tools import FunctionTool
 from llama_index.llms.openai import OpenAI
 
@@ -69,13 +71,16 @@ def add(a: int, b: int) -> int:
     """Add two integers and return the result."""
     return a + b
 
-multiply_tool = FunctionTool.from_defaults(fn=multiply)
-add_tool = FunctionTool.from_defaults(fn=add)
-agent = OpenAIAgent.from_tools([multiply_tool, add_tool])
-Settings.llm = OpenAI(model="gpt-3.5-turbo")
+agent = FunctionAgent(
+    tools=[FunctionTool.from_defaults(fn=multiply), FunctionTool.from_defaults(fn=add)],
+    llm=OpenAI(model="gpt-4o-mini"),
+)
+
+async def main():
+    response = await agent.run("What is (121 * 3) + 42?")
+    print(response)
 
 if __name__ == "__main__":
-    response = agent.query("What is (121 * 3) + 42?")
-    print(response)
+    asyncio.run(main())
 ```
 
