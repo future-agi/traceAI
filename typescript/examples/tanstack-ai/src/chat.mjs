@@ -1,5 +1,6 @@
 // A Node "route" that answers one question with TanStack AI and traces it to
-// Future AGI. Run: node src/chat.mjs "What is the weather in Paris?"
+// Future AGI. Run: node src/chat.mjs "What is the weather in Paris?" [thread-id]
+// A thread id (the caller's conversation id) becomes the Future AGI session.
 //
 // Server side only. FI_API_KEY and FI_SECRET_KEY must never enter a browser
 // bundle.
@@ -33,13 +34,14 @@ const getWeather = toolDefinition({
  * onError hook, so the chat and model-call spans are never ended or exported
  * and a failed request leaves no trace.
  */
-export async function answer(question, middleware) {
+export async function answer(question, middleware, { threadId } = {}) {
   const stream = chat({
     adapter: openaiChatCompletions(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
     systemPrompts: ["You are a concise weather assistant."],
     messages: [{ role: "user", content: question }],
     tools: [getWeather],
     middleware: [middleware],
+    ...(threadId ? { threadId } : {}),
   });
   let text = "";
   let runError = null;
@@ -56,13 +58,18 @@ export async function answer(question, middleware) {
   return text;
 }
 
-/** The route: one traced chat() call, flushed in finally. */
-export async function chatRoute(question, tracerProvider) {
+/**
+ * The route: one traced chat() call, flushed in finally. `threadId` is the
+ * caller's conversation id; when given, it is chat()'s threadId and every
+ * span's session.id.
+ */
+export async function chatRoute(question, tracerProvider, { threadId } = {}) {
   const middleware = futureAgiOtelMiddleware(
     tracerProvider.getTracer("tanstack-ai"),
+    { threadIdAsSession: Boolean(threadId) },
   );
   try {
-    return await answer(question, middleware);
+    return await answer(question, middleware, { threadId });
   } finally {
     await flushTraces(tracerProvider);
   }
@@ -70,9 +77,10 @@ export async function chatRoute(question, tracerProvider) {
 
 async function main() {
   const question = process.argv[2] ?? "What is the weather in Paris?";
+  const threadId = process.argv[3];
   const tracerProvider = registerFutureAgiTracing();
   try {
-    console.log(await chatRoute(question, tracerProvider));
+    console.log(await chatRoute(question, tracerProvider, { threadId }));
   } catch (error) {
     // The route's error response. The spans are already exported.
     console.error(`chat failed: ${error?.message ?? String(error)}`);

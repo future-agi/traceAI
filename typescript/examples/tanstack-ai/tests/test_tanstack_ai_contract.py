@@ -56,6 +56,7 @@ PROMPT = "PROMPT-MARKER-5f1c what is the weather?"
 CITY = "CITY-MARKER-9a2e"
 ANSWER = "ANSWER-MARKER-3d7b it is sunny"
 SYSTEM_PROMPT = "You are a concise weather assistant."  # fixed in src/chat.mjs
+THREAD_ID = "conversation-th8238-7c41"  # the caller's conversation id
 
 ROOT = "chat {0}".format(MODEL)
 ITERATION_0 = "chat {0} #0".format(MODEL)
@@ -81,8 +82,9 @@ def _env(fi_base_url: str, openai_base_url: str) -> dict[str, str]:
     return env
 
 
-def _node(script: Path, fi_base_url: str, fake: FakeOpenAI) -> Any:
-    result = run([NODE, str(script), PROMPT], _env(fi_base_url, fake.base_url), None, 60)
+def _node(script: Path, fi_base_url: str, fake: FakeOpenAI, *args: str) -> Any:
+    argv = [NODE, str(script), PROMPT, *args]
+    result = run(argv, _env(fi_base_url, fake.base_url), None, 60)
     assert not result.timed_out, result.stderr.decode()
     return result
 
@@ -117,11 +119,12 @@ def _is_error(status: dict[str, Any]) -> bool:
 
 @pytest.fixture(scope="module")
 def default_run():
-    """One run of the example exactly as shipped (captureContent unset)."""
+    """One run of the example exactly as shipped (captureContent unset),
+    called with a thread id."""
     with Receiver() as receiver, FakeOpenAI(
         CITY, ANSWER
     ) as fake:
-        result = _node(EXAMPLE / "src" / "chat.mjs", receiver.origin, fake)
+        result = _node(EXAMPLE / "src" / "chat.mjs", receiver.origin, fake, THREAD_ID)
         yield SimpleNamespace(
             result=result,
             spans=receiver.spans(),
@@ -206,6 +209,10 @@ def test_spans_carry_model_usage_and_span_kinds(default_run):
     assert tool["gen_ai.tool.type"] == "function"
     assert tool["tanstack.ai.tool.outcome"] == "success"
     assert tool["gen_ai.span.kind"] == "TOOL"
+
+    # The caller's thread id is the Future AGI session, on every span.
+    for name, span in spans.items():
+        assert _attributes(span)["session.id"] == THREAD_ID, name
 
     # One trace, nested root -> iteration -> tool, without a context manager.
     assert len({span["traceId"] for span in spans.values()}) == 1
@@ -313,6 +320,9 @@ def test_failed_model_call_exports_error_spans():
         assert status.get("message") == "500 boom", (name, status)
     assert spans[ITERATION_0]["parentSpanId"] == spans[ROOT]["spanId"]
     assert _attributes(spans[ITERATION_0])["gen_ai.span.kind"] == "LLM"
+    # No thread id was passed, so no session (chat() generated its own id).
+    for name in (ROOT, ITERATION_0):
+        assert "session.id" not in _attributes(spans[name]), name
 
 
 def test_abort_mid_stream_ends_spans_as_cancelled():

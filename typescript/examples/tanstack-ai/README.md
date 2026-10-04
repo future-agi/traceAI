@@ -78,6 +78,28 @@ model-call spans carry `gen_ai.operation.name`. The root's kind is set in
 `onSpanEnd`, because `attributeEnricher` runs for the root before the number
 of model calls is known.
 
+## Session
+
+Pass the caller's conversation id as TanStack's `threadId`, and build the
+middleware with `threadIdAsSession: true`. Every span then carries
+`session.id` = that thread id, so Future AGI groups the conversation's traces:
+
+```js
+const middleware = futureAgiOtelMiddleware(tracer, { threadIdAsSession: true });
+chat({ adapter, messages, threadId: conversationId, middleware: [middleware] });
+```
+
+`src/chat.mjs` takes it as a second argument:
+`node src/chat.mjs "What is the weather in Paris?" conversation-42`.
+
+Deviation from the traceAI context helper: `setSession()` from
+`@traceai/fi-core` only sets an OpenTelemetry context value. Neither
+`otelMiddleware` nor the plain SDK tracer that `register()`'s provider hands
+out reads it, so it would not reach these spans. The
+recipe uses `threadId` instead. Leave `threadIdAsSession` off when the caller
+has no conversation id: `chat()` then generates a new `thread-<ms>-<random>`
+id per call, and each request would become its own session.
+
 ## Privacy
 
 `captureContent` defaults to `false`, so no prompt, completion, system prompt,

@@ -106,19 +106,39 @@ function moveRootUsage(span) {
   }
 }
 
-export function futureAgiSpanKinds() {
+export const SESSION_ID = "session.id";
+
+/**
+ * Span kinds, usage and session for the spans otelMiddleware emits.
+ *
+ * With `threadIdAsSession: true`, every span also gets
+ * session.id = ctx.threadId, the `threadId` the caller passed to chat().
+ * Set it only when the caller passed one: chat() otherwise generates a
+ * fresh thread-<ms>-<random> id per call, which would make every request its
+ * own session. @traceai/fi-core's setSession() only sets a context value;
+ * neither otelMiddleware nor the plain SDK tracer register()'s provider
+ * hands out reads it, so the recipe uses TanStack's own threadId instead.
+ */
+export function futureAgiSpanKinds({ threadIdAsSession = false } = {}) {
   const iterationsByRun = new WeakMap();
   const usageOnIterations = new WeakSet();
+  const kindAttributes = (info) => {
+    if (info.kind === "iteration") {
+      iterationsByRun.set(info.ctx, info.iteration + 1);
+      return { [GEN_AI_SPAN_KIND]: "LLM" };
+    }
+    if (info.kind === "tool") {
+      return { [GEN_AI_SPAN_KIND]: "TOOL" };
+    }
+    return {};
+  };
   return {
     attributeEnricher(info) {
-      if (info.kind === "iteration") {
-        iterationsByRun.set(info.ctx, info.iteration + 1);
-        return { [GEN_AI_SPAN_KIND]: "LLM" };
+      const attributes = kindAttributes(info);
+      if (threadIdAsSession && info.ctx?.threadId) {
+        attributes[SESSION_ID] = info.ctx.threadId;
       }
-      if (info.kind === "tool") {
-        return { [GEN_AI_SPAN_KIND]: "TOOL" };
-      }
-      return {};
+      return attributes;
     },
     onSpanEnd(info, span) {
       if (info.kind === "iteration" && span?.attributes?.["gen_ai.usage.input_tokens"] !== undefined) {
@@ -140,10 +160,13 @@ export function futureAgiSpanKinds() {
  * The one middleware to pass to chat(). captureContent is left unset, so it
  * stays at its default of false and no prompt, completion, or tool argument
  * text lands on a span. Do not pass captureContent: true.
+ *
+ * Pass `{ threadIdAsSession: true }` when this chat() call gets the caller's
+ * `threadId` (see futureAgiSpanKinds).
  */
-export function futureAgiOtelMiddleware(tracer) {
+export function futureAgiOtelMiddleware(tracer, { threadIdAsSession = false } = {}) {
   return otelMiddleware({
     tracer,
-    ...futureAgiSpanKinds(),
+    ...futureAgiSpanKinds({ threadIdAsSession }),
   });
 }

@@ -223,3 +223,30 @@ test("a tight attribute count limit never leaves usage counted twice", () => {
   assert.equal(traceSum([root, ...modelCalls], "gen_ai.usage.input_tokens"), 34);
   assert.equal(traceSum([root, ...modelCalls], "gen_ai.usage.output_tokens"), 12);
 });
+
+test("threadIdAsSession: every span carries the caller's thread id as session.id", () => {
+  const hooks = futureAgiSpanKinds({ threadIdAsSession: true });
+  const ctx = { threadId: "conversation-42" };
+  const { spans } = run(hooks, [usage(11, 7), usage(23, 5)], { ctx });
+  assert.equal(spans.length, 3);
+  for (const span of spans) {
+    assert.equal(span.attributes["session.id"], "conversation-42");
+  }
+  const tool = hooks.attributeEnricher({
+    kind: "tool",
+    ctx,
+    toolCallId: "call_1",
+    toolName: "get_weather",
+    iteration: 0,
+  });
+  assert.deepEqual(tool, { [GEN_AI_SPAN_KIND]: "TOOL", "session.id": "conversation-42" });
+});
+
+test("no session.id by default, although TanStack always sets a threadId", () => {
+  // chat() generates thread-<ms>-<random> when the caller passes none, so
+  // ctx.threadId alone does not say the caller has a conversation.
+  const { spans } = run(futureAgiSpanKinds(), [usage(11, 7)]);
+  for (const span of spans) {
+    assert.equal(span.attributes["session.id"], undefined);
+  }
+});
