@@ -16,3 +16,6 @@
   same trace. `aggregation` and `compaction` usage keeps its promoted tokens:
   AG2 calls the model outside the middleware for those, so the usage span is
   the only copy. The trace total now equals AG2's `UsageReport` total.
+- Requires `fi-instrumentation-otel>=1.1.0` (was `>=1.0.0`): published 1.0.0
+  crashes in `register()` with `opentelemetry-exporter-otlp-proto-http` 1.45.0
+  (`AttributeError: 'HTTPSpanExporter' object has no attribute '_headers'`).

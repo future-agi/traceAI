@@ -13,7 +13,8 @@ AG2 1.x is the PyPI package `ag2`, imported as `ag2`. It is not Microsoft AutoGe
 | `autogen-agentchat` | `autogen_agentchat` | `traceAI-autogen` |
 
 Requires `ag2>=1.0.0` (the first stable 1.x that ships `TelemetryMiddleware`;
-tested on 1.0.0, 1.0.3 and 1.1.2) and Python 3.10 to 3.13. `ag2` is
+tested on 1.0.0, 1.0.3 and 1.1.2), `fi-instrumentation-otel>=1.1.0` and
+Python 3.10 to 3.13. `ag2` is
 Apache-2.0 and is a dependency only; nothing from it is vendored.
 
 ## What it does
