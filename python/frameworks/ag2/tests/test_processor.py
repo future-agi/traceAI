@@ -183,19 +183,89 @@ def test_model_call_usage_span_does_not_double_count_trace_tokens(pipeline):
 
 
 def test_subtask_usage_span_keeps_promoted_tokens(pipeline):
-    """Only kinds that duplicate a chat span are demoted; others keep their tokens."""
+    """A subtask rollup with no instrumented worker in the trace is the only copy."""
     provider, exporter = pipeline
     _emit(
         provider,
         {
             "ag2.span.type": "usage",
             "ag2.usage.kind": "subtask",
+            "ag2.usage.label": "worker",
             "gen_ai.usage.input_tokens": 4,
         },
         name="record_usage subtask",
     )
     (span,) = exporter.get_finished_spans()
     assert attrs(span)["gen_ai.usage.input_tokens"] == 4
+
+
+@pytest.mark.parametrize("kind", ["aggregation", "compaction"])
+def test_out_of_band_usage_spans_keep_promoted_tokens(pipeline, kind):
+    """aggregate.py / compact.py call the model client outside on_llm_call, so
+    no chat span carries these tokens."""
+    provider, exporter = pipeline
+    _emit(
+        provider,
+        {
+            "ag2.span.type": "usage",
+            "ag2.usage.kind": kind,
+            "gen_ai.usage.input_tokens": 100,
+            "gen_ai.usage.output_tokens": 50,
+        },
+        name=f"record_usage {kind}",
+    )
+    (span,) = exporter.get_finished_spans()
+    got = attrs(span)
+    assert got["gen_ai.usage.input_tokens"] == 100
+    assert got["gen_ai.usage.output_tokens"] == 50
+    assert "ag2.usage.input_tokens" not in got
+
+
+def _subtask_after_worker(provider, worker_name: str, label: str) -> None:
+    tracer = provider.get_tracer(AG2_INSTRUMENTATION_SCOPE)
+    with tracer.start_as_current_span("invoke_agent planner", attributes={"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "planner"}):
+        with tracer.start_as_current_span(
+            f"invoke_agent {worker_name}",
+            attributes={"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": worker_name},
+        ):
+            pass
+        with tracer.start_as_current_span(
+            "record_usage subtask",
+            attributes={
+                "ag2.span.type": "usage",
+                "ag2.usage.kind": "subtask",
+                "ag2.usage.label": label,
+                "gen_ai.usage.input_tokens": 40,
+                "gen_ai.usage.output_tokens": 4,
+            },
+        ):
+            pass
+
+
+def test_subtask_usage_span_demoted_when_its_agent_ran_instrumented_in_the_trace(pipeline):
+    provider, exporter = pipeline
+    _subtask_after_worker(provider, worker_name="worker", label="worker")
+    (rollup,) = [s for s in exporter.get_finished_spans() if s.name == "record_usage subtask"]
+    got = attrs(rollup)
+    assert "gen_ai.usage.input_tokens" not in got and "gen_ai.usage.output_tokens" not in got
+    assert (got["ag2.usage.input_tokens"], got["ag2.usage.output_tokens"]) == (40, 4)
+
+
+def test_subtask_usage_span_kept_when_label_is_another_agent(pipeline):
+    provider, exporter = pipeline
+    _subtask_after_worker(provider, worker_name="other_worker", label="worker")
+    (rollup,) = [s for s in exporter.get_finished_spans() if s.name == "record_usage subtask"]
+    assert attrs(rollup)["gen_ai.usage.input_tokens"] == 40
+
+
+def test_agent_name_map_is_bounded():
+    processor = AG2SpanProcessor(config=TraceConfig(), max_tracked_traces=2)
+    provider = TracerProvider()
+    provider.add_span_processor(processor)
+    for name in ("a", "b", "c"):
+        _emit(provider, {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": name})
+    assert len(processor._agents_by_trace) == 2
+    assert [set(v) for v in processor._agents_by_trace.values()] == [{"b"}, {"c"}]
 
 
 def test_processor_only_adds_keys_by_default(pipeline):

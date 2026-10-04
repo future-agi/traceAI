@@ -9,6 +9,12 @@ does not create spans. On every span from AG2's instrumentation scope it only:
   (``chat``, ``execute_tool``, ``invoke_agent``);
 * copies three non-semconv usage keys onto their dotted GenAI names, keeping
   the originals;
+* on ``record_usage`` spans whose tokens a chat span in the same trace already
+  carries (every ``model_call``; a ``subtask`` rollup whose sub-agent is itself
+  instrumented in that trace), moves ``gen_ai.usage.input_tokens`` /
+  ``output_tokens`` / ``total_tokens`` to ``ag2.usage.*`` so the trace total
+  counts each model call once. ``aggregation`` and ``compaction`` usage keeps
+  its promoted tokens: AG2 calls the model outside the middleware for those;
 * applies ``TraceConfig`` as a second content gate (``hide_inputs`` /
   ``hide_outputs`` and the other ``TraceConfig.mask`` rules).
 
@@ -18,7 +24,9 @@ Spans from any other instrumentation scope pass through untouched.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Mapping, Optional
+import threading
+from collections import OrderedDict
+from typing import AbstractSet, Any, Dict, FrozenSet, Mapping, Optional, Set
 
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from fi_instrumentation.instrumentation.config import TraceConfig
@@ -76,12 +84,16 @@ def span_kind_for(attributes: Mapping[str, Any]) -> Optional[str]:
 def normalize_attributes(
     attributes: Mapping[str, Any],
     config: Optional[TraceConfig] = None,
+    *,
+    instrumented_agents: AbstractSet[str] = frozenset(),
 ) -> Dict[str, Any]:
     """Return a new attribute dict with the kind, aliases and content gate applied.
 
     Never removes a key AG2 set, except where ``config`` asks to hide content
     and where a duplicate usage span's promoted token keys move under
-    ``ag2.usage.*`` (see ``_demote_duplicate_usage``).
+    ``ag2.usage.*`` (see ``_demote_duplicate_usage``). ``instrumented_agents``
+    are the agent names already seen on ``invoke_agent`` spans of the same
+    trace; :class:`AG2SpanProcessor` tracks them.
     """
     mapped: Dict[str, Any] = dict(attributes)
 
@@ -94,7 +106,7 @@ def normalize_attributes(
         if source in mapped and target not in mapped:
             mapped[target] = mapped[source]
 
-    _demote_duplicate_usage(mapped)
+    _demote_duplicate_usage(mapped, instrumented_agents)
 
     if config is not None:
         mapped = _apply_trace_config(mapped, config)
@@ -109,21 +121,43 @@ _PROMOTED_TOKEN_KEYS = (
     "gen_ai.usage.output_tokens",
     "gen_ai.usage.total_tokens",
 )
-# ``record_usage model_call`` repeats the chat span's tokens (telemetry.py
-# 437-440 vs 501-504 at 1.1.2). ``aggregation`` is a sum by definition.
-# ``subtask`` and ``compaction`` are left alone: no chat span repeats them.
-_DUPLICATE_USAGE_KINDS = frozenset({"model_call", "aggregation"})
+# Usage kinds AG2 emits (``ag2/_telemetry_consts.py`` ATTR_USAGE_KIND at
+# 1.1.2) and whether a chat span in the same trace already carries the tokens:
+#
+# * ``model_call``: yes. ``Agent`` emits it right after the LLM call that
+#   ``on_llm_call`` wrapped in a chat span (agent.py 1585-1595; telemetry.py
+#   437-440 vs 501-504). Always demoted.
+# * ``aggregation``: no. ``ag2/aggregate.py`` 97-99 and 193-195 call the model
+#   client directly on a throwaway ``Context(MemoryStream())`` that never goes
+#   through ``on_llm_call``; the ``UsageEvent`` (aggregate.py 214-216) is the
+#   only record of that spend. Never demoted.
+# * ``compaction``: no, for the same reason (compact.py 189-205). Never demoted.
+# * ``subtask``: a rollup of a sub-agent's calls (tools/subagents/run_task.py
+#   63-93, ``label`` = the sub-agent's name). It repeats chat spans only when
+#   that sub-agent is itself instrumented, which shows as an
+#   ``invoke_agent {label}`` span that ended earlier in the same trace. Demoted
+#   only then; otherwise the rollup is the only copy and keeps its tokens.
+_ALWAYS_DUPLICATE_USAGE_KINDS = frozenset({"model_call"})
+_SUBTASK_USAGE_KIND = "subtask"
+_USAGE_LABEL = "ag2.usage.label"
+_AGENT_NAME = "gen_ai.agent.name"
 
 
-def _demote_duplicate_usage(mapped: Dict[str, Any]) -> None:
+def _demote_duplicate_usage(mapped: Dict[str, Any], instrumented_agents: AbstractSet[str] = frozenset()) -> None:
     """Move a duplicate usage span's promoted token keys under ``ag2.usage.*``.
 
-    The values are kept, so nothing AG2 reported is lost, but the trace total
-    counts each model call once.
+    ``instrumented_agents`` are the agent names seen on ``invoke_agent`` spans
+    of the same trace. The values are kept, so nothing AG2 reported is lost,
+    but the trace total counts each model call once.
     """
     if mapped.get("ag2.span.type") != "usage":
         return
-    if mapped.get("ag2.usage.kind") not in _DUPLICATE_USAGE_KINDS:
+    kind = mapped.get("ag2.usage.kind")
+    if kind in _ALWAYS_DUPLICATE_USAGE_KINDS:
+        pass
+    elif kind == _SUBTASK_USAGE_KIND and mapped.get(_USAGE_LABEL) in instrumented_agents:
+        pass
+    else:
         return
     for key in _PROMOTED_TOKEN_KEYS:
         if key in mapped:
@@ -154,11 +188,39 @@ class AG2SpanProcessor(SpanProcessor):
 
     Install it ahead of the exporting processor (``install_span_processor``
     does this) so the exporter sees the added keys.
+
+    It remembers, per trace, the agent names of ``invoke_agent`` spans that
+    have ended, so a ``record_usage subtask`` rollup for an instrumented
+    sub-agent is not counted on top of that sub-agent's own chat spans. The
+    map is bounded to the most recent ``max_tracked_traces`` traces.
     """
 
-    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+    def __init__(self, config: Optional[TraceConfig] = None, *, max_tracked_traces: int = 1024) -> None:
         self._config = config if config is not None else TraceConfig()
         self._shutdown = False
+        self._max_tracked_traces = max(1, int(max_tracked_traces))
+        self._agents_by_trace: "OrderedDict[int, Set[str]]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _note_agent(self, trace_id: int, attributes: Mapping[str, Any]) -> None:
+        if attributes.get(SpanAttributes.GEN_AI_OPERATION_NAME) != "invoke_agent":
+            return
+        name = attributes.get(_AGENT_NAME)
+        if not isinstance(name, str) or not name:
+            return
+        with self._lock:
+            names = self._agents_by_trace.get(trace_id)
+            if names is None:
+                names = self._agents_by_trace[trace_id] = set()
+                while len(self._agents_by_trace) > self._max_tracked_traces:
+                    self._agents_by_trace.popitem(last=False)
+            else:
+                self._agents_by_trace.move_to_end(trace_id)
+            names.add(name)
+
+    def _agents_in(self, trace_id: int) -> FrozenSet[str]:
+        with self._lock:
+            return frozenset(self._agents_by_trace.get(trace_id, ()))
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         return
@@ -171,7 +233,10 @@ class AG2SpanProcessor(SpanProcessor):
             return
         try:
             current = dict(span.attributes or {})
-            mapped = normalize_attributes(current, self._config)
+            trace_id = span.context.trace_id if span.context is not None else 0
+            self._note_agent(trace_id, current)
+            agents = self._agents_in(trace_id) if current.get("ag2.usage.kind") == _SUBTASK_USAGE_KIND else frozenset()
+            mapped = normalize_attributes(current, self._config, instrumented_agents=agents)
             if mapped != current:
                 # ``ReadableSpan.attributes`` is a read-only view over
                 # ``_attributes``; every later processor and exporter in the

@@ -125,13 +125,28 @@ Notes:
 
 - AG2 also emits `await_human_input {agent}` spans. That operation is not in
   the Microsoft Agent Framework kind table, so no kind is guessed for it.
-- From ag2 1.0.3, AG2 also emits a `record_usage {kind}` span per usage event,
-  which carries the same token counts as the `chat` span it accounts for.
+- From ag2 1.0.3, AG2 also emits a `record_usage {kind}` span per usage event
+  (`ag2.usage.kind` = `model_call`, `aggregation`, `compaction` or `subtask`).
   It has no operation name and gets no span kind; the aliases are applied.
-  Future AGI totals tokens by summing every span in a trace, so on
-  `model_call` (and `aggregation`) usage spans the processor moves
-  `gen_ai.usage.input_tokens` / `output_tokens` / `total_tokens` to
-  `ag2.usage.*`. The values stay on the span; each model call counts once.
+  Future AGI totals tokens by summing the promoted
+  `gen_ai.usage.input_tokens` / `output_tokens` / `total_tokens` over every
+  span in a trace, so the processor moves those three keys to
+  `ag2.usage.input_tokens` / `output_tokens` / `total_tokens` (values kept on
+  the span) exactly where a chat span already counts the same spend:
+
+  | `ag2.usage.kind` | Same tokens already on a chat span? | Promoted tokens |
+  |---|---|---|
+  | `model_call` | Yes: the chat span of that LLM call | Moved to `ag2.usage.*` |
+  | `aggregation` | No: memory aggregation calls the model client directly, outside the middleware | Kept |
+  | `compaction` | No: history compaction calls the model client directly | Kept |
+  | `subtask` | Only if the sub-agent named in `ag2.usage.label` is itself instrumented and its `invoke_agent` span ended earlier in the same trace | Moved when it is, kept otherwise |
+
+  With that, the trace total equals AG2's own `UsageReport` total; the tests
+  check this with real AG2 for every kind above. For the `subtask` match, the
+  sub-agent's `TelemetryMiddleware` must use the agent's own name (`setup`
+  does; `create_telemetry_middleware(agent_name=...)` must pass `agent.name`).
+  On ag2 1.0.0 to 1.0.2 there are no `record_usage` spans, so aggregation,
+  compaction and uninstrumented sub-agent spend does not reach the trace.
 - Network trace propagation (`ag2.otel.traceparent`) is upstream. Apart from
   that usage move, the processor never removes attributes it did not hide by
   request.
