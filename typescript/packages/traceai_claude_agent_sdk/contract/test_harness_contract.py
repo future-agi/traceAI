@@ -253,32 +253,83 @@ def _sdk_platform_binary_installed() -> bool:
     return bool(store and list(store.glob("claude-agent-sdk-*")))
 
 
-@pytest.mark.skipif(not _sdk_platform_binary_installed(), reason="claude-agent-sdk platform binary not installed")
+requires_real_sdk = pytest.mark.skipif(
+    not _sdk_platform_binary_installed(), reason="claude-agent-sdk platform binary not installed"
+)
+
+
+def _run_real_sdk(scenario: str, project: str, extra_env: Dict[str, str] | None = None):
+    """Run contract/run_real_sdk.mjs with SCENARIO against a fresh Receiver.
+
+    Returns (stdout JSON, received spans, export request records).
+    """
+    env = _base_env()
+    env.update(
+        {
+            "FI_API_KEY": PLACEHOLDER_API_KEY,
+            "FI_SECRET_KEY": PLACEHOLDER_SECRET_KEY,
+            "FI_PROJECT_NAME": project,
+            "SCENARIO": scenario,
+        }
+    )
+    if os.environ.get("CLAUDE_AGENT_SDK_ENTRY"):
+        # Run the same contract against another installed SDK build (older 0.3.x matrix).
+        env["CLAUDE_AGENT_SDK_ENTRY"] = os.environ["CLAUDE_AGENT_SDK_ENTRY"]
+    env.update(extra_env or {})
+    with Receiver() as receiver:
+        env["FI_BASE_URL"] = receiver.origin
+        result = run([NODE, str(PKG_DIR / "contract" / "run_real_sdk.mjs")], env=env, stdin=None, timeout=180)
+        _check(result, f"node run_real_sdk.mjs ({scenario})")
+        spans = receiver.spans()
+        exported = receiver.requests()
+    return json.loads(result.stdout.decode("utf-8")), spans, exported
+
+
+def _assert_exported_with_both_keys(exported: List[Dict[str, Any]], project: str) -> None:
+    assert exported, "exporter sent nothing"
+    for request in exported:
+        assert request["path"] == "/tracer/v1/traces"
+        assert request["headers"]["x-api-key"] == PLACEHOLDER_API_KEY
+        assert request["headers"]["x-secret-key"] == PLACEHOLDER_SECRET_KEY
+        assert request["resource_attributes"]
+        for resource in request["resource_attributes"]:
+            assert (resource["project_name"], resource["project_type"]) == (project, "observe")
+
+
+@requires_real_sdk
+def test_real_sdk_close_and_async_dispose_end_every_span_cancelled(built_package: Path) -> None:
+    """R3: Query.close() (the SDK abort path) and Symbol.asyncDispose bypass next/return/throw.
+
+    Each query is stopped right after the CLI streamed the Read tool_use, so the
+    conversation, turn and tool spans are open. All of them must still be exported,
+    ended ERROR with claude_agent.cancelled=true.
+    """
+    output, spans, exported = _run_real_sdk("close", "th8235-real-sdk-close")
+    closed, disposed = output["queries"]
+    for messages in (closed, disposed):
+        assert not [m for m in messages if m["type"] == "result"], "query finished before it was stopped"
+
+    traces: Dict[str, List[Dict[str, Any]]] = {}
+    for span in spans:
+        traces.setdefault(span["traceId"], []).append(span)
+    assert len(traces) == 2, sorted(span["name"] for span in spans)
+    for trace_spans in traces.values():
+        names = sorted(span["name"] for span in trace_spans)
+        assert names == sorted(["claude_agent.conversation", "claude_agent.assistant_turn", "tool.Read"]), names
+        for span in trace_spans:
+            assert _status_code(span) == 2, span["name"]
+            assert _attrs(span)["claude_agent.cancelled"] is True, span["name"]
+    _assert_exported_with_both_keys(exported, "th8235-real-sdk-close")
+
+
+@requires_real_sdk
 def test_real_sdk_query_through_anthropic_base_url_mock(built_package: Path) -> None:
     """The real SDK query() and bundled CLI, wrapped, against a loopback Messages API mock.
 
     Mechanism from the ADR: Options.env.ANTHROPIC_BASE_URL. No Anthropic call: placeholder
     key, dead-port HTTPS_PROXY, temp HOME. Spans go through fi-core to the shared Receiver.
     """
-    env = _base_env()
-    env.update(
-        {
-            "FI_BASE_URL": "",  # replaced below once the Receiver is up
-            "FI_API_KEY": PLACEHOLDER_API_KEY,
-            "FI_SECRET_KEY": PLACEHOLDER_SECRET_KEY,
-            "FI_PROJECT_NAME": "th8235-real-sdk-contract",
-        }
-    )
-    if os.environ.get("CLAUDE_AGENT_SDK_ENTRY"):
-        # Run the same contract against another installed SDK build (older 0.3.x matrix).
-        env["CLAUDE_AGENT_SDK_ENTRY"] = os.environ["CLAUDE_AGENT_SDK_ENTRY"]
-    with Receiver() as receiver:
-        env["FI_BASE_URL"] = receiver.origin
-        result = run([NODE, str(PKG_DIR / "contract" / "run_real_sdk.mjs")], env=env, stdin=None, timeout=180)
-        _check(result, "node run_real_sdk.mjs")
-        spans = receiver.spans()
-        exported = receiver.requests()
-    output = json.loads(result.stdout.decode("utf-8"))
+    output, spans, exported = _run_real_sdk("tool", "th8235-real-sdk-contract")
 
     # The CLI called the mock (host root + /v1/messages), streaming, with the placeholder key.
     mock_requests = output["requests"]
@@ -321,13 +372,7 @@ def test_real_sdk_query_through_anthropic_base_url_mock(built_package: Path) -> 
     for marker in ("SECRET_PROMPT_MARKER", "SECRET_TOOL_OUTPUT_MARKER", "SECRET_ASSISTANT_TEXT_MARKER"):
         assert marker not in blob
     assert PLACEHOLDER_API_KEY not in blob and "PLACEHOLDER-not-a-key" not in blob
-    assert exported, "exporter sent nothing"
-    for request in exported:
-        assert request["path"] == "/tracer/v1/traces"
-        assert request["headers"]["x-api-key"] == PLACEHOLDER_API_KEY
-        assert request["resource_attributes"]
-        for resource in request["resource_attributes"]:
-            assert (resource["project_name"], resource["project_type"]) == ("th8235-real-sdk-contract", "observe")
+    _assert_exported_with_both_keys(exported, "th8235-real-sdk-contract")
 
 
 def _read_member(tar: tarfile.TarFile, member: Any) -> bytes:

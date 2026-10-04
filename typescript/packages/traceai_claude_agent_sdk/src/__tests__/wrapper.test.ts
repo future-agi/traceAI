@@ -484,6 +484,57 @@ describe("wrapQuery", () => {
       for (const span of spans) expect(span.ended).toBe(true);
     });
 
+    const ASYNC_DISPOSE =
+      (Symbol as unknown as { asyncDispose?: symbol }).asyncDispose ?? Symbol.for("Symbol.asyncDispose");
+
+    it.each(["close", "asyncDispose"] as const)(
+      "R3: %s() ends every open span as cancelled, then forwards to the original",
+      async (method) => {
+        const { provider, exporter } = memoryProvider();
+        const fake = makeFakeQuery(simpleToolJourney());
+        const traced = wrapQuery(fake.query, { tracerProvider: provider });
+        const q = traced({ prompt: PROMPT });
+        // init, text, tool_use: the conversation, turn and tool spans are open.
+        for (let i = 0; i < 3; i += 1) await q.next();
+        expect(exporter.getFinishedSpans()).toHaveLength(0);
+
+        if (method === "close") {
+          q.close();
+        } else {
+          await (q as unknown as Record<symbol, () => Promise<void>>)[ASYNC_DISPOSE]();
+        }
+
+        expect(method === "close" ? fake.control.closeCalls : fake.control.disposeCalls).toBe(1);
+        const spans = exporter.getFinishedSpans();
+        expect(spans.map((s) => s.name).sort()).toEqual(
+          ["claude_agent.assistant_turn", "claude_agent.conversation", "tool.Read"].sort(),
+        );
+        for (const span of spans) {
+          expect(span.ended).toBe(true);
+          expect(span.status.code).toBe(SpanStatusCode.ERROR);
+          expect(span.attributes["claude_agent.cancelled"]).toBe(true);
+        }
+        // Nothing more is recorded once the query is closed.
+        await q.next();
+        expect(exporter.getFinishedSpans()).toHaveLength(3);
+      },
+    );
+
+    it("R3: close() after the stream completed leaves the finished spans as they were", async () => {
+      const { provider, exporter } = memoryProvider();
+      const fake = makeFakeQuery(simpleToolJourney());
+      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      await drain(q);
+      q.close();
+      expect(fake.control.closeCalls).toBe(1);
+      const spans = exporter.getFinishedSpans();
+      expect(spans).toHaveLength(4);
+      for (const span of spans) {
+        expect(span.status.code).toBe(SpanStatusCode.OK);
+        expect(span.attributes["claude_agent.cancelled"]).toBeUndefined();
+      }
+    });
+
     it("ends open spans when the consumer breaks out early", async () => {
       const { provider, exporter } = memoryProvider();
       const fake = makeFakeQuery(simpleToolJourney());

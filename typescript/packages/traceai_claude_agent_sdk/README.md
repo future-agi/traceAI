@@ -52,7 +52,7 @@ await shutdown(); // flush before a short script exits
 ### What the wrapper does and does not do
 
 - Calls the original `query()` with the same params object. Options (`resume`, `forkSession`, `sessionId`, `hooks`, `mcpServers`, `agents`, `abortController`, `allowedTools`, `permissionMode`, `maxTurns`, `env`, ...) are passed through untouched. The wrapper never sets `ANTHROPIC_BASE_URL`.
-- Yields the same message objects, in order. Control methods on the returned `Query` (`interrupt()`, `setModel()`, ...) go to the original.
+- Yields the same message objects, in order. Control methods on the returned `Query` (`interrupt()`, `setModel()`, ...) go to the original. `close()` and `Symbol.asyncDispose` first end the query's open spans as cancelled, then go to the original.
 - A tracing error never fails the agent. An exporter or collector failure is logged and does not reject the iterator.
 - `startup()` is not wrapped in 0.1.0.
 
@@ -115,7 +115,7 @@ With 0.3.289 the CLI then calls `POST {ANTHROPIC_BASE_URL}/v1/messages?beta=true
 - **No traces.** `register()` needs `projectName` or `FI_PROJECT_NAME`.
 - **Zero spans from a short script.** `await shutdown()` before exit.
 - **Duplicate model spans.** Do not also run a provider instrumentor on the same calls.
-- **A span left open after abort.** Every span for the query is ended with status ERROR and `claude_agent.cancelled=true` when its `AbortController` aborts. Anything else is a bug here.
+- **A span left open after abort.** Every span for the query is ended with status ERROR and `claude_agent.cancelled=true` when its `AbortController` aborts, when you call `close()` on the returned `Query` (the SDK's abort path), or when `await using` disposes it (`Symbol.asyncDispose`). Calling `close()` after the stream has completed changes nothing. Anything else is a bug here.
 
 ## Tests
 

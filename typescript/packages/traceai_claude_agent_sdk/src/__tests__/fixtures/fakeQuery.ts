@@ -8,6 +8,9 @@ export interface FakeQueryControl {
   /** Every params object the fake received, by reference. */
   calls: { prompt: unknown; options?: Options }[];
   interruptCalls: number;
+  closeCalls: number;
+  disposeCalls: number;
+  backgroundTasksCalls: (string | undefined)[];
 }
 
 export interface FakeQueryBehavior {
@@ -16,6 +19,10 @@ export interface FakeQueryBehavior {
   error?: unknown;
   /** Before yielding message `waitForAbortAt`, block until options.abortController aborts. */
   waitForAbortAt?: number;
+  /** Wait this long before yielding each message, so span times are ordered. */
+  delayMs?: number;
+  /** What `backgroundTasks()` resolves to (or rejects with, when an Error). */
+  backgroundTasksResult?: boolean | Error;
 }
 
 export class FakeAbortError extends Error {
@@ -29,7 +36,13 @@ export function makeFakeQuery(
   messages: SDKMessage[],
   behavior: FakeQueryBehavior = {},
 ): { query: typeof query; control: FakeQueryControl } {
-  const control: FakeQueryControl = { calls: [], interruptCalls: 0 };
+  const control: FakeQueryControl = {
+    calls: [],
+    interruptCalls: 0,
+    closeCalls: 0,
+    disposeCalls: 0,
+    backgroundTasksCalls: [],
+  };
 
   const fake = (params: { prompt: string | AsyncIterable<unknown>; options?: Options }): Query => {
     control.calls.push(params);
@@ -37,6 +50,9 @@ export function makeFakeQuery(
 
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       for (let index = 0; index < messages.length; index += 1) {
+        if (behavior.delayMs) {
+          await new Promise((resolve) => setTimeout(resolve, behavior.delayMs));
+        }
         if (behavior.throwAt === index) {
           throw behavior.error ?? new Error("fake query failed");
         }
@@ -58,6 +74,7 @@ export function makeFakeQuery(
     }
 
     const generator = generate();
+    const asyncDispose = (Symbol as unknown as { asyncDispose?: symbol }).asyncDispose ?? Symbol.for("Symbol.asyncDispose");
     const controlMethods = {
       interrupt: async () => {
         control.interruptCalls += 1;
@@ -65,7 +82,21 @@ export function makeFakeQuery(
       },
       setPermissionMode: async () => undefined,
       setModel: async () => undefined,
-      close: () => undefined,
+      backgroundTasks: async (toolUseId?: string) => {
+        control.backgroundTasksCalls.push(toolUseId);
+        const result = behavior.backgroundTasksResult ?? true;
+        if (result instanceof Error) throw result;
+        return result;
+      },
+      // Like the SDK: close() and asyncDispose stop the stream; no further messages.
+      close: () => {
+        control.closeCalls += 1;
+        void generator.return(undefined);
+      },
+      [asyncDispose]: async () => {
+        control.disposeCalls += 1;
+        await generator.return(undefined);
+      },
     };
     return Object.assign(generator, controlMethods) as unknown as Query;
   };

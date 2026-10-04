@@ -5,12 +5,17 @@
 // loopback port, and HOME / CLAUDE_CONFIG_DIR are a fresh temp dir.
 //
 // The mock answers the first /v1/messages call with a Read tool_use for a temp
-// file and the second with text, so the CLI runs one real tool.
+// file and the second with text, so the CLI runs one real tool ("tool" and
+// "close" scenarios). Other scenarios get a text reply to every call.
 //
 // Env: FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME (fi-core).
 //      CLAUDE_AGENT_SDK_ENTRY (optional): absolute path to another SDK build's
 //      sdk.mjs, to run the same contract against an older 0.3.x.
-// Prints {"requests": [...], "messages": [...]} on stdout.
+//      SCENARIO (optional, default "tool"):
+//        tool       one query() that runs the Read tool.
+//        close      two query() calls stopped mid-tool: one with close(), one
+//                   with Symbol.asyncDispose.
+// Prints {"requests": [...], "messages": [...], "queries": [[...], ...]} on stdout.
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,6 +29,8 @@ const { query } = process.env.CLAUDE_AGENT_SDK_ENTRY
 
 const MOCK_MODEL = "claude-sonnet-4-5";
 const PROMPT = "Read README.md and summarize it. SECRET_PROMPT_MARKER";
+const SCENARIO = process.env.SCENARIO || "tool";
+const TOOL_FLOW = SCENARIO === "tool" || SCENARIO === "close";
 
 const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "th8235-real-sdk-"));
 const readmePath = path.join(workdir, "README.md");
@@ -73,7 +80,7 @@ const server = http.createServer((req, res) => {
     });
     if (req.method === "POST" && req.url.startsWith("/v1/messages") && !req.url.includes("count_tokens")) {
       const model = parsed.model || MOCK_MODEL;
-      if (!hasToolResult) {
+      if (TOOL_FLOW && !hasToolResult) {
         return sendSse(res, model, [
           { type: "text", text: "Reading it. SECRET_ASSISTANT_TEXT_MARKER" },
           { type: "tool_use", id: "toolu_mock_read", name: "Read", input: { file_path: readmePath } },
@@ -93,39 +100,74 @@ const tracedQuery = wrapQuery(query, { tracerProvider: provider });
 
 const abortController = new AbortController();
 const timer = setTimeout(() => abortController.abort(), 90_000);
-const messages = [];
-try {
-  const stream = tracedQuery({
-    prompt: PROMPT,
-    options: {
-      model: MOCK_MODEL,
-      cwd: workdir,
-      maxTurns: 3,
-      allowedTools: ["Read"],
-      permissionMode: "default",
-      settingSources: [],
-      persistSession: false,
-      abortController,
-      // Options.env REPLACES the subprocess environment: pass everything the CLI needs.
-      env: {
-        PATH: process.env.PATH,
-        HOME: workdir,
-        CLAUDE_CONFIG_DIR: path.join(workdir, ".claude"),
-        ANTHROPIC_BASE_URL: mockOrigin,
-        ANTHROPIC_API_KEY: "sk-ant-PLACEHOLDER-not-a-key",
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-        DISABLE_TELEMETRY: "1",
-        DISABLE_ERROR_REPORTING: "1",
-        DISABLE_AUTOUPDATER: "1",
-        HTTPS_PROXY: "http://127.0.0.1:9",
-        HTTP_PROXY: "http://127.0.0.1:9",
-        NO_PROXY: "127.0.0.1,localhost",
-      },
+
+function options(extra = {}) {
+  return {
+    model: MOCK_MODEL,
+    cwd: workdir,
+    maxTurns: 3,
+    allowedTools: ["Read"],
+    permissionMode: "default",
+    settingSources: [],
+    persistSession: false,
+    abortController,
+    // Options.env REPLACES the subprocess environment: pass everything the CLI needs.
+    env: {
+      PATH: process.env.PATH,
+      HOME: workdir,
+      CLAUDE_CONFIG_DIR: path.join(workdir, ".claude"),
+      ANTHROPIC_BASE_URL: mockOrigin,
+      ANTHROPIC_API_KEY: "sk-ant-PLACEHOLDER-not-a-key",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_TELEMETRY: "1",
+      DISABLE_ERROR_REPORTING: "1",
+      DISABLE_AUTOUPDATER: "1",
+      HTTPS_PROXY: "http://127.0.0.1:9",
+      HTTP_PROXY: "http://127.0.0.1:9",
+      NO_PROXY: "127.0.0.1,localhost",
     },
-  });
-  for await (const message of stream) {
-    messages.push(message);
+    ...extra,
+  };
+}
+
+async function drain(stream) {
+  const out = [];
+  for await (const message of stream) out.push(message);
+  return out;
+}
+
+/** Read until the assistant asks for the Read tool (conversation, turn and tool spans open). */
+async function readUntilToolUse(stream) {
+  const out = [];
+  for (;;) {
+    const { value, done } = await stream.next();
+    if (done) return out;
+    out.push(value);
+    const content = value.type === "assistant" ? value.message?.content ?? [] : [];
+    if (content.some((block) => block.type === "tool_use")) return out;
   }
+}
+
+const SCENARIOS = {
+  async tool() {
+    return [await drain(tracedQuery({ prompt: PROMPT, options: options() }))];
+  },
+  async close() {
+    const closed = tracedQuery({ prompt: PROMPT, options: options() });
+    const first = await readUntilToolUse(closed);
+    closed.close();
+    const disposed = tracedQuery({ prompt: PROMPT, options: options() });
+    const second = await readUntilToolUse(disposed);
+    await disposed[Symbol.asyncDispose]();
+    return [first, second];
+  },
+};
+
+const queries = [];
+try {
+  const scenario = SCENARIOS[SCENARIO];
+  if (!scenario) throw new Error(`unknown SCENARIO ${SCENARIO}`);
+  queries.push(...(await scenario()));
 } finally {
   clearTimeout(timer);
   await shutdown(provider);
@@ -134,4 +176,4 @@ try {
   fs.rmSync(workdir, { recursive: true, force: true });
 }
 
-process.stdout.write(JSON.stringify({ mockOrigin, requests, messages }));
+process.stdout.write(JSON.stringify({ mockOrigin, requests, messages: queries.flat(), queries }));

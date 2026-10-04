@@ -5,8 +5,9 @@
  * reference, never copied or modified) and returns a proxy around the `Query`
  * it got back. The proxy yields the same message objects the SDK yielded and
  * forwards every control method (`interrupt()`, `setModel()`, ...) to the
- * original. Only `next`, `return`, `throw` and `Symbol.asyncIterator` are
- * intercepted, to drive the span model in `spans.ts`.
+ * original. `next`, `return`, `throw` and `Symbol.asyncIterator` are
+ * intercepted to drive the span model in `spans.ts`; `close()` and
+ * `Symbol.asyncDispose` end the open spans as cancelled, then forward.
  */
 import { Tracer, context as otelContext, diag } from "@opentelemetry/api";
 import { ContentPolicy, QueryTracer, clockMs } from "./spans";
@@ -124,8 +125,31 @@ function proxyQuery<G extends AsyncGenerator<unknown, unknown, unknown>>(
       if (property === "throw") return thr;
       if (property === Symbol.asyncIterator) return () => proxy;
       const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
+      if (typeof value !== "function") return value;
+      // close() is the SDK's abort path (sdk.d.ts Query.close) and asyncDispose
+      // runs on `await using`: neither goes through next/return/throw, so end
+      // every open span as cancelled before forwarding.
+      if (property === "close") {
+        return function close(this: unknown, ...args: unknown[]) {
+          safe(() => queryTracer.finish({ kind: "aborted", reason: "close" }));
+          return value.apply(target, args);
+        };
+      }
+      if (isAsyncDisposeKey(property)) {
+        return function asyncDispose(this: unknown, ...args: unknown[]) {
+          safe(() => queryTracer.finish({ kind: "aborted", reason: "asyncDispose" }));
+          return value.apply(target, args);
+        };
+      }
+      return value.bind(target);
     },
   });
   return proxy;
+}
+
+/** `Symbol.asyncDispose`, native or the `Symbol.for` polyfill the SDK installs on older Node. */
+function isAsyncDisposeKey(property: string | symbol): boolean {
+  if (typeof property !== "symbol") return false;
+  const native = (Symbol as unknown as { asyncDispose?: symbol }).asyncDispose;
+  return property === native || property === Symbol.for("Symbol.asyncDispose");
 }
