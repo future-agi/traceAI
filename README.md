@@ -331,6 +331,7 @@ var tracer = TraceAI.Register(opts =>
 | [`@traceai/mastra`](https://www.npmjs.com/package/@traceai/mastra) | Mastra | [![npm](https://img.shields.io/npm/v/@traceai/mastra)](https://www.npmjs.com/package/@traceai/mastra) |
 | [`@traceai/beeai`](https://www.npmjs.com/package/@traceai/beeai) | IBM BeeAI | [![npm](https://img.shields.io/npm/v/@traceai/beeai)](https://www.npmjs.com/package/@traceai/beeai) |
 | [`@traceai/strands`](https://www.npmjs.com/package/@traceai/strands) | AWS Strands Agents | [![npm](https://img.shields.io/npm/v/@traceai/strands)](https://www.npmjs.com/package/@traceai/strands) |
+| [`@traceai/claude-agent-sdk`](https://www.npmjs.com/package/@traceai/claude-agent-sdk) | Claude Agent SDK (`query()`) | [![npm](https://img.shields.io/npm/v/@traceai/claude-agent-sdk)](https://www.npmjs.com/package/@traceai/claude-agent-sdk) |
 
 #### Tools and Libraries
 
