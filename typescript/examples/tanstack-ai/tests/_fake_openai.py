@@ -4,7 +4,8 @@ A request that offers tools and has no tool result yet gets a get_weather tool
 call. Any other request gets a text answer. Both responses end with an OpenAI
 include_usage chunk, so the adapter reports token usage. With ``stall=True``
 the text answer stops after its first delta until the server exits, so a
-client can abort mid-stream.
+client can abort mid-stream. With ``fail_status=500`` every request gets that
+HTTP status and an OpenAI-shaped error body whose message is ``boom``.
 """
 
 from __future__ import annotations
@@ -48,8 +49,10 @@ def _chunk(delta: dict[str, Any] | None, finish_reason: str | None = None,
 class FakeOpenAI:
     """Serve /v1/chat/completions on 127.0.0.1 and record each request body."""
 
-    def __init__(self, tool_city: str, answer_text: str, stall: bool = False) -> None:
+    def __init__(self, tool_city: str, answer_text: str, stall: bool = False,
+                 fail_status: int | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.authorizations: list[str | None] = []
         self._release = threading.Event()
         lock = threading.Lock()
         owner = self
@@ -63,6 +66,18 @@ class FakeOpenAI:
                 request = json.loads(self.rfile.read(length).decode("utf-8"))
                 with lock:
                     owner.requests.append(request)
+                    owner.authorizations.append(self.headers.get("Authorization"))
+
+                if fail_status is not None:
+                    body = json.dumps(
+                        {"error": {"message": "boom", "type": "server_error"}}
+                    ).encode("utf-8")
+                    self.send_response(fail_status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
 
                 has_tool_result = any(
                     message.get("role") == "tool" for message in request.get("messages", [])

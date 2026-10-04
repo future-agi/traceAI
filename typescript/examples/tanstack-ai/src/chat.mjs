@@ -23,16 +23,37 @@ const getWeather = toolDefinition({
   },
 }).server(async ({ city }) => ({ city, forecast: "sunny", celsius: 21 }));
 
-/** Answer one question. The adapter reads OPENAI_API_KEY and OPENAI_BASE_URL. */
+/**
+ * Answer one question. The adapter reads OPENAI_API_KEY and OPENAI_BASE_URL.
+ *
+ * Reads chat()'s stream to the end, even after a RUN_ERROR chunk, and only
+ * then throws. Do not use `stream: false` with otelMiddleware: at
+ * @tanstack/ai 0.64.0 it collects text with streamToText, which throws at
+ * the first RUN_ERROR and stops reading. The run then never reaches its
+ * onError hook, so the chat and model-call spans are never ended or exported
+ * and a failed request leaves no trace.
+ */
 export async function answer(question, middleware) {
-  return chat({
+  const stream = chat({
     adapter: openaiChatCompletions(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
     systemPrompts: ["You are a concise weather assistant."],
     messages: [{ role: "user", content: question }],
     tools: [getWeather],
     middleware: [middleware],
-    stream: false,
   });
+  let text = "";
+  let runError = null;
+  for await (const chunk of stream) {
+    if (chunk.type === "RUN_ERROR") {
+      runError ??= chunk;
+    } else if (chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta) {
+      text += chunk.delta;
+    }
+  }
+  if (runError) {
+    throw new Error(runError.message || runError.error?.message || "chat failed");
+  }
+  return text;
 }
 
 /** The route: one traced chat() call, flushed in finally. */
@@ -52,6 +73,10 @@ async function main() {
   const tracerProvider = registerFutureAgiTracing();
   try {
     console.log(await chatRoute(question, tracerProvider));
+  } catch (error) {
+    // The route's error response. The spans are already exported.
+    console.error(`chat failed: ${error?.message ?? String(error)}`);
+    process.exitCode = 1;
   } finally {
     await shutdownTraces(tracerProvider);
   }

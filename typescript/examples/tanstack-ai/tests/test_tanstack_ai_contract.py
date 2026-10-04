@@ -271,6 +271,37 @@ def test_unreachable_collector_does_not_fail_chat():
     assert "[futureagi] span export failed" in result.stderr.decode()
 
 
+def test_failed_model_call_exports_error_spans():
+    """A model call that fails still ends and exports the root and LLM spans.
+
+    chat({ stream: false }) stops reading at RUN_ERROR, the run never reaches
+    onError, and otelMiddleware never ends its spans. The route drains the
+    stream instead, then fails the request.
+    """
+    with Receiver() as receiver, FakeOpenAI(CITY, ANSWER, fail_status=500) as fake:
+        result = _node(EXAMPLE / "src" / "chat.mjs", receiver.origin, fake)
+        spans = _by_name(receiver.spans())
+        exports = receiver.requests()
+        model_requests = list(fake.requests)
+
+    # The caller still gets an error, not an answer.
+    assert result.returncode != 0, result.stdout.decode()
+    assert "500 boom" in result.stderr.decode()
+    assert ANSWER not in result.stdout.decode()
+    assert model_requests
+
+    # And the failure is in Future AGI.
+    assert exports
+    assert all(export["path"] == "/tracer/v1/traces" for export in exports)
+    assert sorted(spans) == sorted([ROOT, ITERATION_0])
+    for name in (ROOT, ITERATION_0):
+        status = spans[name].get("status", {})
+        assert _is_error(status), (name, status)
+        assert status.get("message") == "500 boom", (name, status)
+    assert spans[ITERATION_0]["parentSpanId"] == spans[ROOT]["spanId"]
+    assert _attributes(spans[ITERATION_0])["gen_ai.span.kind"] == "LLM"
+
+
 def test_abort_mid_stream_ends_spans_as_cancelled():
     with Receiver() as receiver, FakeOpenAI(
         CITY, ANSWER, stall=True
