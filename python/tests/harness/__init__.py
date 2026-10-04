@@ -23,18 +23,36 @@ class Receiver:
 
     def __init__(self) -> None:
         self._spans: list[dict[str, Any]] = []
+        self._requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
+            def _read_body(self) -> bytes:
+                # The Node OTLP exporter streams with Transfer-Encoding: chunked
+                # and sends no Content-Length, so both framings are accepted.
+                if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+                    chunks = []
+                    while True:
+                        size_line = self.rfile.readline().split(b";", 1)[0].strip()
+                        size = int(size_line, 16)
+                        if size == 0:
+                            while self.rfile.readline() not in (b"\r\n", b"\n", b""):
+                                pass
+                            return b"".join(chunks)
+                        chunks.append(self.rfile.read(size))
+                        self.rfile.readline()
+                length = int(self.headers.get("Content-Length", "0"))
+                return self.rfile.read(length)
+
             def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-                if urlsplit(self.path).path != "/v1/traces":
+                path = urlsplit(self.path).path
+                if path not in ("/v1/traces", "/tracer/v1/traces"):
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
 
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    body = self.rfile.read(length)
+                    body = self._read_body()
                     content_type = self.headers.get("Content-Type", "").lower()
 
                     if content_type.startswith("application/json"):
@@ -53,9 +71,15 @@ class Receiver:
                         return
 
                     spans: list[dict[str, Any]] = []
+                    resource_attributes: list[dict[str, Any]] = []
                     for resource_spans in request.get(
                         "resourceSpans", request.get("resource_spans", [])
                     ):
+                        resource_attributes.append(
+                            _flatten_attributes(
+                                resource_spans.get("resource", {}).get("attributes", [])
+                            )
+                        )
                         for scope_spans in resource_spans.get(
                             "scopeSpans", resource_spans.get("scope_spans", [])
                         ):
@@ -66,6 +90,15 @@ class Receiver:
 
                 with owner._lock:
                     owner._spans.extend(copy.deepcopy(spans))
+                    owner._requests.append(
+                        {
+                            "path": path,
+                            "headers": {
+                                key.lower(): value for key, value in self.headers.items()
+                            },
+                            "resource_attributes": resource_attributes,
+                        }
+                    )
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -76,6 +109,7 @@ class Receiver:
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.origin = "http://127.0.0.1:{0}".format(self._server.server_port)
         self.endpoint = "{0}/v1/traces".format(self.origin)
+        self.collector_endpoint = "{0}/tracer/v1/traces".format(self.origin)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
@@ -92,10 +126,30 @@ class Receiver:
         with self._lock:
             return copy.deepcopy(self._spans)
 
+    def requests(self) -> list[dict[str, Any]]:
+        """Return one record per accepted export: path, lower-cased headers, resource attributes."""
+        with self._lock:
+            return copy.deepcopy(self._requests)
+
     def clear(self) -> None:
-        """Remove every decoded span received so far."""
+        """Remove every decoded span and request record received so far."""
         with self._lock:
             self._spans.clear()
+            self._requests.clear()
+
+
+def _flatten_attributes(attributes: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Turn OTLP key/value attributes into a plain dict of scalar values."""
+    flat: dict[str, Any] = {}
+    for attribute in attributes:
+        value = attribute.get("value", {})
+        for kind in ("stringValue", "boolValue", "intValue", "doubleValue"):
+            if kind in value:
+                flat[attribute.get("key", "")] = value[kind]
+                break
+        else:
+            flat[attribute.get("key", "")] = value
+    return flat
 
 
 def run(

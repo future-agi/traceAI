@@ -38,6 +38,94 @@ def test_receiver_stores_posted_span_and_can_clear() -> None:
         assert receiver.spans() == []
 
 
+def test_receiver_accepts_the_collector_path() -> None:
+    payload = {
+        "resourceSpans": [
+            {"scopeSpans": [{"spans": [{"name": "collector.path"}]}]}
+        ]
+    }
+
+    with Receiver() as receiver:
+        assert post_otlp(payload, receiver.collector_endpoint) == 200
+        assert receiver.spans() == [{"name": "collector.path"}]
+
+
+def _post_chunked(url: str, body: bytes, headers: dict) -> int:
+    """Send a body with Transfer-Encoding: chunked, as the Node OTLP exporter does."""
+    import http.client
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port, timeout=5)
+    try:
+        chunks = [body[: len(body) // 2], body[len(body) // 2 :]]
+        connection.request(
+            "POST",
+            parts.path,
+            body=iter(chunks),
+            headers={**headers, "Transfer-Encoding": "chunked"},
+            encode_chunked=True,
+        )
+        return connection.getresponse().status
+    finally:
+        connection.close()
+
+
+def test_receiver_decodes_a_chunked_body() -> None:
+    payload = {
+        "resourceSpans": [
+            {"scopeSpans": [{"spans": [{"name": "chunked.body"}]}]}
+        ]
+    }
+
+    with Receiver() as receiver:
+        status = _post_chunked(
+            receiver.collector_endpoint,
+            json.dumps(payload).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        assert status == 200
+        assert receiver.spans() == [{"name": "chunked.body"}]
+
+
+def test_receiver_records_path_headers_and_resource_attributes() -> None:
+    payload = {
+        "resourceSpans": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "project_name", "value": {"stringValue": "harness"}},
+                        {"key": "project_type", "value": {"stringValue": "observe"}},
+                    ]
+                },
+                "scopeSpans": [{"spans": [{"name": "with.resource"}]}],
+            }
+        ]
+    }
+
+    with Receiver() as receiver:
+        status = _post_chunked(
+            receiver.collector_endpoint,
+            json.dumps(payload).encode("utf-8"),
+            {
+                "Content-Type": "application/json",
+                "X-Api-Key": "test-key",
+                "X-Secret-Key": "test-secret",
+            },
+        )
+        assert status == 200
+        [request] = receiver.requests()
+        assert request["path"] == "/tracer/v1/traces"
+        assert request["headers"]["x-api-key"] == "test-key"
+        assert request["headers"]["x-secret-key"] == "test-secret"
+        assert "authorization" not in request["headers"]
+        assert request["resource_attributes"] == [
+            {"project_name": "harness", "project_type": "observe"}
+        ]
+        receiver.clear()
+        assert receiver.requests() == []
+
+
 def test_run_captures_output_and_kills_timed_out_process() -> None:
     completed = run(
         [
