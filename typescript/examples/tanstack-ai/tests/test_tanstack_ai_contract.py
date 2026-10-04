@@ -1,0 +1,279 @@
+"""Contract test for the TanStack AI recipe (TH-8238).
+
+Runs the example with ``node`` against a loopback fake of the OpenAI Chat
+Completions API, and exports straight to the shared harness ``Receiver``, which
+decodes the Node exporter's chunked bodies and records headers and resource
+attributes per export. No vendor
+API is called. Every key is a placeholder.
+
+Install the example first: ``npm install`` in typescript/examples/tanstack-ai.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import socket
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+TESTS = Path(__file__).resolve().parent
+EXAMPLE = TESTS.parent
+WORKTREE = EXAMPLE.parents[2]
+sys.path.insert(0, str(WORKTREE / "python" / "tests"))
+sys.path.insert(0, str(TESTS))
+
+from harness import Receiver, run  # noqa: E402
+from _fake_openai import (  # noqa: E402
+    ANSWER_USAGE,
+    RESPONSE_MODEL,
+    TOOL_CALL_USAGE,
+    FakeOpenAI,
+)
+
+NODE = shutil.which("node")
+pytestmark = [
+    pytest.mark.skipif(NODE is None, reason="node is not on PATH"),
+    pytest.mark.skipif(
+        not (EXAMPLE / "node_modules" / "@tanstack" / "ai").is_dir(),
+        reason="run `npm install` in typescript/examples/tanstack-ai first",
+    ),
+]
+
+API_KEY = "placeholder-fi-api-key"
+SECRET_KEY = "placeholder-fi-secret-key"
+PROJECT = "th-8238-contract"
+MODEL = "gpt-4o-mini"
+
+# Content markers. They must reach the fake model and stdout, and must never
+# reach a span while captureContent is at its default.
+PROMPT = "PROMPT-MARKER-5f1c what is the weather?"
+CITY = "CITY-MARKER-9a2e"
+ANSWER = "ANSWER-MARKER-3d7b it is sunny"
+SYSTEM_PROMPT = "You are a concise weather assistant."  # fixed in src/chat.mjs
+
+ROOT = "chat {0}".format(MODEL)
+ITERATION_0 = "chat {0} #0".format(MODEL)
+ITERATION_1 = "chat {0} #1".format(MODEL)
+TOOL = "execute_tool get_weather"
+
+CONTENT_KEYS = {"gen_ai.input.messages", "gen_ai.output.messages"}
+
+
+def _env(fi_base_url: str, openai_base_url: str) -> dict[str, str]:
+    env = {
+        "FI_BASE_URL": fi_base_url,
+        "FI_API_KEY": API_KEY,
+        "FI_SECRET_KEY": SECRET_KEY,
+        "FI_PROJECT_NAME": PROJECT,
+        "OPENAI_API_KEY": "placeholder-openai-key",
+        "OPENAI_BASE_URL": openai_base_url,
+        "OPENAI_MODEL": MODEL,
+    }
+    for name in ("PATH", "HOME", "SYSTEMROOT"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    return env
+
+
+def _node(script: Path, fi_base_url: str, fake: FakeOpenAI) -> Any:
+    result = run([NODE, str(script), PROMPT], _env(fi_base_url, fake.base_url), None, 60)
+    assert not result.timed_out, result.stderr.decode()
+    return result
+
+
+def _value(value: dict[str, Any]) -> Any:
+    if "stringValue" in value:
+        return value["stringValue"]
+    if "intValue" in value:
+        return int(value["intValue"])
+    if "doubleValue" in value:
+        return float(value["doubleValue"])
+    if "boolValue" in value:
+        return value["boolValue"]
+    if "arrayValue" in value:
+        return [_value(item) for item in value["arrayValue"].get("values", [])]
+    return value
+
+
+def _attributes(entity: dict[str, Any]) -> dict[str, Any]:
+    return {item["key"]: _value(item["value"]) for item in entity.get("attributes", [])}
+
+
+def _by_name(spans: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    names = [span["name"] for span in spans]
+    assert len(names) == len(set(names)), names
+    return {span["name"]: span for span in spans}
+
+
+def _is_error(status: dict[str, Any]) -> bool:
+    return status.get("code") in (2, "STATUS_CODE_ERROR")
+
+
+@pytest.fixture(scope="module")
+def default_run():
+    """One run of the example exactly as shipped (captureContent unset)."""
+    with Receiver() as receiver, FakeOpenAI(
+        CITY, ANSWER
+    ) as fake:
+        result = _node(EXAMPLE / "src" / "chat.mjs", receiver.origin, fake)
+        yield SimpleNamespace(
+            result=result,
+            spans=receiver.spans(),
+            exports=receiver.requests(),
+            model_requests=list(fake.requests),
+        )
+
+
+def test_example_answers_through_the_fake_model(default_run):
+    result = default_run.result
+    assert result.returncode == 0, result.stderr.decode()
+    assert ANSWER in result.stdout.decode()
+
+    # Positive control for the no-content test: the markers really flowed
+    # through chat() to the model and back.
+    first, second = default_run.model_requests
+    assert first["model"] == MODEL
+    assert {"role": "user", "content": PROMPT} in first["messages"]
+    assert {"role": "system", "content": SYSTEM_PROMPT} in first["messages"]
+    tool_messages = [m for m in second["messages"] if m.get("role") == "tool"]
+    assert len(tool_messages) == 1 and CITY in tool_messages[0]["content"]
+
+
+def test_spans_carry_model_usage_and_span_kinds(default_run):
+    spans = _by_name(default_run.spans)
+    assert sorted(spans) == sorted([ROOT, ITERATION_0, ITERATION_1, TOOL])
+
+    root = _attributes(spans[ROOT])
+    first = _attributes(spans[ITERATION_0])
+    second = _attributes(spans[ITERATION_1])
+    tool = _attributes(spans[TOOL])
+
+    # One LLM span per provider call, with model, operation and usage.
+    for attributes, iteration, usage, finish in (
+        (first, 0, TOOL_CALL_USAGE, "tool_calls"),
+        (second, 1, ANSWER_USAGE, "stop"),
+    ):
+        assert attributes["gen_ai.operation.name"] == "chat"
+        assert attributes["gen_ai.request.model"] == MODEL
+        assert attributes["gen_ai.response.model"] == RESPONSE_MODEL
+        assert attributes["gen_ai.usage.input_tokens"] == usage["prompt_tokens"]
+        assert attributes["gen_ai.usage.output_tokens"] == usage["completion_tokens"]
+        assert attributes["gen_ai.usage.total_tokens"] == usage["total_tokens"]
+        assert attributes["gen_ai.response.finish_reasons"] == [finish]
+        assert attributes["tanstack.ai.iteration"] == iteration
+        assert attributes["gen_ai.span.kind"] == "LLM"
+
+    # Dotted cache and reasoning keys appear only when the provider sends them.
+    assert "gen_ai.usage.cache_read.input_tokens" not in first
+    assert second["gen_ai.usage.cache_read.input_tokens"] == 3
+    assert second["gen_ai.usage.reasoning.output_tokens"] == 2
+
+    # Root: the whole chat() call. No operation name; usage summed over calls.
+    assert root["gen_ai.request.model"] == MODEL
+    assert "gen_ai.operation.name" not in root
+    assert root["tanstack.ai.iterations"] == 2
+    assert root["gen_ai.usage.input_tokens"] == (
+        TOOL_CALL_USAGE["prompt_tokens"] + ANSWER_USAGE["prompt_tokens"]
+    )
+    assert root["gen_ai.usage.output_tokens"] == (
+        TOOL_CALL_USAGE["completion_tokens"] + ANSWER_USAGE["completion_tokens"]
+    )
+    assert root["gen_ai.response.finish_reasons"] == ["stop"]
+    assert root["gen_ai.span.kind"] == "AGENT"
+
+    assert tool["gen_ai.tool.name"] == "get_weather"
+    assert tool["gen_ai.tool.call.id"] == "call_fake_1"
+    assert tool["gen_ai.tool.type"] == "function"
+    assert tool["tanstack.ai.tool.outcome"] == "success"
+    assert tool["gen_ai.span.kind"] == "TOOL"
+
+    # One trace, nested root -> iteration -> tool, without a context manager.
+    assert len({span["traceId"] for span in spans.values()}) == 1
+    assert spans[ITERATION_0]["parentSpanId"] == spans[ROOT]["spanId"]
+    assert spans[ITERATION_1]["parentSpanId"] == spans[ROOT]["spanId"]
+    assert spans[TOOL]["parentSpanId"] == spans[ITERATION_0]["spanId"]
+    for span in spans.values():
+        assert not _is_error(span.get("status", {})), span["name"]
+
+
+def test_no_prompt_or_response_content_by_default(default_run):
+    assert default_run.spans
+    exported = json.dumps(default_run.spans)
+    for marker in (PROMPT, CITY, ANSWER, SYSTEM_PROMPT, "PROMPT-MARKER", "ANSWER-MARKER"):
+        assert marker not in exported
+    for span in default_run.spans:
+        keys = set(_attributes(span))
+        assert not keys & CONTENT_KEYS, span["name"]
+        assert not [key for key in keys if key.startswith("langfuse.")], span["name"]
+        assert "tanstack.ai.system_prompt.metadata" not in keys
+        assert not span.get("events"), span["name"]
+
+
+def test_export_has_auth_headers_project_resource_and_collector_path(default_run):
+    exports = default_run.exports
+    assert exports
+    for export in exports:
+        assert export["path"] == "/tracer/v1/traces"
+        headers = export["headers"]
+        assert headers["x-api-key"] == API_KEY
+        assert headers["x-secret-key"] == SECRET_KEY
+        assert "authorization" not in headers
+        assert export["resource_attributes"]
+        for resource in export["resource_attributes"]:
+            assert resource["project_name"] == PROJECT
+            assert resource["project_type"] == "observe"
+            assert "openinference.project.name" not in resource
+    assert len(default_run.spans) == 4
+
+
+def test_capture_content_control_is_detected():
+    """If content were captured, the checks above would see it."""
+    with Receiver() as receiver, FakeOpenAI(
+        CITY, ANSWER
+    ) as fake:
+        result = _node(TESTS / "capture_content_on.mjs", receiver.origin, fake)
+        spans = receiver.spans()
+    assert result.returncode == 0, result.stderr.decode()
+    exported = json.dumps(spans)
+    assert "PROMPT-MARKER" in exported
+    assert "ANSWER-MARKER" in exported
+    assert CITY in exported
+    keys = set().union(*(_attributes(span) for span in spans))
+    assert CONTENT_KEYS <= keys
+
+
+def test_unreachable_collector_does_not_fail_chat():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    with FakeOpenAI(CITY, ANSWER) as fake:
+        result = _node(
+            EXAMPLE / "src" / "chat.mjs", "http://127.0.0.1:{0}".format(closed_port), fake
+        )
+    assert result.returncode == 0, result.stderr.decode()
+    assert ANSWER in result.stdout.decode()
+    assert "[futureagi] span export failed" in result.stderr.decode()
+
+
+def test_abort_mid_stream_ends_spans_as_cancelled():
+    with Receiver() as receiver, FakeOpenAI(
+        CITY, ANSWER, stall=True
+    ) as fake:
+        result = _node(TESTS / "abort_mid_stream.mjs", receiver.origin, fake)
+        spans = _by_name(receiver.spans())
+    assert result.returncode == 0, result.stderr.decode()
+    assert sorted(spans) == sorted([ROOT, ITERATION_0])
+    for name in (ROOT, ITERATION_0):
+        status = spans[name].get("status", {})
+        assert _is_error(status), status
+        assert status.get("message") == "cancelled"
+        assert _attributes(spans[name])["tanstack.ai.completion.reason"] == "cancelled"
+    # One iteration: LLM on the iteration span, no kind on the root.
+    assert _attributes(spans[ITERATION_0])["gen_ai.span.kind"] == "LLM"
+    assert "gen_ai.span.kind" not in _attributes(spans[ROOT])
