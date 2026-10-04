@@ -260,6 +260,41 @@ def test_processor_keeps_session_on_outer_conversation_only():
     assert by_name["speaker_selection"].attributes["gen_ai.span.kind"] == "CHAIN"
 
 
+def test_non_ag2_span_between_conversations_does_not_split_the_session():
+    """Agent-as-tool: the user's own span wraps an inner initiate_chat."""
+    provider, exporter = _pipeline()
+    processor = provider._active_span_processor._span_processors[0]
+    ag2 = provider.get_tracer(AG2_SCOPE)
+    user = provider.get_tracer("user.app")
+    with ag2.start_as_current_span("conversation outer") as outer:
+        outer.set_attribute("ag2.span.type", "conversation")
+        with user.start_as_current_span("user work"):
+            with user.start_as_current_span("user inner work"):
+                with ag2.start_as_current_span("conversation inner") as inner:
+                    inner.set_attribute("ag2.span.type", "conversation")
+                    inner.set_attribute("gen_ai.conversation.id", "inner-id")
+        outer.set_attribute("gen_ai.conversation.id", "outer-id")
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    assert by_name["conversation outer"].attributes["session.id"] == "outer-id"
+    assert "session.id" not in by_name["conversation inner"].attributes
+    assert "session.id" not in by_name["user work"].attributes
+    # Every tracked span, AG2 or not, is released when it ends.
+    assert processor._live == {}
+
+
+def test_live_span_tracking_is_bounded(monkeypatch):
+    from traceai_ag2_classic import _processor
+
+    monkeypatch.setattr(_processor, "_MAX_LIVE_SPANS", 2)
+    provider, exporter = _pipeline()
+    processor = provider._active_span_processor._span_processors[0]
+    user = provider.get_tracer("user.app")
+    with user.start_as_current_span("a"), user.start_as_current_span("b"), user.start_as_current_span("c"):
+        assert len(processor._live) == 2
+    assert processor._live == {}
+    assert len(exporter.get_finished_spans()) == 3
+
+
 def test_processor_preserves_bounded_attribute_limits():
     from opentelemetry.attributes import BoundedAttributes
 

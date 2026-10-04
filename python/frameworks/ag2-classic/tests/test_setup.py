@@ -443,6 +443,47 @@ def test_group_chat_is_one_trace_with_one_session(pipeline, fake):
     assert selection.attributes["ag2.speaker_selection.selected"] == "critic"
 
 
+def test_user_span_around_an_inner_chat_keeps_one_session(pipeline, fake):
+    """Agent-as-tool: a tool runs an inner chat inside the user's own span."""
+    from autogen import ConversableAgent
+
+    provider, exporter, make = pipeline
+    tracing = make()
+    user_tracer = provider.get_tracer("user.app")
+    terminates = lambda m: "TERMINATE" in str(m.get("content") or "")  # noqa: E731
+    expert = ConversableAgent("expert", llm_config=fake.llm_config(), human_input_mode="NEVER")
+    asker = ConversableAgent("asker", llm_config=False, human_input_mode="NEVER")
+    tracing.instrument_agent(expert)
+    tracing.instrument_agent(asker)
+
+    def ask_expert(city: str) -> str:
+        """Ask the expert about a city."""
+        with user_tracer.start_as_current_span("ask_expert work"):
+            inner = asker.initiate_chat(expert, message="about " + city, max_turns=1, silent=True)
+        return str(inner.summary)
+
+    assistant = ConversableAgent(
+        "assistant", llm_config=fake.llm_config(), human_input_mode="NEVER", is_termination_msg=terminates
+    )
+    user = ConversableAgent(
+        "user", llm_config=False, human_input_mode="NEVER", max_consecutive_auto_reply=3, is_termination_msg=terminates
+    )
+    assistant.register_for_llm(description="Ask the expert")(ask_expert)
+    user.register_for_execution()(ask_expert)
+    tracing.instrument_agent(assistant)
+    tracing.instrument_agent(user)
+    result = user.initiate_chat(assistant, message="hi", max_turns=3, silent=True)
+
+    finished = exporter.get_finished_spans()
+    names = {s.name for s in finished}
+    assert {"conversation user", "execute_tool ask_expert", "ask_expert work", "conversation asker"} <= names
+    assert len({s.context.trace_id for s in finished}) == 1
+    assert {s.attributes.get("session.id") for s in finished} - {None} == {str(result.chat_id)}
+    inner = next(s for s in finished if s.name == "conversation asker")
+    assert inner.attributes["gen_ai.conversation.id"] != str(result.chat_id)
+    assert "session.id" not in inner.attributes
+
+
 def test_patterns_are_passed_to_upstream_instrument_pattern(pipeline, fake):
     from autogen import ConversableAgent
     from autogen.agentchat import initiate_group_chat

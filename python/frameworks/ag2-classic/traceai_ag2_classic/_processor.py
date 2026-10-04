@@ -12,8 +12,9 @@ What it does, per span on the ``opentelemetry.instrumentation.ag2`` scope:
 * ``gen_ai.span.kind`` from upstream ``ag2.span.type`` (the ``SpanType`` enum).
 * ``session.id`` from ``gen_ai.conversation.id`` on the outermost
   ``conversation`` span only. Nested chats (for example group-chat speaker
-  selection) get their own ``chat_id`` upstream; those are not copied, so one
-  run maps to one session.
+  selection, or an inner chat a tool starts inside the user's own span) get
+  their own ``chat_id`` upstream; those are not copied, so one run maps to one
+  session. The ancestor walk follows every live span, AG2 or not.
 * ``gen_ai.cost.total`` from upstream ``gen_ai.usage.cost`` on LLM spans, and
   ``gen_ai.usage.total_tokens`` = input + output on LLM spans.
 * ``gen_ai.request.parameters`` JSON from upstream ``gen_ai.request.*``
@@ -37,7 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
@@ -111,8 +112,9 @@ REQUEST_PARAMETER_KEYS = (
 # its own upstream chat with its own ``chat_id``.
 _CONVERSATION_TYPES = ("conversation",)
 
-# Upper bound on live AG2 spans tracked for the nested-conversation check, so a
-# span that is started and never ended cannot grow memory without limit.
+# Upper bound on live spans tracked (AG2 or not) for the nested-conversation
+# check, so a span that is started and never ended cannot grow memory without
+# limit. Spans past the bound are not tracked; an ancestor walk stops there.
 _MAX_LIVE_SPANS = 10000
 
 
@@ -264,28 +266,35 @@ class AG2ClassicSpanProcessor(SpanProcessor):
 
     def __init__(self, capture_content: bool = False) -> None:
         self.capture_content = bool(capture_content)
-        self._live: Dict[int, Span] = {}
+        # span_id -> (parent span_id, the span if it is an AG2 span else None),
+        # for every live span on the provider, AG2 or not. A user span between
+        # two AG2 conversations must not hide the outer one.
+        self._live: Dict[int, Tuple[Optional[int], Optional[Span]]] = {}
         self._lock = threading.Lock()
         self._disabled = False
 
     # SpanProcessor interface ----------------------------------------------
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
-        if self._disabled or not _is_ag2(span):
+        if self._disabled:
             return
         try:
+            parent = span.parent
+            entry = (parent.span_id if parent is not None else None, span if _is_ag2(span) else None)
             with self._lock:
                 if len(self._live) < _MAX_LIVE_SPANS:
-                    self._live[span.context.span_id] = span
+                    self._live[span.context.span_id] = entry
         except Exception:  # pragma: no cover - never break the SDK
             return
 
     def on_end(self, span: ReadableSpan) -> None:
-        if self._disabled or not _is_ag2(span):
+        if self._disabled:
             return
         try:
             with self._lock:
                 self._live.pop(span.context.span_id, None)
+            if not _is_ag2(span):
+                return
             attributes = dict(span.attributes or {})
             root = True
             if attributes.get(SPAN_TYPE_KEY) == "conversation":
@@ -325,16 +334,18 @@ class AG2ClassicSpanProcessor(SpanProcessor):
 
     def _has_live_conversation_ancestor(self, span: ReadableSpan) -> bool:
         parent = span.parent
+        parent_id = parent.span_id if parent is not None else None
         seen = 0
         with self._lock:
-            while parent is not None and seen < 256:
-                live = self._live.get(parent.span_id)
-                if live is None:
+            while parent_id is not None and seen < 256:
+                entry = self._live.get(parent_id)
+                if entry is None:
                     return False
-                attrs = live.attributes or {}
-                if attrs.get(SPAN_TYPE_KEY) in _CONVERSATION_TYPES:
-                    return True
-                parent = live.parent
+                parent_id, ag2_span = entry
+                if ag2_span is not None:
+                    attrs = ag2_span.attributes or {}
+                    if attrs.get(SPAN_TYPE_KEY) in _CONVERSATION_TYPES:
+                        return True
                 seen += 1
         return False
 
