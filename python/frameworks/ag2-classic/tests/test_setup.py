@@ -226,8 +226,16 @@ def test_two_agent_chat_kinds_usage_session_and_no_content(pipeline, fake):
     conversation = spans["conversation user"][0].attributes
     assert conversation["gen_ai.span.kind"] == "CHAIN"
     assert conversation["session.id"] == str(result.chat_id)
-    # Upstream aggregate on the conversation span (chat.py:73-82) is passed through.
-    assert conversation["gen_ai.usage.input_tokens"] == 2 * PROMPT_TOKENS
+    # Upstream aggregate on the conversation span (chat.py:73-82) is kept under
+    # ag2.usage.* so the trace total counts each LLM call once.
+    assert "gen_ai.usage.input_tokens" not in conversation
+    assert conversation["ag2.usage.input_tokens"] == 2 * PROMPT_TOKENS
+    promoted = sum(
+        s.attributes.get("gen_ai.usage.input_tokens", 0)
+        for group in spans.values()
+        for s in group
+    )
+    assert promoted == 2 * PROMPT_TOKENS
 
     # LLM spans are children of the agent span, all in one trace.
     trace_ids = {s.context.trace_id for group in spans.values() for s in group}

@@ -100,6 +100,24 @@ def test_conversation_aggregate_usage_is_not_relabelled():
     assert "gen_ai.cost.total" not in mapped
 
 
+def test_conversation_aggregate_tokens_do_not_double_count_the_trace():
+    """chat.py:81-82 puts the chat-wide sum on the conversation span.
+
+    fi-collector promotes gen_ai.usage.* on any span and Observe sums
+    total_tokens over a trace, so only LLM spans keep the promoted keys.
+    """
+    attrs = {
+        "ag2.span.type": "conversation",
+        "gen_ai.usage.input_tokens": 22,
+        "gen_ai.usage.output_tokens": 14,
+    }
+    mapped = map_ag2_attributes(attrs)
+    assert "gen_ai.usage.input_tokens" not in mapped
+    assert "gen_ai.usage.output_tokens" not in mapped
+    assert mapped["ag2.usage.input_tokens"] == 22
+    assert mapped["ag2.usage.output_tokens"] == 14
+
+
 # Session ----------------------------------------------------------------------
 
 

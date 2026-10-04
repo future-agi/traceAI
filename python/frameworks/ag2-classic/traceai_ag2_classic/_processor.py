@@ -210,6 +210,14 @@ def map_ag2_attributes(
         ):
             mapped[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = inp + out
         _bundle_request_parameters(mapped)
+    else:
+        # fi-collector promotes these keys into the token columns on any span
+        # (adapter.go inputTokenKeys/outputTokenKeys/totalTokenKeys) and Observe
+        # sums total_tokens over a trace. Only LLM spans carry per-call usage;
+        # the conversation span's chat-wide sum (chat.py:81-82) would double it.
+        for key in (INPUT_TOKENS, OUTPUT_TOKENS, SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS):
+            if key in mapped:
+                mapped.setdefault("ag2.usage." + key.rsplit(".", 1)[1], mapped.pop(key))
 
     if capture_content:
         _surface_content(mapped, str(span_type))
