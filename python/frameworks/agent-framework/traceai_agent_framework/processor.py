@@ -331,6 +331,10 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         return mapped
     mapped[SpanAttributes.GEN_AI_SPAN_KIND] = kind
 
+    conversation_id = mapped.get("gen_ai.conversation.id")
+    if conversation_id and "session.id" not in mapped:
+        mapped["session.id"] = conversation_id
+
     if kind in (
         FiSpanKindValues.LLM.value,
         FiSpanKindValues.EMBEDDING.value,

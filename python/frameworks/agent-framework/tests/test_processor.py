@@ -18,6 +18,24 @@ FIXTURES = json.loads(
 )
 
 
+def test_conversation_id_is_copied_to_session_id():
+    mapped = _map_attributes_to_fi_conventions(
+        {"gen_ai.operation.name": "invoke_agent", "gen_ai.conversation.id": "conv-1"}
+    )
+    assert mapped["session.id"] == "conv-1"
+
+
+def test_existing_session_id_is_not_overwritten():
+    mapped = _map_attributes_to_fi_conventions(
+        {
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.conversation.id": "conv-1",
+            "session.id": "already",
+        }
+    )
+    assert mapped["session.id"] == "already"
+
+
 def _fixture(name: str) -> dict:
     for f in FIXTURES:
         if f["name"] == name:
