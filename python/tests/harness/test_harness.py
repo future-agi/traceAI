@@ -38,6 +38,18 @@ def test_receiver_stores_posted_span_and_can_clear() -> None:
         assert receiver.spans() == []
 
 
+def test_receiver_accepts_the_collector_path() -> None:
+    payload = {
+        "resourceSpans": [
+            {"scopeSpans": [{"spans": [{"name": "collector.path"}]}]}
+        ]
+    }
+
+    with Receiver() as receiver:
+        assert post_otlp(payload, receiver.collector_endpoint) == 200
+        assert receiver.spans() == [{"name": "collector.path"}]
+
+
 def test_run_captures_output_and_kills_timed_out_process() -> None:
     completed = run(
         [

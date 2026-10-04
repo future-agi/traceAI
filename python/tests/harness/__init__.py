@@ -28,7 +28,7 @@ class Receiver:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-                if urlsplit(self.path).path != "/v1/traces":
+                if urlsplit(self.path).path not in ("/v1/traces", "/tracer/v1/traces"):
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
 
@@ -76,6 +76,7 @@ class Receiver:
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.origin = "http://127.0.0.1:{0}".format(self._server.server_port)
         self.endpoint = "{0}/v1/traces".format(self.origin)
+        self.collector_endpoint = "{0}/tracer/v1/traces".format(self.origin)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
