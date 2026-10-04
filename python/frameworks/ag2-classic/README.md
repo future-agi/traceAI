@@ -132,6 +132,20 @@ summaries. With content off this package removes these keys before export:
 `output.value`. That is stricter than upstream. With content on they are kept
 and lifted into `input.value` / `output.value`.
 
+The filtering lives in `AG2ClassicSpanProcessor`, which must run before any
+exporting processor. `setup()` keeps it first on the provider:
+
+- `trace_provider.add_span_processor(...)` after `setup()`: Future AGI's
+  provider shuts down and removes every processor on the first such call after
+  `register()` (`fi_instrumentation/otel.py:336-339`), this one included.
+  `setup()` wraps that method on your provider instance, so after the call this
+  processor is put back first and re-enabled. Your processor sees filtered
+  spans.
+- `tracing.uninstrument()` leaves the processor in place, because agents
+  instrumented earlier keep emitting spans.
+- Editing `_active_span_processor._span_processors` yourself bypasses this;
+  call `setup()` again to put the processor back first.
+
 ## Attribute inventory (autogen 0.14.1)
 
 Paths are relative to `autogen/opentelemetry/`. Scope name
@@ -160,8 +174,9 @@ Paths are relative to `autogen/opentelemetry/`. Scope name
   `OpenAIWrapper.create` once and keeps the first provider
   (`llm_wrapper.py:64-65`). Call `uninstrument()` on the first handle first.
 - Calling `trace_provider.add_span_processor(...)` after `register()` drops
-  Future AGI's default exporter (and this processor); that is
-  `fi_instrumentation` behaviour. `setup()` does not use it.
+  Future AGI's default exporter; that is `fi_instrumentation` behaviour.
+  `setup()` does not use it, and puts this package's processor back first
+  when you call it (see Privacy).
 - `setup()` raises and names three packages: you have Microsoft AutoGen, `ag2`
   1.x, or `pyautogen` instead of `autogen` 0.14.x.
 - Content missing: content is off by default here; pass `capture_content=True`.

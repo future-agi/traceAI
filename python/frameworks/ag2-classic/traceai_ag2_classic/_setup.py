@@ -51,22 +51,79 @@ def _install_processor(provider: Any, capture_content: bool) -> AG2ClassicSpanPr
     that the ``error.type`` -> ERROR promotion runs before Future AGI's
     exporting processor turns every UNSET status into OK
     (``fi_instrumentation/otel.py`` ``BatchSpanProcessor.on_end``).
+
+    The provider instance's ``add_span_processor`` is wrapped once (see
+    :func:`_guard_add_span_processor`) so a later call by the user keeps this
+    processor installed, first and enabled.
     """
     active = _active_multi_processor(provider)
-    existing = tuple(active._span_processors)
-    for processor in existing:
-        if isinstance(processor, AG2ClassicSpanProcessor):
-            if processor.capture_content != bool(capture_content):
-                logger.warning(
-                    "traceai-ag2-classic is already installed on this provider with "
-                    "capture_content=%s; keeping that setting.",
-                    processor.capture_content,
-                )
-            return processor
-    processor = AG2ClassicSpanProcessor(capture_content=capture_content)
-    with getattr(active, "_lock", _NullLock()):
-        active._span_processors = (processor,) + tuple(active._span_processors)
+    processor = getattr(getattr(provider, "add_span_processor", None), _GUARD_ATTR, None)
+    if not isinstance(processor, AG2ClassicSpanProcessor):
+        processor = next(
+            (p for p in tuple(active._span_processors) if isinstance(p, AG2ClassicSpanProcessor)),
+            None,
+        )
+    if processor is not None:
+        if processor.capture_content != bool(capture_content):
+            logger.warning(
+                "traceai-ag2-classic is already installed on this provider with "
+                "capture_content=%s; keeping that setting.",
+                processor.capture_content,
+            )
+        if processor not in tuple(active._span_processors):
+            _prepend(active, processor)
+    else:
+        processor = AG2ClassicSpanProcessor(capture_content=capture_content)
+        _prepend(active, processor)
+    _guard_add_span_processor(provider, processor)
     return processor
+
+
+# Attribute on our add_span_processor wrapper; holds the provider's processor.
+_GUARD_ATTR = "_traceai_ag2_classic_processor"
+
+
+def _prepend(active: Any, processor: AG2ClassicSpanProcessor) -> None:
+    with getattr(active, "_lock", _NullLock()):
+        rest = tuple(p for p in active._span_processors if p is not processor)
+        active._span_processors = (processor,) + rest
+
+
+def _guard_add_span_processor(provider: Any, processor: AG2ClassicSpanProcessor) -> None:
+    """Keep ``processor`` first and enabled across ``provider.add_span_processor``.
+
+    Future AGI's ``TracerProvider.add_span_processor`` shuts down and clears
+    every processor while ``register()``'s default exporter is still in place
+    (``fi_instrumentation/otel.py:336-339``), ours included. Without this,
+    content would be exported and conversation spans would keep the promoted
+    token keys after a user adds their own processor. Only this provider
+    instance is wrapped, once.
+    """
+    current = getattr(provider, "add_span_processor", None)
+    if current is None or getattr(current, _GUARD_ATTR, None) is not None:
+        return
+
+    def add_span_processor(*args: Any, **kwargs: Any) -> Any:
+        was_enabled = not processor._disabled
+        result = current(*args, **kwargs)
+        try:
+            if was_enabled and processor._disabled:
+                processor._reopen()
+            _prepend(_active_multi_processor(provider), processor)
+        except Exception:  # pragma: no cover - never break the caller's add
+            logger.warning("traceai-ag2-classic could not re-install its span processor.", exc_info=True)
+        return result
+
+    setattr(add_span_processor, _GUARD_ATTR, processor)
+    add_span_processor.__doc__ = getattr(current, "__doc__", None)
+    try:
+        provider.add_span_processor = add_span_processor
+    except Exception:  # pragma: no cover - provider without instance attributes
+        logger.warning(
+            "traceai-ag2-classic could not guard %s.add_span_processor; calling it after setup() "
+            "may remove this package's span processor.",
+            type(provider).__name__,
+        )
 
 
 class _NullLock:

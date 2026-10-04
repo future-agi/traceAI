@@ -310,6 +310,14 @@ class AG2ClassicSpanProcessor(SpanProcessor):
         except Exception:  # pragma: no cover - never break SDK shutdown
             pass
 
+    def _reopen(self) -> None:
+        """Undo :meth:`shutdown` after Future AGI's ``add_span_processor`` ran.
+
+        That method shuts down every processor on the provider, not only its
+        own default exporter; ``setup()`` re-installs this one and calls this.
+        """
+        self._disabled = False
+
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
 
