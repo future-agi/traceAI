@@ -68,29 +68,34 @@ export async function shutdownTraces(tracerProvider) {
  * root when chat() starts, before the iteration count is known. A
  * single-iteration root and media "generation" spans get no kind.
  *
- * Usage: TanStack sums every model call's usage onto the root
- * (otel.ts applyRootUsage, set just before onSpanEnd). Future AGI promotes
- * gen_ai.usage.* into its token columns on any span and sums them over the
- * whole trace, so leaving the root's copy would count each call twice. When
- * the model-call spans carry usage, the root's sum moves to
- * tanstack.ai.root_usage.*. If no model-call span reported usage, the root
- * keeps it, because then it is the only copy.
+ * Usage: TanStack sums every model call's gen_ai.usage.* keys onto the root
+ * (otel.ts applyRootUsage, set just before onSpanEnd): input, output and
+ * total tokens, cost, cache read/creation and reasoning tokens. Future AGI
+ * promotes gen_ai.usage.* (and gen_ai.cost.*) into its token and cost
+ * columns on any span and sums them over the whole trace, so leaving the
+ * root's copy would count each call twice. When the model-call spans carry
+ * usage, every gen_ai.usage.<suffix> key on the root moves to
+ * tanstack.ai.root_usage.<suffix>, and every gen_ai.cost.<suffix> key to
+ * tanstack.ai.root_usage.cost.<suffix>. If no model-call span reported
+ * usage, the root keeps it, because then it is the only copy.
  */
-const PROMOTED_USAGE_KEYS = [
-  "gen_ai.usage.input_tokens",
-  "gen_ai.usage.output_tokens",
-  "gen_ai.usage.total_tokens",
-];
+const PROMOTED_PREFIXES = ["gen_ai.usage.", "gen_ai.cost."];
+
+function rootUsageKey(key) {
+  return key.startsWith("gen_ai.usage.")
+    ? `tanstack.ai.root_usage.${key.slice("gen_ai.usage.".length)}`
+    : `tanstack.ai.root_usage.${key.slice("gen_ai.".length)}`;
+}
 
 function moveRootUsage(span) {
   // The SDK span's attributes object is what the exporter reads at end().
   const attributes = span?.attributes;
   if (!attributes) return;
-  for (const key of PROMOTED_USAGE_KEYS) {
-    if (key in attributes) {
-      span.setAttribute(`tanstack.ai.root_usage.${key.split(".").pop()}`, attributes[key]);
-      delete attributes[key];
-    }
+  for (const key of Object.keys(attributes)) {
+    if (!PROMOTED_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    const value = attributes[key];
+    span.setAttribute(rootUsageKey(key), value);
+    delete attributes[key];
   }
 }
 

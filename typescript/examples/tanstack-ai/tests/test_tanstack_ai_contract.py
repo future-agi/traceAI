@@ -174,26 +174,30 @@ def test_spans_carry_model_usage_and_span_kinds(default_run):
     assert second["gen_ai.usage.cache_read.input_tokens"] == 3
     assert second["gen_ai.usage.reasoning.output_tokens"] == 2
 
-    # Root: the whole chat() call. No operation name. TanStack sums usage over
-    # calls onto the root; Future AGI sums promoted gen_ai.usage.* over every
-    # span in a trace, so the recipe keeps the root's sum under
-    # tanstack.ai.root_usage.* and each model call counts once.
+    # Root: the whole chat() call. No operation name. TanStack sums every
+    # gen_ai.usage.* key over calls onto the root; Future AGI sums promoted
+    # gen_ai.usage.* over every span in a trace, so the recipe keeps the
+    # root's sum under tanstack.ai.root_usage.<same suffix> and each model
+    # call counts once.
     assert root["gen_ai.request.model"] == MODEL
     assert "gen_ai.operation.name" not in root
     assert root["tanstack.ai.iterations"] == 2
-    assert "gen_ai.usage.input_tokens" not in root
-    assert "gen_ai.usage.output_tokens" not in root
-    assert "gen_ai.usage.total_tokens" not in root
-    assert root["tanstack.ai.root_usage.input_tokens"] == (
-        TOOL_CALL_USAGE["prompt_tokens"] + ANSWER_USAGE["prompt_tokens"]
-    )
-    assert root["tanstack.ai.root_usage.output_tokens"] == (
-        TOOL_CALL_USAGE["completion_tokens"] + ANSWER_USAGE["completion_tokens"]
-    )
-    promoted_input = sum(
-        _attributes(span).get("gen_ai.usage.input_tokens", 0) for span in spans.values()
-    )
-    assert promoted_input == TOOL_CALL_USAGE["prompt_tokens"] + ANSWER_USAGE["prompt_tokens"]
+    assert not [k for k in root if k.startswith(("gen_ai.usage.", "gen_ai.cost."))], root
+    per_call = {
+        "input_tokens": (TOOL_CALL_USAGE["prompt_tokens"], ANSWER_USAGE["prompt_tokens"]),
+        "output_tokens": (
+            TOOL_CALL_USAGE["completion_tokens"], ANSWER_USAGE["completion_tokens"]
+        ),
+        "total_tokens": (TOOL_CALL_USAGE["total_tokens"], ANSWER_USAGE["total_tokens"]),
+        "cache_read.input_tokens": (0, 3),
+        "reasoning.output_tokens": (0, 2),
+    }
+    for suffix, calls in per_call.items():
+        assert root["tanstack.ai.root_usage." + suffix] == sum(calls), suffix
+        promoted = sum(
+            _attributes(span).get("gen_ai.usage." + suffix, 0) for span in spans.values()
+        )
+        assert promoted == sum(calls), suffix
     assert root["gen_ai.response.finish_reasons"] == ["stop"]
     assert root["gen_ai.span.kind"] == "AGENT"
 
@@ -210,6 +214,15 @@ def test_spans_carry_model_usage_and_span_kinds(default_run):
     assert spans[TOOL]["parentSpanId"] == spans[ITERATION_0]["spanId"]
     for span in spans.values():
         assert not _is_error(span.get("status", {})), span["name"]
+
+
+def test_span_kind_unit_tests():
+    """tests/span_kinds.test.mjs: futureAgiSpanKinds() against fake spans."""
+    env = {name: os.environ[name] for name in ("PATH", "HOME", "SYSTEMROOT") if name in os.environ}
+    result = run([NODE, "--test", str(TESTS / "span_kinds.test.mjs")], env, None, 60)
+    output = result.stdout.decode() + result.stderr.decode()
+    assert not result.timed_out, output
+    assert result.returncode == 0, output
 
 
 def test_no_prompt_or_response_content_by_default(default_run):
