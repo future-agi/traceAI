@@ -88,14 +88,21 @@ function rootUsageKey(key) {
 }
 
 function moveRootUsage(span) {
-  // The SDK span's attributes object is what the exporter reads at end().
+  // Internal dependency: OpenTelemetry has no public API to remove a span
+  // attribute. This edits the SDK span's `attributes` object, which the
+  // exporter reads at end(). Tested with @opentelemetry/sdk-trace 2.11.0
+  // (SpanImpl, reached through sdk-trace-node and sdk-trace-base 2.11.0,
+  // which package.json "overrides" pins). `delete` does not lower SpanImpl's
+  // private attribute count, so under a tight attributeCountLimit the
+  // tanstack.ai.root_usage.* copy can be dropped. The promoted key still
+  // leaves the root, so a trace's usage is never counted twice.
   const attributes = span?.attributes;
   if (!attributes) return;
   for (const key of Object.keys(attributes)) {
     if (!PROMOTED_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
     const value = attributes[key];
-    span.setAttribute(rootUsageKey(key), value);
     delete attributes[key];
+    span.setAttribute(rootUsageKey(key), value);
   }
 }
 

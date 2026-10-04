@@ -7,6 +7,11 @@ capture off.
 
 Pinned and tested: `@tanstack/ai` 0.64.0, `@tanstack/ai-openai` 0.26.0,
 `@traceai/fi-core` 1.0.0, `@opentelemetry/api` 1.9.1, Node 20, 22 and 26.
+`package.json` `overrides` also pins `@opentelemetry/sdk-trace-node` 2.11.0,
+which pins `@opentelemetry/sdk-trace-base` and `@opentelemetry/sdk-trace`
+2.11.0: the root usage move in `src/tracing.mjs` edits the SDK span's
+attributes object, which is not public API, so re-run the tests before
+changing that pin.
 `@tanstack/ai` is MIT and is a dependency of this example only. It is not
 vendored and not a dependency of any traceAI package.
 

@@ -6,8 +6,42 @@
 // on the root (the sum over calls, or the finish usage when no call reported
 // any) just before the root's onSpanEnd.
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { GEN_AI_SPAN_KIND, futureAgiSpanKinds } from "../src/tracing.mjs";
+
+// The root-usage move edits the SDK span's attributes object, which is not
+// public API. These are the versions it was tested against.
+const TESTED_SDK_TRACE = "2.11.0";
+
+/** Resolve `name` the way the package that owns `req` resolves it. */
+function packageInfo(req, name) {
+  let dir = dirname(req.resolve(name));
+  for (;;) {
+    const file = join(dir, "package.json");
+    if (existsSync(file)) {
+      const pkg = JSON.parse(readFileSync(file, "utf8"));
+      if (pkg.name === name) return { version: pkg.version, req: createRequire(file) };
+    }
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error(`package.json not found for ${name}`);
+    dir = parent;
+  }
+}
+
+/** The SDK chain behind @traceai/fi-core's register() provider. */
+function fiCoreSdk() {
+  const fiCore = packageInfo(createRequire(import.meta.url), "@traceai/fi-core");
+  const node = packageInfo(fiCore.req, "@opentelemetry/sdk-trace-node");
+  const base = packageInfo(node.req, "@opentelemetry/sdk-trace-base");
+  const impl = packageInfo(base.req, "@opentelemetry/sdk-trace");
+  return {
+    versions: [node.version, base.version, impl.version],
+    sdk: fiCore.req("@opentelemetry/sdk-trace-node"),
+  };
+}
 
 class FakeSpan {
   constructor() {
@@ -34,14 +68,18 @@ function usage(input, output, extra = {}) {
   };
 }
 
-function run(hooks, calls, { finishUsage = {}, rootExtra = {}, ctx = {} } = {}) {
+function run(
+  hooks,
+  calls,
+  { finishUsage = {}, rootExtra = {}, ctx = {}, newSpan = () => new FakeSpan() } = {},
+) {
   const runCtx = { threadId: "thread-1700000000000-abc1234", ...ctx };
-  const root = new FakeSpan().setAttributes(
+  const root = newSpan("chat").setAttributes(
     hooks.attributeEnricher({ kind: "chat", ctx: runCtx }),
   );
   const modelCalls = calls.map((callUsage, iteration) => {
     const info = { kind: "iteration", ctx: runCtx, iteration };
-    const span = new FakeSpan().setAttributes(hooks.attributeEnricher(info));
+    const span = newSpan(`chat #${iteration}`).setAttributes(hooks.attributeEnricher(info));
     span.setAttributes(callUsage ?? {});
     hooks.onSpanEnd(info, span);
     return span;
@@ -129,4 +167,59 @@ test("two model calls: every promoted key leaves the root and each counts once",
   // gen_ai.usage.cost.
   assert.equal(root.attributes["tanstack.ai.root_usage.cost.total"], 0.75);
   assert.equal(traceSum(spans, "gen_ai.cost.total"), 0);
+});
+
+test(`fi-core's provider creates spans with @opentelemetry/sdk-trace ${TESTED_SDK_TRACE}`, () => {
+  // sdk-trace-node, sdk-trace-base and sdk-trace (where SpanImpl lives).
+  // package.json "overrides" pins sdk-trace-node, which pins the other two
+  // exactly. A different version needs the tests below re-run and this
+  // constant moved.
+  assert.deepEqual(fiCoreSdk().versions, [
+    TESTED_SDK_TRACE,
+    TESTED_SDK_TRACE,
+    TESTED_SDK_TRACE,
+  ]);
+});
+
+function sdkRun(spanLimits) {
+  const { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } = fiCoreSdk().sdk;
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(exporter)],
+    ...(spanLimits ? { spanLimits } : {}),
+  });
+  const tracer = provider.getTracer("span-kinds-test");
+  const calls = [
+    usage(11, 7),
+    usage(23, 5, { "gen_ai.usage.cache_read.input_tokens": 3 }),
+  ];
+  const { root, modelCalls } = run(futureAgiSpanKinds(), calls, {
+    newSpan: (name) => tracer.startSpan(name),
+  });
+  for (const span of [...modelCalls, root]) span.end();
+  const exported = exporter.getFinishedSpans();
+  return {
+    root: exported.find((span) => span.name === "chat"),
+    modelCalls: exported.filter((span) => span.name !== "chat"),
+  };
+}
+
+test("the move reaches the exported SDK span", () => {
+  const { root, modelCalls } = sdkRun();
+  assert.deepEqual(promotedKeys(root.attributes), []);
+  assert.equal(root.attributes["tanstack.ai.root_usage.input_tokens"], 34);
+  assert.equal(root.attributes["tanstack.ai.root_usage.cache_read.input_tokens"], 3);
+  assert.equal(traceSum([root, ...modelCalls], "gen_ai.usage.input_tokens"), 34);
+  assert.equal(traceSum([root, ...modelCalls], "gen_ai.usage.total_tokens"), 46);
+});
+
+test("a tight attribute count limit never leaves usage counted twice", () => {
+  // delete does not free a slot in SpanImpl's attribute count, so with the
+  // root at its limit the tanstack.ai.root_usage.* copies can be dropped.
+  // The promoted keys still leave the root, and each model call keeps its
+  // own usage, so the trace total stays right.
+  const { root, modelCalls } = sdkRun({ attributeCountLimit: 5 });
+  assert.deepEqual(promotedKeys(root.attributes), []);
+  assert.equal(traceSum([root, ...modelCalls], "gen_ai.usage.input_tokens"), 34);
+  assert.equal(traceSum([root, ...modelCalls], "gen_ai.usage.output_tokens"), 12);
 });
