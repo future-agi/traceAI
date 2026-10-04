@@ -90,6 +90,8 @@ wrapQuery(query, { tracerProvider, traceConfig: { hideInputs: false, hideOutputs
 // or: FI_HIDE_INPUTS=false FI_HIDE_OUTPUTS=false
 ```
 
+Precedence: `traceConfig` option, then the env var, then hidden. The env vars fail closed: only the value `false` (trimmed, any case) turns capture on. Any other value, including `1`, `yes`, `true`, ` true` or an empty string, keeps content hidden. (fi-core itself treats every value other than `true` as "show", so `FI_HIDE_INPUTS=1` would capture there; this package does not follow that rule.)
+
 This is stricter than fi-core's own default and than the Python package, which records the prompt and tool input/output unconditionally.
 
 ## Flushing and batching

@@ -207,6 +207,28 @@ describe("wrapQuery", () => {
       expect(text).toContain(TOOL_OUTPUT_MARKER);
     });
 
+    it.each([" False ", "FALSE"])("treats FI_HIDE_*=%j (trimmed, any case) as the opt-in", async (value) => {
+      process.env.FI_HIDE_INPUTS = value;
+      process.env.FI_HIDE_OUTPUTS = value;
+      const { spans } = await run(simpleToolJourney());
+      const text = allAttributeText(spans);
+      expect(text).toContain("SECRET_PROMPT_MARKER");
+      expect(text).toContain(TOOL_OUTPUT_MARKER);
+    });
+
+    it.each(["1", "yes", " true", "TRUE", "", "0", "no", "off"])(
+      "keeps content hidden for FI_HIDE_*=%j: only an explicit 'false' opts in",
+      async (value) => {
+        process.env.FI_HIDE_INPUTS = value;
+        process.env.FI_HIDE_OUTPUTS = value;
+        const { spans } = await run(simpleToolJourney());
+        const text = allAttributeText(spans);
+        for (const marker of ["SECRET_PROMPT_MARKER", TOOL_INPUT_MARKER, TOOL_OUTPUT_MARKER, ASSISTANT_TEXT_MARKER]) {
+          expect(text).not.toContain(marker);
+        }
+      },
+    );
+
     it("AC-08: yields the same message objects, in order, and passes params through unchanged", async () => {
       const messages = simpleToolJourney();
       const expected = JSON.parse(JSON.stringify(messages));

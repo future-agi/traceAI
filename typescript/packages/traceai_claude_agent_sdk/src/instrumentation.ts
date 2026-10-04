@@ -11,7 +11,11 @@ import { VERSION } from "./version";
 
 export const INSTRUMENTATION_NAME = "@traceai/claude-agent-sdk";
 
-/** fi-core env keys, read with fi-core's rule (`value.toLowerCase() === "true"`). */
+/**
+ * fi-core env keys. Read fail-closed, unlike fi-core (`value.toLowerCase() ===
+ * "true"`, so `1`, `yes` or ` true` would turn capture ON): only an explicit
+ * `false` (trimmed, any case) opts in to content capture.
+ */
 const FI_HIDE_INPUTS = "FI_HIDE_INPUTS";
 const FI_HIDE_OUTPUTS = "FI_HIDE_OUTPUTS";
 
@@ -27,9 +31,10 @@ export interface ClaudeAgentSDKInstrumentationConfig {
   traceConfig?: TraceConfigOptions;
 }
 
-function envFlag(key: string): boolean | undefined {
+/** `false` only for an explicit `false`; any other value (or none) keeps content hidden. */
+function envHide(key: string): boolean {
   const value = typeof process !== "undefined" ? process.env?.[key] : undefined;
-  return value === undefined ? undefined : value.toLowerCase() === "true";
+  return !(typeof value === "string" && value.trim().toLowerCase() === "false");
 }
 
 /**
@@ -38,8 +43,8 @@ function envFlag(key: string): boolean | undefined {
  */
 export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentPolicy {
   return {
-    hideInputs: traceConfig?.hideInputs ?? envFlag(FI_HIDE_INPUTS) ?? true,
-    hideOutputs: traceConfig?.hideOutputs ?? envFlag(FI_HIDE_OUTPUTS) ?? true,
+    hideInputs: traceConfig?.hideInputs ?? envHide(FI_HIDE_INPUTS),
+    hideOutputs: traceConfig?.hideOutputs ?? envHide(FI_HIDE_OUTPUTS),
   };
 }
 
