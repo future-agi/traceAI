@@ -101,10 +101,20 @@ def test_one_tool_run_reaches_collector_path_with_normalized_gen_ai_spans(fi_env
         "gen_ai.usage.reasoning.output_tokens": 5,
     }
     usage_spans = [chat]
-    if "record_usage model_call" in by_name:  # ag2 >= 1.0.3
-        usage_spans.append(by_name["record_usage model_call"])
     for source in usage_spans:
         assert {k: source.get(k) for k in expected_usage} == expected_usage
+    if "record_usage model_call" in by_name:  # ag2 >= 1.0.3
+        # The duplicate of the chat span's tokens is kept under ag2.usage.*
+        # so the trace total (sum of promoted gen_ai.usage.* columns) counts once.
+        record = by_name["record_usage model_call"]
+        assert "gen_ai.usage.input_tokens" not in record
+        assert "gen_ai.usage.output_tokens" not in record
+        assert record["ag2.usage.input_tokens"] == 11
+        assert record["ag2.usage.output_tokens"] == 7
+    promoted_input = sum(
+        a.get("gen_ai.usage.input_tokens", 0) for a in by_name.values()
+    )
+    assert promoted_input == 11, "trace-level input tokens must count the model call once"
 
     # session: AG2 emits none; content: capture is off
     for name, attributes in by_name.items():

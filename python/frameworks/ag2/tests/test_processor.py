@@ -155,6 +155,49 @@ def test_aliases_apply_to_record_usage_spans(pipeline):
     assert "gen_ai.span.kind" not in got
 
 
+def test_model_call_usage_span_does_not_double_count_trace_tokens(pipeline):
+    """record_usage model_call repeats the chat span's tokens (telemetry.py:437-440 vs 501-504).
+
+    fi-collector promotes gen_ai.usage.* on any span and Observe sums
+    total_tokens over every span in a trace, so the duplicate moves to ag2.usage.*.
+    """
+    provider, exporter = pipeline
+    _emit(
+        provider,
+        {
+            "ag2.span.type": "usage",
+            "ag2.usage.kind": "model_call",
+            "gen_ai.usage.input_tokens": 11,
+            "gen_ai.usage.output_tokens": 7,
+            "ag2.usage.total_tokens": 18,
+        },
+        name="record_usage model_call",
+    )
+    (span,) = exporter.get_finished_spans()
+    got = attrs(span)
+    assert "gen_ai.usage.input_tokens" not in got
+    assert "gen_ai.usage.output_tokens" not in got
+    assert got["ag2.usage.input_tokens"] == 11
+    assert got["ag2.usage.output_tokens"] == 7
+    assert got["ag2.usage.total_tokens"] == 18
+
+
+def test_subtask_usage_span_keeps_promoted_tokens(pipeline):
+    """Only kinds that duplicate a chat span are demoted; others keep their tokens."""
+    provider, exporter = pipeline
+    _emit(
+        provider,
+        {
+            "ag2.span.type": "usage",
+            "ag2.usage.kind": "subtask",
+            "gen_ai.usage.input_tokens": 4,
+        },
+        name="record_usage subtask",
+    )
+    (span,) = exporter.get_finished_spans()
+    assert attrs(span)["gen_ai.usage.input_tokens"] == 4
+
+
 def test_processor_only_adds_keys_by_default(pipeline):
     """Nothing AG2 set is stripped, including propagation-related keys."""
     provider, exporter = pipeline

@@ -79,7 +79,9 @@ def normalize_attributes(
 ) -> Dict[str, Any]:
     """Return a new attribute dict with the kind, aliases and content gate applied.
 
-    Never removes a key AG2 set except where ``config`` asks to hide content.
+    Never removes a key AG2 set, except where ``config`` asks to hide content
+    and where a duplicate usage span's promoted token keys move under
+    ``ag2.usage.*`` (see ``_demote_duplicate_usage``).
     """
     mapped: Dict[str, Any] = dict(attributes)
 
@@ -92,9 +94,41 @@ def normalize_attributes(
         if source in mapped and target not in mapped:
             mapped[target] = mapped[source]
 
+    _demote_duplicate_usage(mapped)
+
     if config is not None:
         mapped = _apply_trace_config(mapped, config)
     return mapped
+
+
+# fi-collector promotes these keys into the token columns on any span
+# (fi-collector/pkg/adapter/adapter.go inputTokenKeys/outputTokenKeys/
+# totalTokenKeys), and Observe sums total_tokens over every span of a trace.
+_PROMOTED_TOKEN_KEYS = (
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "gen_ai.usage.total_tokens",
+)
+# ``record_usage model_call`` repeats the chat span's tokens (telemetry.py
+# 437-440 vs 501-504 at 1.1.2). ``aggregation`` is a sum by definition.
+# ``subtask`` and ``compaction`` are left alone: no chat span repeats them.
+_DUPLICATE_USAGE_KINDS = frozenset({"model_call", "aggregation"})
+
+
+def _demote_duplicate_usage(mapped: Dict[str, Any]) -> None:
+    """Move a duplicate usage span's promoted token keys under ``ag2.usage.*``.
+
+    The values are kept, so nothing AG2 reported is lost, but the trace total
+    counts each model call once.
+    """
+    if mapped.get("ag2.span.type") != "usage":
+        return
+    if mapped.get("ag2.usage.kind") not in _DUPLICATE_USAGE_KINDS:
+        return
+    for key in _PROMOTED_TOKEN_KEYS:
+        if key in mapped:
+            value = mapped.pop(key)
+            mapped.setdefault("ag2.usage." + key.rsplit(".", 1)[1], value)
 
 
 def _apply_trace_config(attributes: Dict[str, Any], config: TraceConfig) -> Dict[str, Any]:

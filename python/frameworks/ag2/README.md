@@ -128,8 +128,13 @@ Notes:
 - From ag2 1.0.3, AG2 also emits a `record_usage {kind}` span per usage event,
   which carries the same token counts as the `chat` span it accounts for.
   It has no operation name and gets no span kind; the aliases are applied.
-- Network trace propagation (`ag2.otel.traceparent`) is upstream. The
-  processor never removes attributes it did not hide by request.
+  Future AGI totals tokens by summing every span in a trace, so on
+  `model_call` (and `aggregation`) usage spans the processor moves
+  `gen_ai.usage.input_tokens` / `output_tokens` / `total_tokens` to
+  `ag2.usage.*`. The values stay on the span; each model call counts once.
+- Network trace propagation (`ag2.otel.traceparent`) is upstream. Apart from
+  that usage move, the processor never removes attributes it did not hide by
+  request.
 
 ## Troubleshooting
 
