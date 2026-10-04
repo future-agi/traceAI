@@ -174,16 +174,26 @@ def test_spans_carry_model_usage_and_span_kinds(default_run):
     assert second["gen_ai.usage.cache_read.input_tokens"] == 3
     assert second["gen_ai.usage.reasoning.output_tokens"] == 2
 
-    # Root: the whole chat() call. No operation name; usage summed over calls.
+    # Root: the whole chat() call. No operation name. TanStack sums usage over
+    # calls onto the root; Future AGI sums promoted gen_ai.usage.* over every
+    # span in a trace, so the recipe keeps the root's sum under
+    # tanstack.ai.root_usage.* and each model call counts once.
     assert root["gen_ai.request.model"] == MODEL
     assert "gen_ai.operation.name" not in root
     assert root["tanstack.ai.iterations"] == 2
-    assert root["gen_ai.usage.input_tokens"] == (
+    assert "gen_ai.usage.input_tokens" not in root
+    assert "gen_ai.usage.output_tokens" not in root
+    assert "gen_ai.usage.total_tokens" not in root
+    assert root["tanstack.ai.root_usage.input_tokens"] == (
         TOOL_CALL_USAGE["prompt_tokens"] + ANSWER_USAGE["prompt_tokens"]
     )
-    assert root["gen_ai.usage.output_tokens"] == (
+    assert root["tanstack.ai.root_usage.output_tokens"] == (
         TOOL_CALL_USAGE["completion_tokens"] + ANSWER_USAGE["completion_tokens"]
     )
+    promoted_input = sum(
+        _attributes(span).get("gen_ai.usage.input_tokens", 0) for span in spans.values()
+    )
+    assert promoted_input == TOOL_CALL_USAGE["prompt_tokens"] + ANSWER_USAGE["prompt_tokens"]
     assert root["gen_ai.response.finish_reasons"] == ["stop"]
     assert root["gen_ai.span.kind"] == "AGENT"
 

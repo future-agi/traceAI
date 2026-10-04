@@ -67,9 +67,36 @@ export async function shutdownTraces(tracerProvider) {
  * The root's kind is set in onSpanEnd because attributeEnricher runs for the
  * root when chat() starts, before the iteration count is known. A
  * single-iteration root and media "generation" spans get no kind.
+ *
+ * Usage: TanStack sums every model call's usage onto the root
+ * (otel.ts applyRootUsage, set just before onSpanEnd). Future AGI promotes
+ * gen_ai.usage.* into its token columns on any span and sums them over the
+ * whole trace, so leaving the root's copy would count each call twice. When
+ * the model-call spans carry usage, the root's sum moves to
+ * tanstack.ai.root_usage.*. If no model-call span reported usage, the root
+ * keeps it, because then it is the only copy.
  */
+const PROMOTED_USAGE_KEYS = [
+  "gen_ai.usage.input_tokens",
+  "gen_ai.usage.output_tokens",
+  "gen_ai.usage.total_tokens",
+];
+
+function moveRootUsage(span) {
+  // The SDK span's attributes object is what the exporter reads at end().
+  const attributes = span?.attributes;
+  if (!attributes) return;
+  for (const key of PROMOTED_USAGE_KEYS) {
+    if (key in attributes) {
+      span.setAttribute(`tanstack.ai.root_usage.${key.split(".").pop()}`, attributes[key]);
+      delete attributes[key];
+    }
+  }
+}
+
 export function futureAgiSpanKinds() {
   const iterationsByRun = new WeakMap();
+  const usageOnIterations = new WeakSet();
   return {
     attributeEnricher(info) {
       if (info.kind === "iteration") {
@@ -82,8 +109,16 @@ export function futureAgiSpanKinds() {
       return {};
     },
     onSpanEnd(info, span) {
-      if (info.kind === "chat" && (iterationsByRun.get(info.ctx) ?? 0) > 1) {
-        span.setAttribute(GEN_AI_SPAN_KIND, "AGENT");
+      if (info.kind === "iteration" && span?.attributes?.["gen_ai.usage.input_tokens"] !== undefined) {
+        usageOnIterations.add(info.ctx);
+      }
+      if (info.kind === "chat") {
+        if ((iterationsByRun.get(info.ctx) ?? 0) > 1) {
+          span.setAttribute(GEN_AI_SPAN_KIND, "AGENT");
+        }
+        if (usageOnIterations.has(info.ctx)) {
+          moveRootUsage(span);
+        }
       }
     },
   };

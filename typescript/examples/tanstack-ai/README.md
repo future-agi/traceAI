@@ -57,7 +57,7 @@ const middleware = otelMiddleware({
 
 | Span | Name | Kind set by the recipe | Key attributes |
 |---|---|---|---|
-| chat() call | `chat <model>` | `AGENT` when it ran more than one model call, else none | `gen_ai.request.model`, `tanstack.ai.iterations`, `gen_ai.usage.*` summed |
+| chat() call | `chat <model>` | `AGENT` when it ran more than one model call, else none | `gen_ai.request.model`, `tanstack.ai.iterations`, summed usage as `tanstack.ai.root_usage.*` (Future AGI sums `gen_ai.usage.*` over the trace, so the root's copy would double it; kept on the root only when no model call reported usage) |
 | model call | `chat <model> #<n>` | `LLM` | `gen_ai.operation.name=chat`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `tanstack.ai.iteration` |
 | tool call | `execute_tool <name>` | `TOOL` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` |
 
