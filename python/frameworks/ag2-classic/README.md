@@ -81,7 +81,9 @@ never called unless you ask.
 2. Puts `AG2ClassicSpanProcessor` first on the provider you pass, ahead of the
    Future AGI exporter.
 3. Calls upstream `instrument_llm_wrapper(capture_messages=capture_content)`,
-   then `instrument_agent` and `instrument_pattern` for what you pass.
+   then `instrument_agent` and `instrument_pattern` for what you pass. If one
+   of those raises (for example a non-agent in `agents=`), `setup()` restores
+   `OpenAIWrapper.create` and re-raises.
 
 It never creates a provider, never sets the global provider, and never adds an
 exporter. One provider, the one `register()` returned. HTTP to the collector is

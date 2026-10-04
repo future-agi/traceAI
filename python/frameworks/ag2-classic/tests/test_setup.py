@@ -259,6 +259,30 @@ def test_setup_rejects_a_non_sdk_provider():
         setup(tracer_provider=trace_api.NoOpTracerProvider())
 
 
+def test_setup_rolls_back_the_llm_patch_when_an_agent_fails(fake):
+    from autogen import ConversableAgent
+    from autogen.oai import client as oai_client_module
+    from autogen.oai.client import OpenAIWrapper
+
+    provider = TracerProvider()
+    original = OpenAIWrapper.create
+    good = ConversableAgent("good", llm_config=fake.llm_config(), human_input_mode="NEVER")
+    try:
+        # Upstream instrument_agent raises AttributeError on a non-agent.
+        with pytest.raises(AttributeError):
+            setup(tracer_provider=provider, agents=[good, object()])
+        assert OpenAIWrapper.create is original
+        assert oai_client_module.OpenAIWrapper.create is original
+        # A later setup() can still own the global LLM patch.
+        retry = setup(tracer_provider=provider)
+        assert retry.owns_llm_wrapper is True
+        retry.uninstrument()
+        assert OpenAIWrapper.create is original
+    finally:
+        OpenAIWrapper.create = original
+        oai_client_module.OpenAIWrapper.create = original
+
+
 # AC-01 / AC-03 / AC-06: two-agent chat with a tool, content off --------------------
 
 

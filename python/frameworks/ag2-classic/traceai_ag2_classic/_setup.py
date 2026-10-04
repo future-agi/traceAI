@@ -213,6 +213,10 @@ def setup(
     Raises:
         AG2ClassicCompatibilityError: ``autogen`` is not AG2 Classic 0.14.x.
         TypeError: The provider is not an OpenTelemetry SDK provider.
+
+    If instrumenting an agent or pattern raises, ``setup()`` restores
+    ``OpenAIWrapper.create`` before re-raising, so no global patch is left
+    without a handle to undo it.
     """
     version = check_autogen_classic()
     provider = tracer_provider if tracer_provider is not None else trace_api.get_tracer_provider()
@@ -225,8 +229,16 @@ def setup(
     )
     if instrument_llm:
         handle._instrument_llm_wrapper()
-    for agent in agents:
-        handle.instrument_agent(agent)
-    for pattern in patterns:
-        handle.instrument_pattern(pattern)
+    try:
+        for agent in agents:
+            handle.instrument_agent(agent)
+        for pattern in patterns:
+            handle.instrument_pattern(pattern)
+    except BaseException:
+        # The caller never receives the handle, so undo the global
+        # OpenAIWrapper.create patch here. The processor stays (see
+        # AG2ClassicTracing.uninstrument): agents instrumented before the
+        # failure keep emitting spans and still need filtering.
+        handle.uninstrument()
+        raise
     return handle
