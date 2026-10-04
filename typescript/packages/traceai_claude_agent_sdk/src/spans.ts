@@ -113,8 +113,12 @@ interface ToolState {
 interface SubagentState {
   span: Span;
   startMs: number;
+  /** In the background (run_in_background, task_started, task_updated): ends at task_notification. */
   backgrounded: boolean;
+  /** The app called Query.backgroundTasks() and it has not failed (yet). */
+  backgroundRequested: boolean;
   toolEnded: boolean;
+  toolIsError: boolean;
   status?: string;
   ended: boolean;
 }
@@ -231,6 +235,8 @@ export class QueryTracer {
   private readonly scopes = new Map<Scope, ScopeState>();
   private readonly tools = new Map<string, ToolState>();
   private readonly subagents = new Map<string, SubagentState>();
+  /** task_id -> tool_use_id from task_started; task_updated carries only task_id. */
+  private readonly taskToolUseIds = new Map<string, string>();
 
   constructor(args: {
     tracer: Tracer;
@@ -549,6 +555,9 @@ export class QueryTracer {
         break;
       }
       case "task_started": {
+        if (typeof message.task_id === "string" && typeof message.tool_use_id === "string") {
+          this.taskToolUseIds.set(message.task_id, message.tool_use_id);
+        }
         const sub = message.tool_use_id ? this.subagents.get(message.tool_use_id) : undefined;
         if (sub && !sub.ended) {
           if (typeof message.task_id === "string") {
@@ -560,6 +569,17 @@ export class QueryTracer {
         }
         break;
       }
+      case "task_updated": {
+        // A foreground task moved to the background (sdk.d.ts:6059). Its tool_result
+        // becomes a "running in the background" placeholder; the subagent keeps
+        // running until task_notification.
+        const id = typeof message.task_id === "string" ? this.taskToolUseIds.get(message.task_id) : undefined;
+        const sub = id ? this.subagents.get(id) : undefined;
+        if (sub && !sub.ended && message.patch?.is_backgrounded === true) {
+          sub.backgrounded = true;
+        }
+        break;
+      }
       case "task_notification": {
         const id = message.tool_use_id;
         const sub = id ? this.subagents.get(id) : undefined;
@@ -567,8 +587,8 @@ export class QueryTracer {
           sub.status = message.status;
           sub.span.setAttribute(T.SUBAGENT_STATUS, message.status);
           // A backgrounded subagent outlives its tool_result; it ends here.
-          if (sub.backgrounded || sub.toolEnded) {
-            this.endSubagent(id!, message.status !== "completed");
+          if (sub.backgrounded || sub.backgroundRequested || sub.toolEnded) {
+            this.endSubagent(id!, sub.toolIsError);
           }
         }
         break;
@@ -716,7 +736,8 @@ export class QueryTracer {
     const sub = this.subagents.get(id);
     if (sub && !sub.ended) {
       sub.toolEnded = true;
-      if (!sub.backgrounded) {
+      sub.toolIsError = isError;
+      if (!sub.backgrounded && !sub.backgroundRequested) {
         this.endSubagent(id, isError);
       }
     }
@@ -783,9 +804,50 @@ export class QueryTracer {
       span,
       startMs,
       backgrounded: fields.run_in_background === true,
+      backgroundRequested: false,
       toolEnded: false,
+      toolIsError: false,
       ended: false,
     });
+  }
+
+  /**
+   * The app called `Query.backgroundTasks(toolUseId?)` (sdk.d.ts:3234). Mark the
+   * matching foreground subagents as background now: their "running in the
+   * background" tool_result may arrive before any task_updated. Returns the ids
+   * marked, for `cancelBackgroundRequest` if the call fails.
+   */
+  markBackgroundRequested(toolUseId?: string): string[] {
+    const marked: string[] = [];
+    if (this.finished) return marked;
+    try {
+      for (const [id, sub] of this.subagents) {
+        if (sub.ended || sub.toolEnded || sub.backgrounded || sub.backgroundRequested) continue;
+        if (toolUseId !== undefined && id !== toolUseId) continue;
+        sub.backgroundRequested = true;
+        marked.push(id);
+      }
+    } catch (error) {
+      diag.debug(`@traceai/claude-agent-sdk: failed to record backgroundTasks(): ${error}`);
+    }
+    return marked;
+  }
+
+  /** `backgroundTasks()` rejected or matched nothing: those subagents stay foreground. */
+  cancelBackgroundRequest(ids: string[]): void {
+    if (this.finished) return;
+    try {
+      for (const id of ids) {
+        const sub = this.subagents.get(id);
+        if (!sub || sub.ended || !sub.backgroundRequested) continue;
+        sub.backgroundRequested = false;
+        if (sub.toolEnded && !sub.backgrounded) {
+          this.endSubagent(id, sub.toolIsError);
+        }
+      }
+    } catch (error) {
+      diag.debug(`@traceai/claude-agent-sdk: failed to record backgroundTasks() failure: ${error}`);
+    }
   }
 
   private endSubagent(toolUseId: string, isError: boolean): void {
@@ -797,11 +859,14 @@ export class QueryTracer {
       this.endTurn(scopeState.currentTurn);
     }
     sub.ended = true;
+    // task_notification status failed / stopped is an error even when the
+    // tool_result itself was not.
+    const failed = isError || (sub.status !== undefined && sub.status !== "completed");
     const endMs = clockMs();
     sub.span.setAttribute(A.TOOL_DURATION_MS, endMs - sub.startMs);
-    sub.span.setAttribute(A.TOOL_IS_ERROR, isError);
+    sub.span.setAttribute(A.TOOL_IS_ERROR, failed);
     sub.span.setStatus(
-      isError
+      failed
         ? { code: SpanStatusCode.ERROR, message: sub.status ? `subagent ${sub.status}` : "subagent error" }
         : { code: SpanStatusCode.OK },
     );

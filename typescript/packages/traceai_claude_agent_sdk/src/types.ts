@@ -79,12 +79,14 @@ export interface SystemMessageLike {
   model?: string;
   permissionMode?: string;
   mcp_servers?: { name: string; status?: string }[];
-  /** task_started / task_notification / task_progress */
+  /** task_started / task_notification / task_progress / task_updated */
   task_id?: string;
   tool_use_id?: string;
   status?: string;
   subagent_type?: string;
   is_backgrounded?: boolean;
+  /** task_updated: the TaskState fields that changed (sdk.d.ts SDKTaskUpdatedMessage). */
+  patch?: { is_backgrounded?: boolean; status?: string };
 }
 
 export type SDKMessageLike =

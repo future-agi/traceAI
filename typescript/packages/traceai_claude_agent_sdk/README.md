@@ -67,6 +67,10 @@ await shutdown(); // flush before a short script exits
 
 One API response that the SDK splits over several assistant messages (same `message.id`) is one turn.
 
+### Background subagents
+
+A foreground subagent span ends with its `tool.Agent` / `tool.Task` result. A subagent that runs in the background stays open after that tool result (which is only the "running in the background" placeholder) until its `system/task_notification`, so its later turns and tools still nest under a live span. A subagent counts as background when the tool input has `run_in_background: true`, `task_started.is_backgrounded` is true, a later `task_updated` carries `patch.is_backgrounded: true`, or the app calls `Query.backgroundTasks()` (all foreground subagents, or the one whose `tool_use_id` it was given; undone if the call rejects or returns `false`). The subagent span is ERROR when the notification status is `failed` or `stopped` (`claude_agent.subagent.status` has the value). A background subagent with no notification by the time the query ends is closed as ERROR "Subagent span not completed". The subagent span can therefore end after its parent tool span.
+
 | Field | Attributes | Source |
 |---|---|---|
 | Model | `gen_ai.request.model`, `claude_agent.model` | `options.model`, the init message, each assistant message |

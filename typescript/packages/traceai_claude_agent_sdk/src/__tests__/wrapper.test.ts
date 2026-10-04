@@ -25,10 +25,12 @@ import {
   TOOL_INPUT_MARKER,
   TOOL_OUTPUT_MARKER,
   TOTAL_COST_USD,
+  backgroundedSubagentJourney,
   mcpErrorJourney,
   simpleToolJourney,
   streamingInputJourney,
   subagentJourney,
+  taskNotification,
 } from "./fixtures/messages";
 import { StackContextManager, allAttributeText, byName, drain, memoryProvider, one, parentId } from "./helpers";
 
@@ -341,6 +343,86 @@ describe("wrapQuery", () => {
       }
       expect(subagent.status.code).toBe(SpanStatusCode.OK);
     });
+
+    const endMsOf = (s: ReadableSpan) => s.endTime[0] * 1e3 + s.endTime[1] / 1e6;
+
+    /** Every subagent turn and tool sits under the subagent span and ends before it. */
+    function expectSubagentOutlivesItsWork(spans: ReadableSpan[]) {
+      const agentTool = one(spans, "tool.Agent");
+      const subagent = one(spans, "claude_agent.subagent.code-reviewer");
+      const grep = one(spans, "tool.Grep");
+      const subTurns = byName(spans, "claude_agent.assistant_turn").filter(
+        (t) => t.attributes["claude_agent.parent_tool_use_id"] === AGENT_TOOL_ID,
+      );
+      expect(subTurns).toHaveLength(2);
+      expect(endMsOf(subagent)).toBeGreaterThan(endMsOf(agentTool));
+      for (const turn of subTurns) {
+        expect(parentId(turn)).toBe(subagent.spanContext().spanId);
+        expect(endMsOf(turn)).toBeLessThanOrEqual(endMsOf(subagent));
+      }
+      expect(endMsOf(grep)).toBeLessThanOrEqual(endMsOf(subagent));
+      return subagent;
+    }
+
+    it("R6: keeps a subagent moved to the background (task_updated patch.is_backgrounded) open until task_notification", async () => {
+      const { provider, exporter } = memoryProvider();
+      const fake = makeFakeQuery(backgroundedSubagentJourney(), { delayMs: 2 });
+      await drain(wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT }));
+      const subagent = expectSubagentOutlivesItsWork(exporter.getFinishedSpans());
+      expect(subagent.status.code).toBe(SpanStatusCode.OK);
+      expect(subagent.attributes["claude_agent.subagent.status"]).toBe("completed");
+    });
+
+    it("R6: keeps subagents open after the app calls Query.backgroundTasks()", async () => {
+      const { provider, exporter } = memoryProvider();
+      const fake = makeFakeQuery(backgroundedSubagentJourney({ taskUpdated: false }), { delayMs: 2 });
+      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      for (let i = 0; i < 4; i += 1) await q.next(); // init, Agent tool_use, task_started, subagent Grep turn
+      await expect(q.backgroundTasks()).resolves.toBe(true);
+      expect(fake.control.backgroundTasksCalls).toEqual([undefined]);
+      await drain(q);
+      const subagent = expectSubagentOutlivesItsWork(exporter.getFinishedSpans());
+      expect(subagent.status.code).toBe(SpanStatusCode.OK);
+    });
+
+    it("R6: treats a subagent as foreground again when backgroundTasks() rejects", async () => {
+      const { provider, exporter } = memoryProvider();
+      const disabled = new Error("background tasks are disabled");
+      const fake = makeFakeQuery(subagentJourney(), { backgroundTasksResult: disabled });
+      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      for (let i = 0; i < 3; i += 1) await q.next();
+      await expect(q.backgroundTasks(AGENT_TOOL_ID)).rejects.toBe(disabled);
+      await drain(q);
+      const spans = exporter.getFinishedSpans();
+      expect(endMsOf(one(spans, "claude_agent.subagent.code-reviewer"))).toBeLessThanOrEqual(
+        endMsOf(one(spans, "tool.Agent")),
+      );
+      expect(one(spans, "claude_agent.subagent.code-reviewer").status.code).toBe(SpanStatusCode.OK);
+    });
+
+    it.each(["failed", "stopped"] as const)(
+      "marks a foreground subagent ERROR when task_notification reports %s",
+      async (status) => {
+        const journey = subagentJourney().map((m) =>
+          m.type === "system" && m.subtype === "task_notification" ? taskNotification(AGENT_TOOL_ID, status) : m,
+        );
+        const { spans } = await run(journey);
+        const subagent = one(spans, "claude_agent.subagent.code-reviewer");
+        expect(subagent.attributes["claude_agent.subagent.status"]).toBe(status);
+        expect(subagent.status.code).toBe(SpanStatusCode.ERROR);
+        expect(subagent.status.message).toBe(`subagent ${status}`);
+      },
+    );
+
+    it.each(["failed", "stopped"] as const)(
+      "marks a backgrounded subagent ERROR when task_notification reports %s",
+      async (status) => {
+        const { spans } = await run(backgroundedSubagentJourney({ status }));
+        const subagent = one(spans, "claude_agent.subagent.code-reviewer");
+        expect(subagent.attributes["claude_agent.subagent.status"]).toBe(status);
+        expect(subagent.status.code).toBe(SpanStatusCode.ERROR);
+      },
+    );
   });
 
   describe("J3: MCP tool error and error result", () => {

@@ -13,6 +13,7 @@ import type {
   SDKSystemMessage,
   SDKTaskNotificationMessage,
   SDKTaskStartedMessage,
+  SDKTaskUpdatedMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
@@ -217,6 +218,11 @@ export function taskNotification(
 // Journeys
 // ----------------------------------------------------------------------------
 
+/** `system/task_updated` (sdk.d.ts SDKTaskUpdatedMessage): carries task_id only, no tool_use_id. */
+export function taskUpdated(taskId: string, patch: SDKTaskUpdatedMessage["patch"]): SDKTaskUpdatedMessage {
+  return { type: "system", subtype: "task_updated", task_id: taskId, patch, uuid: uuid(), session_id: SESSION_ID };
+}
+
 export const TOOL_INPUT_MARKER = "SECRET_TOOL_INPUT_MARKER.md";
 export const TOOL_OUTPUT_MARKER = "SECRET_TOOL_OUTPUT_MARKER";
 export const ASSISTANT_TEXT_MARKER = "SECRET_ASSISTANT_TEXT_MARKER";
@@ -256,6 +262,41 @@ export function subagentJourney(): SDKMessage[] {
     toolResult(AGENT_TOOL_ID, "Found one TODO."),
     assistant("msg_13", [text("The reviewer found one TODO.")]),
     resultSuccess("The reviewer found one TODO.", { num_turns: 3 }),
+  ];
+}
+
+export const BACKGROUND_PLACEHOLDER = "Agent is running in the background. You will be notified when it completes.";
+
+/**
+ * J2b: a foreground subagent moved to the background mid-run, either by
+ * `system/task_updated` patch.is_backgrounded (sdk.d.ts:6059) or by the app
+ * calling `Query.backgroundTasks()` (sdk.d.ts:3234). The Agent tool_result is
+ * the "running in the background" placeholder; the subagent keeps working and
+ * settles with `task_notification`.
+ */
+export function backgroundedSubagentJourney(
+  options: { taskUpdated?: boolean; status?: SDKTaskNotificationMessage["status"] } = {},
+): SDKMessage[] {
+  const { taskUpdated: withTaskUpdated = true, status = "completed" } = options;
+  return [
+    init(),
+    assistant("msg_10", [
+      toolUse(AGENT_TOOL_ID, "Agent", {
+        description: "Review the diff",
+        prompt: "Look for TODOs. SECRET_SUBAGENT_PROMPT_MARKER",
+        subagent_type: "code-reviewer",
+        run_in_background: false,
+      }),
+    ]),
+    taskStarted(AGENT_TOOL_ID, { is_backgrounded: false }),
+    assistant("msg_11", [toolUse(SUBAGENT_GREP_ID, "Grep", { pattern: "TODO" })], AGENT_TOOL_ID),
+    ...(withTaskUpdated ? [taskUpdated("task-1", { is_backgrounded: true })] : []),
+    toolResult(AGENT_TOOL_ID, BACKGROUND_PLACEHOLDER),
+    assistant("msg_13", [text("The reviewer is running in the background.")]),
+    toolResult(SUBAGENT_GREP_ID, "src/a.ts:3: TODO", AGENT_TOOL_ID),
+    assistant("msg_12", [text("Found one TODO.")], AGENT_TOOL_ID),
+    taskNotification(AGENT_TOOL_ID, status),
+    resultSuccess("The reviewer is running in the background.", { num_turns: 2 }),
   ];
 }
 

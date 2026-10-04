@@ -141,6 +141,34 @@ function proxyQuery<G extends AsyncGenerator<unknown, unknown, unknown>>(
           return value.apply(target, args);
         };
       }
+      // backgroundTasks() answers foreground tasks with a "running in the
+      // background" tool_result: keep their subagent spans open until
+      // task_notification. Undo if the call rejects or matched nothing.
+      if (property === "backgroundTasks") {
+        return function backgroundTasks(this: unknown, ...args: unknown[]) {
+          let marked: string[] = [];
+          safe(() => {
+            marked = queryTracer.markBackgroundRequested(typeof args[0] === "string" ? args[0] : undefined);
+          });
+          let result: unknown;
+          try {
+            result = value.apply(target, args);
+          } catch (error) {
+            safe(() => queryTracer.cancelBackgroundRequest(marked));
+            throw error;
+          }
+          if (marked.length > 0 && result && typeof (result as Promise<unknown>).then === "function") {
+            // A side branch: the caller still gets the original promise and its rejection.
+            (result as Promise<unknown>).then(
+              (ok) => {
+                if (ok === false) safe(() => queryTracer.cancelBackgroundRequest(marked));
+              },
+              () => safe(() => queryTracer.cancelBackgroundRequest(marked)),
+            );
+          }
+          return result;
+        };
+      }
       return value.bind(target);
     },
   });
