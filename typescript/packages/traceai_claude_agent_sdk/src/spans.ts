@@ -464,6 +464,9 @@ export class QueryTracer {
     if (main && !main.ended) {
       this.endTurn(main);
     }
+    // Streaming input: the next main-loop turn (if any) answers a user message
+    // sent after this result, so it cannot start before now.
+    this.scope(null).nextTurnStartMs = clockMs();
 
     if (typeof message.session_id === "string" && message.session_id) {
       this.setSessionId(message.session_id);

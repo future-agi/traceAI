@@ -27,6 +27,7 @@ import {
   TOTAL_COST_USD,
   mcpErrorJourney,
   simpleToolJourney,
+  streamingInputJourney,
   subagentJourney,
 } from "./fixtures/messages";
 import { StackContextManager, allAttributeText, byName, drain, memoryProvider, one, parentId } from "./helpers";
@@ -628,6 +629,30 @@ describe("wrapQuery", () => {
     const traced = wrapQuery(makeFakeQuery(simpleToolJourney()).query, { tracerProvider: provider });
     traced({ prompt: PROMPT });
     expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  describe("streaming input (one query(), two user turns)", () => {
+    async function* userTurns() {
+      yield { type: "user" as const, message: { role: "user" as const, content: "one" }, parent_tool_use_id: null };
+      yield { type: "user" as const, message: { role: "user" as const, content: "two" }, parent_tool_use_id: null };
+    }
+    const hrMs = (t: [number, number]) => t[0] * 1e3 + t[1] / 1e6;
+
+    it("R5: starts the second turn after the first result, so the turns do not overlap", async () => {
+      const { provider, exporter } = memoryProvider();
+      const fake = makeFakeQuery(streamingInputJourney(), { delayMs: 5 });
+      await drain(wrapQuery(fake.query, { tracerProvider: provider })({ prompt: userTurns() }));
+      const spans = exporter.getFinishedSpans();
+      const conversation = one(spans, "claude_agent.conversation");
+      const [first, second] = byName(spans, "claude_agent.assistant_turn").sort(
+        (a, b) => hrMs(a.startTime) - hrMs(b.startTime),
+      );
+      expect(first.attributes["claude_agent.num_turns"]).toBe(1);
+      expect(second.attributes["claude_agent.num_turns"]).toBe(2);
+      expect(hrMs(first.startTime)).toBe(hrMs(conversation.startTime));
+      expect(hrMs(second.startTime)).toBeGreaterThanOrEqual(hrMs(first.endTime));
+      expect(hrMs(second.endTime)).toBeLessThanOrEqual(hrMs(conversation.endTime));
+    });
   });
 
   it("does not trace a streaming-input prompt's content", async () => {

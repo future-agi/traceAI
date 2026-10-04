@@ -271,3 +271,58 @@ export function mcpErrorJourney(): SDKMessage[] {
     resultError(),
   ];
 }
+
+type ModelUsage = SDKResultSuccess["modelUsage"][string];
+
+/** One `modelUsage` entry (sdk.d.ts ModelUsage). */
+export function modelUsage(
+  input: number,
+  output: number,
+  costUSD: number,
+  cacheRead = 0,
+  cacheCreation = 0,
+): ModelUsage {
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadInputTokens: cacheRead,
+    cacheCreationInputTokens: cacheCreation,
+    webSearchRequests: 0,
+    costUSD,
+    contextWindow: 200000,
+    maxOutputTokens: 64000,
+  };
+}
+
+/** `result.usage` for one main-loop turn (sdk.d.ts:5683: main agent loop only, per turn). */
+export function turnUsage(input: number, output: number): NonNullableUsage {
+  return { ...resultUsage, input_tokens: input, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+}
+
+/** Cost of one 20-in / 8-out call on claude-sonnet-4-5 list prices, as the real CLI reports it. */
+export const TURN_COST_USD = 0.00018;
+
+/**
+ * Streaming input: one query(), two user turns, two results. `total_cost_usd`
+ * and `modelUsage` are running totals (sdk.d.ts:5679, 5687); `usage` is per
+ * turn (sdk.d.ts:5683). Same numbers the real CLI reported against the mock.
+ */
+export function streamingInputJourney(): SDKMessage[] {
+  return [
+    init(),
+    assistant("msg_s1", [text("First answer.")]),
+    resultSuccess("First answer.", {
+      num_turns: 1,
+      total_cost_usd: TURN_COST_USD,
+      usage: turnUsage(20, 8),
+      modelUsage: { [MODEL]: modelUsage(20, 8, TURN_COST_USD) },
+    }),
+    assistant("msg_s2", [text("Second answer.")]),
+    resultSuccess("Second answer.", {
+      num_turns: 2,
+      total_cost_usd: 2 * TURN_COST_USD,
+      usage: turnUsage(20, 8),
+      modelUsage: { [MODEL]: modelUsage(40, 16, 2 * TURN_COST_USD) },
+    }),
+  ];
+}
