@@ -88,7 +88,7 @@ LangGraph-specific setup. You get:
 - **Per-node spans** named after the graph node (`agent`, `tools`, `ask_human`, …)
 - **Tool and LLM spans** nested under their node
 - **Graph-node enrichment** — the node's own span carries `gen_ai.agent.graph.node_name` and `gen_ai.agent.graph.node_id`
-- **Session grouping** — bind `session.id = thread_id` (see the quickstart)
+- **Session grouping** — LangGraph's `configurable.thread_id` becomes `session.id` on every span (an explicit `using_session(...)` or `metadata={"session_id": ...}` wins)
 - **HITL interrupts** traced correctly — an interrupted node/tool span stays `OK` (not `ERROR`) and is marked with `langgraph.interrupt`
 
 > **`LangGraphInstrumentor` is a deprecated no-op** kept for backwards compatibility.
@@ -137,8 +137,87 @@ Node, tool and LLM runs are standard LangChain spans (`gen_ai.span.kind` =
 
 - `gen_ai.agent.graph.node_name`, `gen_ai.agent.graph.node_id` — the graph node (on the node's own span)
 - `langgraph_node`, `langgraph_step`, `langgraph_triggers`, `langgraph_path`, `langgraph_checkpoint_ns` — LangGraph's raw callback metadata
-- `session.id` — when set via `using_session(...)` or `config={"metadata": {"session_id": ...}}`
+- `session.id` — from `using_session(...)`, else `config={"metadata": {"session_id": ...}}`, else LangGraph's `configurable.thread_id`
 - `langgraph.interrupt` (attribute + event) on a HITL pause; a `langgraph.resume` event on resume
+
+---
+
+## Deep Agents
+
+[Deep Agents](https://github.com/langchain-ai/deepagents) builds a LangGraph graph
+with `create_deep_agent`. There is no Deep Agents instrumentor and no separate
+package: `LangChainInstrumentor` traces the graph, its model calls, its built-in
+tools and its `task` subagents. The cookbook is
+[`examples/deep_agents.py`](examples/deep_agents.py); the compatibility test
+(`tests/test_deepagents_compat.py`) runs that same script offline against a
+scripted fake model and a loopback collector.
+
+Tested versions, as printed by the compatibility test:
+
+| Package | Version |
+|---|---|
+| `deepagents` | 0.7.21 (PyPI wheel) |
+| `langchain` | 1.4.3 |
+| `langchain-core` | 1.6.6 (the floor `deepagents` 0.7.21 requires, and the latest on PyPI when tested) |
+| `langgraph` | 1.2.12 |
+| `traceAI-langchain` | 0.2.0 from this repository, including the `thread_id` → `session.id` change |
+| Python | 3.11.12 and 3.13.7 |
+
+`traceAI-langchain`'s own lower bound (`langchain-core>=0.2.43`) is unchanged.
+Deep Agents itself needs `langchain-core>=1.6.6` and `langgraph`.
+
+```bash
+pip install traceAI-langchain "deepagents==0.7.21" langgraph
+```
+
+```python
+from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
+from fi_instrumentation import TraceConfig, register
+from fi_instrumentation.fi_types import ProjectType
+from traceai_langchain import LangChainInstrumentor
+
+# 1. register(), 2. instrument(), 3. build the agent.
+trace_provider = register(project_type=ProjectType.OBSERVE, project_name="deep-agents-app")
+LangChainInstrumentor().instrument(
+    tracer_provider=trace_provider,
+    # Filesystem tool arguments and results can contain file contents.
+    config=TraceConfig(hide_inputs=True, hide_outputs=True),
+)
+
+# Pass a model explicitly: model=None selects the deprecated claude-sonnet-4-6 default.
+agent = create_deep_agent(model=model, tools=[my_tool], backend=StateBackend())
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "..."}]},
+    config={"configurable": {"thread_id": "t-1"}},  # becomes session.id
+)
+trace_provider.force_flush()
+```
+
+What you get (all from `traceAI-langchain`; Deep Agents adds no keys):
+
+- **LLM** spans with `gen_ai.request.model` and `gen_ai.usage.*` from the model's
+  `usage_metadata`. Token counts are only on LLM spans, so a trace's token total is
+  the sum of its model calls.
+- **TOOL** spans named after the tool that ran. With the default `StateBackend`,
+  0.7.21 binds `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`,
+  `grep` and `task`, plus your tools. `execute` is bound only for a sandbox backend.
+  `write_todos` is not a default tool at this version.
+- **Subagents**: the `task` TOOL span is the parent of the subagent's span (named
+  after the subagent, e.g. `general-purpose`, kind `CHAIN`) and of its model and
+  tool spans, all in one trace. Subagent spans also carry `lc_agent_name`.
+- **Graph nodes** (`model`, `tools`, middleware nodes) are `CHAIN` spans; a node whose
+  name contains "agent" (e.g. `PatchToolCallsMiddleware.before_agent`) is reported as
+  `AGENT` by the existing name heuristic.
+- **Session**: `configurable.thread_id` → `session.id` on every span, subagents included.
+- **Errors**: a tool that raises ends its TOOL span `ERROR` with an `exception`
+  event (LangGraph's default tool error handler re-raises, so `invoke` raises too).
+  Cancelling an `astream` early closes every span; the root span ends `ERROR`
+  with a `GeneratorExit` description.
+
+Not emitted: cost, user id (set `using_attributes(user_id=...)` yourself),
+retrieval (Deep Agents has no retriever tool), and a `gen_ai.provider.name`
+(LangChain's raw `ls_provider` metadata is passed through as-is).
 
 ---
 
@@ -154,6 +233,9 @@ Node, tool and LLM runs are standard LangChain spans (`gen_ai.span.kind` =
 - `examples/langgraph_simple_workflow.py` - Simple state machine workflow
 - `examples/langgraph_agent_supervisor.py` - Multi-agent supervisor pattern
 - `examples/langgraph_human_in_the_loop.py` - Human-in-the-loop interrupt workflow
+
+### Deep Agents Example
+- `examples/deep_agents.py` - `create_deep_agent` with a custom tool, built-in file tools and a `task` subagent (runs offline)
 
 ---
 

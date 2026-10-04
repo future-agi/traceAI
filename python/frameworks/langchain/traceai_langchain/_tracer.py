@@ -470,6 +470,7 @@ def _update_span(
                     _tools(run),
                     _retrieval_documents(run),
                     _metadata(run),
+                    _session_id_from_thread_id(run, captured_context),
                     _as_raw_input_output(run),
                     _as_query(query),
                 )
@@ -1019,6 +1020,28 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
 
 
 @stop_on_exception
+def _session_id_from_thread_id(
+    run: Run, captured_context: Mapping[str, Any]
+) -> Iterator[Tuple[str, str]]:
+    """Fall back to LangGraph's ``thread_id`` for ``session.id``.
+
+    LangGraph copies ``configurable.thread_id`` into run metadata, so every node,
+    LLM and tool run of a thread carries it. It is used only when nothing more
+    specific set the session: ``using_session(...)`` (already on the span from
+    ``captured_context``) and ``metadata["session_id"]`` (emitted by ``_metadata``)
+    both win.
+    """
+    if SESSION_ID in captured_context:
+        return
+    if not run.extra or not isinstance(metadata := run.extra.get("metadata"), Mapping):
+        return
+    if metadata.get(LANGCHAIN_SESSION_ID) is not None:
+        return
+    if (thread_id := metadata.get(LANGCHAIN_THREAD_ID)) is not None:
+        yield SESSION_ID, str(thread_id)
+
+
+@stop_on_exception
 def _as_document(document: Any) -> Iterator[Tuple[str, Any]]:
     if page_content := getattr(document, "page_content", None):
         assert isinstance(
@@ -1207,6 +1230,7 @@ RERANKER_QUERY = RerankerAttributes.RERANKER_QUERY
 RERANKER_TOP_K = RerankerAttributes.RERANKER_TOP_K
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
 GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
+SESSION_ID = SpanAttributes.SESSION_ID
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
 GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION

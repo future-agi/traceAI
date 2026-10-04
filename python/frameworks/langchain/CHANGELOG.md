@@ -1,3 +1,10 @@
+## [Unreleased]
+### Fixed
+- LangGraph's `configurable.thread_id` is now copied to `session.id` on every span of the run (LangGraph puts it in run metadata). Before, it landed only in `thread_id`/`gen_ai.conversation.id`, so LangGraph and Deep Agents runs had no session unless wrapped in `using_session(...)`. An explicit `using_session(...)` or `metadata={"session_id": ...}` still wins.
+
+### Added
+- Deep Agents cookbook (`examples/deep_agents.py`) and compatibility test (`tests/test_deepagents_compat.py`, skipped when `deepagents` is not installed). Tested with `deepagents==0.7.21`, `langchain-core` 1.6.6, `langgraph` 1.2.12. No new package and no new dependency.
+
 ## [0.2.0] - 2026-07-30
 ### Fixed
 - `LangGraphInstrumentor` no longer breaks async graph nodes. The previous build monkey-patched `StateGraph.add_node`/`compile` and wrapped node functions with a sync wrapper, which returned a coroutine from `async def` nodes and raised `INVALID_GRAPH_NODE_RETURN_VALUE`. It also corrupted per-request state under concurrency and traced HITL `interrupt()` pauses as errors.
