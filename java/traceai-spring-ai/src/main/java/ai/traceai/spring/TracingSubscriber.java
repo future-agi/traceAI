@@ -59,6 +59,9 @@ final class TracingSubscriber implements CoreSubscriber<ChatResponse>, Subscript
 
     @Override
     public void onSubscribe(Subscription s) {
+        if (s == null) {
+            throw new NullPointerException("upstream Subscription must not be null");
+        }
         if (this.upstream != null) {
             s.cancel();
             return;
@@ -135,6 +138,8 @@ final class TracingSubscriber implements CoreSubscriber<ChatResponse>, Subscript
         }
         try {
             tracer.setError(span, t);
+        } catch (RuntimeException instrumentationFailure) {
+            // recording the error must not replace the original failure or skip ending the span
         } finally {
             span.end();
         }

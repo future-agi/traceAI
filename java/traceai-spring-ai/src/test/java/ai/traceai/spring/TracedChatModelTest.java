@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.metadata.EmptyUsage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -135,6 +137,27 @@ class TracedChatModelTest {
             assertThat(spans.get(2).getAttributes().get(PROMPT_TOKENS)).isNull();
             assertThat(spans.get(2).getAttributes().get(COMPLETION_TOKENS)).isNull();
             assertThat(spans.get(2).getAttributes().get(TOTAL_TOKENS)).isEqualTo(42L);
+        }
+    }
+
+    @Test
+    void realEmptyUsageIsRecordedAsAbsentWhileMeasuredZeroIsPreserved() {
+        try (SpanTestSupport support = new SpanTestSupport()) {
+            ChatResponse placeholder = SpanTestSupport.response("e", new EmptyUsage(), null);
+            ChatResponse measuredZero = SpanTestSupport.response("z", new DefaultUsage(0, 0, 0), null);
+            TracedChatModel model = new TracedChatModel(SpanTestSupport.syncModel(p ->
+                p.getContents().equals("empty") ? placeholder : measuredZero), support.tracer, "synthetic");
+
+            model.call(new Prompt("empty"));
+            model.call(new Prompt("zero"));
+
+            java.util.List<SpanData> spans = support.finished();
+            assertThat(spans.get(0).getAttributes().get(PROMPT_TOKENS)).as("EmptyUsage is absence").isNull();
+            assertThat(spans.get(0).getAttributes().get(COMPLETION_TOKENS)).isNull();
+            assertThat(spans.get(0).getAttributes().get(TOTAL_TOKENS)).isNull();
+            assertThat(spans.get(1).getAttributes().get(PROMPT_TOKENS)).as("measured zero is kept").isEqualTo(0L);
+            assertThat(spans.get(1).getAttributes().get(COMPLETION_TOKENS)).isEqualTo(0L);
+            assertThat(spans.get(1).getAttributes().get(TOTAL_TOKENS)).isEqualTo(0L);
         }
     }
 

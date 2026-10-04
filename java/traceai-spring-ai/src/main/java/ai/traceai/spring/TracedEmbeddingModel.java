@@ -202,7 +202,10 @@ public class TracedEmbeddingModel implements EmbeddingModel {
             if (i > 0) {
                 preview.append("\n---\n");
             }
-            preview.append(texts.get(i));
+            String text = texts.get(i);
+            if (text != null) {
+                preview.append(text);
+            }
         }
         if (texts.size() > INPUT_PREVIEW_TEXTS) {
             preview.append("\n... and ").append(texts.size() - INPUT_PREVIEW_TEXTS).append(" more");
