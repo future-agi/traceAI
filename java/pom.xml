@@ -80,8 +80,8 @@
         <azure-openai.version>1.0.0-beta.16</azure-openai.version>
         <anthropic-java.version>0.1.0</anthropic-java.version>
         <langchain4j.version>0.35.0</langchain4j.version>
-        <spring-ai.version>1.0.0-M4</spring-ai.version>
-        <spring-boot.version>3.2.1</spring-boot.version>
+        <spring-ai.version>1.1.8</spring-ai.version>
+        <spring-boot.version>3.5.15</spring-boot.version>
         <aws-sdk.version>2.25.67</aws-sdk.version>
         <google-cloud.version>1.7.0</google-cloud.version>
 

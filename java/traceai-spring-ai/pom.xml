@@ -12,7 +12,40 @@
 
     <artifactId>traceai-spring-ai</artifactId>
     <name>TraceAI Spring AI</name>
-    <description>Spring AI instrumentation for TraceAI Java SDK</description>
+    <description>Spring AI instrumentation for TraceAI Java SDK (Spring AI 1.1.x GA)</description>
+
+    <properties>
+        <!-- Spring-local JUnit family: aligned with the Spring Boot ${spring-boot.version} BOM so the
+             aggregate, API, params and engine resolve from one release train. -->
+        <spring.junit.version>5.12.2</spring.junit.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Spring AI BOM first, then Spring Boot BOM: Boot supplies Framework/Reactor/JUnit management -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Inherited parent management would otherwise pin the aggregate to a different JUnit train -->
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${spring.junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- TraceAI Core -->
@@ -21,19 +54,17 @@
             <artifactId>traceai-java-core</artifactId>
         </dependency>
 
-        <!-- Spring AI (provided - user brings their own) -->
+        <!-- Spring AI model API (provided - the application brings its own Spring AI 1.1.x) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-core</artifactId>
-            <version>${spring-ai.version}</version>
+            <artifactId>spring-ai-model</artifactId>
             <scope>provided</scope>
         </dependency>
 
-        <!-- Spring Framework -->
+        <!-- Spring Framework (managed by the Spring Boot BOM) -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
-            <version>6.1.3</version>
             <scope>provided</scope>
         </dependency>
 
@@ -49,19 +80,30 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk-testing</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Java 17 clean suite: no startup ByteBuddy agent is required for this module -->
+                    <argLine>
+                        --add-opens java.base/java.lang=ALL-UNNAMED
+                        --add-opens java.base/java.util=ALL-UNNAMED
+                    </argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

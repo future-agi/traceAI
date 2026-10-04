@@ -1,0 +1,51 @@
+name: Java Spring AI compatibility
+
+# Deterministic Spring AI 1.1.x compatibility for the traceAI Java SDK.
+# Builds the candidate once on Spring AI 1.1.8 / Spring Boot 3.5.15 and runs the
+# same JARs against Spring AI 1.1.0 / Spring Boot 3.5.7. No secrets, no live model.
+
+on:
+  pull_request:
+    paths:
+      - 'java/pom.xml'
+      - 'java/traceai-spring-ai/**'
+      - 'java/traceai-spring-boot-starter/**'
+      - 'java/traceai-java-core/**'
+      - 'java/compatibility/spring-ai/**'
+      - 'java/examples/spring-ai-example/**'
+      - '.github/workflows/java-spring-ai-compatibility.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic:
+    runs-on: ubuntu-latest
+    container:
+      image: maven@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14fa8d150138f27f116d7105a639b82
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic Spring module suite (Spring AI 1.1.8)
+        working-directory: java
+        run: mvn -B -ntp -pl traceai-spring-ai -am -Dsurefire.failIfNoSpecifiedTests=false test
+      - name: Package candidate JARs
+        working-directory: java
+        run: mvn -B -ntp -pl traceai-spring-ai,traceai-spring-boot-starter -am -DskipTests package
+      - name: Stage candidate artifacts
+        run: |
+          mkdir -p candidate-jars
+          cp java/traceai-java-core/target/traceai-java-core-1.0.0.jar candidate-jars/
+          cp java/traceai-spring-ai/target/traceai-spring-ai-1.0.0.jar candidate-jars/
+          sha256sum candidate-jars/*.jar
+      - name: Same-binary consumer on Spring AI 1.1.8
+        working-directory: java/compatibility/spring-ai/common
+        run: mvn -B -ntp -q exec:java -Dexec.mainClass=local.th7477.CommonConsumer -Dexec.args=P -Dexec.classpathScope=compile
+      - name: Same-binary consumer on Spring AI 1.1.0
+        working-directory: java/compatibility/spring-ai/baseline-cell
+        run: mvn -B -ntp -o -q exec:java -Dexec.mainClass=local.th7477.CommonConsumer -Dexec.args=B -Dexec.classpathScope=compile
+      - name: 1.1.8-only embedding accessor
+        working-directory: java/compatibility/spring-ai/primary
+        run: mvn -B -ntp -o -q exec:java -Dexec.mainClass=local.th7477.PrimaryConsumer -Dexec.classpathScope=compile
+      - name: Example compiles against 1.1.8
+        working-directory: java/examples/spring-ai-example
+        run: mvn -B -ntp -DskipTests compile

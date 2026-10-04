@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local.th7477</groupId><artifactId>common-consumer</artifactId><version>1.0-SNAPSHOT</version>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <spring-ai.version>1.1.0</spring-ai.version><spring-boot.version>3.5.7</spring-boot.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-bom</artifactId><version>${spring-ai.version}</version><type>pom</type><scope>import</scope></dependency>
+      <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-dependencies</artifactId><version>${spring-boot.version}</version><type>pom</type><scope>import</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-model</artifactId></dependency>
+    <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-client-chat</artifactId></dependency>
+    <dependency><groupId>ai.traceai</groupId><artifactId>traceai-java-core</artifactId><version>1.0.0-candidate</version><scope>system</scope><systemPath>/candidate-jars/traceai-java-core-1.0.0.jar</systemPath></dependency>
+    <dependency><groupId>ai.traceai</groupId><artifactId>traceai-spring-ai</artifactId><version>1.0.0-candidate</version><scope>system</scope><systemPath>/candidate-jars/traceai-spring-ai-1.0.0.jar</systemPath></dependency>
+    <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-testing</artifactId><version>1.49.0</version></dependency>
+    <dependency><groupId>com.google.code.gson</groupId><artifactId>gson</artifactId><version>2.10.1</version></dependency>
+  </dependencies>
+  <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.12.1</version></plugin></plugins></build>
+</project>
