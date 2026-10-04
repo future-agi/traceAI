@@ -168,10 +168,15 @@ class AG2ClassicTracing:
     # Teardown ---------------------------------------------------------------
 
     def uninstrument(self) -> None:
-        """Remove the processor and restore ``OpenAIWrapper.create`` if we patched it.
+        """Restore ``OpenAIWrapper.create`` if this handle patched it.
 
-        Upstream patches agents per instance and offers no undo, so agents
-        instrumented through this handle stay instrumented.
+        The span processor stays on the provider. Upstream patches agents per
+        instance and offers no undo, so agents instrumented earlier keep
+        emitting spans on this provider; the processor keeps dropping their
+        content and moving their aggregate usage off non-LLM spans. Every
+        handle on a provider shares that one processor, so removing it here
+        would also unfilter the other handles. It is shut down with the
+        provider (``provider.shutdown()``).
         """
         if self.owns_llm_wrapper and self._original_create is not None:
             from autogen.oai import client as oai_client_module
@@ -181,13 +186,6 @@ class AG2ClassicTracing:
             oai_client_module.OpenAIWrapper.create = self._original_create
             self.owns_llm_wrapper = False
             self._original_create = None
-        active = getattr(self.tracer_provider, "_active_span_processor", None)
-        if active is not None and hasattr(active, "_span_processors"):
-            with getattr(active, "_lock", _NullLock()):
-                active._span_processors = tuple(
-                    p for p in active._span_processors if p is not self.processor
-                )
-        self.processor.shutdown()
 
 
 def setup(

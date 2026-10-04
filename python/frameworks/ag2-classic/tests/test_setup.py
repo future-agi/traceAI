@@ -182,9 +182,75 @@ def test_setup_is_idempotent_per_provider_and_uninstrument_restores(pipeline):
     assert second.owns_llm_wrapper is False  # upstream wraps once (llm_wrapper.py:64-65)
     first.uninstrument()
     assert OpenAIWrapper.create is original
-    assert not any(
-        isinstance(p, AG2ClassicSpanProcessor) for p in provider._active_span_processor._span_processors
+    # Upstream has no per-agent undo, so agents instrumented earlier keep
+    # emitting spans on this provider. The processor stays installed and live
+    # so those spans are still filtered; the second handle keeps working too.
+    ours = [p for p in provider._active_span_processor._span_processors if isinstance(p, AG2ClassicSpanProcessor)]
+    assert ours == [first.processor]
+    assert provider._active_span_processor._span_processors[0] is first.processor
+    assert first.processor._disabled is False
+
+
+PROMOTED_USAGE_KEYS = (
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "gen_ai.usage.total_tokens",
+    "gen_ai.cost.total",
+    "llm.cost.total",
+)
+
+
+def _assert_no_content_and_no_promoted_usage_off_llm(spans):
+    assert spans, "no spans were exported"
+    for span in spans:
+        attrs = dict(span.attributes)
+        for key in CONTENT_KEYS:
+            assert key not in attrs, (key, span.name)
+        blob = json.dumps(attrs, default=str)
+        assert SECRET_PROMPT not in blob and TOOL_SECRET_CITY not in blob, span.name
+        if attrs.get("gen_ai.span.kind") != "LLM":
+            leaked = [k for k in attrs if k in PROMOTED_USAGE_KEYS]
+            assert not leaked, (span.name, leaked)
+
+
+def test_previously_instrumented_agents_stay_filtered_after_uninstrument(pipeline, fake):
+    from autogen import ConversableAgent
+
+    _provider, exporter, make = pipeline
+    tracing = make()
+    assistant = ConversableAgent(
+        "assistant",
+        llm_config=fake.llm_config(),
+        human_input_mode="NEVER",
+        is_termination_msg=lambda m: "TERMINATE" in str(m.get("content") or ""),
     )
+    user = ConversableAgent("user", llm_config=False, human_input_mode="NEVER", max_consecutive_auto_reply=1)
+    tracing.instrument_agent(assistant)
+    tracing.instrument_agent(user)
+    tracing.uninstrument()
+    exporter.clear()
+
+    user.initiate_chat(assistant, message=SECRET_PROMPT, max_turns=1, silent=True)
+    spans = exporter.get_finished_spans()
+    names = {s.name for s in spans}
+    # Upstream patched these agents for good; their spans still arrive.
+    assert {"conversation user", "invoke_agent assistant"} <= names
+    _assert_no_content_and_no_promoted_usage_off_llm(spans)
+    conversation = next(s for s in spans if s.name == "conversation user").attributes
+    assert conversation["gen_ai.span.kind"] == "CHAIN"
+    assert conversation["ag2.usage.input_tokens"] == PROMPT_TOKENS
+
+
+def test_second_handle_keeps_filtering_after_first_handle_uninstruments(pipeline, fake):
+    _provider, exporter, make = pipeline
+    first = make()
+    second = make()
+    first.uninstrument()
+    exporter.clear()
+    two_agent_tool_chat(second, fake)
+    spans = exporter.get_finished_spans()
+    assert any(s.name == "conversation user" for s in spans)
+    _assert_no_content_and_no_promoted_usage_off_llm(spans)
 
 
 def test_setup_rejects_a_non_sdk_provider():

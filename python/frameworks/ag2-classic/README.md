@@ -89,8 +89,11 @@ the default; pass `transport=Transport.GRPC` (from `fi_instrumentation.otel`) to
 also install the `[tracing]` extra's gRPC exporter as a global provider, or
 spans are duplicated.
 
-`tracing.uninstrument()` removes the processor and restores
-`OpenAIWrapper.create`. Agents stay instrumented; upstream has no per-agent undo.
+`tracing.uninstrument()` restores `OpenAIWrapper.create`, so no new LLM spans.
+Agents stay instrumented; upstream has no per-agent undo. The processor stays on
+the provider, so spans from those agents still have content removed and
+aggregate usage moved off non-LLM spans. It is shared by every handle on that
+provider and shuts down with `trace_provider.shutdown()`.
 
 ## Conformance
 
