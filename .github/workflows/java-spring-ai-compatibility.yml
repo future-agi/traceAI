@@ -31,7 +31,7 @@ jobs:
       - name: Package candidate JARs
         working-directory: java
         run: mvn -B -ntp -pl traceai-spring-ai,traceai-spring-boot-starter -am -DskipTests package
-      - name: Stage candidate artifacts
+      - name: Stage candidate artifacts at the repo root
         run: |
           mkdir -p candidate-jars
           cp java/traceai-java-core/target/traceai-java-core-1.0.0.jar candidate-jars/
@@ -39,13 +39,13 @@ jobs:
           sha256sum candidate-jars/*.jar
       - name: Same-binary consumer on Spring AI 1.1.8
         working-directory: java/compatibility/spring-ai/common
-        run: mvn -B -ntp -q exec:java -Dexec.mainClass=local.th7477.CommonConsumer -Dexec.args=P -Dexec.classpathScope=compile
+        run: mvn -B -ntp -q clean compile exec:java -Dexec.mainClass=local.th7477.CommonConsumer -Dexec.args=P -Dexec.classpathScope=compile
       - name: Same-binary consumer on Spring AI 1.1.0
         working-directory: java/compatibility/spring-ai/baseline-cell
-        run: mvn -B -ntp -o -q exec:java -Dexec.mainClass=local.th7477.CommonConsumer -Dexec.args=B -Dexec.classpathScope=compile
+        run: mvn -B -ntp -q clean compile exec:java -Dexec.mainClass=local.th7477.CommonConsumer -Dexec.args=B -Dexec.classpathScope=compile
       - name: 1.1.8-only embedding accessor
         working-directory: java/compatibility/spring-ai/primary
-        run: mvn -B -ntp -o -q exec:java -Dexec.mainClass=local.th7477.PrimaryConsumer -Dexec.classpathScope=compile
+        run: mvn -B -ntp -q clean compile exec:java -Dexec.mainClass=local.th7477.PrimaryConsumer -Dexec.classpathScope=compile
       - name: Example compiles against 1.1.8
         working-directory: java/examples/spring-ai-example
         run: mvn -B -ntp -DskipTests compile

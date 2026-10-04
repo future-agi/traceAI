@@ -17,8 +17,8 @@
     <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-ollama</artifactId></dependency>
     <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-client-chat</artifactId></dependency>
     <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-client-chat</artifactId></dependency>
-    <dependency><groupId>ai.traceai</groupId><artifactId>traceai-java-core</artifactId><version>1.0.0-candidate</version><scope>system</scope><systemPath>/candidate-jars/traceai-java-core-1.0.0.jar</systemPath></dependency>
-    <dependency><groupId>ai.traceai</groupId><artifactId>traceai-spring-ai</artifactId><version>1.0.0-candidate</version><scope>system</scope><systemPath>/candidate-jars/traceai-spring-ai-1.0.0.jar</systemPath></dependency>
+    <dependency><groupId>ai.traceai</groupId><artifactId>traceai-java-core</artifactId><version>1.0.0-candidate</version><scope>system</scope><systemPath>${project.basedir}/../../../../candidate-jars/traceai-java-core-1.0.0.jar</systemPath></dependency>
+    <dependency><groupId>ai.traceai</groupId><artifactId>traceai-spring-ai</artifactId><version>1.0.0-candidate</version><scope>system</scope><systemPath>${project.basedir}/../../../../candidate-jars/traceai-spring-ai-1.0.0.jar</systemPath></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-testing</artifactId><version>1.49.0</version></dependency>
     <dependency><groupId>com.google.code.gson</groupId><artifactId>gson</artifactId><version>2.10.1</version></dependency>
   </dependencies>
