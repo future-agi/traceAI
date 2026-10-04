@@ -46,6 +46,9 @@ jobs:
       - name: 1.1.8-only embedding accessor
         working-directory: java/compatibility/spring-ai/primary
         run: mvn -B -ntp -q clean compile exec:java -Dexec.mainClass=local.th7477.PrimaryConsumer -Dexec.classpathScope=compile
+      - name: Install the candidate into the local repository
+        working-directory: java
+        run: mvn -B -ntp -pl traceai-spring-boot-starter -am -DskipTests install
       - name: Example compiles against 1.1.8
         working-directory: java/examples/spring-ai-example
         run: mvn -B -ntp -DskipTests compile
