@@ -183,9 +183,11 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.2.3</version>
                     <configuration>
+                        <!-- No hardcoded -javaagent: a missing ByteBuddy agent JAR crashes the forked
+                             test JVM at startup ("Error occurred during initialization of VM") on any
+                             machine whose local repository was not pre-seeded. Java 17 runs this suite
+                             without a startup agent. -->
                         <argLine>
-                            -XX:+EnableDynamicAgentLoading
-                            -javaagent:${user.home}/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.10/byte-buddy-agent-1.14.10.jar
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
