@@ -144,8 +144,9 @@ Dropped keys: `input`, `output`, `agent.instructions`, `agent.messages`, `agent.
 `workflow.stateSnapshot` (step source and the run input), `workspace.sandbox.command`,
 `workspace.sandbox.args`, `suspension.checkpoint`, `agent.summary.preview`, `agent.summary.text`
 (summarization), `agent.workingMemory.finalContent` (working memory), `planagent.todos`,
-`planagent.task.description`, `planagent.task.response_preview` (PlanAgent),
-`guardrail.chunk.text`, `suspension.data`, `resume.data` (span events, below), any key with an
+`planagent.task.description`, `planagent.task.response_preview` (PlanAgent), `eval.scorer.metadata`
+(evals: holds the run's input and output), `eval.expected` (the eval's reference answer), `guardrail.result.metadata` (a guardrail decision's
+payload), `guardrail.chunk.text`, `suspension.data`, `resume.data` (span events, below), any key with an
 `input` or `output` segment (`middleware.input.original`, `guardrail.output.after`, ...), and string
 values whose last segment is `messages`, `instructions`, `query`, `context`, `data`, `checkpoint`,
 `prompt(s)`, `completion`, `content`, `arguments` or `args` (`tool.search.query`, `vector.query`,
@@ -162,7 +163,15 @@ the thrown error carries.
 
 Credentials are never exported, whatever `captureContent` says: keys with a segment like
 `api_key`, `secret`, `secret_key`, `password`, `authorization`, `cookie` or `header(s)` are dropped,
-from span attributes and from event attributes.
+from span attributes and from event attributes. The filter is by key: a JSON value such as
+`llm.provider_options` is exported whole, so do not put credentials in provider options.
+
+Kept in every mode, because they are short strings your code or VoltAgent writes rather than
+prompt or answer text: `guardrail.message` and the `guardrail.stream.abort` event's
+`guardrail.reason` (the built-in guardrails write fixed messages such as "Output blocked due to
+profanity."; a custom guardrail's message is exported as written), `suspension.reason`,
+`cancellation.reason`, workflow step reasons, and the workspace tool fields `workspace.fs.path`,
+`workspace.fs.pattern` and `workspace.sandbox.cwd`, which can carry model-chosen paths.
 
 ## Flushing, serverless and failures
 
@@ -201,7 +210,9 @@ has no LICENSE file, its README and `docs/community/licence.md` carry the MIT te
   resumes, to check its span events and the root's kind; workflow step spans are not asserted.
 - Retriever, embedding and vector spans are mapped from source reading; the fixture runs only the
   agent's memory spans (`memory.read`, `memory.write`, `memory.steps.write`).
-- VoltAgent logs (`RemoteLogProcessor`) and evals are not exported.
+- VoltAgent logs (`RemoteLogProcessor`) are not exported. Eval scorer spans are exported with
+  their ids, status, score and threshold; `eval.scorer.metadata`, `eval.expected`, `eval.input` and
+  `eval.output` are dropped unless `captureContent` is on. `eval.scorer.error_message` is kept.
 - Only the Node runtime was tested; edge runtimes were not.
 
 ## Development

@@ -70,6 +70,14 @@ const CONTENT_EXACT = new Set<string>([
   "planagent.todos",
   "planagent.task.description",
   "planagent.task.response_preview",
+  // Evals: finalizeScorerSpan (eval.ts) stores combineEvalMetadata(...) here, which holds the run's
+  // verbatim input and output. eval.input / eval.output are caught by the segment rule below.
+  "eval.scorer.metadata",
+  // The eval's reference answer (eval.ts scorer attributes).
+  "eval.expected",
+  // A guardrail decision's metadata: whatever the guardrail returns, often the matched text.
+  // (guardrail.metadata is the guardrail's own static config and stays.)
+  "guardrail.result.metadata",
   // Span-event content: each streamed answer chunk an output guardrail sees
   // (agent/streaming/output-guardrail-stream-runner.ts, guardrail.stream.process), and the
   // workflow suspend/resume payloads (workflow/open-telemetry/trace-context.ts,

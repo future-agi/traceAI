@@ -280,6 +280,36 @@ describe("content (AC-07)", () => {
     }
   });
 
+  it("drops eval scorer metadata and guardrail decision metadata by default and keeps them after opt-in", () => {
+    // VoltAgent 2.11.0: finalizeScorerSpan stores combineEvalMetadata(...) under eval.scorer.metadata,
+    // and that object holds the run's verbatim input and output; eval.expected is the reference
+    // answer. A guardrail decision's metadata
+    // (guardrail.result.metadata) is whatever the guardrail returns, often the matched text.
+    const evalAndGuardrail = {
+      "eval.scorer.metadata": '{"input":"SECRET_EVAL_INPUT","output":"SECRET_EVAL_OUTPUT"}',
+      "eval.expected": "SECRET_EVAL_EXPECTED",
+      "guardrail.result.metadata": '{"matched":"SECRET_GUARDRAIL_MATCH"}',
+    };
+    const kept = {
+      "eval.scorer.id": "scorer-1",
+      "eval.scorer.status": "success",
+      "guardrail.name": "pii",
+      "guardrail.action": "block",
+      "guardrail.message": "Output blocked due to profanity.",
+      "guardrail.metadata": '{"owner":"team-a"}',
+    };
+    const off = mapVoltAgentAttributes({ "span.type": "scorer", ...evalAndGuardrail, ...kept }, OFF).attributes;
+    const on = mapVoltAgentAttributes({ "span.type": "scorer", ...evalAndGuardrail, ...kept }, ON).attributes;
+    expect(JSON.stringify(off)).not.toContain("SECRET");
+    for (const [key, value] of Object.entries(evalAndGuardrail)) {
+      expect([key, off[key]]).toEqual([key, undefined]);
+      expect([key, on[key]]).toEqual([key, value]);
+    }
+    for (const [key, value] of Object.entries(kept)) {
+      expect([key, off[key]]).toEqual([key, value]);
+    }
+  });
+
   it("copies input/output to input.value/output.value only after opt-in", () => {
     const { attributes } = mapVoltAgentAttributes(rootSpanAttributes(), ON);
     expect(attributes["input.value"]).toBe("SECRET_PROMPT");
@@ -312,6 +342,11 @@ describe("content (AC-07)", () => {
     expect(isContentKey("guardrail.chunk.index", 4)).toBe(false);
     expect(isContentKey("suspension.step_index", 0)).toBe(false);
     expect(isContentKey("exception.message", "boom")).toBe(false);
+    expect(isContentKey("eval.scorer.metadata", "{}")).toBe(true);
+    expect(isContentKey("eval.expected", "x")).toBe(true);
+    expect(isContentKey("guardrail.result.metadata", "{}")).toBe(true);
+    expect(isContentKey("guardrail.metadata", "{}")).toBe(false);
+    expect(isContentKey("guardrail.message", "x")).toBe(false);
   });
 });
 
