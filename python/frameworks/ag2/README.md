@@ -12,9 +12,10 @@ AG2 1.x is the PyPI package `ag2`, imported as `ag2`. It is not Microsoft AutoGe
 | `autogen` 0.14.x | `autogen` | AG2 Classic integration (TH-8237) |
 | `autogen-agentchat` | `autogen_agentchat` | `traceAI-autogen` |
 
-Requires `ag2>=1.0.0` (the first stable 1.x that ships `TelemetryMiddleware`;
-tested on 1.0.0, 1.0.3 and 1.1.2), `fi-instrumentation-otel>=1.1.0` and
-Python 3.10 to 3.13. `ag2` is
+Requires `ag2>=1.0.0` (the first stable 1.x that ships `TelemetryMiddleware`),
+`fi-instrumentation-otel>=1.1.0` and Python 3.10 to 3.13. The offline test
+suite runs against ag2 1.0.0, 1.0.3 and 1.1.2 on Python 3.11, and against
+ag2 1.1.2 on Python 3.10, 3.12 and 3.13. `ag2` is
 Apache-2.0 and is a dependency only; nothing from it is vendored.
 
 ## What it does
@@ -143,7 +144,7 @@ the processor drops whole attributes:
 | `hide_outputs`, `hide_output_text` | `gen_ai.output.messages`, `gen_ai.tool.call.result`, `ag2.human_input.response` |
 | `hide_input_messages` | `gen_ai.input.messages`, `gen_ai.system_instructions` |
 | `hide_output_messages` | `gen_ai.output.messages` |
-| `hide_llm_invocation_parameters` | `gen_ai.request.parameters` (through `TraceConfig.mask`) |
+| `hide_llm_invocation_parameters` | Nothing: AG2 sets no invocation-parameter attribute (`gen_ai.request.parameters`) |
 | `hide_input_images`, `hide_embedding_vectors` | Nothing: AG2 records only text parts (binary inputs are omitted) and no embeddings |
 
 The text flags cannot redact just the text inside the JSON, so they remove the
@@ -210,6 +211,20 @@ Notes:
   come from `Agent(assembly=[...])`. With per-call `Plugin` policies
   (`agent.ask(..., plugins=[...])`, ag2 1.1.2) the halted call gets a `chat`
   span with status `UNSET` and no attribute carrying the halt reason.
+- The `record_usage subtask` dedupe matches the sub-agent by name within a
+  trace, so if an instrumented agent and an uninstrumented sub-agent with the
+  same name both run in one trace, the uninstrumented one's rollup loses its
+  promoted tokens and the trace undercounts; give such agents distinct names.
+- `create_telemetry_middleware()` defaults `agent_name=None`, which AG2
+  records as `unknown`, so a sub-agent instrumented that way never matches
+  its rollup's `ag2.usage.label` and its spend is counted twice (pass
+  `agent_name=agent.name`), and `tracer_provider=None` sends spans to the
+  OpenTelemetry global provider, which `register()` does not set by default
+  (pass the provider from `register()` or `setup()`).
+- Two threads making the first `add_span_processor` call on a fresh
+  `register()` provider at the same time can race with fi's unlocked
+  exporter reset and drop `AG2SpanProcessor`; add span processors from one
+  thread, or before calling `setup()`.
 
 ## Troubleshooting
 

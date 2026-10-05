@@ -22,9 +22,10 @@ does not create spans. On every span from AG2's instrumentation scope it only:
   ``hide_output_text`` every output-side one (output messages, tool result,
   human-input response), and ``hide_input_messages`` /
   ``hide_output_messages`` the message keys only. ``hide_input_images`` and
-  ``hide_embedding_vectors`` have nothing to act on (AG2 records neither);
-  ``hide_llm_invocation_parameters`` and ``base64_image_max_length`` apply
-  through ``TraceConfig.mask`` as usual;
+  ``hide_embedding_vectors`` have nothing to act on (AG2 records neither),
+  and neither do ``hide_llm_invocation_parameters`` (AG2 sets no
+  ``gen_ai.request.parameters``) and ``base64_image_max_length``;
+  ``TraceConfig.mask`` still runs on every key;
 * in ``on_start``, copies traceAI context attributes (``using_session``,
   ``using_user``, ``using_metadata``, ``using_attributes``, ...) onto the span
   without overriding keys AG2 sets, except ``session.id``, where the context

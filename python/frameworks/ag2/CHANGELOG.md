@@ -65,3 +65,10 @@
   with `Agent(assembly=...)` policies, and with per-call `Plugin` policies
   gives a `chat` span with status `UNSET` and no reason attribute. No capture
   is added; tests pin these span shapes.
+- README accuracy: the tested-version line now names only what the test
+  suite ran (ag2 1.0.0, 1.0.3 and 1.1.2 on Python 3.11; ag2 1.1.2 on Python
+  3.10, 3.12 and 3.13); `hide_llm_invocation_parameters` is listed as having
+  nothing to act on (AG2 sets no `gen_ai.request.parameters`, now checked by
+  a drift guard); Limits also cover the by-name sub-task match, the
+  `create_telemetry_middleware()` `agent_name` / `tracer_provider` defaults
+  and the concurrent first `add_span_processor` race.

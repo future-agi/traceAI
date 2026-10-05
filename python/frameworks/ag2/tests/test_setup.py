@@ -62,6 +62,9 @@ def test_scope_and_strings_match_installed_ag2():
         assert f'"{key}"' in source
     params = inspect.signature(telemetry.TelemetryMiddleware.__init__).parameters
     assert params["capture_content"].default is True  # upstream default the helper overrides
+    # README: hide_llm_invocation_parameters has nothing to act on because AG2
+    # sets no invocation-parameter attribute.
+    assert "gen_ai.request.parameters" not in source + inspect.getsource(_telemetry_consts)
 
 
 # --- AC-05 privacy default ---------------------------------------------------
