@@ -182,7 +182,7 @@ Writing to an MLflow store also makes MLflow fetch its model catalog to
 price LLM spans, from `https://github.com/mlflow/mlflow/releases/download/model-catalog%2Flatest`
 by default (`mlflow/environment_variables.py:1758-1766`,
 `mlflow/utils/providers.py:252-297`). The test points
-`MLFLOW_MODEL_CATALOG_URI` at a loopback server and sees four requests for
+`MLFLOW_MODEL_CATALOG_URI` at a loopback server and sees `GET` requests for
 `/catalog/openai.json`. Set `MLFLOW_MODEL_CATALOG_URI=` (empty) to turn the
 fetch off. OTLP-only export never fetches it.
 
