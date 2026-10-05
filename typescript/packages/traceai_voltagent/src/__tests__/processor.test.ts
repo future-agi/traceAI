@@ -2,6 +2,7 @@ import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { Agent } from "@voltagent/core";
+import { z } from "zod";
 import { FIVoltAgentSpanProcessor } from "../FIVoltAgentSpanProcessor";
 import { isPromotedUsageKey } from "../mapping";
 import {
@@ -543,6 +544,31 @@ describe("span events from a real agent and workflow (M1)", () => {
     expect(String(suspended["suspension.data"])).toContain(MARKERS.suspendData);
     expect(suspended["suspension.checkpoint"]).toEqual(expect.any(String));
     expect(String(events("workflow.resumed")[0]["resume.data"])).toContain(MARKERS.resumeData);
+  });
+});
+
+describe("generateObject (README Tokens)", () => {
+  it("creates no llm span in 2.11.0: usage is only voltagent.usage.* on the agent span", async () => {
+    const { exporter, provider } = fiProvider();
+    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider });
+    const recorder = new RecordingProcessor();
+    const { model, reported } = scriptedModel("mockai/mock-model-1", [
+      { kind: "text", text: '{"city":"Paris"}', input: 9, output: 4 },
+    ]);
+    const agent = new Agent({ name: "assistant", instructions: "x", model });
+    observability = voltagent({ assistant: agent }, [recorder, processor]);
+    const result = await agent.generateObject("hi", z.object({ city: z.string() }));
+    expect(result.object).toEqual({ city: "Paris" });
+    await settle(recorder);
+    await processor.forceFlush();
+    const spans = exporter.getFinishedSpans();
+    expect(reported).toHaveLength(1);
+    expect(spans.filter((span) => span.name.startsWith("llm:"))).toHaveLength(0);
+    expect(spans.filter((span) => attrs(span)["fi.span.kind"] === "LLM")).toHaveLength(0);
+    expect(promotedInputTokens(spans)).toBe(0);
+    const root = attrs(one(spans, "assistant"));
+    expect(root["voltagent.usage.input_tokens"]).toBe(9);
+    expect(root["voltagent.usage.output_tokens"]).toBe(4);
   });
 });
 

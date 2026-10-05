@@ -368,8 +368,15 @@ function looksLikeJson(value: string): boolean {
   return trimmed.startsWith("{") || trimmed.startsWith("[");
 }
 
-/** llm.operation values whose usage VoltAgent also rolls up onto the operation root. */
-const ROOT_ROLLED_UP_OPERATIONS = new Set(["generateText", "streamText", "generateObject", "streamObject"]);
+/**
+ * llm.operation values of the main model call, whose usage VoltAgent also rolls up onto the
+ * operation root. In 2.11.0 the agent opens an llm span (createLLMSpan) only for generateText,
+ * streamText, generateTitle (conversation title; not rolled up), a model-resolution failure (ERROR)
+ * and runInternalGenerateText (a provider tool run through tool routing; also `generateText`).
+ * generateObject / streamObject open no llm span: their usage is only on the root, where it is
+ * exported as `voltagent.usage.*`.
+ */
+const ROOT_ROLLED_UP_OPERATIONS = new Set(["generateText", "streamText"]);
 
 /**
  * VoltAgent 2.11.0 wraps a whole multi-step AI SDK call in one `llm:<operation>` span and records

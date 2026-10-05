@@ -372,6 +372,30 @@ describe("reconcileOperationUsage", () => {
     expect(reconcileOperationUsage(noUsage, [held()])).toBeUndefined();
   });
 
+  it("provider tool via tool routing: two main calls, no reconciliation, under-count never double count", () => {
+    // agent.ts executeProviderToolViaCallTool -> runInternalGenerateText opens a second successful
+    // llm:generateText span in the same operation. Its usage is not in the root total.
+    const main = held(); // last step: 13 input tokens; the root total for the main call is 24
+    const internal = held({ "llm.usage.prompt_tokens": 6, "llm.usage.completion_tokens": 2, "llm.usage.total_tokens": 8 });
+    expect(reconcileOperationUsage(rootSpanAttributes(), [main, internal])).toBeUndefined();
+    const traceInput = [main, internal].reduce(
+      (sum, span) => sum + Number(span.attributes["gen_ai.usage.input_tokens"]),
+      0,
+    );
+    expect(traceInput).toBe(13 + 6);
+    expect(traceInput).toBeLessThan(24 + 6); // every model call's tokens: under-counted, not doubled
+  });
+
+  it("rolls up only the llm operations 2.11.0 emits for a main call (generateText, streamText)", () => {
+    for (const operation of ["generateText", "streamText"]) {
+      expect(reconcileOperationUsage(rootSpanAttributes(), [held({ "llm.operation": operation })])).toBeDefined();
+    }
+    // generateObject / streamObject create no llm span in 2.11.0; their usage is only on the root.
+    for (const operation of ["generateObject", "streamObject"]) {
+      expect(reconcileOperationUsage(rootSpanAttributes(), [held({ "llm.operation": operation })])).toBeUndefined();
+    }
+  });
+
   it("reconciles the one main call even when a title-generation call is present", () => {
     const main = held();
     const title = held({ "llm.operation": "generateTitle", "llm.usage.prompt_tokens": 4 });

@@ -108,11 +108,29 @@ VoltAgent 2.11.0 wraps a whole multi-step AI SDK call (for example: tool call, t
 `llm:<operation>` span and records the AI SDK's `usage` on it, which is the **last step only**,
 while the agent span gets `totalUsage` across all steps. To keep the trace total equal to the
 tokens of every model step, the processor holds each llm span until its operation's root span ends.
-When the operation has exactly one successful `generateText` / `streamText` / `generateObject` /
-`streamObject` llm span and the root total is larger, the exported copy of that llm span carries
-the root total (`voltagent.usage.reconciled = true`) and keeps the last-step values under
-`voltagent.llm.last_step_usage.*`. Otherwise (several main calls, failed attempts, no root within
-`usageReconciliationTimeoutMs`, or a flush in between), the llm span is exported as VoltAgent wrote it.
+When the operation has exactly one successful `llm:generateText` or `llm:streamText` span and the
+root total is larger, the exported copy of that llm span carries the root total
+(`voltagent.usage.reconciled = true`) and keeps the last-step values under
+`voltagent.llm.last_step_usage.*`. Otherwise (several main calls, no root within
+`usageReconciliationTimeoutMs`, or a flush in between), the llm span is exported as VoltAgent wrote
+it. Failed attempts (`ERROR` llm spans) are never reconciled.
+
+#### Limits
+
+A trace's promoted token total can be lower than what the model calls used. It is never counted
+twice.
+
+- `generateObject` / `streamObject` (deprecated in 2.11.0) open no llm span. Their usage appears only
+  as `voltagent.usage.*` on the agent span, so the collector's token columns show 0 for them.
+- Tool routing with a provider tool: VoltAgent runs the provider tool through an internal
+  `generateText` call (`executeProviderToolViaCallTool` → `runInternalGenerateText`), which opens a
+  second successful `llm:generateText` span in the same operation. With two main calls the
+  processor does not reconcile, so the main multi-step span keeps its last-step usage and the
+  earlier steps are missing from the total. The internal call's usage is on its own span, is not
+  part of the agent span's total, and is counted once.
+- A flush between an llm span's end and its root's end (`forceFlush`, a serverless flush on finish,
+  another request's flush), or a root that does not end within `usageReconciliationTimeoutMs`,
+  releases the llm span unreconciled: it carries last-step usage only.
 
 ## Content
 
