@@ -115,6 +115,9 @@ for the string and integer values these fixtures use. The tests check:
 - every span of every fixture is stored and matches its golden;
 - the request carries `project_name` and goes to `/tracer/v1/traces`;
 - the columns match `columns.golden.json`;
+- `first_number()` takes the first alias present and adds nothing. It
+  reads a number before a numeric string for the same key, and skips a
+  non-numeric string. `first_string()` skips an empty string;
 - dual-emit tokens are 3 / 4 / 7. A control derives the columns by adding
   every alias present instead, gets 6 / 8 / 14, and shows the check fails.
   Another shows that a stored 6 fails both goldens;
@@ -126,12 +129,18 @@ for the string and integer values these fixtures use. The tests check:
   a non-loopback endpoint.
 
 The tests do not run fi-collector. The columns are checked against the
-recorded alias lists. One test is opt-in: set `FI_COLLECTOR_ADAPTER_GO` to a
-copy of `fi-collector/pkg/adapter/adapter.go`. It checks that the recorded
-lists and line numbers equal the file's, and that `DeriveHotKeys` uses them
-in the same roles. Without the variable it is skipped. No CI job sets it.
-Run it whenever `adapter.go` changes, or the recorded columns may drift from
-the collector unnoticed.
+recorded alias lists. The tests that read `adapter.go` are opt-in: set
+`FI_COLLECTOR_ADAPTER_GO` to a copy of `fi-collector/pkg/adapter/adapter.go`.
+They check that the recorded lists and line numbers equal the file's, and
+that `DeriveHotKeys` uses them in the same roles. They also check that the
+source of `firstString` and `firstNumber` (`:317-324`, `:330-346`) equals the
+copy recorded in `columns.golden.json`. That source is what
+`first_string()` and `first_number()` mirror: the first alias present wins,
+nothing is added, and for one key a number is read before a numeric string.
+A control edits each of those rules in the file's text, keeping every alias
+list and line number, and shows the check fails. Without the variable these
+tests are skipped. No CI job sets it. Run them whenever `adapter.go`
+changes, or the recorded columns may drift from the collector unnoticed.
 
 When this was written, fi-collector's own JSON decoding and span conversion
 (`4af5338`) were also run on these three files, outside this repository. That

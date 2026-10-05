@@ -22,6 +22,43 @@
       "keys": ["llm.token_count.total", "gen_ai.usage.total_tokens", "llm.usage.total_tokens"]
     }
   },
+  "helpers": {
+    "firstString": {
+      "lines": [317, 324],
+      "source": [
+        "func firstString(attrsString map[string]string, keys []string) string {",
+        "for _, k := range keys {",
+        "if v, ok := attrsString[k]; ok && v != \"\" {",
+        "return v",
+        "}",
+        "}",
+        "return \"\"",
+        "}"
+      ]
+    },
+    "firstNumber": {
+      "lines": [330, 346],
+      "source": [
+        "func firstNumber(",
+        "attrsString map[string]string,",
+        "attrsNumber map[string]float64,",
+        "keys []string,",
+        ") (float64, bool) {",
+        "for _, k := range keys {",
+        "if v, ok := attrsNumber[k]; ok {",
+        "return v, true",
+        "}",
+        "if s, ok := attrsString[k]; ok {",
+        "if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {",
+        "return v, true",
+        "}",
+        "}",
+        "}",
+        "return 0, false",
+        "}"
+      ]
+    }
+  },
   "columns": {
     "era_a.json": {
       "chat": {

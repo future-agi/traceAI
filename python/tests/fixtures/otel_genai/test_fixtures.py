@@ -11,7 +11,8 @@ The model, provider and token columns are fi-collector's
 4af5338). ``columns.golden.json`` records the expected columns and the alias
 order they come from. ``derive_columns`` below applies that recorded order to
 the stored attributes; ``FI_COLLECTOR_ADAPTER_GO`` checks the recorded order
-against a real ``adapter.go``. These tests never run the Go collector.
+and the ``firstString``/``firstNumber`` source against a real ``adapter.go``.
+These tests never run the Go collector.
 
 These are fixtures of these keys, not a claim that Future AGI implements a
 named spec version. No kind is asserted for ``retrieval`` or
@@ -307,6 +308,26 @@ def test_columns_follow_the_adapter_alias_order(
     assert derived == columns_golden["columns"][fixture]
 
 
+def test_first_number_and_first_string_follow_adapter_go(aliases: dict[str, list[str]]) -> None:
+    """The mirror behaves as the source pinned in columns.golden.json["helpers"]."""
+    prompt = aliases["inputTokenKeys"]
+    fi_name, otel_name = prompt[0], prompt[1]
+    # The first alias present wins and nothing is added.
+    assert first_number({}, {fi_name: 3.0, otel_name: 5.0}, prompt) == 3.0
+    assert first_number({}, {otel_name: 5.0}, prompt) == 5.0
+    assert first_number({}, {}, prompt) is None
+    # Alias order decides, not the value type: a numeric string on the first
+    # alias beats a number on the second; a non-numeric string is skipped.
+    assert first_number({fi_name: " 3 "}, {otel_name: 5.0}, prompt) == 3.0
+    assert first_number({fi_name: "n/a"}, {otel_name: 5.0}, prompt) == 5.0
+    # For one key, the number is read before a numeric string.
+    assert first_number({fi_name: "5"}, {fi_name: 3.0}, prompt) == 3.0
+    # An empty string is skipped; the first non-empty alias wins.
+    models = aliases["modelNameKeys"]
+    assert first_string({models[0]: "", models[1]: "gpt-test", models[2]: "gpt-test-actual"}, models) == "gpt-test"
+    assert first_string({}, models) == ""
+
+
 def test_era_b_stores_the_request_model_not_the_response_model(
     aliases: dict[str, list[str]],
 ) -> None:
@@ -390,8 +411,64 @@ def test_a_summing_derivation_fails_the_dual_emit_check(aliases: dict[str, list[
 
 
 # --------------------------------------------------------------------------
-# Opt-in: check the recorded alias order against fi-collector's adapter.go.
+# Opt-in: check the recorded alias order and the firstString/firstNumber
+# source against fi-collector's adapter.go.
 # --------------------------------------------------------------------------
+
+HELPERS = ("firstString", "firstNumber")
+# Changes to the helper bodies that keep every alias list, line span and
+# DeriveHotKeys call site as they are, written against adapter.go @ 4af5338.
+NUMBER_BLOCK = "\t\tif v, ok := attrsNumber[k]; ok {\n\t\t\treturn v, true\n\t\t}\n"
+STRING_BLOCK = (
+    "\t\tif s, ok := attrsString[k]; ok {\n"
+    "\t\t\tif v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {\n"
+    "\t\t\t\treturn v, true\n\t\t\t}\n\t\t}\n"
+)
+HELPER_MUTATIONS = {
+    "firstNumber adds every alias present": (
+        "firstNumber",
+        [
+            ("(float64, bool) {", "(sum float64, found bool) {"),
+            ("return v, true", "sum, found = sum+v, true"),
+            ("return 0, false", "return sum, found"),
+        ],
+    ),
+    "firstNumber reads a numeric string before a number": (
+        "firstNumber",
+        [(NUMBER_BLOCK + STRING_BLOCK, STRING_BLOCK + NUMBER_BLOCK)],
+    ),
+    "firstNumber takes the last alias present": (
+        "firstNumber",
+        [("for _, k := range keys {", "for i := range keys { k := keys[len(keys)-1-i]")],
+    ),
+    "firstString accepts an empty string": ("firstString", [('ok && v != ""', "ok")]),
+}
+
+
+@pytest.fixture(scope="module")
+def adapter_go() -> str:
+    path = os.environ.get("FI_COLLECTOR_ADAPTER_GO")
+    if not path:
+        pytest.skip("set FI_COLLECTOR_ADAPTER_GO to fi-collector/pkg/adapter/adapter.go")
+    return Path(path).read_text(encoding="utf-8")
+
+
+def find_function(source: str, name: str) -> re.Match[str]:
+    match = re.search(r"^func " + name + r"\(.*?^\}", source, flags=re.MULTILINE | re.DOTALL)
+    assert match, name
+    return match
+
+
+def read_helpers(source: str) -> dict[str, dict[str, Any]]:
+    """firstString and firstNumber in adapter.go: line span and source lines, indentation stripped."""
+    helpers = {}
+    for name in HELPERS:
+        match = find_function(source, name)
+        helpers[name] = {
+            "lines": [source.count("\n", 0, match.start()) + 1, source.count("\n", 0, match.end()) + 1],
+            "source": [line.strip() for line in match.group(0).splitlines()],
+        }
+    return helpers
 
 
 def read_alias_lists(source: str) -> dict[str, dict[str, Any]]:
@@ -412,12 +489,8 @@ def read_alias_lists(source: str) -> dict[str, dict[str, Any]]:
     return lists
 
 
-def test_recorded_alias_order_matches_adapter_go(columns_golden: dict[str, Any]) -> None:
-    path = os.environ.get("FI_COLLECTOR_ADAPTER_GO")
-    if not path:
-        pytest.skip("set FI_COLLECTOR_ADAPTER_GO to fi-collector/pkg/adapter/adapter.go")
-    source = Path(path).read_text(encoding="utf-8")
-    assert read_alias_lists(source) == columns_golden["aliases"]
+def test_recorded_alias_order_matches_adapter_go(adapter_go: str, columns_golden: dict[str, Any]) -> None:
+    assert read_alias_lists(adapter_go) == columns_golden["aliases"]
     # derive_columns reads the lists in the roles DeriveHotKeys gives them.
     for line in (
         "hk.Model = firstString(attrsString, modelNameKeys)",
@@ -430,7 +503,34 @@ def test_recorded_alias_order_matches_adapter_go(columns_golden: dict[str, Any])
         "} else if hk.PromptTokens+hk.CompletionTokens > 0 {",
         "hk.TotalTokens = hk.PromptTokens + hk.CompletionTokens",
     ):
-        assert line in source, line
+        assert line in adapter_go, line
+
+
+def test_recorded_first_string_and_first_number_match_adapter_go(
+    adapter_go: str, columns_golden: dict[str, Any]
+) -> None:
+    """first_string and first_number mirror this source: the first alias
+    present wins, nothing is added, and a number is read before a numeric
+    string. Any change to it fails here."""
+    assert read_helpers(adapter_go) == columns_golden["helpers"]
+
+
+@pytest.mark.parametrize("mutation", sorted(HELPER_MUTATIONS))
+def test_a_changed_helper_body_fails_the_drift_check(
+    adapter_go: str, columns_golden: dict[str, Any], mutation: str
+) -> None:
+    """Control: each change keeps the alias lists and line spans, so only the
+    helper source check catches it. The edits are written against 4af5338;
+    if adapter.go itself changes, this fails along with the check above."""
+    name, replacements = HELPER_MUTATIONS[mutation]
+    match = find_function(adapter_go, name)
+    body = match.group(0)
+    for old, new in replacements:
+        assert old in body, (mutation, old)
+        body = body.replace(old, new)
+    mutated = adapter_go[: match.start()] + body + adapter_go[match.end() :]
+    assert read_alias_lists(mutated) == columns_golden["aliases"]
+    assert read_helpers(mutated) != columns_golden["helpers"]
 
 
 def test_readme_states_what_the_fixtures_are() -> None:
