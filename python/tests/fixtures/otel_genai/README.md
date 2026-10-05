@@ -87,9 +87,13 @@ What that means for each fixture:
 - The backend's Python adapter
   (`futureagi/tracer/utils/adapters/otel_genai.py`, `4af5338`) prefers the
   response model over the request model and `gen_ai.system` over
-  `gen_ai.provider.name` (`:110-119`). It also reads
-  `gen_ai.usage.prompt_tokens` as a fallback (`:126`). fi-collector, which
-  these fixtures target, does the opposite on all three. Neither maps
+  `gen_ai.provider.name` (`:110-119`). fi-collector, which these fixtures
+  target, reverses both: it prefers the request model and
+  `gen_ai.provider.name`. The Python adapter also falls back to
+  `gen_ai.usage.prompt_tokens` and `gen_ai.usage.completion_tokens`
+  (`:124-131`). fi-collector does not read `gen_ai.usage.prompt_tokens` at
+  all, nor `gen_ai.usage.completion_tokens`: neither key appears in its
+  source. That is a missing key, not a reversed order. Neither maps
   `invoke_agent` or `retrieval` (`otel_genai.py:31-38`). This change edits
   neither file.
 - traceAI's own note, `docs/OTEL_GENAI_SEMANTIC_CONVENTIONS.md`, lists

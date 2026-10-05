@@ -541,6 +541,9 @@ def test_readme_states_what_the_fixtures_are() -> None:
         "e07f4ebacb08f56db8c4c882d117720333fbca04",
         "4af5338",
         "FI_COLLECTOR_ADAPTER_GO",
+        # otel_genai.py falls back to gen_ai.usage.prompt_tokens; fi-collector
+        # has no such alias. That is absence, not the opposite order.
+        "fi-collector does not read `gen_ai.usage.prompt_tokens` at all",
         *SPAN_NAMES,
     ):
         assert fact in readme, fact
