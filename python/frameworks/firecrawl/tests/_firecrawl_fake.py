@@ -112,7 +112,7 @@ class FakeFirecrawl:
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.origin = "http://127.0.0.1:{0}".format(self._server.server_port)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, args=(0.05,), daemon=True)
         self._thread.start()
 
     def calls_to(self, method: str, path: str) -> int:

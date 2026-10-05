@@ -15,6 +15,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
 pytest.importorskip("firecrawl", reason="firecrawl-py must be installed to test its instrumentor")
 
@@ -103,3 +104,67 @@ def test_sync_crawl_emits_exactly_one_crawl_span(fake: FakeFirecrawl, tracing: T
     assert job.status == "completed"
     assert [span.name for span in spans(exporter)] == ["firecrawl.crawl", "firecrawl.scrape"]
     assert attrs(spans(exporter)[0])["firecrawl.job_id"] == JOB_ID
+
+
+# R2 / AC-03: start, status and cancel share firecrawl.job_id, including when the
+# id is passed positionally (cancel_crawl returns a bool, so the id must come
+# from the call) and when the status call fails.
+
+TRIO = ["firecrawl.start_crawl", "firecrawl.get_crawl_status", "firecrawl.cancel_crawl"]
+
+
+def test_sync_trio_with_positional_ids_shares_job_id(fake: FakeFirecrawl, tracing: Tracing) -> None:
+    _, exporter, _ = tracing
+
+    client = sync_client(fake)
+    started = client.start_crawl("https://example.com", limit=3)
+    client.get_crawl_status(started.id)
+    assert client.cancel_crawl(started.id) is True
+
+    assert [span.name for span in spans(exporter)] == TRIO
+    assert [attrs(span).get("firecrawl.job_id") for span in spans(exporter)] == [JOB_ID] * 3
+
+
+def test_async_trio_with_positional_ids_shares_job_id(fake: FakeFirecrawl, tracing: Tracing) -> None:
+    _, exporter, _ = tracing
+
+    async def journey() -> None:
+        client = async_client(fake)
+        started = await client.start_crawl("https://example.com", limit=3)
+        await client.get_crawl_status(started.id)
+        assert await client.cancel_crawl(started.id) is True
+
+    asyncio.run(journey())
+
+    assert [span.name for span in spans(exporter)] == TRIO
+    assert [attrs(span).get("firecrawl.job_id") for span in spans(exporter)] == [JOB_ID] * 3
+
+
+def test_failed_status_and_cancel_calls_keep_positional_job_id(
+    fake: FakeFirecrawl, tracing: Tracing
+) -> None:
+    _, exporter, _ = tracing
+    client = sync_client(fake)
+
+    with pytest.raises(Exception):
+        client.get_crawl_status("missing-job")
+    with pytest.raises(Exception):
+        client.cancel_crawl("missing-job")
+
+    async def journey() -> None:
+        aclient = async_client(fake)
+        with pytest.raises(Exception):
+            await aclient.get_crawl_status("missing-job")
+        with pytest.raises(Exception):
+            await aclient.cancel_crawl("missing-job")
+
+    asyncio.run(journey())
+
+    finished = spans(exporter)
+    assert [span.name for span in finished] == [
+        "firecrawl.get_crawl_status",
+        "firecrawl.cancel_crawl",
+    ] * 2
+    for span in finished:
+        assert span.status.status_code is StatusCode.ERROR
+        assert attrs(span)["firecrawl.job_id"] == "missing-job"

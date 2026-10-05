@@ -20,6 +20,7 @@ _MAX_QUERY_LENGTH = 1024
 
 # One span per call. crawl polls internally, so it must not emit one span per page.
 _CRAWL_METHODS = {"crawl", "start_crawl", "get_crawl_status", "cancel_crawl"}
+_JOB_ID_FIRST_ARG_METHODS = {"get_crawl_status", "cancel_crawl"}
 
 # True while a traced Firecrawl call runs in this context. firecrawl-py 4.46.2
 # AsyncFirecrawlClient.crawl awaits self.start_crawl, which is wrapped as well;
@@ -79,6 +80,16 @@ def _job_id(result: Any, kwargs: Mapping[str, Any]) -> str:
     return ""
 
 
+def _call_job_id(method_name: str, args: Sequence[Any], kwargs: Mapping[str, Any]) -> str:
+    """Job id the caller passed. get_crawl_status(job_id) and cancel_crawl(crawl_id
+    sync / job_id async) take it as the first positional argument."""
+    if method_name in _JOB_ID_FIRST_ARG_METHODS and args:
+        value = args[0]
+        if isinstance(value, str) and value:
+            return value
+    return _job_id(None, kwargs)
+
+
 class _BaseWrapper:
     def __init__(self, tracer: Tracer, span_name: str, method_name: str) -> None:
         self._tracer = tracer
@@ -101,7 +112,7 @@ class _BaseWrapper:
             limit = kwargs.get("limit")
             if isinstance(limit, int):
                 attributes[_LIMIT] = limit
-            job_id = _job_id(None, kwargs)
+            job_id = _call_job_id(self._method_name, args, kwargs)
             if job_id:
                 attributes[_JOB_ID] = _redact(job_id, instance)
         return attributes
