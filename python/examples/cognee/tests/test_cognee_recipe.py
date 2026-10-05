@@ -645,6 +645,36 @@ def test_recipe_exports_no_content_by_default(runs: dict[str, Scenario]) -> None
     assert_no_content(runs["recipe"].spans)
 
 
+def test_recipe_exports_error_type_and_frames_only_by_default(
+    runs: dict[str, Scenario],
+) -> None:
+    # Cognee's vector-search probes fail in every run (CollectionNotFoundError,
+    # naming the collection). With capture off, only the exception type and
+    # frame lines arrive; with capture on, the error as Cognee recorded it.
+    for name, detail_kept in (("recipe", False), ("capture", True)):
+        errors = [
+            span
+            for span in runs[name].spans
+            if span.get("status", {}).get("code") == "STATUS_CODE_ERROR"
+        ]
+        assert errors, name
+        for span in errors:
+            assert span["events"], span["name"]
+            for event in span["events"]:
+                event_attrs = attributes(event)
+                exception_type = event_attrs["exception.type"]
+                trace = event_attrs["exception.stacktrace"].splitlines()
+                if detail_kept:
+                    assert "not found" in event_attrs["exception.message"]
+                    assert "not found" in span["status"]["message"]
+                    assert "not found" in trace[-1]
+                    continue
+                assert event_attrs["exception.message"] == DETAIL_REMOVED
+                assert span["status"]["message"] == exception_type + TYPE_ONLY
+                assert trace == [TRACEBACK_HEADER, *frame_lines(trace), exception_type]
+                assert frame_lines(trace)
+
+
 def test_recipe_exports_no_secrets(runs: dict[str, Scenario]) -> None:
     recipe = runs["recipe"]
     assert_no_secrets(recipe.spans)
