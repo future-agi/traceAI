@@ -33,3 +33,13 @@ def test_exa_py_is_a_2x_range_not_an_exact_pin():
     for version in ("2.24.0", "3.0.0", "3.1.0"):
         assert not instruments.specifier.contains(version), version
     assert _instruments == ExaInstrumentor().instrumentation_dependencies()
+
+
+def test_fi_instrumentation_floor_is_1_1_0():
+    # 0.1.11/0.1.12 export to the old create_otel_span path and the published
+    # 1.0.0 fails while building its headers; 1.1.0 is the first good release.
+    spec = _dependency("fi-instrumentation-otel")
+    assert spec.contains("1.1.0")
+    assert spec.contains("1.2.0")
+    for version in ("0.1.11", "0.1.12", "0.1.16", "1.0.0"):
+        assert not spec.contains(version), version
