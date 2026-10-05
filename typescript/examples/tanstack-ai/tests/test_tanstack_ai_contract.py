@@ -51,6 +51,8 @@ pytestmark = [
 
 API_KEY = "placeholder-fi-api-key"
 SECRET_KEY = "placeholder-fi-secret-key"
+OPENAI_KEY = "placeholder-openai-key"
+PLACEHOLDER_KEYS = (API_KEY, SECRET_KEY, OPENAI_KEY)
 PROJECT = "th-8238-contract"
 MODEL = "gpt-4o-mini"
 
@@ -76,7 +78,7 @@ def _env(fi_base_url: str, openai_base_url: str) -> dict[str, str]:
         "FI_API_KEY": API_KEY,
         "FI_SECRET_KEY": SECRET_KEY,
         "FI_PROJECT_NAME": PROJECT,
-        "OPENAI_API_KEY": "placeholder-openai-key",
+        "OPENAI_API_KEY": OPENAI_KEY,
         "OPENAI_BASE_URL": openai_base_url,
         "OPENAI_MODEL": MODEL,
     }
@@ -121,6 +123,18 @@ def _is_error(status: dict[str, Any]) -> bool:
     return status.get("code") in (2, "STATUS_CODE_ERROR")
 
 
+def _assert_no_placeholder_keys(spans: list[dict[str, Any]], result: Any) -> None:
+    """No FI or OpenAI key reaches an exported span, stdout or stderr."""
+    surfaces = {
+        "spans": json.dumps(spans),
+        "stdout": result.stdout.decode("utf-8", "replace"),
+        "stderr": result.stderr.decode("utf-8", "replace"),
+    }
+    for surface, text in surfaces.items():
+        for key in PLACEHOLDER_KEYS:
+            assert key not in text, (key, surface)
+
+
 @pytest.fixture(scope="module")
 def default_run():
     """One run of the example exactly as shipped (captureContent unset),
@@ -134,6 +148,7 @@ def default_run():
             spans=receiver.spans(),
             exports=receiver.requests(),
             model_requests=list(fake.requests),
+            model_authorizations=list(fake.authorizations),
         )
 
 
@@ -249,6 +264,18 @@ def test_no_prompt_or_response_content_by_default(default_run):
         assert not span.get("events"), span["name"]
 
 
+def test_placeholder_keys_stay_out_of_spans_and_output(default_run):
+    # Positive control: the keys were in use, as the export headers and as
+    # the model call's bearer token.
+    assert default_run.exports
+    for export in default_run.exports:
+        assert export["headers"]["x-secret-key"] == SECRET_KEY
+    assert default_run.model_authorizations
+    for authorization in default_run.model_authorizations:
+        assert authorization == "Bearer " + OPENAI_KEY
+    _assert_no_placeholder_keys(default_run.spans, default_run.result)
+
+
 def test_export_has_auth_headers_project_resource_and_collector_path(default_run):
     exports = default_run.exports
     assert exports
@@ -293,6 +320,7 @@ def test_unreachable_collector_does_not_fail_chat():
     assert result.returncode == 0, result.stderr.decode()
     assert ANSWER in result.stdout.decode()
     assert "[futureagi] span export failed" in result.stderr.decode()
+    _assert_no_placeholder_keys([], result)
 
 
 @contextlib.contextmanager
@@ -331,6 +359,7 @@ def test_silent_collector_does_not_hold_the_response():
     route_ms = int(re.search(r"routeMs=(\d+)", stdout).group(1))
     assert route_ms < 3000, route_ms
     assert "[futureagi] span export still pending" in result.stderr.decode()
+    _assert_no_placeholder_keys([], result)
 
 
 def test_failed_model_call_exports_error_spans():
@@ -342,7 +371,8 @@ def test_failed_model_call_exports_error_spans():
     """
     with Receiver() as receiver, FakeOpenAI(CITY, ANSWER, fail_status=500) as fake:
         result = _node(EXAMPLE / "src" / "chat.mjs", receiver.origin, fake)
-        spans = _by_name(receiver.spans())
+        raw_spans = receiver.spans()
+        spans = _by_name(raw_spans)
         exports = receiver.requests()
         model_requests = list(fake.requests)
 
@@ -365,6 +395,8 @@ def test_failed_model_call_exports_error_spans():
     # No thread id was passed, so no session (chat() generated its own id).
     for name in (ROOT, ITERATION_0):
         assert "session.id" not in _attributes(spans[name]), name
+    # The provider error is printed; the credentials are not.
+    _assert_no_placeholder_keys(raw_spans, result)
 
 
 def test_abort_mid_stream_ends_spans_as_cancelled():
@@ -421,7 +453,8 @@ def test_readme_recipe_runs_and_exports_the_contract_spans():
     try:
         with Receiver() as receiver, FakeOpenAI(CITY, ANSWER) as fake:
             result = _node(script, receiver.origin, fake, THREAD_ID)
-            spans = _by_name(receiver.spans())
+            raw_spans = receiver.spans()
+            spans = _by_name(raw_spans)
     finally:
         script.unlink()
     assert result.returncode == 0, result.stderr.decode()
@@ -438,3 +471,4 @@ def test_readme_recipe_runs_and_exports_the_contract_spans():
     for name, span in spans.items():
         assert _attributes(span)["session.id"] == THREAD_ID, name
     assert PROMPT not in json.dumps(list(spans.values()))
+    _assert_no_placeholder_keys(raw_spans, result)
