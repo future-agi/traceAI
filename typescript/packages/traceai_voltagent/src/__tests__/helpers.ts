@@ -8,7 +8,16 @@ import {
   SimpleSpanProcessor,
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { Agent, VoltAgent, VoltAgentObservability, createTool } from "@voltagent/core";
+import {
+  Agent,
+  InMemoryStorageAdapter,
+  Memory,
+  VoltAgent,
+  VoltAgentObservability,
+  createOutputGuardrail,
+  createTool,
+  createWorkflowChain,
+} from "@voltagent/core";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { z } from "zod";
 
@@ -19,6 +28,8 @@ export const MARKERS = {
   toolResult: "SECRET_TOOL_RESULT_MARKER",
   answer: "SECRET_ANSWER_MARKER",
   subtask: "SECRET_SUBTASK_MARKER",
+  suspendData: "SECRET_SUSPEND_DATA_MARKER",
+  resumeData: "SECRET_RESUME_DATA_MARKER",
 } as const;
 
 export type Step =
@@ -160,11 +171,53 @@ export function fiProvider() {
   return { exporter, provider };
 }
 
-/** Wire agents into a fresh VoltAgentObservability whose spanProcessors are `processors`. */
-export function voltagent(agents: Record<string, Agent>, processors: SpanProcessor[]) {
+/** Wire agents (and workflows) into a fresh VoltAgentObservability whose spanProcessors are `processors`. */
+export function voltagent(
+  agents: Record<string, Agent>,
+  processors: SpanProcessor[],
+  workflows?: Record<string, ReturnType<typeof approvalWorkflow>>,
+) {
   const observability = new VoltAgentObservability({ spanProcessors: processors });
-  new VoltAgent({ agents, observability, checkDependencies: false });
+  new VoltAgent({ agents, workflows, observability, checkDependencies: false });
   return observability;
+}
+
+/**
+ * An output guardrail with a streaming handler that passes every chunk through. VoltAgent 2.11.0
+ * then adds a `guardrail.stream.process` event per chunk carrying the chunk text
+ * (output-guardrail-stream-runner.ts, `guardrail.chunk.text`).
+ */
+export function passThroughGuardrail() {
+  return createOutputGuardrail({
+    name: "pass-through",
+    handler: async () => ({ pass: true }),
+    streamHandler: ({ part }) => part,
+  });
+}
+
+/**
+ * A one-step workflow that suspends with `question` from its input and completes on resume.
+ * VoltAgent 2.11.0 adds `workflow.suspended` (suspension.data, suspension.checkpoint) and
+ * `workflow.resumed` (resume.data) events to the workflow root (workflow/open-telemetry/trace-context.ts).
+ * The payloads come from the input, never from the step source, because the step source is
+ * serialized into `workflow.stateSnapshot`.
+ */
+export function approvalWorkflow() {
+  return createWorkflowChain({
+    id: "approval",
+    name: "approval",
+    input: z.object({ amount: z.number(), question: z.string() }),
+    result: z.object({ approved: z.boolean() }),
+    memory: new Memory({ storage: new InMemoryStorageAdapter() }),
+  }).andThen({
+    id: "ask",
+    suspendSchema: z.object({ question: z.string() }),
+    resumeSchema: z.object({ approved: z.boolean(), note: z.string() }),
+    execute: async ({ data, suspend, resumeData }) => {
+      if (!resumeData) await suspend("needs approval", { question: data.question });
+      return { approved: resumeData?.approved === true };
+    },
+  });
 }
 
 /** VoltAgentObservability registers its provider globally; reset between tests. */

@@ -8,12 +8,14 @@ import {
   FI_RESOURCE_ATTRIBUTES,
   MARKERS,
   RecordingProcessor,
+  approvalWorkflow,
   attrs,
   byName,
   explodingTool,
   fiProvider,
   one,
   parentId,
+  passThroughGuardrail,
   promotedInputTokens,
   resetOtelGlobals,
   scriptedModel,
@@ -127,6 +129,11 @@ describe("FIVoltAgentSpanProcessor with a real VoltAgent agent (AC-01)", () => {
         expect(attrs(span)[key]).toBeUndefined();
       }
     }
+    // Exception events keep exception.type / .message / .stacktrace (README: passed through).
+    const exception = one(exported, "tool.execution:explode").events.find((event) => event.name === "exception");
+    expect(exception?.attributes?.["exception.message"]).toBe("tool exploded");
+    expect(exception?.attributes?.["exception.type"]).toEqual(expect.any(String));
+    expect(exception?.attributes?.["exception.stacktrace"]).toEqual(expect.stringContaining("tool exploded"));
   });
 
   it("exports content only after captureContent: true (control run)", async () => {
@@ -341,6 +348,201 @@ describe("batching through the register() provider's exporter", () => {
     await agent.generateText("hi");
     await settle(recorder);
     expect(exporter.getFinishedSpans()).toHaveLength(recorder.spans.length);
+  });
+});
+
+/** A finished span as VoltAgent hands it to processors, with the given attributes and events. */
+function fakeSpan(
+  name: string,
+  attributes: Record<string, unknown>,
+  events: Array<{ name: string; attributes?: Record<string, unknown> }>,
+): ReadableSpan {
+  return {
+    name,
+    kind: SpanKind.INTERNAL,
+    spanContext: () => ({ traceId: "c".repeat(32), spanId: name.length.toString(16).padStart(16, "d"), traceFlags: 1 }),
+    parentSpanContext: undefined,
+    startTime: [0, 0],
+    endTime: [0, 10],
+    status: { code: SpanStatusCode.OK },
+    attributes,
+    links: [],
+    events: events.map((event, index) => ({ ...event, time: [0, index + 1] })),
+    duration: [0, 10],
+    ended: true,
+    resource: { attributes: {} },
+    instrumentationScope: { name: "@voltagent/core" },
+    droppedAttributesCount: 0,
+    droppedEventsCount: 0,
+    droppedLinksCount: 0,
+  } as unknown as ReadableSpan;
+}
+
+describe("span events (M1)", () => {
+  // Event shapes VoltAgent 2.11.0 writes: output-guardrail-stream-runner.ts (guardrail.stream.*),
+  // workflow/open-telemetry/trace-context.ts (workflow.suspended / workflow.resumed), and the
+  // OpenTelemetry SDK's recordException.
+  const guardrailSpan = () =>
+    fakeSpan("guardrail.output.stream.1", { "span.type": "guardrail", "guardrail.name": "pii" }, [
+      { name: "guardrail.stream.start", attributes: { "guardrail.stream.handler": true } },
+      {
+        name: "guardrail.stream.process",
+        attributes: {
+          "guardrail.chunk.index": 4,
+          "guardrail.chunk.type": "text-delta",
+          "guardrail.chunk.text": "SECRET_CHUNK_TEXT",
+          "guardrail.chunk.action": "pass",
+        },
+      },
+      {
+        name: "exception",
+        attributes: {
+          "exception.type": "Error",
+          "exception.message": "guardrail failed",
+          "exception.stacktrace": "Error: guardrail failed\n    at handler (guardrail.ts:1:1)",
+        },
+      },
+      {
+        name: "provider.request",
+        attributes: { "provider.name": "openai", "provider.api_key": "PLACEHOLDER_KEY", "http.request.headers": "PLACEHOLDER_HEADERS" },
+      },
+      { name: "guardrail.stream.end" },
+    ]);
+  const workflowSpan = () =>
+    fakeSpan("workflow.approval", { "entity.type": "workflow", "entity.id": "approval" }, [
+      {
+        name: "workflow.suspended",
+        attributes: {
+          "suspension.step_index": 0,
+          "suspension.reason": "needs approval",
+          "suspension.data": '{"question":"SECRET_SUSPEND_DATA"}',
+          "suspension.checkpoint": '{"stepExecutionState":"SECRET_CHECKPOINT"}',
+        },
+      },
+      { name: "workflow.resumed", attributes: { "resume.step_index": 0, "resume.data": '{"note":"SECRET_RESUME_DATA"}' } },
+    ]);
+
+  function exportWith(captureContent: boolean) {
+    const exporter = new InMemorySpanExporter();
+    const processor = new FIVoltAgentSpanProcessor({ exporter, batch: false, captureContent });
+    const originals = [guardrailSpan(), workflowSpan()];
+    const before = JSON.stringify(originals.map((span) => span.events));
+    for (const span of originals) processor.onEnd(span);
+    // The span other processors hold is never modified.
+    expect(JSON.stringify(originals.map((span) => span.events))).toBe(before);
+    const exported = exporter.getFinishedSpans();
+    const event = (spanName: string, eventName: string) => {
+      const found = one(exported, spanName).events.filter((e) => e.name === eventName);
+      expect(found).toHaveLength(1);
+      return found[0].attributes ?? {};
+    };
+    return { exported, event };
+  }
+
+  it("removes content from event attributes by default; names, times, counts and exceptions stay", () => {
+    const { exported, event } = exportWith(false);
+    expect(one(exported, "guardrail.output.stream.1").events.map((e) => [e.name, e.time])).toEqual([
+      ["guardrail.stream.start", [0, 1]],
+      ["guardrail.stream.process", [0, 2]],
+      ["exception", [0, 3]],
+      ["provider.request", [0, 4]],
+      ["guardrail.stream.end", [0, 5]],
+    ]);
+    expect(event("guardrail.output.stream.1", "guardrail.stream.process")).toEqual({
+      "guardrail.chunk.index": 4,
+      "guardrail.chunk.type": "text-delta",
+      "guardrail.chunk.action": "pass",
+    });
+    expect(event("guardrail.output.stream.1", "exception")).toEqual({
+      "exception.type": "Error",
+      "exception.message": "guardrail failed",
+      "exception.stacktrace": "Error: guardrail failed\n    at handler (guardrail.ts:1:1)",
+    });
+    expect(event("workflow.approval", "workflow.suspended")).toEqual({
+      "suspension.step_index": 0,
+      "suspension.reason": "needs approval",
+    });
+    expect(event("workflow.approval", "workflow.resumed")).toEqual({ "resume.step_index": 0 });
+    const blob = JSON.stringify(exported.map((span) => span.events));
+    expect(blob).not.toContain("SECRET");
+    expect(blob).not.toContain("PLACEHOLDER");
+  });
+
+  it("keeps event content after captureContent: true, but never credentials", () => {
+    const { exported, event } = exportWith(true);
+    expect(event("guardrail.output.stream.1", "guardrail.stream.process")["guardrail.chunk.text"]).toBe(
+      "SECRET_CHUNK_TEXT",
+    );
+    const suspended = event("workflow.approval", "workflow.suspended");
+    expect(suspended["suspension.data"]).toBe('{"question":"SECRET_SUSPEND_DATA"}');
+    expect(suspended["suspension.checkpoint"]).toBe('{"stepExecutionState":"SECRET_CHECKPOINT"}');
+    expect(event("workflow.approval", "workflow.resumed")["resume.data"]).toBe('{"note":"SECRET_RESUME_DATA"}');
+    expect(event("guardrail.output.stream.1", "provider.request")).toEqual({ "provider.name": "openai" });
+    expect(JSON.stringify(exported.map((span) => span.events))).not.toContain("PLACEHOLDER");
+  });
+});
+
+describe("span events from a real agent and workflow (M1)", () => {
+  async function runEventJourney(captureContent: boolean) {
+    const { exporter, provider } = fiProvider();
+    const recorder = new RecordingProcessor();
+    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider, captureContent });
+    const { model } = scriptedModel("mockai/mock-model-1", [{ kind: "text", text: MARKERS.answer, input: 3, output: 2 }]);
+    const agent = new Agent({ name: "assistant", instructions: "x", model, outputGuardrails: [passThroughGuardrail()] });
+    const workflow = approvalWorkflow();
+    observability = voltagent({ assistant: agent }, [recorder, processor], { approval: workflow });
+
+    const stream = await agent.streamText(MARKERS.prompt, { conversationId: "conv-events" });
+    expect(await stream.text).toBe(MARKERS.answer);
+    const suspended = await workflow.run({ amount: 5, question: MARKERS.suspendData });
+    expect(suspended.status).toBe("suspended");
+    const resumed = await suspended.resume({ approved: true, note: MARKERS.resumeData });
+    expect(resumed.status).toBe("completed");
+    await settle(recorder);
+    await processor.forceFlush();
+
+    const exported = exporter.getFinishedSpans();
+    const events = (spans: ReadableSpan[], name: string) =>
+      spans.flatMap((span) => span.events.filter((event) => event.name === name).map((event) => event.attributes ?? {}));
+    // Control: VoltAgent really wrote the content into the events the other processors received.
+    expect(events(recorder.spans, "guardrail.stream.process").map((a) => a["guardrail.chunk.text"])).toContain(
+      MARKERS.answer,
+    );
+    expect(String(events(recorder.spans, "workflow.suspended")[0]["suspension.data"])).toContain(MARKERS.suspendData);
+    expect(String(events(recorder.spans, "workflow.resumed")[0]["resume.data"])).toContain(MARKERS.resumeData);
+    expect(exported).toHaveLength(recorder.spans.length);
+    return { exported, events: (name: string) => events(exported, name) };
+  }
+
+  it("drops streamed guardrail text and workflow suspend/resume payloads from events by default", async () => {
+    const { exported, events } = await runEventJourney(false);
+    const processed = events("guardrail.stream.process");
+    expect(processed.map((a) => a["guardrail.chunk.type"])).toContain("text-delta");
+    for (const a of processed) expect(a["guardrail.chunk.text"]).toBeUndefined();
+    expect(events("guardrail.stream.start")).toHaveLength(1);
+    const [suspended] = events("workflow.suspended");
+    expect(suspended).toMatchObject({ "suspension.step_index": 0 });
+    expect(suspended["suspension.reason"]).toEqual(expect.any(String));
+    expect(suspended["suspension.data"]).toBeUndefined();
+    expect(suspended["suspension.checkpoint"]).toBeUndefined();
+    const [resumed] = events("workflow.resumed");
+    expect(resumed).toEqual({ "resume.step_index": 0 });
+    for (const span of exported.filter((s) => s.name === "workflow.approval")) {
+      expect(attrs(span)["fi.span.kind"]).toBe("CHAIN");
+    }
+    const blob = JSON.stringify(exported.map((span) => [span.name, span.attributes, span.events]));
+    for (const marker of [MARKERS.answer, MARKERS.prompt, MARKERS.suspendData, MARKERS.resumeData]) {
+      expect(blob).not.toContain(marker);
+    }
+  });
+
+  it("keeps them after captureContent: true (control run)", async () => {
+    const { events } = await runEventJourney(true);
+    expect(events("guardrail.stream.process").map((a) => a["guardrail.chunk.text"])).toContain(MARKERS.answer);
+    const [suspended] = events("workflow.suspended");
+    expect(String(suspended["suspension.data"])).toContain(MARKERS.suspendData);
+    expect(suspended["suspension.checkpoint"]).toEqual(expect.any(String));
+    expect(String(events("workflow.resumed")[0]["resume.data"])).toContain(MARKERS.resumeData);
   });
 });
 

@@ -91,7 +91,7 @@ promoted token keys on spans that are not model calls (moved under `voltagent.`)
 | `gen_ai.usage.reasoning.output_tokens`, `gen_ai.usage.output_tokens.reasoning` | `llm.usage.reasoning_tokens` | llm spans only, when > 0 |
 | `voltagent.usage.input_tokens`, `.output_tokens`, `.total_tokens`, `.cache_read_tokens`, `.reasoning_tokens` | `usage.prompt_tokens`, ... on the agent span | the operation total; namespaced so it is not counted twice |
 | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.description` | `tool.name`, `tool.call.id`, `tool.description` | |
-| status, `exception` events, `error.*` | passed through | a failing tool is an `ERROR` span |
+| status, `exception` events, `error.*` | passed through | a failing tool is an `ERROR` span; `exception` events keep `exception.type`, `.message` and `.stacktrace`. Other event attributes are filtered like span attributes (see Content) |
 | `input.value`, `output.value` | `input`, `output` (`vector.query` / `embedding.query` as retriever input) | **only with `captureContent: true`** |
 | cost | not mapped | VoltAgent sets `usage.cost` only from OpenRouter provider metadata; it is passed through unchanged and not promoted |
 
@@ -123,17 +123,28 @@ This is stricter than VoltAgent; a VoltOps export of the same run still has the 
 
 Dropped keys: `input`, `output`, `agent.instructions`, `agent.messages`, `agent.messages.ui`,
 `agent.context`, `agent.stateSnapshot`, `llm.messages`, `workflow.context`,
-`workflow.stateSnapshot` (step source and the run input), `workspace.sandbox.command`, `workspace.sandbox.args`, `suspension.checkpoint`,
-`agent.summary.preview`, `agent.summary.text` (summarization), `agent.workingMemory.finalContent`
-(working memory), `planagent.todos`, `planagent.task.description`,
-`planagent.task.response_preview` (PlanAgent), any key with an
+`workflow.stateSnapshot` (step source and the run input), `workspace.sandbox.command`,
+`workspace.sandbox.args`, `suspension.checkpoint`, `agent.summary.preview`, `agent.summary.text`
+(summarization), `agent.workingMemory.finalContent` (working memory), `planagent.todos`,
+`planagent.task.description`, `planagent.task.response_preview` (PlanAgent),
+`guardrail.chunk.text`, `suspension.data`, `resume.data` (span events, below), any key with an
 `input` or `output` segment (`middleware.input.original`, `guardrail.output.after`, ...), and string
 values whose last segment is `messages`, `instructions`, `query`, `context`, `data`, `checkpoint`,
 `prompt(s)`, `completion`, `content`, `arguments` or `args` (`tool.search.query`, `vector.query`,
-`resume.data`, ...). Counts such as `llm.messages.count` stay.
+`workflow.resume.data`, ...). Counts such as `llm.messages.count` stay.
+
+Span events are filtered the same way. VoltAgent puts content in event attributes too: an output
+guardrail with a streaming handler adds a `guardrail.stream.process` event per answer chunk with
+the chunk in `guardrail.chunk.text`, and a workflow adds `workflow.suspended` (`suspension.data`,
+`suspension.checkpoint`) and `workflow.resumed` (`resume.data`). Without `captureContent`, those
+keys are removed from the exported events; the event names, times and other attributes
+(`guardrail.chunk.index`, `suspension.reason`, `resume.step_index`, ...) stay. `exception` events
+keep `exception.type`, `exception.message` and `exception.stacktrace`, which contain whatever text
+the thrown error carries.
 
 Credentials are never exported, whatever `captureContent` says: keys with a segment like
-`api_key`, `secret`, `secret_key`, `password`, `authorization`, `cookie` or `header(s)` are dropped.
+`api_key`, `secret`, `secret_key`, `password`, `authorization`, `cookie` or `header(s)` are dropped,
+from span attributes and from event attributes.
 
 ## Flushing, serverless and failures
 

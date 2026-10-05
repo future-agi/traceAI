@@ -6,6 +6,7 @@ export {
 } from "./FIVoltAgentSpanProcessor";
 export {
   mapVoltAgentAttributes,
+  mapSpanEvents,
   reconcileOperationUsage,
   resolveSpanKind,
   isContentKey,
@@ -13,5 +14,6 @@ export {
   isSecretKey,
   type MapOptions,
   type MappedAttributes,
+  type SpanEventLike,
 } from "./mapping";
 export { VoltAgentAttributes, FIAttributes, VoltAgentFIAttributes } from "./attributes";

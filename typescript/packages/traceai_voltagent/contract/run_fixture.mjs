@@ -6,11 +6,20 @@
 // exporter posts to FI_BASE_URL + /tracer/v1/traces (the shared harness Receiver in tests).
 //
 // Env: FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME (placeholders in tests),
-//      JOURNEY = tools | subagent | burst | collector-down, CAPTURE_CONTENT = "true" to opt in.
+//      JOURNEY = tools | subagent | burst | events, CAPTURE_CONTENT = "true" to opt in.
 // Prints one line "RESULT_JSON:{...}" on stdout.
 import { ProjectType, register } from "@traceai/fi-core";
 import { FIVoltAgentSpanProcessor } from "@traceai/voltagent";
-import { Agent, VoltAgent, VoltAgentObservability, createTool } from "@voltagent/core";
+import {
+  Agent,
+  InMemoryStorageAdapter,
+  Memory,
+  VoltAgent,
+  VoltAgentObservability,
+  createOutputGuardrail,
+  createTool,
+  createWorkflowChain,
+} from "@voltagent/core";
 import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { z } from "zod";
 
@@ -25,6 +34,8 @@ export const MARKERS = {
   toolResult: "SECRET_TOOL_RESULT_MARKER",
   answer: "SECRET_ANSWER_MARKER",
   subtask: "SECRET_SUBTASK_MARKER",
+  suspendData: "SECRET_SUSPEND_DATA_MARKER",
+  resumeData: "SECRET_RESUME_DATA_MARKER",
 };
 
 const modelCalls = [];
@@ -109,7 +120,13 @@ const recorded = [];
 const recorder = {
   onStart() {},
   onEnd(span) {
-    recorded.push({ name: span.name, spanId: span.spanContext().spanId, traceId: span.spanContext().traceId });
+    recorded.push({
+      name: span.name,
+      spanId: span.spanContext().spanId,
+      traceId: span.spanContext().traceId,
+      // Event names and attribute keys as VoltAgent wrote them (the control for event filtering).
+      events: (span.events ?? []).map((event) => [event.name, Object.keys(event.attributes ?? {})]),
+    });
   },
   forceFlush: async () => {},
   shutdown: async () => {},
@@ -150,6 +167,41 @@ if (JOURNEY === "subagent") {
   new VoltAgent({ agents: { supervisor, researcher }, observability, checkDependencies: false });
   const out = await supervisor.generateText(MARKERS.prompt, { conversationId: "conv-sub", userId: "user-1", maxSteps: 4 });
   result.text = out.text;
+} else if (JOURNEY === "events") {
+  // Span events that carry content in VoltAgent 2.11.0: an output guardrail with a streaming
+  // handler adds guardrail.stream.process (guardrail.chunk.text) per chunk, and a workflow that
+  // suspends and resumes adds workflow.suspended (suspension.data, suspension.checkpoint) and
+  // workflow.resumed (resume.data). The payloads come from the input, not the step source,
+  // because VoltAgent serializes the step source into workflow.stateSnapshot.
+  const agent = new Agent({
+    name: "assistant",
+    instructions: MARKERS.instructions,
+    model: scriptedModel("mockai/mock-model-1", [{ text: MARKERS.answer, input: 3, output: 2 }]),
+    outputGuardrails: [
+      createOutputGuardrail({ name: "pass-through", handler: async () => ({ pass: true }), streamHandler: ({ part }) => part }),
+    ],
+  });
+  const workflow = createWorkflowChain({
+    id: "approval",
+    name: "approval",
+    input: z.object({ amount: z.number(), question: z.string() }),
+    result: z.object({ approved: z.boolean() }),
+    memory: new Memory({ storage: new InMemoryStorageAdapter() }),
+  }).andThen({
+    id: "ask",
+    suspendSchema: z.object({ question: z.string() }),
+    resumeSchema: z.object({ approved: z.boolean(), note: z.string() }),
+    execute: async ({ data, suspend, resumeData }) => {
+      if (!resumeData) await suspend("needs approval", { question: data.question });
+      return { approved: resumeData?.approved === true };
+    },
+  });
+  new VoltAgent({ agents: { assistant: agent }, workflows: { approval: workflow }, observability, checkDependencies: false });
+  const stream = await agent.streamText(MARKERS.prompt, { conversationId: "conv-events", userId: "user-9" });
+  result.text = await stream.text;
+  const suspended = await workflow.run({ amount: 5, question: MARKERS.suspendData });
+  const resumed = await suspended.resume({ approved: true, note: MARKERS.resumeData });
+  result.workflowStatuses = [suspended.status, resumed.status];
 } else {
   const agent = new Agent({
     name: "assistant",

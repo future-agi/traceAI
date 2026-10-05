@@ -52,6 +52,8 @@ MARKERS = (
     "SECRET_TOOL_RESULT_MARKER",
     "SECRET_ANSWER_MARKER",
     "SECRET_SUBTASK_MARKER",
+    "SECRET_SUSPEND_DATA_MARKER",
+    "SECRET_RESUME_DATA_MARKER",
 )
 CONTENT_KEYS = ("input", "output", "input.value", "output.value", "llm.messages", "agent.instructions",
                 "agent.messages", "agent.messages.ui", "agent.stateSnapshot")
@@ -60,6 +62,14 @@ PROMOTED_EXACT = {"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "ge
                   "llm.cost.prompt", "llm.cost.completion"}
 PROMOTED_PREFIXES = ("llm.token_count.", "llm.usage.")
 INPUT_TOKEN_KEYS = ("gen_ai.usage.input_tokens", "llm.usage.prompt_tokens", "llm.token_count.prompt")
+# (event name, attribute key) pairs VoltAgent 2.11.0 fills with content (output-guardrail-stream-runner.ts,
+# workflow/open-telemetry/trace-context.ts).
+EVENT_CONTENT = (
+    ("guardrail.stream.process", "guardrail.chunk.text"),
+    ("workflow.suspended", "suspension.data"),
+    ("workflow.suspended", "suspension.checkpoint"),
+    ("workflow.resumed", "resume.data"),
+)
 
 
 def _check(result: subprocess.CompletedProcess, what: str) -> None:
@@ -299,6 +309,52 @@ def test_burst_then_flush_drops_nothing(built_package: Path) -> None:
     assert len(spans) == len(output["recorded"]) == output["storedCount"]
     assert len({span["traceId"] for span in spans}) == 20
     assert _promoted_input_tokens(spans) == sum(call["input"] for call in output["modelCalls"]) == 20 * 24
+
+
+def _event_values(spans: List[Dict[str, Any]]) -> Dict[tuple, List[Any]]:
+    """(event name, attribute key) -> every value exported for it, over the whole trace."""
+    values: Dict[tuple, List[Any]] = {}
+    for span in spans:
+        for event in span.get("events", []):
+            for key, value in _attrs(event).items():
+                values.setdefault((event["name"], key), []).append(value)
+    return values
+
+
+@pytest.mark.parametrize("node", NODES)
+def test_span_events_carry_no_content_by_default(built_package: Path, node: str) -> None:
+    """Guardrail stream chunks and workflow suspend/resume payloads in span events (M1)."""
+    with Receiver() as receiver:
+        output = _run_fixture(node, receiver.origin, "events")
+        spans = receiver.spans()
+        requests = receiver.requests()
+    assert output["text"] == "SECRET_ANSWER_MARKER"
+    assert output["workflowStatuses"] == ["suspended", "completed"]
+    _assert_collector_contract(requests)
+    assert len(spans) == len(output["recorded"])
+
+    # Control: VoltAgent wrote the content keys into the events every processor received.
+    written = {(name, key) for span in output["recorded"] for name, keys in span["events"] for key in keys}
+    for pair in EVENT_CONTENT:
+        assert pair in written, pair
+    exported = _event_values(spans)
+    for pair in EVENT_CONTENT:
+        assert pair not in exported, pair
+    assert "text-delta" in exported[("guardrail.stream.process", "guardrail.chunk.type")]
+    assert exported[("workflow.suspended", "suspension.step_index")] == [0]
+    assert exported[("workflow.resumed", "resume.step_index")] == [0]
+    blob = json.dumps(spans)
+    for marker in MARKERS:
+        assert marker not in blob, marker
+    assert PLACEHOLDER_API_KEY not in blob and PLACEHOLDER_SECRET_KEY not in blob
+
+    with Receiver() as receiver:
+        _run_fixture(node, receiver.origin, "events", {"CAPTURE_CONTENT": "true"})
+        captured = _event_values(receiver.spans())
+    assert "SECRET_ANSWER_MARKER" in captured[("guardrail.stream.process", "guardrail.chunk.text")]
+    assert "SECRET_SUSPEND_DATA_MARKER" in captured[("workflow.suspended", "suspension.data")][0]
+    assert captured[("workflow.suspended", "suspension.checkpoint")]
+    assert "SECRET_RESUME_DATA_MARKER" in captured[("workflow.resumed", "resume.data")][0]
 
 
 def _closed_port() -> int:

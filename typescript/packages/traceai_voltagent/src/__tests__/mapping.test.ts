@@ -304,6 +304,14 @@ describe("content (AC-07)", () => {
     expect(isContentKey("memory.context_limit", 10)).toBe(false);
     expect(isContentKey("gen_ai.usage.input_tokens", 3)).toBe(false);
     expect(isContentKey("tool.name", "x")).toBe(false);
+    // Span-event content (VoltAgent 2.11.0 guardrail stream and workflow suspend/resume events).
+    expect(isContentKey("guardrail.chunk.text", "x")).toBe(true);
+    expect(isContentKey("suspension.data", "x")).toBe(true);
+    expect(isContentKey("suspension.checkpoint", "x")).toBe(true);
+    expect(isContentKey("resume.data", "x")).toBe(true);
+    expect(isContentKey("guardrail.chunk.index", 4)).toBe(false);
+    expect(isContentKey("suspension.step_index", 0)).toBe(false);
+    expect(isContentKey("exception.message", "boom")).toBe(false);
   });
 });
 

@@ -70,6 +70,13 @@ const CONTENT_EXACT = new Set<string>([
   "planagent.todos",
   "planagent.task.description",
   "planagent.task.response_preview",
+  // Span-event content: each streamed answer chunk an output guardrail sees
+  // (agent/streaming/output-guardrail-stream-runner.ts, guardrail.stream.process), and the
+  // workflow suspend/resume payloads (workflow/open-telemetry/trace-context.ts,
+  // workflow.suspended / workflow.resumed). Listed here so the value type does not matter.
+  "guardrail.chunk.text",
+  "suspension.data",
+  "resume.data",
   // Future AGI / GenAI content keys, in case an upstream span already carries them.
   "input.value",
   "output.value",
@@ -110,6 +117,36 @@ const SECRET_SEGMENT = /^(api[_-]?key|apikey|secret|secret[_-]?key|password|pass
 
 export function isSecretKey(key: string): boolean {
   return key.split(".").some((segment) => SECRET_SEGMENT.test(segment));
+}
+
+/** The OpenTelemetry exception event keys (type, message, stacktrace, escaped). */
+const EXCEPTION_PREFIX = "exception.";
+
+/** A span event as `ReadableSpan.events` holds it. */
+export interface SpanEventLike {
+  name: string;
+  attributes?: Attributes;
+}
+
+/**
+ * Filter span event attributes the way span attributes are filtered: credential keys are always
+ * removed, content keys are removed unless captureContent. `exception.*` keys are kept (exception
+ * events pass through). Event names, times and every other field are kept. Returns new event
+ * objects; the events of the span other processors hold are never mutated.
+ */
+export function mapSpanEvents<T extends SpanEventLike>(events: readonly T[] | undefined, options: MapOptions): T[] {
+  if (!events) return [];
+  return events.map((event) => {
+    if (!event.attributes) return { ...event };
+    const attributes: Attributes = {};
+    for (const [key, value] of Object.entries(event.attributes)) {
+      if (value === undefined) continue;
+      if (isSecretKey(key)) continue;
+      if (!key.startsWith(EXCEPTION_PREFIX) && !options.captureContent && isContentKey(key, value)) continue;
+      attributes[key] = value;
+    }
+    return { ...event, attributes };
+  });
 }
 
 const asString = (value: AttributeValue | undefined): string | undefined =>

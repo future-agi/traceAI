@@ -8,9 +8,10 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { mapVoltAgentAttributes, reconcileOperationUsage } from "./mapping";
+import { mapSpanEvents, mapVoltAgentAttributes, reconcileOperationUsage } from "./mapping";
 
 type Resource = ReadableSpan["resource"];
+type SpanEvents = ReadableSpan["events"];
 
 /**
  * Anything shaped like an OpenTelemetry SDK 2.x `BasicTracerProvider`, such as the
@@ -40,9 +41,9 @@ export interface FIVoltAgentSpanProcessorOptions {
   /** BatchSpanProcessor settings (SDK defaults: queue 2048, batch 512, delay 5000 ms). */
   batchConfig?: BufferConfig;
   /**
-   * Export prompts, messages, instructions, tool arguments/results and retrieval queries.
-   * Default false. VoltAgent itself has no such flag and always writes them; this processor
-   * drops them from the Future AGI copy unless you opt in.
+   * Export prompts, messages, instructions, tool arguments/results and retrieval queries, on span
+   * attributes and on span event attributes. Default false. VoltAgent itself has no such flag and
+   * always writes them; this processor drops them from the Future AGI copy unless you opt in.
    */
   captureContent?: boolean;
   /**
@@ -63,6 +64,7 @@ interface PendingLLMSpan {
   original: ReadableSpan;
   source: Attributes;
   attributes: Attributes;
+  events: SpanEvents;
   isError: boolean;
 }
 
@@ -109,13 +111,17 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
     if (this.isShutdown) return;
     try {
       const source = span.attributes ?? {};
-      const mapped = mapVoltAgentAttributes(source, { captureContent: this.captureContent });
+      const options = { captureContent: this.captureContent };
+      const mapped = mapVoltAgentAttributes(source, options);
+      // Event attributes carry content too (guardrail stream chunks, workflow suspend/resume data).
+      const events = mapSpanEvents(span.events, options);
 
       if (mapped.isModelCall && mapped.operationId) {
         this.hold(mapped.operationId, {
           original: span,
           source,
           attributes: mapped.attributes,
+          events,
           isError: span.status?.code === SpanStatusCode.ERROR,
         });
         return;
@@ -129,11 +135,11 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
           } catch (error) {
             diag.warn("@traceai/voltagent: usage reconciliation failed", error);
           }
-          for (const held of operation.spans) this.forward(held.original, held.attributes);
+          for (const held of operation.spans) this.forward(held.original, held.attributes, held.events);
         }
       }
 
-      this.forward(span, mapped.attributes);
+      this.forward(span, mapped.attributes, events);
     } catch (error) {
       diag.error("@traceai/voltagent: failed to map or export a VoltAgent span", error);
     }
@@ -187,24 +193,32 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
   private release(operationId: string): void {
     const operation = this.take(operationId);
     if (!operation) return;
-    for (const held of operation.spans) this.forward(held.original, held.attributes);
+    for (const held of operation.spans) this.forward(held.original, held.attributes, held.events);
   }
 
   private releaseAll(): void {
     for (const operationId of Array.from(this.pending.keys())) this.release(operationId);
   }
 
-  private forward(span: ReadableSpan, attributes: Attributes): void {
+  private forward(span: ReadableSpan, attributes: Attributes, events: SpanEvents): void {
     try {
-      this.delegate.processor.onEnd(copySpan(span, attributes, this.delegate.resource ?? span.resource));
+      this.delegate.processor.onEnd(copySpan(span, attributes, this.delegate.resource ?? span.resource, events));
     } catch (error) {
       diag.error("@traceai/voltagent: exporter rejected a span", error);
     }
   }
 }
 
-/** A ReadableSpan with new attributes and resource; every other field reads through. */
-export function copySpan(span: ReadableSpan, attributes: Attributes, resource: Resource): ReadableSpan {
+/**
+ * A ReadableSpan with new attributes, resource and (optionally) events; every other field reads
+ * through. Pass events filtered with `mapSpanEvents`, or the original events are copied as-is.
+ */
+export function copySpan(
+  span: ReadableSpan,
+  attributes: Attributes,
+  resource: Resource,
+  events: SpanEvents = span.events,
+): ReadableSpan {
   const spanContext = span.spanContext();
   const copy = {
     name: span.name,
@@ -216,7 +230,7 @@ export function copySpan(span: ReadableSpan, attributes: Attributes, resource: R
     status: span.status,
     attributes,
     links: span.links,
-    events: span.events,
+    events,
     duration: span.duration,
     ended: span.ended,
     resource,
