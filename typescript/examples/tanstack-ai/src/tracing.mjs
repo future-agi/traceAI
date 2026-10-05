@@ -145,6 +145,8 @@ export const SESSION_ID = "session.id";
  *
  * With `threadIdAsSession: true`, every span also gets
  * session.id = ctx.threadId, the `threadId` the caller passed to chat().
+ * It is exported verbatim, so pass an opaque id (a UUID), never an email
+ * address or user name.
  * Set it only when the caller passed one: chat() otherwise generates a
  * fresh thread-<ms>-<random> id per call, which would make every request its
  * own session. @traceai/fi-core's setSession() only sets a context value;

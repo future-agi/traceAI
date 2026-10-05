@@ -155,6 +155,12 @@ chat({ adapter, messages, threadId: conversationId, middleware: [middleware] });
 `src/chat.mjs` takes it as a second argument:
 `node src/chat.mjs "What is the weather in Paris?" conversation-42`.
 
+The thread id is copied verbatim to `session.id` on every span and leaves
+your process. Use an opaque id, such as a random UUID per conversation, not
+an email address, a user name or anything else that identifies a person.
+The same goes for `chat()`'s legacy `conversationId` option: TanStack uses it
+as the thread id when `threadId` is not set.
+
 Deviation from the traceAI context helper: `setSession()` from
 `@traceai/fi-core` only sets an OpenTelemetry context value. Neither
 `otelMiddleware` nor the plain SDK tracer that `register()`'s provider hands
