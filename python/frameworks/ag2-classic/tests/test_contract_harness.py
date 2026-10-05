@@ -135,8 +135,11 @@ def test_ag2_classic_contract_content_off_round_trip():
             assert attrs["ag2.span.type"] == span_type, name
             assert attrs["gen_ai.span.kind"] == kind, name
 
-    # Model, provider, usage and cost on LLM spans.
+    # Model, provider, usage and cost on LLM spans (the one rejected call is
+    # asserted below).
     for span in names["chat gpt-4o-mini"]:
+        if span.get("status", {}).get("code") == "STATUS_CODE_ERROR":
+            continue
         attrs = _flatten(span)
         assert attrs["gen_ai.operation.name"] == "chat"
         assert attrs["gen_ai.provider.name"] == "openai"
@@ -171,6 +174,23 @@ def test_ag2_classic_contract_content_off_round_trip():
     assert broken["status"].get("code") == "STATUS_CODE_ERROR"
     assert names["execute_tool get_weather"][0].get("status", {}).get("code") != "STATUS_CODE_ERROR"
 
+    # A model call that raises: upstream sets error.type and re-raises
+    # (llm_wrapper.py:97-101). Status stays ERROR through Future AGI's
+    # exporting processor, which turns only UNSET into OK.
+    assert app["llm_error"] == "BadRequestError"
+    assert app["llm_failed_requests"] == 1
+    llm_spans = [s for s in spans if _flatten(s).get("gen_ai.span.kind") == "LLM"]
+    failed_llm = [s for s in llm_spans if s.get("status", {}).get("code") == "STATUS_CODE_ERROR"]
+    assert len(failed_llm) == 1
+    failed_attrs = _flatten(failed_llm[0])
+    assert failed_attrs["error.type"] == "BadRequestError"
+    assert failed_attrs["ag2.span.type"] == "llm"
+    for key in ("gen_ai.usage.input_tokens", "gen_ai.usage.total_tokens", "gen_ai.cost.total"):
+        assert key not in failed_attrs, key
+    ok_llm = [s for s in llm_spans if s not in failed_llm]
+    for span in ok_llm:
+        assert span.get("status", {}).get("code") != "STATUS_CODE_ERROR", span["name"]
+
     # AC-04: every span of the group chat run shares one trace id.
     group_trace = names["conversation writer"][0]["traceId"]
     for name in ("speaker_selection", "conversation checking_agent", "invoke_agent critic"):
@@ -191,7 +211,6 @@ def test_ag2_classic_contract_content_off_round_trip():
     # Usage and cost live on LLM spans only. fi-collector promotes token and
     # cost keys on any span and Observe sums them over a trace, so an
     # aggregate on a conversation/agent span would count every call twice.
-    llm_spans = [s for s in spans if _flatten(s).get("gen_ai.span.kind") == "LLM"]
     for span in spans:
         attrs = _flatten(span)
         if attrs.get("gen_ai.span.kind") == "LLM":
@@ -202,12 +221,14 @@ def test_ag2_classic_contract_content_off_round_trip():
             if key.startswith("gen_ai.usage.") or key in ("gen_ai.cost.total", "llm.cost.total")
         ]
         assert not leaked, "usage/cost keys {0} on non-LLM span {1}".format(leaked, span["name"])
-    assert len(llm_spans) == app["llm_requests"]
+    # Each successful model call is one LLM span with 11 + 7 = 18 tokens; the
+    # failed call carries none.
+    assert len(ok_llm) == app["llm_requests"]
     per_trace: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
     for span in spans:
         tokens = _flatten(span).get("gen_ai.usage.total_tokens", 0)
         per_trace[span["traceId"]][0] += tokens
-    for span in llm_spans:
+    for span in ok_llm:
         per_trace[span["traceId"]][1] += 1
     for trace_id, (total, calls) in per_trace.items():
         assert total == calls * 18, (trace_id, total, calls)

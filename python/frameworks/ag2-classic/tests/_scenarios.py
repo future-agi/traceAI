@@ -73,6 +73,29 @@ def broken_tool_chat(tracing: Any, fake: Any) -> Any:
     return user.initiate_chat(assistant, message="call the broken tool", max_turns=2, silent=True)
 
 
+def failing_llm_chat(tracing: Any, fake: Any) -> str:
+    """The model endpoint rejects the request (HTTP 400); the error reaches the caller.
+
+    The prompt also carries ``SECRET_PROMPT`` so the error path is checked for
+    content leaks. Returns the exception class name the caller saw.
+    """
+    from autogen import ConversableAgent
+
+    from _fake_openai import LLM_FAIL_TRIGGER
+
+    assistant = ConversableAgent("assistant_f", llm_config=fake.llm_config(), human_input_mode="NEVER")
+    user = ConversableAgent("user_f", llm_config=False, human_input_mode="NEVER", max_consecutive_auto_reply=1)
+    tracing.instrument_agent(assistant)
+    tracing.instrument_agent(user)
+    try:
+        user.initiate_chat(
+            assistant, message="{0} {1}".format(LLM_FAIL_TRIGGER, SECRET_PROMPT), max_turns=1, silent=True
+        )
+    except Exception as exc:  # the caller sees the model error
+        return type(exc).__name__
+    raise AssertionError("the fake model was expected to reject the request")
+
+
 def group_chat(tracing: Any, fake: Any, *, message: str = "Write a haiku about tracing") -> Any:
     """writer -> GroupChatManager with LLM ("auto") speaker selection."""
     from autogen import ConversableAgent

@@ -28,6 +28,7 @@ from _scenarios import (  # noqa: E402
     SECRET_PROMPT,
     TOOL_SECRET_CITY,
     broken_tool_chat,
+    failing_llm_chat,
     group_chat,
     two_agent_tool_chat,
 )
@@ -422,6 +423,25 @@ def test_tool_exception_sets_error_status(pipeline, fake):
     assert tool.attributes["error.type"] == "ExecutionError"
     assert tool.status.status_code is StatusCode.ERROR
     assert tool.status.description == "ExecutionError"
+
+
+def test_llm_exception_keeps_error_status_and_error_type(pipeline, fake):
+    """The model call raises: upstream sets error.type and re-raises (llm_wrapper.py:97-101)."""
+    _provider, exporter, make = pipeline
+    tracing = make()
+    assert failing_llm_chat(tracing, fake) == "BadRequestError"
+    assert len(fake.failed_requests) == 1
+    finished = exporter.get_finished_spans()
+    llm = [s for s in finished if s.attributes.get("ag2.span.type") == "llm"]
+    assert len(llm) == 1
+    attrs = llm[0].attributes
+    assert attrs["gen_ai.span.kind"] == "LLM"
+    assert attrs["error.type"] == "BadRequestError"
+    assert llm[0].status.status_code is StatusCode.ERROR
+    # A failed call has no usage: nothing to count, nothing invented.
+    for key in ("gen_ai.usage.total_tokens", "gen_ai.cost.total"):
+        assert key not in attrs
+    _assert_no_content_and_no_promoted_usage_off_llm(finished)
 
 
 # AC-04: group chat, one trace id ----------------------------------------------------

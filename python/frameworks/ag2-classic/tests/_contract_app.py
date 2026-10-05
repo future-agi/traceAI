@@ -25,7 +25,7 @@ def main(argv: list) -> int:
     from opentelemetry import trace as trace_api
 
     from _fake_openai import FakeOpenAI
-    from _scenarios import TOOL_SECRET_CITY, broken_tool_chat, group_chat, two_agent_tool_chat
+    from _scenarios import TOOL_SECRET_CITY, broken_tool_chat, failing_llm_chat, group_chat, two_agent_tool_chat
     from traceai_ag2_classic import setup
 
     global_before = type(trace_api.get_tracer_provider()).__name__
@@ -43,7 +43,10 @@ def main(argv: list) -> int:
         broken_tool_chat(tracing, fake)
         group = group_chat(tracing, fake)
         out["group_chat_id"] = str(group.chat_id)
-        out["llm_requests"] = len(fake.requests)
+        # The model rejects this one (HTTP 400): an LLM span that ends in an exception.
+        out["llm_error"] = failing_llm_chat(tracing, fake)
+        out["llm_requests"] = len(fake.requests)  # successful model calls only
+        out["llm_failed_requests"] = len(fake.failed_requests)
 
     flushed = provider.force_flush(timeout_millis=10000)
     out["flushed"] = bool(flushed)

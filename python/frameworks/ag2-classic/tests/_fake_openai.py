@@ -4,12 +4,15 @@ No network and no vendor API: the server binds to 127.0.0.1 on a free port and
 answers ``POST /v1/chat/completions`` with deterministic replies chosen from the
 request body:
 
+* a request whose messages contain ``LLM_FAIL_TRIGGER`` gets HTTP 400 (the
+  OpenAI client raises ``BadRequestError`` and does not retry); it is recorded
+  in ``failed_requests``, not ``requests``;
 * a group-chat speaker-selection prompt gets ``speaker_reply`` (an agent name);
 * a request whose last message is a tool result gets ``final_reply``;
 * a request that offers tools gets one tool call to the first offered tool;
 * anything else gets ``text_reply``.
 
-Every reply carries ``usage`` so token attributes can be asserted.
+Every successful reply carries ``usage`` so token attributes can be asserted.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Any, Dict, List, Optional
 PROMPT_TOKENS = 11
 COMPLETION_TOKENS = 7
 FAKE_MODEL = "gpt-4o-mini"
+LLM_FAIL_TRIGGER = "FAKE-LLM-REJECT"
 
 
 class FakeOpenAI:
@@ -39,6 +43,7 @@ class FakeOpenAI:
         self.speaker_reply = speaker_reply
         self.tool_arguments = tool_arguments if tool_arguments is not None else {"city": "Paris"}
         self.requests: List[Dict[str, Any]] = []
+        self.failed_requests: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
         self._counter = 0
         owner = self
@@ -50,9 +55,21 @@ class FakeOpenAI:
                     return
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-                payload = owner._reply(body)
+                status = HTTPStatus.OK
+                if owner._rejects(body):
+                    status = HTTPStatus.BAD_REQUEST
+                    payload = {
+                        "error": {
+                            "message": "fake model rejected the request",
+                            "type": "invalid_request_error",
+                            "param": None,
+                            "code": "fake_rejected",
+                        }
+                    }
+                else:
+                    payload = owner._reply(body)
                 data = json.dumps(payload).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -90,6 +107,14 @@ class FakeOpenAI:
         }
         entry.update(extra)
         return {"config_list": [entry], "cache_seed": None}
+
+    def _rejects(self, body: Dict[str, Any]) -> bool:
+        messages = body.get("messages") or []
+        if not any(LLM_FAIL_TRIGGER in str(m.get("content") or "") for m in messages if isinstance(m, dict)):
+            return False
+        with self._lock:
+            self.failed_requests.append(body)
+        return True
 
     def _reply(self, body: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
