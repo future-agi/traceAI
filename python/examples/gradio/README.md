@@ -13,9 +13,8 @@ Pinned: `gradio==6.29.1`, the latest release on PyPI on 2026-10-05
 dependency of this example only, not of any traceAI package. `openai` is
 pinned to 3.24.0, the version the tests ran with.
 
-The tests (see [Tests](#tests)) pass on Python 3.11.12 and 3.13.15 against
-loopback fakes only: no model key, no live Future AGI project. Python 3.10
-and 3.12 are within Gradio's metadata but were not tested here;
+The tests (see [Tests](#tests)) pass on Python 3.10, 3.11, 3.12 and 3.13
+against loopback fakes only: no model key, no live Future AGI project.
 `fi-instrumentation-otel` and `traceAI-openai` declare Python <3.14.
 Statements marked "source reading" come from the pinned code and are not
 exercised by the tests.
