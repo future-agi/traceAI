@@ -40,6 +40,7 @@ TRACED_FUNCTION = TESTS_DIR / "traced_function.py"
 TOOL_CALL_SCRIPT = TESTS_DIR / "tool_call.py"
 FAILED_CALL = TESTS_DIR / "failed_call.py"
 REGISTER_FIRST = TESTS_DIR / "register_first.py"
+SECOND_EXPORTER = TESTS_DIR / "second_exporter.py"
 GUARD = TESTS_DIR / "_guarded_run.py"
 GUARD_PROBE = TESTS_DIR / "_guard_probe.py"
 
@@ -157,9 +158,12 @@ class _PathRecorder:
     By default it answers /v1/traces and /tracer/v1/traces with 200 and
     anything else with 404, as fi-collector's HTTP mux does
     (pkg/server/server.go:233-234). ``status`` forces one reply for all.
+    With ``require_keys``, a request without the placeholder Future AGI keys
+    gets 401 first, as fi-collector's auth middleware does
+    (pkg/auth/middleware.go:18-21).
     """
 
-    def __init__(self, status: Optional[HTTPStatus] = None) -> None:
+    def __init__(self, status: Optional[HTTPStatus] = None, require_keys: bool = False) -> None:
         self.calls: list[tuple[str, str, int]] = []
         lock = threading.Lock()
         owner = self
@@ -168,8 +172,11 @@ class _PathRecorder:
             def do_POST(self) -> None:  # noqa: N802
                 path = urlsplit(self.path).path
                 self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                keys = (self.headers.get("x-api-key"), self.headers.get("x-secret-key"))
                 if status is not None:
                     reply = status
+                elif require_keys and keys != (FI_API_KEY, FI_SECRET_KEY):
+                    reply = HTTPStatus.UNAUTHORIZED
                 elif path in ("/v1/traces", "/tracer/v1/traces"):
                     reply = HTTPStatus.OK
                 else:
@@ -279,24 +286,20 @@ def _run_variant(tmp_path: Path, **init_overrides: Any) -> dict[str, Any]:
 
 
 def _run_against_recorder(
-    tmp_path: Path, suffix: str = "", status: Optional[HTTPStatus] = None, **overrides: Optional[str]
+    tmp_path: Path,
+    suffix: str = "",
+    status: Optional[HTTPStatus] = None,
+    require_keys: bool = False,
+    **overrides: Optional[str],
 ) -> tuple[Any, list[tuple[str, str, int]], list[dict[str, Any]]]:
     """Run a script with a _PathRecorder as the collector; return result, calls, guard log."""
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    guard_log = tmp_path / "guard.jsonl"
     script = VARIANT if "RECIPE_INIT_OVERRIDES" in overrides else APP
-    with _PathRecorder(status) as recorder, FakeOpenAI(ANSWER) as fake:
-        env = _child_env(
-            tmp_path, guard_log, recorder.origin + suffix, fake.base_url, **overrides
-        )
-        result = run(
-            [sys.executable, str(GUARD), str(script), QUESTION],
-            env=env,
-            stdin=None,
-            timeout=RUN_TIMEOUT_SECONDS,
+    with _PathRecorder(status, require_keys) as recorder, FakeOpenAI(ANSWER) as fake:
+        result, guard_attempts = _launch(
+            tmp_path, script, recorder.origin + suffix, fake, **overrides
         )
         calls = list(recorder.calls)
-    return result, calls, _guard_attempts(guard_log)
+    return result, calls, guard_attempts
 
 
 def _value(value: dict[str, Any]) -> Any:
@@ -716,6 +719,91 @@ def test_rejected_export_is_logged_and_the_app_still_exits_zero(tmp_path: Path) 
     assert ANSWER in result.stdout.decode("utf-8", "replace")
 
 
+# Environment that overrides the recipe (README.md, The recipe).
+
+
+@pytest.mark.parametrize(
+    ("traces_headers", "expected_status"),
+    [(None, HTTPStatus.OK), ("x-team=support", HTTPStatus.UNAUTHORIZED)],
+)
+def test_traces_headers_variable_replaces_the_recipes_headers(
+    tmp_path: Path, traces_headers: Optional[str], expected_status: HTTPStatus
+) -> None:
+    """The exporter reads OTEL_EXPORTER_OTLP_TRACES_HEADERS instead of OpenLIT's string."""
+    result, calls, guard_attempts = _run_against_recorder(
+        tmp_path, require_keys=True, OTEL_EXPORTER_OTLP_TRACES_HEADERS=traces_headers
+    )
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert guard_attempts == []
+    assert {(path, status) for _method, path, status in calls} == {
+        ("/v1/traces", int(expected_status))
+    }
+    stderr = result.stderr.decode("utf-8", "replace")
+    rejected = "Failed to export spans batch code: 401" in stderr
+    assert rejected == (expected_status == HTTPStatus.UNAUTHORIZED), stderr
+
+
+def test_traces_endpoint_variable_wins_over_otlp_endpoint(tmp_path: Path) -> None:
+    """A set OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is used as is, and the keys go there."""
+    with _PathRecorder() as recipe_target, Receiver() as elsewhere, FakeOpenAI(ANSWER) as fake:
+        result, guard_attempts = _launch(
+            tmp_path,
+            APP,
+            recipe_target.origin,
+            fake,
+            OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=elsewhere.collector_endpoint,
+        )
+        calls, requests = list(recipe_target.calls), elsewhere.requests()
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert guard_attempts == []
+    assert calls == []
+    # The full URL, nothing appended: /tracer/v1/traces/v1/traces would 404.
+    assert requests, "no export reached the other collector"
+    assert {request["path"] for request in requests} == {"/tracer/v1/traces"}
+    for request in requests:
+        assert request["headers"].get("x-api-key") == FI_API_KEY
+        assert request["headers"].get("x-secret-key") == FI_SECRET_KEY
+
+
+@pytest.mark.parametrize("exporter", ["none", "console"])
+def test_traces_exporter_variable_can_leave_out_the_otlp_exporter(
+    tmp_path: Path, exporter: str
+) -> None:
+    result, calls, guard_attempts = _run_against_recorder(
+        tmp_path, OTEL_TRACES_EXPORTER=exporter
+    )
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert guard_attempts == []
+    assert calls == []
+    stdout = result.stdout.decode("utf-8", "replace")
+    assert ANSWER in stdout
+    # console prints each span to stdout instead.
+    assert ('"name": "{0}"'.format(LLM_SPAN) in stdout) == (exporter == "console")
+
+
+def test_a_later_otlp_exporter_in_the_process_sends_the_future_agi_keys(tmp_path: Path) -> None:
+    """OpenLIT leaves the keys in OTEL_EXPORTER_OTLP_HEADERS for every later exporter."""
+    with Receiver() as recipe_collector, Receiver() as elsewhere, FakeOpenAI(ANSWER) as fake:
+        result, guard_attempts = _launch(
+            tmp_path,
+            SECOND_EXPORTER,
+            recipe_collector.origin,
+            fake,
+            SECOND_COLLECTOR=elsewhere.endpoint,
+        )
+        requests, spans = elsewhere.requests(), elsewhere.spans()
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert guard_attempts == []
+    assert [span["name"] for span in spans] == ["other_library_span"]
+    for request in requests:
+        assert request["headers"].get("x-api-key") == FI_API_KEY
+        assert request["headers"].get("x-secret-key") == FI_SECRET_KEY
+
+
 @pytest.mark.parametrize(
     ("unset", "message"),
     [
@@ -843,11 +931,13 @@ def test_register_before_openlit_init(tmp_path: Path, global_provider: bool) -> 
 # --------------------------------------------------------------------------
 
 
-def _readme_section(title: str) -> str:
+def _readme_section(title: str, level: int = 2) -> str:
+    """The README text from a heading of this level to the next of the same or higher."""
     text = README.read_text(encoding="utf-8")
-    start = text.index("\n## {0}\n".format(title))
-    end = text.find("\n## ", start + 1)
-    return text[start : end if end != -1 else len(text)]
+    start = text.index("\n{0} {1}\n".format("#" * level, title))
+    ends = [text.find("\n{0} ".format("#" * n), start + 1) for n in range(2, level + 1)]
+    ends = [end for end in ends if end != -1]
+    return text[start : min(ends) if ends else len(text)]
 
 
 def test_readme_key_inventory_matches_the_emitted_keys() -> None:
@@ -872,6 +962,18 @@ def test_readme_privacy_names_what_content_off_still_exports(
     assert {"gen_ai.tool.args", "gen_ai.request.user", "exception.message"} <= exported
     missing = sorted(key for key in exported if "`{0}`".format(key) not in not_covered)
     assert missing == [], "not listed in README Privacy: {0}".format(missing)
+
+
+def test_readme_names_the_environment_that_overrides_the_recipe() -> None:
+    """The variables the tests above show replacing or widening the recipe's settings."""
+    section = _readme_section("Environment that overrides the recipe", level=3)
+    for name in (
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ):
+        assert "`{0}`".format(name) in section, name
 
 
 def _code_blocks(section: str, language: str) -> list[str]:

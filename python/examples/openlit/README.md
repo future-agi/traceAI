@@ -121,9 +121,9 @@ that mux does; no deployed endpoint was called.
 Read from source, not tested: with `otlp_endpoint` left out, OpenLIT uses
 `OTEL_EXPORTER_OTLP_ENDPOINT` from the environment, and with neither it
 prints every span to stdout (`tracing.py:121-131`). `src/app.py` refuses to
-start without the variable instead (tested). `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
-if set, is used as the full URL with nothing appended
-(`_common/__init__.py:133-134`). `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` switches
+start without the variable instead (tested). A set
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` wins over all of this (see "Environment
+that overrides the recipe"). `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` switches
 OpenLIT to the gRPC exporter (`tracing.py:23-26`); this recipe does not test
 gRPC.
 
@@ -142,8 +142,9 @@ that contains `,` and `=`. Without the encoding, a comma cuts the value
 short (tested).
 
 Because OpenLIT writes the joined string to `os.environ`, the keys stay in
-the process environment after `init()` and any child process the app starts
-inherits them (read from source).
+the process environment after `init()`. Child processes inherit them (read
+from source), and so does any OTLP exporter created later in the same
+process (tested; see "Environment that overrides the recipe").
 
 ### Project
 
@@ -188,6 +189,41 @@ and the price download is the only URL the `init()` path calls;
 `cloud.openlit.io` appears only in the CLI's help text (read from source).
 No recipe run in the contract test made any non-loopback connection
 attempt.
+
+### Environment that overrides the recipe
+
+If these variables are already set when `openlit.init()` runs, they
+replace or widen what the recipe configures. `src/app.py` does not check
+them.
+
+- `OTEL_EXPORTER_OTLP_TRACES_HEADERS` replaces the header string OpenLIT
+  built: the exporter reads it instead of `OTEL_EXPORTER_OTLP_HEADERS`
+  (`_common/__init__.py:146-147`). The Future AGI keys are then not sent,
+  and every export gets 401, which is only logged. Tested with
+  `x-team=support` against a recorder that answers 401 without the keys, as
+  fi-collector's auth middleware does (`middleware.go:18-21`).
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` wins over `otlp_endpoint` and is used
+  as the full URL, with nothing appended (`_common/__init__.py:133-134`).
+  The Future AGI keys go to that URL, wherever it points (tested).
+- `OTEL_TRACES_EXPORTER` makes OpenLIT add an OTLP exporter only if the list
+  includes `otlp` (`tracing.py:86-119`). With `none` nothing is exported;
+  with `console` each span is printed to stdout instead (both tested).
+- `OTEL_EXPORTER_OTLP_HEADERS` is overwritten by OpenLIT with the recipe's
+  headers (`tracing.py:83`), so headers you put there are dropped (read from
+  source).
+
+The keys also leak the other way. OpenLIT writes the endpoint and the
+joined keys to `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`
+in `os.environ` (`tracing.py:72-83`). Any OTLP/HTTP exporter created later
+in the same process without its own headers reads them and sends the Future
+AGI keys to whatever endpoint it was given. The test builds a second
+exporter for another loopback receiver after `init_tracing()`, and that
+receiver got both keys. An exporter built without an endpoint also sends its
+spans to fi-collector (read from source).
+
+When `openlit.init()` reuses an existing tracer provider, it builds no
+exporter and writes neither variable (`tracing.py:56-59`; see "traceAI's
+`register()`").
 
 ## What is traced
 
