@@ -245,6 +245,7 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-huggingface`](https://pypi.org/project/traceAI-huggingface/) | HuggingFace | [![PyPI](https://img.shields.io/pypi/v/traceAI-huggingface)](https://pypi.org/project/traceAI-huggingface/) |
 | [`traceAI-xai`](https://pypi.org/project/traceAI-xai/) | xAI (Grok) | [![PyPI](https://img.shields.io/pypi/v/traceAI-xai)](https://pypi.org/project/traceAI-xai/) |
 | [`traceAI-vllm`](https://pypi.org/project/traceAI-vllm/) | vLLM | [![PyPI](https://img.shields.io/pypi/v/traceAI-vllm)](https://pypi.org/project/traceAI-vllm/) |
+| [`traceAI-replicate`](https://pypi.org/project/traceAI-replicate/) | Replicate (Python client) | [![PyPI](https://img.shields.io/pypi/v/traceAI-replicate)](https://pypi.org/project/traceAI-replicate/) |
 
 #### Agent Frameworks
 
