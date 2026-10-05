@@ -27,7 +27,12 @@ _METHODS = ("search", "extract")
 
 
 class TavilyInstrumentor(BaseInstrumentor):  # type: ignore[misc]
-    """Trace ``search`` and ``extract`` on TavilyClient and AsyncTavilyClient."""
+    """Trace ``search`` and ``extract`` on TavilyClient and AsyncTavilyClient.
+
+    ``instrument()`` accepts ``tracer_provider`` and ``config`` (a
+    ``fi_instrumentation.TraceConfig``; by default one read from the
+    ``FI_HIDE_*`` environment variables).
+    """
 
     __slots__ = ("_originals",)
 
@@ -35,29 +40,61 @@ class TavilyInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         config = kwargs.get("config")
         if config is None:
             config = TraceConfig()
+        elif not isinstance(config, TraceConfig):
+            raise TypeError(
+                "config must be a fi_instrumentation.TraceConfig, not {0}".format(
+                    type(config).__name__
+                )
+            )
+        tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
         self._originals: Dict[Tuple[str, str, str], Any] = {}
         for module_name, class_name, wrapper_type in _CLIENTS:
-            module = import_module(module_name)
-            client = getattr(module, class_name)
+            client = _vendor_class(module_name, class_name)
+            if client is None:
+                continue
             for method in _METHODS:
-                self._originals[(module_name, class_name, method)] = vars(client)[method]
+                original = vars(client).get(method)
+                if original is None:
+                    logger.warning(
+                        "traceAI-tavily: %s.%s.%s not found; it is not traced",
+                        module_name,
+                        class_name,
+                        method,
+                    )
+                    continue
                 # wrapt 2.x rejects the keyword form; these are positional.
                 wrap_function_wrapper(
-                    module, "{0}.{1}".format(class_name, method), wrapper_type(tracer, method)
+                    module_name,
+                    "{0}.{1}".format(class_name, method),
+                    wrapper_type(tracer, method),
                 )
+                self._originals[(module_name, class_name, method)] = original
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        for (module_name, class_name, method), original in self._originals.items():
-            setattr(getattr(import_module(module_name), class_name), method, original)
+        originals = getattr(self, "_originals", None) or {}
+        for (module_name, class_name, method), original in originals.items():
+            client = _vendor_class(module_name, class_name)
+            if client is not None:
+                setattr(client, method, original)
         self._originals = {}
+
+
+def _vendor_class(module_name: str, class_name: str) -> Any:
+    """The vendor class, or None (logged) when a tavily-python release moved it."""
+    try:
+        return getattr(import_module(module_name), class_name)
+    except (ImportError, AttributeError):
+        logger.warning(
+            "traceAI-tavily: %s.%s not found; it is not traced", module_name, class_name
+        )
+        return None
 
 
 __all__ = ["TavilyInstrumentor", "__version__"]
