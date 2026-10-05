@@ -100,7 +100,7 @@ def test_async_raw_and_streaming_responses_are_traced(fake):
         client = async_client(fake)
         try:
             raw = await client.with_raw_response.search(search_queries=["q"])
-            assert len(raw.parse().results) == 2
+            assert len((await raw.parse()).results) == 2
             async with client.with_streaming_response.extract(
                 urls=["https://x.example/a"]
             ) as response:

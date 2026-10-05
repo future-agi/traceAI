@@ -181,7 +181,7 @@ def test_usage_items_are_recorded_only_when_the_response_has_them(fake):
     with instrumented() as traced:
         client = sync_client(fake)
         client.search(search_queries=[USAGE])
-        client.search(search_queries=["no usage here"])
+        client.search(search_queries=["plain search"])
 
     with_usage, without_usage = (attrs(span) for span in traced.spans())
     assert list(with_usage["parallel.usage.names"]) == [name for name, _ in USAGE_ITEMS]
