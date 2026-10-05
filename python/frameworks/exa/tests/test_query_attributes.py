@@ -160,3 +160,17 @@ def test_capture_urls_does_not_add_urls_to_search_spans(fake):
         Exa(api_key=EXA_KEY, base_url=fake.origin).search("plain search")
 
     assert "fi.retrieval.urls" not in attrs(traced.one())
+
+
+def test_missing_api_key_raises_in_the_constructor_before_any_span(monkeypatch):
+    # PRD J5 expected an ERROR span for a missing key. exa-py raises in
+    # Exa()/AsyncExa() __init__, which is not a traced call, so there is no
+    # span to mark; the README documents this.
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    with instrumented() as traced:
+        with pytest.raises(ValueError, match="API key"):
+            Exa()
+        with pytest.raises(ValueError, match="API key"):
+            AsyncExa()
+
+    assert traced.spans() == []
