@@ -1,0 +1,5 @@
+# Not a traceAI package: these are the example's own dependencies.
+cognee==1.6.2
+# Provides fi_instrumentation.register(); pulls in opentelemetry-sdk and the
+# OTLP/HTTP exporter that Cognee's tracing needs.
+fi-instrumentation-otel
