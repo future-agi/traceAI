@@ -1,0 +1,7 @@
+# Not a traceAI package: these are the example's own dependencies.
+cognee==1.6.2
+# Provides fi_instrumentation.register(); pulls in opentelemetry-sdk and the
+# OTLP/HTTP exporter that Cognee's tracing needs. Pinned because app.py's
+# re-add line relies on register() marking its exporter as a replaceable
+# default (TH-8394); once that is fixed, the line goes away and the pin can move.
+fi-instrumentation-otel>=1.1.0,<1.2
