@@ -25,6 +25,16 @@ Measured with tavily-python 0.8.4, langchain-community 0.4.2, langchain-core
   ``output.value``, and the next agent turn carries it in ``input.value``;
   only ``FI_HIDE_INPUTS`` plus ``FI_HIDE_OUTPUTS`` keeps it all in-process.
 
+With traceAI-tavily on (the wrapper the first result released):
+
+* Bare client: one TOOL span per call, children of the caller's span.
+* LangGraph path (AC-04): still exactly one TOOL span. ``TavilySearchResults``
+  posts with ``requests`` itself and never calls ``TavilyClient``.
+* A LangChain ``@tool`` that calls ``TavilyClient.search``: the LangChain
+  TOOL span plus one ``tavily.search`` span, which starts its own trace
+  because traceAI-langchain does not make its spans current; wrapping the
+  call in ``trace.use_span(traceai_langchain.get_current_span())`` nests it.
+
 Each test prints one ``MEASUREMENT`` line (run with ``-s`` to see it).
 """
 
@@ -242,3 +252,83 @@ def test_langgraph_tool_path_drops_result_text_with_inputs_and_outputs_hidden():
     assert values["input.value"] == values["output.value"] == "__REDACTED__"
     assert _content_keys(spans) == []
     assert sorted(span["name"] for span in spans) == LANGGRAPH_SPANS
+
+
+# --- With traceAI-tavily on (after the decision) ------------------------------
+
+
+def test_bare_client_with_the_wrapper_emits_one_span_per_call():
+    summary, spans, _, paths = measure(
+        "bare_client.py", ["--with-tavily-instrumentor"], "tavily-bare-wrapped"
+    )
+    report("bare_client traceai_tavily", spans, summary=summary, fake_paths=paths)
+
+    assert summary["instrumented"] == ["traceai_tavily"]
+    assert paths == BARE_CLIENT_CALLS
+    (control,) = [span for span in spans if span["name"] == "measurement.control"]
+    traced = tavily_spans(spans)
+    assert [span["name"] for span in traced] == [
+        "tavily.search",
+        "tavily.extract",
+        "tavily.search",
+        "tavily.extract",
+    ]
+    for span in traced:
+        assert kind(span) == "TOOL"
+        assert span["parentSpanId"] == control["spanId"]
+
+
+def test_langgraph_tool_path_is_not_double_counted_with_the_wrapper():
+    """AC-04: TavilySearchResults posts with requests itself, not TavilyClient."""
+    pytest.importorskip("langchain_community", reason="the example's Tavily tool")
+    pytest.importorskip("langgraph", reason="the example is a LangGraph graph")
+    summary, spans, _, paths = measure(
+        "langgraph_tool.py", ["--with-tavily-instrumentor"], "tavily-langgraph-wrapped"
+    )
+    report("langgraph_tool traceai_tavily", spans, summary=summary, fake_paths=paths)
+
+    assert summary["instrumented"] == ["traceai_langchain", "traceai_tavily"]
+    assert paths == ["/search"]
+    langgraph_tool_span(spans)
+    assert sorted(span["name"] for span in spans) == LANGGRAPH_SPANS
+
+
+def test_a_langchain_tool_over_the_bare_client_adds_one_tavily_span():
+    """A custom LangChain tool that calls TavilyClient, with both instrumentors.
+
+    traceAI-langchain does not make its spans current (callbacks cannot
+    guarantee a detach), so the tavily.search span starts its own trace unless
+    the tool makes the LangChain span current itself.
+    """
+    pytest.importorskip("langgraph", reason="the example is a LangGraph graph")
+    _, plain, _, _ = measure("langgraph_tool.py", ["--custom-tool"], "tavily-custom-tool")
+    summary, spans, _, paths = measure(
+        "langgraph_tool.py",
+        ["--custom-tool", "--with-tavily-instrumentor"],
+        "tavily-custom-tool-wrapped",
+    )
+    _, nested, _, _ = measure(
+        "langgraph_tool.py",
+        ["--custom-tool", "--use-langchain-span", "--with-tavily-instrumentor"],
+        "tavily-custom-tool-nested",
+    )
+    report("langgraph custom_tool", plain)
+    report("langgraph custom_tool traceai_tavily", spans, summary=summary, fake_paths=paths)
+    report("langgraph custom_tool use_langchain_span traceai_tavily", nested)
+
+    assert paths == ["/search"]
+    # Without the wrapper the bare client inside the tool adds nothing.
+    assert [span["name"] for span in plain if kind(span) == "TOOL"] == ["tavily_web_search"]
+
+    # With it, exactly one more span: tavily.search, a root in its own trace.
+    assert len(spans) == len(plain) + 1
+    tools = {span["name"]: span for span in spans if kind(span) == "TOOL"}
+    assert sorted(tools) == ["tavily.search", "tavily_web_search"]
+    assert "parentSpanId" not in tools["tavily.search"]
+    assert tools["tavily.search"]["traceId"] != tools["tavily_web_search"]["traceId"]
+
+    # Made current with traceai_langchain.get_current_span(), it nests.
+    assert len(nested) == len(plain) + 1
+    tools = {span["name"]: span for span in nested if kind(span) == "TOOL"}
+    assert tools["tavily.search"]["parentSpanId"] == tools["tavily_web_search"]["spanId"]
+    assert tools["tavily.search"]["traceId"] == tools["tavily_web_search"]["traceId"]

@@ -12,6 +12,12 @@ to ``FI_BASE_URL``.
 Options:
   --with-tavily-instrumentor  also instrument traceAI-tavily (PRD J5: the
                               LangChain tool plus the bare-client wrapper).
+  --custom-tool               use a LangChain ``@tool`` that calls
+                              ``TavilyClient.search`` instead of
+                              ``TavilySearchResults``.
+  --use-langchain-span        in the custom tool, make traceAI-langchain's
+                              tool span current around the client call
+                              (``traceai_langchain.get_current_span()``).
 
 Prints one JSON line with the tool output length and the message count.
 """
@@ -28,6 +34,31 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 
 QUERY = "th-8327 langgraph tool measurement"
+
+
+def _custom_tool():
+    """A LangChain tool written over the bare client, as an app might."""
+    from langchain_core.tools import tool
+    from tavily import TavilyClient
+
+    @tool
+    def tavily_web_search(query: str) -> str:
+        """Search the web with Tavily and return the result URLs."""
+        client = TavilyClient(
+            api_key=os.environ["TAVILY_API_KEY"],
+            api_base_url=os.environ["TAVILY_BASE_URL"],
+        )
+        if "--use-langchain-span" in sys.argv:
+            from opentelemetry import trace
+            from traceai_langchain import get_current_span
+
+            with trace.use_span(get_current_span(), end_on_exit=False):
+                response = client.search(query, max_results=2)
+        else:
+            response = client.search(query, max_results=2)
+        return json.dumps([result["url"] for result in response["results"]])
+
+    return tavily_web_search
 
 
 def main() -> None:
@@ -47,20 +78,23 @@ def main() -> None:
         TavilyInstrumentor().instrument(tracer_provider=provider)
         instrumented.append("traceai_tavily")
 
-    import langchain_community.utilities.tavily_search as tavily_utilities
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     from langgraph.graph import END, START, MessagesState, StateGraph
     from langgraph.prebuilt import ToolNode
 
-    with warnings.catch_warnings():
-        # TavilySearchResults is deprecated upstream in favour of langchain-tavily;
-        # the example on the base branch still imports it.
-        warnings.simplefilter("ignore")
-        from langchain_community.tools.tavily_search import TavilySearchResults
+    if "--custom-tool" in sys.argv:
+        tool = _custom_tool()
+    else:
+        with warnings.catch_warnings():
+            # TavilySearchResults is deprecated upstream in favour of
+            # langchain-tavily; the example on the base branch still imports it.
+            warnings.simplefilter("ignore")
+            import langchain_community.utilities.tavily_search as tavily_utilities
+            from langchain_community.tools.tavily_search import TavilySearchResults
 
-        # The API wrapper reads this module constant on every call.
-        tavily_utilities.TAVILY_API_URL = os.environ["TAVILY_BASE_URL"]
-        tool = TavilySearchResults(max_results=2)
+            # The API wrapper reads this module constant on every call.
+            tavily_utilities.TAVILY_API_URL = os.environ["TAVILY_BASE_URL"]
+            tool = TavilySearchResults(max_results=2)
 
     def agent(state: MessagesState) -> dict:
         if any(isinstance(message, ToolMessage) for message in state["messages"]):
