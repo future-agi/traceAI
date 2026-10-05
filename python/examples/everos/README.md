@@ -36,7 +36,9 @@ export OTEL_RESOURCE_ATTRIBUTES="project_name=my-everos-app,project_type=observe
 everos server start
 ```
 
-Content capture stays at EverOS's default, off. The same settings can live in
+Content capture stays at EverOS's default, off. That keeps queries and
+memories out of span attributes, not out of error text: see
+[Privacy](#privacy). The same settings can live in
 the `[observability]` section of `~/.everos/everos.toml` instead (environment
 variables win over the file). `everos init` already wrote an
 `[observability]` section, so edit that one rather than adding a second:
@@ -193,16 +195,23 @@ open no span (`nested_only`, `component/embedding/openai_provider.py:117-123`).
   specified except `everos.search.rank`, which EverOS types `span` (CHAIN),
   not RETRIEVER. Source reading; whether that adapter runs on
   fi-collector-ingested spans was not established. Recorded here for SF-1.
-- **Model: populated.** `gen_ai.request.model` is on generation and
-  embedding spans; fi-collector reads it (`fi-collector/pkg/adapter/adapter.go:279-284`).
-  EverOS sets no provider key, so the provider column stays empty
-  (`adapter.go:289-295`).
-- **Tokens: on generation and embedding spans only.**
-  `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens`
-  (`adapter.go:296-305`); embedding spans carry input tokens only. EverOS
-  writes no total; fi-collector adds input and output (`adapter.go:232-234`).
-  A span that wraps several LLM calls carries their sum
-  (`attributes.py:191-221`).
+- **Model: populated.** `gen_ai.request.model` is on whichever span is
+  current when EverOS's LLM client or embedding provider records a call,
+  whatever its type. In the recorded scenario that is the generation spans,
+  the embedding spans and the agent-typed `everos.ome.extract_atomic_facts`
+  (table above). fi-collector reads it
+  (`fi-collector/pkg/adapter/adapter.go:279-284`). EverOS sets no provider
+  key, so the provider column stays empty (`adapter.go:289-295`).
+- **Tokens: on the same spans.** `gen_ai.usage.input_tokens` and
+  `gen_ai.usage.output_tokens` (`adapter.go:296-305`) on the generation
+  spans and on `everos.ome.extract_atomic_facts`; embedding spans carry
+  input tokens only. The atomic-fact strategy calls the model directly
+  (`memory/strategies/extract_atomic_facts.py:38-50`) inside its agent span
+  (`infra/ome/_dispatch/runner.py:229-251`), and the LLM client records
+  usage on the current span (`component/llm/_usage_client.py:44-57`), so
+  that agent span carries the call's tokens (tested). EverOS writes no
+  total; fi-collector adds input and output (`adapter.go:232-234`). A span
+  that wraps several LLM calls carries their sum (`attributes.py:191-221`).
 - **Cost: no cost attribute is exported** (tested), and the recipe converts
   no tokens to a price. fi-collector's own fallback is a different matter:
   with no `gen_ai.cost.*` / `llm.cost.*` attribute (`adapter.go:311-313`) it
@@ -216,11 +225,15 @@ open no span (`nested_only`, `component/embedding/openai_provider.py:117-123`).
 
 Content capture is off unless `capture_content = true`
 (`EVEROS_OBSERVABILITY__CAPTURE_CONTENT=true`); the default is false
-(`settings.py:658`, `default.toml:228-230`, `attributes.py:43-45`).
+(`settings.py:658`, `default.toml:228-230`, `attributes.py:43-45`). The
+switch governs two attributes and nothing else. It does not keep error text
+out of the export, so turning it off is not a privacy guarantee.
 
-- **Capture off (tested):** no question, no message text and no extracted
-  memory anywhere in the export, and no `langfuse.observation.input` or
-  `langfuse.observation.output` key.
+- **Capture off (tested):** in a run where nothing fails, no question, no
+  message text and no extracted memory anywhere in the export, and no
+  `langfuse.observation.input` or `langfuse.observation.output` key. A
+  failure can export any of them; see
+  [error text](#error-text-is-not-covered-by-the-switch).
 - **Capture on (tested):** exactly four attributes are added.
   `everos.memory.search` gets `langfuse.observation.input` (the query,
   `top_k` and method as JSON) and `langfuse.observation.output` (the ids of
@@ -231,18 +244,55 @@ Content capture is off unless `capture_content = true`
   (`attributes.py:39, 61-65`), and although EverOS calls them "redacted",
   the redaction hook is a no-op unless your code installs one with
   `set_redactor` (`attributes.py:46, 55-58`).
-- **Never exported (tested, both settings):** the text of the messages you
-  add, the Future AGI keys (they travel only as request headers) and the
-  model API key.
+- **Never exported in the tested runs (both settings):** the text of the
+  messages you add, the Future AGI keys (they travel only as request
+  headers) and the model API key. An error message that quotes any of them
+  exports it; see [error text](#error-text-is-not-covered-by-the-switch).
 - **Exported even with capture off (tested):** identifiers. Session id
   (`langfuse.session.id`), the searched user id (`langfuse.user.id`), the
   memory owner (`langfuse.trace.metadata.owner_id`), app and project ids,
   memcell, request and run ids, model names, and the search's top score.
-- **Not covered by the switch (tested):** when an extraction fails,
-  everalgo's error message quotes the model's reply, and OpenTelemetry
-  records that message as the span's status and in an `exception` event
-  with the stack trace. The `llm_error` test finds the reply there with
-  capture off.
+
+### Error text is not covered by the switch
+
+When an exception leaves an EverOS span, OpenTelemetry records it on that
+span and again on every EverOS span it propagates out of: an ERROR status
+whose description is `<exception type>: <message>`, and an `exception`
+event with the message and the full stack trace, chained causes included
+(opentelemetry-api 1.45.0 `trace/__init__.py:609-628`, opentelemetry-sdk
+1.45.0 `sdk/trace/__init__.py:1026-1046`). The stack trace also carries
+the file paths of your installation. None of EverOS's content controls
+applies to these channels: `capture_content = false`, `set_redactor` and
+the 4096-character cap act only on `langfuse.observation.input` and
+`langfuse.observation.output` (`attributes.py:61-77`), and
+`everos server start` exports through EverOS's own provider and processor
+with no setting that filters status or events (`provider.py:134-139`,
+`tracing_lifespan.py:42`). Whatever an error message contains is exported
+unredacted and uncut. Two cases, not the only ones:
+
+- **Model and embedding provider errors.** The OpenAI client puts the
+  provider's whole error body in the exception message, and EverOS keeps
+  that message: `EmbeddingInputError` or `EmbeddingServiceError` for
+  embeddings (`component/embedding/openai_provider.py:39-49, 121-134`),
+  `LLMError` for chat calls (`component/llm/openai_provider.py:106-109`).
+  A provider or gateway that quotes the rejected input in its error body
+  therefore exports your query, messages or memories. Tested for
+  embeddings: in the `embedding_error` test the embedding endpoint rejects
+  the search query with HTTP 400 and a body that quotes it, plus a marker
+  4,200 characters into the message. With capture off, both are in the
+  status description and `exception` event of `everos.embedding`,
+  `everos.search.recall` and `everos.memory.search`, and in no attribute;
+  the search answers 422. The chat path is source reading.
+- **Extraction errors (tested).** When everalgo rejects a model reply, its
+  error message quotes the reply. The `llm_error` test finds it on
+  `everos.ome.extract_atomic_facts` with capture off. Background strategies
+  record the error on their span before EverOS's retry handling catches it
+  (`infra/ome/_dispatch/runner.py:254-267`).
+
+If queries, messages or memories must not leave the process, keep tracing
+off (`EVEROS_OBSERVABILITY__ENABLED` unset or `false`, EverOS's default)
+until EverOS, or a collector you control, strips exception events and
+status descriptions. This recipe adds no such filter.
 
 ## Notes
 
@@ -275,7 +325,8 @@ and tree, `langfuse.observation.type` per span (the table above), no
 fi-collector kind key, no cost key, tokens and models only where EverOS sets
 them, no query or other content with capture off, the query on the search
 span with capture on, `project_name` and `project_type=observe` on the
-resource, and no keys or host paths.
+resource, and no keys or host paths. Others check that this page names
+every span with a model and tokens and states the error-text caveat.
 
 Live tests run when `everos` is installed. `tests/everos_session.py` runs
 `everos init`, then drives EverOS's own app (`create_app()`, what
@@ -285,15 +336,18 @@ waits for indexing and runs one hybrid search. EverOS's LLM and embedding
 endpoints are a loopback fake of the OpenAI API (`tests/_fake_openai.py`),
 and spans go to the shared harness `Receiver` (`python/tests/harness`),
 which serves `/v1/traces` and `/tracer/v1/traces` like fi-collector but does
-not authenticate or store anything. Three runs: the recipe (capture off),
-capture on, and a model reply everalgo rejects (`llm_error`). They must
+not authenticate or store anything. Four runs: the recipe (capture off),
+capture on, a model reply everalgo rejects (`llm_error`), and an embedding
+endpoint that rejects the search query with an error body quoting it
+(`embedding_error`); both error runs have capture off. The first two must
 match the fixtures (the background `everos.ome.*` spans only where they
 finished), and the tests check the request path, both auth headers, the
-resource, content off and on, and that no key reaches the export or the
-output. `tests/everos_config_probe.py` exports one span through EverOS's
-settings and tracer to test the toml block above, tracing off by default,
-the capture switch, the OpenTelemetry header and endpoint variables, an
-endpoint without its path, and a missing `OTEL_RESOURCE_ATTRIBUTES`.
+resource, content off and on, the error text each error run exports, and
+that no key reaches the export or the output. `tests/everos_config_probe.py`
+exports one span through EverOS's settings and tracer to test the toml
+block above, tracing off by default, the capture switch, the OpenTelemetry
+header and endpoint variables, an endpoint without its path, and a missing
+`OTEL_RESOURCE_ATTRIBUTES`.
 
 Every live process loads `tests/loopback_guard/sitecustomize.py` through
 `PYTHONPATH`: Python-level connections and DNS lookups to any host other
@@ -321,12 +375,12 @@ imports the repository's `python/__init__.py` package (which imports
 from it. Re-record the fixtures by running the same command with
 `EVEROS_RECORD_FIXTURE=1`. A full run takes under a minute once uv has the packages.
 
-All 33 tests pass on Python 3.12.10 and 3.13.15 (macOS arm64) with the pins
+All 37 tests pass on Python 3.12.10 and 3.13.15 (macOS arm64) with the pins
 above and what uv resolved on 2026-10-05: fastapi 0.142.2, starlette 1.7.0,
 httpx 0.28.1, openai 2.54.0, pydantic 2.13.5, pydantic-settings 2.15.0,
 lancedb 0.34.0, tiktoken 0.14.0, protobuf 7.36.2, opentelemetry-proto
 1.45.0, and the everalgo packages everos pins (core 0.3.0, boundary 0.2.1,
 user-memory 0.4.0, agent-memory 0.4.0, rank 0.4.1). Without `everos`
-installed, the 17 fixture tests pass and the 16 live tests are skipped
+installed, the 20 fixture tests pass and the 17 live tests are skipped
 (checked on 3.12). Python 3.10 and 3.11 were not run: EverOS requires 3.12
 or newer.
