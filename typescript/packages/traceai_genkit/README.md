@@ -4,7 +4,7 @@ Send [Firebase Genkit](https://genkit.dev) (JavaScript) spans to Future AGI. Gen
 
 Alpha. Validated with real `genkit` 1.42.0 flows on Genkit's own test model (`mockModel` from `genkit/testing`), exported to a loopback OTLP receiver. No model vendor and no GCP were called.
 
-JavaScript only. Genkit Python and Genkit Go are not covered. This package does not use the Firebase / Google Cloud plugin and does not wrap `ai.generate()`.
+JavaScript only. Genkit Python and Genkit Go are not covered. This package does not use the Firebase / Google Cloud plugin, cannot run next to it in one process in this release (see [Firebase / Google Cloud telemetry plugin](#firebase--google-cloud-telemetry-plugin)), and does not wrap `ai.generate()`.
 
 ## Versions and licence
 
@@ -12,7 +12,7 @@ JavaScript only. Genkit Python and Genkit Go are not covered. This package does 
 |---|---|
 | Tested pin | `genkit` 1.42.0 (`@genkit-ai/core` 1.42.0, `@genkit-ai/ai` 1.42.0) |
 | Peer range | `genkit` `^1.42.0` |
-| Node | 20.20.2, 22.23.3 and 26.8.1 (contract suite and CJS/ESM import check) |
+| Node | 20.20.2, 22.23.3 and 26.8.1: the full contract suite (every journey) ran once per version with `NODE_BINARY` set to it, and jest ran once per version with that Node first on `PATH`. `TRACEAI_NODE_MATRIX` parametrizes only the CJS/ESM entry-point import check; each of the three runs set it to all three Nodes. See [Tests](#tests). |
 | Genkit licence | Apache-2.0 (`node_modules/genkit/LICENSE`, `package.json` `license`) |
 
 `genkit` is a **peer dependency**. Install it yourself. This package never bundles or re-exports Genkit; the pack test hashes every file of the installed `genkit`, `@genkit-ai/core` and `@genkit-ai/ai` and checks that none ships in the tarball.
@@ -62,6 +62,14 @@ Three things the setup depends on, each checked in the installed 1.42.0 source:
 - `enableTelemetry` keeps Genkit's own telemetry-server processor first and appends yours (`@genkit-ai/core` `src/tracing/node-telemetry-provider.ts:66-77`). The Genkit Dev UI keeps working. Passing `traceExporter` instead of `spanProcessors` throws in Genkit.
 
 Metrics: `enableTelemetry({ spanProcessors })` passes no metric reader, and the NodeSDK Genkit uses (`@opentelemetry/sdk-node` 0.52.1) builds a meter provider only when one is configured, so no Genkit metrics go anywhere. `disableMetrics` and `forceDevExport` are options of the `@genkit-ai/google-cloud` plugin (`src/types.ts:92,110`), not of `enableTelemetry`'s `TelemetryConfig`; TypeScript rejects them there.
+
+### Firebase / Google Cloud telemetry plugin
+
+Using this package together with the Firebase / Google Cloud telemetry plugin (`enableFirebaseTelemetry()` from `@genkit-ai/firebase`, `enableGoogleCloudTelemetry()` from `@genkit-ai/google-cloud`, or `ENABLE_FIREBASE_MONITORING=true`) is **not supported in this release**. Use one or the other per process.
+
+Why: both plugins call the same `enableTelemetry()` (`@genkit-ai/firebase` `src/index.ts:40-44` -> `@genkit-ai/google-cloud` `src/index.ts:38-41`), and every `enableTelemetry()` call replaces Genkit's stored config and starts a second NodeSDK (`@genkit-ai/core` `src/tracing/node-telemetry-provider.ts:64,97-98`). Only the first NodeSDK becomes the global tracer provider, so only the first call's processors get Genkit's spans, while `flushTracing()` flushes only the last call's processors (`node-telemetry-provider.ts:143-151`). Whichever runs second gets no spans, and the first is no longer flushed by `flushTracing()`. Checked locally with genkit 1.42.0 and no plugin: two `enableTelemetry()` calls with recording processors, one flow; the first processor received the flow span and no flush, the second received no span and the flush. `ENABLE_FIREBASE_MONITORING=true` makes Genkit call `enableFirebaseTelemetry()` itself when a span starts before any `enableTelemetry()` call (`@genkit-ai/core` `src/tracing.ts:33,50-62`); the Firebase plugin itself was not run (it needs GCP).
+
+Cost: the Future AGI export adds no Google Cloud cost. The Firebase / Google Cloud plugin exports to Cloud Trace, Logging and Monitoring, which Google bills (Blaze plan), so exporting to both, for example from separate deployments, may cost on GCP for that copy only.
 
 ## What you get
 
@@ -130,11 +138,15 @@ Genkit's schema-validation error embeds the rejected data in its message: `Schem
 
 The processor never changes Genkit's span. Genkit's Dev UI and any other exporter see the original attributes; Future AGI gets a mapped copy.
 
+fi-core's `TraceConfig` masking (`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and the other `FI_HIDE_*` settings) is not applied to Genkit spans: `captureContent` is the only content switch in this package.
+
 ## Flush and shutdown
 
 - `flushTracing()` from `genkit/tracing` (`core/src/tracing.ts:113`) flushes every processor, this one included. Call it before a short script exits.
 - `FIGenkitSpanProcessor.forceFlush()` and `shutdown()` never reject. Each is bounded by `flushTimeoutMillis` (default 30000 ms). A collector that is down is logged through the OTel diag logger; the flow still returns.
+- `shutdown()` also shuts down the `register()` provider you passed, and Genkit's NodeSDK calls it on SIGTERM (`@genkit-ai/core` `src/tracing/node-telemetry-provider.ts:99,111`), so give Genkit its own `register()` provider instead of sharing one with other traceAI instrumentations.
 - SIGTERM: `genkit` installs a SIGTERM / SIGINT listener at import that stops its reflection servers and calls `process.exit(0)` without flushing (`genkit/src/genkit.ts:786-793`). An app listener that awaits `flushTracing()` loses that race. `flushOnSignals(flush)` moves the listeners registered so far behind a bounded `flush` (default 10000 ms) and then runs them in order. Call it after `import "genkit"` and after `await enableTelemetry(...)`. It returns a function that restores the original listeners.
+- Call `flushOnSignals` after every other SIGTERM / SIGINT listener is installed: a listener added later is not moved behind the flush and runs at once, in parallel with it, and a second signal (a second Ctrl-C) during the flush is ignored until the flush finishes or its timeout ends.
 - Export goes through the fi-core provider's own span processor and exporter. This package adds no queue of its own.
 
 ## Span inventory at 1.42.0
@@ -159,11 +171,13 @@ From `typescript/packages/traceai_genkit`:
 pnpm exec jest
 ```
 
-From the repository root (shared harness in `python/tests/harness`):
+From the repository root (shared harness in `python/tests/harness`), once per Node version:
 
 ```bash
+NODE_BINARY=/path/to/node-v20.20.2/bin/node \
+TRACEAI_NODE_MATRIX=/path/to/node-v20.20.2/bin/node:/path/to/node-v22.23.3/bin/node:/path/to/node-v26.8.1/bin/node \
 PYTHONPATH=python/tests uv run --no-project --python 3.11 --with pytest --with protobuf --with opentelemetry-proto \
   pytest typescript/packages/traceai_genkit/contract -q -p no:cacheprovider --noconftest -o addopts=''
 ```
 
-The contract suite builds the package, runs `contract/run_fixture.mjs` against the real fi-core exporter and the shared receiver, and checks the collector path and headers, the resource, span names, kinds and parenting, model and tokens, the trace token sum, content off by default with an opt-in control run, one closed model span for a streamed flow, error status and exception events, schema-validation data cut from status and exception events with content off (and kept after opt-in), SIGTERM flushing (with a control that shows a plain listener loses the race), a collector that is down, Genkit's Dev UI reflection server and telemetry export in `GENKIT_ENV=dev`, the inventory drift check, the packed tarball, and the CJS / ESM entry points. `NODE_BINARY` selects the node binary; `TRACEAI_NODE_MATRIX` (path-separated) widens the entry-point check.
+The contract suite builds the package, runs `contract/run_fixture.mjs` against the real fi-core exporter and the shared receiver, and checks the collector path and headers, the resource, span names, kinds and parenting, model and tokens, the trace token sum, content off by default with an opt-in control run, one closed model span for a streamed flow, error status and exception events, schema-validation data cut from status and exception events with content off (and kept after opt-in), SIGTERM flushing (with a control that shows a plain listener loses the race), a collector that is down, Genkit's Dev UI reflection server and telemetry export in `GENKIT_ENV=dev`, the inventory drift check, the packed tarball, and the CJS / ESM entry points. `NODE_BINARY` is the node every fixture journey and the inventory check run on (the build and `pnpm pack` steps use the `node` on `PATH`). `TRACEAI_NODE_MATRIX` (path-separated) parametrizes only the CJS / ESM entry-point import check, which loads the built package through a symlink in a temporary `node_modules` (not a clean `npm install`); unset, it is `NODE_BINARY` alone. The suite ran on 20.20.2, 22.23.3 and 26.8.1, one run each with the matrix above: 22 passed per run (19 tests plus the import check on three Nodes). jest ran on the same three Nodes (that Node first on `PATH`): 68 passed each.
