@@ -35,6 +35,33 @@ logger.addHandler(logging.NullHandler())
 _OPTIONS = frozenset({"tracer_provider", "config"})
 # replicate/__init__.py binds these to default_client at import time.
 _MODULE_FUNCTIONS = ("run", "async_run", "stream", "async_stream")
+# Provider methods that end held create spans before they run (see _hook_provider).
+_PROVIDER_METHODS = ("force_flush", "shutdown")
+_MISSING = object()
+
+
+class _EndPendingFirst:
+    """Stands in for ``force_flush`` / ``shutdown`` on one provider instance.
+
+    Ends the create spans still held open on their predictions, then calls
+    the original, so those spans reach the processors before they flush or
+    stop. ``fi_instrumentation.register()``'s SIGTERM/SIGINT handler shuts
+    the provider down and exits; an ``atexit`` hook alone would run after the
+    processors had stopped and every held span would be dropped.
+    """
+
+    def __init__(self, original: Any, end_pending: Any) -> None:
+        self.original = original
+        self.end_pending = end_pending
+        self.enabled = True
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self.enabled:
+            try:
+                self.end_pending()
+            except Exception:
+                logger.debug("traceai-replicate: could not end held spans", exc_info=True)
+        return self.original(*args, **kwargs)
 
 
 class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
@@ -159,6 +186,9 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         for module_name, class_name, method, wrapper in targets:
             self._wrap(module_name, class_name, method, wrapper)
         self._rebind_module_functions()
+        self._hook_provider(tracer_provider)
+        # Fallback for a provider whose methods could not be hooked; registered
+        # after register(), so it runs before the provider's own atexit shutdown.
         atexit.register(self._end_pending)
 
     def _wrap(self, module_name: str, class_name: str, method: str, wrapper: Any) -> None:
@@ -208,6 +238,49 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                 setattr(package, name, rebound)
                 self._module_functions.append((package, name, current, rebound))
 
+    def _hook_provider(self, provider: Any) -> None:
+        """End held create spans before ``provider.force_flush()``/``shutdown()``.
+
+        Only this provider instance is changed. A provider without these
+        methods, or whose attributes cannot be set, is left as it is; the
+        ``atexit`` fallback still ends held spans on a normal exit.
+        """
+        self._provider_hooks: List[Tuple[Any, str, Any, _EndPendingFirst]] = []
+        for name in _PROVIDER_METHODS:
+            try:
+                original = getattr(provider, name, None)
+                if not callable(original):
+                    continue
+                try:
+                    previous = vars(provider).get(name, _MISSING)
+                except TypeError:  # no __dict__: setattr below fails as well
+                    previous = _MISSING
+                hook = _EndPendingFirst(original, self._end_pending)
+                setattr(provider, name, hook)
+            except Exception:
+                logger.debug(
+                    "traceai-replicate: cannot hook %s.%s; held create spans end at exit",
+                    type(provider).__name__,
+                    name,
+                    exc_info=True,
+                )
+                continue
+            self._provider_hooks.append((provider, name, previous, hook))
+
+    def _unhook_provider(self) -> None:
+        for provider, name, previous, hook in reversed(getattr(self, "_provider_hooks", [])):
+            hook.enabled = False  # a copy someone kept, or a hook layered on ours, passes through
+            try:
+                if vars(provider).get(name) is not hook:
+                    continue  # replaced after instrument(): not ours to undo
+                if previous is _MISSING:
+                    delattr(provider, name)
+                else:
+                    setattr(provider, name, previous)
+            except Exception:
+                logger.debug("traceai-replicate: could not restore %s", name, exc_info=True)
+        self._provider_hooks = []
+
     def _end_pending(self) -> None:
         registry = getattr(self, "_registry", None)
         if registry is not None:
@@ -221,6 +294,7 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             setattr(owner, method, original)
         self._module_functions = []
         self._originals = []
+        self._unhook_provider()
         atexit.unregister(self._end_pending)
         self._end_pending()
 

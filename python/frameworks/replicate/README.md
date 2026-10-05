@@ -65,9 +65,12 @@ The span stays open on the returned prediction:
   that same span with the final status. Create followed by wait is one span.
 - If neither is called, the span ends with the status the create response
   carried (`starting` or `processing`) and the time `create` returned. It is
-  exported when the prediction object is released, at `uninstrument()`, or
-  at interpreter exit. Such a span is not a completion. This package never
-  polls a prediction you did not wait for.
+  exported when the prediction object is released, when the tracer provider
+  you passed to `instrument()` is flushed or shut down (`force_flush()`,
+  `shutdown()`, and the SIGTERM/SIGINT handler that `register()` installs,
+  which calls `shutdown()`), at `uninstrument()`, or at interpreter exit.
+  A `wait()` or `cancel()` after that gets its own span. Such a span is not
+  a completion. This package never polls a prediction you did not wait for.
 
 The prediction you get back is the client's `Prediction` behind a thin
 `wrapt.ObjectProxy`: `isinstance(p, Prediction)` holds, and fields, methods,

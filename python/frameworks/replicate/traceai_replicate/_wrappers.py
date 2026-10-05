@@ -10,8 +10,9 @@ Span model (TH-8320):
   prediction is not terminal yet, the span stays open on that prediction so a
   later ``wait`` / ``cancel`` ends it (one span, not two). If neither is
   called, it ends with the create-time status and the create-time end
-  timestamp when the prediction object is released, at ``uninstrument()``,
-  or at interpreter exit.
+  timestamp when the prediction object is released, when the tracer
+  provider is flushed or shut down, at ``uninstrument()``, or at
+  interpreter exit.
 * ``replicate.prediction.wait`` / ``replicate.predictions.cancel`` - wait or
   cancel on a prediction that has no open create span.
 
