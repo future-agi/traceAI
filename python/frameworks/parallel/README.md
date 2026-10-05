@@ -124,6 +124,12 @@ environment variables before calling `instrument()`:
 `config` must be a `fi_instrumentation.TraceConfig`; anything else raises
 `TypeError` and nothing is wrapped.
 
+Server-written text is recorded as the server wrote it, with only the key
+removed: a warning message or an error message that quotes your request
+shows that text even with `hide_inputs`. `hide_outputs` drops warning
+messages; error messages and stack traces are always recorded on failed
+calls.
+
 ## Errors and cancellation
 
 An error raised by `parallel-web` (for example `AuthenticationError` for an
