@@ -1,0 +1,875 @@
+[
+ {
+  "traceId": "8fWmYzcqS/g6VfjlUep2pQ==",
+  "spanId": "bY3CgdcGxLQ=",
+  "parentSpanId": "ce04TY0DWKI=",
+  "name": "everos.memcell.boundary",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220808766257000",
+  "endTimeUnixNano": "1791220809781330000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "generation"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "gen_ai.request.model",
+    "value": {
+     "stringValue": "openai/gpt-4o-mini"
+    }
+   },
+   {
+    "key": "gen_ai.usage.input_tokens",
+    "value": {
+     "intValue": "11"
+    }
+   },
+   {
+    "key": "gen_ai.usage.output_tokens",
+    "value": {
+     "intValue": "7"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "8fWmYzcqS/g6VfjlUep2pQ==",
+  "spanId": "ce04TY0DWKI=",
+  "name": "everos.memory.add",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220808765975000",
+  "endTimeUnixNano": "1791220809781404000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "span"
+    }
+   },
+   {
+    "key": "langfuse.session.id",
+    "value": {
+     "stringValue": "session-ada-1"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.mode",
+    "value": {
+     "stringValue": "agent"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.is_final",
+    "value": {
+     "boolValue": false
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.defer_extraction",
+    "value": {
+     "boolValue": false
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.request_id",
+    "value": {
+     "stringValue": "62177174f1ef47108dfba2c8dea2bc85"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "+LZbuOFKtIk=",
+  "parentSpanId": "dNANr8kf1RM=",
+  "name": "everos.memcell.boundary",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809784166000",
+  "endTimeUnixNano": "1791220809800804000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "generation"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "gen_ai.request.model",
+    "value": {
+     "stringValue": "openai/gpt-4o-mini"
+    }
+   },
+   {
+    "key": "gen_ai.usage.input_tokens",
+    "value": {
+     "intValue": "11"
+    }
+   },
+   {
+    "key": "gen_ai.usage.output_tokens",
+    "value": {
+     "intValue": "7"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "C3yKSp64hqQ=",
+  "parentSpanId": "dNANr8kf1RM=",
+  "name": "everos.extract",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809801752000",
+  "endTimeUnixNano": "1791220809807098000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "generation"
+    }
+   },
+   {
+    "key": "langfuse.session.id",
+    "value": {
+     "stringValue": "session-ada-1"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.app_id",
+    "value": {
+     "stringValue": "default"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.project_id",
+    "value": {
+     "stringValue": "default"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.memcell_id",
+    "value": {
+     "stringValue": "mc_a1c7012b8de4"
+    }
+   },
+   {
+    "key": "gen_ai.request.model",
+    "value": {
+     "stringValue": "openai/gpt-4o-mini"
+    }
+   },
+   {
+    "key": "gen_ai.usage.input_tokens",
+    "value": {
+     "intValue": "11"
+    }
+   },
+   {
+    "key": "gen_ai.usage.output_tokens",
+    "value": {
+     "intValue": "7"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "42gIo1yhrJE=",
+  "parentSpanId": "dNANr8kf1RM=",
+  "name": "everos.ome.extract_agent_case",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809809734000",
+  "endTimeUnixNano": "1791220809809878000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "agent"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.strategy",
+    "value": {
+     "stringValue": "extract_agent_case"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.run_id",
+    "value": {
+     "stringValue": "26a1e247ef314491bf1e9be0a50f62ec"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.attempt",
+    "value": {
+     "intValue": "0"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.event_topic",
+    "value": {
+     "stringValue": "everos.memory.events:AgentPipelineStarted"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 768
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "mE5TR8SpHeQ=",
+  "parentSpanId": "dNANr8kf1RM=",
+  "name": "everos.persist.markdown",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809807186000",
+  "endTimeUnixNano": "1791220809810423000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "span"
+    }
+   },
+   {
+    "key": "langfuse.session.id",
+    "value": {
+     "stringValue": "session-ada-1"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.owner_id",
+    "value": {
+     "stringValue": "ada"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.app_id",
+    "value": {
+     "stringValue": "default"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.project_id",
+    "value": {
+     "stringValue": "default"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "dNANr8kf1RM=",
+  "name": "everos.memory.flush",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809784093000",
+  "endTimeUnixNano": "1791220809815308000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "span"
+    }
+   },
+   {
+    "key": "langfuse.session.id",
+    "value": {
+     "stringValue": "session-ada-1"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.mode",
+    "value": {
+     "stringValue": "agent"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.is_final",
+    "value": {
+     "boolValue": true
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.defer_extraction",
+    "value": {
+     "boolValue": false
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.request_id",
+    "value": {
+     "stringValue": "dd7f645431de422f8c87db3271791211"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "PG6r3G/BwSE=",
+  "parentSpanId": "IZbLjfOCurQ=",
+  "name": "everos.embedding",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809835232000",
+  "endTimeUnixNano": "1791220809841482000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "embedding"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "gen_ai.request.model",
+    "value": {
+     "stringValue": "text-embedding-3-small"
+    }
+   },
+   {
+    "key": "gen_ai.usage.input_tokens",
+    "value": {
+     "intValue": "3"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "GY/mfwmKKMg=",
+  "parentSpanId": "dNANr8kf1RM=",
+  "name": "everos.ome.extract_atomic_facts",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809831334000",
+  "endTimeUnixNano": "1791220809841879000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "agent"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.strategy",
+    "value": {
+     "stringValue": "extract_atomic_facts"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.run_id",
+    "value": {
+     "stringValue": "43dab83b88a948aaa7dbba1461f4627d"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.attempt",
+    "value": {
+     "intValue": "0"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.event_topic",
+    "value": {
+     "stringValue": "everos.memory.events:EpisodeExtracted"
+    }
+   },
+   {
+    "key": "gen_ai.request.model",
+    "value": {
+     "stringValue": "openai/gpt-4o-mini"
+    }
+   },
+   {
+    "key": "gen_ai.usage.input_tokens",
+    "value": {
+     "intValue": "11"
+    }
+   },
+   {
+    "key": "gen_ai.usage.output_tokens",
+    "value": {
+     "intValue": "7"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 768
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "IZbLjfOCurQ=",
+  "parentSpanId": "dNANr8kf1RM=",
+  "name": "everos.ome.trigger_profile_clustering",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809835171000",
+  "endTimeUnixNano": "1791220809848131000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "agent"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.strategy",
+    "value": {
+     "stringValue": "trigger_profile_clustering"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.run_id",
+    "value": {
+     "stringValue": "0333032183234ee9bcb53c7699800f61"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.attempt",
+    "value": {
+     "intValue": "0"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.event_topic",
+    "value": {
+     "stringValue": "everos.memory.events:EpisodeExtracted"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 768
+ },
+ {
+  "traceId": "rOT44NotUCbHtu8u6T+fEw==",
+  "spanId": "qW/xm1M02lM=",
+  "parentSpanId": "IZbLjfOCurQ=",
+  "name": "everos.ome.extract_user_profile",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220809854318000",
+  "endTimeUnixNano": "1791220809857560000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "agent"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.strategy",
+    "value": {
+     "stringValue": "extract_user_profile"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.run_id",
+    "value": {
+     "stringValue": "e6b46a194a8841ec8cddf6063b47c1bf"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.attempt",
+    "value": {
+     "intValue": "0"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.event_topic",
+    "value": {
+     "stringValue": "everos.memory.events:ProfileClusterUpdated"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 768
+ },
+ {
+  "traceId": "L/ac56oSSQUTjKBmA10bvg==",
+  "spanId": "oFJ6up0SKEQ=",
+  "parentSpanId": "tKoMhwswGhM=",
+  "name": "everos.embedding",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220815028144000",
+  "endTimeUnixNano": "1791220815031796000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "embedding"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "gen_ai.request.model",
+    "value": {
+     "stringValue": "text-embedding-3-small"
+    }
+   },
+   {
+    "key": "gen_ai.usage.input_tokens",
+    "value": {
+     "intValue": "3"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "L/ac56oSSQUTjKBmA10bvg==",
+  "spanId": "tKoMhwswGhM=",
+  "parentSpanId": "CcWSv706FsI=",
+  "name": "everos.search.recall",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220815028109000",
+  "endTimeUnixNano": "1791220815037765000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "retriever"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.phase",
+    "value": {
+     "stringValue": "sparse_dense"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.method",
+    "value": {
+     "stringValue": "hybrid"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "L/ac56oSSQUTjKBmA10bvg==",
+  "spanId": "8jSXin0P6NY=",
+  "parentSpanId": "CcWSv706FsI=",
+  "name": "everos.search.rank",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220815037849000",
+  "endTimeUnixNano": "1791220815041959000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "span"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.phase",
+    "value": {
+     "stringValue": "hierarchy"
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ },
+ {
+  "traceId": "L/ac56oSSQUTjKBmA10bvg==",
+  "spanId": "CcWSv706FsI=",
+  "name": "everos.memory.search",
+  "kind": "SPAN_KIND_INTERNAL",
+  "startTimeUnixNano": "1791220815026860000",
+  "endTimeUnixNano": "1791220815042178000",
+  "attributes": [
+   {
+    "key": "langfuse.observation.type",
+    "value": {
+     "stringValue": "retriever"
+    }
+   },
+   {
+    "key": "langfuse.user.id",
+    "value": {
+     "stringValue": "ada"
+    }
+   },
+   {
+    "key": "langfuse.trace.tags",
+    "value": {
+     "arrayValue": {
+      "values": [
+       {
+        "stringValue": "everos"
+       },
+       {
+        "stringValue": "memory"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.request_id",
+    "value": {
+     "stringValue": "20ae2fd65d654a598aa4951ad490cd21"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.app_id",
+    "value": {
+     "stringValue": "default"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.project_id",
+    "value": {
+     "stringValue": "default"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.owner_type",
+    "value": {
+     "stringValue": "user"
+    }
+   },
+   {
+    "key": "langfuse.trace.metadata.method",
+    "value": {
+     "stringValue": "hybrid"
+    }
+   },
+   {
+    "key": "everos.search.top_score",
+    "value": {
+     "doubleValue": 0.008435162307525619
+    }
+   },
+   {
+    "key": "everos.search.hit",
+    "value": {
+     "boolValue": false
+    }
+   }
+  ],
+  "status": {},
+  "flags": 256
+ }
+]
