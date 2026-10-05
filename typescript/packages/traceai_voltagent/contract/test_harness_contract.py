@@ -13,8 +13,10 @@ Run from the repo root:
     pytest typescript/packages/traceai_voltagent/contract -q -p no:cacheprovider \
     --noconftest -o addopts=''
 
-Set TRACEAI_NODE_MATRIX=/path/to/node20:/path/to/node22 to run every journey on
-several Node binaries.
+NODE_BINARY (default: node on PATH) runs every test. Set
+TRACEAI_NODE_MATRIX=/path/to/node20:/path/to/node22 to run the tests parametrized
+over `node` (tool journey, span-event journey, ESM/CJS import check) on each of
+those binaries instead; the other tests still use NODE_BINARY.
 """
 
 from __future__ import annotations

@@ -189,7 +189,7 @@ from span attributes and from event attributes.
 | `@voltagent/core` | 2.11.0 (npm `latest` on 2026-10-04) |
 | `ai` (mock model, `ai/test` `MockLanguageModelV3`) | 6.0.97 |
 | `@traceai/fi-core` exporter | workspace (OpenTelemetry SDK 2.0.1, OTLP HTTP exporter 0.202.0) |
-| Node.js | 20.20.2, 22.23.3, 26.8.1 |
+| Node.js | 26.8.1: jest and every contract test. 20.20.2 and 22.23.3 as well: the contract tool journey, span-event journey and ESM/CJS entry-point check (the tests `TRACEAI_NODE_MATRIX` parametrizes) |
 
 `@voltagent/core` 2.11.0 is MIT-licensed (`license` in its `package.json`; the published tarball
 has no LICENSE file, its README and `docs/community/licence.md` carry the MIT text, "Copyright (c)
@@ -197,7 +197,8 @@ has no LICENSE file, its README and `docs/community/licence.md` carry the MIT te
 
 ## Not covered
 
-- Workflows (`entity.type=workflow`) map to `CHAIN`; they were not exercised by the fixture.
+- Workflows (`entity.type=workflow`) map to `CHAIN`. The tests run one workflow that suspends and
+  resumes, to check its span events and the root's kind; workflow step spans are not asserted.
 - Retriever, embedding and vector spans are mapped from source reading; the fixture runs only the
   agent's memory spans (`memory.read`, `memory.write`, `memory.steps.write`).
 - VoltAgent logs (`RemoteLogProcessor`) and evals are not exported.
@@ -208,7 +209,9 @@ has no LICENSE file, its README and `docs/community/licence.md` carry the MIT te
 ```bash
 pnpm --filter @traceai/voltagent run build
 pnpm --filter @traceai/voltagent test
-# Shared-harness contract test (from the repo root):
+# Shared-harness contract test (from the repo root). Every test runs on NODE_BINARY (default: node
+# on PATH); with TRACEAI_NODE_MATRIX=/path/node20:/path/node22:..., the tool journey, the span-event
+# journey and the ESM/CJS import check run on each listed binary instead.
 PYTHONPATH="python/tests" uv run --no-project --python 3.11 --with pytest --with protobuf \
   --with opentelemetry-proto pytest typescript/packages/traceai_voltagent/contract -q \
   -p no:cacheprovider --noconftest -o addopts=''
