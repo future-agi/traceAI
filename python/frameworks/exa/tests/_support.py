@@ -105,7 +105,8 @@ class FakeExa:
                     owner._release.wait(30)
                     self._send(200, "application/json", {"results": []})
                 elif path == "/search":
-                    results = [_document(i) for i in range(SEARCH_RESULTS)]
+                    count = int(body.get("numResults") or SEARCH_RESULTS)
+                    results = [_document(i) for i in range(count)]
                     self._send(200, "application/json", {"requestId": "req-1", "results": results})
                 elif path == "/contents":
                     results = [
