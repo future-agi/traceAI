@@ -55,8 +55,11 @@ def test_example_exports_one_replicate_run_span():
     assert not result.timed_out
     assert result.returncode == 0, result.stderr.decode(errors="replace")
     assert TEXT_OUTPUT in result.stdout.decode()
-    assert fake.paths() == ["/v1/models/meta/meta-llama-3-8b-instruct/predictions"]
-    assert fake.request_headers("POST", fake.paths()[0])["authorization"] == "Bearer " + TOKEN
+    create = "/v1/models/meta/meta-llama-3-8b-instruct/predictions"
+    assert fake.paths("POST") == [create]
+    # replicate 1.0.0 sends no Prefer: wait by default, so it polls; 1.0.7 does not poll.
+    assert set(fake.paths("GET")) <= {"/v1/predictions/pred0001"}
+    assert fake.request_headers("POST", create)["authorization"] == "Bearer " + TOKEN
 
     assert [span["name"] for span in spans] == ["replicate.run"]
     values = _flatten_attributes(spans[0]["attributes"])

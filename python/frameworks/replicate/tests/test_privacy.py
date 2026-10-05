@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import re
 from pathlib import Path
@@ -109,6 +111,25 @@ def test_data_uri_output_records_only_its_media_type():
     assert values["replicate.output.type"] == "url"
     assert values["output.value"].startswith("data:image/png;base64,")
     assert DATA_PAYLOAD not in traced.wire()
+
+
+def test_file_inputs_are_described_not_read():
+    image = io.BytesIO(b"FILE-BYTES-MARKER" * 4)
+    with FakeReplicate() as fake, instrumented() as traced:
+        client = _client(fake, api_token=API_TOKEN)
+        client.run(
+            TEXT_MODEL,
+            input={"prompt": PROMPT, "image": image},
+            file_encoding_strategy="base64",
+        )
+
+    # The client itself read and inlined the file; the span did not.
+    (_, _, _, body) = [call for call in fake.calls if call[0] == "POST"][0]
+    assert base64.b64encode(b"FILE-BYTES-MARKER" * 4).decode() in body["input"]["image"]
+    values = attrs(traced.one())
+    assert json.loads(values["input.value"]) == {"prompt": PROMPT, "image": "<BytesIO>"}
+    assert "FILE-BYTES-MARKER" not in traced.wire()
+    assert json.loads(values["gen_ai.request.parameters"])["file_encoding_strategy"] == "base64"
 
 
 def test_the_package_never_reads_the_environment():
