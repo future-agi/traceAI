@@ -295,6 +295,8 @@ def test_pii_redaction_applies_to_the_default_query_and_keeps_the_scores(fake):
     assert values["reranker.query"] == values["input.value"] == "mail <EMAIL_ADDRESS>"
     # The fake's scores are short enough that no PII pattern matches them.
     assert json.loads(values["output.value"]) == TOP_2_SCORES
+    # Every string attribute is scanned: the fake's 127.0.0.1 host too.
+    assert values["server.address"] == "<IP_ADDRESS>"
     assert email not in traced.wire()
 
 
