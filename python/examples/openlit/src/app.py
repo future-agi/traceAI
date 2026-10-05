@@ -35,6 +35,11 @@ def init_tracing() -> None:
     if not endpoint:
         # Without an endpoint OpenLIT prints every span to stdout instead.
         raise SystemExit("Set OTEL_EXPORTER_OTLP_ENDPOINT to the fi-collector origin.")
+    api_key = os.environ.get("FI_API_KEY")
+    secret_key = os.environ.get("FI_SECRET_KEY")
+    if not (api_key and secret_key):
+        # fi-collector answers 401 without both, and OpenLIT only logs that.
+        raise SystemExit("Set FI_API_KEY and FI_SECRET_KEY to your Future AGI keys.")
     # openlit.init() has no resource argument; its Resource.create() merges
     # OTEL_RESOURCE_ATTRIBUTES. fi-collector rejects (HTTP 400) a batch whose
     # resource has no project_name, so stop here instead.
@@ -49,8 +54,8 @@ def init_tracing() -> None:
         # OpenLIT joins this dict into OTEL_EXPORTER_OTLP_HEADERS, which the
         # exporter splits on commas and percent-decodes: encode the values.
         otlp_headers={
-            "x-api-key": quote(os.environ["FI_API_KEY"], safe=""),
-            "x-secret-key": quote(os.environ["FI_SECRET_KEY"], safe=""),
+            "x-api-key": quote(api_key, safe=""),
+            "x-secret-key": quote(secret_key, safe=""),
         },
         capture_message_content=False,  # OpenLIT's default is True
         disable_metrics=True,  # fi-collector serves no /v1/metrics

@@ -41,7 +41,9 @@ python src/app.py "What is the refund window?"
 ## The recipe
 
 `init_tracing()` in `src/app.py` is the whole integration. It first checks
-that the endpoint and the project are set, then calls:
+that `OTEL_EXPORTER_OTLP_ENDPOINT`, `FI_API_KEY`, `FI_SECRET_KEY` and the
+project are set, and otherwise exits with a message saying what to set
+(tested). Then it calls:
 
 ```python
 openlit.init(

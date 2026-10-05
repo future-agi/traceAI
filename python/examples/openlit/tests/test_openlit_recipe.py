@@ -719,15 +719,20 @@ def test_rejected_export_is_logged_and_the_app_still_exits_zero(tmp_path: Path) 
     [
         ("OTEL_EXPORTER_OTLP_ENDPOINT", "Set OTEL_EXPORTER_OTLP_ENDPOINT"),
         ("OTEL_RESOURCE_ATTRIBUTES", "Set OTEL_RESOURCE_ATTRIBUTES"),
+        ("FI_API_KEY", "Set FI_API_KEY and FI_SECRET_KEY"),
+        ("FI_SECRET_KEY", "Set FI_API_KEY and FI_SECRET_KEY"),
     ],
 )
-def test_app_refuses_to_start_without_endpoint_or_project(
+def test_app_refuses_to_start_without_endpoint_keys_or_project(
     tmp_path: Path, unset: str, message: str
 ) -> None:
     record = _run_script(tmp_path, APP, **{unset: None})
     assert not record["result"].timed_out
     assert record["result"].returncode != 0
     assert message in record["stderr"]
+    assert "Traceback" not in record["stderr"]
+    for secret in (FI_API_KEY, FI_SECRET_KEY):
+        assert secret not in record["stderr"]
     assert record["requests"] == []
     assert record["model_requests"] == []
     assert record["guard_attempts"] == []
