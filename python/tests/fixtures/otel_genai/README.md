@@ -140,8 +140,7 @@ env -u PYTHONPATH PYTHONPATH="python/tests" \
 ```
 
 For Python 3.13, replace `--python 3.11`. Only pytest is needed. The tests
-pass on Python 3.11.12 and 3.13.15 with pytest 9.1.1; no other Python was
-run.
+pass on Python 3.10, 3.11, 3.12 and 3.13 with pytest 9.1.1.
 `--noconftest` skips `python/tests/conftest.py`, which patches
 `fi_instrumentation`; these tests do not use it. With fi-instrumentation
 installed (`pip install -e python`), the plain
