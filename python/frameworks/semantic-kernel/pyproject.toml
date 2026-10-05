@@ -1,0 +1,50 @@
+[tool.poetry]
+name = "traceAI-semantic-kernel"
+version = "0.1.0"
+description = "Future AGI tracing for Semantic Kernel (Python) through its native OpenTelemetry diagnostics"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/future-agi/traceAI"
+repository = "https://github.com/future-agi/traceAI"
+keywords = ["opentelemetry", "semantic-kernel", "tracing", "observability", "agents", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+packages = [
+    { include = "traceai_semantic_kernel" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+# Semantic Kernel (MIT) is a dependency floor only; never vendored or bundled.
+# 1.38.0 is the oldest release whose diagnostics surface (settings instances,
+# operation strings, agent attribute keys, module-level tracers) is identical
+# to 1.44.1. Tested on 1.38.0 and 1.44.1.
+semantic-kernel = ">=1.38.0,<2"
+fi-instrumentation-otel = ">=1.0.0"
+# Floor tested: the full suite passes with opentelemetry-api/-sdk/-exporter-otlp-proto-http
+# 1.29.0 as well as 1.45.0. Python 3.10-3.13 tested on semantic-kernel 1.38.0 and 1.44.1.
+opentelemetry-api = ">=1.29.0"
+opentelemetry-sdk = ">=1.29.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
