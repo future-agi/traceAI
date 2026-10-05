@@ -172,6 +172,8 @@ export const GENKIT_USAGE_PREFIX = "genkit.usage.";
 
 /**
  * True for keys fi-collector promotes into token/cost columns on any span kind.
+ * Cost is matched by prefix: with no total present the collector also promotes
+ * the cost parts (`gen_ai.cost.input`/`output`, `llm.cost.prompt`/`completion`).
  */
 export function isPromotedUsageKey(key: string): boolean {
   return (
@@ -181,7 +183,7 @@ export function isPromotedUsageKey(key: string): boolean {
     key.startsWith("gen_ai.usage.") ||
     key.startsWith("llm.token_count.") ||
     key.startsWith("llm.usage.") ||
-    key === "gen_ai.cost.total" ||
-    key === "llm.cost.total"
+    key.startsWith("gen_ai.cost.") ||
+    key.startsWith("llm.cost.")
   );
 }

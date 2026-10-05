@@ -98,7 +98,7 @@ Metrics: `enableTelemetry({ spanProcessors })` passes no metric reader, and the 
 
 Unavailable at 1.42.0, and not set: provider, cost, user id (unless the app sets it), retriever documents, and every `GenerationUsage` field the inventory did not see on a span (`thoughtsTokens`, `cachedContentTokens`, the character / image / video / audio counters, `custom`). Those stay inside `genkit:output`.
 
-Tokens are written only on model call spans. The `generate` span's `genkit:output` repeats the last turn's usage; it stays inside that JSON and is not promoted. If any non-model span carries a key the collector promotes (`gen_ai.usage.*`, `llm.token_count.*`, `llm.usage.*`, `gen_ai.cost.total`, `llm.cost.total`), the processor moves it to `genkit.usage.<key>`, so the trace-wide token sum equals the model calls.
+Tokens are written only on model call spans. The `generate` span's `genkit:output` repeats the last turn's usage; it stays inside that JSON and is not promoted. If any non-model span carries a key the collector promotes (`gen_ai.usage.*`, `llm.token_count.*`, `llm.usage.*`, `gen_ai.cost.*`, `llm.cost.*`; the cost prefixes cover the parts such as `gen_ai.cost.input` and `llm.cost.completion` as well as the totals), the processor moves it to `genkit.usage.<key>`, so the trace-wide token and cost sums equal the model calls.
 
 Errors: Genkit sets the OTel status to `ERROR` and records an `exception` event on every span the error passes through (`core/src/tracing/instrumentation.ts:153-172`). Both are exported; with content off, schema-validation data is cut from them (see [Content](#content)). `genkit:isFailureSource` marks the first failing span.
 

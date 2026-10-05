@@ -65,10 +65,8 @@ PROMOTED_EXACT = {
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.output_tokens",
     "gen_ai.usage.total_tokens",
-    "gen_ai.cost.total",
-    "llm.cost.total",
 }
-PROMOTED_PREFIXES = ("gen_ai.usage.", "llm.token_count.", "llm.usage.")
+PROMOTED_PREFIXES = ("gen_ai.usage.", "llm.token_count.", "llm.usage.", "gen_ai.cost.", "llm.cost.")
 # Inventory at genkit 1.42.0 (contract/inventory.mjs): mockModel spans carry
 # usage.inputTokens/outputTokens/totalTokens in genkit:output; only those are
 # mapped. thoughtsTokens and cachedContentTokens exist in GenerationUsageSchema

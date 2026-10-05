@@ -188,6 +188,42 @@ describe("model call spans", () => {
       expect(isPromotedUsageKey(key)).toBe(false);
     }
   });
+
+  it("treats every gen_ai.cost.* and llm.cost.* key as promoted, cost parts included", () => {
+    // fi-collector promotes the cost parts too when no total is present (DeriveHotKeys).
+    for (const key of [
+      "gen_ai.cost.input",
+      "gen_ai.cost.output",
+      "gen_ai.cost.total",
+      "llm.cost.prompt",
+      "llm.cost.completion",
+      "llm.cost.total",
+      "gen_ai.cost.some_future_part",
+    ]) {
+      expect(isPromotedUsageKey(key)).toBe(true);
+    }
+    for (const key of ["genkit.usage.gen_ai.cost.input", "gen_ai.costs", "llm.costing", "cost.total"]) {
+      expect(isPromotedUsageKey(key)).toBe(false);
+    }
+  });
+
+  it("moves cost parts on a non-model span to genkit.usage.*, from span and context attributes", () => {
+    const out = mapGenkitAttributes(
+      { ...flowAttributes(), "gen_ai.cost.input": 0.01, "llm.cost.completion": 0.02 },
+      { contextAttributes: { "gen_ai.cost.output": 0.03, "llm.cost.prompt": 0.04 } },
+    );
+    expect(Object.keys(out).filter((k) => k.startsWith("gen_ai.cost.") || k.startsWith("llm.cost."))).toEqual([]);
+    expect(out["genkit.usage.gen_ai.cost.input"]).toBe(0.01);
+    expect(out["genkit.usage.llm.cost.completion"]).toBe(0.02);
+    expect(out["genkit.usage.gen_ai.cost.output"]).toBe(0.03);
+    expect(out["genkit.usage.llm.cost.prompt"]).toBe(0.04);
+  });
+
+  it("keeps cost parts unprefixed on a model span", () => {
+    const out = mapGenkitAttributes(modelAttributes(), { contextAttributes: { "gen_ai.cost.input": 0.05 } });
+    expect(out["gen_ai.cost.input"]).toBe(0.05);
+    expect(out["genkit.usage.gen_ai.cost.input"]).toBeUndefined();
+  });
 });
 
 describe("tool spans", () => {
