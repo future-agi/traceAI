@@ -49,7 +49,7 @@ Each call to `scrape`, `search`, `map`, `crawl`, `start_crawl`, `get_crawl_statu
 
 ### Status
 
-- The SDK returns a failed or cancelled crawl job without raising. A job with status `failed` sets the span to ERROR `failed`. A job with status `cancelled` sets ERROR `cancelled` and `firecrawl.cancelled=true`.
+- The SDK returns a failed or cancelled crawl job without raising. On a blocking `crawl()`, a job with status `failed` sets the span to ERROR `failed`, and a job with status `cancelled` sets ERROR `cancelled` and `firecrawl.cancelled=true`. A `get_crawl_status` poll that gets an answer stays OK and records the job's state in `firecrawl.status`.
 - `cancel_crawl` sets `firecrawl.cancelled` to the API's answer; the span itself is OK.
 - Cancelling an asyncio task that is awaiting a Firecrawl call ends the span ERROR `cancelled` with `firecrawl.cancelled=true`.
 - Any exception the SDK raises is recorded on the span, sets ERROR with the exception type and message, and is re-raised unchanged.

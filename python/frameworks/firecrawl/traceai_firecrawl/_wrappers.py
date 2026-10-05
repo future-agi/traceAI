@@ -36,6 +36,8 @@ _JOB_ID_FIRST_ARG_METHODS = {"get_crawl_status", "cancel_crawl"}
 # without raising (methods/crawl.py wait_for_crawl_completion), so the span
 # status comes from the job.
 _JOB_STATUS_METHODS = {"crawl", "get_crawl_status"}
+# Of those, the methods whose span status follows the job (crawl waits for it).
+_JOB_OUTCOME_METHODS = {"crawl"}
 _ERROR_JOB_STATUSES = {"failed", "cancelled"}
 # Methods whose arguments carry the requested output formats.
 _FORMAT_METHODS = {"scrape", "search", "crawl", "start_crawl"}
@@ -244,9 +246,12 @@ class _BaseWrapper:
         )
         if isinstance(job_status, str) and job_status:
             span.set_attribute(_STATUS, job_status)
-        if job_status == "cancelled":
+        # Only the blocking crawl() call's outcome is the job's outcome. A
+        # get_crawl_status poll that got an answer succeeded; it records the state.
+        job_failed = self._method_name in _JOB_OUTCOME_METHODS and job_status in _ERROR_JOB_STATUSES
+        if job_failed and job_status == "cancelled":
             span.set_attribute(_CANCELLED, True)
-        if job_status in _ERROR_JOB_STATUSES:
+        if job_failed:
             span.set_status(Status(StatusCode.ERROR, job_status))
         else:
             span.set_status(Status(StatusCode.OK))

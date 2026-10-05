@@ -170,9 +170,10 @@ def test_failed_status_and_cancel_calls_keep_positional_job_id(
         assert attrs(span)["firecrawl.job_id"] == "missing-job"
 
 
-# R3 / J3: the SDK returns a failed or cancelled job without raising, so the span
-# takes its status from the job. failed -> ERROR; cancelled -> ERROR "cancelled"
-# plus firecrawl.cancelled=true; completed -> OK.
+# R3 / J3: the SDK returns a failed or cancelled job without raising, so the
+# blocking crawl() span takes its status from the job. failed -> ERROR;
+# cancelled -> ERROR "cancelled" plus firecrawl.cancelled=true; completed -> OK.
+# get_crawl_status only records the job's state.
 
 EXPECTED_JOB_STATUS = {
     "completed": (StatusCode.OK, None),
@@ -210,16 +211,22 @@ def test_job_status_sets_attribute_and_span_status(
 
     finished = spans(exporter)
     assert [span.name for span in finished] == ["firecrawl.crawl", "firecrawl.get_crawl_status"]
+    crawl_span, status_span = finished
     code, description = EXPECTED_JOB_STATUS[job_status]
-    for span in finished:
-        assert attrs(span)["firecrawl.status"] == job_status
-        assert span.status.status_code is code
-        if description is not None:
-            assert span.status.description == description
-        if job_status == "cancelled":
-            assert attrs(span)["firecrawl.cancelled"] is True
-        else:
-            assert "firecrawl.cancelled" not in attrs(span)
+    # The blocking crawl() call's outcome is the job's outcome.
+    assert attrs(crawl_span)["firecrawl.status"] == job_status
+    assert crawl_span.status.status_code is code
+    if description is not None:
+        assert crawl_span.status.description == description
+    if job_status == "cancelled":
+        assert attrs(crawl_span)["firecrawl.cancelled"] is True
+    else:
+        assert "firecrawl.cancelled" not in attrs(crawl_span)
+    # A status poll that got an answer succeeded, whatever the job's state: it
+    # records the state, and only the poll's own errors make it ERROR.
+    assert attrs(status_span)["firecrawl.status"] == job_status
+    assert status_span.status.status_code is StatusCode.OK
+    assert "firecrawl.cancelled" not in attrs(status_span)
 
 
 # R5: instrumentation errors never reach the caller, and the span always ends.
