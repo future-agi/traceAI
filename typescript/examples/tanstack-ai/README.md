@@ -45,6 +45,17 @@ not from `@tanstack/ai`) with the Future AGI span kinds, the root usage move
 and the optional session, and registers the tracer provider with
 `@traceai/fi-core`. Do not pass a bare `otelMiddleware` to `chat()`: its root
 span repeats every model call's usage, so Future AGI would count it twice.
+
+The SDK pin does not travel with `src/tracing.mjs`: it lives in this
+example's `package.json` `overrides`
+(`"@opentelemetry/sdk-trace-node": "2.11.0"`). Copy that entry into your
+app's `package.json` too (npm reads `overrides`; pnpm and Yarn have their own
+field, `pnpm.overrides` and `resolutions`). Without it your app resolves the
+SDK through `@traceai/fi-core`'s `^2.0.1` range, and the root usage move is
+tested only on 2.11.0. If an SDK version stopped exposing the span's plain
+`attributes` object, the move would do nothing, silently, and Future AGI
+would count every model call's usage twice.
+
 A route then looks like this:
 
 ```js
