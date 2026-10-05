@@ -33,6 +33,11 @@ def _snapshot_processor():
         def on_end(self, span):
             self.raw[format(span.context.span_id, "016x")] = dict(span.attributes or {})
 
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            # opentelemetry-sdk 1.29's base SpanProcessor.force_flush returns None,
+            # which makes the provider's force_flush report False.
+            return True
+
     return SnapshotProcessor()
 
 

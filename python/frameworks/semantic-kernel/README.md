@@ -118,8 +118,10 @@ Not available: retrieval spans (memory/vector connectors were not inspected), ca
 
 | `semantic-kernel` | Python | Resolved alongside |
 |---|---|---|
-| 1.44.1 | 3.11, 3.12 | `openai` 3.24.0, `opentelemetry-sdk` 1.45.0 |
-| 1.38.0 (floor) | 3.10, 3.11 | `openai` 1.109.1, `opentelemetry-sdk` 1.45.0 |
+| 1.44.1 | 3.10, 3.11, 3.12, 3.13 | `openai` 3.24.0; `opentelemetry-sdk` 1.45.0, and 1.29.0 (the declared floor) on Python 3.11 |
+| 1.38.0 (floor) | 3.10, 3.11, 3.12, 3.13 | `openai` 1.109.1; `opentelemetry-sdk` 1.45.0, and 1.29.0 (the declared floor) on Python 3.11 |
+
+Semantic Kernel's own classifiers stop at Python 3.12; both versions install on 3.13 and the full suite passes there.
 
 Semantic Kernel added agent diagnostics in 1.19.0, but the surface this package reads (three module-level settings objects, `chat` / `invoke_agent` / `execute_tool` operation strings, `gen_ai.input.messages` agent keys) is identical from 1.38.0 to 1.44.1 and differs before it (for example `chat.completions` and `gen_ai.agent.invocation_input` up to 1.37.x). Hence the 1.38.0 floor.
 
@@ -128,15 +130,17 @@ Azure AI Inference connector: it builds its own `ModelDiagnosticSettings()` from
 ## Tests
 
 ```bash
-PYTHONPATH="python/frameworks/semantic-kernel:python:python/tests" uv run --no-project --python 3.11 \
-  --prerelease=if-necessary-or-explicit \
+PYTHONPATH="python/frameworks/semantic-kernel:python:python/tests" uv run --no-project --python 3.11 --prerelease=allow \
   --with pytest --with opentelemetry-api --with opentelemetry-sdk --with opentelemetry-exporter-otlp-proto-http \
-  --with wrapt --with requests --with jsonschema --with 'semantic-kernel==1.44.1' --with 'azure-ai-agents>=1.2.0b3' \
+  --with wrapt --with requests --with jsonschema --with protobuf --with opentelemetry-proto \
+  --with 'semantic-kernel==1.44.1' \
   pytest python/frameworks/semantic-kernel/tests -q -p no:cacheprovider --noconftest -o addopts=''
 ```
 
-`semantic-kernel` 1.38.0+ depends on the pre-release `azure-ai-agents>=1.2.0b3`, so uv needs the explicit pre-release pin. `wrapt` is there for `fi_instrumentation`, not for this package.
+Swap `--python` for 3.10, 3.12 or 3.13 and `semantic-kernel==1.38.0` for the floor. For the OpenTelemetry floor, pin `opentelemetry-api==1.29.0`, `opentelemetry-sdk==1.29.0`, `opentelemetry-exporter-otlp-proto-http==1.29.0` and `opentelemetry-proto==1.29.0` in the `--with` list.
 
-- `tests/test_processor.py`: synthetic spans with Semantic Kernel's exact names and keys.
-- `tests/test_instrument.py`: switches flip without env vars, `Kernel.invoke` / `KernelFunction.invoke` are untouched, one processor after two calls, tracers routed and restored.
+`semantic-kernel` 1.38.0+ depends on the pre-release `azure-ai-agents>=1.2.0b3`, so uv needs `--prerelease=allow` (or an explicit `azure-ai-agents>=1.2.0b3` pin). `wrapt` is there for `fi_instrumentation`, not for this package.
+
+- `tests/test_processor.py`: synthetic spans with Semantic Kernel's exact names and keys, including an id-less tool call under the auto function invocation loop and the `TraceConfig` hide flags.
+- `tests/test_instrument.py`: switches flip without env vars, `Kernel.invoke` / `KernelFunction.invoke` are untouched, one processor after two calls, tracers routed and restored, a real id-less auto-invoked tool, warn-and-skip for a moved module or a non-SDK provider, a user-installed processor left alone, `TraceConfig` / `FI_HIDE_*` on real spans, and the `add_span_processor` ordering note.
 - `tests/test_contract_harness.py`: real Semantic Kernel, real `register()` exporter, shared harness `Receiver`, loopback fake OpenAI server, placeholder keys.
