@@ -734,6 +734,15 @@ def test_recorded_fixture_matches_documented_mapping(recorded: list[dict[str, An
     assert found_in(recorded, host_paths()) == []
 
 
+def test_recorded_error_spans_are_vector_search_probes(recorded: list[dict[str, Any]]) -> None:
+    errors = [s for s in recorded if s.get("status", {}).get("code") == "STATUS_CODE_ERROR"]
+    searches = spans_named(recorded, "cognee.db.vector.search")
+    assert {span["name"] for span in errors} == {"cognee.db.vector.search"}
+    for span in errors:
+        assert [event["name"] for event in span["events"]] == ["exception"]
+    assert "{0} of {1}".format(len(errors), len(searches)) in README.read_text(encoding="utf-8")
+
+
 def test_scrub_removes_host_and_tmp_paths(tmp_path_factory: pytest.TempPathFactory) -> None:
     base = tmp_path_factory.getbasetemp()
     planted = [
@@ -947,6 +956,10 @@ def test_readme_states_what_the_tests_check() -> None:
     "fact",
     [
         pytest.param("TH-8394", id="R2-register-follow-up"),
+        pytest.param("pass the same ones", id="R3-same-exporter-options"),
+        pytest.param('pip install "cognee[tracing]==1.6.2"', id="R5-option-b-install"),
+        pytest.param("cognee.disable_tracing()", id="R7-disable-tracing"),
+        pytest.param("License-Expression: Apache-2.0", id="D9-license-metadata"),
     ],
 )
 def test_readme_covers_review_items(fact: str) -> None:

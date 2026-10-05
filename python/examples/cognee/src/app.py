@@ -48,7 +48,8 @@ def init_tracing():
     # in-memory buffer, which would silently drop the Future AGI exporter.
     # Adding the exporter again makes it a regular processor that Cognee's
     # call leaves in place. HTTPSpanExporter() reads FI_BASE_URL, FI_API_KEY
-    # and FI_SECRET_KEY like register()'s own exporter.
+    # and FI_SECRET_KEY like register()'s own exporter; if you pass exporter
+    # or batch options to register(), pass the same ones here.
     exporter = CogneeExportFilter(HTTPSpanExporter())
     provider.add_span_processor(BatchSpanProcessor(exporter))
     return provider

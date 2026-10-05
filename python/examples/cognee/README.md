@@ -8,12 +8,15 @@ operation). Option A adds one small export filter,
 [`src/cognee_filter.py`](src/cognee_filter.py), that keeps Cognee's content
 out of the export and marks search and LLM spans.
 
-Pinned: `cognee==1.6.2` (Python >=3.10,<3.15; option A also needs
-`fi-instrumentation-otel>=1.1.0,<1.2`, which declares Python <3.14). Tested on
-Python 3.11 and 3.13 against loopback fakes only: no LLM key, no live Future
-AGI project (see [Tests](#tests)). Traces only: metrics and logs are not
-ingested by this recipe. Statements marked "source reading" come from the
-cognee 1.6.2 code and are not exercised by the tests.
+Pinned: `cognee==1.6.2` (Python >=3.10,<3.15). Its wheel METADATA declares
+`License-Expression: Apache-2.0` (license files `LICENSE` and `NOTICE.md`);
+it is a dependency of this example only, not of any traceAI package.
+Option A also needs `fi-instrumentation-otel>=1.1.0,<1.2`, which declares
+Python <3.14. Tested on Python 3.10, 3.11 and 3.13 against loopback fakes
+only: no LLM key, no live Future AGI project (see [Tests](#tests)). Traces
+only: metrics and logs are not ingested by this recipe. Statements marked
+"source reading" come from the cognee 1.6.2 code and are not exercised by the
+tests.
 
 ## Option A: `register()` (recommended)
 
@@ -73,16 +76,29 @@ These things about it are load-bearing:
   **nothing is exported**: Cognee still buffers its spans, but no request
   leaves the process (the `no_readd` test shows this). Adding the processor
   yourself makes it a regular one that Cognee's call leaves alone, and it is
-  where the export filter goes. `HTTPSpanExporter()` reads `FI_BASE_URL`,
-  `FI_API_KEY` and `FI_SECRET_KEY` just as `register()` does. Once TH-8394
-  is fixed, the re-add line goes away; until then `requirements.txt` pins
-  `fi-instrumentation-otel>=1.1.0,<1.2` (the published 1.1.0 behaves this
-  way; the tests use this repository's source).
+  where the export filter goes. Once TH-8394 is fixed, the re-add line goes
+  away; until then `requirements.txt` pins `fi-instrumentation-otel>=1.1.0,<1.2`
+  (the published 1.1.0 behaves this way; the tests use this repository's
+  source).
+- **The re-added exporter does not inherit `register()`'s options.**
+  `HTTPSpanExporter()` reads `FI_BASE_URL`, `FI_API_KEY` and `FI_SECRET_KEY`
+  just as `register()`'s default exporter does, and `BatchSpanProcessor` uses
+  the default batch settings. `register()`'s own processor is discarded, so if
+  you pass exporter options to `register()`, pass the same ones here:
+  `headers` and `timeout` to `HTTPSpanExporter(...)`; for `span_exporter` or
+  gRPC transport, wrap that exporter (or `GRPCSpanExporter(...)`) in
+  `CogneeExportFilter`; the batch tuning to `BatchSpanProcessor(...)`, or use
+  `SimpleSpanProcessor` for `batch=False`.
 - **Wrap the calls in one span if you want one trace.** Each Cognee API call
   starts its own root span, and `cognee.add` ends its `memory.store` span
   before ingestion runs (`cognee/api/v1/add/add.py`), so without a parent span
   one add/cognify/search sequence arrives as five traces. With the parent span
   it is one trace.
+- **Do not call `cognee.disable_tracing()` (or `shutdown_tracing()`).** With
+  this option they shut down the provider Cognee attached to, which is your
+  global Future AGI provider, so your app's own spans stop too (source
+  reading: `cognee/modules/observability/trace_context.py` and `tracing.py`).
+  To turn Cognee's spans off, unset `COGNEE_TRACING_ENABLED` instead.
 
 Do not also set `OTEL_EXPORTER_OTLP_ENDPOINT` with this option. Cognee ignores
 it for traces when a provider is already registered, but its metrics and log
@@ -127,9 +143,12 @@ answer and find none of them on the wire.
 ## Option B: Cognee's own OTLP exporter (no traceAI)
 
 Cognee can export by itself when `OTEL_EXPORTER_OTLP_ENDPOINT` is set and no
-provider was registered:
+provider was registered. It needs Cognee's tracing extra, which installs the
+OpenTelemetry SDK and exporters:
 
 ```bash
+pip install "cognee[tracing]==1.6.2"
+
 export COGNEE_TRACING_ENABLED=true
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.futureagi.com:443/tracer/v1/traces
 export OTEL_EXPORTER_OTLP_HEADERS="X-Api-Key=$FI_API_KEY,X-Secret-Key=$FI_SECRET_KEY"
@@ -206,9 +225,11 @@ What that means in Future AGI:
   export filter sets `fi.span.kind`. With option B they stay `unknown`: no
   span-kind key arrives and only embedding spans carry
   `gen_ai.operation.name`.
-- Some `cognee.db.vector.search` spans end in `ERROR` with an `exception`
-  event (Cognee probes collections that do not exist yet). That is Cognee's
-  own behaviour, not an export failure.
+- **Most `cognee.db.vector.search` spans end in `ERROR`**, each with an
+  `exception` event: 60 of 66 in the recorded run (60 of its 117 spans).
+  Cognee probes collections that do not exist yet. That is Cognee's own
+  behaviour, not an export failure, but these spans count in Future AGI's
+  error filters and error rates.
 
 ## Content
 
@@ -247,12 +268,18 @@ product telemetry, not OpenTelemetry tracing.
 
 - **No traces at all with option A.** The `add_span_processor(BatchSpanProcessor(exporter))`
   line is missing, or `register()` ran after Cognee's first traced call.
+- **Option A traces stop part-way.** Something called
+  `cognee.disable_tracing()` or `shutdown_tracing()`, which shut down the
+  Future AGI provider. Unset `COGNEE_TRACING_ENABLED` instead.
 - **Prompts or documents visible with option A.** `COGNEE_FI_CAPTURE_CONTENT=true`
   is set, `capture_content=True` is passed, or the exporter is not wrapped in
   `CogneeExportFilter`.
 - **Spans doubled.** Another instrumentor is wrapping Cognee or LiteLLM on top
   of Cognee's own spans. Remove it.
-- **Option B exports nothing.** The URL has no `:443`, so Cognee chose gRPC.
+- **Option B exports nothing, with no error.** Either the OpenTelemetry
+  packages are missing (plain `cognee==1.6.2` has none; with tracing on,
+  Cognee then silently uses no-op spans; install `cognee[tracing]==1.6.2`),
+  or the URL has no `:443`, so Cognee chose gRPC.
 - **404 on `/tracer/v1/traces/v1/traces`.** Something appended the path to a
   URL that already had it. Cognee does not append; give the full path once.
 - **Five traces per request.** Wrap the Cognee calls in one parent span.
