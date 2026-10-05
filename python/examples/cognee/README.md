@@ -201,13 +201,18 @@ product telemetry, not OpenTelemetry tracing.
 
 ## Tests
 
-`tests/test_cognee_recipe.py` runs, side by side, four guarded subprocesses
-with the real `cognee==1.6.2`. Each can only reach 127.0.0.1
-(`tests/_guarded_run.py` refuses and logs anything else), Cognee's LLM and
-embedding endpoints are a loopback fake of the OpenAI API
-(`tests/_fake_openai.py`), and spans go to the shared harness `Receiver`
-(`python/tests/harness`), which serves `/v1/traces` and `/tracer/v1/traces`
-like fi-collector but does not authenticate or store anything:
+`tests/test_cognee_recipe.py` runs, side by side, four subprocesses with the
+real `cognee==1.6.2`. Each loads `tests/loopback_guard/sitecustomize.py`
+through `PYTHONPATH`, and so do the worker processes Cognee spawns for
+LanceDB and Ladybug: in all of them, Python-level connections and DNS lookups
+to any host other than 127.0.0.1 are refused and logged, and the test asserts
+the log is empty and that the guard was installed in Cognee's workers. Native
+code that opens sockets itself (for example a database extension download) is
+not intercepted. Cognee's LLM and embedding endpoints are a loopback fake of
+the OpenAI API (`tests/_fake_openai.py`), and spans go to the shared harness
+`Receiver` (`python/tests/harness`), which serves `/v1/traces` and
+`/tracer/v1/traces` like fi-collector but does not authenticate or store
+anything:
 
 - `recipe`: `src/app.py` as written (option A).
 - `tracing_off`: the same, with `COGNEE_TRACING_ENABLED` unset.

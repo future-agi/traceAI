@@ -2,7 +2,8 @@
 
 Runs ``src/app.py`` as written with the real ``cognee`` 1.6.2 and traceAI's
 ``register()``, plus two one-call scenario scripts, each in a subprocess whose
-network is limited to 127.0.0.1 (``_guarded_run.py``). Cognee's LLM and
+network, and that of the worker processes Cognee spawns, is limited to
+127.0.0.1 (``loopback_guard/sitecustomize.py``). Cognee's LLM and
 embedding endpoints are a loopback fake of the OpenAI API
 (``_fake_openai.py``). Spans go to the shared harness ``Receiver``, which
 serves ``/v1/traces`` and ``/tracer/v1/traces`` like fi-collector's HTTP mux
@@ -40,7 +41,8 @@ REPO_ROOT = PYTHON_DIR.parent
 APP = RECIPE_DIR / "src" / "app.py"
 README = RECIPE_DIR / "README.md"
 ADD_SCRIPT = TESTS_DIR / "cognee_add.py"
-GUARD = TESTS_DIR / "_guarded_run.py"
+# Put first on a scenario's PYTHONPATH, so every interpreter it starts loads the guard.
+GUARD_DIR = TESTS_DIR / "loopback_guard"
 FIXTURE = TESTS_DIR / "fixtures" / "cognee-1.6.2-recipe-spans.json"
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -263,7 +265,7 @@ class Scenario:
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(self.work),
-            "PYTHONPATH": str(PYTHON_DIR),
+            "PYTHONPATH": os.pathsep.join((str(GUARD_DIR), str(PYTHON_DIR))),
             "LOOPBACK_GUARD_LOG": str(self.guard_log),
             # Cognee's product telemetry is separate from OTel tracing.
             "TELEMETRY_DISABLED": "1",
@@ -311,7 +313,7 @@ class Scenario:
             fake = FakeOpenAI(dimensions=16)
             try:
                 self.result = run(
-                    [sys.executable, str(GUARD), str(self.script), *self.args],
+                    [sys.executable, str(self.script), *self.args],
                     env=self.env(receiver, fake),
                     stdin=None,
                     timeout=RUN_TIMEOUT_SECONDS,
@@ -331,10 +333,22 @@ class Scenario:
     def stderr(self) -> str:
         return self.result.stderr.decode("utf-8", "replace")
 
-    def blocked(self) -> list[str]:
+    def guard_records(self) -> list[dict[str, Any]]:
         if not self.guard_log.exists():
             return []
-        return self.guard_log.read_text(encoding="utf-8").splitlines()
+        lines = self.guard_log.read_text(encoding="utf-8").splitlines()
+        return [json.loads(line) for line in lines]
+
+    def blocked(self) -> list[dict[str, Any]]:
+        return [record for record in self.guard_records() if record["kind"] != "installed"]
+
+    def guarded_workers(self) -> list[dict[str, Any]]:
+        """Processes spawned by multiprocessing that loaded the guard."""
+        return [
+            record
+            for record in self.guard_records()
+            if record["kind"] == "installed" and "--multiprocessing-fork" in record["argv"]
+        ]
 
     def assert_ran_offline(self) -> None:
         assert not self.result.timed_out, self.stderr[-4000:]
@@ -375,6 +389,15 @@ def test_recipe_runs_offline_against_the_fakes(runs: dict[str, Scenario]) -> Non
     assert ANSWER_MARKER in recipe.stdout
     paths = {request["path"] for request in recipe.fake_requests}
     assert paths == {"/v1/chat/completions", "/v1/embeddings"}
+
+
+def test_loopback_guard_also_runs_in_cognee_worker_processes(runs: dict[str, Scenario]) -> None:
+    # Cognee 1.6.2 runs LanceDB and Ladybug in multiprocessing "spawn"
+    # workers; the guard must be installed there too, not only in the
+    # scenario's main process (each scenario's assert_ran_offline checks
+    # that nothing was refused).
+    for name, scenario in runs.items():
+        assert scenario.guarded_workers(), name
 
 
 def test_recipe_exports_to_collector_path_with_both_auth_headers(
