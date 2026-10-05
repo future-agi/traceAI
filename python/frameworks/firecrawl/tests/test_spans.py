@@ -374,3 +374,122 @@ def test_vendor_error_is_recorded_once_and_reraised(fake: FakeFirecrawl, tracing
     (span,) = spans(exporter)
     assert span.status.status_code is StatusCode.ERROR
     assert [event.name for event in span.events] == ["exception"]
+
+
+# R7 / AC-07: cancellation sets firecrawl.cancelled=true. A cancelled asyncio task
+# running a blocking crawl ends the span ERROR "cancelled"; cancel_crawl records
+# whether the API cancelled the job.
+
+
+def test_cancelling_an_async_crawl_task_marks_the_span_cancelled(
+    fake: FakeFirecrawl, tracing: Tracing
+) -> None:
+    from _firecrawl_fake import crawl_status
+
+    _, exporter, _ = tracing
+    fake.routes[("GET", "/v2/crawl/" + JOB_ID)] = (200, crawl_status("scraping"))
+
+    async def journey() -> None:
+        client = async_client(fake)
+        task = asyncio.ensure_future(
+            client.crawl(url="https://example.com", limit=3, poll_interval=0.01)
+        )
+        for _ in range(500):
+            if fake.calls_to("GET", "/v2/crawl/" + JOB_ID):
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(journey())
+
+    (span,) = spans(exporter)
+    assert span.name == "firecrawl.crawl"
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "cancelled"
+    assert attrs(span)["firecrawl.cancelled"] is True
+
+
+@pytest.mark.parametrize("api_status,cancelled", [("cancelled", True), ("scraping", False)])
+def test_cancel_crawl_records_whether_the_job_was_cancelled(
+    fake: FakeFirecrawl, tracing: Tracing, api_status: str, cancelled: bool
+) -> None:
+    _, exporter, _ = tracing
+    fake.routes[("DELETE", "/v2/crawl/" + JOB_ID)] = (200, {"success": True, "status": api_status})
+
+    assert sync_client(fake).cancel_crawl(JOB_ID) is cancelled
+
+    async def journey() -> Any:
+        return await async_client(fake).cancel_crawl(JOB_ID)
+
+    assert asyncio.run(journey()) is cancelled
+
+    finished = spans(exporter)
+    assert [span.name for span in finished] == ["firecrawl.cancel_crawl"] * 2
+    for span in finished:
+        assert attrs(span)["firecrawl.cancelled"] is cancelled
+        assert span.status.status_code is StatusCode.OK
+
+
+# R7 / J1: requested formats are recorded as a list of format names. A JSON
+# format's prompt or schema is content and stays off the span.
+
+
+def test_requested_formats_are_recorded_by_name(fake: FakeFirecrawl, tracing: Tracing) -> None:
+    from firecrawl.v2.types import JsonFormat, ScrapeOptions
+
+    _, exporter, _ = tracing
+    prompt = "FORMAT-PROMPT-MUST-NOT-BE-EXPORTED"
+    client = sync_client(fake)
+    client.scrape("https://example.com", formats=["markdown", JsonFormat(prompt=prompt)])
+    client.scrape("https://example.com")
+    client.start_crawl("https://example.com", scrape_options=ScrapeOptions(formats=["html"]))
+
+    async def journey() -> None:
+        await async_client(fake).scrape(
+            "https://example.com", formats=["markdown", {"type": "json", "prompt": prompt}]
+        )
+
+    asyncio.run(journey())
+
+    finished = spans(exporter)
+    assert [attrs(span).get("firecrawl.formats") for span in finished] == [
+        ("markdown", "json"),
+        None,
+        ("html",),
+        ("markdown", "json"),
+    ]
+    assert all(prompt not in str(attrs(span)) for span in finished)
+
+
+# R7 / J5: a vendor error records its HTTP status and machine-readable code.
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+def test_vendor_error_records_status_code_and_code(
+    fake: FakeFirecrawl, tracing: Tracing, use_async: bool
+) -> None:
+    from firecrawl.v2.utils.error_handler import RateLimitError
+
+    _, exporter, _ = tracing
+    fake.routes[("POST", "/v2/scrape")] = (
+        429,
+        {"success": False, "error": "rate limited", "code": "RATE_LIMIT_EXCEEDED"},
+    )
+
+    with pytest.raises(RateLimitError):
+        if use_async:
+
+            async def journey() -> None:
+                await async_client(fake).scrape("https://example.com")
+
+            asyncio.run(journey())
+        else:
+            sync_client(fake).scrape("https://example.com")
+
+    (span,) = spans(exporter)
+    assert span.status.status_code is StatusCode.ERROR
+    assert attrs(span)["firecrawl.error.status_code"] == 429
+    assert attrs(span)["firecrawl.error.code"] == "RATE_LIMIT_EXCEEDED"
+    assert "firecrawl.cancelled" not in attrs(span)

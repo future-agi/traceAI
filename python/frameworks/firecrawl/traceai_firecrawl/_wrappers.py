@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 from contextvars import ContextVar
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -22,6 +24,9 @@ _PAGE_COUNT = "firecrawl.page_count"
 _CREDITS_USED = "firecrawl.credits_used"
 _STATUS = "firecrawl.status"
 _CANCELLED = "firecrawl.cancelled"
+_FORMATS = "firecrawl.formats"
+_ERROR_STATUS_CODE = "firecrawl.error.status_code"
+_ERROR_CODE = "firecrawl.error.code"
 _MAX_QUERY_LENGTH = 1024
 
 # One span per call. crawl polls internally, so it must not emit one span per page.
@@ -32,6 +37,10 @@ _JOB_ID_FIRST_ARG_METHODS = {"get_crawl_status", "cancel_crawl"}
 # status comes from the job.
 _JOB_STATUS_METHODS = {"crawl", "get_crawl_status"}
 _ERROR_JOB_STATUSES = {"failed", "cancelled"}
+# Methods whose arguments carry the requested output formats.
+_FORMAT_METHODS = {"scrape", "search", "crawl", "start_crawl"}
+_MAX_FORMAT_NAME_LENGTH = 64
+_CANCELLATION_ERRORS = (asyncio.CancelledError, concurrent.futures.CancelledError)
 
 # True while a traced Firecrawl call runs in this context. firecrawl-py 4.46.2
 # AsyncFirecrawlClient.crawl awaits self.start_crawl, which is wrapped as well;
@@ -101,6 +110,47 @@ def _call_job_id(method_name: str, args: Sequence[Any], kwargs: Mapping[str, Any
     return _job_id(None, kwargs)
 
 
+def _formats(kwargs: Mapping[str, Any]) -> list[str]:
+    """Names of the requested formats. A format object's prompt or schema is
+    content, so only its ``type`` is kept."""
+    formats = kwargs.get("formats")
+    if formats is None:
+        scrape_options = kwargs.get("scrape_options")
+        if isinstance(scrape_options, Mapping):
+            formats = scrape_options.get("formats")
+        else:
+            formats = getattr(scrape_options, "formats", None)
+    if not isinstance(formats, (list, tuple)):
+        return []
+    names = []
+    for item in formats:
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, Mapping):
+            name = item.get("type")
+        else:
+            name = getattr(item, "type", None)
+        if isinstance(name, str) and name:
+            names.append(name[:_MAX_FORMAT_NAME_LENGTH])
+    return names
+
+
+def _vendor_error_fields(error: BaseException) -> tuple[Optional[int], Optional[str]]:
+    """HTTP status and machine-readable code of a firecrawl-py FirecrawlError."""
+    try:
+        from firecrawl.v2.utils.error_handler import FirecrawlError
+    except Exception:
+        return None, None
+    if not isinstance(error, FirecrawlError):
+        return None, None
+    status_code = getattr(error, "status_code", None)
+    code = getattr(error, "code", None)
+    return (
+        status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else None,
+        code if isinstance(code, str) and code else None,
+    )
+
+
 class _BaseWrapper:
     """Span bookkeeping shared by the sync and async wrappers.
 
@@ -127,6 +177,10 @@ class _BaseWrapper:
             host = _url_host(url, instance)
             if host:
                 attributes["server.address"] = host
+        if self._method_name in _FORMAT_METHODS:
+            formats = _formats(kwargs)
+            if formats:
+                attributes[_FORMATS] = formats
         if self._method_name in _CRAWL_METHODS:
             limit = kwargs.get("limit")
             if isinstance(limit, int):
@@ -157,6 +211,8 @@ class _BaseWrapper:
                 span.set_attribute(_JOB_ID, _redact(job_id, span))
             if self._method_name == "crawl":
                 span.set_attribute(_PAGE_COUNT, _page_count(result))
+        if self._method_name == "cancel_crawl" and isinstance(result, bool):
+            span.set_attribute(_CANCELLED, result)
         credits = getattr(result, "credits_used", None)
         if isinstance(credits, int):
             span.set_attribute(_CREDITS_USED, credits)
@@ -180,13 +236,24 @@ class _BaseWrapper:
         finally:
             _end(span)
 
-    def _finish_error(self, span: Span, error: BaseException) -> None:
+    def _finish_error(self, span: Span, error: BaseException, instance: Any = None) -> None:
+        cancelled = isinstance(error, _CANCELLATION_ERRORS)
+        try:
+            if cancelled:
+                span.set_attribute(_CANCELLED, True)
+            status_code, code = _vendor_error_fields(error)
+            if status_code is not None:
+                span.set_attribute(_ERROR_STATUS_CODE, status_code)
+            if code is not None:
+                span.set_attribute(_ERROR_CODE, _redact(code, instance))
+        except Exception:
+            logger.debug("Could not read %s error", self._span_name, exc_info=True)
         try:
             span.record_exception(error)
         except Exception:
             logger.debug("Could not record %s exception", self._span_name, exc_info=True)
         try:
-            span.set_status(Status(StatusCode.ERROR, _describe(error)))
+            span.set_status(Status(StatusCode.ERROR, "cancelled" if cancelled else _describe(error)))
         except Exception:
             logger.debug("Could not set %s status", self._span_name, exc_info=True)
         finally:
@@ -235,7 +302,7 @@ class OperationWrapper(_BaseWrapper):
             with _current(span):
                 result = wrapped(*args, **kwargs)
         except BaseException as error:
-            self._finish_error(span, error)
+            self._finish_error(span, error, instance)
             raise
         finally:
             _ACTIVE.reset(token)
@@ -263,7 +330,7 @@ class AsyncOperationWrapper(_BaseWrapper):
             with _current(span):
                 result = await wrapped(*args, **kwargs)
         except BaseException as error:
-            self._finish_error(span, error)
+            self._finish_error(span, error, instance)
             raise
         finally:
             _ACTIVE.reset(token)
