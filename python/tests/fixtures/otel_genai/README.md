@@ -3,10 +3,12 @@
 These are fixtures of these keys, not a claim that Future AGI implements a
 named spec version. Each file is one OTLP/JSON export request carrying OTel
 GenAI (`gen_ai.*`) attributes the way fi-collector receives them. The era
-labels are names for key sets. They come from a secondary review of the spec
-history: era A uses the names from before v1.37 (`gen_ai.system`,
-`gen_ai.usage.prompt_tokens`), and era B uses the names from v1.37 on
-(`gen_ai.provider.name`, `gen_ai.usage.input_tokens`).
+labels name key sets, not spec versions. A secondary review of the spec
+history (not re-read from the spec repository here) dates two renames:
+`gen_ai.usage.prompt_tokens`/`completion_tokens` became
+`input_tokens`/`output_tokens` in v1.27, and `gen_ai.system` became
+`gen_ai.provider.name` in v1.37. Era A uses the old names, era B the new
+ones, and dual-emit sets both prompt-token names.
 
 Pinned 2026-10-05:
 
