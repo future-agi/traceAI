@@ -66,9 +66,9 @@ Spans Semantic Kernel 1.44.1 emits once diagnostics are on, and what the process
 |---|---|---|
 | `chat <model>` / `text_completions <model>` | `utils/telemetry/model_diagnostics/decorators.py` 37-38, 322-364 | `LLM` |
 | `invoke_agent <agent name>` | `utils/telemetry/agent_diagnostics/decorators.py` 35, 174-205 | `AGENT` |
-| `execute_tool <plugin>-<function>` with `gen_ai.tool.call.id` (the model asked for it; `kernel.py` 468-471) | `functions/kernel_function.py` 264, `model_diagnostics/function_tracer.py` 54-65 | `TOOL` |
-| `execute_tool <plugin>-<function>` without a tool call id (you invoked the function, e.g. `kernel.invoke_prompt`) | same | `CHAIN` |
-| `AutoFunctionInvocationLoop` | `connectors/ai/chat_completion_client_base.py` 137, 410-424 | `CHAIN` |
+| `execute_tool <plugin>-<function>` the model asked for: it carries `gen_ai.tool.call.id` (`kernel.py` 468-471) or runs as a direct child of `AutoFunctionInvocationLoop` (connectors that send no tool call id, such as Ollama) | `functions/kernel_function.py` 264, `model_diagnostics/function_tracer.py` 54-65 | `TOOL` |
+| `execute_tool <plugin>-<function>` with neither (you invoked the function, e.g. `kernel.invoke` / `kernel.invoke_prompt`, or a function your tool calls) | same | `CHAIN` |
+| `AutoFunctionInvocationLoop` | `connectors/ai/chat_completion_client_base.py` 137, 256, 410-424 | `CHAIN` |
 
 Typical tree for an agent that calls one tool:
 

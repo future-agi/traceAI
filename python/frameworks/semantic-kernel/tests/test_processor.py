@@ -153,6 +153,36 @@ def test_agent_tool_and_chain_kinds(pipeline):
     assert _attrs(exporter, "AutoFunctionInvocationLoop")["gen_ai.span.kind"] == "CHAIN"
 
 
+def test_auto_invoked_tool_without_call_id_is_tool(pipeline):
+    """Id-less connectors (Ollama) still run model-requested tools under the loop span."""
+    provider, exporter, processor = pipeline()
+    loop_tracer = provider.get_tracer(LOOP_SCOPE)
+    function_tracer = provider.get_tracer(FUNCTION_SCOPE)
+    idless_tool = {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "Weather-get_weather"}
+    with loop_tracer.start_as_current_span("AutoFunctionInvocationLoop"):
+        with function_tracer.start_as_current_span("execute_tool Weather-get_weather", attributes=idless_tool):
+            # A function the tool itself invokes was not requested by the model.
+            _emit(
+                provider,
+                FUNCTION_SCOPE,
+                "execute_tool Helper-lookup",
+                {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "Helper-lookup"},
+            )
+    # A span with the loop's name from another library does not count.
+    with provider.get_tracer("someone.else").start_as_current_span("AutoFunctionInvocationLoop"):
+        _emit(provider, FUNCTION_SCOPE, "execute_tool Other-fn", {"gen_ai.operation.name": "execute_tool"})
+
+    tool = _attrs(exporter, "execute_tool Weather-get_weather")
+    assert "gen_ai.tool.call.id" not in tool
+    assert tool[FI_SPAN_KIND] == "TOOL"
+    assert tool["gen_ai.span.kind"] == "TOOL"
+    assert _attrs(exporter, "execute_tool Helper-lookup")[FI_SPAN_KIND] == "CHAIN"
+    assert _attrs(exporter, "execute_tool Other-fn")[FI_SPAN_KIND] == "CHAIN"
+    sk_loop = [s for s in exporter.get_finished_spans() if s.instrumentation_scope.name == LOOP_SCOPE]
+    assert sk_loop[0].attributes[FI_SPAN_KIND] == "CHAIN"
+    assert processor._auto_invoked == {}  # nothing left pending once the spans ended
+
+
 def test_spans_from_other_scopes_pass_through_untouched(pipeline):
     provider, exporter, _ = pipeline()
     _emit(provider, "openai.client", "chat gpt-4o-mini", dict(CHAT_ATTRS, **{"gen_ai.input.messages": "[]"}))

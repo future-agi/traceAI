@@ -176,6 +176,60 @@ def test_native_spans_route_to_the_provider_passed(instrumentor, provider):
     assert provider.exporter.get_finished_spans() == ()
 
 
+def test_auto_invoked_tool_without_call_id_is_tool(instrumentor, provider):
+    """A connector that sends no tool call id (Ollama does not) still yields a TOOL span.
+
+    The fake service returns a ``FunctionCallContent`` without ``id``, as
+    ``ollama_chat_completion.py`` ``_parse_tool_calls`` does, so Semantic Kernel's
+    own auto function invocation loop runs the tool.
+    """
+    from typing import ClassVar
+
+    from semantic_kernel import Kernel
+    from semantic_kernel.connectors.ai.chat_completion_client_base import ChatCompletionClientBase
+    from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
+    from semantic_kernel.connectors.ai.prompt_execution_settings import PromptExecutionSettings
+    from semantic_kernel.contents import AuthorRole, ChatHistory, ChatMessageContent, FunctionCallContent
+    from semantic_kernel.contents import FunctionResultContent
+    from semantic_kernel.functions import KernelArguments, kernel_function
+
+    class Plugin:
+        @kernel_function(name="echo", description="Echo")
+        def echo(self, text: str) -> str:
+            return text
+
+    class IdlessToolCaller(ChatCompletionClientBase):
+        SUPPORTS_FUNCTION_CALLING: ClassVar[bool] = True
+
+        async def _inner_get_chat_message_contents(self, chat_history, settings):
+            answered = any(isinstance(i, FunctionResultContent) for m in chat_history.messages for i in m.items)
+            if answered:
+                return [ChatMessageContent(role=AuthorRole.ASSISTANT, content="done")]
+            call = FunctionCallContent(name="P-echo", arguments='{"text": "hi"}')
+            return [ChatMessageContent(role=AuthorRole.ASSISTANT, items=[call])]
+
+    kernel = Kernel()
+    kernel.add_plugin(Plugin(), "P")
+    service = IdlessToolCaller(ai_model_id="fake-model", service_id="fake")
+    instrumentor.instrument(tracer_provider=provider)
+
+    history = ChatHistory()
+    history.add_user_message("echo hi")
+    settings = PromptExecutionSettings(function_choice_behavior=FunctionChoiceBehavior.Auto())
+    result = asyncio.run(
+        service.get_chat_message_contents(history, settings, kernel=kernel, arguments=KernelArguments())
+    )
+    assert str(result[0]) == "done"
+
+    spans = {s.name: s for s in provider.exporter.get_finished_spans()}
+    tool, loop = spans["execute_tool P-echo"], spans["AutoFunctionInvocationLoop"]
+    assert "gen_ai.tool.call.id" not in tool.attributes
+    assert tool.parent.span_id == loop.context.span_id
+    assert tool.attributes["fi.span.kind"] == "TOOL"
+    assert tool.attributes["gen_ai.span.kind"] == "TOOL"
+    assert loop.attributes["fi.span.kind"] == "CHAIN"
+
+
 def test_uninstrument_restores_module_tracers(provider):
     originals = {name: importlib.import_module(name).tracer for name in TRACER_MODULES}
     inst = SemanticKernelInstrumentor()

@@ -14,11 +14,13 @@ Upstream surface (semantic-kernel 1.38.0 through 1.44.1, files identical):
   (operation at line 35, attributes at 183-205, content at 208-227).
 * ``execute_tool <plugin-function>``: ``functions/kernel_function.py`` lines
   264-288 through ``model_diagnostics/function_tracer.py`` lines 54-65. Emitted
-  for every kernel function invocation. Only functions the model asked for
-  (auto function invocation) carry ``gen_ai.tool.call.id``
-  (``kernel.py`` line 471 passes the function call content as metadata).
+  for every kernel function invocation. A function the model asked for (auto
+  function invocation) runs as a direct child of ``AutoFunctionInvocationLoop``
+  and carries ``gen_ai.tool.call.id`` when the connector supplies one
+  (``kernel.py`` line 471 passes the function call content as metadata; the
+  Ollama connector sends no id, ``ollama_chat_completion.py`` 244-253).
 * ``AutoFunctionInvocationLoop``: ``connectors/ai/chat_completion_client_base.py``
-  lines 137 and 410-424 (``sk.available_functions`` only).
+  lines 137, 256 and 410-424 (``sk.available_functions`` only).
 
 What the processor adds, per Semantic Kernel span:
 
@@ -48,8 +50,10 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
+from opentelemetry import trace as trace_api
 from opentelemetry.context import Context, get_value
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.trace import Status, StatusCode
@@ -94,7 +98,8 @@ KIND_BY_OPERATION: Dict[str, str] = {
     "chat": FiSpanKindValues.LLM.value,
     "text_completions": FiSpanKindValues.LLM.value,
     "invoke_agent": FiSpanKindValues.AGENT.value,
-    # "execute_tool" is resolved in kind_for(): TOOL with a tool call id, else CHAIN.
+    # "execute_tool" is resolved in kind_for(): TOOL when the model asked for
+    # it (tool call id, or a child of AutoFunctionInvocationLoop), else CHAIN.
 }
 
 # fi-collector promotes these into token/cost hot columns on ANY span kind
@@ -132,13 +137,18 @@ CONTENT_KEYS: Tuple[str, ...] = (
 )
 
 
-def kind_for(name: str, attributes: Mapping[str, Any]) -> Optional[str]:
-    """Return the Future AGI span kind for a Semantic Kernel span, or None."""
+def kind_for(name: str, attributes: Mapping[str, Any], auto_invoked: bool = False) -> Optional[str]:
+    """Return the Future AGI span kind for a Semantic Kernel span, or None.
+
+    ``auto_invoked`` is True when the span started as a direct child of
+    Semantic Kernel's ``AutoFunctionInvocationLoop`` span, i.e. the model asked
+    for the function. Connectors that send no tool call id (Ollama) rely on it.
+    """
     operation = attributes.get(OPERATION)
     if operation == "execute_tool":
-        # Every KernelFunction.invoke opens an execute_tool span. Only a
-        # function the model asked for carries a tool call id.
-        if attributes.get(TOOL_CALL_ID):
+        # Every KernelFunction.invoke opens an execute_tool span. A function
+        # the model asked for carries a tool call id or runs inside the loop.
+        if auto_invoked or attributes.get(TOOL_CALL_ID):
             return FiSpanKindValues.TOOL.value
         return FiSpanKindValues.CHAIN.value
     if isinstance(operation, str) and operation in KIND_BY_OPERATION:
@@ -181,10 +191,11 @@ def map_sk_attributes(
     *,
     name: str = "",
     sensitive: bool = False,
+    auto_invoked: bool = False,
 ) -> Dict[str, Any]:
     """Return a new attribute dict with Future AGI keys added (see module docstring)."""
     mapped = dict(attributes or {})
-    kind = kind_for(name, mapped)
+    kind = kind_for(name, mapped, auto_invoked=auto_invoked)
 
     if kind is not None:
         mapped.setdefault(FI_SPAN_KIND, kind)
@@ -263,6 +274,22 @@ def _is_semantic_kernel(span: Any) -> bool:
     return name == SK_SCOPE_PREFIX or name.startswith(SK_SCOPE_PREFIX + ".")
 
 
+def _is_auto_function_invocation_loop(span: Any) -> bool:
+    return getattr(span, "name", None) == AUTO_FUNCTION_INVOCATION_SPAN and _is_semantic_kernel(span)
+
+
+def _span_key(span: Any) -> Optional[Tuple[int, int]]:
+    context = span.get_span_context() if hasattr(span, "get_span_context") else getattr(span, "context", None)
+    if context is None:
+        return None
+    return (context.trace_id, context.span_id)
+
+
+# Bound on spans that started inside the loop but have not ended yet. A span
+# that never ends (a producer bug) must not grow this without limit.
+_MAX_PENDING_AUTO_INVOKED = 10_000
+
+
 class SemanticKernelSpanProcessor(SpanProcessor):
     """Map Semantic Kernel's native spans to Future AGI conventions.
 
@@ -273,10 +300,25 @@ class SemanticKernelSpanProcessor(SpanProcessor):
     def __init__(self, sensitive: bool = False) -> None:
         self.sensitive = bool(sensitive)
         self._disabled = False
+        # Spans that started as direct children of AutoFunctionInvocationLoop.
+        # The parent is only visible at start; on_end gets a ReadableSpan copy,
+        # so they are keyed by (trace_id, span_id).
+        self._auto_invoked: Dict[Tuple[int, int], None] = {}
+        self._auto_invoked_lock = threading.Lock()
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         if self._disabled or not _is_semantic_kernel(span):
             return
+        try:
+            if _is_auto_function_invocation_loop(trace_api.get_current_span(parent_context)):
+                key = _span_key(span)
+                if key is not None:
+                    with self._auto_invoked_lock:
+                        if len(self._auto_invoked) >= _MAX_PENDING_AUTO_INVOKED:
+                            self._auto_invoked.pop(next(iter(self._auto_invoked)))
+                        self._auto_invoked[key] = None
+        except Exception:
+            logger.debug("traceai-semantic-kernel: parent lookup failed", exc_info=True)
         try:
             existing = span.attributes or {}
             for key, value in _context_attributes(parent_context):
@@ -285,12 +327,25 @@ class SemanticKernelSpanProcessor(SpanProcessor):
         except Exception:
             logger.debug("traceai-semantic-kernel: context attribute copy failed", exc_info=True)
 
+    def _pop_auto_invoked(self, span: ReadableSpan) -> bool:
+        key = _span_key(span)
+        if key is None:
+            return False
+        with self._auto_invoked_lock:
+            if key in self._auto_invoked:
+                del self._auto_invoked[key]
+                return True
+            return False
+
     def on_end(self, span: ReadableSpan) -> None:
         if self._disabled or not _is_semantic_kernel(span):
             return
         try:
+            auto_invoked = self._pop_auto_invoked(span)
             attributes = dict(span.attributes or {})
-            mapped = map_sk_attributes(attributes, name=span.name, sensitive=self.sensitive)
+            mapped = map_sk_attributes(
+                attributes, name=span.name, sensitive=self.sensitive, auto_invoked=auto_invoked
+            )
             if mapped != attributes:
                 _replace_attributes(span, mapped)
             if attributes.get(ERROR_TYPE) and span.status.status_code is StatusCode.UNSET:
