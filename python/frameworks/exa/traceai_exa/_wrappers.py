@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
@@ -36,10 +36,25 @@ def _query_from_call(
     else:
         query = str(getattr(value, "url", value or ""))
 
-    api_key = getattr(instance, "api_key", None)
-    if isinstance(api_key, str) and api_key:
+    api_key = _api_key(instance)
+    if api_key:
         query = query.replace(api_key, "[redacted]")
     return query[:_MAX_QUERY_LENGTH]
+
+
+def _api_key(instance: Any) -> Optional[str]:
+    """Return the client's Exa key so it can be removed from span values.
+
+    exa-py keeps the key only in ``headers["x-api-key"]``; ``api_key`` is a
+    fallback for clients that expose it as an attribute.
+    """
+    key = None
+    headers = getattr(instance, "headers", None)
+    if isinstance(headers, Mapping):
+        key = headers.get("x-api-key")
+    if not key:
+        key = getattr(instance, "api_key", None)
+    return key if isinstance(key, str) and key else None
 
 
 def _document_count(result: Any) -> int:
