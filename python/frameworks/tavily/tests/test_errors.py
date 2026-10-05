@@ -115,6 +115,44 @@ def test_keyless_limit_sets_error_reraises_and_does_not_retry(fake, monkeypatch,
     _assert_error_span(traced.one(), info.value)
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_a_current_parent_that_records_nothing_leaves_one_exception_event(fake, mode):
+    """The README's pattern for a LangChain tool span, with plain OpenTelemetry.
+
+    ``use_span(..., record_exception=False, set_status_on_exception=False)``
+    makes the parent current without recording the error on it, so the
+    parent's owner (traceAI-langchain's on_tool_error) records it once.
+    """
+    from opentelemetry import trace
+    from tavily import InvalidAPIKeyError
+
+    with instrumented() as traced:
+        parent = traced.provider.get_tracer("test").start_span("langchain-tool")
+        with pytest.raises(InvalidAPIKeyError):
+            with trace.use_span(
+                parent,
+                end_on_exit=False,
+                record_exception=False,
+                set_status_on_exception=False,
+            ):
+                if mode == "sync":
+                    _sync(fake).search(FAIL_401)
+                else:
+                    asyncio.run(_async(fake, "search", FAIL_401))
+        parent.end()
+
+    spans = {span.name: span for span in traced.spans()}
+    assert sorted(spans) == ["langchain-tool", "tavily.search"]
+    tool, search = spans["langchain-tool"], spans["tavily.search"]
+    assert _exception_events(tool) == []
+    assert tool.status.status_code is StatusCode.UNSET
+    assert search.parent is not None
+    assert search.parent.span_id == tool.context.span_id
+    assert search.context.trace_id == tool.context.trace_id
+    assert len(_exception_events(search)) == 1
+    assert search.status.status_code is StatusCode.ERROR
+
+
 @pytest.mark.parametrize(
     "method, argument",
     [("search", SLOW), ("extract", ["https://example.com/" + SLOW])],

@@ -33,7 +33,9 @@ With traceAI-tavily on (the wrapper the first result released):
 * A LangChain ``@tool`` that calls ``TavilyClient.search``: the LangChain
   TOOL span plus one ``tavily.search`` span, which starts its own trace
   because traceAI-langchain does not make its spans current; wrapping the
-  call in ``trace.use_span(traceai_langchain.get_current_span())`` nests it.
+  call in ``trace.use_span(traceai_langchain.get_current_span(),
+  end_on_exit=False, record_exception=False, set_status_on_exception=False)``
+  nests it, and a failing call leaves one exception event on each span.
 
 Each test prints one ``MEASUREMENT`` line (run with ``-s`` to see it).
 """
@@ -339,3 +341,42 @@ def test_a_langchain_tool_over_the_bare_client_adds_one_tavily_span():
     tools = {span["name"]: span for span in nested if kind(span) == "TOOL"}
     assert tools["tavily.search"]["parentSpanId"] == tools["tavily_web_search"]["spanId"]
     assert tools["tavily.search"]["traceId"] == tools["tavily_web_search"]["traceId"]
+
+
+def _exception_events(span: dict) -> List[dict]:
+    return [event for event in span.get("events", []) if event.get("name") == "exception"]
+
+
+def test_a_failing_langchain_tool_over_the_bare_client_records_the_error_once():
+    """The README's use_span pattern leaves one exception event on each span.
+
+    traceAI-langchain records the tool's error on its span (on_tool_error). A
+    ``trace.use_span`` that records exceptions would add a second, identical
+    event to that span, so the tool makes it current with
+    ``record_exception=False, set_status_on_exception=False``.
+    """
+    pytest.importorskip("langgraph", reason="the example is a LangGraph graph")
+    summary, spans, _, paths = measure(
+        "langgraph_tool.py",
+        ["--custom-tool", "--use-langchain-span", "--with-tavily-instrumentor", "--fail"],
+        "tavily-custom-tool-error",
+    )
+    report(
+        "langgraph custom_tool error use_langchain_span traceai_tavily",
+        spans,
+        summary=summary,
+        fake_paths=paths,
+    )
+
+    assert paths == ["/search"]
+    assert summary["tool_status"] == ["error"]
+    tools = {span["name"]: span for span in spans if kind(span) == "TOOL"}
+    assert sorted(tools) == ["tavily.search", "tavily_web_search"]
+    tool, search = tools["tavily_web_search"], tools["tavily.search"]
+    assert search["parentSpanId"] == tool["spanId"]
+    assert search["traceId"] == tool["traceId"]
+    for span in (tool, search):
+        events = _exception_events(span)
+        assert len(events) == 1, (span["name"], events)
+        exception_type = _flatten_attributes(events[0]["attributes"])["exception.type"]
+        assert exception_type.endswith("InvalidAPIKeyError")

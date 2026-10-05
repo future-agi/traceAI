@@ -70,9 +70,19 @@ that span current around the call:
 from opentelemetry import trace
 from traceai_langchain import get_current_span
 
-with trace.use_span(get_current_span(), end_on_exit=False):
+with trace.use_span(
+    get_current_span(),
+    end_on_exit=False,
+    record_exception=False,
+    set_status_on_exception=False,
+):
     response = client.search(query)
 ```
+
+`record_exception=False, set_status_on_exception=False` leave the tool span's
+error to `traceAI-langchain`, which records it once; without them a failing
+call records the same exception twice on the tool span. The `tavily.search`
+span records its own exception event either way.
 
 If you do not want the second span, do not instrument Tavily in that process.
 

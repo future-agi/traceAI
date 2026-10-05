@@ -18,6 +18,10 @@ Options:
   --use-langchain-span        in the custom tool, make traceAI-langchain's
                               tool span current around the client call
                               (``traceai_langchain.get_current_span()``).
+  --fail                      ask the tool for the fake's scripted 401
+                              (``fail-401``), so the client call raises
+                              ``InvalidAPIKeyError``; the ``ToolNode`` turns it
+                              into an error ``ToolMessage``.
 
 Prints one JSON line with the tool output length and the message count.
 """
@@ -34,6 +38,8 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 
 QUERY = "th-8327 langgraph tool measurement"
+# The fake answers this query with HTTP 401 (tests/_tavily_fake.py FAIL_401).
+FAIL_QUERY = "fail-401"
 
 
 def _custom_tool():
@@ -52,7 +58,12 @@ def _custom_tool():
             from opentelemetry import trace
             from traceai_langchain import get_current_span
 
-            with trace.use_span(get_current_span(), end_on_exit=False):
+            with trace.use_span(
+                get_current_span(),
+                end_on_exit=False,
+                record_exception=False,
+                set_status_on_exception=False,
+            ):
                 response = client.search(query, max_results=2)
         else:
             response = client.search(query, max_results=2)
@@ -96,10 +107,13 @@ def main() -> None:
             tavily_utilities.TAVILY_API_URL = os.environ["TAVILY_BASE_URL"]
             tool = TavilySearchResults(max_results=2)
 
+    fail = "--fail" in sys.argv
+    query = FAIL_QUERY if fail else QUERY
+
     def agent(state: MessagesState) -> dict:
         if any(isinstance(message, ToolMessage) for message in state["messages"]):
             return {"messages": [AIMessage(content="done")]}
-        call = {"name": tool.name, "args": {"query": QUERY}, "id": "call-tavily-1"}
+        call = {"name": tool.name, "args": {"query": query}, "id": "call-tavily-1"}
         return {"messages": [AIMessage(content="", tool_calls=[call])]}
 
     def route(state: MessagesState) -> str:
@@ -107,7 +121,10 @@ def main() -> None:
 
     graph = StateGraph(MessagesState)
     graph.add_node("agent", agent)
-    graph.add_node("tools", ToolNode([tool]))
+    # ToolNode's default re-raises a tool's own exception; --fail keeps the
+    # graph running so the error spans are exported.
+    tool_node = ToolNode([tool], handle_tool_errors=True) if fail else ToolNode([tool])
+    graph.add_node("tools", tool_node)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", route, ["tools", END])
     graph.add_edge("tools", "agent")
