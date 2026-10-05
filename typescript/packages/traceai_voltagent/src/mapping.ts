@@ -55,6 +55,9 @@ const CONTENT_EXACT = new Set<string>([
   "agent.stateSnapshot",
   "llm.messages",
   "workflow.context",
+  // The workflow root's snapshot: step source code plus the run input, which workflow/core.ts
+  // stores under `inputSchema` (`inputSchema: input`).
+  "workflow.stateSnapshot",
   "workspace.sandbox.command",
   "workspace.sandbox.args",
   "suspension.checkpoint",

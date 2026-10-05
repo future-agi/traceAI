@@ -123,7 +123,7 @@ This is stricter than VoltAgent; a VoltOps export of the same run still has the 
 
 Dropped keys: `input`, `output`, `agent.instructions`, `agent.messages`, `agent.messages.ui`,
 `agent.context`, `agent.stateSnapshot`, `llm.messages`, `workflow.context`,
-`workspace.sandbox.command`, `workspace.sandbox.args`, `suspension.checkpoint`,
+`workflow.stateSnapshot` (step source and the run input), `workspace.sandbox.command`, `workspace.sandbox.args`, `suspension.checkpoint`,
 `agent.summary.preview`, `agent.summary.text` (summarization), `agent.workingMemory.finalContent`
 (working memory), `planagent.todos`, `planagent.task.description`,
 `planagent.task.response_preview` (PlanAgent), any key with an

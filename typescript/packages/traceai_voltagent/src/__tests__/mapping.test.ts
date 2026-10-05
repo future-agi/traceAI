@@ -257,6 +257,8 @@ describe("content (AC-07)", () => {
     "workflow.resume.data": "SECRET",
     "suspension.checkpoint": "SECRET",
     "workspace.sandbox.command": "SECRET",
+    // The workflow root's snapshot carries the run input (workflow/core.ts: `inputSchema: input`).
+    "workflow.stateSnapshot": '{"id":"approval","inputSchema":{"question":"SECRET"}}',
     // Summarization, working memory and PlanAgent text (VoltAgent 2.11.0 apply-summarization.ts,
     // agent.ts working-memory finalization, planagent/planning/index.ts, planagent/plan-agent.ts).
     ...summaryMemoryPlanContent,
