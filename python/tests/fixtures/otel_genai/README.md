@@ -118,6 +118,11 @@ for the string and integer values these fixtures use. The tests check:
 
 - every span of every fixture is stored and matches its golden;
 - the request carries `project_name` and goes to `/tracer/v1/traces`;
+- every `traceId` is 32 lowercase hex characters, and every `spanId` and
+  `parentSpanId` is 16. fi-collector decodes OTLP/JSON ids as hex of exactly
+  that length and answers 400 otherwise, base64 included. The Receiver and
+  `compare()` never look at ids. A control shows a base64 span id fails the
+  check;
 - the columns match `columns.golden.json`;
 - `first_number()` takes the first alias present and adds nothing. It
   reads a number before a numeric string for the same key, and skips a
@@ -148,8 +153,9 @@ changes, or the recorded columns may drift from the collector unnoticed.
 
 When this was written, fi-collector's own JSON decoding and span conversion
 (`4af5338`) were also run on these three files, outside this repository. That
-run produced exactly the columns in `columns.golden.json`. It is not part of
-these tests.
+run produced exactly the columns in `columns.golden.json`. The same decoding
+rejected a copy of `era_b.json` with base64 ids ("invalid length for ID").
+Neither run is part of these tests.
 
 From the repository root, Python 3.11:
 

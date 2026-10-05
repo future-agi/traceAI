@@ -21,6 +21,7 @@ named spec version. No kind is asserted for ``retrieval`` or
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import copy
 import json
@@ -55,6 +56,15 @@ DUAL_EMIT_TOKENS = {"dual_emit": (3, 4, 7), "dual_emit prompt_tokens": (3, 0, 3)
 # gen_ai.operation.name (exporter/clickhouse25exporter/converter.go:79-90).
 SPAN_KIND_KEYS = ("fi.span.kind", "gen_ai.span.kind", "llm.request.type", "openinference.span.kind")
 ALIAS_LISTS = ("modelNameKeys", "providerKeys", "inputTokenKeys", "outputTokenKeys", "totalTokenKeys")
+# fi-collector decodes OTLP/JSON ids as hex of exactly these lengths (pdata
+# v1.20.0 internal/data/bytesid.go:27-43) and answers anything else, base64
+# included, with 400 (pkg/server/server.go:438-441). The fixtures also keep
+# them lowercase.
+ID_PATTERNS = {
+    "traceId": re.compile(r"[0-9a-f]{32}"),
+    "spanId": re.compile(r"[0-9a-f]{16}"),
+    "parentSpanId": re.compile(r"[0-9a-f]{16}"),
+}
 
 
 def load(name: str) -> Any:
@@ -258,6 +268,33 @@ def test_fixture_is_stored_and_matches_its_golden(fixture: str) -> None:
     # (pkg/auth/stamp.go:31-46, answered 400 at pkg/server/server.go:461-464).
     assert request["resource_attributes"] == [{"project_name": PROJECT, "project_type": "observe"}]
     compare(record["spans"], golden_path(fixture))
+
+
+def check_ids(request: dict[str, Any]) -> None:
+    for resource_spans in request["resourceSpans"]:
+        for scope_spans in resource_spans["scopeSpans"]:
+            for span in scope_spans["spans"]:
+                for field, pattern in ID_PATTERNS.items():
+                    if field == "parentSpanId" and field not in span:
+                        continue  # a root span
+                    assert pattern.fullmatch(span.get(field, "")), (span.get("name"), field, span.get(field))
+
+
+@pytest.mark.parametrize("fixture", sorted(SPAN_NAMES))
+def test_fixture_ids_are_lowercase_hex(fixture: str) -> None:
+    """The Receiver and compare() never look at ids; fi-collector does."""
+    check_ids(load(fixture))
+
+
+def test_a_base64_id_fails_the_id_check() -> None:
+    """Control: the era B agent span id as base64. fi-collector's decoder
+    fails it with "invalid length for ID" and answers 400."""
+    request = load("era_b.json")
+    span = request["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    span["spanId"] = base64.b64encode(bytes.fromhex(span["spanId"])).decode("ascii")
+    assert span["spanId"] == "4bAAAAAAAAE="
+    with pytest.raises(AssertionError, match="spanId"):
+        check_ids(request)
 
 
 def test_compare_fails_when_a_stored_attribute_differs() -> None:
