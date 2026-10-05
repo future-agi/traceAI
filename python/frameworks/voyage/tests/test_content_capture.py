@@ -286,6 +286,18 @@ def test_pii_redaction_in_trace_config_applies_to_captured_content(fake):
     assert email not in traced.wire()
 
 
+def test_pii_redaction_applies_to_the_default_query_and_keeps_the_scores(fake):
+    email = "jane.doe@example.com"
+    with instrumented(config=TraceConfig(pii_redaction=True)) as traced:
+        client(fake).rerank("mail {0}".format(email), DOCUMENTS, model=RERANK_MODEL, top_k=2)
+
+    values = attrs(traced.one())
+    assert values["reranker.query"] == values["input.value"] == "mail <EMAIL_ADDRESS>"
+    # The fake's scores are short enough that no PII pattern matches them.
+    assert json.loads(values["output.value"]) == TOP_2_SCORES
+    assert email not in traced.wire()
+
+
 @pytest.mark.parametrize(
     "options",
     [{"config": {"hide_inputs": True}}, {"capture_content": "yes"}, {"capture_content": 1}],

@@ -136,7 +136,23 @@ At most 64 texts, 64 documents and 64 scores (the first 64 results, in the
 client's order) are recorded, and the query and each text or document are
 cut to 2 KB of UTF-8 on a character boundary; `voyage.embedding.count`,
 `voyage.rerank.document_count` and `voyage.rerank.result_count` stay exact.
-`pii_redaction=True` applies to every recorded value.
+
+`TraceConfig(pii_redaction=True)` (or `FI_PII_REDACTION=true`) applies
+`fi_instrumentation`'s regex PII redaction, which replaces email addresses,
+SSNs, card numbers, `sk-`/`pk-` live/test/prod API keys, IPv4 addresses and
+phone numbers with tokens such as `<EMAIL_ADDRESS>`. It covers:
+
+- every string span attribute: the query, captured texts and documents, the
+  scores JSON, and the other attributes above (an IP `server.address` becomes
+  `<IP_ADDRESS>`);
+- the error status description and the `exception` event's
+  `exception.message` and `exception.stacktrace`, after the API key is
+  removed from them.
+
+It does not change span names, event names or `exception.type`. The patterns
+match digits, not meaning: a relevance score with 10 or more digits after the
+decimal point is rewritten too (for example `0.<CREDIT_CARD>`), which leaves
+that `output.value` as invalid JSON.
 
 Embedding vectors are never recorded, with or without capture, and
 `hide_embedding_vectors` has nothing to hide here.
@@ -152,7 +168,8 @@ messages and stack traces with `[redacted]`.
 An error raised by the client (for example `voyageai.error.AuthenticationError`
 for HTTP 401, or `voyageai.error.Timeout`) sets the span status to ERROR with
 `<ExceptionType>: <message>` and records one `exception` event; the key is
-redacted from both. The exception reaches your code unchanged.
+redacted from both, and with `pii_redaction=True` so is PII (see above). The
+exception reaches your code unchanged.
 
 Cancelling an `AsyncClient` call (`asyncio.CancelledError`) or interrupting a
 blocking call (`KeyboardInterrupt`) ends the span with status ERROR,

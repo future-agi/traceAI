@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("voyageai", reason="voyageai must be installed to test its instrumentor")
 
 import voyageai  # noqa: E402
+from fi_instrumentation import TraceConfig  # noqa: E402
 from voyageai.api_resources import api_requestor  # noqa: E402
 
 from _support import (  # noqa: E402
@@ -74,6 +75,62 @@ def test_a_key_echoed_in_an_error_message_is_redacted(fake):
     assert "[redacted]" in span.status.description
     assert "[redacted]" in span.events[0].attributes["exception.message"]
     assert VOYAGE_KEY not in traced.wire()
+
+
+EMAIL = "jane.doe@example.com"
+
+
+@pytest.mark.parametrize("operation", ["embed", "rerank"])
+def test_pii_redaction_covers_the_error_status_and_exception_event(fake, operation):
+    text = "mail {0} now".format(EMAIL)
+    with instrumented(config=TraceConfig(pii_redaction=True)) as traced:
+        with pytest.raises(voyageai.error.InvalidRequestError) as raised:
+            if operation == "embed":
+                client(fake).embed([text], model="echo-input")
+            else:
+                client(fake).rerank(text, DOCUMENTS, model="echo-input")
+
+    # The caller still sees the vendor's message unchanged.
+    assert EMAIL in str(raised.value)
+    span = traced.one()
+    (event,) = span.events
+    # set_status and add_event bypass FiSpan's attribute masking, so the
+    # wrapper applies TraceConfig's PII redaction to them itself.
+    for recorded in (
+        span.status.description,
+        event.attributes["exception.message"],
+        event.attributes["exception.stacktrace"],
+    ):
+        assert EMAIL not in recorded
+        assert "<EMAIL_ADDRESS>" in recorded
+    assert EMAIL not in traced.wire()
+
+
+def test_without_pii_redaction_error_text_is_unchanged_apart_from_the_key(fake):
+    with instrumented() as traced:
+        with pytest.raises(voyageai.error.InvalidRequestError):
+            client(fake).embed(["mail {0} now".format(EMAIL)], model="echo-input")
+
+    span = traced.one()
+    assert EMAIL in span.status.description
+    assert EMAIL in span.events[0].attributes["exception.message"]
+    assert EMAIL in span.events[0].attributes["exception.stacktrace"]
+
+
+def test_the_key_is_redacted_before_pii_redaction(fake):
+    # A key with a phone-number-like run: PII redaction first would rewrite
+    # part of it and leave the rest of the key behind.
+    key = "pa-placeholder-5551234567-PHONE-KEY-TAIL"
+    with instrumented(config=TraceConfig(pii_redaction=True)) as traced:
+        with pytest.raises(voyageai.error.InvalidRequestError):
+            voyageai.Client(api_key=key, base_url=fake.base_url).embed(TEXTS, model="echo-key")
+
+    span = traced.one()
+    assert "[redacted]" in span.status.description
+    assert "[redacted]" in span.events[0].attributes["exception.message"]
+    wire = traced.wire()
+    for fragment in (key, "5551234567", "PHONE-KEY-TAIL"):
+        assert fragment not in wire, fragment
 
 
 def test_a_client_timeout_ends_the_span_as_an_error(fake):

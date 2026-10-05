@@ -42,7 +42,9 @@ class VoyageInstrumentor(BaseInstrumentor):  # type: ignore[misc]
       ``hide_input_text``, or ``FI_HIDE_INPUTS``) drops the rerank query and
       any captured texts and documents; ``hide_outputs`` (or
       ``FI_HIDE_OUTPUTS``) drops the rerank scores. Hiding inputs keeps the
-      scores. ``pii_redaction`` applies to every recorded value.
+      scores. ``pii_redaction`` applies to every string attribute and, after
+      the key is removed, to the error status description and the exception
+      event's message and stack trace.
     * ``capture_content``: ``False`` by default. By default only the rerank
       span records content: the query (``reranker.query`` and a plain-text
       ``input.value``) and the scores (``output.value``), as PRD J2 / AC-03

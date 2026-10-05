@@ -12,6 +12,8 @@ Models with special behaviour:
 * ``fail-401``: HTTP 401 with a ``detail`` message.
 * ``echo-key``: HTTP 400 whose ``detail`` echoes the bearer key back, so a
   test can prove the key is redacted from error text.
+* ``echo-input``: HTTP 400 whose ``detail`` echoes the rerank query or the
+  first text back, so a test can prove PII redaction covers error text.
 * ``rate-limit-once``: the first request gets HTTP 429, later ones succeed.
 * ``slow``: the request is held until the fake closes (timeouts, cancels).
 """
@@ -129,6 +131,10 @@ class FakeVoyage:
                 elif model == "echo-key":
                     key = authorization[len("Bearer ") :]
                     self._send(400, {"detail": "bad request for key {0}".format(key)})
+                elif model == "echo-input":
+                    echoed = body.get("query") or body.get("input") or ""
+                    echoed = echoed if isinstance(echoed, str) else echoed[0]
+                    self._send(400, {"detail": "cannot process {0}".format(echoed)})
                 elif model == "rate-limit-once" and owner._take_rate_limit():
                     self._send(429, {"detail": "rate limited"})
                 elif path == "/v1/embeddings":

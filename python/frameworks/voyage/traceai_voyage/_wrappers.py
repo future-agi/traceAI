@@ -26,6 +26,11 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
+try:  # The function TraceConfig.mask applies when pii_redaction is on.
+    from fi_instrumentation.instrumentation.config import redact_pii_in_value
+except ImportError:  # pragma: no cover - present from fi-instrumentation-otel 1.1.0
+    redact_pii_in_value = None
+
 logger = logging.getLogger(__name__)
 
 PROVIDER = "voyage"
@@ -375,12 +380,33 @@ def _describe(error: BaseException, secrets: Sequence[str]) -> Tuple[str, str]:
     return type(error).__name__, _redact(message, secrets)
 
 
-def _record_error(span: Span, error: BaseException, secrets: Sequence[str]) -> None:
+def _redact_pii(value: str, config: TraceConfig) -> str:
+    """TraceConfig's PII redaction for text FiSpan does not mask.
+
+    FiSpan masks attributes only; the status description and the exception
+    event go through set_status / add_event unmasked, so with
+    ``pii_redaction`` on they are redacted here. Callers remove the key first,
+    so a key that looks like PII is still removed whole.
+    """
+    if not config.pii_redaction:
+        return value
+    if redact_pii_in_value is not None:
+        redacted = redact_pii_in_value(value)
+    else:  # pragma: no cover - same function, reached through TraceConfig
+        redacted = config.mask("exception.message", value)
+    return redacted if isinstance(redacted, str) else value
+
+
+def _record_error(
+    span: Span, error: BaseException, secrets: Sequence[str], config: TraceConfig
+) -> None:
     name, message = _describe(error, secrets)
     try:
         stacktrace = "".join(traceback.format_exception(type(error), error, error.__traceback__))
     except Exception:
         stacktrace = ""
+    message = _redact_pii(message, config)
+    stacktrace = _redact_pii(_redact(stacktrace, secrets), config)
     # The SDK's record_exception would copy str(error) verbatim; the key may
     # be in it (a server echoing it back), so the event is built here.
     span.add_event(
@@ -388,7 +414,7 @@ def _record_error(span: Span, error: BaseException, secrets: Sequence[str]) -> N
         {
             "exception.type": "{0}.{1}".format(type(error).__module__, type(error).__qualname__),
             "exception.message": message,
-            "exception.stacktrace": _redact(stacktrace, secrets),
+            "exception.stacktrace": stacktrace,
         },
     )
     span.set_status(Status(StatusCode.ERROR, "{0}: {1}".format(name, message)))
@@ -490,7 +516,7 @@ class _Call:
         if span is None:
             return
         try:
-            _record_error(span, error, self._secrets)
+            _record_error(span, error, self._secrets, self._wrapper.config)
         except Exception:
             logger.debug("Could not record the Voyage error", exc_info=True)
         finally:
