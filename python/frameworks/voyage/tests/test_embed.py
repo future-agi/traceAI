@@ -170,3 +170,34 @@ def test_unwrapped_methods_produce_no_span(fake):
 
     assert fake.paths() == ["/v1/multimodalembeddings"]
     assert traced.spans() == []
+
+
+def test_a_local_model_is_traced_without_a_server_address(fake, monkeypatch):
+    helpers = pytest.importorskip(
+        "voyageai.local.helpers", reason="voyageai < 0.5 has no local embedding models"
+    )
+    import voyageai.client as client_module
+    from voyageai.object import EmbeddingsObject
+
+    model = "voyage-4-nano"
+    assert helpers.is_local_model(model)
+
+    def embed_local(texts, model, **kwargs):
+        # Stands in for the sentence-transformers backend (torch is not installed).
+        result = EmbeddingsObject()
+        result.embeddings = [[VECTOR_BASE] * DIMENSION for _ in texts]
+        result.total_tokens = 5
+        return result
+
+    monkeypatch.setattr(client_module, "embed_local", embed_local)
+    with instrumented() as traced:
+        # The client has a key and a base URL, but a local model sends no request.
+        result = client(fake).embed(TEXTS, model=model)
+
+    assert len(result.embeddings) == 2
+    assert fake.paths() == []
+    values = attrs(traced.one())
+    assert values["embedding.model_name"] == model
+    assert values["voyage.embedding.count"] == 2
+    assert values["gen_ai.usage.total_tokens"] == 5
+    assert "server.address" not in values

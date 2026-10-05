@@ -170,9 +170,7 @@ def test_a_failing_result_attribute_never_reaches_the_caller(fake, monkeypatch):
     monkeypatch.setattr(wrappers, "_response_attributes", explode)
     with instrumented() as traced:
         result = client(fake).rerank(QUERY, DOCUMENTS, model="rerank-2.5")
-        async_result = asyncio.run(
-            async_client(fake).rerank(QUERY, DOCUMENTS, model="rerank-2.5")
-        )
+        async_result = asyncio.run(async_client(fake).rerank(QUERY, DOCUMENTS, model="rerank-2.5"))
 
     assert [r.index for r in result.results] == [1, 0, 2]
     assert [r.index for r in async_result.results] == [1, 0, 2]

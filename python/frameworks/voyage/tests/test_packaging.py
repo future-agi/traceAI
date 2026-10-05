@@ -21,9 +21,7 @@ SOURCE = PACKAGE / "traceai_voyage"
 
 
 def _dependency(name: str) -> SpecifierSet:
-    match = re.search(
-        r'^{0}\s*=\s*"([^"]+)"'.format(re.escape(name)), PYPROJECT.read_text(), re.M
-    )
+    match = re.search(r'^{0}\s*=\s*"([^"]+)"'.format(re.escape(name)), PYPROJECT.read_text(), re.M)
     assert match, name
     return SpecifierSet(match.group(1))
 
@@ -41,7 +39,9 @@ def test_voyageai_is_a_range_from_the_atlas_floor_to_the_next_major():
     assert tuple(_instruments) == tuple(VoyageInstrumentor().instrumentation_dependencies())
 
 
-@pytest.mark.parametrize(("installed", "wrapped"), [("0.4.1", True), ("0.3.6", False), ("1.0.0", False)])
+@pytest.mark.parametrize(
+    ("installed", "wrapped"), [("0.4.1", True), ("0.3.6", False), ("1.0.0", False)]
+)
 def test_the_runtime_dependency_check_accepts_only_the_range(monkeypatch, installed, wrapped):
     import opentelemetry.instrumentation.dependencies as dependencies
 

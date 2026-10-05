@@ -65,7 +65,9 @@ def _journey(
     try:
         voyage = client(fake)
         assert len(voyage.embed(TEXTS, model=EMBED_MODEL, input_type="document").embeddings) == 2
-        assert [r.index for r in voyage.rerank(QUERY, DOCUMENTS, RERANK_MODEL, top_k=2).results] == [
+        assert [
+            r.index for r in voyage.rerank(QUERY, DOCUMENTS, RERANK_MODEL, top_k=2).results
+        ] == [
             1,
             0,
         ]
@@ -133,7 +135,9 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
         assert int(rerank["voyage.rerank.document_count"]) == 3
         assert int(rerank["gen_ai.usage.total_tokens"]) == rerank_tokens(3)
         assert rerank_span["status"]["code"] == "STATUS_CODE_OK"
-    assert int(_flatten_attributes(by_name["voyage.rerank"][0]["attributes"])["reranker.top_k"]) == 2
+    assert (
+        int(_flatten_attributes(by_name["voyage.rerank"][0]["attributes"])["reranker.top_k"]) == 2
+    )
 
     failed = _flatten_attributes(failed_embed["attributes"])
     assert failed_embed["status"]["code"] == "STATUS_CODE_ERROR"

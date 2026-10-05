@@ -124,7 +124,7 @@ class FakeVoyage:
                 elif model == "fail-401":
                     self._send(401, {"detail": "Provided API key is invalid."})
                 elif model == "echo-key":
-                    key = authorization[len("Bearer "):]
+                    key = authorization[len("Bearer ") :]
                     self._send(400, {"detail": "bad request for key {0}".format(key)})
                 elif model == "rate-limit-once" and owner._take_rate_limit():
                     self._send(429, {"detail": "rate limited"})
