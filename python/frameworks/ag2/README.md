@@ -194,6 +194,8 @@ Notes:
   span's `BoundedAttributes` (limits and `dropped_attributes_count` carry
   over), so on a span already at `max_span_attributes` (128 by default) a key
   it adds evicts the oldest one and the drop is counted, as the SDK does.
+  traceAI context keys (`session.id`, `user.id`, `metadata`, ...) are moved
+  behind AG2's keys first, so AG2's oldest keys are evicted before them.
 
 ## Troubleshooting
 

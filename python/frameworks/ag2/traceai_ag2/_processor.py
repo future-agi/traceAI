@@ -42,7 +42,7 @@ from typing import AbstractSet, Any, Dict, FrozenSet, Mapping, Optional, Set, Tu
 
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from fi_instrumentation.instrumentation.config import TraceConfig
-from fi_instrumentation.instrumentation.context_attributes import get_attributes_from_context
+from fi_instrumentation.instrumentation.context_attributes import CONTEXT_ATTRIBUTES, get_attributes_from_context
 from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
@@ -236,6 +236,19 @@ def _apply_trace_config(attributes: Dict[str, Any], config: TraceConfig) -> Dict
     return masked
 
 
+def _move_context_keys_last(mapped: Dict[str, Any]) -> None:
+    """Move traceAI context keys (``session.id``, ``user.id``, ...) to the newest end.
+
+    ``on_start`` writes them before AG2 sets any attribute, so they are the
+    oldest keys on the span, and ``BoundedAttributes`` evicts oldest-first
+    when the keys this processor adds overflow ``max_span_attributes``.
+    Moved last, they are evicted after every key AG2 set.
+    """
+    for key in CONTEXT_ATTRIBUTES:
+        if key in mapped:
+            mapped[key] = mapped.pop(key)
+
+
 def _bounded_like(previous: Any, attributes: Dict[str, Any]) -> Any:
     """Return ``attributes`` in the container the span already used.
 
@@ -351,6 +364,7 @@ class AG2SpanProcessor(SpanProcessor):
             mapped = normalize_attributes(current, self._config, instrumented_agents=agents)
             if session is not None:
                 mapped[_SESSION_ID] = session
+            _move_context_keys_last(mapped)
             if mapped != current:
                 # ``ReadableSpan.attributes`` is a read-only view over
                 # ``_attributes``; every later processor and exporter in the

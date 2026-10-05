@@ -54,3 +54,8 @@
   processor never saw the worker's `invoke_agent` span and the worker's
   `record_usage subtask` rollup was counted on top of the worker's chat spans.
   A different `project_name` on a later call is ignored with a warning.
+- traceAI context keys (`session.id`, `user.id`, `metadata`, ...) are no
+  longer the first keys evicted when the processor's added keys overflow
+  `max_span_attributes`. `on_start` writes them before AG2 sets anything, so
+  they were the oldest keys on the span; the processor now moves them behind
+  AG2's keys before re-bounding, and AG2's oldest keys are evicted instead.

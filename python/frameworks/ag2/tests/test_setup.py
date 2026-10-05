@@ -359,6 +359,43 @@ def test_context_attributes_skip_foreign_scope_spans():
     assert "session.id" not in attrs(span)
 
 
+def test_context_keys_are_evicted_last_when_processor_keys_fill_a_limited_span():
+    """on_start writes traceAI context keys before AG2 sets any attribute, so
+    they are the oldest keys on the span. When the keys the processor adds
+    (span kind, usage aliases) overflow max_span_attributes, the oldest keys
+    are evicted; session.id and user.id must not be among them."""
+    from fi_instrumentation import using_attributes
+    from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    def final_chat(max_span_attributes):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider(
+            span_limits=SpanLimits(max_span_attributes=max_span_attributes), shutdown_on_exit=False
+        )
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        agent = weather_agent()
+        setup(agent, tracer_provider=provider)
+        _ask_inside(agent, using_attributes(session_id="sess-limit", user_id="user-limit"))
+        (chat,) = find(exporter.get_finished_spans(), f"chat {MODEL}")
+        return chat
+
+    added_by_processor = {"gen_ai.span.kind", *traceai_ag2.USAGE_KEY_ALIASES.values()}
+    unlimited = attrs(final_chat(128))
+    assert added_by_processor <= set(unlimited)
+    written_by_ag2_and_context = [k for k in unlimited if k not in added_by_processor]
+
+    # Exactly full when AG2 is done, so only the processor's keys evict.
+    chat = final_chat(len(written_by_ag2_and_context))
+    a = attrs(chat)
+    assert chat.dropped_attributes == len(added_by_processor)
+    assert a.get("session.id") == "sess-limit"
+    assert a.get("user.id") == "user-limit"
+    assert a.get("gen_ai.usage.input_tokens") == 11
+    assert a.get("gen_ai.span.kind") == "LLM"
+
+
 # --- AC-06 errors and cancellation -------------------------------------------
 
 
