@@ -30,7 +30,9 @@ function packageInfo(req, name) {
     const file = join(dir, "package.json");
     if (existsSync(file)) {
       const pkg = JSON.parse(readFileSync(file, "utf8"));
-      if (pkg.name === name) return { version: pkg.version, req: createRequire(file) };
+      if (pkg.name === name) {
+        return { version: pkg.version, engines: pkg.engines, req: createRequire(file) };
+      }
     }
     const parent = dirname(dir);
     if (parent === dir) throw new Error(`package.json not found for ${name}`);
@@ -46,8 +48,32 @@ function fiCoreSdk() {
   const impl = packageInfo(base.req, "@opentelemetry/sdk-trace");
   return {
     versions: [node.version, base.version, impl.version],
+    nodeRanges: {
+      "@opentelemetry/sdk-trace-node": node.engines?.node,
+      "@opentelemetry/sdk-trace-base": base.engines?.node,
+      "@opentelemetry/sdk-trace": impl.engines?.node,
+    },
     sdk: fiCore.req("@opentelemetry/sdk-trace-node"),
   };
+}
+
+/** `>=20`, `20.6.0` -> [20, 6, 0]. */
+function parseVersion(text) {
+  const parts = text.replace(/^>=\s*/, "").trim().split(".").map(Number);
+  assert.ok(parts.length <= 3 && parts.every(Number.isInteger), text);
+  return [0, 1, 2].map((i) => parts[i] ?? 0);
+}
+
+/** Whether `version` is in an engines range made of `^x.y.z` and `>=x.y.z` alternatives. */
+function inNodeRange(version, range) {
+  const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  return range.split("||").some((alternative) => {
+    const match = alternative.trim().match(/^(\^|>=)\s*(\d+\.\d+\.\d+)$/);
+    assert.ok(match, `unsupported engines range: ${range}`);
+    const floor = parseVersion(match[2]);
+    if (compare(version, floor) < 0) return false;
+    return match[1] === ">=" || version[0] === floor[0];
+  });
 }
 
 class FakeSpan {
@@ -186,6 +212,22 @@ test(`fi-core's provider creates spans with @opentelemetry/sdk-trace ${TESTED_SD
     TESTED_SDK_TRACE,
     TESTED_SDK_TRACE,
   ]);
+});
+
+test("package.json engines starts at a Node version the pinned SDK supports", () => {
+  // The lowest Node the example allows must be inside every pinned SDK
+  // package's own engines range (2.11.0: ^18.19.0 || >=20.6.0).
+  const example = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  const range = example.engines.node;
+  assert.match(range, /^>=\s*\d+(\.\d+){0,2}$/, `engines.node is not a >= floor: ${range}`);
+  const floor = parseVersion(range);
+  for (const [name, sdkRange] of Object.entries(fiCoreSdk().nodeRanges)) {
+    assert.ok(sdkRange, `${name} declares no engines.node`);
+    assert.ok(
+      inNodeRange(floor, sdkRange),
+      `engines.node ${range} allows Node ${floor.join(".")}, outside ${name}'s ${sdkRange}`,
+    );
+  }
 });
 
 function sdkRun(spanLimits) {
