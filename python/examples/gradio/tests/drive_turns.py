@@ -10,16 +10,18 @@ delay). Prints one JSON line with counts only, never the prompt.
 
 ``--content`` calls ``init_tracing(trace_content=True)`` instead.
 
-``--reload`` re-runs the app's source between the two turns the way Gradio
-6.29.1's reload watcher does after a save: on a non-main thread marked as
-the reload thread (``gradio/utils.py`` ``watchfn``), ``exec`` of the file
-into the same module namespace with ``__name__ == "__main__"``, so the app's
-``__main__`` block runs again and ``demo.launch()`` returns at once
-(``Blocks.launch``'s reload-thread check). The re-run source carries one
-edit, ``init_tracing()`` -> ``init_tracing(trace_content=True)``, as if the
-developer had turned content on and saved. The second turn then uses the
-re-created ``predict``. This replays the reload's effect on tracing; it is
-not a ``gradio app.py`` run.
+``--reload`` replays Gradio 6.29.1's reload mode. Its watcher thread
+(``gradio/utils.py`` ``watchfn``) runs the app's source again in the same
+process: once at startup, before any save, and once after each save. Each
+run is an ``exec`` of the file into the same module namespace with
+``__name__ == "__main__"``, on a non-main thread marked as the reload
+thread, so the app's ``__main__`` block runs again and ``demo.launch()``
+returns at once (``Blocks.launch``'s reload-thread check). This script does
+the startup run before the first turn and a save run between the two turns.
+The saved source carries one edit, ``init_tracing()`` ->
+``init_tracing(trace_content=True)``, as if the developer had turned content
+on and saved. The second turn then uses the re-created ``predict``. This
+replays the reload's effect on tracing; it is not a ``gradio app.py`` run.
 
 Prints one JSON line: the turn count and the ``project_version_id`` of the
 provider ``init_tracing()`` returned first (a fresh UUID per ``register()``
@@ -49,10 +51,8 @@ def load_app():
     return module
 
 
-def reload_like_gradio(module) -> None:
-    source = APP.read_text(encoding="utf-8")
-    assert source.count("init_tracing()") == 1, "expected one init_tracing() call in app.py"
-    source = source.replace("init_tracing()", "init_tracing(trace_content=True)")
+def rerun_like_gradio(module, source: str) -> None:
+    """Run ``source`` into ``module`` the way Gradio's reload watcher does."""
 
     def rerun() -> None:
         from gradio.cli.commands.reload import reload_thread
@@ -71,6 +71,13 @@ def main(argv: list[str]) -> int:
     app = load_app()
     provider = app.init_tracing(trace_content="--content" in argv)
     request = gr.Request(session_hash=SESSION_HASH)
+    report = {"first_provider": provider.resource.attributes["project_version_id"]}
+
+    source = APP.read_text(encoding="utf-8")
+    assert source.count("init_tracing()") == 1, "expected one init_tracing() call in app.py"
+    if "--reload" in argv:
+        # Gradio's watcher runs the file once at startup, before any save.
+        rerun_like_gradio(app, source)
 
     first = app.predict(message, [], request)
     history = [
@@ -78,18 +85,14 @@ def main(argv: list[str]) -> int:
         {"role": "assistant", "content": first},
     ]
     if "--reload" in argv:
-        reload_like_gradio(app)
+        # A save that turned content on.
+        rerun_like_gradio(
+            app, source.replace("init_tracing()", "init_tracing(trace_content=True)")
+        )
     second = app.predict(message, history, request)
 
-    print(
-        json.dumps(
-            {
-                "turns": 2,
-                "answered": [bool(first), bool(second)],
-                "first_provider": provider.resource.attributes["project_version_id"],
-            }
-        )
-    )
+    report.update(turns=2, answered=[bool(first), bool(second)])
+    print(json.dumps(report))
     return 0
 
 

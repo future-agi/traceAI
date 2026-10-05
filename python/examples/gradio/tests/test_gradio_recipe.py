@@ -630,17 +630,21 @@ def test_reload_keeps_the_first_provider_and_ignores_tracing_edits(tmp_path: Pat
     _assert_ran(record)
     # Both turns, before and after the reload, were exported at exit ...
     assert len(record["spans"]) == 2
-    # ... by the provider the first init_tracing() created. The reload's
-    # register() made another provider, which exported nothing.
+    # ... by the provider the first init_tracing() created.
     first_provider = _report(record)["first_provider"]
     for request in record["requests"]:
         for resource in request["resource_attributes"]:
             assert resource["project_version_id"] == first_provider
+    # init_tracing() ran on the watcher thread twice, at startup and after the
+    # save. Each run's register() made another provider, which exported
+    # nothing, and each run logged two warnings.
+    stderr = record["stderr"]
+    assert stderr.count("Attempting to instrument while already instrumented") == 2
+    assert stderr.count("Failed to register signal handlers") == 2
     # The reloaded source turned content on; the instrumentor ignored it.
-    assert "Attempting to instrument while already instrumented" in record["stderr"]
     for marker in CONTENT_MARKERS:
         assert marker not in _export_dump(record)
-    # The session key survived the reload: one id for both turns.
+    # The session key survived both runs of the file: one id for both turns.
     first, second = (_otlp_attrs(span) for span in record["spans"])
     assert first["session.id"] == second["session.id"]
 

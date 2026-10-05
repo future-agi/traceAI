@@ -232,27 +232,38 @@ does not test them.
 
 `gradio src/app.py` (reload mode) does not restart the process when you
 save. Gradio 6.29.1 runs the file again in the same process, on a watcher
-thread (`gradio/utils.py`, `watchfn`), so `init_tracing()` runs again:
+thread (`gradio/utils.py`, `watchfn`): once at startup, before any save, and
+again after each save. So `init_tracing()` runs twice per launch even if you
+never save, and once more per save:
 
-- `register()` builds another provider with its own batch queue, and
+- Each of those runs' `register()` builds another provider with its own
+  batch queue and logs `Failed to register signal handlers: ... This is
+  expected when running in non-main threads.` Its
   `OpenAIInstrumentor().instrument()` is ignored with the warning
-  `Attempting to instrument while already instrumented`. Spans keep going to
-  the first provider, with the first `TraceConfig`.
+  `Attempting to instrument while already instrumented`. So both warnings
+  appear once at startup and once per save. Spans keep going to the first
+  provider, with the first `TraceConfig`; the other providers export
+  nothing.
 - **Edits to the tracing setup do not take effect until you restart.** In
   the tested replay, an edit that turned content on was saved and reloaded,
   and the next turn still exported no content.
 - In that replay no span was dropped: the turns before and after the reload
   were exported at exit by the first provider.
+- The session key survives the re-runs, so an open session keeps its id
+  (tested).
 
 A batch is lost only if the process ends without the exit flush.
 `register()` flushes on normal exit, SIGINT and SIGTERM. SIGKILL, or the
 SIGHUP a closed terminal sends, skips it (source reading of
-`fi_instrumentation/otel.py`, `setup_signal_handlers`; not tested). Each save
-also leaves one idle provider behind until the process exits (source
+`fi_instrumentation/otel.py`, `setup_signal_handlers`; not tested). The
+startup run leaves one idle provider from the start, and each save one
+more, until the process exits (that they stay until exit is source
 reading).
 
-The replay re-runs `src/app.py` the way `watchfn` does. It is not a
-`gradio src/app.py` run: the tests open no server port.
+The replay re-runs `src/app.py` the way `watchfn` does: once before the
+first turn, as at startup, and once between the two turns, as after a save.
+The tests count both warnings twice. It is not a `gradio src/app.py` run:
+the tests open no server port.
 
 ## Troubleshooting
 
@@ -266,6 +277,10 @@ The replay re-runs `src/app.py` the way `watchfn` does. It is not a
   so no session id was set.
 - **`session.id` is not Gradio's session hash.** By design: it is a keyed
   digest of the hash (see Session above).
+- **Startup warnings in reload mode.** `Failed to register signal handlers`
+  and `Attempting to instrument while already instrumented` come from
+  Gradio's startup re-run of the file. In the tested replay the spans still
+  went to the first provider; see [Gradio reload mode](#gradio-reload-mode).
 - **A tracing change did nothing after a save.** Reload mode keeps the
   first instrumentation. Restart the process.
 
