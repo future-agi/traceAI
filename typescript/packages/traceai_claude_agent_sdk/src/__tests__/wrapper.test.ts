@@ -716,27 +716,78 @@ describe("wrapQuery", () => {
       },
     );
 
-    it("M1: close() after a background subagent finishes post-result (its messages arrive after the result) ends OK", async () => {
-      const { provider, exporter } = memoryProvider();
+    /** Background subagent journey reordered: the main loop's result comes before the subagent's tail. */
+    function resultBeforeBackgroundTail(): SDKMessage[] {
       const base = backgroundedSubagentJourney();
       const result = base[base.length - 1];
       const idx = base.findIndex((m) => m.type === "assistant" && m.message.id === "msg_13");
-      // Main loop answers and yields its result; the background subagent's tool_result,
-      // final turn and task_notification arrive afterwards.
-      const journey = [...base.slice(0, idx + 1), result, ...base.slice(idx + 1, base.length - 1)];
-      const fake = makeFakeQuery(journey);
-      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      return [...base.slice(0, idx + 1), result, ...base.slice(idx + 1, base.length - 1)];
+    }
+
+    async function readThrough(q: AsyncGenerator<SDKMessage, void>, stop: (m: SDKMessage) => boolean): Promise<void> {
       for (;;) {
         const step = await q.next();
         if (step.done) throw new Error("stream ended early");
-        if (step.value.type === "system" && step.value.subtype === "task_notification") break;
+        if (stop(step.value)) return;
       }
+    }
+
+    const isTaskNotification = (m: SDKMessage) => m.type === "system" && m.subtype === "task_notification";
+
+    it("R4-1: close() after a post-result task_notification stays cancelled (the notification starts a main-loop turn)", async () => {
+      const { provider, exporter } = memoryProvider();
+      const fake = makeFakeQuery(resultBeforeBackgroundTail());
+      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      await readThrough(q, isTaskNotification);
       q.close();
       const spans = exporter.getFinishedSpans();
       const conversation = one(spans, "claude_agent.conversation");
-      expect(conversation.status.code).toBe(SpanStatusCode.OK);
-      expect(conversation.attributes["claude_agent.cancelled"]).toBeUndefined();
+      expect(conversation.status.code).toBe(SpanStatusCode.ERROR);
+      expect(conversation.attributes["claude_agent.cancelled"]).toBe(true);
+      // The subagent itself finished at its notification.
       expect(one(spans, "claude_agent.subagent.code-reviewer").status.code).toBe(SpanStatusCode.OK);
+    });
+
+    it.each([
+      ["idle", SpanStatusCode.OK],
+      ["running", SpanStatusCode.ERROR],
+    ] as const)(
+      "R4-1: session_state_changed %s is authoritative for close() after a result",
+      async (state, expected) => {
+        const { provider, exporter } = memoryProvider();
+        const stateMessage = {
+          type: "system",
+          subtype: "session_state_changed",
+          state,
+          uuid: "00000000-0000-4000-8000-0000000000aa",
+          session_id: SESSION_ID,
+        } as unknown as SDKMessage;
+        const fake = makeFakeQuery([...resultBeforeBackgroundTail(), stateMessage]);
+        const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+        await readThrough(q, (m) => m.type === "system" && (m as { subtype?: string }).subtype === "session_state_changed");
+        q.close();
+        const conversation = one(exporter.getFinishedSpans(), "claude_agent.conversation");
+        expect(conversation.status.code).toBe(expected);
+      },
+    );
+
+    it("R4-2: a main-loop stream_event after a result starts a new turn, so close() stays cancelled", async () => {
+      const { provider, exporter } = memoryProvider();
+      const partial = {
+        type: "stream_event",
+        event: { type: "message_start", message: { id: "msg_p2" } },
+        parent_tool_use_id: null,
+        uuid: "00000000-0000-4000-8000-0000000000bb",
+        session_id: SESSION_ID,
+      } as unknown as SDKMessage;
+      const journey = [init(), assistant("msg_s1", [text("First answer.")]), resultSuccess("First answer.", { num_turns: 1 }), partial];
+      const fake = makeFakeQuery(journey);
+      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      await readThrough(q, (m) => m.type === "stream_event");
+      q.close();
+      const conversation = one(exporter.getFinishedSpans(), "claude_agent.conversation");
+      expect(conversation.status.code).toBe(SpanStatusCode.ERROR);
+      expect(conversation.attributes["claude_agent.cancelled"]).toBe(true);
     });
 
     it("N1: close() after a result while a background subagent still runs stays cancelled", async () => {

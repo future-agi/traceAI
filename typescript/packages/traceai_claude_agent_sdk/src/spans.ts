@@ -287,7 +287,7 @@ export class QueryTracer {
   private conversationContext?: Context;
   private conversationIsError = false;
   private resultSeen = false;
-  /** A result arrived and no main-loop assistant/user message has followed it yet. */
+  /** A result arrived and the main loop has not started another turn since (see trackIdleAfterResult). */
   private idleAfterResult = false;
   private sessionId?: string;
   private finished = false;
@@ -380,15 +380,7 @@ export class QueryTracer {
     }
     try {
       const type = (message as { type?: unknown }).type;
-      if (
-        (type === "assistant" || type === "user") &&
-        ((message as { parent_tool_use_id?: unknown }).parent_tool_use_id ?? null) === null
-      ) {
-        // Main-loop activity after a result starts a new turn. Background
-        // subagent messages (parent_tool_use_id set) do not: nothingInFlight()
-        // already covers subagents that are still open.
-        this.idleAfterResult = false;
-      }
+      this.trackIdleAfterResult(type, message as { parent_tool_use_id?: unknown; subtype?: unknown; state?: unknown });
       if (type === "assistant") {
         this.onAssistant(message as AssistantMessageLike);
       } else if (type === "user") {
@@ -484,6 +476,30 @@ export class QueryTracer {
       conversation.end(toHrTime(endMs));
     } catch (error) {
       diag.debug(`@traceai/claude-agent-sdk: failed to finish spans: ${error}`);
+    }
+  }
+
+  /**
+   * Keep idleAfterResult in step with the main loop. Main-loop assistant, user
+   * and stream_event frames after a result start a new turn, and so does a
+   * task_notification: the CLI queues it as a main-thread command that runs
+   * its own turn (sdk.d.ts:5440, 4603). Background subagent frames
+   * (parent_tool_use_id set) do not; nothingInFlight() covers subagents still
+   * open. system/session_state_changed is authoritative when the CLI sends it
+   * (sdk.d.ts:5858): 'idle' after a result means the turn is over.
+   */
+  private trackIdleAfterResult(
+    type: unknown,
+    message: { parent_tool_use_id?: unknown; subtype?: unknown; state?: unknown },
+  ): void {
+    if (type === "assistant" || type === "user" || type === "stream_event") {
+      if ((message.parent_tool_use_id ?? null) === null) this.idleAfterResult = false;
+    } else if (type === "system") {
+      if (message.subtype === "task_notification") {
+        this.idleAfterResult = false;
+      } else if (message.subtype === "session_state_changed") {
+        this.idleAfterResult = message.state === "idle" && this.resultSeen;
+      }
     }
   }
 
