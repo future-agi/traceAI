@@ -46,16 +46,24 @@ class ExaInstrumentor(BaseInstrumentor):
     def _instrument(self, **kwargs: Any) -> None:
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
+        # Off by default: get_contents records only a URL count. With
+        # capture_urls=True it also records up to 20 requested URLs, each
+        # with the Exa key redacted and capped at 1 KB.
+        capture_urls = bool(kwargs.get("capture_urls", False))
         api_module = import_module(_MODULE)
         self._original_methods: Dict[Tuple[str, str], Any] = {}
 
         for client_name in ("Exa", "AsyncExa"):
             is_async = client_name == "AsyncExa"
             for method_name, span_name in _OPERATIONS.items():
+                options = {
+                    "contents": method_name == "get_contents",
+                    "capture_urls": capture_urls,
+                }
                 wrapper = (
-                    AsyncOperationWrapper(tracer, span_name)
+                    AsyncOperationWrapper(tracer, span_name, **options)
                     if is_async
-                    else OperationWrapper(tracer, span_name)
+                    else OperationWrapper(tracer, span_name, **options)
                 )
                 self._wrap_method(api_module, client_name, method_name, wrapper)
 

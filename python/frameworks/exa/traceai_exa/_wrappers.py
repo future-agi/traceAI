@@ -11,36 +11,70 @@ _FI_SPAN_KIND = "fi.span.kind"
 _INPUT_VALUE = "input.value"
 _RETRIEVAL_QUERY = "fi.retrieval.query"
 _RETRIEVAL_DOCUMENT_COUNT = "fi.retrieval.document_count"
+_RETRIEVAL_URL_COUNT = "fi.retrieval.url_count"
+_RETRIEVAL_URLS = "fi.retrieval.urls"
 _RETRIEVER = "RETRIEVER"
+_REDACTED = "[redacted]"
 _MAX_QUERY_BYTES = 1024
+_MAX_CAPTURED_URLS = 20
 
 
-def _query_from_call(
-    instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
-) -> str:
-    """Return only the user query or URL input, never client configuration."""
+def _redact(value: str, api_key: Optional[str]) -> str:
+    return value.replace(api_key, _REDACTED) if api_key else value
+
+
+def _query(args: Sequence[Any], kwargs: Mapping[str, Any]) -> Optional[str]:
+    """Return the search or answer query argument, never client configuration."""
     value = kwargs.get("query")
     if value is None and args:
         value = args[0]
-    if value is None:
-        value = kwargs.get("urls", kwargs.get("ids", ""))
+    return None if value is None else str(value)
 
+
+def _requested_urls(args: Sequence[Any], kwargs: Mapping[str, Any]) -> Optional[list]:
+    """Return get_contents' requested URLs, or None when the shape is unknown.
+
+    exa-py accepts one URL, a list of URLs, or a list of Result objects. Only a
+    Result's ``url`` is read, so text and highlights cannot reach a span.
+    """
+    value = kwargs["urls"] if "urls" in kwargs else (args[0] if args else None)
     if isinstance(value, str):
-        query = value
-    elif isinstance(value, (list, tuple)):
-        # get_contents also accepts Result objects. Use only their URLs so
-        # content fields such as text and highlights cannot be traced.
-        query = ",".join(
-            item if isinstance(item, str) else str(getattr(item, "url", ""))
-            for item in value
-        )
-    else:
-        query = str(getattr(value, "url", value or ""))
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [item if isinstance(item, str) else getattr(item, "url", None) for item in value]
+    return None
 
+
+def _request_attributes(
+    instance: Any,
+    args: Sequence[Any],
+    kwargs: Mapping[str, Any],
+    contents: bool,
+    capture_urls: bool,
+) -> dict:
+    attributes: dict = {_FI_SPAN_KIND: _RETRIEVER}
     api_key = _api_key(instance)
-    if api_key:
-        query = query.replace(api_key, "[redacted]")
-    return _cap(query)
+    if contents:
+        # get_contents: a URL count by default. URLs can carry tokens or
+        # personal data, so they are recorded only with capture_urls=True.
+        urls = _requested_urls(args, kwargs)
+        if urls is not None:
+            attributes[_RETRIEVAL_URL_COUNT] = len(urls)
+            if capture_urls:
+                attributes[_RETRIEVAL_URLS] = [
+                    _cap(_redact(url, api_key))
+                    for url in urls[:_MAX_CAPTURED_URLS]
+                    if isinstance(url, str)
+                ]
+        return attributes
+
+    query = _query(args, kwargs)
+    if query is not None:
+        query = _cap(_redact(query, api_key))
+        attributes[_RETRIEVAL_QUERY] = query
+        # The backend input panel reads input.value; keep both keys.
+        attributes[_INPUT_VALUE] = query
+    return attributes
 
 
 def _cap(value: str, limit: int = _MAX_QUERY_BYTES) -> str:
@@ -77,23 +111,29 @@ def _document_count(result: Any) -> int:
 
 
 class _BaseWrapper:
-    def __init__(self, tracer: Tracer, span_name: str) -> None:
+    def __init__(
+        self,
+        tracer: Tracer,
+        span_name: str,
+        *,
+        contents: bool = False,
+        capture_urls: bool = False,
+    ) -> None:
         self._tracer = tracer
         self._span_name = span_name
+        self._contents = contents
+        self._capture_urls = capture_urls
 
     def _start_span(
         self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
     ) -> Span:
-        query = _query_from_call(instance, args, kwargs)
-        return self._tracer.start_span(
-            self._span_name,
-            attributes={
-                _FI_SPAN_KIND: _RETRIEVER,
-                _RETRIEVAL_QUERY: query,
-                # The backend input panel reads input.value; keep both keys.
-                _INPUT_VALUE: query,
-            },
-        )
+        try:
+            attributes = _request_attributes(
+                instance, args, kwargs, self._contents, self._capture_urls
+            )
+        except Exception:  # an attribute must never break the user's call
+            attributes = {_FI_SPAN_KIND: _RETRIEVER}
+        return self._tracer.start_span(self._span_name, attributes=attributes)
 
     @staticmethod
     def _finish_ok(span: Span, result: Any = None) -> None:

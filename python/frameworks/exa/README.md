@@ -35,5 +35,17 @@ returned document count. Content capture is off by default: highlights, text,
 and response bodies are not added to span attributes. API keys are never added
 to span attributes.
 
+`get_contents` spans record the number of requested URLs
+(`fi.retrieval.url_count`), not the URLs, because URLs can carry tokens or
+personal data. To record the URLs as well, opt in when instrumenting:
+
+```python
+ExaInstrumentor().instrument(tracer_provider=tracer_provider, capture_urls=True)
+```
+
+With `capture_urls=True`, `fi.retrieval.urls` holds at most the first 20
+requested URLs, each with the Exa API key replaced by `[redacted]` and cut to
+1 KB. Query strings are otherwise kept as given.
+
 Do not use this package together with another instrumentor that wraps the same
 Exa client methods, or duplicate spans may result.
