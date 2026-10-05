@@ -1,0 +1,129 @@
+{
+  "collector": "fi-collector/pkg/adapter/adapter.go, future-agi main 4af5338",
+  "aliases": {
+    "modelNameKeys": {
+      "lines": [279, 284],
+      "keys": ["llm.model_name", "gen_ai.request.model", "gen_ai.response.model", "llm.request.model"]
+    },
+    "providerKeys": {
+      "lines": [289, 295],
+      "keys": ["gen_ai.provider.name", "llm.system", "gen_ai.system", "llm.vendor", "llm.provider"]
+    },
+    "inputTokenKeys": {
+      "lines": [296, 300],
+      "keys": ["llm.token_count.prompt", "gen_ai.usage.input_tokens", "llm.usage.prompt_tokens"]
+    },
+    "outputTokenKeys": {
+      "lines": [301, 305],
+      "keys": ["llm.token_count.completion", "gen_ai.usage.output_tokens", "llm.usage.completion_tokens"]
+    },
+    "totalTokenKeys": {
+      "lines": [306, 310],
+      "keys": ["llm.token_count.total", "gen_ai.usage.total_tokens", "llm.usage.total_tokens"]
+    }
+  },
+  "helpers": {
+    "firstString": {
+      "lines": [317, 324],
+      "source": [
+        "func firstString(attrsString map[string]string, keys []string) string {",
+        "for _, k := range keys {",
+        "if v, ok := attrsString[k]; ok && v != \"\" {",
+        "return v",
+        "}",
+        "}",
+        "return \"\"",
+        "}"
+      ]
+    },
+    "firstNumber": {
+      "lines": [330, 346],
+      "source": [
+        "func firstNumber(",
+        "attrsString map[string]string,",
+        "attrsNumber map[string]float64,",
+        "keys []string,",
+        ") (float64, bool) {",
+        "for _, k := range keys {",
+        "if v, ok := attrsNumber[k]; ok {",
+        "return v, true",
+        "}",
+        "if s, ok := attrsString[k]; ok {",
+        "if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {",
+        "return v, true",
+        "}",
+        "}",
+        "}",
+        "return 0, false",
+        "}"
+      ]
+    }
+  },
+  "columns": {
+    "era_a.json": {
+      "chat": {
+        "model": "",
+        "provider": "openai",
+        "gen_ai_system": "openai",
+        "gen_ai_operation": "chat",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0
+      }
+    },
+    "era_b.json": {
+      "invoke_agent": {
+        "model": "",
+        "provider": "",
+        "gen_ai_system": "",
+        "gen_ai_operation": "invoke_agent",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0
+      },
+      "retrieval": {
+        "model": "",
+        "provider": "",
+        "gen_ai_system": "",
+        "gen_ai_operation": "retrieval",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0
+      },
+      "chat gpt-test": {
+        "model": "gpt-test",
+        "provider": "openai",
+        "gen_ai_system": "",
+        "gen_ai_operation": "chat",
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+        "total_tokens": 7
+      }
+    },
+    "dual_emit.json": {
+      "dual_emit": {
+        "model": "",
+        "provider": "",
+        "gen_ai_system": "",
+        "gen_ai_operation": "",
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+        "total_tokens": 7
+      },
+      "dual_emit prompt_tokens": {
+        "model": "",
+        "provider": "",
+        "gen_ai_system": "",
+        "gen_ai_operation": "",
+        "prompt_tokens": 3,
+        "completion_tokens": 0,
+        "total_tokens": 3
+      }
+    }
+  },
+  "why": {
+    "era_a.json": "Provider is openai from gen_ai.system (providerKeys, adapter.go:292). gen_ai.usage.prompt_tokens and gen_ai.usage.completion_tokens are in no token alias list (:296-305), so the token columns stay 0: a recorded miss for SF-1, not a fix here.",
+    "era_b.json": "Model is gpt-test because gen_ai.request.model (:281) is ahead of gen_ai.response.model (:282). Provider from gen_ai.provider.name (:290). Tokens from gen_ai.usage.input_tokens (:298) and output_tokens (:303); total is derived as 3 + 4 because no total alias is set (:230-235). The retrieval and invoke_agent spans carry only gen_ai.operation.name.",
+    "dual_emit.json": "dual_emit: llm.token_count.prompt (:297) and gen_ai.usage.input_tokens (:298) are both prompt aliases, and llm.token_count.completion (:302) and gen_ai.usage.output_tokens (:303) both completion aliases. firstNumber takes the first alias present (:330-346), so tokens are 3 / 4 and total is derived as 3 + 4 (:230-235); adding the aliases would give 6 / 8 / 14. dual_emit prompt_tokens: gen_ai.usage.prompt_tokens is not an alias, so prompt tokens are 3 from gen_ai.usage.input_tokens and total is 3 + 0; this span cannot tell first-wins from a sum."
+  }
+}

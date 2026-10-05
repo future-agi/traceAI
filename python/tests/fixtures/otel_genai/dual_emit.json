@@ -1,0 +1,47 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "project_name", "value": {"stringValue": "otel-genai-conformance"}},
+          {"key": "project_type", "value": {"stringValue": "observe"}}
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {"name": "traceai.tests.fixtures.otel_genai"},
+          "spans": [
+            {
+              "traceId": "d0a1e000000000000000000000000003",
+              "spanId": "d0a1e00000000001",
+              "name": "dual_emit",
+              "kind": 3,
+              "startTimeUnixNano": "1791158400000000000",
+              "endTimeUnixNano": "1791158400250000000",
+              "attributes": [
+                {"key": "llm.token_count.prompt", "value": {"intValue": "3"}},
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "3"}},
+                {"key": "llm.token_count.completion", "value": {"intValue": "4"}},
+                {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "4"}}
+              ],
+              "status": {}
+            },
+            {
+              "traceId": "d0a1e000000000000000000000000004",
+              "spanId": "d0a1e00000000002",
+              "name": "dual_emit prompt_tokens",
+              "kind": 3,
+              "startTimeUnixNano": "1791158400000000000",
+              "endTimeUnixNano": "1791158400250000000",
+              "attributes": [
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "3"}},
+                {"key": "gen_ai.usage.prompt_tokens", "value": {"intValue": "3"}}
+              ],
+              "status": {}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
