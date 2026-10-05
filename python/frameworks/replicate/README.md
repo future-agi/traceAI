@@ -111,7 +111,7 @@ an object a traced `create` returned while it was not yet finished.
 | `replicate.prediction.version` | The version id, when the ref or the prediction has one. |
 | `replicate.deployment` | `owner/name` of the deployment, for deployment calls. |
 | `replicate.prediction.id` | The prediction id. `run` and `stream` record the id of the prediction the client created for them. Absent when the client never got one (for example an invalid ref). |
-| `replicate.prediction.status` | The status string the client returns (`starting`, `processing`, `succeeded`, `failed`, `canceled`), never normalised. Stream spans have none: the event stream does not report one. |
+| `replicate.prediction.status` | The status string the client returns (`starting`, `processing`, `succeeded`, `failed`, `canceled`), never normalised. Stream spans have none: the event stream does not report one. A `replicate.run` span can show `processing` on an OK span with output: with `Prefer: wait` (the default `wait=True` in replicate 1.0.7, an explicit `wait=` in 1.0.0) the client's `run()` returns without polling once the create response is no longer `starting`, and the server can answer `processing` for a prediction that has finished (the client's `run.py` behaviour). |
 | `replicate.metrics.predict_time` | `metrics.predict_time` in seconds, when present. A duration, not a price. |
 | `replicate.output.type` | `text`, `url` (one file URL), `list`, `object` or `other`. |
 | `replicate.stream.file_count` | File outputs seen in a stream, when there were any. |
@@ -119,7 +119,7 @@ an object a traced `create` returned while it was not yet finished.
 | `input.value`, `input.mime_type` | The prediction `input` as JSON. |
 | `output.value`, `output.mime_type` | Text output (a list of text tokens is joined; stream text events are concatenated), or the file URL(s) as strings. |
 | `gen_ai.request.parameters` | JSON of the call options that were passed: `wait`, `stream`, `use_file_output`, `file_encoding_strategy`, `webhook_events_filter`; `webhook` / `webhook_completed` only as `true`. |
-| `replicate.cancelled` | `true` when the caller cancelled (see below). |
+| `replicate.cancelled` | `true` when the caller abandoned the call (closed/dropped an iterator, cancelled a task); an explicit `cancel()` is recorded as status `canceled`. See [errors and cancellation](#errors-and-cancellation). |
 
 No token usage and no cost are recorded, whatever the prediction's metrics
 contain.
