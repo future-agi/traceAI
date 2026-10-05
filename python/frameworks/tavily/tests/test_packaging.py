@@ -47,11 +47,30 @@ def test_fi_instrumentation_floor_is_1_1_0():
         assert not spec.contains(version), version
 
 
+TESTED_PYTHONS = ["3.10", "3.11", "3.12", "3.13"]
+
+
+def _classified_pythons() -> list:
+    return re.findall(r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text())
+
+
 def test_classifiers_list_only_the_tested_python_versions():
-    versions = re.findall(
-        r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text()
-    )
-    assert versions == ["3.10", "3.11", "3.13"]
+    assert _classified_pythons() == TESTED_PYTHONS
+
+
+def test_python_constraint_admits_exactly_the_classified_versions():
+    """poetry-core adds a classifier for every minor the ``python`` constraint
+    admits, so the built wheel lists those whatever pyproject's classifiers say.
+    The constraint and the classifiers must therefore name the same versions.
+    """
+    match = re.search(r'^python\s*=\s*"([^"]+)"', PYPROJECT.read_text(), re.M)
+    assert match
+    admitted = [
+        "3.{0}".format(minor)
+        for minor in range(6, 20)
+        if SpecifierSet(match.group(1)).contains("3.{0}.0".format(minor))
+    ]
+    assert admitted == _classified_pythons()
 
 
 @pytest.mark.parametrize(

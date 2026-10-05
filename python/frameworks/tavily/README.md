@@ -15,7 +15,7 @@ pip install traceAI-tavily
 ```
 
 It accepts `tavily-python>=0.8.4,<1` and `fi-instrumentation-otel>=1.1.0`, and is
-tested with `tavily-python` 0.8.4 on Python 3.10, 3.11 and 3.13.
+tested with `tavily-python` 0.8.4 on Python 3.10, 3.11, 3.12 and 3.13.
 
 ## Which path do you use?
 
