@@ -160,7 +160,9 @@ occurrence of it in server-written text (the error status description, the
 covers the verbatim text and the escaped copies the client libraries write:
 protobuf text format (a status detail that quotes the query, which
 `google-api-core` appends to the error message with `'`, `"` and `\`
-backslash-escaped), the hex escapes of older gRPC cores (the chained gRPC
+backslash-escaped, `\n`, `\r` and `\t` as short escapes, and other ASCII
+control characters and DEL as 3-digit octal such as `\013`), the hex
+escapes of older gRPC cores (the chained gRPC
 error's `debug_error_string`, with non-ASCII bytes as `\xHH`; seen with
 grpcio 1.62, not with 1.82 or 1.84), and the Python repr and JSON string
 forms. A short query is removed wherever it occurs, including inside other

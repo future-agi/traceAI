@@ -316,8 +316,17 @@ def _hides_query(options: Options) -> bool:
 
 
 def _c_escaped(text: str) -> str:
-    """``text`` as protobuf text format writes a string field (non-ASCII kept)."""
-    return "".join(_C_ESCAPES.get(char, char) for char in text)
+    """``text`` as protobuf text format writes a string field (non-ASCII kept).
+
+    ``\\n``, ``\\r``, ``\\t``, quotes and backslash get their short escapes;
+    other ASCII control characters and DEL become 3-digit octal (``\\013``),
+    as upb's ``_upb_TextEncode_Escaped`` writes them.
+    """
+    return "".join(
+        _C_ESCAPES.get(char)
+        or ("\\{0:03o}".format(ord(char)) if ord(char) < 0x20 or char == "\x7f" else char)
+        for char in text
+    )
 
 
 def _c_hex_escaped(text: str) -> str:

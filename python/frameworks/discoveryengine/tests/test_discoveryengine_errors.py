@@ -369,6 +369,31 @@ def test_an_escaped_copy_of_a_hidden_query_is_removed(copy):
     assert "direct cause" in stacktrace and "debug_error_string" in stacktrace
 
 
+def _protobuf_text(text):
+    from google.rpc import error_details_pb2
+
+    violation = error_details_pb2.BadRequest.FieldViolation(description=text)
+    written = str(violation)
+    prefix = 'description: "'
+    assert written.startswith(prefix) and written.rstrip("\n").endswith('"'), written
+    return written.rstrip("\n")[len(prefix) : -1]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "".join(chr(code) for code in range(0x00, 0x20)) + "\x7f",
+        "Zelda's \"quoted\" a\\b caf\xe9 2024",
+        "tab\tnew\nline\rret vt\x0b esc\x1b del\x7f \u00e9\u4e2d\U0001f600",
+    ],
+    ids=["controls-and-del", "quotes-backslash-nonascii", "mixed"],
+)
+def test_the_protobuf_text_copy_matches_what_protobuf_writes(text):
+    # Pin _c_escaped to the installed protobuf's own text format (the copy a
+    # status detail appends to the error), not to a hand-written table.
+    assert _wrappers._c_escaped(text) == _protobuf_text(text)
+
+
 def test_a_hex_digit_after_a_hex_escape_is_matched_as_grpc_escapes_it():
     # absl escapes a hex digit that follows \xHH too: U+00E9 then 1 is \xc3\xa9\x31.
     error = core_exceptions.InvalidArgument(r"bad query 'caf\xc3\xa9\x31\x32 x'")

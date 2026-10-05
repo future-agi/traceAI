@@ -116,6 +116,36 @@ def test_escaped_copies_of_the_query_are_removed_from_error_text(fake, hide_inpu
     assert "Zelda" not in span.to_json()
 
 
+# ASCII control characters other than \t, \n and \r, and DEL: protobuf text
+# format writes them as 3-digit octal (\013, \033, \177), which none of the
+# repr, JSON or CHexEscape copies matches.
+CONTROL_QUERY = FAIL_DETAILS + " Zelda\x0bcontrol\x1bcopy\x7fend"
+CONTROL_DETAIL = r"Zelda\013control\033copy\177end"
+
+
+def test_the_status_detail_writes_control_characters_as_octal(fake):
+    # Control: the escaped copy really is in the error the caller sees.
+    with instrumented(capture_query=True):
+        with pytest.raises(core_exceptions.InvalidArgument) as raised:
+            search_client(fake).search(request=search_request(CONTROL_QUERY))
+    assert CONTROL_DETAIL in str(raised.value)
+
+
+@pytest.mark.parametrize("hide_inputs", [False, True], ids=["default", "hide_inputs"])
+def test_octal_escaped_copies_of_the_query_are_removed_from_error_text(fake, hide_inputs):
+    options = {"capture_query": True, "config": _config(hide_inputs=True)} if hide_inputs else {}
+    with instrumented(**options) as traced:
+        with pytest.raises(core_exceptions.InvalidArgument) as raised:
+            search_client(fake).search(request=search_request(CONTROL_QUERY))
+    assert CONTROL_DETAIL in str(raised.value)
+    span = traced.one()
+    for text in _error_texts(span):
+        assert text
+        assert "Zelda" not in text and "control" not in text, text
+        assert REDACTED_VALUE in text
+    assert "Zelda" not in span.to_json()
+
+
 def _config(**fields):
     from fi_instrumentation import TraceConfig
 
