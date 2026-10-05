@@ -329,6 +329,7 @@ var tracer = TraceAI.Register(opts =>
 | [`@traceai/openai-agents`](https://www.npmjs.com/package/@traceai/openai-agents) | OpenAI Agents | [![npm](https://img.shields.io/npm/v/@traceai/openai-agents)](https://www.npmjs.com/package/@traceai/openai-agents) |
 | [`@traceai/fi-instrumentation-google-adk`](https://www.npmjs.com/package/@traceai/fi-instrumentation-google-adk) | Google ADK | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-google-adk)](https://www.npmjs.com/package/@traceai/fi-instrumentation-google-adk) |
 | [`@traceai/mastra`](https://www.npmjs.com/package/@traceai/mastra) | Mastra | [![npm](https://img.shields.io/npm/v/@traceai/mastra)](https://www.npmjs.com/package/@traceai/mastra) |
+| [`@traceai/voltagent`](https://www.npmjs.com/package/@traceai/voltagent) | VoltAgent | [![npm](https://img.shields.io/npm/v/@traceai/voltagent)](https://www.npmjs.com/package/@traceai/voltagent) |
 | [`@traceai/beeai`](https://www.npmjs.com/package/@traceai/beeai) | IBM BeeAI | [![npm](https://img.shields.io/npm/v/@traceai/beeai)](https://www.npmjs.com/package/@traceai/beeai) |
 | [`@traceai/strands`](https://www.npmjs.com/package/@traceai/strands) | AWS Strands Agents | [![npm](https://img.shields.io/npm/v/@traceai/strands)](https://www.npmjs.com/package/@traceai/strands) |
 
@@ -462,6 +463,7 @@ Available on [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel).
 | | AWS Strands Agents | ✅ | ✅ | | |
 | | IBM BeeAI | ✅ | ✅ | | |
 | | Mastra | | ✅ | | |
+| | VoltAgent | | ✅ | | |
 | | LangChain4j | | | ✅ | |
 | | Spring AI | | | ✅ | |
 | | Semantic Kernel | | | ✅ | |
