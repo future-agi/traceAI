@@ -14,6 +14,7 @@ from opentelemetry.trace import StatusCode  # noqa: E402
 from _parallel_support import (  # noqa: E402
     FAIL_401,
     FAIL_500,
+    FAIL_HUGE,
     PARALLEL_KEY,
     SLOW,
     FakeParallel,
@@ -22,6 +23,9 @@ from _parallel_support import (  # noqa: E402
     instrumented,
     sync_client,
 )
+from traceai_parallel import _wrappers  # noqa: E402
+
+STACKTRACE_LIMIT = 16 * 1024
 
 
 @pytest.fixture()
@@ -56,6 +60,48 @@ def test_http_401_sets_error_reraises_and_never_records_the_key(fake):
     # Nothing came back, so no result count or ids are recorded.
     for key in ("parallel.result_count", "parallel.search_id"):
         assert key not in attrs(span)
+
+
+def test_a_huge_error_stacktrace_is_redacted_and_capped_at_16kb(fake):
+    # FAIL_HUGE echoes the key, then ~24 KB of 3-byte characters.
+    with instrumented() as traced:
+        with pytest.raises(parallel.BadRequestError):
+            sync_client(fake).search(search_queries=[FAIL_HUGE])
+
+    event = _exception_event(traced.one())
+    stacktrace = event["exception.stacktrace"]
+    assert stacktrace.startswith("Traceback")
+    assert "echo [redacted] \u20ac" in stacktrace
+    size = len(stacktrace.encode("utf-8"))
+    # Cut to 16 KB, losing at most a split 3-byte character at the end.
+    assert STACKTRACE_LIMIT - 3 <= size <= STACKTRACE_LIMIT
+    assert len(event["exception.message"].encode("utf-8")) <= 1024
+    assert PARALLEL_KEY not in traced.wire()
+
+
+def test_the_stacktrace_key_is_redacted_before_the_16kb_cap():
+    # An exception that was never raised has no traceback, so its stacktrace
+    # is exactly "RuntimeError: <message>\n" and the key straddles 16 KB.
+    prefix = "RuntimeError: "
+    message = "a" * (STACKTRACE_LIMIT - len(prefix) - 10) + PARALLEL_KEY
+    event = _wrappers._exception_attributes(RuntimeError(message), [PARALLEL_KEY])
+
+    stacktrace = event["exception.stacktrace"]
+    assert stacktrace == prefix + "a" * (STACKTRACE_LIMIT - len(prefix) - 10) + "[redacted]"
+    assert PARALLEL_KEY[:10] not in stacktrace
+
+
+def test_the_stacktrace_cap_keeps_whole_characters():
+    message = "\u20ac" * 6000  # 3 UTF-8 bytes each
+    full = "RuntimeError: {0}\n".format(message)
+    stacktrace = _wrappers._exception_attributes(RuntimeError(message), [])[
+        "exception.stacktrace"
+    ]
+
+    assert len(stacktrace.encode("utf-8")) <= STACKTRACE_LIMIT
+    # The longest whole-character prefix that fits: one more would not.
+    assert stacktrace == full[: len(stacktrace)]
+    assert len(full[: len(stacktrace) + 1].encode("utf-8")) > STACKTRACE_LIMIT
 
 
 def test_http_500_on_extract_sets_error_and_reraises(fake):

@@ -44,6 +44,7 @@ EXTRACT = "extract"
 REDACTED = "[redacted]"
 MAX_VALUE_BYTES = 1024
 MAX_NAME_BYTES = 256
+MAX_STACKTRACE_BYTES = 16 * 1024
 MAX_CAPTURED_URLS = 20
 MAX_WARNING_EVENTS = 20
 _API_KEY_HEADER = "x-api-key"
@@ -246,7 +247,11 @@ def _describe(error: BaseException) -> str:
 
 
 def _exception_attributes(error: BaseException, keys: Sequence[str]) -> Dict[str, Any]:
-    """The OTel exception event, with the Parallel key removed from every text."""
+    """The OTel exception event, with the Parallel key removed from every text.
+
+    The message is then cut to 1 KB and the stacktrace to 16 KB of UTF-8: a
+    server error can echo a large request into both.
+    """
     error_type = type(error)
     module = error_type.__module__
     qualified = (
@@ -258,7 +263,7 @@ def _exception_attributes(error: BaseException, keys: Sequence[str]) -> Dict[str
     return {
         "exception.type": qualified,
         "exception.message": _clean(_describe(error), keys),
-        "exception.stacktrace": _redact(stacktrace, keys),
+        "exception.stacktrace": _clean(stacktrace, keys, MAX_STACKTRACE_BYTES),
     }
 
 

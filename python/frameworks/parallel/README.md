@@ -138,6 +138,10 @@ span status to ERROR and records one `exception` event, with the API key
 redacted from both. The exception is re-raised unchanged, so your code still
 sees the server's original message.
 
+After the key is removed, the error text is cut on a UTF-8 character
+boundary: the status description's message and `exception.message` to 1 KB,
+and `exception.stacktrace` to 16 KB.
+
 Cancelling an `AsyncParallel` call (`asyncio.CancelledError`) ends the span
 with status ERROR, description `cancelled`, and `parallel.cancelled` =
 `true`, without an exception event.
@@ -153,6 +157,12 @@ skips the span.
 
 ## Limits
 
+- Recorded text is cut on a UTF-8 character boundary, after the API key is
+  removed: 1 KB for the joined queries, each captured URL, the objective,
+  each warning message, `exception.message` and the message in the error
+  status; 256 bytes for `parallel.mode`, ids, usage SKU names and warning
+  types; 16 KB for `exception.stacktrace`. At most 20 URLs and 20 warning
+  events are recorded per span.
 - `parallel-web` copies `client.search` and `client.extract` into
   `client.with_raw_response` and `client.with_streaming_response` the first
   time either is read. A copy made before `instrument()` stays untraced;
