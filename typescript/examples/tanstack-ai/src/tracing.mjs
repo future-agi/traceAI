@@ -19,11 +19,18 @@ export const GEN_AI_SPAN_KIND = "gen_ai.span.kind";
  * `batch: true` is not passed: with @traceai/fi-core 1.0.0 on
  * @opentelemetry/sdk-trace(-base) 2.11.0 it does not attach the batch
  * processor, so spans go through register()'s default SimpleSpanProcessor.
+ *
+ * `setGlobalTracerProvider: false`: the recipe passes this provider's tracer
+ * to otelMiddleware, so it never needs the global provider, and leaving the
+ * global slot alone keeps an app's own OpenTelemetry setup (and its other
+ * spans) where it was. Removing the recipe is then dropping the middleware
+ * and calling shutdownTraces().
  */
 export function registerFutureAgiTracing() {
   return register({
     projectType: ProjectType.OBSERVE,
     projectName: process.env.FI_PROJECT_NAME ?? "tanstack-ai-example",
+    setGlobalTracerProvider: false,
   });
 }
 

@@ -1,5 +1,6 @@
-// Unit tests for futureAgiSpanKinds(), run with `node --test` (the contract
-// test runs this file). Fake spans stand in for the SDK span, and run() calls
+// Unit tests for futureAgiSpanKinds() and the tracer provider registration,
+// run with `node --test` (the contract test runs this file). Fake spans stand
+// in for the SDK span, and run() calls
 // the hooks in the order otelMiddleware does at @tanstack/ai 0.64.0:
 // attributeEnricher for the root at start, then per model call
 // attributeEnricher, the usage attributes and onSpanEnd, then applyRootUsage
@@ -10,7 +11,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { GEN_AI_SPAN_KIND, futureAgiSpanKinds } from "../src/tracing.mjs";
+import { trace } from "@opentelemetry/api";
+import {
+  GEN_AI_SPAN_KIND,
+  futureAgiSpanKinds,
+  registerFutureAgiTracing,
+  shutdownTraces,
+} from "../src/tracing.mjs";
 
 // The root-usage move edits the SDK span's attributes object, which is not
 // public API. These are the versions it was tested against.
@@ -240,6 +247,27 @@ test("threadIdAsSession: every span carries the caller's thread id as session.id
     iteration: 0,
   });
   assert.deepEqual(tool, { [GEN_AI_SPAN_KIND]: "TOOL", "session.id": "conversation-42" });
+});
+
+test("registerFutureAgiTracing() leaves the global tracer provider alone", async () => {
+  // The recipe hands its tracer to otelMiddleware, so it never needs the
+  // global provider. Taking the global slot would compete with an app's own
+  // OpenTelemetry setup or send that app's other spans to Future AGI.
+  // Placeholder settings only: register() makes no request, and no span is
+  // created here.
+  process.env.FI_API_KEY = "placeholder-fi-api-key";
+  process.env.FI_SECRET_KEY = "placeholder-fi-secret-key";
+  process.env.FI_PROJECT_NAME = "span-kinds-test";
+  const provider = registerFutureAgiTracing();
+  try {
+    assert.notEqual(trace.getTracerProvider().getDelegate(), provider);
+    // The slot is still free for the app's own provider.
+    const { BasicTracerProvider } = fiCoreSdk().sdk;
+    assert.equal(trace.setGlobalTracerProvider(new BasicTracerProvider()), true);
+  } finally {
+    trace.disable();
+    await shutdownTraces(provider);
+  }
 });
 
 test("no session.id by default, although TanStack always sets a threadId", () => {
