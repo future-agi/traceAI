@@ -72,9 +72,9 @@ a span from an HTTP client instrumentation nests under it.
 | `parallel.cancelled` | cancelled async calls | `true`; see [Errors and cancellation](#errors-and-cancellation). |
 
 Each response warning becomes a `parallel.warning` span event with
-`parallel.warning.type` and `parallel.warning.message` (key redacted, cut to
-1 KB). At most 20 events are recorded per span. Warnings do not change the
-span status.
+`parallel.warning.type` and `parallel.warning.message` (key redacted, and
+your inputs with `hide_inputs`; cut to 1 KB). At most 20 events are
+recorded per span. Warnings do not change the span status.
 
 A count, id or usage value that the response does not carry is omitted,
 never written as 0. Calls through `with_raw_response` and
@@ -135,30 +135,37 @@ environment variables before calling `instrument()`:
 
 | Setting | Effect |
 |---|---|
-| `hide_inputs` / `FI_HIDE_INPUTS=true` | Records `input.value` as `__REDACTED__` when `search_queries` were passed, and drops `gen_ai.retrieval.query`, `parallel.urls` and `parallel.objective`. No query text is recorded. Counts, mode and ids stay. |
+| `hide_inputs` / `FI_HIDE_INPUTS=true` | Records `input.value` as `__REDACTED__` when `search_queries` were passed, and drops `gen_ai.retrieval.query`, `parallel.urls` and `parallel.objective`. It also removes your inputs from server-written text: after the key is redacted, each verbatim occurrence of a search query, a requested `extract` URL or the objective in the error status description, the `exception` event's message and stacktrace, and warning messages becomes `__REDACTED__`, with or without `capture_urls` and `capture_objective`. Counts, mode and ids stay. |
 | `hide_outputs` / `FI_HIDE_OUTPUTS=true` | Drops `parallel.warning.message`. Warning types and counts stay. |
-| `pii_redaction` / `FI_PII_REDACTION=true` | Replaces emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` style keys with tokens such as `<EMAIL_ADDRESS>`, in every recorded text: attributes, warning messages, the error status and the `exception` event. It runs after the API key is removed and before the size caps, so a cut cannot leave part of an email. The patterns also match ids: an id with a run of ten digits is replaced too. |
+| `pii_redaction` / `FI_PII_REDACTION=true` | Replaces emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` style keys with tokens such as `<EMAIL_ADDRESS>`, in every recorded text: attributes, warning messages, the error status and the `exception` event. It runs after the API key (and, with `hide_inputs`, your inputs) is removed and before the size caps, so a cut cannot leave part of an email. The patterns also match ids: an id with a run of ten digits is replaced too. |
 
 `config` must be a `fi_instrumentation.TraceConfig`; anything else raises
 `TypeError` and nothing is wrapped.
 
-Server-written text is recorded as the server wrote it, with only the key
-removed (and PII, with `pii_redaction`): a warning message or an error
-message that quotes your request shows that text even with `hide_inputs`.
-`hide_outputs` drops warning messages; error messages and stack traces are
-always recorded on failed calls.
+Server-written text (error messages, stack traces and warning messages) is
+recorded as the server wrote it, with the key removed, your inputs removed
+with `hide_inputs`, and PII replaced with `pii_redaction`. `hide_inputs`
+matches each input verbatim only: a copy the server escaped, truncated or
+reformatted stays. For example, a query that contains a newline appears as
+`\n` in a `parallel-web` error message and is not matched. A short input is
+removed wherever it occurs, including inside other words. If the inputs
+cannot be read, the error and warning messages are recorded as
+`__REDACTED__`. `hide_outputs` drops warning messages; error messages and
+stack traces are always recorded on failed calls.
 
 ## Errors and cancellation
 
 An error raised by `parallel-web` (for example `AuthenticationError` for an
 HTTP 401, `InternalServerError` for a 5xx, or `APIConnectionError`) sets the
 span status to ERROR and records one `exception` event, with the API key
-redacted from both. The exception is re-raised unchanged, so your code still
-sees the server's original message.
+redacted from both (and your inputs, with `hide_inputs`; see
+[Privacy](#privacy)). The exception is re-raised unchanged, so your code
+still sees the server's original message.
 
-After the key is removed, the error text is cut on a UTF-8 character
-boundary: the status description's message and `exception.message` to 1 KB,
-and `exception.stacktrace` to 16 KB.
+The error text is cleaned in this order: the API key, then your inputs with
+`hide_inputs`, then PII with `pii_redaction`. It is then cut on a UTF-8
+character boundary: the status description's message and
+`exception.message` to 1 KB, and `exception.stacktrace` to 16 KB.
 
 Cancelling an `AsyncParallel` call (`asyncio.CancelledError`) ends the span
 with status ERROR, description `cancelled`, and `parallel.cancelled` =
@@ -175,12 +182,12 @@ skips the span.
 
 ## Limits
 
-- Recorded text is cut on a UTF-8 character boundary, after the API key is
-  removed: 1 KB for the joined queries, each captured URL, the objective,
-  each warning message, `exception.message` and the message in the error
-  status; 256 bytes for `parallel.mode`, ids, usage SKU names and warning
-  types; 16 KB for `exception.stacktrace`. At most 20 URLs and 20 warning
-  events are recorded per span.
+- Recorded text is cut on a UTF-8 character boundary, after it is cleaned
+  (API key, then hidden inputs, then PII): 1 KB for the joined queries, each
+  captured URL, the objective, each warning message, `exception.message` and
+  the message in the error status; 256 bytes for `parallel.mode`, ids, usage
+  SKU names and warning types; 16 KB for `exception.stacktrace`. At most 20
+  URLs and 20 warning events are recorded per span.
 - `parallel-web` copies `client.search` and `client.extract` into
   `client.with_raw_response` and `client.with_streaming_response` the first
   time either is read. A copy made before `instrument()` stays untraced;

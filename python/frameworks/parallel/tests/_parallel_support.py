@@ -7,10 +7,13 @@ first search query (or, without queries, the first URL) picks the behaviour:
 - ``fail-401``: HTTP 401 whose error message echoes the request's x-api-key
 - ``fail-500``: HTTP 500
 - ``fail-huge``: HTTP 400 whose ~24 KB error message echoes the x-api-key
-- ``fail-echo``: HTTP 400 whose error message echoes the first search query
+- ``fail-echo``: HTTP 400 whose error message quotes every search query, URL
+  and the objective back
 - ``slow``: held open until the fake closes (for cancellation)
 - ``warn``: a successful response with two warnings
 - ``echo-key-into-notice``: one oversized warning that echoes the x-api-key
+- ``echo-request-into-notice``: one warning that quotes the request like
+  ``fail-echo``
 - ``usage``: a successful response with usage items
 - ``malformed``: HTTP 200 with none of the documented fields
 
@@ -39,12 +42,14 @@ FAIL_500 = "fail-500"
 # HTTP 400 whose error message echoes the x-api-key, then 8000 euro signs.
 FAIL_HUGE = "fail-huge"
 HUGE_ERROR_CHARS = 8000
-# HTTP 400 whose error message echoes the first search query.
+# HTTP 400 whose error message quotes the request back (see _echo).
 FAIL_ECHO = "fail-echo"
 SLOW = "slow"
 WARN = "warn"
 # Echoes the request's x-api-key into one oversized warning message.
 WARN_ECHO = "echo-key-into-notice"
+# A successful response with one warning that quotes the request (see _echo).
+NOTICE_ECHO = "echo-request-into-notice"
 USAGE = "usage"
 MALFORMED = "malformed"
 
@@ -83,9 +88,23 @@ def _trigger(body: Dict[str, Any]) -> str:
     return str(urls[0]) if urls else ""
 
 
-def _decorate(trigger: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
+def _echo(body: Dict[str, Any]) -> str:
+    """The request's queries, URLs and objective, quoted back as a server might."""
+    texts = [str(query) for query in body.get("search_queries") or []]
+    texts += [str(url) for url in body.get("urls") or []]
+    if body.get("objective"):
+        texts.append(str(body["objective"]))
+    return " | ".join(texts)
+
+
+def _decorate(
+    trigger: str, payload: Dict[str, Any], headers: Dict[str, str], body: Dict[str, Any]
+) -> Dict[str, Any]:
     if WARN_ECHO in trigger:
         message = "echo {0} {1}".format(headers.get("x-api-key", ""), "\u20ac" * 600)
+        payload["warnings"] = [{"type": "warning", "message": message}]
+    elif NOTICE_ECHO in trigger:
+        message = "about your request: " + _echo(body)
         payload["warnings"] = [{"type": "warning", "message": message}]
     elif WARN in trigger:
         payload["warnings"] = [
@@ -134,7 +153,7 @@ class FakeParallel:
                     )
                     self._send(400, {"error": {"message": message}})
                 elif FAIL_ECHO in trigger:
-                    self._send(400, {"error": {"message": "rejected query: " + trigger}})
+                    self._send(400, {"error": {"message": "rejected request: " + _echo(body)}})
                 elif SLOW in trigger:
                     owner._release.wait(30)
                     self._send(503, {"error": {"message": "released"}})
@@ -147,7 +166,7 @@ class FakeParallel:
                         "session_id": body.get("session_id") or SESSION_ID,
                         "results": results,
                     }
-                    self._send(200, _decorate(trigger, payload, headers))
+                    self._send(200, _decorate(trigger, payload, headers, body))
                 elif path == "/v1/extract":
                     results, errors = [], []
                     for index, url in enumerate(body.get("urls") or []):
@@ -168,7 +187,7 @@ class FakeParallel:
                         "results": results,
                         "errors": errors,
                     }
-                    self._send(200, _decorate(trigger, payload, headers))
+                    self._send(200, _decorate(trigger, payload, headers, body))
                 elif path == "/v1/tasks/runs":
                     self._send(
                         200,

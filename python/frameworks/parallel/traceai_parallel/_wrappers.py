@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import traceback
 from collections.abc import Sequence as _SequenceABC
 from dataclasses import dataclass
@@ -92,16 +93,40 @@ def _redact(value: str, keys: Sequence[str]) -> str:
     return value
 
 
-def _clean(
-    value: str, keys: Sequence[str], limit: int = MAX_VALUE_BYTES, pii: bool = False
-) -> str:
-    """Redact the key, then PII when enabled, then cap.
+# The inputs to remove from server-written text: () when inputs are shown, or
+# None when inputs are hidden but could not be read (then no such text is kept).
+Hidden = Optional[Tuple[str, ...]]
 
-    Redacting before the cap means a key or an email cut by the cap cannot
-    leave a prefix. ``FITracer`` applies its PII pass to attributes again,
-    after the cap; span events and the status are written only from here.
+
+def _hide(value: str, hidden: Hidden) -> str:
+    """Replace every verbatim occurrence of a hidden input with ``__REDACTED__``.
+
+    One pass, longest input first, so an input inside a longer one, or inside
+    the placeholder itself, cannot split or rewrite a replacement.
     """
-    value = _redact(value, keys)
+    if hidden is None:
+        return REDACTED_VALUE
+    if not hidden:
+        return value
+    pattern = "|".join(re.escape(text) for text in hidden)
+    return re.sub(pattern, lambda _: REDACTED_VALUE, value)
+
+
+def _clean(
+    value: str,
+    keys: Sequence[str],
+    limit: int = MAX_VALUE_BYTES,
+    pii: bool = False,
+    hidden: Hidden = (),
+) -> str:
+    """Redact the key, then the hidden inputs, then PII when enabled, then cap.
+
+    Redacting before the cap means a key, an input or an email cut by the cap
+    cannot leave a prefix. ``FITracer`` applies its PII pass to attributes
+    again, after the cap; span events and the status are written only from
+    here.
+    """
+    value = _hide(_redact(value, keys), hidden)
     if pii:
         value = redact_pii_in_string(value)
     return _cap(value, limit)
@@ -199,6 +224,28 @@ def _request_attributes(
     return attributes
 
 
+def _hidden_inputs(
+    operation: str, kwargs: Mapping[str, Any], keys: Sequence[str], options: Options
+) -> Tuple[str, ...]:
+    """With ``hide_inputs``, the request text to remove from server-written text.
+
+    Every search query, every requested URL (``extract``) and the objective,
+    whether or not a capture switch would record them, as each reads after the
+    key is redacted, longest first. Empty when inputs are not hidden.
+    """
+    if not options.hide_inputs:
+        return ()
+    texts = [str(query) for query in _sequence(kwargs.get("search_queries")) or []]
+    if operation == EXTRACT:
+        texts += [url for url in _sequence(kwargs.get("urls")) or [] if isinstance(url, str)]
+    objective = kwargs.get("objective")
+    if isinstance(objective, str):
+        texts.append(objective)
+    found = {_redact(text, keys) for text in texts}
+    found.discard("")
+    return tuple(sorted(found, key=len, reverse=True))
+
+
 def _count(value: Any) -> Optional[int]:
     """Length of a returned list; None (never 0) when the shape is unknown."""
     if isinstance(value, (list, tuple)):
@@ -211,6 +258,7 @@ def _response_attributes(
     result: Any,
     keys: Sequence[str],
     options: Options,
+    hidden: Hidden = (),
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """Counts, ids, usage and warnings from a SearchResult or ExtractResponse.
 
@@ -258,7 +306,9 @@ def _response_attributes(
                 event[WARNING_TYPE] = _cap(kind, MAX_NAME_BYTES)
             message = getattr(warning, "message", None)
             if isinstance(message, str) and not options.hide_outputs:
-                event[WARNING_MESSAGE] = _clean(message, keys, pii=options.pii_redaction)
+                event[WARNING_MESSAGE] = _clean(
+                    message, keys, pii=options.pii_redaction, hidden=hidden
+                )
             events.append(event)
     return attributes, events
 
@@ -271,13 +321,13 @@ def _describe(error: BaseException) -> str:
 
 
 def _exception_attributes(
-    error: BaseException, keys: Sequence[str], pii: bool = False
+    error: BaseException, keys: Sequence[str], pii: bool = False, hidden: Hidden = ()
 ) -> Dict[str, Any]:
     """The OTel exception event, with the Parallel key removed from every text.
 
-    PII is replaced next when enabled. The message is then cut to 1 KB and
-    the stacktrace to 16 KB of UTF-8: a server error can echo a large
-    request into both.
+    The hidden inputs and then PII are replaced next when enabled. The message
+    is then cut to 1 KB and the stacktrace to 16 KB of UTF-8: a server error
+    can echo a large request into both.
     """
     error_type = type(error)
     module = error_type.__module__
@@ -289,8 +339,8 @@ def _exception_attributes(
     stacktrace = "".join(traceback.format_exception(error_type, error, error.__traceback__))
     return {
         "exception.type": qualified,
-        "exception.message": _clean(_describe(error), keys, pii=pii),
-        "exception.stacktrace": _clean(stacktrace, keys, MAX_STACKTRACE_BYTES, pii),
+        "exception.message": _clean(_describe(error), keys, pii=pii, hidden=hidden),
+        "exception.stacktrace": _clean(stacktrace, keys, MAX_STACKTRACE_BYTES, pii, hidden),
     }
 
 
@@ -324,16 +374,24 @@ def _current(span: Span) -> Iterator[None]:
 class _Call:
     """One traced Parallel call. Every method is isolated and ends the span once."""
 
-    def __init__(self, span: Span, operation: str, keys: List[str], options: Options) -> None:
+    def __init__(
+        self,
+        span: Span,
+        operation: str,
+        keys: List[str],
+        options: Options,
+        hidden: Hidden = (),
+    ) -> None:
         self.span = span
         self.operation = operation
         self.keys = keys
         self.options = options
+        self.hidden = hidden
 
     def ok(self, result: Any) -> None:
         try:
             attributes, events = _response_attributes(
-                self.operation, result, self.keys, self.options
+                self.operation, result, self.keys, self.options, self.hidden
             )
             for key, value in attributes.items():
                 self.span.set_attribute(key, value)
@@ -352,7 +410,12 @@ class _Call:
         try:
             description = "{0}: {1}".format(
                 type(error).__name__,
-                _clean(_describe(error), self.keys, pii=self.options.pii_redaction),
+                _clean(
+                    _describe(error),
+                    self.keys,
+                    pii=self.options.pii_redaction,
+                    hidden=self.hidden,
+                ),
             )
             self.span.set_status(Status(StatusCode.ERROR, description))
         except Exception:
@@ -360,7 +423,9 @@ class _Call:
         try:
             self.span.add_event(
                 "exception",
-                _exception_attributes(error, self.keys, self.options.pii_redaction),
+                _exception_attributes(
+                    error, self.keys, self.options.pii_redaction, self.hidden
+                ),
             )
         except Exception:
             logger.debug("Could not record the exception", exc_info=True)
@@ -411,12 +476,19 @@ class _BaseWrapper:
         except Exception:  # an attribute must never break the user's call
             logger.debug("Could not read the Parallel request", exc_info=True)
             attributes = {FI_SPAN_KIND: RETRIEVER}
+        hidden: Hidden = ()
+        try:
+            hidden = _hidden_inputs(self._operation, kwargs, keys, self._options)
+        except Exception:
+            # Inputs are hidden but unreadable: keep no server-written text.
+            logger.debug("Could not read the Parallel inputs to hide", exc_info=True)
+            hidden = None if self._options.hide_inputs else ()
         try:
             span = self._tracer.start_span(self._span_name, attributes=attributes)
         except Exception:
             logger.debug("Could not start the Parallel span", exc_info=True)
             return None
-        return _Call(span, self._operation, keys, self._options)
+        return _Call(span, self._operation, keys, self._options, hidden)
 
 
 class OperationWrapper(_BaseWrapper):
