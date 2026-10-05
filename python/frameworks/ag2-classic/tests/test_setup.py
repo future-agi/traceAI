@@ -484,6 +484,64 @@ def test_user_span_around_an_inner_chat_keeps_one_session(pipeline, fake):
     assert "session.id" not in inner.attributes
 
 
+# Context attributes and initiate_chats sessions -----------------------------------
+
+
+def test_using_attributes_sets_session_and_user_on_ag2_spans(pipeline, fake):
+    from fi_instrumentation import using_attributes
+
+    _provider, exporter, make = pipeline
+    tracing = make()
+    with using_attributes(session_id="my-session", user_id="u-1"):
+        result = two_agent_tool_chat(tracing, fake)
+    finished = exporter.get_finished_spans()
+    assert {s.name for s in finished} >= {"conversation user", "chat {0}".format(FAKE_MODEL), "execute_tool get_weather"}
+    for span in finished:
+        assert span.attributes["session.id"] == "my-session", span.name
+        assert span.attributes["user.id"] == "u-1", span.name
+    conversation = next(s for s in finished if s.name == "conversation user").attributes
+    assert conversation["gen_ai.conversation.id"] == str(result.chat_id)
+
+
+def _initiate_chats(tracing, fake):
+    from autogen import ConversableAgent
+
+    first = ConversableAgent("first", llm_config=fake.llm_config(), human_input_mode="NEVER")
+    second = ConversableAgent("second", llm_config=fake.llm_config(), human_input_mode="NEVER")
+    sender = ConversableAgent("sender", llm_config=False, human_input_mode="NEVER")
+    for agent in (first, second, sender):
+        tracing.instrument_agent(agent)
+    return sender.initiate_chats(
+        [
+            {"recipient": first, "message": "one", "max_turns": 1, "silent": True},
+            {"recipient": second, "message": "two", "max_turns": 1, "silent": True},
+        ]
+    )
+
+
+def test_initiate_chats_has_one_session_per_chat_by_default(pipeline, fake):
+    _provider, exporter, make = pipeline
+    results = _initiate_chats(make(), fake)
+    finished = exporter.get_finished_spans()
+    assert len({s.context.trace_id for s in finished}) == 1
+    sessions = {s.attributes.get("session.id") for s in finished} - {None}
+    assert sessions == {str(r.chat_id) for r in results} and len(sessions) == 2
+    multi = next(s for s in finished if s.attributes.get("ag2.span.type") == "multi_conversation")
+    assert "session.id" not in multi.attributes
+
+
+def test_using_session_gives_initiate_chats_one_session(pipeline, fake):
+    from fi_instrumentation import using_session
+
+    _provider, exporter, make = pipeline
+    tracing = make()
+    with using_session("batch-1"):
+        _initiate_chats(tracing, fake)
+    finished = exporter.get_finished_spans()
+    assert any(s.attributes.get("ag2.span.type") == "multi_conversation" for s in finished)
+    assert {s.attributes.get("session.id") for s in finished} == {"batch-1"}
+
+
 def test_patterns_are_passed_to_upstream_instrument_pattern(pipeline, fake):
     from autogen import ConversableAgent
     from autogen.agentchat import initiate_group_chat

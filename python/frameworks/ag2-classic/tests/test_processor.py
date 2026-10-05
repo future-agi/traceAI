@@ -295,6 +295,50 @@ def test_live_span_tracking_is_bounded(monkeypatch):
     assert len(exporter.get_finished_spans()) == 3
 
 
+# Context attributes (using_attributes / using_session / using_user) ------------
+
+
+def test_context_attributes_are_copied_onto_ag2_spans():
+    from fi_instrumentation import using_attributes
+
+    provider, exporter = _pipeline()
+    ag2 = provider.get_tracer(AG2_SCOPE)
+    other = provider.get_tracer("someone.else")
+    with using_attributes(session_id="my-session", user_id="u-1", metadata={"k": "v"}, tags=["t1"]):
+        with ag2.start_as_current_span("conversation c") as conversation:
+            conversation.set_attribute("ag2.span.type", "conversation")
+            with ag2.start_as_current_span("chat m") as llm:
+                llm.set_attribute("ag2.span.type", "llm")
+            conversation.set_attribute("gen_ai.conversation.id", "chat-1")
+        with other.start_as_current_span("x"):
+            pass
+    by_name = {s.name: s.attributes for s in exporter.get_finished_spans()}
+    for name in ("conversation c", "chat m"):
+        assert by_name[name]["session.id"] == "my-session", name
+        assert by_name[name]["user.id"] == "u-1", name
+        assert json.loads(by_name[name]["metadata"]) == {"k": "v"}, name
+        assert tuple(by_name[name]["tag.tags"]) == ("t1",), name
+    # The user's session wins over the upstream chat id; the chat id is kept.
+    assert by_name["conversation c"]["gen_ai.conversation.id"] == "chat-1"
+    # Spans from other instrumentations are left to their own tracer.
+    assert "session.id" not in by_name["x"] and "user.id" not in by_name["x"]
+
+
+def test_context_attributes_do_not_overwrite_upstream_values():
+    from fi_instrumentation import using_session
+
+    provider, exporter = _pipeline()
+    ag2 = provider.get_tracer(AG2_SCOPE)
+    with using_session("my-session"):
+        with ag2.start_as_current_span(
+            "conversation c", attributes={"ag2.span.type": "conversation", "gen_ai.conversation.id": "chat-1"}
+        ):
+            pass
+    attrs = exporter.get_finished_spans()[0].attributes
+    assert attrs["session.id"] == "my-session"
+    assert attrs["gen_ai.conversation.id"] == "chat-1"
+
+
 def test_processor_preserves_bounded_attribute_limits():
     from opentelemetry.attributes import BoundedAttributes
 

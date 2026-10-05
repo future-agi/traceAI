@@ -100,10 +100,10 @@ provider and shuts down with `trace_provider.shutdown()`.
 ## Conformance
 
 Every row was read from `autogen/opentelemetry/instrumentators/` at 0.14.1.
-LLM, agent, tool, conversation, group-chat speaker selection and pattern spans
-are exercised by real `autogen` runs against a loopback fake model in
-`tests/`; code execution, human input, `initiate_chats` and remote-agent spans
-are covered by mapping unit tests only.
+LLM, agent, tool, conversation, group-chat speaker selection, pattern and
+`initiate_chats` spans are exercised by real `autogen` runs against a loopback
+fake model in `tests/`; code execution, human input and remote-agent spans are
+covered by mapping unit tests only.
 
 | Field | What you get | When it is omitted |
 |---|---|---|
@@ -111,8 +111,8 @@ are covered by mapping unit tests only.
 | Model, provider | `gen_ai.request.model`, `gen_ai.provider.name` on LLM, agent and conversation spans; `gen_ai.response.model` on LLM spans. Upstream keys, passed through. | Agents without an LLM config carry no model or provider. |
 | Tokens | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` on LLM spans (from the response `usage`), plus `gen_ai.usage.total_tokens` added here. | A response without `usage` gives no token keys. Conversation spans carry upstream's aggregate input/output tokens for the whole chat. Future AGI sums tokens over every span in a trace, so those move to `ag2.usage.input_tokens` / `ag2.usage.output_tokens`; each LLM call counts once. |
 | Cost | `gen_ai.cost.total` on LLM spans, copied from upstream `gen_ai.usage.cost` (AG2's own price table). | Conversation spans keep only upstream `gen_ai.usage.cost` (aggregate). |
-| Session | `session.id` from upstream `gen_ai.conversation.id` (`ChatResult.chat_id`) on the outermost `conversation` span. | Nested chats (for example the internal chat behind group-chat speaker selection) keep `gen_ai.conversation.id` but get no `session.id`. Child spans end before the chat id exists, so only the conversation span carries it. A `GroupChatManager` run emits no own conversation span at 0.14.x. |
-| User | Not emitted upstream. | Always. |
+| Session | `session.id` from upstream `gen_ai.conversation.id` (`ChatResult.chat_id`) on the outermost `conversation` span. Inside `using_session(...)` or `using_attributes(session_id=...)` (from `fi_instrumentation`), that id is set on every AG2 span instead and wins over the chat id; `gen_ai.conversation.id` keeps the chat id. | Nested chats (for example the internal chat behind group-chat speaker selection, or an inner chat a tool starts) keep `gen_ai.conversation.id` but get no `session.id`. Child spans end before the chat id exists, so only the conversation span carries it. A `GroupChatManager` run emits no own conversation span at 0.14.x. `initiate_chats` gives one session per chat: each chat is its own outermost conversation, and the parent `initiate_chats` span (`multi_conversation`) has no `session.id`, so one trace holds several sessions. For one session over the whole call, wrap it in `with using_session("..."):`. |
+| User | `user.id` (and `metadata`, `tag.tags`) from `using_user(...)` / `using_attributes(...)`, set on every AG2 span started inside it. | Not emitted upstream; absent without that context. |
 | Tools | `gen_ai.tool.name`, `gen_ai.tool.type` (`function`), `gen_ai.tool.call.id`. | Arguments and result (`gen_ai.tool.call.arguments` / `.result`) only with `capture_content=True`. |
 | Errors | Exceptions keep OTel's ERROR status. A failing tool is caught inside `ConversableAgent.execute_function`, so upstream only sets `error.type=ExecutionError`; this package sets status ERROR from `error.type`. A non-zero code exit (`error.type=CodeExecutionError`) also becomes ERROR. | |
 | Retrieval | Not emitted upstream. | Always. |

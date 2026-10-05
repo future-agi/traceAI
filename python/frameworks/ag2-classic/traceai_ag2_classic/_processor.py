@@ -15,6 +15,10 @@ What it does, per span on the ``opentelemetry.instrumentation.ag2`` scope:
   selection, or an inner chat a tool starts inside the user's own span) get
   their own ``chat_id`` upstream; those are not copied, so one run maps to one
   session. The ancestor walk follows every live span, AG2 or not.
+* Future AGI context attributes (``using_session``, ``using_user``,
+  ``using_attributes``: ``session.id``, ``user.id``, ``metadata``, ...) copied
+  onto AG2 spans when they start; a context ``session.id`` wins over the
+  conversation id.
 * ``gen_ai.cost.total`` from upstream ``gen_ai.usage.cost`` on LLM spans, and
   ``gen_ai.usage.total_tokens`` = input + output on LLM spans.
 * ``gen_ai.request.parameters`` JSON from upstream ``gen_ai.request.*``
@@ -40,11 +44,13 @@ import logging
 import threading
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from opentelemetry import context as context_api
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.trace import Status, StatusCode
 
 from fi_instrumentation.fi_types import FiMimeTypeValues, FiSpanKindValues, SpanAttributes
+from fi_instrumentation import get_attributes_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -279,11 +285,14 @@ class AG2ClassicSpanProcessor(SpanProcessor):
         if self._disabled:
             return
         try:
+            ag2 = _is_ag2(span)
             parent = span.parent
-            entry = (parent.span_id if parent is not None else None, span if _is_ag2(span) else None)
+            entry = (parent.span_id if parent is not None else None, span if ag2 else None)
             with self._lock:
                 if len(self._live) < _MAX_LIVE_SPANS:
                     self._live[span.context.span_id] = entry
+            if ag2:
+                _apply_context_attributes(span, parent_context)
         except Exception:  # pragma: no cover - never break the SDK
             return
 
@@ -353,3 +362,37 @@ class AG2ClassicSpanProcessor(SpanProcessor):
 def _is_ag2(span: Any) -> bool:
     scope = getattr(span, "instrumentation_scope", None)
     return getattr(scope, "name", None) == AG2_SCOPE
+
+
+def _context_attributes(parent_context: Optional[Context]) -> Dict[str, Any]:
+    """Return Future AGI context attributes (``using_attributes`` & co.).
+
+    Upstream spans come from a plain OpenTelemetry tracer, which never reads
+    these; only Future AGI's own tracer applies them
+    (``fi_instrumentation/instrumentation/_tracers.py:165``).
+    """
+    if parent_context is None:
+        return dict(get_attributes_from_context())
+    token = context_api.attach(parent_context)
+    try:
+        return dict(get_attributes_from_context())
+    finally:
+        context_api.detach(token)
+
+
+def _apply_context_attributes(span: Span, parent_context: Optional[Context]) -> None:
+    """Copy context attributes onto a starting AG2 span.
+
+    Keys upstream already set are left alone. A ``session.id`` from
+    ``using_session`` / ``using_attributes`` is therefore on the span before
+    it ends, and wins over the ``gen_ai.conversation.id`` copy in
+    :func:`map_ag2_attributes`. Upstream sets the conversation span's
+    ``gen_ai.conversation.id`` later, so it keeps the real chat id.
+    """
+    values = _context_attributes(parent_context)
+    if not values:
+        return
+    existing = span.attributes or {}
+    missing = {key: value for key, value in values.items() if key not in existing}
+    if missing:
+        span.set_attributes(missing)
