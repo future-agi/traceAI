@@ -109,9 +109,11 @@ if __name__ == "__main__":
   declares one. Its `session_hash` identifies one browser session (one page
   load), not a user, and it is not a Future AGI user id. It is also a Gradio
   session key: any client that sends it can read that session's live state
-  back from the running app (for example through
-  `/gradio_api/deep_link?session_hash=...`; source reading of Gradio
-  6.29.1's `routes.py`). So the recipe deliberately does not export it.
+  back from the running app, for example through
+  `/gradio_api/deep_link?session_hash=...`. If the app sets `auth`, the
+  client has to be logged in, but as any user, not the session's (source
+  reading of Gradio 6.29.1's `routes.py`, `deep_link` and `login_check`).
+  So the recipe deliberately does not export it.
   `_session_id` exports an HMAC-SHA256 of it instead, keyed with 32 random
   bytes drawn once per process, cut to 32 hex characters. Passed to
   `using_session`, that id goes on every turn of the session as `session.id`
