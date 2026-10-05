@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from contextvars import ContextVar
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
+
+logger = logging.getLogger(__name__)
 
 _FI_SPAN_KIND = "fi.span.kind"
 _TOOL = "TOOL"
@@ -98,6 +101,14 @@ def _call_job_id(method_name: str, args: Sequence[Any], kwargs: Mapping[str, Any
 
 
 class _BaseWrapper:
+    """Span bookkeeping shared by the sync and async wrappers.
+
+    Everything here is isolated from the caller: an error while reading
+    arguments, reading the result or recording an exception is logged at debug
+    level and never replaces the vendor's own result or exception. Every span
+    that starts is ended exactly once.
+    """
+
     def __init__(self, tracer: Tracer, span_name: str, method_name: str) -> None:
         self._tracer = tracer
         self._span_name = span_name
@@ -124,7 +135,19 @@ class _BaseWrapper:
                 attributes[_JOB_ID] = _redact(job_id, instance)
         return attributes
 
-    def _finish_ok(self, span: Span, result: Any, kwargs: Mapping[str, Any]) -> None:
+    def _start(self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Optional[Span]:
+        try:
+            attributes = self._attributes(instance, args, kwargs)
+        except Exception:
+            logger.debug("Could not read %s arguments", self._span_name, exc_info=True)
+            attributes = {_FI_SPAN_KIND: _TOOL}
+        try:
+            return self._tracer.start_span(self._span_name, attributes=attributes)
+        except Exception:
+            logger.debug("Could not start %s span", self._span_name, exc_info=True)
+            return None
+
+    def _record_result(self, span: Span, result: Any, kwargs: Mapping[str, Any]) -> None:
         if self._method_name == "search":
             span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, _document_count(result))
         if self._method_name in _CRAWL_METHODS:
@@ -147,15 +170,40 @@ class _BaseWrapper:
             span.set_status(Status(StatusCode.ERROR, job_status))
         else:
             span.set_status(Status(StatusCode.OK))
-        span.end()
 
-    @staticmethod
-    def _finish_error(span: Span, error: BaseException) -> None:
-        span.record_exception(error)
-        span.set_status(
-            Status(StatusCode.ERROR, "{0}: {1}".format(type(error).__name__, error))
-        )
+    def _finish_ok(self, span: Span, result: Any, kwargs: Mapping[str, Any]) -> None:
+        try:
+            self._record_result(span, result, kwargs)
+        except Exception:
+            logger.debug("Could not read %s result", self._span_name, exc_info=True)
+        finally:
+            _end(span)
+
+    def _finish_error(self, span: Span, error: BaseException) -> None:
+        try:
+            span.record_exception(error)
+        except Exception:
+            logger.debug("Could not record %s exception", self._span_name, exc_info=True)
+        try:
+            span.set_status(Status(StatusCode.ERROR, _describe(error)))
+        except Exception:
+            logger.debug("Could not set %s status", self._span_name, exc_info=True)
+        finally:
+            _end(span)
+
+
+def _describe(error: BaseException) -> str:
+    try:
+        return "{0}: {1}".format(type(error).__name__, error)
+    except Exception:
+        return type(error).__name__
+
+
+def _end(span: Span) -> None:
+    try:
         span.end()
+    except Exception:
+        logger.debug("Could not end span", exc_info=True)
 
 
 class OperationWrapper(_BaseWrapper):
@@ -170,9 +218,9 @@ class OperationWrapper(_BaseWrapper):
     ) -> Any:
         if _ACTIVE.get():
             return wrapped(*args, **kwargs)
-        span = self._tracer.start_span(
-            self._span_name, attributes=self._attributes(instance, args, kwargs)
-        )
+        span = self._start(instance, args, kwargs)
+        if span is None:
+            return wrapped(*args, **kwargs)
         token = _ACTIVE.set(True)
         try:
             result = wrapped(*args, **kwargs)
@@ -197,9 +245,9 @@ class AsyncOperationWrapper(_BaseWrapper):
     ) -> Any:
         if _ACTIVE.get():
             return await wrapped(*args, **kwargs)
-        span = self._tracer.start_span(
-            self._span_name, attributes=self._attributes(instance, args, kwargs)
-        )
+        span = self._start(instance, args, kwargs)
+        if span is None:
+            return await wrapped(*args, **kwargs)
         token = _ACTIVE.set(True)
         try:
             result = await wrapped(*args, **kwargs)

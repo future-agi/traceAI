@@ -220,3 +220,100 @@ def test_job_status_sets_attribute_and_span_status(
             assert attrs(span)["firecrawl.cancelled"] is True
         else:
             assert "firecrawl.cancelled" not in attrs(span)
+
+
+# R5: instrumentation errors never reach the caller, and the span always ends.
+
+
+def test_unparseable_url_does_not_break_the_call(fake: FakeFirecrawl, tracing: Tracing) -> None:
+    # urlsplit raises ValueError("Invalid IPv6 URL") for this string; the SDK
+    # itself sends it to the API unchanged.
+    _, exporter, _ = tracing
+    bad_url = "http://[::1/page"
+
+    document = sync_client(fake).scrape(bad_url)
+
+    async def journey() -> Any:
+        return await async_client(fake).scrape(bad_url)
+
+    async_document = asyncio.run(journey())
+
+    assert document.markdown and async_document.markdown
+    finished = spans(exporter)
+    assert [span.name for span in finished] == ["firecrawl.scrape"] * 2
+    assert all(attrs(span)["fi.span.kind"] == "TOOL" for span in finished)
+
+
+class _ExplodingResult:
+    """A result whose attributes raise something other than AttributeError."""
+
+    @property
+    def data(self) -> Any:
+        raise RuntimeError("result attribute exploded")
+
+    web = data
+    credits_used = data
+
+
+def test_result_attribute_errors_do_not_reach_the_caller(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeFirecrawl
+) -> None:
+    from firecrawl.v2.client import FirecrawlClient
+    from firecrawl.v2.client_async import AsyncFirecrawlClient
+
+    result = _ExplodingResult()
+
+    def search(_self: Any, _query: str, **_kwargs: Any) -> Any:
+        return result
+
+    async def asearch(_self: Any, _query: str, **_kwargs: Any) -> Any:
+        return result
+
+    monkeypatch.setattr(FirecrawlClient, "search", search)
+    monkeypatch.setattr(AsyncFirecrawlClient, "search", asearch)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = FirecrawlInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    try:
+        assert sync_client(fake).search("query") is result
+
+        async def journey() -> Any:
+            return await async_client(fake).search("query")
+
+        assert asyncio.run(journey()) is result
+    finally:
+        instrumentor.uninstrument()
+
+    assert [span.name for span in spans(exporter)] == ["firecrawl.search"] * 2
+
+
+class _UnprintableError(Exception):
+    def __str__(self) -> str:
+        raise RuntimeError("str() exploded")
+
+
+def test_error_recording_failure_still_reraises_the_vendor_error(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeFirecrawl
+) -> None:
+    from firecrawl.v2.client import FirecrawlClient
+
+    def scrape(_self: Any, _url: str, **_kwargs: Any) -> Any:
+        raise _UnprintableError()
+
+    monkeypatch.setattr(FirecrawlClient, "scrape", scrape)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = FirecrawlInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    try:
+        with pytest.raises(_UnprintableError):
+            sync_client(fake).scrape("https://example.com")
+    finally:
+        instrumentor.uninstrument()
+
+    finished = spans(exporter)
+    assert [span.name for span in finished] == ["firecrawl.scrape"]
+    assert finished[0].status.status_code is StatusCode.ERROR
