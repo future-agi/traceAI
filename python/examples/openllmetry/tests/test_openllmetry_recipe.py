@@ -35,6 +35,7 @@ APP = RECIPE_DIR / "src" / "app.py"
 README = RECIPE_DIR / "README.md"
 BARE_CALL = TESTS_DIR / "bare_llm_call.py"
 GUARD = TESTS_DIR / "_guarded_run.py"
+GUARD_PROBE = TESTS_DIR / "_guard_probe.py"
 
 sys.path.insert(0, str(TESTS_DIR))
 from _fake_openai import RESPONSE_MODEL, USAGE, FakeOpenAI  # noqa: E402
@@ -256,12 +257,32 @@ def test_recipe_runs_with_loopback_network_only(recipe_run: dict[str, Any]) -> N
     assert recipe_run["model_authorizations"] == ["Bearer " + OPENAI_KEY]
 
 
+def test_guard_refuses_and_logs_non_loopback_connections(tmp_path: Path) -> None:
+    """Positive control for every ``guard_attempts == []`` assertion in this file."""
+    guard_log = tmp_path / "guard.jsonl"
+    result = run(
+        [sys.executable, str(GUARD), str(GUARD_PROBE)],
+        env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "LOOPBACK_GUARD_LOG": str(guard_log)},
+        stdin=None,
+        timeout=60,
+    )
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert "refused: connect,connect_ex,getaddrinfo" in result.stdout.decode("utf-8", "replace")
+    logged = [json.loads(line) for line in guard_log.read_text().splitlines()]
+    assert [entry["kind"] for entry in logged] == ["connect", "connect_ex", "getaddrinfo"]
+    assert "192.0.2.1" in logged[0]["target"]
+    assert "2001:db8::1" in logged[1]["target"]
+    assert "example.invalid" in logged[2]["target"]
+
+
 def test_base_url_without_path_posts_to_v1_traces_once(recipe_run: dict[str, Any]) -> None:
     assert recipe_run["requests"], "no export reached the receiver"
     assert {request["path"] for request in recipe_run["requests"]} == {"/v1/traces"}
 
 
 def test_traceloop_headers_carry_the_future_agi_keys(recipe_run: dict[str, Any]) -> None:
+    assert recipe_run["requests"], "no export reached the receiver"
     for request in recipe_run["requests"]:
         headers = request["headers"]
         assert headers.get("x-api-key") == FI_API_KEY
@@ -272,6 +293,7 @@ def test_traceloop_headers_carry_the_future_agi_keys(recipe_run: dict[str, Any])
 
 
 def test_resource_carries_the_project(recipe_run: dict[str, Any]) -> None:
+    assert recipe_run["requests"], "no export reached the receiver"
     for request in recipe_run["requests"]:
         assert request["resource_attributes"], "export without a resource"
         for resource in request["resource_attributes"]:
