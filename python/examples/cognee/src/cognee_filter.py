@@ -14,9 +14,8 @@ questions to span attributes and has no setting to stop that, and its
 errors can quote them (a content-policy rejection quotes the whole prompt).
 By default the filter removes those attributes (``CONTENT_KEYS``) and, on
 every span, all free-text error detail: exception messages and status
-descriptions are replaced, stack traces keep only their headers, frame lines
-and the exception type, and other event values are kept only if they are
-not text. Pass ``capture_content=True``, or set
+descriptions are replaced, exception stack traces are omitted, and other event
+values are kept only if they are not text. Pass ``capture_content=True``, or set
 ``COGNEE_FI_CAPTURE_CONTENT=true``, to export everything.
 
 Span kinds. Cognee sets no span-kind attribute, so Future AGI would store
@@ -32,7 +31,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from typing import Any, Mapping, Optional, Sequence
 
 from opentelemetry.sdk.trace import Event, ReadableSpan
@@ -71,16 +69,6 @@ TYPE_ONLY = "{0} (detail removed: content capture off)"
 # and "True"/"False". Cognee 1.6.2 adds no events other than OpenTelemetry's
 # "exception" events; any other event gets the same allowlist.
 SAFE_EVENT_KEYS = frozenset({"exception.type", "exception.escaped"})
-# The lines of a Python stack trace (traceback.format_exception) that hold no
-# message or source text.
-TRACEBACK_HEADER = "Traceback (most recent call last):"
-CHAIN_SEPARATORS = frozenset(
-    {
-        "During handling of the above exception, another exception occurred:",
-        "The above exception was the direct cause of the following exception:",
-    }
-)
-FRAME_LINE = re.compile(r'  File "[^"]*", line \d+, in [\w<>.]+')
 
 
 def span_kind(name: str) -> Optional[str]:
@@ -161,7 +149,9 @@ def _without_detail(attributes: Optional[Mapping[str, Any]]) -> dict:
         if key == "exception.message":
             out[key] = DETAIL_REMOVED
         elif key == "exception.stacktrace":
-            out[key] = _trace_structure(str(value), attributes.get("exception.type"))
+            # A serialized traceback has no trustworthy boundary between its
+            # real frames and traceback-shaped exception-message content.
+            continue
         elif key in SAFE_EVENT_KEYS or _not_text(value):
             out[key] = value
     return out
@@ -174,37 +164,6 @@ def _not_text(value: Any) -> bool:
     return isinstance(value, (list, tuple)) and all(
         isinstance(item, (bool, int, float)) for item in value
     )
-
-
-def _trace_structure(stacktrace: str, exception_type: Any) -> str:
-    """A Python stack trace reduced to the lines that match its structure.
-
-    Kept: each ``Traceback (most recent call last):`` header that starts the
-    trace or follows a chained-exception separator, the ``File "...", line N,
-    in name`` lines below that header, the separators, and a last line with
-    the exception type. Everything else (source lines, every line of every
-    message and note, layouts this does not recognise) is left out.
-    """
-    lines = stacktrace.splitlines()
-    kept = []
-    in_frames = False
-    for index, line in enumerate(lines):
-        if in_frames and line.startswith(" "):
-            if FRAME_LINE.fullmatch(line):
-                kept.append(line)
-            continue
-        # A section's frames end at its first unindented line (the message).
-        in_frames = line == TRACEBACK_HEADER and (
-            index == 0
-            or (index >= 2 and lines[index - 1] == "" and lines[index - 2] in CHAIN_SEPARATORS)
-        )
-        if in_frames:
-            kept.append(line)
-        elif line in CHAIN_SEPARATORS:
-            kept += ["", line, ""]
-    if isinstance(exception_type, str):
-        kept.append(exception_type)
-    return "\n".join(kept).strip("\n") + "\n"
 
 
 def _copy(

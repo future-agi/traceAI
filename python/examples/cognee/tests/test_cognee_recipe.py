@@ -90,7 +90,6 @@ FILTERED_KEYS = set().union(*CONTENT_KEYS.values()) | {"cognee.db.query"}
 DETAIL_REMOVED = "__REDACTED__ (content capture off)"
 TYPE_ONLY = " (detail removed: content capture off)"
 TRACEBACK_HEADER = "Traceback (most recent call last):"
-FRAME_LINE = re.compile(r'  File "[^"]*", line \d+, in \S+')
 
 APP_SPAN = "remember_and_ask"
 INTERNAL = "SPAN_KIND_INTERNAL"
@@ -386,27 +385,23 @@ def filtered(
 def without_error_detail(span: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """A recorded span's events and status as the filter should export them by default.
 
-    The recorded run's error spans each hold one exception event with a
-    single-section stack trace (test_recorded_error_spans_are_vector_search_probes).
+    Default content-off mode keeps the fixed marker, exception type and
+    exception.escaped, but omits serialized exception stack traces entirely.
     """
     events = copy.deepcopy(span.get("events", []))
     for event in events:
-        exception_type = attributes(event)["exception.type"]
+        event["attributes"] = [
+            attribute
+            for attribute in event["attributes"]
+            if attribute["key"] != "exception.stacktrace"
+        ]
         for attribute in event["attributes"]:
             if attribute["key"] == "exception.message":
                 attribute["value"] = {"stringValue": DETAIL_REMOVED}
-            elif attribute["key"] == "exception.stacktrace":
-                lines = attribute["value"]["stringValue"].splitlines()
-                kept = [TRACEBACK_HEADER, *frame_lines(lines), exception_type]
-                attribute["value"] = {"stringValue": "\n".join(kept) + "\n"}
     status = dict(span.get("status", {}))
     if "message" in status:
         status["message"] = attributes(events[-1])["exception.type"] + TYPE_ONLY
     return events, status
-
-
-def frame_lines(lines: list[str]) -> list[str]:
-    return [line for line in lines if FRAME_LINE.fullmatch(line)]
 
 
 def filtered_attributes(span: dict[str, Any], capture_content: bool) -> dict[str, Any]:
@@ -645,12 +640,12 @@ def test_recipe_exports_no_content_by_default(runs: dict[str, Scenario]) -> None
     assert_no_content(runs["recipe"].spans)
 
 
-def test_recipe_exports_error_type_and_frames_only_by_default(
+def test_recipe_exports_error_type_without_stacktrace_by_default(
     runs: dict[str, Scenario],
 ) -> None:
     # Cognee's vector-search probes fail in every run (CollectionNotFoundError,
-    # naming the collection). With capture off, only the exception type and
-    # frame lines arrive; with capture on, the error as Cognee recorded it.
+    # naming the collection). With capture off, only fixed error markers and
+    # the exception type arrive; with capture on, the error is unchanged.
     for name, detail_kept in (("recipe", False), ("capture", True)):
         errors = [
             span
@@ -663,16 +658,14 @@ def test_recipe_exports_error_type_and_frames_only_by_default(
             for event in span["events"]:
                 event_attrs = attributes(event)
                 exception_type = event_attrs["exception.type"]
-                trace = event_attrs["exception.stacktrace"].splitlines()
                 if detail_kept:
                     assert "not found" in event_attrs["exception.message"]
                     assert "not found" in span["status"]["message"]
-                    assert "not found" in trace[-1]
+                    assert "not found" in event_attrs["exception.stacktrace"].splitlines()[-1]
                     continue
                 assert event_attrs["exception.message"] == DETAIL_REMOVED
                 assert span["status"]["message"] == exception_type + TYPE_ONLY
-                assert trace == [TRACEBACK_HEADER, *frame_lines(trace), exception_type]
-                assert frame_lines(trace)
+                assert "exception.stacktrace" not in event_attrs
 
 
 def test_recipe_exports_no_secrets(runs: dict[str, Scenario]) -> None:
@@ -848,8 +841,8 @@ def test_filter_keeps_content_off_the_wire_by_default(
     wire = filtered(cognee_filter, recorded)
     assert len(wire) == len(recorded)
     assert_no_content(wire)
-    # Error text is reduced to the exception type and frame lines; everything
-    # else is unchanged.
+    # Error text is replaced and serialized exception stack traces are omitted;
+    # everything else is unchanged.
     for before, after in zip(recorded, wire):
         assert attributes(after) == filtered_attributes(before, capture_content=False)
         events, status = without_error_detail(before)
@@ -895,8 +888,6 @@ def test_filter_removes_error_text_quoting_content(
         assert attributes(span["events"][0]) == {
             "exception.type": "ValueError",
             "exception.message": DETAIL_REMOVED,
-            "exception.stacktrace": TRACEBACK_HEADER
-            + '\n  File "/app/x.py", line 3, in run\nValueError\n',
             "exception.escaped": "False",
         }
 
@@ -909,6 +900,21 @@ PAYLOAD_MARKER = "PMARK2c6d"
 PAYLOAD = "\n".join([PAYLOAD_MARKER + " Ada works on the Lighthouse project."] * 220)
 POLICY_ERROR = "cognee.infrastructure.llm.exceptions.ContentPolicyFilterError"
 TASK_SPAN = "cognee.pipeline.task.extract_graph_and_summarize"
+CHAIN_FRAME_MARKER = "PROMPT_SECRET_FIXTURE_ONLY"
+# This is the exact separator, blank line, header and fake frame from
+# tickets/TH-8328/fix-r3/red-probe.py. It is quoted by the exception message
+# below, so it also occurs in the serialized exception.stacktrace.
+FORGED_CHAIN_FRAME = "\n".join(
+    (
+        "The above exception was the direct cause of the following exception:",
+        "",
+        TRACEBACK_HEADER,
+        '  File "/private/PROMPT_SECRET_FIXTURE_ONLY.py", line 1, in '
+        "PROMPT_SECRET_FIXTURE_ONLY",
+        "end of quoted prompt",
+    )
+)
+FORGED_CHAIN_PAYLOAD = ("ordinary oversized prompt text " * 320) + "\n" + FORGED_CHAIN_FRAME
 
 
 class ContentPolicyViolationError(Exception):
@@ -919,14 +925,14 @@ class ContentPolicyFilterError(Exception):
     """Stands in for Cognee's ContentPolicyFilterError."""
 
 
-def raise_policy_rejection() -> None:
+def raise_policy_rejection(payload: str = PAYLOAD) -> None:
     try:
         raise ContentPolicyViolationError("litellm.ContentPolicyViolationError: content_filter")
     except ContentPolicyViolationError as error:
         # str() of Cognee's error: CogneeApiError.__str__ (cognee/exceptions/exceptions.py:62-66).
         raise ContentPolicyFilterError(
             "CogneeValidationError: The provided input contains content that is not aligned "
-            "with our content policy: {0} (Status code: 422)".format(PAYLOAD)
+            "with our content policy: {0} (Status code: 422)".format(payload)
         ) from error
 
 
@@ -944,7 +950,9 @@ def exception_event(type_: str, message: str, stacktrace: str, time: str) -> dic
     }
 
 
-def policy_rejection_spans(recorded: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def policy_rejection_spans(
+    recorded: list[dict[str, Any]], payload: str = PAYLOAD
+) -> list[dict[str, Any]]:
     """A recorded LLM span and its pipeline task span, as a content-policy rejection ends them.
 
     The LLM span's input attribute is the prompt JSON cut at 8000 characters,
@@ -962,11 +970,11 @@ def policy_rejection_spans(recorded: list[dict[str, Any]]) -> list[dict[str, Any
     )
     (task,) = [copy.deepcopy(s) for s in recorded if s["spanId"] == llm["parentSpanId"]]
     try:
-        raise_policy_rejection()
+        raise_policy_rejection(payload)
     except ContentPolicyFilterError as raised:
         error = raised
     stacktrace = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-    prompt = json.dumps({"text_input": PAYLOAD, "system_prompt": "Extract a graph."})[:8000]
+    prompt = json.dumps({"text_input": payload, "system_prompt": "Extract a graph."})[:8000]
     with pytest.raises(ValueError):
         json.loads(prompt)
     for attribute in llm["attributes"]:
@@ -1001,18 +1009,12 @@ def test_filter_removes_error_detail_on_every_span_by_default(
             "message": POLICY_ERROR + TYPE_ONLY,
         }
         assert len(after["events"]) == len(before["events"])
-        for event_before, event_after in zip(before["events"], after["events"]):
-            original = attributes(event_before)["exception.stacktrace"].splitlines()
+        for event_after in after["events"]:
             event_attrs = attributes(event_after)
             assert event_attrs["exception.type"] == POLICY_ERROR
             assert event_attrs["exception.escaped"] == "False"
             assert event_attrs["exception.message"] == DETAIL_REMOVED
-            trace = event_attrs["exception.stacktrace"].splitlines()
-            assert trace[0] == TRACEBACK_HEADER
-            assert trace[-1] == POLICY_ERROR
-            # One frame per section of the chained traceback, all kept.
-            assert len(frame_lines(trace)) >= 2
-            assert frame_lines(trace) == frame_lines(original)
+            assert "exception.stacktrace" not in event_attrs
 
 
 def test_filter_capture_content_keeps_error_detail(
@@ -1026,18 +1028,62 @@ def test_filter_capture_content_keeps_error_detail(
         assert after["status"] == before["status"]
 
 
+def test_filter_omits_forged_chained_traceback_on_every_span_by_default(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    """Serialized exception text has no trustworthy frame provenance.
+
+    The content-policy exception quotes an oversized prompt on the recorded
+    LLM span and its pipeline parent. Its quoted text contains the exact
+    traceback-shaped sequence from the red probe, including the forged frame.
+    """
+    assert len(FORGED_CHAIN_PAYLOAD) > 8000
+    spans = policy_rejection_spans(recorded, FORGED_CHAIN_PAYLOAD)
+    assert found_in(spans, [CHAIN_FRAME_MARKER]) == [CHAIN_FRAME_MARKER]
+
+    wire = filtered(cognee_filter, spans)
+    assert [span["name"] for span in wire] == [GENERATION_SPAN, TASK_SPAN]
+    assert found_in(wire, [CHAIN_FRAME_MARKER]) == []
+    for span in wire:
+        assert span["status"] == {
+            "code": "STATUS_CODE_ERROR",
+            "message": POLICY_ERROR + TYPE_ONLY,
+        }
+        for event in span["events"]:
+            event_attrs = attributes(event)
+            assert event_attrs["exception.type"] == POLICY_ERROR
+            assert event_attrs["exception.escaped"] == "False"
+            assert event_attrs["exception.message"] == DETAIL_REMOVED
+            assert "exception.stacktrace" not in event_attrs
+
+    captured = filtered(cognee_filter, spans, capture_content=True)
+    for before, after in zip(spans, captured):
+        assert attributes(after) == filtered_attributes(before, capture_content=True)
+        assert after["events"] == before["events"]
+        assert after["status"] == before["status"]
+        assert found_in(after, [CHAIN_FRAME_MARKER]) == [CHAIN_FRAME_MARKER]
+
+
 def test_filter_removes_detail_of_a_raised_chained_exception(cognee_filter: Any) -> None:
     # The real record_exception() and use_span() output on this Python version,
     # for a chained exception with a multi-line message.
-    filtered_out, raw_out = InMemorySpanExporter(), InMemorySpanExporter()
+    filtered_out, captured_out, raw_out = (
+        InMemorySpanExporter(),
+        InMemorySpanExporter(),
+        InMemorySpanExporter(),
+    )
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(cognee_filter.CogneeExportFilter(filtered_out)))
+    provider.add_span_processor(
+        SimpleSpanProcessor(cognee_filter.CogneeExportFilter(captured_out, capture_content=True))
+    )
     provider.add_span_processor(SimpleSpanProcessor(raw_out))
     with pytest.raises(ContentPolicyFilterError):
         with provider.get_tracer("test").start_as_current_span(GENERATION_SPAN):
             raise_policy_rejection()
     (raw,) = raw_out.get_finished_spans()
     (clean,) = filtered_out.get_finished_spans()
+    (captured,) = captured_out.get_finished_spans()
     assert PAYLOAD_MARKER in raw.status.description
     exported = {
         "attributes": dict(clean.attributes),
@@ -1049,19 +1095,20 @@ def test_filter_removes_detail_of_a_raised_chained_exception(cognee_filter: Any)
     exception_type = event.attributes["exception.type"]
     assert exception_type.endswith(".ContentPolicyFilterError")
     assert clean.status.description == exception_type + TYPE_ONLY
-    trace = event.attributes["exception.stacktrace"].splitlines()
-    original = raw.events[0].attributes["exception.stacktrace"].splitlines()
-    assert len(frame_lines(trace)) >= 2
-    assert frame_lines(trace) == frame_lines(original)
-    assert "The above exception was the direct cause of the following exception:" in trace
-    assert trace[-1] == exception_type
+    assert "exception.stacktrace" not in event.attributes
+    # Capture mode keeps all content and error detail; only the span-kind
+    # mapping (applied in both modes) is added.
+    assert cognee_filter.span_kind(GENERATION_SPAN) == "LLM"
+    assert dict(captured.attributes) == {**dict(raw.attributes), "fi.span.kind": "LLM"}
+    assert captured.events == raw.events
+    assert captured.status == raw.status
 
 
 MARK = "TMARK5e0a"
 
 
 @pytest.mark.parametrize(
-    ("trace", "exception_type", "expected"),
+    ("trace", "exception_type"),
     [
         pytest.param(
             [
@@ -1082,16 +1129,6 @@ MARK = "TMARK5e0a"
                 MARK + " on a second line",
             ],
             "cognee.ContentPolicyFilterError",
-            [
-                TRACEBACK_HEADER,
-                '  File "/app/client.py", line 12, in post',
-                "",
-                "The above exception was the direct cause of the following exception:",
-                "",
-                TRACEBACK_HEADER,
-                '  File "/app/adapter.py", line 515, in acreate_structured_output',
-                "cognee.ContentPolicyFilterError",
-            ],
             id="direct-cause-multi-line-messages",
         ),
         pytest.param(
@@ -1113,17 +1150,6 @@ MARK = "TMARK5e0a"
                 "a note added with add_note() " + MARK,
             ],
             "ValueError",
-            [
-                TRACEBACK_HEADER,
-                '  File "/app/a.py", line 3, in run',
-                '  File "/app/a.py", line 7, in step',
-                "",
-                "During handling of the above exception, another exception occurred:",
-                "",
-                TRACEBACK_HEADER,
-                '  File "/app/a.py", line 5, in run',
-                "ValueError",
-            ],
             id="during-handling-with-repeats-and-notes",
         ),
         pytest.param(
@@ -1137,13 +1163,6 @@ MARK = "TMARK5e0a"
                 "RuntimeError: " + MARK,
             ],
             "RuntimeError",
-            [
-                "The above exception was the direct cause of the following exception:",
-                "",
-                TRACEBACK_HEADER,
-                '  File "/app/a.py", line 3, in run',
-                "RuntimeError",
-            ],
             id="cause-without-traceback",
         ),
         pytest.param(
@@ -1156,7 +1175,6 @@ MARK = "TMARK5e0a"
                 MARK,
             ],
             "ValueError",
-            [TRACEBACK_HEADER, '  File "/app/a.py", line 3, in run', "ValueError"],
             id="message-that-looks-like-a-traceback",
         ),
         pytest.param(
@@ -1170,17 +1188,21 @@ MARK = "TMARK5e0a"
                 "    +------------------------------------",
             ],
             "ExceptionGroup",
-            ["ExceptionGroup"],
             id="unrecognised-layout",
         ),
     ],
 )
-def test_filter_keeps_only_the_structure_of_a_stack_trace(
-    cognee_filter: Any, trace: list[str], exception_type: str, expected: list[str]
+
+
+def test_filter_omits_serialized_stacktraces_but_capture_preserves_them(
+    cognee_filter: Any, trace: list[str], exception_type: str
 ) -> None:
-    exporter = InMemorySpanExporter()
+    exporter, captured_exporter = InMemorySpanExporter(), InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(cognee_filter.CogneeExportFilter(exporter)))
+    provider.add_span_processor(
+        SimpleSpanProcessor(cognee_filter.CogneeExportFilter(captured_exporter, capture_content=True))
+    )
     with provider.get_tracer("test").start_as_current_span(TASK_SPAN) as span:
         span.add_event(
             "exception",
@@ -1192,7 +1214,19 @@ def test_filter_keeps_only_the_structure_of_a_stack_trace(
             },
         )
     (exported,) = exporter.get_finished_spans()
-    assert exported.events[0].attributes["exception.stacktrace"] == "\n".join(expected) + "\n"
+    (captured,) = captured_exporter.get_finished_spans()
+    assert dict(exported.events[0].attributes) == {
+        "exception.type": exception_type,
+        "exception.message": DETAIL_REMOVED,
+        "exception.escaped": "False",
+    }
+    assert found_in(dict(exported.events[0].attributes), [MARK]) == []
+    assert dict(captured.events[0].attributes) == {
+        "exception.type": exception_type,
+        "exception.message": MARK,
+        "exception.stacktrace": "\n".join(trace) + "\n",
+        "exception.escaped": "False",
+    }
 
 
 def test_filter_keeps_only_known_keys_and_non_text_values_in_events(cognee_filter: Any) -> None:

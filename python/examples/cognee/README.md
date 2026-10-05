@@ -113,29 +113,27 @@ tests).
 sends. It exports copies, so Cognee's own span buffer and any other processor
 or exporter still see the original spans.
 
-- **Content is off by default.** It removes the five attributes in which
-  Cognee 1.6.2 exports content (see [Content](#content)):
+- **Content is off by default.** For the Cognee 1.6.2 add/cognify/search path
+  covered by this recipe's recorded fixture and loopback tests, it removes the
+  five content-bearing attributes listed in [Content](#content):
   `langfuse.observation.input`, `langfuse.observation.output`,
   `memory.query.text`, `cognee.search.query` and `cognee.db.query`.
 - **Error detail is off by default too, on every span.** Cognee's errors can
   quote content: a content-policy rejection raises an error whose message is
   the whole prompt (a document chunk, or the question with the retrieved
   context), and that message is recorded on the LLM span and again on each
-  pipeline-task span it passes through. So by default, on every span, the
-  filter keeps each `exception` event's `exception.type` and
+  pipeline-task span it passes through. On every span passed to this filter in
+  content-off mode, it keeps each `exception` event's `exception.type` and
   `exception.escaped`, replaces `exception.message` with
-  `__REDACTED__ (content capture off)`, and reduces `exception.stacktrace`
-  to its `Traceback (most recent call last):` headers, its
-  `File "...", line N, in name` lines, the separators between chained
-  exceptions and a last line with the exception type. Source lines and every
-  line of every message are dropped. An `ERROR` status description becomes
+  `__REDACTED__ (content capture off)`, and omits
+  `exception.stacktrace` altogether. An `ERROR` status description becomes
   `<exception type> (detail removed: content capture off)`, or
   `__REDACTED__ (content capture off)` if the span recorded no exception
   type. In every event, numbers and booleans are kept and any other string
-  value is dropped (Cognee 1.6.2 adds no events besides `exception`). The
-  stack trace is reduced by keeping the lines that match
-  this structure, not by looking for content in it, so a layout it does not
-  recognise (for example an exception group) is reduced to the type line.
+  value is dropped (the tested Cognee 1.6.2 recipe adds no events besides
+  `exception`). Serialized traceback text has no trustworthy boundary between
+  genuine frames and traceback-shaped exception-message content, so frames
+  are available only with the existing content-capture opt-in.
 - **Content capture turns both back on.**
   `CogneeExportFilter(exporter, capture_content=True)`, or
   `COGNEE_FI_CAPTURE_CONTENT=true` in the environment, exports everything,
@@ -154,23 +152,20 @@ or exporter still see the original spans.
   fails, the span is dropped. The filter logs a warning and never raises into
   the export path.
 
-The trade-off: with the defaults, error text in Future AGI is
-less useful for debugging. You see which exception was raised and where
-(type, file, line, function), not its message. The filter does not touch Cognee's own logging
-(for example, `run_tasks_base.py` logs a failed pipeline task with
-`logger.exception`; source reading), and content capture exports the error
-text.
+The trade-off: with the defaults, error detail in Future AGI is
+less useful for debugging. You see the exception type, but not its message or
+traceback frames; use the existing content-capture opt-in to export the
+original error detail. The filter does not touch Cognee's own logging (for example,
+`run_tasks_base.py` logs a failed pipeline task with `logger.exception`;
+source reading).
 
 What it keeps: span names and event names (in Cognee 1.6.2, fixed strings and
 function names), the other span attributes (counts, lengths, names and ids;
-source reading of every attribute Cognee sets), and in stack traces the file
-paths, line numbers and function names. If an exception message itself
-contains the text of a chained Python traceback (a separator line, a blank
-line, a `Traceback` header), the `File` lines that follow it in the message
-are kept as frame lines. The tests find none of the planted document,
-question or answer on the wire from a live run, and none of a planted
-content-policy rejection (an 8000+-character prompt quoted on an LLM span
-and its pipeline-task span) after the filter exports the recorded spans.
+source reading of the attributes Cognee sets on the tested path). The tests
+assert that the planted document, question and answer do not reach the
+loopback receiver, and that an 8000+-character content-policy prompt with a
+forged chained-traceback frame reaches neither events nor status when the
+recorded LLM and pipeline-parent spans pass through the default filter.
 
 ## Option B: Cognee's own OTLP exporter (no traceAI)
 
@@ -287,7 +282,7 @@ is on; option B exports them:
 | `langfuse.observation.output` | every LLM span | the model's response (extracted graph JSON, summaries, the answer). Same cap and redaction. |
 | `memory.query.text`, `cognee.search.query` | `memory.retrieve`, `cognee.search.authorize` | the search question (first 500 characters). |
 | `cognee.db.query` | `cognee.db.graph.query` | the graph query text (first 500 characters, redacted). In the test run these are parameterised queries without document text. |
-| `exception.message`, `exception.stacktrace`, the status description | `exception` events and `ERROR` status of the span that raised and of each span the error passes through | the error message, which can quote content: a content-policy rejection (`litellm_native/native_adapter.py:512-518`) quotes the whole prompt, past the 8000-character cap. Stack traces also hold source lines and absolute file paths of the host's Python install. With option A's defaults the message and description are replaced and the stack trace keeps only its structure (see [The export filter](#the-export-filter)); the file paths stay. |
+| `exception.message`, `exception.stacktrace`, the status description | `exception` events and `ERROR` status of the span that raised and of each span the error passes through | the error message can quote content: a content-policy rejection (`litellm_native/native_adapter.py:512-518`) quotes the whole prompt, past the 8000-character cap. Stack traces can also contain that serialized message and host paths. With option A's defaults the message and description are replaced and `exception.stacktrace` is omitted (see [The export filter](#the-export-filter)). |
 
 The test plants markers in the document and the question and asserts that,
 with option A's defaults, none of them arrives anywhere (attributes, status,
@@ -319,9 +314,10 @@ product telemetry, not OpenTelemetry tracing.
 - **Prompts or documents visible with option A.** `COGNEE_FI_CAPTURE_CONTENT=true`
   is set, `capture_content=True` is passed, or the exporter is not wrapped in
   `CogneeExportFilter`.
-- **Error messages read `__REDACTED__ (content capture off)`.** That is
-  option A's default, because error text can quote content. Check Cognee's
-  own log, or turn content capture on to export it.
+- **Error messages read `__REDACTED__ (content capture off)` and no traceback
+  appears.** That is option A's default, because serialized error detail can
+  quote content. Check Cognee's own log, or turn content capture on to export
+  the original error detail.
 - **Spans doubled.** Another instrumentor is wrapping Cognee or LiteLLM on top
   of Cognee's own spans. Remove it.
 - **Option B exports nothing, with no error.** Either the OpenTelemetry
