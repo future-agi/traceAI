@@ -188,6 +188,7 @@ trace_provider = register(
 | `traceai-mcp` | Model Context Protocol |
 | `traceai-pipecat` | Pipecat |
 | `traceai-livekit` | LiveKit |
+| `traceai-discoveryengine` | Google Discovery Engine |
 
 ### Vector Databases
 
