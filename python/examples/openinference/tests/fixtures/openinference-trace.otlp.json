@@ -1,0 +1,62 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "openinference-fixture"}},
+          {"key": "project_name", "value": {"stringValue": "openinference-fixture-contract"}},
+          {"key": "project_type", "value": {"stringValue": "observe"}}
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {"name": "openinference-fixture"},
+          "spans": [
+            {
+              "traceId": "83360000000000000000000000000001",
+              "spanId": "8336000000000001",
+              "name": "retrieve",
+              "kind": 1,
+              "startTimeUnixNano": "1791115200000000000",
+              "endTimeUnixNano": "1791115201500000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "RETRIEVER"}},
+                {"key": "input.value", "value": {"stringValue": "What is the refund window?"}}
+              ],
+              "status": {"code": 1}
+            },
+            {
+              "traceId": "83360000000000000000000000000001",
+              "spanId": "8336000000000002",
+              "parentSpanId": "8336000000000001",
+              "name": "ChatCompletion",
+              "kind": 1,
+              "startTimeUnixNano": "1791115200300000000",
+              "endTimeUnixNano": "1791115201100000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "LLM"}},
+                {"key": "llm.model_name", "value": {"stringValue": "gpt-4o-mini"}},
+                {"key": "llm.token_count.prompt", "value": {"intValue": "120"}},
+                {"key": "llm.token_count.completion", "value": {"intValue": "38"}}
+              ],
+              "status": {"code": 1}
+            },
+            {
+              "traceId": "83360000000000000000000000000001",
+              "spanId": "8336000000000003",
+              "parentSpanId": "8336000000000001",
+              "name": "lookup_refund_policy",
+              "kind": 1,
+              "startTimeUnixNano": "1791115201200000000",
+              "endTimeUnixNano": "1791115201400000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "TOOL"}}
+              ],
+              "status": {"code": 1}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
