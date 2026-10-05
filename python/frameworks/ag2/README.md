@@ -73,7 +73,11 @@ offline example below is what the tests execute.
 
 `setup(agent)` without `tracer_provider` calls
 `register(project_type=ProjectType.OBSERVE, project_name=project_name)` itself
-and returns the provider.
+and returns the provider. Later `setup()` calls without `tracer_provider`
+reuse that provider until it is shut down, so `setup(planner)` followed by
+`setup(worker)` gives both agents one provider and one `AG2SpanProcessor`. A
+different `project_name` on a later call is ignored with a warning; pass
+`tracer_provider=` to send agents to another project.
 
 Agents created later, or per-call middleware:
 

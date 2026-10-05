@@ -47,3 +47,10 @@
   dict, so `dropped_attributes_count` is no longer reset to 0 and the span's
   attribute limits still apply (a key the processor adds to a full span
   evicts the oldest one and is counted).
+- `setup()` without `tracer_provider` now registers a provider once and
+  reuses it on later calls without one (until it is shut down) instead of
+  calling `register()` again. Before, `setup(planner)` then `setup(worker)`
+  gave each agent its own provider and `AG2SpanProcessor`, so the planner's
+  processor never saw the worker's `invoke_agent` span and the worker's
+  `record_usage subtask` rollup was counted on top of the worker's chat spans.
+  A different `project_name` on a later call is ignored with a warning.

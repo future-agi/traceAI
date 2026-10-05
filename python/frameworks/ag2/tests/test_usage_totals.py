@@ -16,7 +16,7 @@ import pytest
 
 from traceai_ag2 import setup
 
-from ._support import attrs, emits_record_usage, memory_provider
+from ._support import attrs, emits_record_usage, fake_register, memory_provider
 
 PROMOTED_INPUT = "gen_ai.usage.input_tokens"
 PROMOTED_OUTPUT = "gen_ai.usage.output_tokens"
@@ -179,6 +179,21 @@ def test_subtask_rollup_counts_once_when_worker_is_instrumented():
         assert a["ag2.usage.input_tokens"] == 40
         assert a["ag2.usage.output_tokens"] == 4
     _assert_trace_matches_report(spans, report)
+
+
+@needs_record_usage
+def test_subtask_counts_once_when_planner_and_worker_are_set_up_in_separate_calls(monkeypatch):
+    """setup(planner) then setup(worker), neither passing tracer_provider. Both
+    must share one provider and one AG2SpanProcessor; otherwise the planner's
+    processor never sees the worker's invoke_agent and keeps the rollup's
+    tokens on top of the worker's own chat spans."""
+    exporter, _ = fake_register(monkeypatch)
+    worker = _worker()
+    planner = _delegating_planner(worker)
+    setup(planner)
+    setup(worker)
+    report = _run(planner, "plan")
+    _assert_trace_matches_report(exporter.get_finished_spans(), report)
 
 
 @needs_record_usage

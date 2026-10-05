@@ -28,6 +28,7 @@ from ._support import (
     assert_no_content,
     attrs,
     expected_one_tool_kinds,
+    fake_register,
     find,
     get_weather,
     memory_provider,
@@ -511,6 +512,46 @@ def test_setup_is_idempotent_per_agent():
     assert sum(isinstance(p, AG2SpanProcessor) for p in chain) == 1
     ask(agent)
     assert len(find(exporter.get_finished_spans(), "invoke_agent")) == 1
+
+
+def test_setup_without_provider_registers_once_and_reuses_it(monkeypatch):
+    """README: setup is idempotent. A second setup() without tracer_provider
+    reuses the provider, and its one AG2SpanProcessor, from the first call
+    instead of registering another; a later config still replaces the
+    installed one."""
+    exporter, calls = fake_register(monkeypatch)
+    planner = weather_agent("planner")
+    worker = weather_agent("worker")
+    first = setup(planner, project_name="ag2-app")
+    second = setup(worker, capture_content=True, config=TraceConfig(hide_inputs=True, hide_outputs=True))
+    assert second is first
+    assert calls == ["ag2-app"]
+    chain = first._active_span_processor._span_processors
+    assert sum(isinstance(p, AG2SpanProcessor) for p in chain) == 1
+    ask(worker)
+    spans = exporter.get_finished_spans()
+    assert find(spans, "invoke_agent worker")
+    for span in spans:
+        assert_no_content(attrs(span), span.name)
+
+
+def test_setup_reusing_its_provider_warns_when_project_name_differs(monkeypatch, caplog):
+    _, calls = fake_register(monkeypatch)
+    first = setup(project_name="ag2-app")
+    with caplog.at_level(logging.WARNING, logger="traceai_ag2"):
+        assert setup(project_name="other-app") is first
+    assert calls == ["ag2-app"]
+    assert any("other-app" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_setup_registers_again_after_its_provider_is_shut_down(monkeypatch):
+    """A provider the application shut down is not reused."""
+    _, calls = fake_register(monkeypatch)
+    first = setup(project_name="ag2-app")
+    first.shutdown()
+    second = setup(project_name="ag2-app")
+    assert second is not first
+    assert calls == ["ag2-app", "ag2-app"]
 
 
 def test_setup_names_middleware_after_each_agent():

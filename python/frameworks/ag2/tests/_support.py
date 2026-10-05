@@ -108,6 +108,33 @@ def memory_provider() -> "tuple[TracerProvider, InMemorySpanExporter]":
     return provider, exporter
 
 
+def fake_register(monkeypatch: Any) -> "tuple[InMemorySpanExporter, List[Optional[str]]]":
+    """Patch ``fi_instrumentation.register`` to build a new in-memory provider per call.
+
+    Every provider exports to one shared exporter, so spans split across
+    providers still land in one place. ``calls`` records the ``project_name``
+    of each call. Any provider an earlier test's ``setup()`` registered is
+    forgotten for this test.
+    """
+    import fi_instrumentation
+    from opentelemetry.sdk.resources import Resource
+
+    import traceai_ag2._setup as setup_module
+
+    exporter = InMemorySpanExporter()
+    calls: List[Optional[str]] = []
+
+    def register(*, project_type: Any = None, project_name: Optional[str] = None, **_: Any) -> TracerProvider:
+        calls.append(project_name)
+        provider = TracerProvider(resource=Resource.create({"project_name": project_name or ""}), shutdown_on_exit=False)
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        return provider
+
+    monkeypatch.setattr(fi_instrumentation, "register", register)
+    monkeypatch.setattr(setup_module, "_registered_provider", None, raising=False)
+    return exporter, calls
+
+
 def attrs(span: ReadableSpan) -> Dict[str, Any]:
     return dict(span.attributes or {})
 

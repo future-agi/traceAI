@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import logging
+import threading
 from typing import Any, Dict, Iterable, Optional
 
 from fi_instrumentation.instrumentation.config import TraceConfig
@@ -198,6 +199,45 @@ def _has_telemetry_middleware(agent: Any) -> bool:
     return any(isinstance(m, TelemetryMiddleware) for m in entries)
 
 
+# The provider ``setup()`` registered itself (no ``tracer_provider`` given).
+# Later calls without one reuse it: a second ``register()`` would give the
+# later agents their own provider and ``AG2SpanProcessor``, which never sees
+# the earlier agents' spans, so a sub-task rollup would be counted twice.
+_registered_provider: Optional[TracerProvider] = None
+_register_lock = threading.Lock()
+
+
+def _is_shut_down(provider: Any) -> bool:
+    """``True`` once ``provider.shutdown()`` reached its ``AG2SpanProcessor``."""
+    active = getattr(provider, "_active_span_processor", None)
+    processors = getattr(active, "_span_processors", ())
+    return any(isinstance(p, AG2SpanProcessor) and p._shutdown for p in processors)
+
+
+def _registered_or_new_provider(project_name: Optional[str]) -> TracerProvider:
+    global _registered_provider
+    with _register_lock:
+        provider = _registered_provider
+        if provider is not None and not _is_shut_down(provider):
+            registered_name = getattr(getattr(provider, "resource", None), "attributes", {}).get("project_name")
+            if project_name is not None and project_name != registered_name:
+                logger.warning(
+                    "traceai-ag2: project_name %r is ignored; setup() reuses the provider it "
+                    "registered earlier for project %r. Pass tracer_provider= to send these "
+                    "agents elsewhere.",
+                    project_name,
+                    registered_name,
+                )
+            return provider
+
+        from fi_instrumentation import register
+        from fi_instrumentation.fi_types import ProjectType
+
+        provider = register(project_type=ProjectType.OBSERVE, project_name=project_name)
+        _registered_provider = provider
+        return provider
+
+
 def setup(
     *agents: Any,
     tracer_provider: Optional[TracerProvider] = None,
@@ -218,10 +258,14 @@ def setup(
             ``TelemetryMiddleware`` is skipped, so calling ``setup`` twice does
             not duplicate spans.
         tracer_provider: Provider from ``fi_instrumentation.register(...)``.
-            When omitted, ``setup`` calls ``register(project_type=OBSERVE,
-            project_name=project_name)`` itself (``FI_PROJECT_NAME``,
-            ``FI_API_KEY``, ``FI_SECRET_KEY`` and ``FI_BASE_URL`` apply).
-        project_name: Used only when ``tracer_provider`` is omitted.
+            When omitted, the first such ``setup`` call runs
+            ``register(project_type=OBSERVE, project_name=project_name)``
+            (``FI_PROJECT_NAME``, ``FI_API_KEY``, ``FI_SECRET_KEY`` and
+            ``FI_BASE_URL`` apply) and later calls without one reuse that
+            provider until it is shut down, so every agent shares one
+            provider and one ``AG2SpanProcessor``.
+        project_name: Used only when ``setup`` registers a provider; ignored,
+            with a warning, when it differs from the one already registered.
         capture_content: Forwarded to ``TelemetryMiddleware``. Defaults to
             ``False``, overriding AG2's upstream default of ``True``.
         provider_name, model_name, span_attributes, max_tool_result_chars:
@@ -240,10 +284,7 @@ def setup(
         before exiting.
     """
     if tracer_provider is None:
-        from fi_instrumentation import register
-        from fi_instrumentation.fi_types import ProjectType
-
-        tracer_provider = register(project_type=ProjectType.OBSERVE, project_name=project_name)
+        tracer_provider = _registered_or_new_provider(project_name)
     elif project_name is not None:
         logger.warning(
             "traceai-ag2: project_name is ignored when tracer_provider is passed; "
