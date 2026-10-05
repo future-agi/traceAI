@@ -13,6 +13,7 @@ Future AGI.
 
 from __future__ import annotations
 
+import ast
 import importlib.metadata
 import importlib.util
 import json
@@ -818,6 +819,55 @@ def test_readme_privacy_names_what_content_off_still_exports(
     assert {"gen_ai.tool.args", "gen_ai.request.user", "exception.message"} <= exported
     missing = sorted(key for key in exported if "`{0}`".format(key) not in not_covered)
     assert missing == [], "not listed in README Privacy: {0}".format(missing)
+
+
+def _code_blocks(section: str, language: str) -> list[str]:
+    return re.findall(r"```{0}\n(.*?)```".format(language), section, flags=re.DOTALL)
+
+
+def _init_keywords(source: str) -> dict[Optional[str], ast.expr]:
+    """The keyword arguments of the one ``openlit.init(...)`` call in ``source``."""
+    calls = [
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == "openlit.init"
+    ]
+    assert len(calls) == 1, source
+    assert calls[0].args == []
+    return {keyword.arg: keyword.value for keyword in calls[0].keywords}
+
+
+def test_readme_init_call_is_the_one_in_app_py() -> None:
+    blocks = [
+        block
+        for block in _code_blocks(_readme_section("The recipe"), "python")
+        if "openlit.init(" in block
+    ]
+    assert len(blocks) == 1
+    readme = _init_keywords(blocks[0])
+    app = _init_keywords(APP.read_text(encoding="utf-8"))
+    assert {key: ast.dump(value) for key, value in readme.items()} == {
+        key: ast.dump(value) for key, value in app.items()
+    }
+    assert ast.literal_eval(app["capture_message_content"]) is False
+
+
+def test_readme_run_block_sets_what_app_py_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from opentelemetry.sdk.resources import OTELResourceDetector
+
+    (block,) = _code_blocks(_readme_section("Run"), "bash")
+    exports = dict(re.findall(r'^export (\w+)="([^"]*)"', block, flags=re.MULTILINE))
+    for name in (
+        "FI_API_KEY",
+        "FI_SECRET_KEY",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_RESOURCE_ATTRIBUTES",
+        "OPENAI_API_KEY",
+    ):
+        assert name in exports, name
+    # The parser src/app.py checks the project with.
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", exports["OTEL_RESOURCE_ATTRIBUTES"])
+    assert OTELResourceDetector().detect().attributes.get("project_name")
 
 
 def _collector_aliases() -> dict[str, Any]:

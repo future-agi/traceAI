@@ -47,11 +47,11 @@ project are set, and otherwise exits with a message saying what to set
 
 ```python
 openlit.init(
-    service_name="openlit-recipe",  # service.name
-    otlp_endpoint=os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
+    service_name=APP_NAME,  # "openlit-recipe", exported as service.name
+    otlp_endpoint=endpoint,  # OTEL_EXPORTER_OTLP_ENDPOINT
     otlp_headers={
-        "x-api-key": quote(os.environ["FI_API_KEY"], safe=""),
-        "x-secret-key": quote(os.environ["FI_SECRET_KEY"], safe=""),
+        "x-api-key": quote(api_key, safe=""),  # FI_API_KEY
+        "x-secret-key": quote(secret_key, safe=""),  # FI_SECRET_KEY
     },
     capture_message_content=False,
     disable_metrics=True,
@@ -59,6 +59,9 @@ openlit.init(
     pricing_json=str(NO_PRICING),  # src/no_pricing.json, an empty table
 )
 ```
+
+A test checks that this call has the same arguments as the one in
+`src/app.py`, and that the "Run" block sets a `project_name`.
 
 The 1.45.0 signature, quoted from the wheel's `openlit/__init__.py:185-209`:
 
