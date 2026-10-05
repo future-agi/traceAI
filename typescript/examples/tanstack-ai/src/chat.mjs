@@ -32,15 +32,17 @@ const getWeather = toolDefinition({
  * @tanstack/ai 0.64.0 it collects text with streamToText, which throws at
  * the first RUN_ERROR and stops reading. The run then never reaches its
  * onError hook, so the chat and model-call spans are never ended or exported
- * and a failed request leaves no trace.
+ * and a failed request leaves no trace. For the same reason, stop early only
+ * by aborting `abortController`, never by leaving the loop.
  */
-export async function answer(question, middleware, { threadId } = {}) {
+export async function answer(question, middleware, { threadId, abortController } = {}) {
   const stream = chat({
     adapter: openaiChatCompletions(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
     systemPrompts: ["You are a concise weather assistant."],
     messages: [{ role: "user", content: question }],
     tools: [getWeather],
     middleware: [middleware],
+    abortController,
     ...(threadId ? { threadId } : {}),
   });
   let text = "";
@@ -61,16 +63,22 @@ export async function answer(question, middleware, { threadId } = {}) {
 /**
  * The route: one traced chat() call, flushed in finally. `threadId` is the
  * caller's conversation id; when given, it is chat()'s threadId and every
- * span's session.id.
+ * span's session.id. `signal` is the request's abort signal: when the client
+ * disconnects it aborts chat(), so the spans end as cancelled and export.
  */
-export async function chatRoute(question, tracerProvider, { threadId } = {}) {
+export async function chatRoute(question, tracerProvider, { threadId, signal } = {}) {
   const middleware = futureAgiOtelMiddleware(
     tracerProvider.getTracer("tanstack-ai"),
     { threadIdAsSession: Boolean(threadId) },
   );
+  const abortController = new AbortController();
+  const abort = () => abortController.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
   try {
-    return await answer(question, middleware, { threadId });
+    return await answer(question, middleware, { threadId, abortController });
   } finally {
+    signal?.removeEventListener("abort", abort);
     await flushTraces(tracerProvider);
   }
 }

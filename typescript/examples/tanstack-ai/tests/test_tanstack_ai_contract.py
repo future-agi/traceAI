@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import uuid
@@ -425,6 +426,17 @@ def _readme_recipe() -> str:
     return blocks[0]
 
 
+@contextlib.contextmanager
+def _readme_script(tail: str) -> Iterator[Path]:
+    """The README snippet plus `tail`, saved next to src/tracing.mjs."""
+    script = EXAMPLE / "src" / ".readme-recipe-{0}.mjs".format(uuid.uuid4().hex)
+    script.write_text(_readme_recipe() + tail, encoding="utf-8")
+    try:
+        yield script
+    finally:
+        script.unlink()
+
+
 def test_readme_recipe_uses_the_recipe_middleware_and_bounded_flush():
     code = _readme_recipe()
     # Bare otelMiddleware has no span kinds and no root usage move, so Future
@@ -444,19 +456,12 @@ def test_readme_recipe_uses_the_recipe_middleware_and_bounded_flush():
 
 def test_readme_recipe_runs_and_exports_the_contract_spans():
     """Run the README snippet itself, saved next to src/tracing.mjs."""
-    script = EXAMPLE / "src" / ".readme-recipe-{0}.mjs".format(uuid.uuid4().hex)
-    script.write_text(
-        _readme_recipe()
-        + "\nconsole.log(await chatRoute(process.argv[2], { threadId: process.argv[3] }));\n",
-        encoding="utf-8",
-    )
-    try:
+    tail = "\nconsole.log(await chatRoute(process.argv[2], { threadId: process.argv[3] }));\n"
+    with _readme_script(tail) as script:
         with Receiver() as receiver, FakeOpenAI(CITY, ANSWER) as fake:
             result = _node(script, receiver.origin, fake, THREAD_ID)
             raw_spans = receiver.spans()
             spans = _by_name(raw_spans)
-    finally:
-        script.unlink()
     assert result.returncode == 0, result.stderr.decode()
     assert ANSWER in result.stdout.decode()
     # The snippet offers no tools, so the fake model answers in one call.
@@ -472,3 +477,107 @@ def test_readme_recipe_runs_and_exports_the_contract_spans():
         assert _attributes(span)["session.id"] == THREAD_ID, name
     assert PROMPT not in json.dumps(list(spans.values()))
     _assert_no_placeholder_keys(raw_spans, result)
+
+
+# How long the route may keep running once its client has gone. The stalled
+# fake model holds its stream for 10 s, so a route that never learns about
+# the disconnect is still running when this runs out.
+DISCONNECT_BOUND_S = 6
+
+
+@contextlib.contextmanager
+def _disconnect_server(route: str) -> Iterator[Path]:
+    """A script that serves one request with `route` (tests/disconnect_route.mjs)."""
+    if route == "chat.mjs":
+        yield TESTS / "disconnect_route.mjs"
+        return
+    tail = (
+        '\nimport { serveOnce } from "../tests/disconnect_route.mjs";\n'
+        "await serveOnce((signal) => chatRoute(process.argv[2], { signal }));\n"
+    )
+    with _readme_script(tail) as script:
+        yield script
+
+
+def _request_then_disconnect(script: Path, fi_base_url: str, fake: FakeOpenAI) -> Any:
+    """Start the server, send one request, close the connection once the model
+    stream is mid-way, and wait for the server process to exit."""
+    process = subprocess.Popen(
+        [NODE, str(script), PROMPT],
+        env=_env(fi_base_url, fake.base_url),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout: list[bytes] = []
+    stderr: list[bytes] = []
+    listening = threading.Event()
+
+    def read_stdout() -> None:
+        for line in process.stdout:
+            stdout.append(line)
+            if line.startswith(b"port="):
+                listening.set()
+
+    def read_stderr() -> None:
+        stderr.append(process.stderr.read())
+
+    readers = [threading.Thread(target=read_stdout), threading.Thread(target=read_stderr)]
+    for reader in readers:
+        reader.start()
+    exited = False
+    try:
+        assert listening.wait(30), b"".join(stderr).decode()
+        port = int(re.search(rb"port=(\d+)", b"".join(stdout)).group(1))
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as client:
+            client.sendall(b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n")
+            assert fake.stalled.wait(30), "the model stream never started"
+        # The client is gone while the model is still streaming.
+        try:
+            process.wait(timeout=DISCONNECT_BOUND_S)
+            exited = True
+        except subprocess.TimeoutExpired:
+            pass
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        for reader in readers:
+            reader.join()
+    return SimpleNamespace(
+        exited=exited,
+        returncode=process.returncode,
+        stdout=b"".join(stdout),
+        stderr=b"".join(stderr),
+    )
+
+
+@pytest.mark.parametrize("route", ["readme", "chat.mjs"])
+def test_client_disconnect_mid_stream_ends_and_exports_every_span(route):
+    """PRD J3 / AC-05: a client that disconnects mid-stream.
+
+    The server aborts the request's signal when the connection closes, and
+    the route passes chat() an AbortController tied to it, so the run reaches
+    onAbort and every span ends as cancelled and is exported. Without that
+    wiring chat() never learns that the client left: TanStack ends the spans
+    only on finish, error or its own abort signal, so the route waits on the
+    model and nothing is exported.
+    """
+    with Receiver() as receiver, FakeOpenAI(CITY, ANSWER, stall=True) as fake:
+        with _disconnect_server(route) as script:
+            served = _request_then_disconnect(script, receiver.origin, fake)
+        raw_spans = receiver.spans()
+    assert served.exited, (
+        "route still running {0} s after the client disconnected; exported "
+        "spans: {1}".format(DISCONNECT_BOUND_S, [span["name"] for span in raw_spans])
+    )
+    assert served.returncode == 0, served.stderr.decode()
+    assert b"outcome=returned disconnected=true" in served.stdout, served.stdout.decode()
+    spans = _by_name(raw_spans)
+    assert sorted(spans) == sorted([ROOT, ITERATION_0])
+    for name in (ROOT, ITERATION_0):
+        status = spans[name].get("status", {})
+        assert _is_error(status), (name, status)
+        assert status.get("message") == "cancelled", (name, status)
+        assert _attributes(spans[name])["tanstack.ai.completion.reason"] == "cancelled", name
+    assert spans[ITERATION_0]["parentSpanId"] == spans[ROOT]["spanId"]
+    _assert_no_placeholder_keys(raw_spans, served)

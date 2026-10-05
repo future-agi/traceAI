@@ -56,12 +56,20 @@ import {
 // Once per process. register() reads FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL.
 const tracerProvider = registerFutureAgiTracing();
 
-export async function chatRoute(question, { threadId } = {}) {
+// `signal` is the request's abort signal: `request.signal` in a Fetch API
+// handler, or an AbortController you abort on `res.on("close")` in node:http.
+export async function chatRoute(question, { threadId, signal } = {}) {
   // captureContent stays at its default of false.
   const middleware = futureAgiOtelMiddleware(
     tracerProvider.getTracer("tanstack-ai"),
     { threadIdAsSession: Boolean(threadId) },
   );
+  // When the client disconnects, abort chat() so its spans end as cancelled
+  // and export. Without this chat() never learns the client left.
+  const abortController = new AbortController();
+  const abort = () => abortController.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
   try {
     // Read the stream to the end, even after RUN_ERROR, so the spans end
     // and export. Do not use chat()'s non-streaming mode.
@@ -71,6 +79,7 @@ export async function chatRoute(question, { threadId } = {}) {
       adapter: openaiChatCompletions(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
       messages: [{ role: "user", content: question }],
       middleware: [middleware],
+      abortController,
       ...(threadId ? { threadId } : {}),
     })) {
       if (chunk.type === "RUN_ERROR") runError ??= chunk;
@@ -79,12 +88,20 @@ export async function chatRoute(question, { threadId } = {}) {
     if (runError) throw new Error(runError.message);
     return text;
   } finally {
+    signal?.removeEventListener("abort", abort);
     // Waits at most 2 s and never throws. A long-lived server can drop
     // this flush: see Notes.
     await flushTraces(tracerProvider);
   }
 }
 ```
+
+Never stop reading `chat()`'s stream without aborting its `abortController`:
+a `break`, an early `return` or a dropped response body ends no span, so the
+whole trace is lost. TanStack ends the spans only when the run finishes,
+fails or is aborted. When you stream to the client with
+`toServerSentEventsResponse(stream, { abortController })`, pass it the same
+controller you passed to `chat()`, so a closed response aborts the run.
 
 `src/chat.mjs` is the runnable version of this route, with a tool and a
 system prompt; it takes the tracer provider as an argument. The contract
@@ -179,4 +196,6 @@ the snippet under "The recipe" as written.
 `tests/capture_content_on.mjs` is a test control that turns content capture
 on, to prove the no-content check would catch a leak. `tests/timed_route.mjs`
 and `tests/abort_mid_stream.mjs` are fixtures for the flush bound and the
-abort case. None of them is part of the recipe.
+abort case. `tests/disconnect_route.mjs` serves one HTTP request with the
+route (the README snippet's or `src/chat.mjs`'s) and aborts its signal when
+the client disconnects mid-stream. None of them is part of the recipe.

@@ -3,8 +3,9 @@
 A request that offers tools and has no tool result yet gets a get_weather tool
 call. Any other request gets a text answer. Both responses end with an OpenAI
 include_usage chunk, so the adapter reports token usage. With ``stall=True``
-the text answer stops after its first delta until the server exits, so a
-client can abort mid-stream. With ``fail_status=500`` every request gets that
+every response stops after its first two chunks until the server exits, so a
+client can abort or disconnect mid-stream; ``stalled`` is set once a
+response has stopped there. With ``fail_status=500`` every request gets that
 HTTP status and an OpenAI-shaped error body whose message is ``boom``.
 """
 
@@ -53,6 +54,7 @@ class FakeOpenAI:
                  fail_status: int | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
         self.authorizations: list[str | None] = []
+        self.stalled = threading.Event()
         self._release = threading.Event()
         lock = threading.Lock()
         owner = self
@@ -115,8 +117,9 @@ class FakeOpenAI:
                     self.end_headers()
                     self.wfile.write(body)
                     return
-                # Stalled stream: send the first text delta, then hold the
-                # rest until the test exits, so the client can abort mid-stream.
+                # Stalled stream: send the first two chunks (the first text
+                # delta, or the tool call), then hold the rest until the test
+                # exits, so the client can abort or disconnect mid-stream.
                 # HTTP/1.0 without Content-Length: the body ends at close.
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/event-stream")
@@ -124,6 +127,7 @@ class FakeOpenAI:
                 try:
                     self.wfile.write(b"".join(events[:2]))
                     self.wfile.flush()
+                    owner.stalled.set()
                     owner._release.wait(timeout=10)
                     self.wfile.write(b"".join(events[2:]))
                 except (BrokenPipeError, ConnectionResetError):
