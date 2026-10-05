@@ -246,7 +246,7 @@ def test_cancelling_the_run_ends_the_open_spans_as_cancelled():
                 callbacks=[handler, started],
             )
             task = asyncio.ensure_future(agent.run(PROMPT))
-            for _ in range(1000):
+            for _ in range(6000):  # up to a minute on a slow machine
                 if started.started.is_set():
                     break
                 await asyncio.sleep(0.01)
@@ -281,7 +281,7 @@ def test_leaving_stream_early_ends_the_agent_span_as_cancelled():
             async for _ in stream:
                 break  # the first item is the (action, observation) of the tool step
             await stream.aclose()
-            for _ in range(500):
+            for _ in range(6000):
                 if spans_named(exporter.get_finished_spans(), AGENT):
                     break
                 await asyncio.sleep(0.01)

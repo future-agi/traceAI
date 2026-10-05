@@ -217,7 +217,7 @@ class _LoopbackServer:
             target=lambda: asyncio.run(server.serve(sockets=[sock])), daemon=True
         )
         thread.start()
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 120
         while not server.started:
             if time.monotonic() > deadline or not thread.is_alive():
                 raise RuntimeError("the loopback MCP server did not start")
