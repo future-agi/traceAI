@@ -164,6 +164,8 @@ def test_real_client_calls_reach_the_collector_contract(fake_exa, monkeypatch):
 
     answer = _flatten_attributes(by_name["exa.answer"][0]["attributes"])
     assert answer["fi.span.kind"] == "RETRIEVER"
+    # AnswerResponse carries citations, not results; the fake returns one.
+    assert int(answer["fi.retrieval.document_count"]) == 1
     assert not any("model" in key for key in answer)
 
     failed = _flatten_attributes(failed_search["attributes"])

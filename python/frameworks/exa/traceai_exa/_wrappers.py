@@ -99,13 +99,26 @@ def _api_key(instance: Any) -> Optional[str]:
     return key if isinstance(key, str) and key else None
 
 
-def _document_count(result: Any) -> int:
-    """Count returned documents without inspecting their content."""
-    results = getattr(result, "results", None)
-    if results is None:
-        return len(result) if isinstance(result, (list, tuple, set)) else 0
+def _document_count(result: Any) -> Optional[int]:
+    """Count returned documents without inspecting their content.
+
+    SearchResponse (search, get_contents) has ``results``; AnswerResponse has
+    ``citations``. Anything else is an unknown count: None, never 0.
+    """
+    for name in ("results", "citations"):
+        documents = getattr(result, name, None)
+        if documents is not None:
+            try:
+                return len(documents)
+            except TypeError:
+                return None
+    return None
+
+
+def _chunk_citations(chunk: Any) -> int:
+    """Citations carried by one StreamChunk (stream_search / stream_answer)."""
     try:
-        return len(results)
+        return len(getattr(chunk, "citations", None) or ())
     except TypeError:
         return 0
 
@@ -136,14 +149,15 @@ class _BaseWrapper:
         return self._tracer.start_span(self._span_name, attributes=attributes)
 
     @staticmethod
-    def _finish_ok(span: Span, result: Any = None) -> None:
-        span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, _document_count(result))
+    def _finish_ok(span: Span, document_count: Optional[int]) -> None:
+        if document_count is not None:
+            span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, document_count)
         span.set_status(Status(StatusCode.OK))
         span.end()
 
     @staticmethod
     def _finish_error(span: Span, error: BaseException) -> None:
-        span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, 0)
+        # No document count: nothing was returned, so the count is unknown.
         span.record_exception(error)
         span.set_status(
             Status(StatusCode.ERROR, "{0}: {1}".format(type(error).__name__, error))
@@ -167,7 +181,7 @@ class OperationWrapper(_BaseWrapper):
         except BaseException as error:
             self._finish_error(span, error)
             raise
-        self._finish_ok(span, result)
+        self._finish_ok(span, _document_count(result))
         return result
 
 
@@ -187,7 +201,7 @@ class AsyncOperationWrapper(_BaseWrapper):
         except BaseException as error:
             self._finish_error(span, error)
             raise
-        self._finish_ok(span, result)
+        self._finish_ok(span, _document_count(result))
         return result
 
 
@@ -199,19 +213,23 @@ class _StreamIterator:
         self._iterator = iter(response)
         self._span = span
         self._finished = False
+        # Citations accumulate over chunks; the total is known only at the end.
+        self._citations = 0
 
     def __iter__(self) -> "_StreamIterator":
         return self
 
     def __next__(self) -> Any:
         try:
-            return next(self._iterator)
+            chunk = next(self._iterator)
         except StopIteration:
             self._finish_ok()
             raise
         except BaseException as error:
             self._finish_error(error)
             raise
+        self._citations += _chunk_citations(chunk)
+        return chunk
 
     def close(self) -> None:
         try:
@@ -234,7 +252,7 @@ class _StreamIterator:
     def _finish_ok(self) -> None:
         if not self._finished:
             self._finished = True
-            _BaseWrapper._finish_ok(self._span)
+            _BaseWrapper._finish_ok(self._span, self._citations)
 
     def _finish_error(self, error: BaseException) -> None:
         if not self._finished:
@@ -269,19 +287,23 @@ class _AsyncStreamIterator:
         self._iterator = response.__aiter__()
         self._span = span
         self._finished = False
+        # Citations accumulate over chunks; the total is known only at the end.
+        self._citations = 0
 
     def __aiter__(self) -> "_AsyncStreamIterator":
         return self
 
     async def __anext__(self) -> Any:
         try:
-            return await self._iterator.__anext__()
+            chunk = await self._iterator.__anext__()
         except StopAsyncIteration:
             self._finish_ok()
             raise
         except BaseException as error:
             self._finish_error(error)
             raise
+        self._citations += _chunk_citations(chunk)
+        return chunk
 
     async def aclose(self) -> None:
         try:
@@ -304,7 +326,7 @@ class _AsyncStreamIterator:
     def _finish_ok(self) -> None:
         if not self._finished:
             self._finished = True
-            _BaseWrapper._finish_ok(self._span)
+            _BaseWrapper._finish_ok(self._span, self._citations)
 
     def _finish_error(self, error: BaseException) -> None:
         if not self._finished:
