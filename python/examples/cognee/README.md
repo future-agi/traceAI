@@ -245,6 +245,15 @@ the export filter sets `fi.span.kind` on the spans marked below.
 With option A, the content attributes in this table are removed unless you
 turn content capture on.
 
+Not in the table: `cognee.api.recall` (`api/v1/recall/recall.py:533`) and
+`cognee.agent_memory.retrieve` (`modules/agent_memory/runtime.py:405`) are
+retrieval entry points that the recipe's add/cognify/search path does not
+reach (source reading). The filter does not map them, so they stay `unknown`
+in Future AGI. Their query text is still removed: `cognee.api.recall` puts it
+in `cognee.search.query`, and `cognee.agent_memory.retrieve` records only the
+query length, while the search it runs puts the query on `memory.retrieve`
+and `cognee.search.*` spans.
+
 What that means in Future AGI:
 
 - **Model column: populated.** Every LLM span carries `gen_ai.request.model`,

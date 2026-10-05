@@ -1326,6 +1326,8 @@ def test_readme_states_what_the_tests_check() -> None:
         pytest.param("License-Expression: Apache-2.0", id="D9-license-metadata"),
         pytest.param("less useful for debugging", id="N1-error-detail-trade-off"),
         pytest.param("among span attributes", id="F1-capture-claim-scope"),
+        pytest.param("`cognee.api.recall`", id="F2-recall-unmapped"),
+        pytest.param("`cognee.agent_memory.retrieve`", id="F2-agent-memory-unmapped"),
     ],
 )
 def test_readme_covers_review_items(fact: str) -> None:
