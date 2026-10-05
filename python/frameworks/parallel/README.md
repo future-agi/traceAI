@@ -59,7 +59,7 @@ a span from an HTTP client instrumentation nests under it.
 | `fi.span.kind` | all | `RETRIEVER` |
 | `parallel.mode` | `search` with `mode` | The mode passed by the caller. Absent when not passed; the server default is not assumed. |
 | `parallel.query_count` | `search`, `extract` with `search_queries` | Number of `search_queries` passed. |
-| `gen_ai.retrieval.query`, `input.value` | `search`, `extract` with `search_queries` | The queries joined with a newline, Parallel API key replaced by `[redacted]`, cut to 1 KB of UTF-8 on a character boundary. |
+| `gen_ai.retrieval.query`, `input.value` | `search`, `extract` with `search_queries` | The queries joined with a newline, Parallel API key replaced by `[redacted]`, cut to about 1 KB of UTF-8 on a character boundary (see [Limits](#limits)). |
 | `parallel.url_count` | `extract` | Number of requested URLs. |
 | `parallel.urls` | `extract` with `capture_urls=True` | See [Privacy](#privacy). |
 | `parallel.objective` | `capture_objective=True` | See [Privacy](#privacy). |
@@ -122,7 +122,7 @@ ParallelInstrumentor().instrument(
 ```
 
 Each captured URL and the objective has the API key replaced by `[redacted]`
-and is cut to 1 KB of UTF-8. Both options must be booleans.
+and is cut to about 1 KB of UTF-8. Both options must be booleans.
 
 The API key is removed from every recorded value, including error messages
 and stack traces. The package looks for it everywhere `parallel-web` keeps
@@ -183,11 +183,17 @@ skips the span.
 ## Limits
 
 - Recorded text is cut on a UTF-8 character boundary, after it is cleaned
-  (API key, then hidden inputs, then PII): 1 KB for the joined queries, each
-  captured URL, the objective, each warning message, `exception.message` and
-  the message in the error status; 256 bytes for `parallel.mode`, ids, usage
-  SKU names and warning types; 16 KB for `exception.stacktrace`. At most 20
-  URLs and 20 warning events are recorded per span.
+  (API key, then hidden inputs, then PII): about 1 KB for the joined queries,
+  each captured URL and the objective; about 256 bytes for `parallel.mode`,
+  ids and usage SKU names; 1 KB for each warning message,
+  `exception.message` and the message in the error status; 256 bytes for
+  warning types; 16 KB for `exception.stacktrace`. The span attributes are
+  "about" the limit because, with `pii_redaction`, `FITracer` runs its own
+  PII pass on every attribute after the cut. A cut can leave a new match
+  (for example the last ten digits of a longer number), and its token, such
+  as `<PHONE_NUMBER>`, can make the value a few bytes longer. That pass only
+  redacts more. Span events and the status are not passed through it. At
+  most 20 URLs and 20 warning events are recorded per span.
 - `parallel-web` copies `client.search` and `client.extract` into
   `client.with_raw_response` and `client.with_streaming_response` the first
   time either is read. A copy made before `instrument()` stays untraced;
