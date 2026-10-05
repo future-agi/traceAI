@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import logging
 
 import pytest
 from opentelemetry.trace import StatusCode
 
 pytest.importorskip("exa_py", reason="exa-py must be installed to test its instrumentor")
 
-from _support import SLOW_QUERY, EXA_KEY, FakeExa, attrs, instrumented  # noqa: E402
+from _support import (  # noqa: E402
+    CONTENT_MARKERS,
+    EXA_KEY,
+    FAIL_QUERY,
+    SLOW_QUERY,
+    STREAM_CHUNKS,
+    STREAM_CITATIONS,
+    FakeExa,
+    attrs,
+    instrumented,
+)
 from exa_py import AsyncExa, Exa  # noqa: E402
 from exa_py.api import (  # noqa: E402
     AsyncStreamAnswerResponse,
@@ -226,3 +237,112 @@ def test_sync_stream_close_ends_the_span_even_if_the_vendor_close_fails(fake, mo
         with pytest.raises(OSError, match="socket already gone"):
             stream.close()
         _assert_cancelled(traced.one())
+
+
+@pytest.fixture()
+def double_end_warnings(caplog):
+    """The SDK logs, rather than raises, when an ended span is touched again."""
+    caplog.set_level(logging.WARNING, logger="opentelemetry.sdk.trace")
+    return lambda: [r.getMessage() for r in caplog.records if "ended span" in r.getMessage()]
+
+
+def _assert_complete(span) -> None:
+    values = attrs(span)
+    assert span.status.status_code is StatusCode.OK
+    assert values["fi.retrieval.document_count"] == STREAM_CITATIONS
+    assert "exa.cancelled" not in values
+    assert not span.events
+
+
+def test_sync_streams_complete_as_one_ok_span_and_are_ended_once(fake, double_end_warnings):
+    with instrumented() as traced:
+        client = Exa(api_key=EXA_KEY, base_url=fake.origin)
+        for method in (client.stream_search, client.stream_answer):
+            stream = method("q")
+            assert len(list(stream)) == STREAM_CHUNKS
+            stream.close()  # after completion: must not re-end or flip to ERROR
+            del stream
+            gc.collect()
+
+    assert [span.name for span in traced.spans()] == ["exa.search", "exa.answer"]
+    for span in traced.spans():
+        _assert_complete(span)
+    for marker in CONTENT_MARKERS:
+        assert marker not in traced.wire()
+    assert double_end_warnings() == []
+
+
+def test_async_streams_complete_as_one_ok_span_and_are_ended_once(fake, double_end_warnings):
+    async def call() -> None:
+        client = AsyncExa(api_key=EXA_KEY, api_base=fake.origin)
+        try:
+            for method in (client.stream_search, client.stream_answer):
+                stream = await method("q")
+                chunks = [chunk async for chunk in stream]
+                assert len(chunks) == STREAM_CHUNKS
+                await stream.aclose()  # after completion: no second end
+                del stream
+                gc.collect()
+        finally:
+            await client.client.aclose()
+
+    with instrumented() as traced:
+        asyncio.run(call())
+
+    assert [span.name for span in traced.spans()] == ["exa.search", "exa.answer"]
+    for span in traced.spans():
+        _assert_complete(span)
+    assert double_end_warnings() == []
+
+
+def test_cancelled_streams_are_ended_once(fake, double_end_warnings):
+    with instrumented() as traced:
+        stream = Exa(api_key=EXA_KEY, base_url=fake.origin).stream_search("q")
+        next(iter(stream))
+        stream.close()
+        stream.close()
+        del stream
+        gc.collect()
+
+    _assert_cancelled(traced.one())
+    assert double_end_warnings() == []
+
+
+def _assert_failed(span) -> None:
+    assert span.status.status_code is StatusCode.ERROR
+    assert "401" in span.status.description
+    assert [event.name for event in span.events] == ["exception"]
+    assert "exa.cancelled" not in attrs(span)
+    assert "fi.retrieval.document_count" not in attrs(span)
+
+
+def test_sync_stream_non_200_is_an_error_and_reraised(fake, double_end_warnings):
+    with instrumented() as traced:
+        client = Exa(api_key=EXA_KEY, base_url=fake.origin)
+        for method in (client.stream_search, client.stream_answer):
+            with pytest.raises(ValueError, match="401"):
+                method(FAIL_QUERY)
+
+    assert [span.name for span in traced.spans()] == ["exa.search", "exa.answer"]
+    for span in traced.spans():
+        _assert_failed(span)
+    assert double_end_warnings() == []
+
+
+def test_async_stream_non_200_is_an_error_and_reraised(fake, double_end_warnings):
+    async def call() -> None:
+        client = AsyncExa(api_key=EXA_KEY, api_base=fake.origin)
+        try:
+            for method in (client.stream_search, client.stream_answer):
+                with pytest.raises(ValueError, match="401"):
+                    await method(FAIL_QUERY)
+        finally:
+            await client.client.aclose()
+
+    with instrumented() as traced:
+        asyncio.run(call())
+
+    assert [span.name for span in traced.spans()] == ["exa.search", "exa.answer"]
+    for span in traced.spans():
+        _assert_failed(span)
+    assert double_end_warnings() == []
