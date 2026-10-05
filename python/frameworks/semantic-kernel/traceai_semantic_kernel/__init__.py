@@ -21,10 +21,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from opentelemetry import trace as trace_api
 
+from fi_instrumentation import TraceConfig
+
 from .processor import (
     CONTENT_KEYS,
     FI_SPAN_KIND,
+    INPUT_CONTENT_KEYS,
     KIND_BY_OPERATION,
+    OUTPUT_CONTENT_KEYS,
     PROMOTED_USAGE_KEYS,
     SemanticKernelSpanProcessor,
     kind_for,
@@ -147,6 +151,7 @@ class SemanticKernelInstrumentor:
         tracer_provider: Optional[Any] = None,
         *,
         sensitive: bool = False,
+        config: Optional[TraceConfig] = None,
         **kwargs: Any,
     ) -> None:
         """Turn on Semantic Kernel diagnostics and install the mapping processor.
@@ -160,6 +165,13 @@ class SemanticKernelInstrumentor:
                 results on spans, and this package copies them to
                 ``input.value`` / ``output.value``. Leave it False unless you
                 want that text stored in Future AGI.
+            config: A ``fi_instrumentation.TraceConfig``. When omitted, one is
+                built from the environment. With ``sensitive=True``, its
+                ``hide_inputs`` (``FI_HIDE_INPUTS``) drops tool arguments,
+                agent input messages and ``input.value``, and ``hide_outputs``
+                (``FI_HIDE_OUTPUTS``) drops tool results, agent output messages
+                and ``output.value``. Other TraceConfig fields are not applied.
+                Raises ``TypeError`` for anything that is not a TraceConfig.
 
         No environment variable is required. Calling this more than once (on
         any instance) installs one processor; later calls are no-ops until
@@ -172,6 +184,12 @@ class SemanticKernelInstrumentor:
         OpenTelemetry SDK ``TracerProvider`` gets a WARNING and nothing is
         changed.
         """
+        if config is not None and not isinstance(config, TraceConfig):
+            raise TypeError(
+                "traceai-semantic-kernel: config must be a fi_instrumentation.TraceConfig, got {0}".format(
+                    type(config).__name__
+                )
+            )
         if kwargs:
             logger.debug("traceai-semantic-kernel: ignoring unsupported instrument() arguments %s", sorted(kwargs))
         with SemanticKernelInstrumentor._lock:
@@ -186,6 +204,10 @@ class SemanticKernelInstrumentor:
                     logger.warning(
                         "traceai-semantic-kernel is already instrumented with sensitive=%s; keeping it.",
                         state.sensitive,
+                    )
+                if config is not None and state.processor is not None and config != state.processor.config:
+                    logger.warning(
+                        "traceai-semantic-kernel is already instrumented with another TraceConfig; keeping it."
                     )
                 return
 
@@ -208,8 +230,11 @@ class SemanticKernelInstrumentor:
             new_state = _State()
             new_state.provider = provider
             new_state.sensitive = bool(sensitive)
+            trace_config = config if config is not None else TraceConfig()
             try:
-                self._apply(new_state, active, settings_modules, tracer_modules, tracer_provider, sensitive)
+                self._apply(
+                    new_state, active, settings_modules, tracer_modules, tracer_provider, sensitive, trace_config
+                )
             except Exception:
                 # Undo whatever was applied, then surface the error at setup time.
                 SemanticKernelInstrumentor._state = new_state
@@ -225,6 +250,7 @@ class SemanticKernelInstrumentor:
         tracer_modules: List[Any],
         tracer_provider: Optional[Any],
         sensitive: bool,
+        config: TraceConfig,
     ) -> None:
         # 1. Processor first, ahead of the exporting processor. Not via
         # provider.add_span_processor(): fi_instrumentation's TracerProvider
@@ -239,7 +265,7 @@ class SemanticKernelInstrumentor:
                 "traceai-semantic-kernel: this provider already has a SemanticKernelSpanProcessor you installed; "
                 "instrument() adds its own and leaves yours in place. Use one or the other."
             )
-        processor = SemanticKernelSpanProcessor(sensitive=sensitive)
+        processor = SemanticKernelSpanProcessor(sensitive=sensitive, config=config)
         with getattr(active, "_lock", _NullLock()):
             active._span_processors = (processor,) + tuple(active._span_processors)
         new_state.processor = processor
@@ -306,7 +332,9 @@ __all__ = [
     "CONTENT_KEYS",
     "DIAGNOSTICS_SETTINGS_MODULES",
     "FI_SPAN_KIND",
+    "INPUT_CONTENT_KEYS",
     "KIND_BY_OPERATION",
+    "OUTPUT_CONTENT_KEYS",
     "PROMOTED_USAGE_KEYS",
     "SemanticKernelInstrumentor",
     "SemanticKernelSpanProcessor",

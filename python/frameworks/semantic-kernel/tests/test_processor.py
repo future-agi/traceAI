@@ -15,7 +15,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Status, StatusCode
 
-from fi_instrumentation import using_attributes
+from fi_instrumentation import TraceConfig, using_attributes
 from traceai_semantic_kernel import processor as processor_module
 from traceai_semantic_kernel.processor import (
     CONTENT_KEYS,
@@ -55,11 +55,15 @@ TOOL_ATTRS = {
 
 
 @pytest.fixture()
-def pipeline():
-    def build(sensitive: bool = False):
+def pipeline(monkeypatch):
+    # Hermetic: a processor built without a config reads FI_HIDE_* from the environment.
+    for key in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+        monkeypatch.delenv(key, raising=False)
+
+    def build(sensitive: bool = False, **processor_kwargs):
         provider = TracerProvider()
         exporter = InMemorySpanExporter()
-        processor = SemanticKernelSpanProcessor(sensitive=sensitive)
+        processor = SemanticKernelSpanProcessor(sensitive=sensitive, **processor_kwargs)
         # Same order instrument() uses: the mapping processor runs before the exporter.
         provider.add_span_processor(processor)
         provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -318,6 +322,39 @@ def test_content_surfaced_when_sensitive_on(pipeline):
     assert tool["input.mime_type"] == "application/json"
     assert tool["output.value"] == "sunny in SECRET-CITY"
     assert tool["output.mime_type"] == "text/plain"
+
+
+HIDDEN_BY_HIDE_INPUTS = ("gen_ai.input.messages", "gen_ai.tool.call.arguments", "input.value", "input.mime_type")
+HIDDEN_BY_HIDE_OUTPUTS = ("gen_ai.output.messages", "gen_ai.tool.call.result", "output.value", "output.mime_type")
+
+
+def test_processor_without_config_reads_fi_hide_env(pipeline, monkeypatch):
+    """A processor you build yourself honours FI_HIDE_OUTPUTS like instrument() does."""
+    monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
+    provider, exporter, _ = pipeline(sensitive=True)
+    _emit(provider, AGENT_SCOPE, "invoke_agent Assistant", SENSITIVE_AGENT)
+    _emit(provider, FUNCTION_SCOPE, "execute_tool Weather-get_weather", SENSITIVE_TOOL)
+    agent = _attrs(exporter, "invoke_agent Assistant")
+    assert "SECRET-IN" in agent["input.value"]
+    assert "SECRET-OUT" not in json.dumps(agent)
+    tool = _attrs(exporter, "execute_tool Weather-get_weather")
+    assert json.loads(tool["input.value"]) == {"city": "SECRET-CITY"}
+    for attrs in (agent, tool):
+        for key in HIDDEN_BY_HIDE_OUTPUTS:
+            assert key not in attrs, key
+
+
+def test_processor_config_must_be_a_trace_config():
+    with pytest.raises(TypeError, match="TraceConfig"):
+        SemanticKernelSpanProcessor(sensitive=True, config={"hide_inputs": True})
+    processor = SemanticKernelSpanProcessor(sensitive=True, config=TraceConfig(hide_inputs=True))
+    assert processor.hide_inputs is True and processor.hide_outputs is False
+    mapped = map_sk_attributes(SENSITIVE_TOOL, name="execute_tool W", sensitive=True, hide_inputs=True)
+    for key in HIDDEN_BY_HIDE_INPUTS:
+        assert key not in mapped, key
+    assert mapped["output.value"] == "sunny in SECRET-CITY"
+    assert set(processor_module.INPUT_CONTENT_KEYS) == set(HIDDEN_BY_HIDE_INPUTS)
+    assert set(processor_module.OUTPUT_CONTENT_KEYS) == set(HIDDEN_BY_HIDE_OUTPUTS)
 
 
 # Status -----------------------------------------------------------------------

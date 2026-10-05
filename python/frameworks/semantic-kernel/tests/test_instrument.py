@@ -91,6 +91,81 @@ def test_sensitive_false_overrides_env_opt_in(instrumentor, provider, monkeypatc
     assert "sensitive" in caplog.text.lower()
 
 
+# TraceConfig / FI_HIDE_INPUTS / FI_HIDE_OUTPUTS (N1) ---------------------------
+
+AGENT_SCOPE = "semantic_kernel.utils.telemetry.agent_diagnostics.decorators"
+HIDE_ENV = ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS")
+
+
+@pytest.mark.parametrize(
+    "config_kwargs,env,hide_in,hide_out",
+    [
+        pytest.param({"hide_inputs": True}, {}, True, False, id="config-hide_inputs"),
+        pytest.param({"hide_outputs": True}, {}, False, True, id="config-hide_outputs"),
+        pytest.param({"hide_inputs": True, "hide_outputs": True}, {}, True, True, id="config-both"),
+        pytest.param(None, {"FI_HIDE_INPUTS": "true"}, True, False, id="env-FI_HIDE_INPUTS"),
+        pytest.param(None, {"FI_HIDE_OUTPUTS": "true"}, False, True, id="env-FI_HIDE_OUTPUTS"),
+        pytest.param(None, {}, False, False, id="control-no-hiding"),
+    ],
+)
+def test_trace_config_hides_content_with_sensitive_on(
+    instrumentor, provider, monkeypatch, config_kwargs, env, hide_in, hide_out
+):
+    """sensitive=True copies content; TraceConfig / FI_HIDE_* then drop the hidden side."""
+    from fi_instrumentation import TraceConfig
+    from semantic_kernel import Kernel
+    from semantic_kernel.functions import kernel_function
+
+    for key in HIDE_ENV:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    kwargs = {"config": TraceConfig(**config_kwargs)} if config_kwargs is not None else {}
+
+    class Plugin:
+        @kernel_function(name="answer", description="Answer")
+        def answer(self, question: str) -> str:
+            return "OUT-MARKER"
+
+    kernel = Kernel()
+    kernel.add_plugin(Plugin(), "P")
+    instrumentor.instrument(tracer_provider=provider, sensitive=True, **kwargs)
+
+    # Real Semantic Kernel execute_tool span: arguments and result attributes.
+    asyncio.run(kernel.invoke(plugin_name="P", function_name="answer", question="IN-MARKER"))
+    # Agent span with Semantic Kernel's agent scope and message keys.
+    provider.get_tracer(AGENT_SCOPE).start_span(
+        "invoke_agent A",
+        attributes={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": "A",
+            "gen_ai.input.messages": '[{"role": "user", "content": "IN-MARKER"}]',
+            "gen_ai.output.messages": '[{"role": "assistant", "content": "OUT-MARKER"}]',
+        },
+    ).end()
+
+    spans = {s.name: dict(s.attributes) for s in provider.exporter.get_finished_spans()}
+    tool, agent = spans["execute_tool P-answer"], spans["invoke_agent A"]
+    for attrs, input_key, output_key in (
+        (tool, "gen_ai.tool.call.arguments", "gen_ai.tool.call.result"),
+        (agent, "gen_ai.input.messages", "gen_ai.output.messages"),
+    ):
+        blob = str(attrs)
+        assert ("IN-MARKER" in blob) is (not hide_in), attrs
+        assert ("OUT-MARKER" in blob) is (not hide_out), attrs
+        for key in (input_key, "input.value", "input.mime_type"):
+            assert (key in attrs) is (not hide_in), (key, attrs)
+        for key in (output_key, "output.value", "output.mime_type"):
+            assert (key in attrs) is (not hide_out), (key, attrs)
+
+
+def test_trace_config_of_the_wrong_type_is_rejected(instrumentor, provider):
+    with pytest.raises(TypeError, match="TraceConfig"):
+        instrumentor.instrument(tracer_provider=provider, sensitive=True, config={"hide_inputs": True})
+    assert not instrumentor.is_instrumented
+    assert not any(s.enable_otel_diagnostics for s in _settings())
+
+
 def test_kernel_invoke_is_not_wrapped(instrumentor, provider):
     from semantic_kernel import Kernel
     from semantic_kernel.functions.kernel_function import KernelFunction

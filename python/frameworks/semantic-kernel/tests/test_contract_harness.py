@@ -84,7 +84,7 @@ def _hex(b64: str) -> str:
 
 
 def _env(receiver_origin: str) -> Dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SEMANTICKERNEL_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SEMANTICKERNEL_", "FI_HIDE_"))}
     env.update(
         {
             "FI_BASE_URL": receiver_origin,

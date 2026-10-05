@@ -39,7 +39,9 @@ What the processor adds, per Semantic Kernel span:
   ``semantic_kernel.usage.*`` so trace-wide sums are not inflated.
 * Content: with ``sensitive=False`` (default) message, tool-argument and
   tool-result keys are removed. With ``sensitive=True`` they are kept and
-  copied to ``input.value`` / ``output.value``.
+  copied to ``input.value`` / ``output.value``, except that TraceConfig
+  ``hide_inputs`` / ``hide_outputs`` (``FI_HIDE_INPUTS`` / ``FI_HIDE_OUTPUTS``)
+  drop the input / output side, ``input.value`` / ``output.value`` included.
 * Status ``ERROR`` when ``error.type`` is set but the status was left unset.
   An existing status is never cleared or downgraded.
 
@@ -58,6 +60,7 @@ from opentelemetry.context import Context, get_value
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.trace import Status, StatusCode
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import FiMimeTypeValues, FiSpanKindValues, SpanAttributes
 from fi_instrumentation.instrumentation.context_attributes import CONTEXT_ATTRIBUTES
 
@@ -135,6 +138,20 @@ CONTENT_KEYS: Tuple[str, ...] = (
     SpanAttributes.OUTPUT_VALUE,
     SpanAttributes.OUTPUT_MIME_TYPE,
 )
+# The input and output halves of CONTENT_KEYS, dropped by TraceConfig
+# hide_inputs / hide_outputs (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS).
+INPUT_CONTENT_KEYS: Tuple[str, ...] = (
+    INPUT_MESSAGES,
+    TOOL_CALL_ARGUMENTS,
+    SpanAttributes.INPUT_VALUE,
+    SpanAttributes.INPUT_MIME_TYPE,
+)
+OUTPUT_CONTENT_KEYS: Tuple[str, ...] = (
+    OUTPUT_MESSAGES,
+    TOOL_CALL_RESULT,
+    SpanAttributes.OUTPUT_VALUE,
+    SpanAttributes.OUTPUT_MIME_TYPE,
+)
 
 
 def kind_for(name: str, attributes: Mapping[str, Any], auto_invoked: bool = False) -> Optional[str]:
@@ -192,8 +209,14 @@ def map_sk_attributes(
     name: str = "",
     sensitive: bool = False,
     auto_invoked: bool = False,
+    hide_inputs: bool = False,
+    hide_outputs: bool = False,
 ) -> Dict[str, Any]:
-    """Return a new attribute dict with Future AGI keys added (see module docstring)."""
+    """Return a new attribute dict with Future AGI keys added (see module docstring).
+
+    ``hide_inputs`` / ``hide_outputs`` (TraceConfig) apply when ``sensitive`` is
+    True; with ``sensitive`` False every content key is removed anyway.
+    """
     mapped = dict(attributes or {})
     kind = kind_for(name, mapped, auto_invoked=auto_invoked)
 
@@ -227,6 +250,9 @@ def map_sk_attributes(
         elif mapped.get(OPERATION) == "execute_tool":
             _set_io(mapped, SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE, mapped.get(TOOL_CALL_ARGUMENTS))
             _set_io(mapped, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, mapped.get(TOOL_CALL_RESULT))
+        hidden = (INPUT_CONTENT_KEYS if hide_inputs else ()) + (OUTPUT_CONTENT_KEYS if hide_outputs else ())
+        for key in hidden:
+            mapped.pop(key, None)
     else:
         for key in CONTENT_KEYS:
             mapped.pop(key, None)
@@ -295,10 +321,24 @@ class SemanticKernelSpanProcessor(SpanProcessor):
 
     Install it ahead of the exporting processor (``instrument()`` does this) so
     the exporter sees the mapped attributes. It does not export anything.
+
+    ``config`` is a ``fi_instrumentation.TraceConfig``; when omitted one is
+    built from the environment (``FI_HIDE_INPUTS``, ``FI_HIDE_OUTPUTS``). Its
+    ``hide_inputs`` / ``hide_outputs`` drop the input / output content keys
+    that ``sensitive=True`` would otherwise keep.
     """
 
-    def __init__(self, sensitive: bool = False) -> None:
+    def __init__(self, sensitive: bool = False, config: Optional[TraceConfig] = None) -> None:
+        if config is None:
+            config = TraceConfig()
+        elif not isinstance(config, TraceConfig):
+            raise TypeError(
+                "config must be a fi_instrumentation.TraceConfig, got {0}".format(type(config).__name__)
+            )
         self.sensitive = bool(sensitive)
+        self.config = config
+        self.hide_inputs = bool(config.hide_inputs)
+        self.hide_outputs = bool(config.hide_outputs)
         self._disabled = False
         # Spans that started as direct children of AutoFunctionInvocationLoop.
         # The parent is only visible at start; on_end gets a ReadableSpan copy,
@@ -344,7 +384,12 @@ class SemanticKernelSpanProcessor(SpanProcessor):
             auto_invoked = self._pop_auto_invoked(span)
             attributes = dict(span.attributes or {})
             mapped = map_sk_attributes(
-                attributes, name=span.name, sensitive=self.sensitive, auto_invoked=auto_invoked
+                attributes,
+                name=span.name,
+                sensitive=self.sensitive,
+                auto_invoked=auto_invoked,
+                hide_inputs=self.hide_inputs,
+                hide_outputs=self.hide_outputs,
             )
             if mapped != attributes:
                 _replace_attributes(span, mapped)
