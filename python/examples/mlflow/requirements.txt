@@ -1,0 +1,5 @@
+# Not a traceAI package: these are the example's own dependencies.
+mlflow==3.16.1
+# mlflow 3.16.1 depends on opentelemetry-sdk but installs no OTLP exporter.
+# Without this one it exports nothing over OTLP and logs nothing about it.
+opentelemetry-exporter-otlp-proto-http==1.45.0  # the version the contract test ran with
