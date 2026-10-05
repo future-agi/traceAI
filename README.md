@@ -275,6 +275,7 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-mcp`](https://pypi.org/project/traceAI-mcp/) | Model Context Protocol | [![PyPI](https://img.shields.io/pypi/v/traceAI-mcp)](https://pypi.org/project/traceAI-mcp/) |
 | [`traceAI-pipecat`](https://pypi.org/project/traceAI-pipecat/) | Pipecat (Voice AI) | [![PyPI](https://img.shields.io/pypi/v/traceAI-pipecat)](https://pypi.org/project/traceAI-pipecat/) |
 | [`traceAI-livekit`](https://pypi.org/project/traceAI-livekit/) | LiveKit (Real-time) | [![PyPI](https://img.shields.io/pypi/v/traceAI-livekit)](https://pypi.org/project/traceAI-livekit/) |
+| [`traceAI-parallel`](https://pypi.org/project/traceAI-parallel/) | Parallel (Search and Extract) | [![PyPI](https://img.shields.io/pypi/v/traceAI-parallel)](https://pypi.org/project/traceAI-parallel/) |
 
 #### Vector Databases
 
@@ -474,6 +475,7 @@ Available on [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel).
 | | MCP | ✅ | ✅ | | |
 | | Pipecat | ✅ | ✅ | | |
 | | LiveKit | ✅ | ✅ | | |
+| | Parallel | ✅ | | | |
 | **Vector Databases** | Pinecone | ✅ | ✅ | ✅ | |
 | | ChromaDB | ✅ | ✅ | ✅ | |
 | | Qdrant | ✅ | ✅ | ✅ | |

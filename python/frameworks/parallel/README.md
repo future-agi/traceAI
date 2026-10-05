@@ -1,0 +1,206 @@
+# traceAI-parallel
+
+OpenTelemetry instrumentation for the Search and Extract methods of the
+[`parallel-web`](https://pypi.org/project/parallel-web/) client
+(Parallel Web Systems).
+
+It traces `search` and `extract` only. The Task API (`task_run`,
+`task_group`), Monitor, FindAll and the rest of `client.beta` are different
+products and produce no spans from this package.
+
+## Installation
+
+```bash
+pip install traceAI-parallel
+```
+
+It accepts `parallel-web>=1.0.1,<2` and `fi-instrumentation-otel>=1.1.0`.
+The suite runs with `parallel-web` 1.0.1 and 1.3.5 on Python 3.10, 3.11, 3.12
+and 3.13.
+
+## Usage
+
+```python
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
+from parallel import Parallel
+from traceai_parallel import ParallelInstrumentor
+
+tracer_provider = register(project_type=ProjectType.OBSERVE, project_name="parallel-search")
+ParallelInstrumentor().instrument(tracer_provider=tracer_provider)
+
+client = Parallel()  # reads PARALLEL_API_KEY
+result = client.search(search_queries=["open telemetry retrieval"], mode="turbo")
+client.extract(urls=[result.results[0].url])
+```
+
+`search` and `extract` take keyword arguments only; `search_queries` is
+required for `search` and `urls` for `extract`. See
+[`examples/search_and_extract.py`](examples/search_and_extract.py).
+
+## Instrumented calls
+
+| Call | Span name |
+|---|---|
+| `Parallel.search`, `AsyncParallel.search` | `parallel.search` |
+| `Parallel.extract`, `AsyncParallel.extract` | `parallel.extract` |
+
+Each call produces one span with `fi.span.kind` = `RETRIEVER`, including
+calls through `with_raw_response`, `with_streaming_response`, `copy()` and
+`with_options()`. Retries made by `parallel-web` inside one call stay in that
+one span. The span is a child of the active span when there is one, and a
+root span otherwise. It is current while `parallel-web` sends the request, so
+a span from an HTTP client instrumentation nests under it.
+
+## Span attributes
+
+| Attribute | Calls | Value |
+|---|---|---|
+| `fi.span.kind` | all | `RETRIEVER` |
+| `parallel.mode` | `search` with `mode` | The mode passed by the caller. Absent when not passed; the server default is not assumed. |
+| `parallel.query_count` | `search`, `extract` with `search_queries` | Number of `search_queries` passed. |
+| `gen_ai.retrieval.query`, `input.value` | `search`, `extract` with `search_queries` | The queries joined with a newline, Parallel API key replaced by `[redacted]`, cut to about 1 KB of UTF-8 on a character boundary (see [Limits](#limits)). |
+| `parallel.url_count` | `extract` | Number of requested URLs. |
+| `parallel.urls` | `extract` with `capture_urls=True` | See [Privacy](#privacy). |
+| `parallel.objective` | `capture_objective=True` | See [Privacy](#privacy). |
+| `parallel.result_count` | successful calls | Length of `results`. |
+| `parallel.failed_url_count` | successful `extract` | Length of `errors` (requested URLs that were not extracted). The call itself still succeeded. |
+| `parallel.search_id`, `parallel.extract_id` | successful calls | The vendor request id. |
+| `parallel.session_id` | when passed or returned | The Parallel session id, from the request and then from the response. |
+| `parallel.usage.names`, `parallel.usage.counts` | when the response has `usage` | Usage SKU names and their counts, in order. Never tokens or cost. |
+| `parallel.warning_count` | when the response has `warnings` | Number of warnings. |
+| `parallel.cancelled` | cancelled async calls | `true`; see [Errors and cancellation](#errors-and-cancellation). |
+
+Each response warning becomes a `parallel.warning` span event with
+`parallel.warning.type` and `parallel.warning.message` (key redacted, and
+your inputs with `hide_inputs`; cut to 1 KB). At most 20 events are
+recorded per span. Warnings do not change the span status.
+
+A count, id or usage value that the response does not carry is omitted,
+never written as 0. Calls through `with_raw_response` and
+`with_streaming_response` return an unparsed HTTP response, so their spans
+carry the request attributes and status only. For `with_streaming_response`,
+the span covers the request up to the response headers, not the body read:
+a failure while reading the body is not recorded on the span.
+
+No model name, token count or cost is recorded: Parallel Search and Extract
+do not return them, and `client_model` is not recorded.
+
+Spans come from an `fi_instrumentation.FITracer`, so the context attributes
+of `using_session`, `using_user`, `using_metadata`, `using_tags` and
+`using_attributes` are stamped on every Parallel span started inside them
+(`session.id`, `user.id`, `metadata`, `tag.tags`):
+
+```python
+from fi_instrumentation import using_session, using_user
+
+with using_session("session-1"), using_user("user-1"):
+    client.search(search_queries=["open telemetry retrieval"])
+```
+
+`parallel.session_id` is Parallel's own session id and is a separate
+attribute.
+
+## Privacy
+
+Recorded by default: the search queries (redacted and capped as above),
+counts, mode, ids, usage SKUs and warning text.
+
+Never recorded: the Parallel API key, excerpts, titles, result URLs, full
+page content, extract error content and warning `detail`. There is no
+setting that adds them.
+
+Not recorded unless you opt in, because they can carry tokens, personal data
+or the full research goal:
+
+```python
+ParallelInstrumentor().instrument(
+    tracer_provider=tracer_provider,
+    capture_urls=True,        # parallel.urls: at most the first 20 requested URLs
+    capture_objective=True,   # parallel.objective
+)
+```
+
+Each captured URL and the objective has the API key replaced by `[redacted]`
+and is cut to about 1 KB of UTF-8. Both options must be booleans.
+
+The API key is removed from every recorded value, including error messages
+and stack traces. The package looks for it everywhere `parallel-web` keeps
+it: `client.api_key` (also set from `PARALLEL_API_KEY`), the `x-api-key`
+header in `default_headers` (or `PARALLEL_CUSTOM_HEADERS`), and a per-call
+`extra_headers={"x-api-key": ...}`.
+
+`TraceConfig` settings apply. Pass `config=TraceConfig(...)` or set the
+environment variables before calling `instrument()`:
+
+| Setting | Effect |
+|---|---|
+| `hide_inputs` / `FI_HIDE_INPUTS=true` | Records `input.value` as `__REDACTED__` when `search_queries` were passed, and drops `gen_ai.retrieval.query`, `parallel.urls` and `parallel.objective`. It also removes your inputs from server-written text: after the key is redacted, each verbatim occurrence of a search query, a requested `extract` URL or the objective in the error status description, the `exception` event's message and stacktrace, and warning messages becomes `__REDACTED__`, with or without `capture_urls` and `capture_objective`. Counts, mode and ids stay. |
+| `hide_outputs` / `FI_HIDE_OUTPUTS=true` | Drops `parallel.warning.message`. Warning types and counts stay. |
+| `pii_redaction` / `FI_PII_REDACTION=true` | Replaces emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` style keys with tokens such as `<EMAIL_ADDRESS>`, in every recorded text: attributes, warning messages, the error status and the `exception` event. It runs after the API key (and, with `hide_inputs`, your inputs) is removed and before the size caps, so a cut cannot leave part of an email. The patterns also match ids: an id with a run of ten digits is replaced too. |
+
+`config` must be a `fi_instrumentation.TraceConfig`; anything else raises
+`TypeError` and nothing is wrapped.
+
+Server-written text (error messages, stack traces and warning messages) is
+recorded as the server wrote it, with the key removed, your inputs removed
+with `hide_inputs`, and PII replaced with `pii_redaction`. `hide_inputs`
+matches each input verbatim only: a copy the server escaped, truncated or
+reformatted stays. For example, a query that contains a newline appears as
+`\n` in a `parallel-web` error message and is not matched. A short input is
+removed wherever it occurs, including inside other words. If the inputs
+cannot be read, the error and warning messages are recorded as
+`__REDACTED__`. `hide_outputs` drops warning messages; error messages and
+stack traces are always recorded on failed calls.
+
+## Errors and cancellation
+
+An error raised by `parallel-web` (for example `AuthenticationError` for an
+HTTP 401, `InternalServerError` for a 5xx, or `APIConnectionError`) sets the
+span status to ERROR and records one `exception` event, with the API key
+redacted from both (and your inputs, with `hide_inputs`; see
+[Privacy](#privacy)). The exception is re-raised unchanged, so your code
+still sees the server's original message.
+
+The error text is cleaned in this order: the API key, then your inputs with
+`hide_inputs`, then PII with `pii_redaction`. It is then cut on a UTF-8
+character boundary: the status description's message and
+`exception.message` to 1 KB, and `exception.stacktrace` to 16 KB.
+
+Cancelling an `AsyncParallel` call (`asyncio.CancelledError`) ends the span
+with status ERROR, description `cancelled`, and `parallel.cancelled` =
+`true`, without an exception event.
+
+A missing API key raises `ParallelError` in `Parallel()` or
+`AsyncParallel()` itself, before any traced method runs, so no span is
+recorded for it.
+
+If the instrumentation itself fails (reading a request or response, starting
+a span, recording an error), it logs at debug level and your call proceeds
+with its own result or exception. `fi_instrumentation.suppress_tracing()`
+skips the span.
+
+## Limits
+
+- Recorded text is cut on a UTF-8 character boundary, after it is cleaned
+  (API key, then hidden inputs, then PII): about 1 KB for the joined queries,
+  each captured URL and the objective; about 256 bytes for `parallel.mode`,
+  ids and usage SKU names; 1 KB for each warning message,
+  `exception.message` and the message in the error status; 256 bytes for
+  warning types; 16 KB for `exception.stacktrace`. The span attributes are
+  "about" the limit because, with `pii_redaction`, `FITracer` runs its own
+  PII pass on every attribute after the cut. A cut can leave a new match
+  (for example the last ten digits of a longer number), and its token, such
+  as `<PHONE_NUMBER>`, can make the value a few bytes longer. That pass only
+  redacts more. Span events and the status are not passed through it. At
+  most 20 URLs and 20 warning events are recorded per span.
+- `parallel-web` copies `client.search` and `client.extract` into
+  `client.with_raw_response` and `client.with_streaming_response` the first
+  time either is read. A copy made before `instrument()` stays untraced;
+  read them after instrumenting. A copy made while instrumented stops
+  tracing after `uninstrument()`.
+- `instrument()` checks the installed `parallel-web` version. Outside
+  `>=1.0.1,<2` it logs an error and wraps nothing.
+- `/v1beta/search` is not traced. No `parallel-web` 1.x method calls it.
+- Do not combine this package with another instrumentor that wraps the
+  same `parallel-web` methods, or calls will produce duplicate spans.
