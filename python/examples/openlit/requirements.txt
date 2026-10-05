@@ -1,0 +1,4 @@
+# Not a traceAI package: these are the example's own dependencies.
+openlit==1.45.0
+# openlit 1.45.0 requires openai>=1.92.0,<3.0.0; this is the version the contract test ran with.
+openai==2.54.0
