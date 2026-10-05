@@ -16,11 +16,18 @@ _JOB_ID = "firecrawl.job_id"
 _LIMIT = "firecrawl.limit"
 _PAGE_COUNT = "firecrawl.page_count"
 _CREDITS_USED = "firecrawl.credits_used"
+_STATUS = "firecrawl.status"
+_CANCELLED = "firecrawl.cancelled"
 _MAX_QUERY_LENGTH = 1024
 
 # One span per call. crawl polls internally, so it must not emit one span per page.
 _CRAWL_METHODS = {"crawl", "start_crawl", "get_crawl_status", "cancel_crawl"}
 _JOB_ID_FIRST_ARG_METHODS = {"get_crawl_status", "cancel_crawl"}
+# Methods that return a CrawlJob. The SDK returns failed and cancelled jobs
+# without raising (methods/crawl.py wait_for_crawl_completion), so the span
+# status comes from the job.
+_JOB_STATUS_METHODS = {"crawl", "get_crawl_status"}
+_ERROR_JOB_STATUSES = {"failed", "cancelled"}
 
 # True while a traced Firecrawl call runs in this context. firecrawl-py 4.46.2
 # AsyncFirecrawlClient.crawl awaits self.start_crawl, which is wrapped as well;
@@ -129,7 +136,17 @@ class _BaseWrapper:
         credits = getattr(result, "credits_used", None)
         if isinstance(credits, int):
             span.set_attribute(_CREDITS_USED, credits)
-        span.set_status(Status(StatusCode.OK))
+        job_status = (
+            getattr(result, "status", None) if self._method_name in _JOB_STATUS_METHODS else None
+        )
+        if isinstance(job_status, str) and job_status:
+            span.set_attribute(_STATUS, job_status)
+        if job_status == "cancelled":
+            span.set_attribute(_CANCELLED, True)
+        if job_status in _ERROR_JOB_STATUSES:
+            span.set_status(Status(StatusCode.ERROR, job_status))
+        else:
+            span.set_status(Status(StatusCode.OK))
         span.end()
 
     @staticmethod

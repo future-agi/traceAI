@@ -168,3 +168,55 @@ def test_failed_status_and_cancel_calls_keep_positional_job_id(
     for span in finished:
         assert span.status.status_code is StatusCode.ERROR
         assert attrs(span)["firecrawl.job_id"] == "missing-job"
+
+
+# R3 / J3: the SDK returns a failed or cancelled job without raising, so the span
+# takes its status from the job. failed -> ERROR; cancelled -> ERROR "cancelled"
+# plus firecrawl.cancelled=true; completed -> OK.
+
+EXPECTED_JOB_STATUS = {
+    "completed": (StatusCode.OK, None),
+    "failed": (StatusCode.ERROR, "failed"),
+    "cancelled": (StatusCode.ERROR, "cancelled"),
+}
+
+
+def _crawl_and_status(fake: FakeFirecrawl, use_async: bool) -> None:
+    if not use_async:
+        client = sync_client(fake)
+        client.crawl("https://example.com", limit=3, poll_interval=0)
+        client.get_crawl_status(JOB_ID)
+        return
+
+    async def journey() -> None:
+        client = async_client(fake)
+        await client.crawl(url="https://example.com", limit=3, poll_interval=0)
+        await client.get_crawl_status(JOB_ID)
+
+    asyncio.run(journey())
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("job_status", sorted(EXPECTED_JOB_STATUS))
+def test_job_status_sets_attribute_and_span_status(
+    fake: FakeFirecrawl, tracing: Tracing, job_status: str, use_async: bool
+) -> None:
+    from _firecrawl_fake import crawl_status
+
+    _, exporter, _ = tracing
+    fake.routes[("GET", "/v2/crawl/" + JOB_ID)] = (200, crawl_status(job_status))
+
+    _crawl_and_status(fake, use_async)
+
+    finished = spans(exporter)
+    assert [span.name for span in finished] == ["firecrawl.crawl", "firecrawl.get_crawl_status"]
+    code, description = EXPECTED_JOB_STATUS[job_status]
+    for span in finished:
+        assert attrs(span)["firecrawl.status"] == job_status
+        assert span.status.status_code is code
+        if description is not None:
+            assert span.status.description == description
+        if job_status == "cancelled":
+            assert attrs(span)["firecrawl.cancelled"] is True
+        else:
+            assert "firecrawl.cancelled" not in attrs(span)
