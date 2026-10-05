@@ -211,6 +211,28 @@ describe("mapVoltAgentAttributes (AC-02)", () => {
     expect(attributes["voltagent.llm.usage.prompt_tokens"]).toBe(98);
     expect(attributes["voltagent.gen_ai.cost.total"]).toBe(0.5);
   });
+
+  it("also moves the cost-part keys the collector sums into its cost column", () => {
+    // fi-collector pkg/adapter/adapter.go DeriveHotKeys: with no cost.total, cost = input + output
+    // from gen_ai.cost.input / llm.cost.prompt and gen_ai.cost.output / llm.cost.completion.
+    const costParts = {
+      "gen_ai.cost.input": 0.1,
+      "gen_ai.cost.output": 0.2,
+      "llm.cost.prompt": 0.3,
+      "llm.cost.completion": 0.4,
+    };
+    for (const key of Object.keys(costParts)) expect(isPromotedUsageKey(key)).toBe(true);
+    const { attributes } = mapVoltAgentAttributes(
+      { "span.type": "tool", "tool.name": "t", ...costParts },
+      OFF,
+    );
+    for (const [key, value] of Object.entries(costParts)) {
+      expect(attributes[key]).toBeUndefined();
+      expect(attributes[`voltagent.${key}`]).toBe(value);
+    }
+    const llm = mapVoltAgentAttributes({ "span.type": "llm", ...costParts }, OFF).attributes;
+    for (const [key, value] of Object.entries(costParts)) expect(llm[key]).toBe(value);
+  });
 });
 
 describe("content (AC-07)", () => {

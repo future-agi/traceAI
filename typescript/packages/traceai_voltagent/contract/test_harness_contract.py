@@ -56,7 +56,8 @@ MARKERS = (
 CONTENT_KEYS = ("input", "output", "input.value", "output.value", "llm.messages", "agent.instructions",
                 "agent.messages", "agent.messages.ui", "agent.stateSnapshot")
 PROMOTED_EXACT = {"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.total_tokens",
-                  "gen_ai.cost.total", "llm.cost.total"}
+                  "gen_ai.cost.total", "llm.cost.total", "gen_ai.cost.input", "gen_ai.cost.output",
+                  "llm.cost.prompt", "llm.cost.completion"}
 PROMOTED_PREFIXES = ("llm.token_count.", "llm.usage.")
 INPUT_TOKEN_KEYS = ("gen_ai.usage.input_tokens", "llm.usage.prompt_tokens", "llm.token_count.prompt")
 

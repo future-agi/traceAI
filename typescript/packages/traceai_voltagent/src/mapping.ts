@@ -21,6 +21,8 @@ export interface MappedAttributes {
 /**
  * Token and cost keys the Future AGI collector promotes into hot columns on any span kind.
  * Observe sums them over every span of a trace, so they may appear only on per-model-call spans.
+ * The cost-part keys count too: with no cost total, the collector stores input + output
+ * (fi-collector pkg/adapter/adapter.go DeriveHotKeys, costInputKeys / costOutputKeys).
  */
 const PROMOTED_EXACT = new Set<string>([
   "gen_ai.usage.input_tokens",
@@ -28,6 +30,10 @@ const PROMOTED_EXACT = new Set<string>([
   "gen_ai.usage.total_tokens",
   "gen_ai.cost.total",
   "llm.cost.total",
+  "gen_ai.cost.input",
+  "gen_ai.cost.output",
+  "llm.cost.prompt",
+  "llm.cost.completion",
 ]);
 const PROMOTED_PREFIXES = ["llm.token_count.", "llm.usage."];
 

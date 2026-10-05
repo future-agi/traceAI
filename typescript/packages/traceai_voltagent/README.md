@@ -98,8 +98,11 @@ promoted token keys on spans that are not model calls (moved under `voltagent.`)
 ### Tokens
 
 The Future AGI collector promotes `gen_ai.usage.*`, `llm.usage.*` and `llm.token_count.*` into
-token columns on any span, and Observe sums them over the whole trace. So promoted keys appear only
-on llm (model-call) spans. The agent span's summed usage is exported as `voltagent.usage.*`.
+token columns, and `gen_ai.cost.total` / `llm.cost.total` (or, without a total, the parts
+`gen_ai.cost.input` + `.output`, `llm.cost.prompt` + `.completion`) into its cost column, on any
+span; Observe sums them over the whole trace. So promoted keys appear only on llm (model-call)
+spans; on any other span they are moved under `voltagent.` (for example
+`voltagent.gen_ai.cost.total`). The agent span's summed usage is exported as `voltagent.usage.*`.
 
 VoltAgent 2.11.0 wraps a whole multi-step AI SDK call (for example: tool call, then answer) in one
 `llm:<operation>` span and records the AI SDK's `usage` on it, which is the **last step only**,
