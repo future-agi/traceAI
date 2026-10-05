@@ -12,7 +12,8 @@ Installed-layout facts this guard is written against (read, not assumed):
 
 * ``autogen==0.14.1`` is a standalone distribution that ships the ``autogen``
   module itself (Source: ``ag2ai/ag2classic``).
-* ``autogen==0.14.0`` is an 8-file alias whose only runtime requirement is
+* ``autogen==0.14.0`` is a metadata-only alias wheel (6 entries, all under
+  ``autogen-0.14.0.dist-info/``, no modules) whose only runtime requirement is
   ``ag2==0.14.0``; the ``autogen`` module is shipped by the ``ag2`` 0.14.0
   distribution. Its ``autogen/opentelemetry`` tree is byte-identical to the
   0.14.1 one. That exact pairing is accepted.
