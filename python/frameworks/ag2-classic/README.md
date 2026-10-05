@@ -143,8 +143,10 @@ exporting processor. `setup()` keeps it first on the provider:
   spans.
 - `tracing.uninstrument()` leaves the processor in place, because agents
   instrumented earlier keep emitting spans.
-- Editing `_active_span_processor._span_processors` yourself bypasses this;
-  call `setup()` again to put the processor back first.
+- Editing `_active_span_processor._span_processors` yourself, or shutting the
+  processor down without going through `trace_provider.add_span_processor`,
+  bypasses this; call `setup()` again to put the processor back first and
+  re-enable it.
 
 ## Attribute inventory (autogen 0.14.1)
 

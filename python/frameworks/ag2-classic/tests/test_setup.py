@@ -227,6 +227,26 @@ def test_add_span_processor_on_a_plain_sdk_provider_keeps_one_processor_first(pi
     assert sum(isinstance(p, AG2ClassicSpanProcessor) for p in processors) == 1
 
 
+def test_setup_again_reopens_a_processor_that_was_shut_down(pipeline, fake):
+    """A shutdown that bypassed the add_span_processor guard (for example an
+    unbound ``TracerProvider.add_span_processor(provider, p)``) leaves the
+    processor disabled; on_end then skips filtering. A second setup() reuses
+    that processor and must turn filtering back on, not export content.
+    """
+    _provider, exporter, make = pipeline
+    first = make()
+    first.processor.shutdown()
+    second = make()
+    assert second.processor is first.processor
+
+    exporter.clear()
+    two_agent_tool_chat(second, fake)
+    spans = exporter.get_finished_spans()
+    assert any(s.name == "conversation user" for s in spans)
+    _assert_no_content_and_no_promoted_usage_off_llm(spans)
+    assert second.processor._disabled is False
+
+
 def test_setup_is_idempotent_per_provider_and_uninstrument_restores(pipeline):
     from autogen.oai.client import OpenAIWrapper
 

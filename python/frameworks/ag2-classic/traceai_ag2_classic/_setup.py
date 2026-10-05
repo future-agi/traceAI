@@ -72,6 +72,12 @@ def _install_processor(provider: Any, capture_content: bool) -> AG2ClassicSpanPr
             )
         if processor not in tuple(active._span_processors):
             _prepend(active, processor)
+        if processor._disabled:
+            # Shut down by a path that bypassed the add_span_processor guard
+            # (an unbound TracerProvider.add_span_processor(provider, p), or
+            # the multi-processor's shutdown()). A disabled processor skips
+            # filtering in on_end, so reusing it as is would export content.
+            processor._reopen()
     else:
         processor = AG2ClassicSpanProcessor(capture_content=capture_content)
         _prepend(active, processor)
