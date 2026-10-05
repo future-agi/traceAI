@@ -151,11 +151,24 @@ pytest imports `python/__init__.py` (fi_instrumentation) for any test under
 `python/`, which is why the other packages are listed. A run takes a few
 seconds.
 
-Two opt-in tests read fi-collector's Go source instead of copying its tables.
-They check that the kind, model, token, `input.value` and `project_name`
-facts above still hold, and that the fixture's kinds are in the collector's
-type list and the unknown ones are not. Point `FI_COLLECTOR_SRC` at a
-fi-collector checkout:
+Four opt-in tests read fi-collector's Go source instead of copying its
+tables. They check that the source still has the tables and statements
+behind the source-reading facts above:
+
+- the kind keys and their order, the type list and synonyms (the fixture's
+  kinds are in the list, the unknown ones are not), and the first model and
+  token aliases;
+- the statements in `Split`, `DeriveHotKeys`, `resolveObservationType` and
+  `spanToRow` that route the fixture's keys, resolve the kind with its
+  `unknown` fallback, derive `total_tokens`, lift `input.value` and store
+  each in its column, and that `spanToRow` has one return, with a nil error;
+- the `project_name` statements in `handleHTTPTraces`, `StampResourceAttrs`
+  and `ResolveProjectsForKey`.
+
+They match the source text, with comments removed and whitespace collapsed.
+They do not run the collector: a behaviour change outside those statements
+passes them, and a refactor that keeps the behaviour fails them. Point
+`FI_COLLECTOR_SRC` at a fi-collector checkout:
 
 ```bash
 mkdir -p /tmp/fi-main
@@ -163,6 +176,5 @@ git -C <future-agi checkout> archive origin/main fi-collector | tar -x -C /tmp/f
 export FI_COLLECTOR_SRC=/tmp/fi-main/fi-collector   # then run the command above
 ```
 
-Without it they are skipped. They read the source; they do not run the
-collector. No CI job runs this directory, so run them whenever fi-collector's
-kind or alias code changes.
+Without it they are skipped. No CI job runs this directory, so run them
+whenever fi-collector's kind, alias or project code changes.

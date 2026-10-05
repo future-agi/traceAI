@@ -339,6 +339,18 @@ def test_readme_qualifies_the_project_name_rules() -> None:
         assert fact in readme, fact
 
 
+def test_readme_says_the_opt_in_tests_read_source_text() -> None:
+    """The opt-in tests match source statements; they do not show behaviour."""
+    readme = _readme_text()
+    assert "facts above still hold" not in readme
+    for fact in (
+        "They match the source text, with comments removed and whitespace collapsed",
+        "They do not run the collector",
+        "a refactor that keeps the behaviour fails them",
+    ):
+        assert fact in readme, fact
+
+
 # --------------------------------------------------------------------------
 # Opt-in: read fi-collector's source instead of copying its tables.
 # --------------------------------------------------------------------------
