@@ -2,8 +2,10 @@
 
 Every POST to /v1/chat/completions gets one assistant message whose text is
 ``answer_text``, with fixed token usage, so the instrumentor records model
-and usage attributes. Each request body and Authorization header is kept for
-assertions. Listens on 127.0.0.1 only.
+and usage attributes. With ``status`` other than 200 it answers that status
+and an OpenAI-style error body instead, with no message text in it. Each
+request body and Authorization header is kept for assertions. Listens on
+127.0.0.1 only.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ USAGE = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 class FakeOpenAI:
     """Serve /v1/chat/completions on 127.0.0.1 and record each request."""
 
-    def __init__(self, answer_text: str) -> None:
+    def __init__(self, answer_text: str, status: int = HTTPStatus.OK) -> None:
         self.requests: list[dict[str, Any]] = []
         self.authorizations: list[str | None] = []
         lock = threading.Lock()
@@ -37,7 +39,12 @@ class FakeOpenAI:
                 with lock:
                     owner.requests.append(request)
                     owner.authorizations.append(self.headers.get("Authorization"))
-                body = json.dumps(
+                if status != HTTPStatus.OK:
+                    error = {"message": "fixture failure", "type": "server_error", "code": None}
+                    self._send_json(status, {"error": error})
+                    return
+                self._send_json(
+                    HTTPStatus.OK,
                     {
                         "id": "chatcmpl-fake",
                         "object": "chat.completion",
@@ -51,9 +58,12 @@ class FakeOpenAI:
                             }
                         ],
                         "usage": USAGE,
-                    }
-                ).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
+                    },
+                )
+
+            def _send_json(self, code: int, payload: dict[str, Any]) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()

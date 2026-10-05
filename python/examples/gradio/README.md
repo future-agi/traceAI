@@ -157,6 +157,12 @@ One span per chat turn, from `traceai_openai`:
   `gpt-4o-mini`; the requested one is in `gen_ai.request.parameters`.
 - `openai` is the OpenAI instrumentor's provider label, not Gradio's. It was
   `openai` for the loopback test host too.
+- **A failed model call** still gives one `ChatCompletion` span, with status
+  `ERROR`, exported like the others (by the exit flush in the test), with
+  `input.value` `__REDACTED__` and no message text, and `predict` raises the
+  OpenAI error (`openai.InternalServerError` for a 500). Tested with the
+  model host answering HTTP 500 and the client's retries turned off
+  (`max_retries=0`); with the default retries it is not tested.
 
 ## Privacy
 
@@ -176,10 +182,12 @@ latest). Tested. With content on, traceAI's `FI_HIDE_INPUTS` and
 `FI_HIDE_OUTPUTS` environment variables apply again (source reading,
 `fi_instrumentation/instrumentation/config.py`).
 
-Not covered by the switch (source reading of
-`traceai_openai/_request.py`): when the model call raises, the span records
-the exception type and message as an `exception` event and in the status
-description.
+Not covered by the switch: when the model call raises, the span records the
+exception type, message and stack trace as an `exception` event, and the
+type and message in the status description. For an HTTP error the message
+includes the error body the model host returned (tested with a 500 whose
+body holds no message text; a host that echoes the prompt in its error body
+would put it in the span).
 
 No Future AGI key, secret or OpenAI key appears in any exported span or
 resource, or in the app's output (tested). The keys travel only as request
@@ -288,8 +296,8 @@ the tests open no server port.
 
 `gradio[mcp]`, Gradio's queue metrics and Spaces hosting. Not tested here:
 Gradio's HTTP and queue layer (the tests call its event dispatch directly),
-streaming, model errors, and a real fi-collector (authentication, project
-stamping and storage).
+streaming, model errors with the client's default retries, and a real
+fi-collector (authentication, project stamping and storage).
 
 ## Tests
 
@@ -317,8 +325,9 @@ Gradio server port.
   resource (`project_name`, `project_type=observe`), the exit flush, the
   span attributes, content off and (as a control) on, that no key and no
   session hash reaches the export or the output, a new session key per
-  process, that the prompt is never printed, the reload replay and the
-  Gradio analytics probe (`tests/_analytics_probe.py`).
+  process, that the prompt is never printed, a model error (the fake
+  answers HTTP 500), the reload replay and the Gradio analytics probe
+  (`tests/_analytics_probe.py`).
 
 All keys are placeholders. From the repository root, Python 3.11:
 

@@ -31,6 +31,7 @@ import os
 import re
 import sys
 import threading
+from http import HTTPStatus
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -403,13 +404,23 @@ def _guard_attempts(guard_log: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in guard_log.read_text().splitlines()]
 
 
-def _run_driver(tmp_path: Path, *flags: str) -> dict[str, Any]:
-    """Run drive_turns.py under the loopback guard; return everything the tests read."""
+def _run_driver(
+    tmp_path: Path,
+    *flags: str,
+    status: int = HTTPStatus.OK,
+) -> dict[str, Any]:
+    """Run drive_turns.py under the loopback guard; return everything the tests read.
+
+    ``status`` is what the fake model host answers.
+    """
     tmp_path.mkdir(parents=True, exist_ok=True)
     guard_log = tmp_path / "guard.jsonl"
-    with Receiver() as receiver, FakeOpenAI(ANSWER) as fake:
+    with Receiver() as receiver, FakeOpenAI(ANSWER, status=status) as fake:
         env = _child_env(
-            tmp_path, guard_log, FI_BASE_URL=receiver.origin, OPENAI_BASE_URL=fake.base_url
+            tmp_path,
+            guard_log,
+            FI_BASE_URL=receiver.origin,
+            OPENAI_BASE_URL=fake.base_url,
         )
         result = run(
             [sys.executable, str(GUARD), str(DRIVER), QUESTION, *flags],
@@ -647,6 +658,37 @@ def test_reload_keeps_the_first_provider_and_ignores_tracing_edits(tmp_path: Pat
     # The session key survived both runs of the file: one id for both turns.
     first, second = (_otlp_attrs(span) for span in record["spans"])
     assert first["session.id"] == second["session.id"]
+
+
+def test_a_model_error_is_exported_as_an_error_span_without_content(tmp_path: Path) -> None:
+    """The model host answers HTTP 500; the client's retries are off."""
+    record = _run_driver(tmp_path, "--model-error", status=HTTPStatus.INTERNAL_SERVER_ERROR)
+    _assert_ran(record)
+    report = _report(record)
+    assert (report["error"], report["status_code"]) == ("InternalServerError", 500)
+    assert len(record["model_requests"]) == 1
+    # The failed turn's span left through the exit flush ...
+    assert len(record["requests"]) == 1
+    (span,) = record["spans"]
+    attrs = _otlp_attrs(span)
+    assert span["name"] == LLM_SPAN
+    assert attrs["gen_ai.span.kind"] == "LLM"
+    # ... with status ERROR (StatusCode.ERROR, as OTLP names it) ...
+    assert span["status"]["code"] == "STATUS_CODE_ERROR"
+    # ... and no message text.
+    for marker in CONTENT_MARKERS:
+        assert marker not in _export_dump(record)
+    assert not [k for k in attrs if k.startswith(CONTENT_KEY_PREFIXES)]
+    assert attrs["input.value"] == REDACTED
+    # What it does carry, whatever TraceConfig says: the exception, including
+    # the error body the model host returned.
+    (event,) = span["events"]
+    assert event["name"] == "exception"
+    exception = _otlp_attrs(event)
+    assert exception["exception.type"] == "openai.InternalServerError"
+    assert "fixture failure" in exception["exception.message"]
+    assert "exception.stacktrace" in exception
+    assert "fixture failure" in span["status"]["message"]
 
 
 def test_building_a_gradio_app_contacts_gradio_analytics_unless_turned_off(

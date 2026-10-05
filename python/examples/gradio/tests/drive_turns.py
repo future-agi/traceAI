@@ -1,6 +1,6 @@
 """Scenario script: run the recipe's ``predict`` for chat turns, then exit.
 
-    python drive_turns.py <message> [--content] [--reload]
+    python drive_turns.py <message> [--content] [--reload] [--model-error]
 
 Loads ``src/app.py`` as a module, so its ``demo.launch()`` does not run and no
 port is opened, then calls ``init_tracing()`` as the app's ``__main__`` block
@@ -23,6 +23,10 @@ The saved source carries one edit, ``init_tracing()`` ->
 on and saved. The second turn then uses the re-created ``predict``. This
 replays the reload's effect on tracing; it is not a ``gradio app.py`` run.
 
+``--model-error`` expects the model host to fail (the test's fake answers
+HTTP 500). It turns the client's retries off and runs one turn, which must
+raise ``openai.InternalServerError``.
+
 Prints one JSON line: the turn count and the ``project_version_id`` of the
 provider ``init_tracing()`` returned first (a fresh UUID per ``register()``
 call), never the prompt.
@@ -39,6 +43,7 @@ import threading
 from pathlib import Path
 
 import gradio as gr
+import openai
 
 APP = Path(__file__).resolve().parents[1] / "src" / "app.py"
 SESSION_HASH = "drive-session-1"
@@ -72,6 +77,16 @@ def main(argv: list[str]) -> int:
     provider = app.init_tracing(trace_content="--content" in argv)
     request = gr.Request(session_hash=SESSION_HASH)
     report = {"first_provider": provider.resource.attributes["project_version_id"]}
+
+    if "--model-error" in argv:
+        app.client = app.client.with_options(max_retries=0)
+        try:
+            app.predict(message, [], request)
+        except openai.InternalServerError as error:
+            report.update(turns=1, error=type(error).__name__, status_code=error.status_code)
+            print(json.dumps(report))
+            return 0
+        raise AssertionError("the model call did not fail")
 
     source = APP.read_text(encoding="utf-8")
     assert source.count("init_tracing()") == 1, "expected one init_tracing() call in app.py"
