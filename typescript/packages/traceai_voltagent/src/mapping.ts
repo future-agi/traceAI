@@ -58,6 +58,15 @@ const CONTENT_EXACT = new Set<string>([
   "workspace.sandbox.command",
   "workspace.sandbox.args",
   "suspension.checkpoint",
+  // Model-written summary (agent/apply-summarization.ts, span.type=summary).
+  "agent.summary.preview",
+  "agent.summary.text",
+  // The whole working-memory document (agent.ts, on the agent root).
+  "agent.workingMemory.finalContent",
+  // PlanAgent: the plan, the delegation brief and the subagent's answer (planagent/).
+  "planagent.todos",
+  "planagent.task.description",
+  "planagent.task.response_preview",
   // Future AGI / GenAI content keys, in case an upstream span already carries them.
   "input.value",
   "output.value",

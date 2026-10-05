@@ -117,13 +117,16 @@ the root total (`voltagent.usage.reconciled = true`) and keeps the last-step val
 ## Content
 
 Off by default. VoltAgent itself has no capture flag: it writes the prompt, the answer, system
-instructions, message history, tool arguments and results, and memory payloads onto its spans. The
-Future AGI copy drops them unless you pass `captureContent: true`. This is stricter than VoltAgent;
-a VoltOps export of the same run still has the originals.
+instructions, message history, tool arguments and results, memory payloads, conversation summaries
+and plans onto its spans. The Future AGI copy drops them unless you pass `captureContent: true`.
+This is stricter than VoltAgent; a VoltOps export of the same run still has the originals.
 
 Dropped keys: `input`, `output`, `agent.instructions`, `agent.messages`, `agent.messages.ui`,
 `agent.context`, `agent.stateSnapshot`, `llm.messages`, `workflow.context`,
-`workspace.sandbox.command`, `workspace.sandbox.args`, `suspension.checkpoint`, any key with an
+`workspace.sandbox.command`, `workspace.sandbox.args`, `suspension.checkpoint`,
+`agent.summary.preview`, `agent.summary.text` (summarization), `agent.workingMemory.finalContent`
+(working memory), `planagent.todos`, `planagent.task.description`,
+`planagent.task.response_preview` (PlanAgent), any key with an
 `input` or `output` segment (`middleware.input.original`, `guardrail.output.after`, ...), and string
 values whose last segment is `messages`, `instructions`, `query`, `context`, `data`, `checkpoint`,
 `prompt(s)`, `completion`, `content`, `arguments` or `args` (`tool.search.query`, `vector.query`,

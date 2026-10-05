@@ -236,6 +236,14 @@ describe("mapVoltAgentAttributes (AC-02)", () => {
 });
 
 describe("content (AC-07)", () => {
+  const summaryMemoryPlanContent = {
+    "agent.summary.preview": "SECRET_SUMMARY_PREVIEW",
+    "agent.summary.text": "SECRET_SUMMARY_TEXT",
+    "agent.workingMemory.finalContent": "SECRET_WORKING_MEMORY",
+    "planagent.todos": '[{"content":"SECRET_TODO"}]',
+    "planagent.task.description": "SECRET_TASK_BRIEF",
+    "planagent.task.response_preview": "SECRET_SUBAGENT_ANSWER",
+  };
   const contentCarrier = {
     ...rootSpanAttributes(),
     "llm.messages": "SECRET",
@@ -249,6 +257,9 @@ describe("content (AC-07)", () => {
     "workflow.resume.data": "SECRET",
     "suspension.checkpoint": "SECRET",
     "workspace.sandbox.command": "SECRET",
+    // Summarization, working memory and PlanAgent text (VoltAgent 2.11.0 apply-summarization.ts,
+    // agent.ts working-memory finalization, planagent/planning/index.ts, planagent/plan-agent.ts).
+    ...summaryMemoryPlanContent,
   };
 
   it("drops prompts, messages, instructions, tool payloads and queries by default", () => {
@@ -256,6 +267,15 @@ describe("content (AC-07)", () => {
     expect(JSON.stringify(attributes)).not.toContain("SECRET");
     expect(attributes["input.value"]).toBeUndefined();
     expect(attributes["output.value"]).toBeUndefined();
+  });
+
+  it("drops summary, working-memory and plan text by default and keeps it after opt-in", () => {
+    const off = mapVoltAgentAttributes({ "span.type": "summary", ...summaryMemoryPlanContent }, OFF).attributes;
+    const on = mapVoltAgentAttributes({ "span.type": "summary", ...summaryMemoryPlanContent }, ON).attributes;
+    for (const [key, value] of Object.entries(summaryMemoryPlanContent)) {
+      expect([key, off[key]]).toEqual([key, undefined]);
+      expect([key, on[key]]).toEqual([key, value]);
+    }
   });
 
   it("copies input/output to input.value/output.value only after opt-in", () => {
