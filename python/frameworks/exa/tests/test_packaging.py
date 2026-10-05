@@ -43,3 +43,11 @@ def test_fi_instrumentation_floor_is_1_1_0():
     assert spec.contains("1.2.0")
     for version in ("0.1.11", "0.1.12", "0.1.16", "1.0.0"):
         assert not spec.contains(version), version
+
+
+def test_classifiers_list_only_the_tested_python_versions():
+    # The suite runs on 3.10, 3.11 and 3.13 (PRD matrix 3.10/3.13, plus 3.11).
+    versions = re.findall(
+        r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text()
+    )
+    assert versions == ["3.10", "3.11", "3.13"]
