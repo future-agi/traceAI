@@ -17,6 +17,7 @@ from traceai_voyage.package import _instruments  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parents[1]
 PYPROJECT = PACKAGE / "pyproject.toml"
+CHANGELOG = PACKAGE / "CHANGELOG.md"
 SOURCE = PACKAGE / "traceai_voyage"
 
 
@@ -83,6 +84,14 @@ def test_distribution_name_and_license():
     assert re.search(r'^name = "traceAI-voyage"$', text, re.M)
     assert re.search(r'^license = "Apache-2.0"$', text, re.M)
     assert '"License :: OSI Approved :: Apache Software License"' in text
+
+
+def test_the_changelog_has_an_entry_for_the_package_version():
+    # Same layout as the other framework packages (e.g. groq).
+    version = re.search(r'^version = "([^"]+)"$', PYPROJECT.read_text(), re.M).group(1)
+    assert CHANGELOG.is_file()
+    heading = r"^## \[{0}\] - \d{{4}}-\d{{2}}-\d{{2}}$".format(re.escape(version))
+    assert re.search(heading, CHANGELOG.read_text(), re.M), version
 
 
 def test_the_package_never_sets_base_url():
