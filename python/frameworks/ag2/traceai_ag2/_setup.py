@@ -9,16 +9,21 @@ the middleware to the agents you pass it through AG2's public
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import logging
 from typing import Any, Dict, Iterable, Optional
 
 from fi_instrumentation.instrumentation.config import TraceConfig
 from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ConcurrentMultiSpanProcessor, TracerProvider
 
 from ._processor import AG2SpanProcessor
 
 logger = logging.getLogger(__name__)
+
+# Set on the wrapper ``_keep_processor_first`` installs, so it wraps once.
+_KEEP_FIRST_MARKER = "_traceai_ag2_keeps_processor_first"
 
 
 class _Unset:
@@ -89,6 +94,16 @@ def install_span_processor(
     ``fi_instrumentation.register()`` treats its exporter as a replaceable
     default and shuts it down on the first ``add_span_processor`` call, and the
     processor must run before the exporter reads the span.
+
+    That same ``add_span_processor`` call, made later by the application,
+    would also shut down and drop this processor. So the provider instance's
+    ``add_span_processor`` is wrapped once: the processor is taken out of the
+    chain for the call (fi's reset never shuts it down) and put back first
+    afterwards. Spans ending during that call are not normalized.
+
+    A provider whose active processor is a ``ConcurrentMultiSpanProcessor``
+    runs every processor's ``on_end`` in parallel, so an exporter can read a
+    span before it is normalized; a warning is logged for it.
     """
     provider = tracer_provider if tracer_provider is not None else trace_api.get_tracer_provider()
     active = getattr(provider, "_active_span_processor", None)
@@ -101,19 +116,19 @@ def install_span_processor(
         return False
 
     processor = AG2SpanProcessor(config=config)
-    lock = getattr(active, "_lock", None)
-    if lock is not None:
-        with lock:
-            existing = tuple(active._span_processors)
-            installed = next((p for p in existing if isinstance(p, AG2SpanProcessor)), None)
-            if installed is None:
-                active._span_processors = (processor,) + existing
-    else:  # pragma: no cover - SDK multi-processors always carry a lock
+    with _chain_lock(active):
         existing = tuple(active._span_processors)
         installed = next((p for p in existing if isinstance(p, AG2SpanProcessor)), None)
         if installed is None:
             active._span_processors = (processor,) + existing
+    _keep_processor_first(provider, active)
     if installed is None:
+        if isinstance(active, ConcurrentMultiSpanProcessor):
+            logger.warning(
+                "traceai-ag2: the tracer provider runs span processors concurrently "
+                "(ConcurrentMultiSpanProcessor), so exporters may read AG2 spans before "
+                "AG2SpanProcessor normalizes them. Use the default synchronous processor."
+            )
         return True
     if config is not None and installed.update_config(config):
         logger.warning(
@@ -122,6 +137,51 @@ def install_span_processor(
             config,
         )
     return False
+
+
+def _chain_lock(active: Any) -> Any:
+    lock = getattr(active, "_lock", None)
+    # SDK multi-processors always carry a lock.
+    return lock if lock is not None else contextlib.nullcontext()  # pragma: no branch
+
+
+def _keep_processor_first(provider: Any, active: Any) -> None:
+    """Wrap ``provider.add_span_processor`` so :class:`AG2SpanProcessor` stays first.
+
+    fi's ``TracerProvider.add_span_processor`` shuts down and clears the whole
+    chain on its first call after ``register()`` (``fi_instrumentation/otel.py``
+    ``add_span_processor``: ``_default_processor``). The wrapper lifts the AG2
+    processor out of the chain for the call, so it is neither shut down nor
+    dropped, then puts it back in front of whatever the call left.
+    """
+    original = getattr(provider, "add_span_processor", None)
+    if original is None or getattr(original, _KEEP_FIRST_MARKER, False):
+        return
+
+    @functools.wraps(original)
+    def add_span_processor(*args: Any, **kwargs: Any) -> Any:
+        with _chain_lock(active):
+            processors = tuple(active._span_processors)
+            ours = tuple(p for p in processors if isinstance(p, AG2SpanProcessor))
+            if ours:
+                active._span_processors = tuple(p for p in processors if not isinstance(p, AG2SpanProcessor))
+        try:
+            return original(*args, **kwargs)
+        finally:
+            if ours:
+                with _chain_lock(active):
+                    rest = tuple(p for p in active._span_processors if not isinstance(p, AG2SpanProcessor))
+                    active._span_processors = ours[:1] + rest
+
+    setattr(add_span_processor, _KEEP_FIRST_MARKER, True)
+    try:
+        provider.add_span_processor = add_span_processor
+    except (AttributeError, TypeError):  # pragma: no cover - providers with __slots__
+        logger.warning(
+            "traceai-ag2: cannot guard %s.add_span_processor; add span processors "
+            "before calling setup(), or AG2 spans may reach exporters un-normalized.",
+            type(provider).__name__,
+        )
 
 
 def _has_telemetry_middleware(agent: Any) -> bool:

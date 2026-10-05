@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fi_instrumentation.instrumentation.config import TraceConfig
 from opentelemetry.sdk.trace import TracerProvider
@@ -420,6 +422,83 @@ def test_install_keeps_fi_register_exporter():
         got = attrs(span)
         assert got["gen_ai.span.kind"] == "LLM"
         assert got["gen_ai.usage.reasoning.output_tokens"] == 2
+    finally:
+        provider.shutdown()
+
+
+def _fi_provider(exporter):
+    from fi_instrumentation import register
+    from fi_instrumentation.fi_types import ProjectType
+
+    return register(
+        project_type=ProjectType.OBSERVE,
+        project_name="ag2-unit",
+        batch=False,
+        span_exporter=exporter,
+        verbose=False,
+    )
+
+
+def test_later_add_span_processor_on_fi_provider_keeps_ag2_processor_first():
+    """fi's provider shuts down and clears every processor on the first
+    add_span_processor() after register() (otel.py 329-340); the user's new
+    exporter must still receive normalized AG2 spans."""
+    provider = _fi_provider(InMemorySpanExporter())
+    try:
+        assert install_span_processor(provider) is True
+        replacement = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(replacement))
+
+        chain = provider._active_span_processor._span_processors
+        assert isinstance(chain[0], AG2SpanProcessor), chain
+        assert sum(isinstance(p, AG2SpanProcessor) for p in chain) == 1
+        assert [type(p) for p in chain[1:]] == [SimpleSpanProcessor]
+
+        _emit(provider, {"gen_ai.operation.name": "chat", "gen_ai.usage.thinking_tokens": 2})
+        (span,) = replacement.get_finished_spans()
+        got = attrs(span)
+        assert got["gen_ai.span.kind"] == "LLM"
+        assert got["gen_ai.usage.reasoning.output_tokens"] == 2
+    finally:
+        provider.shutdown()
+
+
+def test_later_add_span_processor_on_sdk_provider_keeps_ag2_processor_first():
+    provider, first = memory_provider()
+    assert install_span_processor(provider) is True
+    assert install_span_processor(provider) is False  # no second wrapper either
+    second = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(second))
+    provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+
+    chain = provider._active_span_processor._span_processors
+    assert isinstance(chain[0], AG2SpanProcessor), chain
+    assert sum(isinstance(p, AG2SpanProcessor) for p in chain) == 1
+    assert len(chain) == 4
+    _emit(provider, {"gen_ai.operation.name": "chat"})
+    for exporter in (first, second):
+        (span,) = exporter.get_finished_spans()
+        assert attrs(span)["gen_ai.span.kind"] == "LLM"
+
+
+def test_provider_shutdown_still_shuts_the_processor_down():
+    provider, _ = memory_provider()
+    install_span_processor(provider)
+    (processor,) = [p for p in provider._active_span_processor._span_processors if isinstance(p, AG2SpanProcessor)]
+    provider.shutdown()
+    assert processor._shutdown is True
+
+
+def test_install_warns_when_processors_run_concurrently(caplog):
+    """A ConcurrentMultiSpanProcessor runs on_end of every processor in
+    parallel, so the exporter may read a span before it is normalized."""
+    from opentelemetry.sdk.trace import ConcurrentMultiSpanProcessor
+
+    provider = TracerProvider(active_span_processor=ConcurrentMultiSpanProcessor(), shutdown_on_exit=False)
+    try:
+        with caplog.at_level(logging.WARNING, logger="traceai_ag2"):
+            assert install_span_processor(provider) is True
+        assert any("ConcurrentMultiSpanProcessor" in r.getMessage() for r in caplog.records), caplog.text
     finally:
         provider.shutdown()
 

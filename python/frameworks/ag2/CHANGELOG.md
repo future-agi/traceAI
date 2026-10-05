@@ -36,3 +36,10 @@
   `hide_input_messages` also drops `gen_ai.system_instructions`. The README
   lists which flags apply; `hide_input_images` and `hide_embedding_vectors`
   have nothing to act on.
+- A later `trace_provider.add_span_processor(...)` no longer removes
+  `AG2SpanProcessor`. fi's provider shuts down and clears every processor on
+  the first such call after `register()`; `install_span_processor` now wraps
+  the provider instance's `add_span_processor` so the AG2 processor sits out
+  that reset and is put back first. Installing on a provider that uses
+  `ConcurrentMultiSpanProcessor` logs a warning (normalization before export
+  is not guaranteed there).

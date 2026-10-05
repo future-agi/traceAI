@@ -92,6 +92,11 @@ a later `setup(..., config=TraceConfig(...))` replaces its `TraceConfig` (the
 most recent call wins and a warning is logged when it changes), while
 `config=None` keeps the current one.
 
+Span processors you add after `setup()` with
+`trace_provider.add_span_processor(...)` are fine: `setup` wraps that method on
+the provider instance so `AG2SpanProcessor` stays first and is not shut down
+when fi's provider replaces its default exporter.
+
 Sessions and users come from traceAI's context helpers, as with the other
 traceAI integrations:
 
@@ -190,6 +195,10 @@ Notes:
 - Duplicate spans: do not attach a second `TelemetryMiddleware`, and do not
   also enable `traceai-autogen` in an `ag2` process.
 - Export failures are logged and never fail the agent.
+- Spans arrive without `gen_ai.span.kind`: the provider runs its processors
+  concurrently (`TracerProvider(active_span_processor=ConcurrentMultiSpanProcessor())`;
+  `setup` logs a warning), so the exporter can read a span before
+  `AG2SpanProcessor` normalizes it. Use the default synchronous processor.
 - Content appeared without opting in: you constructed `TelemetryMiddleware`
   yourself. Pass `capture_content=False`, or use `create_telemetry_middleware`.
 - This package never imports `autogen`. If your code imports `autogen`, you
