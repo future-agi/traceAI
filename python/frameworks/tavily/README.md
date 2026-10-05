@@ -201,3 +201,43 @@ start, the call runs untraced.
   are recorded.
 - Validated against a local Tavily fake only; no call to api.tavily.com was
   made.
+
+## Tests
+
+Run from the repository root with any `PYTHONPATH` of your own unset; the
+commands set their own. Every Tavily call goes to a loopback fake and every key
+is a placeholder.
+
+Base suite:
+
+```bash
+PYTHONPATH="python/frameworks/tavily:python:python/tests" uv run --no-project --python 3.11 \
+  --with pytest --with pytest-asyncio --with opentelemetry-api --with opentelemetry-sdk \
+  --with opentelemetry-instrumentation --with opentelemetry-exporter-otlp-proto-http \
+  --with wrapt --with requests --with jsonschema --with protobuf --with opentelemetry-proto \
+  --with 'tavily-python==0.8.4' \
+  pytest python/frameworks/tavily/tests -q -p no:cacheprovider --noconftest -o addopts= -rs
+```
+
+With the LangChain extras:
+
+```bash
+PYTHONPATH="python/frameworks/tavily:python:python/tests" uv run --no-project --python 3.11 \
+  --with pytest --with pytest-asyncio --with opentelemetry-api --with opentelemetry-sdk \
+  --with opentelemetry-instrumentation --with opentelemetry-exporter-otlp-proto-http \
+  --with 'wrapt<2' --with requests --with jsonschema --with protobuf --with opentelemetry-proto \
+  --with 'tavily-python==0.8.4' --with langchain-community==0.4.2 --with langchain-core==1.5.2 \
+  --with langgraph==1.2.2 \
+  pytest python/frameworks/tavily/tests -q -p no:cacheprovider --noconftest -o addopts= -rs
+```
+
+The base command skips the 7 measurement tests that run LangChain or LangGraph
+(the AC-01 and AC-04 LangGraph runs, the bare-client run with traceAI-langchain
+on, and the two custom-tool runs, all in `tests/test_measurement.py`); the
+second command adds the extras they need and runs them. It pins `wrapt<2`
+(`fi-instrumentation-otel` declares `wrapt ^1.15.0`); the base command takes
+the newest `wrapt`. `--python` can be 3.10, 3.11, 3.12 or 3.13.
+
+These measurement tests live in this package, not under
+`python/frameworks/langchain/`. That is a deviation from PRD section 13, made to
+keep the change in one package.

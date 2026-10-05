@@ -1,7 +1,9 @@
-"""Packaging contract: dependency ranges, the runtime version check, Pythons."""
+"""Packaging contract: dependency ranges, the runtime version check, Pythons,
+and the README's test commands."""
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -92,3 +94,62 @@ def test_instrument_only_wraps_an_in_range_tavily_python(monkeypatch, installed,
     finally:
         instrumentor.uninstrument()
     assert TavilyClient.__dict__["search"] is original
+
+
+README = PACKAGE / "README.md"
+# The extras the README's second test command adds; measurement tests that
+# import them are skipped by the base command.
+LANGCHAIN_EXTRAS = ("langchain_core", "langchain_community", "langgraph")
+
+
+def _readme_tests_section() -> str:
+    match = re.search(r"^## Tests\n(.*?)(?=^## |\Z)", README.read_text(), re.M | re.S)
+    assert match, "README.md has no '## Tests' section"
+    return match.group(1)
+
+
+def _tests_needing_langchain_extras() -> list:
+    """Test functions in test_measurement.py that importorskip a LangChain extra."""
+    tree = ast.parse((PACKAGE / "tests" / "test_measurement.py").read_text())
+    gated = []
+    for node in tree.body:
+        if not (isinstance(node, ast.FunctionDef) and node.name.startswith("test_")):
+            continue
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "importorskip"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value in LANGCHAIN_EXTRAS
+            ):
+                gated.append(node.name)
+                break
+    return gated
+
+
+def test_readme_gives_both_test_commands():
+    section = _readme_tests_section()
+    commands = re.findall(r"```bash\n(.*?)```", section, re.S)
+    assert len(commands) == 2, commands
+    base, extras = (" ".join(command.replace("\\\n", " ").split()) for command in commands)
+    for command in (base, extras):
+        assert command.startswith('PYTHONPATH="python/frameworks/tavily:python:python/tests" ')
+        assert "--with 'tavily-python==0.8.4'" in command
+        assert command.endswith(
+            " pytest python/frameworks/tavily/tests -q -p no:cacheprovider --noconftest"
+            " -o addopts= -rs"
+        )
+    assert "--with wrapt " in base and "langchain" not in base
+    assert "--with 'wrapt<2'" in extras
+    for pin in ("langchain-community==0.4.2", "langchain-core==1.5.2", "langgraph==1.2.2"):
+        assert "--with " + pin in extras, pin
+
+
+def test_readme_counts_the_tests_that_need_the_langchain_extras():
+    gated = _tests_needing_langchain_extras()
+    assert gated, "no measurement test needs the LangChain extras"
+    match = re.search(r"skips the (\d+) measurement tests", _readme_tests_section())
+    assert match, "the Tests section does not say how many tests the extras run"
+    assert int(match.group(1)) == len(gated), gated
