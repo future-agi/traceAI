@@ -15,6 +15,7 @@ Scripted queries (search) and URLs (extract):
   so an error message can carry whatever the query carried.
 * ``slow`` (a query, or a URL containing it) is held until the fake closes,
   so a caller can cancel mid-call.
+* ``odd-results`` gets HTTP 200 whose ``results`` is not a list.
 * an extract URL containing ``fail`` is returned in ``failed_results``.
 """
 
@@ -31,6 +32,7 @@ FAIL_500 = "fail-500"
 KEYLESS_LIMIT = "keyless-limit"
 ECHO_400 = "echo-400"
 SLOW = "slow"
+ODD_RESULTS = "odd-results"
 
 # Response content the fake returns. None of it may reach a span.
 RESULT_TITLE = "RESULT-TITLE-MUST-NOT-BE-EXPORTED"
@@ -106,6 +108,8 @@ class FakeTavily:
                     )
                 elif query.startswith(ECHO_400):
                     self._send(400, {"detail": {"error": "Bad query: {0}".format(query)}})
+                elif query == ODD_RESULTS:
+                    self._send(200, {"query": query, "results": {"unexpected": "shape"}})
                 elif query == SLOW:
                     owner._release.wait(30)
                     self._send(200, {"query": query, "results": []})
