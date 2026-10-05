@@ -252,7 +252,9 @@ def test_langgraph_tool_path_drops_result_text_with_inputs_and_outputs_hidden():
         extra_env={"FI_HIDE_OUTPUTS": "true", "FI_HIDE_INPUTS": "true"},
     )
     values = _flatten_attributes(langgraph_tool_span(spans)["attributes"])
-    report("langgraph_tool FI_HIDE_INPUTS+FI_HIDE_OUTPUTS", spans, content_keys=_content_keys(spans))
+    report(
+        "langgraph_tool FI_HIDE_INPUTS+FI_HIDE_OUTPUTS", spans, content_keys=_content_keys(spans)
+    )
 
     assert values["input.value"] == values["output.value"] == "__REDACTED__"
     assert _content_keys(spans) == []

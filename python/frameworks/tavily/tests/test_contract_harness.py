@@ -124,7 +124,9 @@ def test_real_client_calls_reach_the_collector_contract(journey):
     assert failed["input.value"] == FAIL_401
     assert "tavily.result_count" not in failed
     assert search_failed["status"]["code"] == "STATUS_CODE_ERROR"
-    assert search_failed["status"]["message"] == "InvalidAPIKeyError: Unauthorized: invalid API key."
+    assert search_failed["status"]["message"] == (
+        "InvalidAPIKeyError: Unauthorized: invalid API key."
+    )
     assert [event["name"] for event in search_failed.get("events", [])] == ["exception"]
 
     assert int(_flatten_attributes(async_search["attributes"])["tavily.result_count"]) == 1
