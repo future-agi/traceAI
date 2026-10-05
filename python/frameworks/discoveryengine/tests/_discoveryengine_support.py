@@ -22,6 +22,9 @@ selects the behaviour:
 - ``fail-denied``: PERMISSION_DENIED whose message echoes the query and the
   ``authorization`` / ``x-goog-api-key`` metadata the client sent
 - ``fail-huge``: INVALID_ARGUMENT whose ~24 KB message echoes the credential
+- ``fail-unseen``: INVALID_ARGUMENT quoting token-shaped strings the client
+  never held (a ``ya29.`` access token, an ``AIza`` key, a bearer value)
+- ``fail-unavailable``: UNAVAILABLE on every call
 - ``unavailable-once``: UNAVAILABLE on the first call, then success
 - ``pages``: a first page with ``next_page_token`` and a second page
 - ``slow``: held until the fake closes (for cancellation)
@@ -72,14 +75,22 @@ CONVERSATION_PARENT = (
 )
 
 # Placeholder credentials. The fake echoes them into error messages; none may
-# reach a span.
-ACCESS_TOKEN = "ya29.placeholder-access-token-must-not-be-exported"
-API_KEY = "AIzaPlaceholderApiKeyMustNotBeExported00"
-METADATA_TOKEN = "ya29.placeholder-metadata-token-must-not-be-exported"
+# reach a span. They deliberately do not look like Google tokens, so only the
+# package's lookup of where the client keeps them can redact them.
+ACCESS_TOKEN = "placeholder-access-token-must-not-be-exported"
+API_KEY = "placeholder-api-key-must-not-be-exported"
+METADATA_TOKEN = "placeholder-metadata-token-must-not-be-exported"
+# Token-shaped strings the package never saw (an access token minted by a
+# refresh, an API key quoted by the server): caught by their shape.
+UNSEEN_ACCESS_TOKEN = "ya29.a0AfB_unseenTokenValue-123"
+UNSEEN_API_KEY = "AIza" + "S" * 35
 
 FAIL_DENIED = "fail-denied"
 FAIL_HUGE = "fail-huge"
 HUGE_ERROR_CHARS = 8000
+FAIL_UNSEEN = "fail-unseen"
+BEARER_VALUE = "opaque-bearer-value-must-not-be-exported"
+FAIL_UNAVAILABLE = "fail-unavailable"
 UNAVAILABLE_ONCE = "unavailable-once"
 PAGES = "pages"
 SLOW = "slow"
@@ -229,6 +240,15 @@ class FakeDiscoveryEngine:
                 grpc.StatusCode.INVALID_ARGUMENT,
                 "echo {0} {1}".format(credential, "\u20ac" * HUGE_ERROR_CHARS),
             )
+        if FAIL_UNSEEN in trigger:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "token {0} key {1} header Authorization: Bearer {2}".format(
+                    UNSEEN_ACCESS_TOKEN, UNSEEN_API_KEY, BEARER_VALUE
+                ),
+            )
+        if FAIL_UNAVAILABLE in trigger:
+            context.abort(grpc.StatusCode.UNAVAILABLE, "backend unavailable")
         if UNAVAILABLE_ONCE in trigger:
             with self._lock:
                 first = query not in self._unavailable_sent
