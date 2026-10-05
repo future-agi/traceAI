@@ -57,9 +57,10 @@ answers = discoveryengine.ConversationalSearchServiceClient()
 answers.answer_query(request={"serving_config": serving_config, "query": {"text": "What is OTLP?"}})
 ```
 
-Import the clients from `google.cloud.discoveryengine_v1`. At 0.20.5 the
-unversioned `google.cloud.discoveryengine` module re-exports the **v1beta**
-clients, which are not traced (nor are v1alpha clients).
+Import the clients from `google.cloud.discoveryengine_v1`, as above.
+**`from google.cloud import discoveryengine` produces no spans**: at 0.20.5
+that unversioned module re-exports the v1beta clients, which are not traced
+(nor are v1alpha clients).
 
 The methods are wrapped on the client classes, so clients built before or
 after `instrument()` are both traced. See
@@ -285,3 +286,20 @@ env -u PYTHONPATH PYTHONPATH="python/frameworks/discoveryengine:python:python/te
 
 Replace `3.11` with `3.10`, `3.12` or `3.13` for the other supported
 Pythons.
+
+The stock-span measurement (`tests/test_discoveryengine_stock_spans.py`)
+also runs with `opentelemetry-instrumentation-grpc` installed. Then
+`GOOGLE_SDK_EXPERIMENTAL_PYTHON_TRACING_ENABLED=true` turns
+`google-api-core`'s experimental tracing on, and the file checks that the
+unwrapped client still emits no span:
+
+```bash
+env -u PYTHONPATH PYTHONPATH="python/frameworks/discoveryengine:python:python/tests" \
+  uv run --no-project --python 3.11 \
+  --with pytest --with pytest-asyncio --with opentelemetry-api --with opentelemetry-sdk \
+  --with opentelemetry-instrumentation --with opentelemetry-exporter-otlp-proto-http \
+  --with wrapt --with requests --with jsonschema --with protobuf --with opentelemetry-proto \
+  --with 'google-cloud-discoveryengine==0.20.5' --with opentelemetry-instrumentation-grpc \
+  pytest python/frameworks/discoveryengine/tests/test_discoveryengine_stock_spans.py \
+  -q -p no:cacheprovider --noconftest -o addopts= -rfEs
+```

@@ -152,9 +152,9 @@ def test_unwrapped_clients_on_the_real_grpc_transport_emit_no_span(global_provid
 def test_the_experimental_switch_state_is_part_of_the_measurement(tracing_env):
     # google-api-core turns its experimental path on only when the variable
     # is true and opentelemetry-instrumentation-grpc is importable. The
-    # default test environment does not install the latter; the build
-    # evidence also runs this file with it installed, where the switch is on
-    # and the two tests above still count zero.
+    # default test environment does not install the latter; the README's
+    # second test command runs this file with it installed, where the switch
+    # is on and the two tests above still count zero.
     observability = pytest.importorskip(
         "google.api_core._observability",
         reason="google-api-core without the experimental tracing path",
