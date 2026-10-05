@@ -281,8 +281,9 @@ fi-collector promotes a few keys to columns. This table is everything this
 recipe calls "displayed". It was read from fi-collector at future-agi `main`
 4af5338 (`pkg/adapter/adapter.go`,
 `exporter/clickhouse25exporter/converter.go`); the opt-in test (see
-"Tests") re-reads the alias lists from that source and checks this table
-against them and against the keys the run emitted. No fi-collector was run.
+"Tests") re-reads from that source the alias lists and the keys `input` and
+`output` are read from, and checks this table against them and against the
+keys the run emitted. No fi-collector was run.
 
 | Column | Filled from | Source |
 |---|---|---|
@@ -518,10 +519,11 @@ The two traceai-openai tests skip in that environment. To run them, add
 2.5.0 without it. The whole suite passes in both environments.
 
 One test is opt-in. It reads the alias lists from fi-collector's
-`adapter.go` and `converter.go` and checks the "What Future AGI shows" table
-against them and against the emitted keys. Point `FI_COLLECTOR_SRC` at the
-`fi-collector` directory of a future-agi checkout (tested with `main`
-4af5338):
+`adapter.go` and `converter.go`, and the keys passed to `overflowAsString`
+for `input` and `output` in `converter.go`, and checks the "What Future AGI
+shows" table against them and against the emitted keys. Point
+`FI_COLLECTOR_SRC` at the `fi-collector` directory of a future-agi checkout
+(tested with `main` 4af5338):
 
 ```bash
 export FI_COLLECTOR_SRC=<future-agi checkout>/fi-collector   # then run the command above

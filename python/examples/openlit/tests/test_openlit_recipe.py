@@ -958,6 +958,13 @@ def _collector_aliases() -> dict[str, Any]:
     aliases["spanKindSynonyms"] = dict(
         re.findall(r'"([^"]+)"\s*:\s*"([^"]+)"', synonyms_body.group(1))
     )
+    # The input and output columns: `input := overflowAsString(overflow, "...")`.
+    for column in ("input", "output"):
+        aliases[column] = re.findall(
+            r'\b{0}\s*:?=\s*overflowAsString\(\s*\w+\s*,\s*"([^"]+)"\s*\)'.format(column),
+            converter,
+        )
+        assert aliases[column], column
     return aliases
 
 
@@ -983,18 +990,27 @@ def test_readme_display_table_matches_the_collector_aliases(recipe_run: dict[str
             aliases["costTotalKeys"] + aliases["costInputKeys"] + aliases["costOutputKeys"],
         ),
         "observation_type": kind_key,
-        "input": "input.value" if "input.value" in llm else None,
-        "output": "output.value" if "output.value" in llm else None,
+        "input": _first(llm, aliases["input"]),
+        "output": _first(llm, aliases["output"]),
     }
     # gen_ai.operation.name=chat resolves to the llm observation type.
     assert aliases["spanKindSynonyms"].get(llm[kind_key]) == "llm"
 
+    section = _readme_section("What Future AGI shows")
     rows = {
         column: key or word
         for column, key, word in re.findall(
             r"^\| `([a-z_]+)` \| (?:`([a-z_.]+)`|(derived|none))",
-            _readme_section("What Future AGI shows"),
+            section,
             flags=re.MULTILINE,
         )
     }
     assert rows == {column: key or "none" for column, key in expected.items()}
+    # The input and output rows name exactly the keys converter.go reads, and
+    # the content-on keys (Key inventory: "not read as the span's input") are
+    # not among them.
+    for column in ("input", "output"):
+        row = re.search(r"^\| `{0}` \|([^|]*)\|".format(column), section, flags=re.MULTILINE)
+        assert row, column
+        assert set(re.findall(r"`([a-z_.]+)`", row.group(1))) == set(aliases[column]), column
+    assert not CONTENT_KEYS & set(aliases["input"] + aliases["output"])
