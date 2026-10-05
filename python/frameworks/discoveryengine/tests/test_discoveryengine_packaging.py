@@ -115,7 +115,10 @@ def _attribute_constants():
 
 
 def test_the_readme_documents_every_attribute_the_code_can_write():
-    documented = set(re.findall(r"`(discoveryengine\.[a-z_.]+)`", README.read_text()))
+    span_names = {"discoveryengine." + name for name in ("search", "search_lite", "answer_query")}
+    documented = set(
+        re.findall(r"`(discoveryengine\.(?!googleapis)[a-z_.]+)`", README.read_text())
+    ) - span_names
     assert _attribute_constants() <= documented
     # And nothing in the README is an attribute the code never writes.
     assert documented - _attribute_constants() == set()

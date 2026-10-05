@@ -9,6 +9,7 @@ from google.api_core import exceptions as core_exceptions
 
 from _discoveryengine_support import (
     FAIL_DENIED,
+    SERVING_CONFIG,
     FakeDiscoveryEngine,
     answer_client,
     answer_request,
@@ -143,6 +144,17 @@ def test_pii_straddling_the_cap_is_replaced_before_the_cut(fake):
     value = attrs(traced.one())["input.value"]
     assert "jane" not in value
     assert len(value.encode("utf-8")) <= _wrappers.MAX_VALUE_BYTES
+
+
+def test_pii_redaction_also_matches_a_project_number_in_resource_names(fake):
+    # Documented: the phone pattern matches the last ten digits of a GCP
+    # project number, so resource names lose part of it with pii_redaction.
+    serving_config = SERVING_CONFIG.replace("projects/test-project/", "projects/123456789012/")
+    with instrumented(config=_config(pii_redaction=True)) as traced:
+        search_client(fake).search(request=search_request(serving_config=serving_config))
+
+    value = attrs(traced.one())["discoveryengine.serving_config"]
+    assert value == serving_config.replace("123456789012", "12<PHONE_NUMBER>")
 
 
 def test_the_query_is_capped_on_a_character_boundary(fake):

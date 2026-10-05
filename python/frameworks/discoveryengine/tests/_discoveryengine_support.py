@@ -22,8 +22,11 @@ selects the behaviour:
 - ``fail-denied``: PERMISSION_DENIED whose message echoes the query and the
   ``authorization`` / ``x-goog-api-key`` metadata the client sent
 - ``fail-huge``: INVALID_ARGUMENT whose ~24 KB message echoes the credential
+  (percent-encoded to ~72 KB of trailer, so clients built with credentials
+  raise gRPC's 8 KB / 16 KB received-metadata limits)
 - ``fail-unseen``: INVALID_ARGUMENT quoting token-shaped strings the client
-  never held (a ``ya29.`` access token, an ``AIza`` key, a bearer value)
+  never held (a ``ya29.`` access token, an ``AIza`` key, a ``1//`` refresh
+  token, a bearer value)
 - ``fail-unavailable``: UNAVAILABLE on every call
 - ``unavailable-once``: UNAVAILABLE on the first call, then success
 - ``pages``: a first page with ``next_page_token`` and a second page
@@ -84,6 +87,7 @@ METADATA_TOKEN = "placeholder-metadata-token-must-not-be-exported"
 # refresh, an API key quoted by the server): caught by their shape.
 UNSEEN_ACCESS_TOKEN = "ya29.a0AfB_unseenTokenValue-123"
 UNSEEN_API_KEY = "AIza" + "S" * 35
+UNSEEN_REFRESH_TOKEN = "1//0g" + "R" * 30
 
 FAIL_DENIED = "fail-denied"
 FAIL_HUGE = "fail-huge"
@@ -243,8 +247,8 @@ class FakeDiscoveryEngine:
         if FAIL_UNSEEN in trigger:
             context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT,
-                "token {0} key {1} header Authorization: Bearer {2}".format(
-                    UNSEEN_ACCESS_TOKEN, UNSEEN_API_KEY, BEARER_VALUE
+                "token {0} key {1} refresh {2} header Authorization: Bearer {3}".format(
+                    UNSEEN_ACCESS_TOKEN, UNSEEN_API_KEY, UNSEEN_REFRESH_TOKEN, BEARER_VALUE
                 ),
             )
         if FAIL_UNAVAILABLE in trigger:
@@ -320,6 +324,27 @@ def _local_credentials() -> grpc.ChannelCredentials:
     return grpc.local_channel_credentials(grpc.LocalConnectionType.LOCAL_TCP)
 
 
+# Room for the fail-huge trailer (the defaults are 8 KB soft, 16 KB hard).
+_METADATA_LIMITS = [
+    ("grpc.max_metadata_size", 256 * 1024),
+    ("grpc.absolute_max_metadata_size", 256 * 1024),
+]
+
+
+def _channel(transport_class: Any) -> Any:
+    """A channel factory for the transport's ``channel`` argument.
+
+    Unlike a channel instance, a factory keeps the transport's credentials:
+    the transport calls it with them, exactly as it calls ``create_channel``.
+    """
+
+    def create(host: str, **kwargs: Any) -> Any:
+        kwargs["options"] = list(kwargs.get("options") or []) + _METADATA_LIMITS
+        return transport_class.create_channel(host, **kwargs)
+
+    return create
+
+
 def search_client(fake: FakeDiscoveryEngine, credentials: Any = None) -> Any:
     """A real SearchServiceClient on the gRPC transport, talking to the fake."""
     from google.cloud.discoveryengine_v1 import SearchServiceClient
@@ -334,6 +359,7 @@ def search_client(fake: FakeDiscoveryEngine, credentials: Any = None) -> Any:
             host=fake.secure_target,
             credentials=credentials,
             ssl_channel_credentials=_local_credentials(),
+            channel=_channel(SearchServiceGrpcTransport),
         )
     return SearchServiceClient(transport=transport)
 
@@ -347,7 +373,11 @@ def search_client_with_api_key(fake: FakeDiscoveryEngine, api_key: str) -> Any:
 
     def transport(**kwargs: Any) -> Any:
         kwargs["host"] = fake.secure_target
-        return SearchServiceGrpcTransport(ssl_channel_credentials=_local_credentials(), **kwargs)
+        return SearchServiceGrpcTransport(
+            ssl_channel_credentials=_local_credentials(),
+            channel=_channel(SearchServiceGrpcTransport),
+            **kwargs,
+        )
 
     return SearchServiceClient(client_options={"api_key": api_key}, transport=transport)
 
@@ -366,6 +396,7 @@ def async_search_client(fake: FakeDiscoveryEngine, credentials: Any = None) -> A
             host=fake.secure_target,
             credentials=credentials,
             ssl_channel_credentials=_local_credentials(),
+            channel=_channel(SearchServiceGrpcAsyncIOTransport),
         )
     return SearchServiceAsyncClient(transport=transport)
 
@@ -385,6 +416,7 @@ def answer_client(fake: FakeDiscoveryEngine, credentials: Any = None) -> Any:
             host=fake.secure_target,
             credentials=credentials,
             ssl_channel_credentials=_local_credentials(),
+            channel=_channel(ConversationalSearchServiceGrpcTransport),
         )
     return ConversationalSearchServiceClient(transport=transport)
 
@@ -404,6 +436,7 @@ def async_answer_client(fake: FakeDiscoveryEngine, credentials: Any = None) -> A
             host=fake.secure_target,
             credentials=credentials,
             ssl_channel_credentials=_local_credentials(),
+            channel=_channel(ConversationalSearchServiceGrpcAsyncIOTransport),
         )
     return ConversationalSearchServiceAsyncClient(transport=transport)
 

@@ -19,6 +19,7 @@ from _discoveryengine_support import (
     METADATA_TOKEN,
     UNSEEN_ACCESS_TOKEN,
     UNSEEN_API_KEY,
+    UNSEEN_REFRESH_TOKEN,
     FakeDiscoveryEngine,
     answer_client,
     async_search_client,
@@ -103,14 +104,20 @@ def test_api_key_credentials_on_the_transport_are_never_exported(fake):
     assert API_KEY not in traced.wire()
 
 
-def test_auth_metadata_passed_per_call_is_never_exported(fake):
-    metadata = [("authorization", "Bearer " + METADATA_TOKEN)]
+@pytest.mark.parametrize(
+    "key, value",
+    [("authorization", "Bearer " + METADATA_TOKEN), ("x-goog-api-key", METADATA_TOKEN)],
+    ids=["authorization", "x-goog-api-key"],
+)
+def test_auth_metadata_passed_per_call_is_never_exported(fake, key, value):
+    metadata = [(key, value)]
     with instrumented(capture_query=True) as traced:
         with pytest.raises(core_exceptions.PermissionDenied):
             search_client(fake).search(request=search_request(FAIL_DENIED), metadata=metadata)
         answer_client(fake).answer_query(request=answer_request(), metadata=metadata)
 
-    assert fake.calls[0].metadata["authorization"] == "Bearer " + METADATA_TOKEN
+    assert fake.calls[0].metadata[key.lower()] == value
+    assert METADATA_TOKEN in str(fake.calls[0].metadata)
     assert METADATA_TOKEN not in traced.wire()
     # No request metadata is recorded as an attribute.
     for span in traced.spans():
@@ -137,8 +144,54 @@ def test_token_shaped_strings_the_client_never_held_are_redacted(fake):
     span = traced.one()
     for text in _error_texts(span):
         assert text
-        for secret in (UNSEEN_ACCESS_TOKEN, UNSEEN_API_KEY, BEARER_VALUE, "ya29.", "AIza"):
+        for secret in (
+            UNSEEN_ACCESS_TOKEN,
+            UNSEEN_API_KEY,
+            UNSEEN_REFRESH_TOKEN,
+            BEARER_VALUE,
+            "ya29.",
+            "AIza",
+            "1//",
+        ):
             assert secret not in text, secret
+        assert "Bearer [redacted]" in text
+
+
+def test_the_bearer_pass_runs_on_server_text_only(fake):
+    # A captured query is the user's words: "bearer <word>" stays. Token
+    # shapes and held credentials are still removed from it.
+    query = "bearer responsibility " + UNSEEN_ACCESS_TOKEN
+    with instrumented(capture_query=True) as traced:
+        search_client(fake).search(request=search_request(query))
+
+    assert attrs(traced.one())["input.value"] == "bearer responsibility [redacted]"
+
+
+def test_refresh_token_and_client_secret_are_never_exported():
+    from google.oauth2.credentials import Credentials
+
+    refresh_token = "placeholder-refresh-token-value"
+    client_secret = "placeholder-client-secret-value"
+
+    class Transport:
+        _credentials = Credentials(
+            token=None, refresh_token=refresh_token, client_id="client-id", client_secret=client_secret
+        )
+
+    class Client:
+        _transport = Transport()
+        _client_options = None
+
+    error = core_exceptions.Unauthenticated(
+        "refresh failed for {0} with {1}".format(refresh_token, client_secret)
+    )
+    span = _call_wrapper(
+        _wrappers.OperationWrapper, "search", Client(), error, search_request("q"), capture_query=True
+    )
+
+    wire = span.to_json()
+    assert refresh_token not in wire and client_secret not in wire
+    assert event(span, "exception")["exception.message"] == "401 refresh failed for [redacted] with [redacted]"
 
 
 def test_server_unavailable_records_its_code(fake):
