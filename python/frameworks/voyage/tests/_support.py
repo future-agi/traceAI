@@ -36,16 +36,19 @@ VOYAGE_KEY = "pa-placeholder-voyage-key-must-not-be-exported"
 EMBED_MODEL = "voyage-3.5"
 RERANK_MODEL = "rerank-2.5"
 
-# Content the tests send or the fake returns. None of it may reach a span
-# unless content capture is switched on.
+# Content the tests send or the fake returns. By default only the rerank
+# query (and the scores) may reach a span; texts and documents need
+# capture_content=True, and the TraceConfig hide flags drop each kind.
 TEXTS = ["TEXT-ALPHA-MUST-NOT-BE-EXPORTED", "TEXT-BETA-MUST-NOT-BE-EXPORTED"]
-QUERY = "QUERY-MUST-NOT-BE-EXPORTED"
+QUERY = "QUERY-RECORDED-UNLESS-INPUTS-ARE-HIDDEN"
 DOCUMENTS = [
     "DOC-ONE-MUST-NOT-BE-EXPORTED",
     "DOC-TWO-MUST-NOT-BE-EXPORTED",
     "DOC-THREE-MUST-NOT-BE-EXPORTED",
 ]
 CONTENT_MARKERS = tuple(TEXTS) + (QUERY,) + tuple(DOCUMENTS)
+# Recorded only with capture_content=True.
+OPT_IN_MARKERS = tuple(TEXTS) + tuple(DOCUMENTS)
 
 # Vectors: every component is VECTOR_BASE + k * 2**-9, exact in float32, so
 # the decoded values are predictable and searchable on the wire.

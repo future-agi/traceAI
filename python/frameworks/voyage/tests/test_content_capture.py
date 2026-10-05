@@ -1,4 +1,5 @@
-"""Content capture: off by default; opt-in honours TraceConfig and the key redaction."""
+"""Content: the rerank query and scores by default (PRD J2 / AC-03); texts and
+documents only with capture_content=True; TraceConfig and key redaction apply."""
 
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from traceai_voyage import VoyageInstrumentor  # noqa: E402
 from _support import (  # noqa: E402
     DOCUMENTS,
     EMBED_MODEL,
+    OPT_IN_MARKERS,
     QUERY,
     RERANK_MODEL,
     SCORE_MARKERS,
@@ -29,6 +31,11 @@ from _support import (  # noqa: E402
 )
 
 OTHER_KEY = "al-placeholder-module-key-must-not-be-exported"
+# The fake returns documents 1 and 0 for top_k=2, in that order.
+TOP_2_SCORES = [
+    {"index": 1, "relevance_score": SCORES[1]},
+    {"index": 0, "relevance_score": SCORES[0]},
+]
 
 
 @pytest.fixture()
@@ -44,6 +51,106 @@ def _embed_and_rerank(fake, **options):
         voyage.rerank(QUERY, DOCUMENTS, model=RERANK_MODEL, top_k=2)
     embed, rerank = traced.spans()
     return traced, attrs(embed), attrs(rerank)
+
+
+def test_default_config_records_the_rerank_query_and_scores(fake):
+    _traced, _embed, rerank = _embed_and_rerank(fake)
+
+    # PRD J2 step 2 / AC-03: the RERANKER span carries the query and scores.
+    assert rerank["reranker.query"] == QUERY
+    assert rerank["input.value"] == QUERY
+    assert rerank["input.mime_type"] == "text/plain"
+    assert json.loads(rerank["output.value"]) == TOP_2_SCORES
+    assert rerank["output.mime_type"] == "application/json"
+
+
+def test_default_config_records_no_embed_texts_rerank_documents_or_vectors(fake):
+    traced, embed, rerank = _embed_and_rerank(fake)
+
+    for key in ("input.value", "input.mime_type", "output.value", "output.mime_type"):
+        assert key not in embed, key
+    for key in ("reranker.input_documents", "reranker.output_documents"):
+        assert not any(name.startswith(key) for name in rerank), key
+    wire = traced.wire()
+    for marker in OPT_IN_MARKERS + (VECTOR_MARKER, VOYAGE_KEY):
+        assert marker not in wire, marker
+    # The counts stay exact.
+    assert embed["voyage.embedding.count"] == 2
+    assert rerank["voyage.rerank.document_count"] == 3
+
+
+def test_the_default_query_is_key_redacted_and_capped(fake, monkeypatch):
+    monkeypatch.setattr(voyageai, "api_key", OTHER_KEY)
+    with instrumented() as traced:
+        voyage = client(fake)
+        voyage.rerank("q {0} {1}".format(VOYAGE_KEY, OTHER_KEY), DOCUMENTS, model=RERANK_MODEL)
+        voyage.rerank("é" * 3000, DOCUMENTS, model=RERANK_MODEL)  # 6000 UTF-8 bytes
+
+    keyed, long = (attrs(span) for span in traced.spans())
+    assert keyed["reranker.query"] == keyed["input.value"] == "q [redacted] [redacted]"
+    # Cut to 2 KB of UTF-8 on a character boundary.
+    assert long["reranker.query"] == long["input.value"] == "é" * 1024
+    wire = traced.wire()
+    assert VOYAGE_KEY not in wire
+    assert OTHER_KEY not in wire
+
+
+_HIDE_CASES = [
+    # (TraceConfig kwargs, environment, query kept, scores kept)
+    pytest.param({"hide_inputs": True}, {}, False, True, id="hide_inputs"),
+    pytest.param({"hide_input_text": True}, {}, False, True, id="hide_input_text"),
+    pytest.param({"hide_outputs": True}, {}, True, False, id="hide_outputs"),
+    pytest.param({"hide_inputs": True, "hide_outputs": True}, {}, False, False, id="hide_both"),
+    pytest.param({}, {"FI_HIDE_INPUTS": "true"}, False, True, id="FI_HIDE_INPUTS"),
+    pytest.param({}, {"FI_HIDE_OUTPUTS": "true"}, True, False, id="FI_HIDE_OUTPUTS"),
+    pytest.param(
+        {},
+        {"FI_HIDE_INPUTS": "true", "FI_HIDE_OUTPUTS": "true"},
+        False,
+        False,
+        id="FI_HIDE_both",
+    ),
+]
+
+
+@pytest.mark.parametrize("capture_content", [False, True], ids=["default", "capture"])
+@pytest.mark.parametrize(("config", "environment", "query_kept", "scores_kept"), _HIDE_CASES)
+def test_hide_flags_drop_the_query_and_the_scores_independently(
+    fake, monkeypatch, capture_content, config, environment, query_kept, scores_kept
+):
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    options = {"capture_content": capture_content}
+    if config:
+        options["config"] = TraceConfig(**config)
+    traced, embed, rerank = _embed_and_rerank(fake, **options)
+    wire = traced.wire()
+
+    if query_kept:
+        assert rerank["reranker.query"] == QUERY
+    else:
+        for values in (embed, rerank):
+            assert "reranker.query" not in values
+            assert "input.value" not in values
+            assert "input.mime_type" not in values
+        assert QUERY not in wire
+    # Scores are numbers, not input text: hiding inputs keeps them (PRD J2).
+    if scores_kept:
+        assert json.loads(rerank["output.value"]) == TOP_2_SCORES
+    else:
+        assert "output.value" not in rerank
+        assert "output.mime_type" not in rerank
+        for marker in SCORE_MARKERS:
+            assert marker not in wire, marker
+    # Texts and documents only with capture on and inputs not hidden.
+    for marker in OPT_IN_MARKERS:
+        assert (marker in wire) is (capture_content and query_kept), marker
+    # Counts stay exact whatever is hidden; vectors and the key never appear.
+    assert embed["voyage.embedding.count"] == 2
+    assert rerank["voyage.rerank.document_count"] == 3
+    assert rerank["voyage.rerank.result_count"] == 2
+    assert VECTOR_MARKER not in wire
+    assert VOYAGE_KEY not in wire
 
 
 def test_capture_content_records_inputs_and_scores_but_never_vectors(fake):

@@ -30,6 +30,7 @@ from _support import (  # noqa: E402
     DIMENSION,
     DOCUMENTS,
     EMBED_MODEL,
+    OPT_IN_MARKERS,
     QUERY,
     RERANK_MODEL,
     SCORE_MARKERS,
@@ -145,13 +146,19 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
     assert "gen_ai.usage.total_tokens" not in failed
 
 
-def test_no_key_vectors_or_content_are_exported_by_default(monkeypatch):
+def test_only_the_query_and_scores_are_exported_by_default(monkeypatch):
     with FakeVoyage() as fake, Receiver() as receiver:
         spans, exports = _journey(receiver, fake, monkeypatch)
 
     wire = json.dumps(spans) + json.dumps(exports)
-    for secret in (VOYAGE_KEY, VECTOR_MARKER) + CONTENT_MARKERS + SCORE_MARKERS:
+    # Texts, documents, vectors and the key need capture_content (or never).
+    for secret in (VOYAGE_KEY, VECTOR_MARKER) + OPT_IN_MARKERS:
         assert secret not in wire, secret
+    # PRD J2 / AC-03: the rerank query and scores are exported by default.
+    for rerank_span in _by_name(spans)["voyage.rerank"]:
+        rerank = _flatten_attributes(rerank_span["attributes"])
+        assert rerank["reranker.query"] == QUERY
+        assert SCORE_MARKERS[1] in rerank["output.value"]
 
 
 def test_capture_content_control_run_puts_the_markers_on_the_wire(monkeypatch):

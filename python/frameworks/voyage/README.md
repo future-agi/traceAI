@@ -100,8 +100,27 @@ it, the trace counts those tokens twice.
 
 ## Privacy and content capture
 
-By default a span carries no content: no texts, no rerank query or documents,
-no relevance scores, no vectors. To record content, opt in:
+By default the rerank span records the query and the relevance scores, as PRD
+J2 / AC-03 require, so this default is not a deviation from the spec. Embed
+texts and rerank documents are recorded only with `capture_content=True`.
+Embedding vectors are never recorded.
+
+| Attribute | Calls | Value | Recorded | Dropped by |
+|---|---|---|---|---|
+| `reranker.query` | rerank | The query. | By default | `hide_inputs`, `hide_input_text` |
+| `input.value` (`input.mime_type` = `text/plain`) | rerank | The query. | By default | `hide_inputs`, `hide_input_text` |
+| `output.value` (`output.mime_type` = `application/json`) | rerank | JSON list of `{"index", "relevance_score"}` in the client's order. | By default | `hide_outputs` |
+| `input.value` (`application/json`) | rerank | JSON `{"query": ..., "documents": [...]}`, in place of the plain query. | Only with `capture_content=True` | `hide_inputs`, `hide_input_text` |
+| `input.value` (`application/json`) | embed | JSON list of the texts. | Only with `capture_content=True` | `hide_inputs`, `hide_input_text` |
+
+Hiding inputs keeps the scores (they are numbers, not input text), and hiding
+outputs keeps the query. The counts (`voyage.embedding.count`,
+`voyage.rerank.document_count`, `voyage.rerank.result_count`) stay whatever is
+hidden. `TraceConfig` reads `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` from the
+environment, so `FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true` records no content
+at all.
+
+To record embed texts and rerank documents too, opt in:
 
 ```python
 from fi_instrumentation import TraceConfig
@@ -113,19 +132,9 @@ VoyageInstrumentor().instrument(
 )
 ```
 
-With `capture_content=True`:
-
-| Attribute | Calls | Value | Dropped by |
-|---|---|---|---|
-| `input.value` (`input.mime_type` = `application/json`) | embed | JSON list of the texts. | `hide_inputs`, `hide_input_text` |
-| `reranker.query` | rerank | The query. | `hide_inputs`, `hide_input_text` |
-| `input.value` (`application/json`) | rerank | JSON `{"query": ..., "documents": [...]}`. | `hide_inputs`, `hide_input_text` |
-| `output.value` (`application/json`) | rerank | JSON list of `{"index", "relevance_score"}` in the client's order. | `hide_outputs` |
-
-Captured content holds at most 64 texts or documents, each cut to 2 KB of
-UTF-8 on a character boundary; the counts above stay exact. `TraceConfig`
-reads `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` from the environment, and
-`pii_redaction=True` applies to every recorded value.
+Captured content holds at most 64 texts or documents, and the query and each
+text or document are cut to 2 KB of UTF-8 on a character boundary; the counts
+stay exact. `pii_redaction=True` applies to every recorded value.
 
 Embedding vectors are never recorded, with or without capture, and
 `hide_embedding_vectors` has nothing to hide here.
@@ -133,8 +142,8 @@ Embedding vectors are never recorded, with or without capture, and
 The Voyage API key is never recorded. The instrumentor does not read it from
 the environment itself; it takes the key the client holds (`client.api_key`,
 `client._params["api_key"]`) and a module-level `voyageai.api_key`, and
-replaces any occurrence in captured content, error messages and stack traces
-with `[redacted]`.
+replaces any occurrence in the recorded query, captured content, error
+messages and stack traces with `[redacted]`.
 
 ## Errors and cancellation
 

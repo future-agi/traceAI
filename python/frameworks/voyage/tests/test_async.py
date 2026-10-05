@@ -12,9 +12,9 @@ pytest.importorskip("voyageai", reason="voyageai must be installed to test its i
 import voyageai  # noqa: E402
 
 from _support import (  # noqa: E402
-    CONTENT_MARKERS,
     DOCUMENTS,
     EMBED_MODEL,
+    OPT_IN_MARKERS,
     QUERY,
     RERANK_MODEL,
     SCORE_MARKERS,
@@ -69,7 +69,7 @@ def test_async_rerank_matches_the_sync_span(fake):
     assert status_code(async_span) == "OK"
 
 
-def test_async_spans_carry_no_content_by_default(fake):
+def test_async_spans_carry_the_same_default_content_as_sync(fake):
     async def calls() -> None:
         voyage = async_client(fake)
         await voyage.embed(TEXTS, model=EMBED_MODEL)
@@ -78,10 +78,17 @@ def test_async_spans_carry_no_content_by_default(fake):
     with instrumented() as traced:
         _run(calls)
 
-    assert [span.name for span in traced.spans()] == ["voyage.embed", "voyage.rerank"]
+    embed, rerank = traced.spans()
+    assert [embed.name, rerank.name] == ["voyage.embed", "voyage.rerank"]
+    # Query and scores by default (PRD J2 / AC-03); texts, documents,
+    # vectors and the key never without capture_content.
+    assert attrs(rerank)["reranker.query"] == QUERY
+    assert "output.value" in attrs(rerank)
+    assert "input.value" not in attrs(embed)
     wire = traced.wire()
-    for marker in CONTENT_MARKERS + SCORE_MARKERS + (VECTOR_MARKER, VOYAGE_KEY):
+    for marker in OPT_IN_MARKERS + (VECTOR_MARKER, VOYAGE_KEY):
         assert marker not in wire, marker
+    assert SCORE_MARKERS[1] in wire
 
 
 def test_async_errors_match_the_sync_error_span(fake):

@@ -22,7 +22,7 @@ PYTHON_ROOT = PACKAGE.parents[1]
 sys.path.insert(0, str(PYTHON_ROOT / "tests"))
 
 from _support import (  # noqa: E402
-    CONTENT_MARKERS,
+    OPT_IN_MARKERS,
     SCORE_MARKERS,
     VECTOR_MARKER,
     VOYAGE_KEY,
@@ -82,9 +82,11 @@ def test_example_exports_one_embedding_and_one_reranker_span():
             assert resource["project_name"] == "voyage-example"
             assert resource["project_type"] == "observe"
 
-    # The example's own documents and query, its key, vectors and scores
-    # stay off the wire (content capture is off by default).
+    # The example's documents, its key and vectors stay off the wire (texts
+    # and documents need capture_content). The rerank query and scores are
+    # recorded by default (PRD J2 / AC-03).
     wire = json.dumps(spans)
-    example_markers = ("EXAMPLE-DOC", "EXAMPLE-QUERY")
-    for marker in (VOYAGE_KEY, VECTOR_MARKER) + example_markers + CONTENT_MARKERS + SCORE_MARKERS:
+    for marker in (VOYAGE_KEY, VECTOR_MARKER, "EXAMPLE-DOC") + OPT_IN_MARKERS:
         assert marker not in wire, marker
+    assert by_name["voyage.rerank"]["reranker.query"].startswith("EXAMPLE-QUERY")
+    assert SCORE_MARKERS[1] in by_name["voyage.rerank"]["output.value"]

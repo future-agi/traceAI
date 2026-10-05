@@ -38,12 +38,16 @@ class VoyageInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     ``instrument()`` accepts:
 
     * ``tracer_provider``: the provider to use (default: the global one).
-    * ``config``: a ``fi_instrumentation.TraceConfig``. ``hide_inputs`` and
-      ``hide_outputs`` apply to captured content; ``pii_redaction`` applies to
-      every recorded value.
-    * ``capture_content``: ``False`` by default. When ``True``, spans also
-      record the texts, the rerank query and documents, and the rerank scores,
-      subject to ``config``. Embedding vectors are never recorded.
+    * ``config``: a ``fi_instrumentation.TraceConfig``. ``hide_inputs`` (or
+      ``hide_input_text``, or ``FI_HIDE_INPUTS``) drops the rerank query and
+      any captured texts and documents; ``hide_outputs`` (or
+      ``FI_HIDE_OUTPUTS``) drops the rerank scores. Hiding inputs keeps the
+      scores. ``pii_redaction`` applies to every recorded value.
+    * ``capture_content``: ``False`` by default. By default only the rerank
+      span records content: the query (``reranker.query`` and a plain-text
+      ``input.value``) and the scores (``output.value``), as PRD J2 / AC-03
+      require; embed spans record none. ``True`` also records the embed texts
+      and the rerank documents. Embedding vectors are never recorded.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("voyageai", reason="voyageai must be installed to test its instrumentor")
 
 from _support import (  # noqa: E402
-    CONTENT_MARKERS,
     DOCUMENTS,
     QUERY,
     RERANK_MODEL,
-    SCORE_MARKERS,
+    SCORES,
     VOYAGE_KEY,
     FakeVoyage,
     attrs,
@@ -53,18 +54,23 @@ def test_rerank_emits_one_reranker_span_with_counts_top_k_and_tokens(fake):
     assert status_code(span) == "OK"
 
 
-def test_rerank_span_carries_no_query_documents_scores_or_key_by_default(fake):
+def test_rerank_span_carries_the_query_and_scores_but_no_documents_or_key_by_default(fake):
     with instrumented() as traced:
         client(fake).rerank(QUERY, DOCUMENTS, model=RERANK_MODEL, top_k=2)
 
     values = attrs(traced.one())
-    for key in ("reranker.query", "reranker.input_documents", "reranker.output_documents"):
+    # PRD J2 / AC-03: query and scores are on by default; documents are opt-in.
+    assert values["reranker.query"] == QUERY
+    assert values["input.value"] == QUERY
+    assert json.loads(values["output.value"]) == [
+        {"index": 1, "relevance_score": SCORES[1]},
+        {"index": 0, "relevance_score": SCORES[0]},
+    ]
+    for key in ("reranker.input_documents", "reranker.output_documents"):
         assert not any(name.startswith(key) for name in values), key
-    assert "input.value" not in values
-    assert "output.value" not in values
     wire = traced.wire()
     assert VOYAGE_KEY not in wire
-    for marker in CONTENT_MARKERS + SCORE_MARKERS:
+    for marker in DOCUMENTS:
         assert marker not in wire, marker
 
 

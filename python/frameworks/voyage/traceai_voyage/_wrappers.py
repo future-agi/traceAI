@@ -2,9 +2,11 @@
 
 One span per public call. The span is current while the SDK sends HTTP, so an
 HTTP client instrumentation nests under it, and it covers the client's own
-retries. Content (texts, query, documents, scores) is recorded only with
-``capture_content=True``; embedding vectors are never recorded. Nothing in
-this module may change what the caller gets back or raises.
+retries. By default the rerank span records the query and the scores (PRD J2,
+AC-03); embed texts and rerank documents are recorded only with
+``capture_content=True``. TraceConfig ``hide_inputs`` / ``hide_outputs`` drop
+them. Embedding vectors are never recorded. Nothing in this module may change
+what the caller gets back or raises.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ RERANK_DOCUMENT_COUNT = "voyage.rerank.document_count"
 RERANK_RESULT_COUNT = "voyage.rerank.result_count"
 SERVER_ADDRESS = "server.address"
 JSON_MIME_TYPE = "application/json"
+TEXT_MIME_TYPE = "text/plain"
 
 # Captured content limits: at most this many texts or documents, each cut to
 # this many UTF-8 bytes on a character boundary. Counts stay exact.
@@ -254,21 +257,34 @@ def _input_content(
     kwargs: Mapping[str, Any],
     secrets: Sequence[str],
     config: TraceConfig,
+    capture_content: bool,
 ) -> Dict[str, Any]:
-    """Texts, query and documents, only with capture on and inputs not hidden."""
+    """Input content, unless TraceConfig hides inputs.
+
+    By default only the rerank query (PRD J2, AC-03): ``reranker.query`` and a
+    plain-text ``input.value``. With ``capture_content`` the embed texts, and
+    the rerank query with its documents as JSON in ``input.value``.
+    """
     if _hides_inputs(config):
         return {}
     attributes: Dict[str, Any] = {}
     if operation is EMBED:
+        if not capture_content:
+            return attributes
         texts = _captured_list(_argument(operation, args, kwargs, "texts"), secrets)
         if texts is not None:
             attributes[SpanAttributes.INPUT_VALUE] = json.dumps(texts, ensure_ascii=False)
             attributes[SpanAttributes.INPUT_MIME_TYPE] = JSON_MIME_TYPE
         return attributes
     query = _argument(operation, args, kwargs, "query")
-    documents = _captured_list(_argument(operation, args, kwargs, "documents"), secrets)
     if query is not None:
         attributes[RerankerAttributes.RERANKER_QUERY] = _captured_text(query, secrets)
+    if not capture_content:
+        if query is not None:
+            attributes[SpanAttributes.INPUT_VALUE] = attributes[RerankerAttributes.RERANKER_QUERY]
+            attributes[SpanAttributes.INPUT_MIME_TYPE] = TEXT_MIME_TYPE
+        return attributes
+    documents = _captured_list(_argument(operation, args, kwargs, "documents"), secrets)
     payload: Dict[str, Any] = {}
     if query is not None:
         payload["query"] = attributes[RerankerAttributes.RERANKER_QUERY]
@@ -318,7 +334,10 @@ def _response_attributes(
 
 
 def _output_content(operation: Operation, result: Any, config: TraceConfig) -> Dict[str, Any]:
-    """Rerank scores in the client's order, only with capture on and outputs not hidden."""
+    """Rerank scores in the client's order, by default, unless outputs are hidden.
+
+    Scores are numbers, not input text, so hiding inputs keeps them (PRD J2).
+    """
     if operation is not RERANK or config.hide_outputs:
         return {}
     results = getattr(result, "results", None)
@@ -403,13 +422,19 @@ class _Call:
             attributes.update(_request_attributes(operation, instance, args, kwargs))
         except Exception:
             logger.debug("Could not read Voyage request attributes", exc_info=True)
-        if wrapper.capture_content:
-            try:
-                attributes.update(
-                    _input_content(operation, args, kwargs, self._secrets, wrapper.config)
+        try:
+            attributes.update(
+                _input_content(
+                    operation,
+                    args,
+                    kwargs,
+                    self._secrets,
+                    wrapper.config,
+                    wrapper.capture_content,
                 )
-            except Exception:
-                logger.debug("Could not capture Voyage request content", exc_info=True)
+            )
+        except Exception:
+            logger.debug("Could not capture Voyage request content", exc_info=True)
         try:
             self._span = wrapper.tracer.start_span(operation.span_name, attributes=attributes)
         except Exception:
@@ -447,11 +472,10 @@ class _Call:
                 )
             except Exception:
                 logger.debug("Could not read Voyage response attributes", exc_info=True)
-            if self._wrapper.capture_content:
-                try:
-                    _set_attributes(span, _output_content(operation, result, self._wrapper.config))
-                except Exception:
-                    logger.debug("Could not capture Voyage response content", exc_info=True)
+            try:
+                _set_attributes(span, _output_content(operation, result, self._wrapper.config))
+            except Exception:
+                logger.debug("Could not capture Voyage response content", exc_info=True)
             span.set_status(Status(StatusCode.OK))
         except Exception:
             logger.debug("Could not finish the Voyage span", exc_info=True)
