@@ -63,3 +63,20 @@ def test_query_is_capped_at_1kb_of_utf8_on_a_character_boundary(fake, query):
     # The longest whole-character prefix that fits: one more character would not.
     assert recorded == query[: len(recorded)]
     assert len(query[: len(recorded) + 1].encode("utf-8")) > 1024
+
+
+def test_input_value_carries_the_same_redacted_capped_query(fake):
+    query = "{0} {1}".format(EXA_KEY, "\u20ac" * 500)
+    with instrumented() as traced:
+        client = Exa(api_key=EXA_KEY, base_url=fake.origin)
+        client.search(query)
+        client.answer(query)
+        list(client.stream_search(query))
+
+    spans = traced.spans()
+    assert [span.name for span in spans] == ["exa.search", "exa.answer", "exa.search"]
+    for span in spans:
+        values = attrs(span)
+        assert values["input.value"] == values["fi.retrieval.query"]
+        assert values["input.value"].startswith("[redacted] \u20ac")
+        assert len(values["input.value"].encode("utf-8")) <= 1024

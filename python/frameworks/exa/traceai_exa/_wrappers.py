@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 _FI_SPAN_KIND = "fi.span.kind"
+_INPUT_VALUE = "input.value"
 _RETRIEVAL_QUERY = "fi.retrieval.query"
 _RETRIEVAL_DOCUMENT_COUNT = "fi.retrieval.document_count"
 _RETRIEVER = "RETRIEVER"
@@ -83,11 +84,14 @@ class _BaseWrapper:
     def _start_span(
         self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
     ) -> Span:
+        query = _query_from_call(instance, args, kwargs)
         return self._tracer.start_span(
             self._span_name,
             attributes={
                 _FI_SPAN_KIND: _RETRIEVER,
-                _RETRIEVAL_QUERY: _query_from_call(instance, args, kwargs),
+                _RETRIEVAL_QUERY: query,
+                # The backend input panel reads input.value; keep both keys.
+                _INPUT_VALUE: query,
             },
         )
 

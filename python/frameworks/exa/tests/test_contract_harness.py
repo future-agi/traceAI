@@ -158,6 +158,7 @@ def test_real_client_calls_reach_the_collector_contract(fake_exa, monkeypatch):
     ok = _flatten_attributes(ok_search["attributes"])
     assert ok["fi.span.kind"] == "RETRIEVER"
     assert ok["fi.retrieval.query"] == "open telemetry retrieval"
+    assert ok["input.value"] == "open telemetry retrieval"
     assert int(ok["fi.retrieval.document_count"]) == 2
     assert ok_search.get("status", {}).get("code") in (None, "STATUS_CODE_OK", "STATUS_CODE_UNSET")
 
