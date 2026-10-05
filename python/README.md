@@ -165,6 +165,7 @@ trace_provider = register(
 | `traceai-bedrock` | AWS Bedrock |
 | `traceai-litellm` | LiteLLM |
 | `traceai-portkey` | Portkey |
+| `traceai-voyage` | Voyage AI (embeddings, rerank) |
 
 ### Agent Frameworks
 
