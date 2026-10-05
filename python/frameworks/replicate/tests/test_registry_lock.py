@@ -1,9 +1,10 @@
 """Releasing a held-open prediction inside a registry operation must not deadlock.
 
 The cyclic GC can run a ``PendingPrediction.__del__`` at any allocation,
-including while this thread holds the pending-span registry's lock; that
-``__del__`` ends the span and removes it from the registry. The scenario runs
-in a subprocess so that a regression is a timeout, not a hung test session.
+including while this thread holds the pending-span registry's lock. That
+``__del__`` only queues the finish; ``uninstrument()`` drains the queue, ends
+the span and removes it from the registry. The scenario runs in a subprocess
+so that a regression is a timeout, not a hung test session.
 """
 
 from __future__ import annotations

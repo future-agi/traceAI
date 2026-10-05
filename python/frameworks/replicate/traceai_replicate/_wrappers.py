@@ -10,9 +10,9 @@ Span model (TH-8320):
   prediction is not terminal yet, the span stays open on that prediction so a
   later ``wait`` / ``cancel`` ends it (one span, not two). If neither is
   called, it ends with the create-time status and the create-time end
-  timestamp when the prediction object is released, when the tracer
-  provider is flushed or shut down, at the first traced call after it has
-  been held for ``max_pending_seconds`` (default 600), at
+  timestamp at the first traced call after the prediction object is
+  released or after it has been held for ``max_pending_seconds`` (default
+  600), when the tracer provider is flushed or shut down, at
   ``uninstrument()``, or at interpreter exit.
 * ``replicate.prediction.wait`` / ``replicate.predictions.cancel`` - wait or
   cancel on a prediction that has no open create span.
@@ -24,6 +24,7 @@ logged at DEBUG and never replaces the vendor's result or exception.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextvars
 import copy
 import logging
@@ -168,6 +169,15 @@ class _Call:
         """End a create span that no wait/cancel continued, as of create time."""
         self.finish(use_snapshot=True, end_time=self.create_end)
 
+    def release(self, cancelled: bool) -> None:
+        """For ``__del__``: queue the finish; never run span processors here.
+
+        ``cancelled`` is an abandoned stream/iterator, which ends as of now;
+        otherwise a held create span, which ends as of create time.
+        """
+        if not self._finished:
+            _RELEASED.append((self, cancelled, time.time_ns()))
+
     def finish(
         self,
         *,
@@ -283,6 +293,28 @@ class _Call:
         self.span.set_status(Status(StatusCode.ERROR, description))
 
 
+# Finishes queued by ``__del__``. The cyclic GC can run ``__del__`` on any
+# thread at any allocation, even while that thread holds a lock on the export
+# path (an inline SimpleSpanProcessor export holds the HTTP pool's lock), so
+# ``__del__`` only appends here (``deque.append`` is atomic) and the span ends
+# later, at a safe point: the next traced call, a registry operation, the
+# provider's force_flush/shutdown, uninstrument() or exit.
+_RELEASED: "collections.deque[Tuple[_Call, bool, int]]" = collections.deque()
+
+
+def drain_released() -> None:
+    """End the spans of traced objects released since the last drain."""
+    while True:
+        try:
+            call, cancelled, released_at = _RELEASED.popleft()
+        except IndexError:
+            return
+        if cancelled:
+            _guard(lambda: call.finish(cancelled=True, end_time=released_at), None)
+        else:
+            _guard(call.expire, None)
+
+
 class PendingRegistry:
     """Create spans still open on a prediction, by prediction id.
 
@@ -295,8 +327,8 @@ class PendingRegistry:
     def __init__(self, max_pending_seconds: float = DEFAULT_MAX_PENDING_SECONDS) -> None:
         self._calls: Dict[str, Tuple[_Call, float]] = {}
         self._max_age = max_pending_seconds
-        # Re-entrant: a PendingPrediction released by the cyclic GC while this
-        # thread holds the lock ends its span and calls discard() right here.
+        # Re-entrant as a safeguard. No span ends while it is held: expiry runs
+        # outside it, and __del__ only queues (see _RELEASED).
         self._lock = threading.RLock()
 
     def add(self, prediction_id: str, call: _Call) -> None:
@@ -323,7 +355,8 @@ class PendingRegistry:
                 del self._calls[prediction_id]
 
     def touch(self) -> None:
-        """End the held spans that are older than the cap."""
+        """End released spans, then the held spans older than the cap."""
+        drain_released()
         deadline = _monotonic() - self._max_age
         stale: List[_Call] = []
         with self._lock:
@@ -338,6 +371,7 @@ class PendingRegistry:
             call.expire()
 
     def expire_all(self) -> None:
+        drain_released()
         with self._lock:
             calls = [call for call, _ in self._calls.values()]
             self._calls.clear()
@@ -358,7 +392,8 @@ class PendingPrediction(wrapt.ObjectProxy):  # type: ignore[misc]
 
     An ObjectProxy, so ``isinstance(p, Prediction)`` and every field and method
     are the vendor's. Copying or pickling it yields a plain Prediction.
-    Releasing it ends a span that wait/cancel never continued.
+    Releasing it queues the end of a span that wait/cancel never continued
+    (see ``_RELEASED``).
     """
 
     def __init__(self, prediction: Any, call: _Call) -> None:
@@ -395,15 +430,16 @@ class PendingPrediction(wrapt.ObjectProxy):  # type: ignore[misc]
 
     def __del__(self) -> None:
         call = _call_of(self)
-        if call is not None and not call.finished:
-            _guard(call.expire, None)
+        if call is not None:
+            _guard(lambda: call.release(cancelled=False), None)
 
 
 class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     """A stream / run output generator whose span ends with the iteration.
 
     Completed: OK. ``close()`` before the end, or dropping it: ERROR
-    ``cancelled`` with ``replicate.cancelled``. An exception: ERROR. The span
+    ``cancelled`` with ``replicate.cancelled`` (a drop is queued, see
+    ``_RELEASED``, and keeps the drop time). An exception: ERROR. The span
     ends exactly once; ``close()`` closes the vendor generator (and its HTTP
     response) first and ends the span after, even if that close raises.
     """
@@ -440,8 +476,8 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
 
     def __del__(self) -> None:
         call = _call_of(self)
-        if call is not None and not call.finished:
-            _guard(lambda: call.finish(cancelled=True), None)
+        if call is not None:
+            _guard(lambda: call.release(cancelled=True), None)
 
 
 class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
@@ -482,8 +518,8 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
 
     def __del__(self) -> None:
         call = _call_of(self)
-        if call is not None and not call.finished:
-            _guard(lambda: call.finish(cancelled=True), None)
+        if call is not None:
+            _guard(lambda: call.release(cancelled=True), None)
 
 
 def _finish_or_wrap(call: _Call, result: Any, count_files: bool) -> Any:

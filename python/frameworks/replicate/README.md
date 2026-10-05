@@ -69,12 +69,12 @@ The span stays open on the returned prediction:
 - `wait()` or `cancel()` on it (or `predictions.cancel(prediction.id)`) ends
   that same span with the final status. Create followed by wait is one span.
 - If neither is called, the span ends with the status the create response
-  carried (`starting` or `processing`) and the time `create` returned. It is
-  exported when the prediction object is released, when the tracer provider
-  you passed to `instrument()` is flushed or shut down (`force_flush()`,
-  `shutdown()`, and the SIGTERM/SIGINT handler that `register()` installs,
-  which calls `shutdown()`), at the first traced call after it has been held
-  for `max_pending_seconds`, at `uninstrument()`, or at interpreter exit. A
+  carried (`starting` or `processing`) and the time `create` returned. That
+  happens at the first of: the next traced call after the prediction object
+  is released or after the span has been held for `max_pending_seconds`;
+  `force_flush()` or `shutdown()` on the tracer provider you passed to
+  `instrument()` (including the SIGTERM/SIGINT handler that `register()`
+  installs, which calls `shutdown()`); `uninstrument()`; interpreter exit. A
   `wait()` or `cancel()` after that gets its own span. Such a span is not a
   completion. This package never polls a prediction you did not wait for.
 
@@ -159,6 +159,12 @@ contain.
   stream/iterator is closed (`close()` / `aclose()`) or dropped before its
   end — the span ends once with status ERROR, description `cancelled`, and
   `replicate.cancelled` = `true`, without an exception event.
+- Nothing is exported from a finaliser. The garbage collector can release a
+  dropped stream, iterator or held prediction on any thread, even while that
+  thread holds an exporter's lock, so its span end is only queued then. It is
+  done, with the time the object was dropped (create time for a held
+  prediction), at the next traced call, the provider's `force_flush()` or
+  `shutdown()`, `uninstrument()`, or interpreter exit.
 - An error inside this instrumentation is logged at DEBUG and never changes
   the client's result or exception.
 

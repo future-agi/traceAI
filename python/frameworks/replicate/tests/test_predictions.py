@@ -14,6 +14,7 @@ pytest.importorskip("replicate", reason="replicate must be installed to test its
 
 from opentelemetry.trace import StatusCode  # noqa: E402
 from replicate.prediction import Prediction  # noqa: E402
+from traceai_replicate._wrappers import drain_released  # noqa: E402
 
 from _support import (  # noqa: E402
     DEPLOYMENT,
@@ -61,6 +62,7 @@ def test_create_without_wait_is_one_span_ended_at_create_and_never_polled():
         time.sleep(0.05)
         del prediction
         gc.collect()
+        drain_released()  # __del__ only queues the finish; end it here, explicitly
         span = traced.one()
 
     # AC-02: one span, the status the create response carried, and no poll.

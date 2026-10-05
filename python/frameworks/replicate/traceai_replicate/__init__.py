@@ -27,6 +27,7 @@ from traceai_replicate._wrappers import (
     LifecycleWrapper,
     PendingRegistry,
     RunWrapper,
+    drain_released,
 )
 from traceai_replicate.package import _instruments
 from traceai_replicate.version import __version__
@@ -213,8 +214,12 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             self._wrap(module_name, class_name, method, wrapper)
         self._rebind_module_functions()
         self._hook_provider(tracer_provider)
-        # Fallback for a provider whose methods could not be hooked; registered
-        # after register(), so it runs before the provider's own atexit shutdown.
+        # Fallbacks for a provider whose methods could not be hooked; registered
+        # after register(), so they run before the provider's own atexit
+        # shutdown. drain_released stays registered after uninstrument() for a
+        # stream that is still open then and released later.
+        atexit.unregister(drain_released)
+        atexit.register(drain_released)
         atexit.register(self._end_pending)
 
     def _wrap(self, module_name: str, class_name: str, method: str, wrapper: Any) -> None:

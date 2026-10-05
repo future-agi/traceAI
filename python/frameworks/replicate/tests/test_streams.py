@@ -13,6 +13,7 @@ pytest.importorskip("replicate", reason="replicate must be installed to test its
 
 from fi_instrumentation import TraceConfig  # noqa: E402
 from opentelemetry.trace import StatusCode  # noqa: E402
+from traceai_replicate._wrappers import drain_released  # noqa: E402
 
 from _support import (  # noqa: E402
     PROMPT,
@@ -100,6 +101,7 @@ def test_dropping_a_stream_mid_iteration_ends_its_span_as_cancelled():
         next(stream)
         del stream
         gc.collect()
+        drain_released()  # __del__ only queues the finish; end it here, explicitly
         _assert_cancelled_once(traced)
 
 

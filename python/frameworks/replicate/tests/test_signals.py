@@ -9,7 +9,8 @@ down, not from an ``atexit`` hook that runs afterwards.
 The script runs as a subprocess with the real ``register()`` OTLP exporter
 (batch and simple processors) and the real replicate client against the
 loopback fake. It creates a prediction, keeps it in a module global, signals
-that it is ready, and sleeps until the test sends the signal.
+that it is ready, and sleeps until the test sends the signal. A released
+variant drops the prediction first, so the span waits in the release queue.
 """
 
 from __future__ import annotations
@@ -55,16 +56,19 @@ ReplicateInstrumentor().instrument(tracer_provider=provider)
 client = replicate.Client(base_url=os.environ["REPLICATE_BASE_URL"])
 PREDICTION = client.predictions.create(model="{model}", input={{}})
 returned = time.time_ns()
+status = PREDICTION.status
+if os.environ["RELEASE"] == "1":
+    del PREDICTION  # released: its finish is queued, not run, in __del__
 ready = os.environ["READY_FILE"]
 with open(ready + ".tmp", "w") as handle:
-    handle.write("{{0}} {{1}}".format(PREDICTION.status, returned))
+    handle.write("{{0}} {{1}}".format(status, returned))
 os.replace(ready + ".tmp", ready)
 while True:
     time.sleep(0.05)
 """.format(model=SLOW_MODEL)
 
 
-def _run_until_signalled(tmp_path, fake, receiver, signum, batch):
+def _run_until_signalled(tmp_path, fake, receiver, signum, batch, release=False):
     script = tmp_path / "hold_then_signal.py"
     script.write_text(SCRIPT)
     ready = tmp_path / "ready"
@@ -76,6 +80,7 @@ def _run_until_signalled(tmp_path, fake, receiver, signum, batch):
     env.update(
         {
             "BATCH": "1" if batch else "0",
+            "RELEASE": "1" if release else "0",
             "READY_FILE": str(ready),
             "FI_BASE_URL": receiver.origin,
             "FI_API_KEY": "placeholder-fi-api-key",
@@ -108,14 +113,23 @@ def _run_until_signalled(tmp_path, fake, receiver, signum, batch):
     return process.returncode, stderr.decode(errors="replace"), status, int(returned)
 
 
-@pytest.mark.parametrize("batch", [True, False], ids=["batch", "simple"])
-@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT], ids=["SIGTERM", "SIGINT"])
+CASES = [
+    pytest.param(signal.SIGTERM, True, False, id="SIGTERM-batch"),
+    pytest.param(signal.SIGTERM, False, False, id="SIGTERM-simple"),
+    pytest.param(signal.SIGINT, True, False, id="SIGINT-batch"),
+    pytest.param(signal.SIGINT, False, False, id="SIGINT-simple"),
+    pytest.param(signal.SIGTERM, True, True, id="SIGTERM-batch-released"),
+    pytest.param(signal.SIGTERM, False, True, id="SIGTERM-simple-released"),
+]
+
+
+@pytest.mark.parametrize("signum, batch, release", CASES)
 def test_signal_under_register_exports_the_held_create_span_with_its_create_status(
-    tmp_path, signum, batch
+    tmp_path, signum, batch, release
 ):
     with FakeReplicate() as fake, Receiver() as receiver:
         returncode, stderr, status, returned = _run_until_signalled(
-            tmp_path, fake, receiver, signum, batch
+            tmp_path, fake, receiver, signum, batch, release
         )
         spans = receiver.spans()
 

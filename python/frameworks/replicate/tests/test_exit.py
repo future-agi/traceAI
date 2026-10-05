@@ -3,7 +3,7 @@
 The script runs as a subprocess through harness.run with the real
 ``fi_instrumentation.register()`` exporter (batch processor) and the real
 replicate client against the loopback fake. It creates a prediction, keeps it
-in a module global, and exits without calling wait().
+in a module global (or releases it), and exits without calling wait().
 """
 
 from __future__ import annotations
@@ -36,10 +36,13 @@ ReplicateInstrumentor().instrument(tracer_provider=provider)
 client = replicate.Client(base_url=os.environ["REPLICATE_BASE_URL"])
 PREDICTION = client.predictions.create(model="{model}", input={{}})
 print(PREDICTION.status)
+if os.environ.get("RELEASE") == "1":
+    del PREDICTION  # released: its finish is queued and run at exit
 """.format(model=SLOW_MODEL)
 
 
-def test_exit_without_wait_exports_the_create_span_with_its_create_status(tmp_path):
+@pytest.mark.parametrize("release", [False, True], ids=["held", "released"])
+def test_exit_without_wait_exports_the_create_span_with_its_create_status(tmp_path, release):
     script = tmp_path / "exit_without_wait.py"
     script.write_text(SCRIPT)
     with FakeReplicate() as fake, Receiver() as receiver:
@@ -55,6 +58,7 @@ def test_exit_without_wait_exports_the_create_span_with_its_create_status(tmp_pa
                 "FI_SECRET_KEY": "placeholder-fi-secret-key",
                 "REPLICATE_BASE_URL": fake.origin,
                 "REPLICATE_API_TOKEN": "r8_exit-placeholder-token",
+                "RELEASE": "1" if release else "0",
                 "PYTHONPATH": os.pathsep.join(
                     [str(PACKAGE), str(PYTHON_ROOT), os.environ.get("PYTHONPATH", "")]
                 ),
