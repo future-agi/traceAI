@@ -92,6 +92,9 @@ also install the `[tracing]` extra's gRPC exporter as a global provider, or
 spans are duplicated.
 
 `tracing.uninstrument()` restores `OpenAIWrapper.create`, so no new LLM spans.
+If another library wrapped `OpenAIWrapper.create` after `setup()`, that wrapper
+is left in place and a WARNING is logged; call `uninstrument()` again once it
+is removed.
 Agents stay instrumented; upstream has no per-agent undo. The processor stays on
 the provider, so spans from those agents still have content removed and
 aggregate usage moved off non-LLM spans. It is shared by every handle on that

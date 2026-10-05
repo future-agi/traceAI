@@ -270,6 +270,42 @@ def test_setup_is_idempotent_per_provider_and_uninstrument_restores(pipeline):
     assert first.processor._disabled is False
 
 
+def test_uninstrument_leaves_a_later_third_party_wrapper_in_place(pipeline, caplog):
+    """Another library wraps OpenAIWrapper.create after setup(). Restoring
+    our captured original would silently drop that wrapper.
+    """
+    from autogen.oai import client as oai_client_module
+    from autogen.oai.client import OpenAIWrapper
+
+    _provider, _exporter, make = pipeline
+    original = OpenAIWrapper.create
+    tracing = make()
+    traced = OpenAIWrapper.create
+    assert tracing.owns_llm_wrapper is True and traced is not original
+
+    def third_party_create(self, **config):
+        return traced(self, **config)
+
+    OpenAIWrapper.create = third_party_create
+    try:
+        with caplog.at_level(logging.WARNING, logger="traceai_ag2_classic"):
+            tracing.uninstrument()
+        assert OpenAIWrapper.create is third_party_create
+        assert oai_client_module.OpenAIWrapper.create is third_party_create
+        assert any(
+            r.levelno == logging.WARNING and "OpenAIWrapper.create" in r.getMessage() for r in caplog.records
+        )
+
+        # Once the other wrapper is gone, the same handle can still restore.
+        OpenAIWrapper.create = traced
+        tracing.uninstrument()
+        assert OpenAIWrapper.create is original
+        assert tracing.owns_llm_wrapper is False
+    finally:
+        OpenAIWrapper.create = original
+        oai_client_module.OpenAIWrapper.create = original
+
+
 PROMOTED_USAGE_KEYS = (
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.output_tokens",

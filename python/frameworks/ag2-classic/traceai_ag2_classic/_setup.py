@@ -179,6 +179,7 @@ class AG2ClassicTracing:
         self.autogen_version = autogen_version
         self.capture_content = capture_content
         self._original_create: Any = None
+        self._traced_create: Any = None
         self.owns_llm_wrapper = False
 
     # Upstream calls ---------------------------------------------------------
@@ -200,6 +201,7 @@ class AG2ClassicTracing:
         instrument_llm_wrapper(
             tracer_provider=self.tracer_provider, capture_messages=self.capture_content
         )
+        self._traced_create = OpenAIWrapper.create
         self.owns_llm_wrapper = True
 
     def instrument_agent(self, agent: Any) -> Any:
@@ -260,15 +262,28 @@ class AG2ClassicTracing:
         handle on a provider shares that one processor, so removing it here
         would also unfilter the other handles. It is shut down with the
         provider (``provider.shutdown()``).
+
+        ``OpenAIWrapper.create`` is restored only while it is still the
+        traced function upstream installed for this handle. If something else
+        replaced it after ``setup()`` (another library's wrapper around ours),
+        it is left in place and a warning is logged; call ``uninstrument()``
+        again once that wrapper is gone.
         """
         if self.owns_llm_wrapper and self._original_create is not None:
             from autogen.oai import client as oai_client_module
             from autogen.oai.client import OpenAIWrapper
 
+            if OpenAIWrapper.create is not self._traced_create:
+                logger.warning(
+                    "traceai-ag2-classic: OpenAIWrapper.create was replaced after setup(); leaving that "
+                    "replacement in place. Call uninstrument() again after it is removed."
+                )
+                return
             OpenAIWrapper.create = self._original_create
             oai_client_module.OpenAIWrapper.create = self._original_create
             self.owns_llm_wrapper = False
             self._original_create = None
+            self._traced_create = None
 
 
 def setup(
