@@ -1,0 +1,35 @@
+"""Packaging contract: dependency ranges and declared Python versions."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+
+from traceai_exa import ExaInstrumentor
+from traceai_exa.package import _instruments
+
+PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+
+
+def _dependency(name: str) -> SpecifierSet:
+    match = re.search(
+        r'^{0}\s*=\s*"([^"]+)"'.format(re.escape(name)), PYPROJECT.read_text(), re.M
+    )
+    assert match, name
+    return SpecifierSet(match.group(1))
+
+
+def test_exa_py_is_a_2x_range_not_an_exact_pin():
+    (requirement,) = ExaInstrumentor().instrumentation_dependencies()
+    instruments = Requirement(requirement)
+    assert instruments.name == "exa-py"
+    # pyproject and the runtime dependency check agree.
+    assert instruments.specifier == _dependency("exa-py")
+    for version in ("2.25.0", "2.25.1", "2.26.0", "2.99.0"):
+        assert instruments.specifier.contains(version), version
+    for version in ("2.24.0", "3.0.0", "3.1.0"):
+        assert not instruments.specifier.contains(version), version
+    assert _instruments == ExaInstrumentor().instrumentation_dependencies()
