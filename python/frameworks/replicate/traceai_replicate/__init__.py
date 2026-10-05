@@ -48,9 +48,11 @@ class _EndPendingFirst:
 
     Ends the create spans still held open on their predictions, then calls
     the original, so those spans reach the processors before they flush or
-    stop. ``fi_instrumentation.register()``'s SIGTERM/SIGINT handler shuts
-    the provider down and exits; an ``atexit`` hook alone would run after the
-    processors had stopped and every held span would be dropped.
+    stop. ``shutdown`` also ends, as a best effort, a span whose
+    ``wait()``/``cancel()`` is still running; ``force_flush`` leaves it to
+    that call. ``fi_instrumentation.register()``'s SIGTERM/SIGINT handler
+    shuts the provider down and exits; an ``atexit`` hook alone would run
+    after the processors had stopped and every held span would be dropped.
     """
 
     def __init__(self, original: Any, end_pending: Any) -> None:
@@ -277,6 +279,9 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         ``atexit`` fallback still ends held spans on a normal exit.
         """
         self._provider_hooks: List[Tuple[Any, str, Any, _EndPendingFirst]] = []
+        # A flush leaves a span whose wait()/cancel() is running to that call;
+        # shutdown ends it too, or it would be dropped once the processors stop.
+        ends = {"force_flush": self._expire_held, "shutdown": self._end_pending}
         for name in _PROVIDER_METHODS:
             try:
                 original = getattr(provider, name, None)
@@ -286,7 +291,7 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                     previous = vars(provider).get(name, _MISSING)
                 except TypeError:  # no __dict__: setattr below fails as well
                     previous = _MISSING
-                hook = _EndPendingFirst(original, self._end_pending)
+                hook = _EndPendingFirst(original, ends[name])
                 setattr(provider, name, hook)
             except Exception:
                 logger.debug(
@@ -313,6 +318,15 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         self._provider_hooks = []
 
     def _end_pending(self) -> None:
+        """Provider shutdown and exit: every held span, and the spans whose
+        wait()/cancel() is still running."""
+        registry = getattr(self, "_registry", None)
+        if registry is not None:
+            registry.end_all()
+
+    def _expire_held(self) -> None:
+        """Flush and uninstrument(): every held span. A running
+        wait()/cancel() keeps its span and ends it when it returns."""
         registry = getattr(self, "_registry", None)
         if registry is not None:
             registry.expire_all()
@@ -327,7 +341,7 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         self._originals = []
         self._unhook_provider()
         atexit.unregister(self._end_pending)
-        self._end_pending()
+        self._expire_held()
 
 
 __all__ = ["ReplicateInstrumentor", "__version__"]

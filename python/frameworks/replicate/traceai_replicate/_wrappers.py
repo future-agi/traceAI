@@ -13,7 +13,10 @@ Span model (TH-8320):
   timestamp at the first traced call after the prediction object is
   released or after it has been held for ``max_pending_seconds`` (default
   600), when the tracer provider is flushed or shut down, at
-  ``uninstrument()``, or at interpreter exit.
+  ``uninstrument()``, or at interpreter exit. A ``wait`` / ``cancel`` that
+  continues the span claims it: while that call runs, neither the cap, a
+  flush nor a release ends it; only a provider shutdown or interpreter exit
+  does, as a best effort (see :meth:`PendingRegistry.claim`).
 * ``replicate.prediction.wait`` / ``replicate.predictions.cancel`` - wait or
   cancel on a prediction that has no open create span.
 
@@ -141,12 +144,19 @@ class _Call:
         self.snapshot: Dict[str, Any] = {}
         self.create_end: Optional[int] = None
         self.on_finish: Optional[Callable[["_Call"], None]] = None
-        self._finished = False
-        self._lock = threading.Lock()
+        # Set (under the registry lock) when a wait()/cancel() continues this
+        # held create span; from then on that call ends it (see expire()).
+        self.claimed = False
+        # Acquired once, by the finish() that ends the span, and never
+        # released: a non-blocking acquire is an atomic test-and-set. No
+        # finish() ever waits on it, so one run from a signal handler
+        # (register()'s shutdown) that interrupted this thread inside another
+        # finish() returns instead of deadlocking.
+        self._done = threading.Lock()
 
     @property
     def finished(self) -> bool:
-        return self._finished
+        return self._done.locked()
 
     @contextmanager
     def activate(self) -> Iterator[None]:
@@ -166,8 +176,20 @@ class _Call:
             self.prediction = prediction
 
     def expire(self) -> None:
-        """End a create span that no wait/cancel continued, as of create time."""
-        self.finish(use_snapshot=True, end_time=self.create_end)
+        """End a create span that no wait/cancel continued, as of create time.
+
+        A claimed span is not held any more: the wait()/cancel() that claimed
+        it ends it with its result, so expiring it (a release drained while
+        that call runs) does nothing.
+        """
+        if not self.claimed:
+            self.finish(use_snapshot=True, end_time=self.create_end)
+
+    def interrupt(self) -> None:
+        """Shutdown or exit while the wait()/cancel() that claimed this span
+        still runs: end it now, with the prediction's last polled status and
+        no output. That call ends nothing when it returns later."""
+        self.finish()
 
     def release(self, cancelled: bool) -> None:
         """For ``__del__``: queue the finish; never run span processors here.
@@ -175,7 +197,7 @@ class _Call:
         ``cancelled`` is an abandoned stream/iterator, which ends as of now;
         otherwise a held create span, which ends as of create time.
         """
-        if not self._finished:
+        if not self.finished:
             _RELEASED.append((self, cancelled, time.time_ns()))
 
     def finish(
@@ -189,10 +211,8 @@ class _Call:
         use_snapshot: bool = False,
         end_time: Optional[int] = None,
     ) -> None:
-        with self._lock:
-            if self._finished:
-                return
-            self._finished = True
+        if not self._done.acquire(blocking=False):
+            return  # ended, or being ended, by another finish()
         try:
             self._write(prediction, output, collector, error, cancelled, use_snapshot)
         except Exception:
@@ -316,16 +336,24 @@ def drain_released() -> None:
 
 
 class PendingRegistry:
-    """Create spans still open on a prediction, by prediction id.
+    """Create spans still open on a prediction.
 
-    A span is held for at most ``max_pending_seconds``. Expiry is lazy: every
-    registry operation (and every traced call, through :meth:`touch`) first
-    ends, as of create time, the held spans older than that. Entries are kept
-    in the order they were held, so a check stops at the first young one.
+    A *held* span waits, by prediction id, for a wait()/cancel(). It is held
+    for at most ``max_pending_seconds``. Expiry is lazy: every registry
+    operation (and every traced call, through :meth:`touch`) first ends, as
+    of create time, the held spans older than that. Held entries are kept in
+    the order they were held, so a check stops at the first young one.
+
+    A *claimed* span is one a running wait()/cancel() continues (see
+    :meth:`claim`). It is not held: neither the cap nor ``force_flush`` (nor
+    a release of the prediction) ends it; that call does, when it returns or
+    raises. Only :meth:`end_all` (provider shutdown, interpreter exit) ends
+    it earlier.
     """
 
     def __init__(self, max_pending_seconds: float = DEFAULT_MAX_PENDING_SECONDS) -> None:
         self._calls: Dict[str, Tuple[_Call, float]] = {}
+        self._claimed: Dict[_Call, str] = {}
         self._max_age = max_pending_seconds
         # Re-entrant as a safeguard. No span ends while it is held: expiry runs
         # outside it, and __del__ only queues (see _RELEASED).
@@ -340,19 +368,34 @@ class PendingRegistry:
             previous[0].expire()
         self.touch()
 
-    def get(self, prediction_id: Any) -> Optional[_Call]:
+    def claim(self, prediction_id: Any) -> Optional[_Call]:
+        """Hand the span held for ``prediction_id`` to the wait()/cancel()
+        that continues it, or return None if none is held.
+
+        The entry leaves the held set under the lock, so a cap check or a
+        flush on another thread or task cannot end the span while that call
+        runs, and a second wait()/cancel() on the same prediction does not
+        get it (it opens its own span). The call is still tracked, so
+        provider shutdown and interpreter exit end it as a best effort.
+        """
         self.touch()
         if not isinstance(prediction_id, str):
             return None
         with self._lock:
-            entry = self._calls.get(prediction_id)
-        return entry[0] if entry is not None else None
+            entry = self._calls.pop(prediction_id, None)
+            if entry is None:
+                return None
+            call = entry[0]
+            call.claimed = True
+            self._claimed[call] = prediction_id
+        return call
 
     def discard(self, prediction_id: str, call: _Call) -> None:
         with self._lock:
             entry = self._calls.get(prediction_id)
             if entry is not None and entry[0] is call:
                 del self._calls[prediction_id]
+            self._claimed.pop(call, None)
 
     def touch(self) -> None:
         """End released spans, then the held spans older than the cap."""
@@ -371,12 +414,26 @@ class PendingRegistry:
             call.expire()
 
     def expire_all(self) -> None:
+        """End released spans, then every held span (``force_flush``,
+        ``uninstrument()``). A claimed span is left to its running call."""
         drain_released()
         with self._lock:
             calls = [call for call, _ in self._calls.values()]
             self._calls.clear()
         for call in calls:
             call.expire()
+
+    def end_all(self) -> None:
+        """Provider shutdown and interpreter exit: :meth:`expire_all`, then
+        end the claimed spans whose wait()/cancel() is still running, as of
+        now (see :meth:`_Call.interrupt`), so they are not lost when the
+        processors stop."""
+        self.expire_all()
+        with self._lock:
+            running = list(self._claimed)
+            self._claimed.clear()
+        for call in running:
+            _guard(call.interrupt, None)
 
 
 def _call_of(proxy: Any) -> Optional[_Call]:
@@ -575,8 +632,8 @@ class _Wrapper:
         """On entry to a traced call: end held spans that are past the cap."""
         _guard(self._registry.touch, None)
 
-    def _pending(self, prediction_id: Any) -> Optional[_Call]:
-        return _guard(lambda: self._registry.get(prediction_id), None)
+    def _claim(self, prediction_id: Any) -> Optional[_Call]:
+        return _guard(lambda: self._registry.claim(prediction_id), None)
 
     def _created(self, call: _Call, prediction: Any) -> Any:
         """Finish a create span, or keep it open on the returned prediction."""
@@ -694,9 +751,11 @@ class AsyncCreateWrapper(_Wrapper):
 class _LifecycleWrapper(_Wrapper):
     """``Prediction.wait`` / ``cancel`` and ``Predictions.cancel(id)``.
 
-    An open create span for the same prediction is continued and ended; there
-    is no second span. Otherwise one span covers the call. ``wait`` on a
-    prediction that is already terminal makes no request and adds no span.
+    An open create span for the same prediction is claimed, continued and
+    ended when the call returns or raises; there is no second span. While
+    the call runs, the cap and a flush leave that span alone. Otherwise one
+    span covers the call. ``wait`` on a prediction that is already terminal
+    makes no request and adds no span.
     """
 
     def __init__(self, *args: Any, by_id: bool = False, skip_terminal: bool = False) -> None:
@@ -724,7 +783,7 @@ class LifecycleWrapper(_LifecycleWrapper):
         if _ACTIVE.get() is not None:
             return wrapped(*args, **kwargs)
         self._touch()
-        call = self._pending(_guard(lambda: self._prediction_id(instance, args, kwargs), None))
+        call = self._claim(_guard(lambda: self._prediction_id(instance, args, kwargs), None))
         if call is None:
             if self._untraced(instance):
                 return wrapped(*args, **kwargs)
@@ -748,7 +807,7 @@ class AsyncLifecycleWrapper(_LifecycleWrapper):
         if _ACTIVE.get() is not None:
             return await wrapped(*args, **kwargs)
         self._touch()
-        call = self._pending(_guard(lambda: self._prediction_id(instance, args, kwargs), None))
+        call = self._claim(_guard(lambda: self._prediction_id(instance, args, kwargs), None))
         if call is None:
             if self._untraced(instance):
                 return await wrapped(*args, **kwargs)
