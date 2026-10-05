@@ -162,11 +162,22 @@ def shape(spans: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def scrub(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Replace machine-local paths in exception stack traces before recording."""
+def host_paths() -> tuple[str, ...]:
+    """Machine-local path fragments that must not reach a recorded fixture."""
+    return (str(Path.home()), "/Users/", "/home/", "/tmp/pytest-of-", "/var/folders", "/private/")
+
+
+def scrub(spans: list[dict[str, Any]], tmp_base: Path) -> list[dict[str, Any]]:
+    """Replace machine-local paths (stack traces, data dirs) before recording."""
     text = json.dumps(spans)
-    text = text.replace(str(REPO_ROOT), "<repo>")
+    for path, label in (
+        (os.path.realpath(tmp_base), "<tmp>"),
+        (str(tmp_base), "<tmp>"),
+        (str(REPO_ROOT), "<repo>"),
+    ):
+        text = text.replace(path, label)
     text = re.sub(r'File \\"[^"\\]*?/lib/python3\.\d+/', r'File \\"<python-lib>/', text)
+    text = text.replace(str(Path.home()), "<home>")
     return json.loads(text)
 
 
@@ -221,10 +232,14 @@ def assert_default_content(spans: list[dict[str, Any]]) -> None:
         assert DOC_MARKER not in json.dumps(span)
 
 
-def assert_no_secrets(payload: Any) -> None:
+def found_in(payload: Any, needles: Any) -> list[str]:
+    """The needles that occur in payload's JSON (a list keeps pytest's diff of it small)."""
     text = json.dumps(payload)
-    for secret in (FI_API_KEY, FI_SECRET_KEY, LLM_API_KEY):
-        assert secret not in text
+    return [needle for needle in needles if needle in text]
+
+
+def assert_no_secrets(payload: Any) -> None:
+    assert found_in(payload, (FI_API_KEY, FI_SECRET_KEY, LLM_API_KEY)) == []
 
 
 def assert_one_trace_under_app_span(spans: list[dict[str, Any]]) -> None:
@@ -379,7 +394,8 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Scenario]:
     by_name = {scenario.name: scenario for scenario in done}
     recipe = by_name["recipe"]
     if os.environ.get("COGNEE_RECORD_FIXTURE") == "1" and recipe.result.returncode == 0:
-        FIXTURE.write_text(json.dumps(scrub(recipe.spans), indent=1) + "\n", encoding="utf-8")
+        spans = scrub(recipe.spans, tmp_path_factory.getbasetemp())
+        FIXTURE.write_text(json.dumps(spans, indent=1) + "\n", encoding="utf-8")
     return by_name
 
 
@@ -552,7 +568,20 @@ def test_recorded_fixture_matches_documented_mapping(recorded: list[dict[str, An
     assert_collector_mapping_inputs(recorded)
     assert_default_content(recorded)
     assert_no_secrets(recorded)
-    assert "/Users/" not in json.dumps(recorded)
+    assert found_in(recorded, host_paths()) == []
+
+
+def test_scrub_removes_host_and_tmp_paths(tmp_path_factory: pytest.TempPathFactory) -> None:
+    base = tmp_path_factory.getbasetemp()
+    planted = [
+        str(base / "recipe0" / "data" / "file.txt"),
+        os.path.realpath(base) + "/recipe0/system",
+        str(REPO_ROOT / "python" / "x.py"),
+        str(Path.home() / ".cache" / "uv" / "x.py"),
+        'File "{0}/.venv/lib/python3.11/site-packages/x.py"'.format(Path.home()),
+    ]
+    scrubbed = scrub([{"name": "x", "attributes": [], "planted": planted}], base)
+    assert found_in(scrubbed, host_paths()) == []
 
 
 def test_readme_states_what_the_tests_check() -> None:

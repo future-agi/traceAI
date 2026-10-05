@@ -220,8 +220,8 @@ anything:
 - `otlp_env`: option B's environment variables, then one `cognee.add`.
 
 `tests/fixtures/cognee-1.6.2-recipe-spans.json` is the `recipe` run's spans as
-the Receiver decoded them (stack-trace paths replaced by `<python-lib>` and
-`<repo>`). The fixture tests post it with the harness `post_otlp()`, check it
+the Receiver decoded them (host paths replaced by `<python-lib>`, `<repo>`,
+`<tmp>` and `<home>`). The fixture tests post it with the harness `post_otlp()`, check it
 with `compare()` and run the same mapping and content assertions on it, with
 no Cognee installed. The live run must match the fixture's shape (span names,
 kinds, attribute keys, statuses and counts). Re-record with
