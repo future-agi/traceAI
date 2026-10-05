@@ -197,6 +197,20 @@ Notes:
   traceAI context keys (`session.id`, `user.id`, `metadata`, ...) are moved
   behind AG2's keys first, so AG2's oldest keys are evicted before them.
 
+## Limits
+
+- PRD J4 is not met: a middleware short-circuit shows neither `ERROR` nor a
+  typed reason, and this package adds no capture for it. `setup()` adds
+  `TelemetryMiddleware` as the innermost middleware, so a middleware
+  registered before it (for example in `Agent(middleware=[...])`) that
+  answers `on_llm_call` without calling `call_next` leaves no `chat` span for
+  that call (the `invoke_agent` span ends with status `UNSET`), and one that
+  answers `on_turn` leaves no span at all. AG2's own halt (the `HaltEvent`
+  that `AlertPolicy` sends on a FATAL alert) does the same when the policies
+  come from `Agent(assembly=[...])`. With per-call `Plugin` policies
+  (`agent.ask(..., plugins=[...])`, ag2 1.1.2) the halted call gets a `chat`
+  span with status `UNSET` and no attribute carrying the halt reason.
+
 ## Troubleshooting
 
 - No traces: `register()` needs `project_name` or `FI_PROJECT_NAME`; the

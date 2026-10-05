@@ -59,3 +59,9 @@
   `max_span_attributes`. `on_start` writes them before AG2 sets anything, so
   they were the oldest keys on the span; the processor now moves them behind
   AG2's keys before re-bounding, and AG2's oldest keys are evicted instead.
+- Disclosed in the README (Limits): PRD J4 is not met. A middleware that
+  runs outside `TelemetryMiddleware` and short-circuits leaves no `chat` span
+  (no span at all when it answers `on_turn`); AG2's own halt does the same
+  with `Agent(assembly=...)` policies, and with per-call `Plugin` policies
+  gives a `chat` span with status `UNSET` and no reason attribute. No capture
+  is added; tests pin these span shapes.

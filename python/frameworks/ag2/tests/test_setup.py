@@ -510,6 +510,101 @@ def test_cancel_closes_spans():
     assert all(s.end_time is not None for s in spans)
 
 
+# --- PRD J4: middleware short-circuits (documented gap, not captured) --------
+
+
+def _short_circuit_middlewares():
+    from ag2.events import HaltEvent, ModelMessage, ModelResponse
+    from ag2.middleware import BaseMiddleware
+
+    class AnswerLLMCall(BaseMiddleware):
+        async def on_llm_call(self, call_next, events, context):
+            return ModelResponse(ModelMessage("blocked"))
+
+    class AnswerTurn(BaseMiddleware):
+        async def on_turn(self, call_next, event, context):
+            return ModelResponse(ModelMessage("blocked"))
+
+    class EmitHalt(BaseMiddleware):
+        """Sends the HaltEvent a FATAL AlertPolicy alert sends, then carries on."""
+
+        async def on_llm_call(self, call_next, events, context):
+            await context.send(HaltEvent(reason="budget exceeded", source="limiter"))
+            return await call_next(events, context)
+
+    return AnswerLLMCall, AnswerTurn, EmitHalt
+
+
+def test_j4_outer_middleware_answering_the_llm_call_leaves_no_chat_span():
+    from ag2 import Agent
+    from ag2.testing import TestConfig
+
+    answer_llm_call, _, _ = _short_circuit_middlewares()
+    provider, exporter = memory_provider()
+    agent = Agent("limited_bot", config=TestConfig("unreachable"), middleware=[answer_llm_call])
+    setup(agent, tracer_provider=provider)
+    assert ask(agent).body == "blocked"
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["invoke_agent limited_bot"]
+    assert spans[0].status.status_code == StatusCode.UNSET
+
+
+def test_j4_outer_middleware_answering_the_turn_leaves_no_span():
+    from ag2 import Agent
+    from ag2.testing import TestConfig
+
+    _, answer_turn, _ = _short_circuit_middlewares()
+    provider, exporter = memory_provider()
+    agent = Agent("limited_bot", config=TestConfig("unreachable"), middleware=[answer_turn])
+    setup(agent, tracer_provider=provider)
+    assert ask(agent).body == "blocked"
+    assert exporter.get_finished_spans() == ()
+
+
+def test_j4_ag2_halt_with_agent_assembly_policies_leaves_no_chat_span():
+    """Agent(assembly=...) adds AG2's halt check before setup() adds telemetry,
+    so the halted LLM call is answered outside the chat span."""
+    from ag2 import Agent
+    from ag2.policies.alert import AlertPolicy
+    from ag2.testing import TestConfig
+
+    _, _, emit_halt = _short_circuit_middlewares()
+    provider, exporter = memory_provider()
+    agent = Agent("halted_bot", config=TestConfig("unreachable"), middleware=[emit_halt], assembly=[AlertPolicy()])
+    setup(agent, tracer_provider=provider)
+    assert ask(agent).body == "HALTED: budget exceeded"
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["invoke_agent halted_bot"]
+    assert spans[0].status.status_code == StatusCode.UNSET
+
+
+def test_j4_ag2_halt_with_per_call_policies_gives_a_chat_span_without_reason():
+    """Per-call Plugin policies (present in ag2 1.1.2, absent in 1.0.0) put
+    the halt check inside the telemetry middleware: the halted call gets a
+    chat span, status UNSET, and no attribute carries the halt reason."""
+    from ag2 import Agent
+    from ag2.policies.alert import AlertPolicy
+    from ag2.testing import TestConfig
+
+    try:
+        from ag2.plugin import Plugin
+    except ImportError:  # pragma: no cover - depends on the installed ag2
+        Plugin = None
+    if Plugin is None or not hasattr(Plugin, "add_policy") or "plugins" not in inspect.signature(Agent.ask).parameters:
+        pytest.skip("installed ag2 has no per-call Plugin policies (Agent.ask(plugins=...))")
+
+    _, _, emit_halt = _short_circuit_middlewares()
+    provider, exporter = memory_provider()
+    agent = Agent("halted_bot", config=TestConfig("unreachable"), middleware=[emit_halt])
+    setup(agent, tracer_provider=provider)
+    assert ask(agent, plugins=[Plugin().add_policy(AlertPolicy())]).body == "HALTED: budget exceeded"
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["chat", "invoke_agent halted_bot"]
+    for span in spans:
+        assert span.status.status_code == StatusCode.UNSET, span.name
+        assert not any("budget exceeded" in str(v) for v in attrs(span).values()), span.name
+
+
 # --- AC-04 (partial): traceparent relay across two agents --------------------
 
 
