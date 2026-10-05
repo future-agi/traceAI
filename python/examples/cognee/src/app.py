@@ -43,8 +43,8 @@ def init_tracing():
         verbose=False,
     )
     # register() marks its exporter as a default that the next
-    # add_span_processor() call replaces. On its first traced call Cognee
-    # calls add_span_processor() on the global provider to attach its
+    # add_span_processor() call replaces (TH-8394). On its first traced call
+    # Cognee calls add_span_processor() on the global provider to attach its
     # in-memory buffer, which would silently drop the Future AGI exporter.
     # Adding the exporter again makes it a regular processor that Cognee's
     # call leaves in place. HTTPSpanExporter() reads FI_BASE_URL, FI_API_KEY

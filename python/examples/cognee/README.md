@@ -9,11 +9,11 @@ operation). Option A adds one small export filter,
 out of the export and marks search and LLM spans.
 
 Pinned: `cognee==1.6.2` (Python >=3.10,<3.15; option A also needs
-`fi-instrumentation-otel`, which declares Python <3.14). Tested on Python 3.11
-and 3.13 against loopback fakes only: no LLM key, no live Future AGI project
-(see [Tests](#tests)). Traces only: metrics and logs are not ingested by this
-recipe. Statements marked "source reading" come from the cognee 1.6.2 code and
-are not exercised by the tests.
+`fi-instrumentation-otel>=1.1.0,<1.2`, which declares Python <3.14). Tested on
+Python 3.11 and 3.13 against loopback fakes only: no LLM key, no live Future
+AGI project (see [Tests](#tests)). Traces only: metrics and logs are not
+ingested by this recipe. Statements marked "source reading" come from the
+cognee 1.6.2 code and are not exercised by the tests.
 
 ## Option A: `register()` (recommended)
 
@@ -67,14 +67,17 @@ These things about it are load-bearing:
 - **Keep the `add_span_processor(BatchSpanProcessor(exporter))` line.**
   `register()` marks its exporter as a default that the next
   `add_span_processor()` call replaces (`fi_instrumentation/otel.py`,
-  `TracerProvider.add_span_processor`). Cognee calls
+  `TracerProvider.add_span_processor`; tracked as TH-8394). Cognee calls
   `add_span_processor()` on the global provider to attach its in-memory span
   buffer, so without this line the Future AGI exporter is dropped and
   **nothing is exported**: Cognee still buffers its spans, but no request
   leaves the process (the `no_readd` test shows this). Adding the processor
   yourself makes it a regular one that Cognee's call leaves alone, and it is
   where the export filter goes. `HTTPSpanExporter()` reads `FI_BASE_URL`,
-  `FI_API_KEY` and `FI_SECRET_KEY` just as `register()` does.
+  `FI_API_KEY` and `FI_SECRET_KEY` just as `register()` does. Once TH-8394
+  is fixed, the re-add line goes away; until then `requirements.txt` pins
+  `fi-instrumentation-otel>=1.1.0,<1.2` (the published 1.1.0 behaves this
+  way; the tests use this repository's source).
 - **Wrap the calls in one span if you want one trace.** Each Cognee API call
   starts its own root span, and `cognee.add` ends its `memory.store` span
   before ingestion runs (`cognee/api/v1/add/add.py`), so without a parent span

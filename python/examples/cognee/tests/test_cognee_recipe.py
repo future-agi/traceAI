@@ -50,6 +50,7 @@ PYTHON_DIR = RECIPE_DIR.parents[1]
 REPO_ROOT = PYTHON_DIR.parent
 APP = SRC_DIR / "app.py"
 README = RECIPE_DIR / "README.md"
+REQUIREMENTS = RECIPE_DIR / "requirements.txt"
 ADD_SCRIPT = TESTS_DIR / "cognee_add.py"
 # Put first on a scenario's PYTHONPATH, so every interpreter it starts loads the guard.
 GUARD_DIR = TESTS_DIR / "loopback_guard"
@@ -940,3 +941,19 @@ def test_readme_states_what_the_tests_check() -> None:
         *SPAN_KINDS,
     ):
         assert fact in readme, fact
+
+
+@pytest.mark.parametrize(
+    "fact",
+    [
+        pytest.param("TH-8394", id="R2-register-follow-up"),
+    ],
+)
+def test_readme_covers_review_items(fact: str) -> None:
+    assert fact in README.read_text(encoding="utf-8")
+
+
+def test_requirements_pin_the_register_behaviour_the_recipe_relies_on() -> None:
+    lines = REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+    assert "fi-instrumentation-otel>=1.1.0,<1.2" in lines
+    assert "cognee==1.6.2" in lines
