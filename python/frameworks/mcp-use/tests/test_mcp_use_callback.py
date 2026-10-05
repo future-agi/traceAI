@@ -765,3 +765,37 @@ def test_hide_flags_fail_closed_when_a_run_remembers_too_much(monkeypatch):
     tool = only(spans, "execute_tool fail")
     assert tool.status.description == "ValueError"
     assert dict(tool.events[0].attributes) == {"exception.type": "ValueError"}
+
+
+def test_an_internal_failure_in_any_callback_never_reaches_langchain(monkeypatch):
+    # Every public callback catches its own failure, past the inner guards
+    # the other tests exercise: make the bookkeeping itself raise.
+    exporter, handler = _handler(capture_content=True)
+
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("internal failure")
+
+    class Exploding(dict):
+        def get(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("internal failure")
+
+    for name in ("_begin", "_pop", "_finish_error"):
+        monkeypatch.setattr(handler, name, boom)
+    monkeypatch.setattr(handler, "_runs", Exploding())
+    run_id, parent = uuid4(), uuid4()
+    reply = _result(AIMessage(content="x"))
+    handler.on_chain_start({}, {"messages": []}, run_id=run_id)
+    handler.on_chain_end({}, run_id=run_id)
+    handler.on_chain_error(RuntimeError(), run_id=run_id)
+    handler.on_retriever_start({}, "q", run_id=run_id, parent_run_id=parent)
+    handler.on_retriever_end([], run_id=run_id)
+    handler.on_retriever_error(RuntimeError(), run_id=run_id)
+    handler.on_chat_model_start({}, [[HumanMessage(content="x")]], run_id=run_id)
+    handler.on_llm_start({}, ["x"], run_id=run_id)
+    handler.on_llm_new_token("t", run_id=run_id)
+    handler.on_llm_end(reply, run_id=run_id)
+    handler.on_llm_error(RuntimeError(), run_id=run_id)
+    handler.on_tool_start({"name": "add"}, "{}", run_id=run_id, inputs={})
+    handler.on_tool_end("result", run_id=run_id)
+    handler.on_tool_error(RuntimeError(), run_id=run_id)
+    assert exporter.get_finished_spans() == ()
