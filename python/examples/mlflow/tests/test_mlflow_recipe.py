@@ -9,7 +9,8 @@ fi-collector's HTTP mux but does not authenticate, stamp projects or store
 anything. There is no model call: the app's model client is a stand-in.
 
 All keys are placeholders. Nothing here contacts an MLflow tracking server,
-Databricks, a model provider or Future AGI.
+Databricks, a model provider or Future AGI: the Databricks tests point the
+workspace and MLflow's model catalog at a loopback recorder.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sqlite3
 import sys
 import threading
@@ -496,9 +498,11 @@ def test_v1_traces_is_accepted_too(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("suffix", "posted_to"),
-    [("", "/"), ("/", "/"), ("/tracer", "/tracer")],
+    [("", "/"), ("/", "/"), ("/tracer", "/tracer"), ("/tracer/v1/traces/", "/tracer/v1/traces/")],
 )
 def test_mlflow_does_not_append_v1_traces(tmp_path: Path, suffix: str, posted_to: str) -> None:
+    # Nor does it strip a trailing slash: the recorder, like fi-collector's
+    # exact "/tracer/v1/traces" pattern (server.go:233-234), answers 404.
     record = _run_recorded(
         tmp_path, BARE_SPAN, [QUESTION], lambda recorder: recorder.origin + suffix
     )
@@ -580,6 +584,15 @@ def test_a_metrics_endpoint_turns_on_metrics_export(
         ({"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://127.0.0.1:9"}, "full traces URL"),
         ({"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": None}, "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf"),
         ({"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "grpc"}, "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf"),
+        (
+            {"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": None, "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc"},
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf",
+        ),
+        (
+            # MLflow reads the TRACES variable first (otlp.py:133-136).
+            {"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "grpc", "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf",
+        ),
         ({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"}, "Unset OTEL_EXPORTER_OTLP_ENDPOINT"),
         (
             {"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://127.0.0.1:9/v1/metrics"},
@@ -594,6 +607,8 @@ def test_a_metrics_endpoint_turns_on_metrics_export(
         "origin-only",
         "no-protocol",
         "grpc",
+        "general-grpc",
+        "traces-grpc-over-general-http",
         "base-endpoint",
         "metrics-endpoint",
         "no-resource",
@@ -610,6 +625,138 @@ def test_app_refuses_settings_that_export_nothing(
     assert message in record["stderr"]
     assert record["requests"] == []
     assert record["guard_attempts"] == []
+    assert record["files"] == []
+
+
+@pytest.mark.parametrize(
+    ("suffix", "overrides", "message"),
+    [
+        ("/tracer/v1/traces", {"MLFLOW_TRACKING_URI": "databricks"}, "Unset MLFLOW_TRACKING_URI"),
+        ("/tracer/v1/traces", {"MLFLOW_TRACKING_URI": "databricks://profile"}, "Unset MLFLOW_TRACKING_URI"),
+        ("/tracer/v1/traces", {"MLFLOW_TRACING_DESTINATION": "0"}, "Unset MLFLOW_TRACING_DESTINATION"),
+        (
+            "/tracer/v1/traces",
+            {"MLFLOW_TRACING_DESTINATION": "0", "MLFLOW_TRACE_ENABLE_OTLP_DUAL_EXPORT": "false"},
+            "Unset MLFLOW_TRACING_DESTINATION",
+        ),
+        ("/tracer/v1/traces/", {}, "trailing slash"),
+        (
+            "/tracer/v1/traces",
+            {"OTEL_EXPORTER_OTLP_HEADERS": "x-api-key=other-vendor-placeholder"},
+            "Unset OTEL_EXPORTER_OTLP_HEADERS",
+        ),
+        ("/tracer/v1/traces", {"OTEL_EXPORTER_OTLP_TRACES_HEADERS": None}, "missing: x-api-key, x-secret-key"),
+        ("/tracer/v1/traces", {"OTEL_EXPORTER_OTLP_TRACES_HEADERS": ""}, "missing: x-api-key, x-secret-key"),
+        (
+            "/tracer/v1/traces",
+            {"OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-api-key=" + quote(FI_API_KEY, safe="")},
+            "missing: x-secret-key",
+        ),
+    ],
+    ids=[
+        "databricks",
+        "databricks-profile",
+        "tracing-destination",
+        "tracing-destination-dual-false",
+        "trailing-slash",
+        "general-headers",
+        "no-traces-headers",
+        "empty-traces-headers",
+        "traces-headers-without-secret",
+    ],
+)
+def test_app_refuses_settings_that_send_traces_or_keys_elsewhere(
+    tmp_path: Path, suffix: str, overrides: dict[str, Optional[str]], message: str
+) -> None:
+    """Refused before the first span, so not one request of any kind is made.
+
+    The endpoint, the model catalog and DATABRICKS_HOST are all the loopback
+    catch-all, so a span export, a catalog fetch or a workspace call would be
+    recorded here, not only blocked by the guard.
+    """
+    with _Recorder() as recorder:
+        loopback = {
+            "MLFLOW_MODEL_CATALOG_URI": recorder.origin + "/catalog",
+            "DATABRICKS_HOST": recorder.origin,
+        }
+        record = _execute(
+            tmp_path, APP, [QUESTION], recorder.origin + suffix, **{**loopback, **overrides}
+        )
+        calls = list(recorder.calls)
+    assert not record["result"].timed_out
+    assert record["result"].returncode != 0
+    assert message in record["stderr"]
+    assert ANSWER not in record["stdout"]
+    assert calls == []
+    assert record["files"] == []
+    assert record["guard_attempts"] == []
+    # The message names variables and headers, never a value.
+    output = record["stdout"] + record["stderr"]
+    for value in (FI_API_KEY, FI_SECRET_KEY, quote(FI_SECRET_KEY, safe=""), "other-vendor-placeholder"):
+        assert value not in output
+
+
+def test_general_otlp_protocol_is_accepted(tmp_path: Path) -> None:
+    """MLflow falls back to OTEL_EXPORTER_OTLP_PROTOCOL when the TRACES one is unset."""
+    record = _run_script(
+        tmp_path,
+        APP,
+        [QUESTION],
+        OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=None,
+        OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf",
+    )
+    _assert_ran(record)
+    assert {request["path"] for request in record["requests"]} == {"/tracer/v1/traces"}
+    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert record["files"] == []
+
+
+def test_header_names_are_case_insensitive(tmp_path: Path) -> None:
+    headers = otlp_headers(FI_API_KEY, FI_SECRET_KEY)
+    headers = headers.replace("x-api-key", "X-Api-Key").replace("x-secret-key", "X-Secret-Key")
+    record = _run_script(tmp_path, APP, [QUESTION], OTEL_EXPORTER_OTLP_TRACES_HEADERS=headers)
+    _assert_ran(record)
+    for request in record["requests"]:
+        # The exporter lower-cases names; fi-collector reads them case-insensitively.
+        assert request["headers"].get("x-api-key") == FI_API_KEY
+        assert request["headers"].get("x-secret-key") == FI_SECRET_KEY
+
+
+@pytest.mark.parametrize("experiment_id", [None, "123"], ids=["no-experiment", "experiment"])
+def test_databricks_tracking_uri_fetches_the_catalog_and_calls_the_workspace(
+    tmp_path: Path, experiment_id: Optional[str]
+) -> None:
+    """Why src/app.py refuses a Databricks tracking URI when dual export is off.
+
+    tests/bare_span.py skips check_environment(). The OTLP endpoint, the model
+    catalog and the workspace (DATABRICKS_HOST, placeholder token) are all the
+    loopback catch-all, so nothing reaches github.com or Databricks.
+    """
+    with _Recorder() as recorder:
+        record = _execute(
+            tmp_path,
+            BARE_SPAN,
+            [QUESTION],
+            recorder.origin + "/tracer/v1/traces",
+            MLFLOW_TRACKING_URI="databricks",
+            MLFLOW_MODEL_CATALOG_URI=recorder.origin + "/catalog",
+            DATABRICKS_HOST=recorder.origin,
+            DATABRICKS_TOKEN="databricks-token-placeholder",
+            MLFLOW_EXPERIMENT_ID=experiment_id,
+        )
+        calls = list(recorder.calls)
+    _assert_exited_cleanly(record)
+    assert ("POST", "/tracer/v1/traces") in calls
+    # MLflow prices the model span on the client, so it fetches the catalog,
+    # although dual export is off.
+    assert ("GET", "/catalog/openai.json") in calls
+    workspace = [call for call in calls if call[1].startswith("/api/")]
+    if experiment_id is None:
+        assert workspace == []
+    else:
+        # On the first span MLflow reads the experiment, to see whether it is
+        # linked to a Unity Catalog trace location.
+        assert workspace == [("GET", "/api/2.0/mlflow/experiments/get")]
     assert record["files"] == []
 
 
@@ -773,6 +920,43 @@ def test_set_destination_with_dual_export_sends_both(tmp_path: Path) -> None:
     }
 
 
+def test_tracing_destination_variable_silences_otlp(tmp_path: Path) -> None:
+    """MLFLOW_TRACING_DESTINATION does what a set_destination call does, with no code."""
+    record = _run_recorded(
+        tmp_path,
+        BARE_SPAN,
+        [QUESTION],
+        lambda recorder: recorder.origin + "/tracer/v1/traces",
+        MLFLOW_TRACING_DESTINATION="0",
+        MLFLOW_MODEL_CATALOG_URI="",
+    )
+    _assert_exited_cleanly(record)
+    assert ANSWER in record["stdout"]
+    assert record["calls"] == []
+    # Only INFO lines about the local database; nothing says OTLP was skipped.
+    assert [line for line in record["stderr"].splitlines() if " INFO " not in line] == []
+    assert record["files"] == ["mlflow.db"]
+    assert _store(record["work"] / "mlflow.db")["spans"] == [ROOT, LLM]
+
+
+def test_tracing_destination_with_dual_export_is_accepted_and_sends_both(tmp_path: Path) -> None:
+    record = _run_script(
+        tmp_path,
+        APP,
+        [QUESTION],
+        MLFLOW_TRACING_DESTINATION="0",
+        MLFLOW_TRACE_ENABLE_OTLP_DUAL_EXPORT="true",
+        MLFLOW_MODEL_CATALOG_URI="",
+    )
+    _assert_ran(record)
+    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert record["files"] == ["mlflow.db"]
+    assert _store(record["work"] / "mlflow.db") == {
+        "traces": [_trace_request_id(record)],
+        "spans": [ROOT, LLM],
+    }
+
+
 @pytest.mark.parametrize("disabled", [None, "true"])
 def test_telemetry_switch(tmp_path: Path, disabled: Optional[str]) -> None:
     record = _run_script(tmp_path, APP, [QUESTION], MLFLOW_DISABLE_TELEMETRY=disabled)
@@ -780,6 +964,147 @@ def test_telemetry_switch(tmp_path: Path, disabled: Optional[str]) -> None:
     # With telemetry on, importing mlflow writes an installation id to HOME.
     expected = [] if disabled else [".config/mlflow/telemetry.json"]
     assert record["files"] == expected
+
+
+# --------------------------------------------------------------------------
+# The README Run block itself, run by bash.
+# --------------------------------------------------------------------------
+
+# The Run block lines the tests execute: export and unset, optionally behind a
+# ': "${VAR:?}" ... &&' guard. Never cd, pip or the line that runs the app.
+_SETUP_LINE = re.compile(r'^(?:: (?:"\$\{\w+:\?\}" )+&& )?(?:export|unset) ')
+
+
+def _readme_setup_lines(origin: str) -> list[str]:
+    """README.md's Run block export/unset lines, with a loopback origin and the test's keys.
+
+    The test runs these lines on their own, so they must all come before the
+    line that runs the app.
+    """
+    text = README.read_text(encoding="utf-8")
+    block = text.split("## Run\n", 1)[1].split("```bash\n", 1)[1].split("```", 1)[0].splitlines()
+    run_line = next(n for n, line in enumerate(block) if line.startswith("python src/app.py"))
+    picked = [n for n, line in enumerate(block) if _SETUP_LINE.match(line)]
+    assert picked, "no export or unset line in the Run block"
+    assert max(picked) < run_line, "an export or unset line comes after the app runs"
+    setup = "\n".join(block[n] for n in picked)
+    for placeholder, value in (
+        ("https://YOUR_FI_COLLECTOR_ORIGIN", origin),
+        ("YOUR_API_KEY", FI_API_KEY),
+        ("YOUR_SECRET_KEY", FI_SECRET_KEY),
+    ):
+        assert setup.count(placeholder) == 1, placeholder
+        setup = setup.replace(placeholder, value)
+    return setup.replace("python -c", shlex.quote(sys.executable) + " -c").splitlines()
+
+
+def _emit_line(path: Path, names: tuple[str, ...]) -> str:
+    """A shell line that writes the named variables to path as JSON (test values only)."""
+    code = "import json,os,sys; open(sys.argv[1], 'w').write(json.dumps({{k: os.environ.get(k) for k in {0!r}}}))".format(
+        names
+    )
+    return " ".join(shlex.quote(part) for part in (sys.executable, "-c", code, str(path)))
+
+
+def test_readme_run_block_replaces_a_stale_environment(tmp_path: Path) -> None:
+    """The Run block's own lines, run by bash over settings left from another setup.
+
+    The shell inherits PATH, HOME, the guard log and three stale values, and
+    no recipe variable, so deleting a line from the README fails this test.
+    The stale model catalog URI is a loopback recorder, so a fetch would be
+    recorded, not only blocked.
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    guard_log = tmp_path / "guard.jsonl"
+    emitted = tmp_path / "emitted.json"
+    stale_names = ("MLFLOW_MODEL_CATALOG_URI", "MLFLOW_TRACING_DESTINATION", "OTEL_EXPORTER_OTLP_HEADERS")
+    with Receiver() as receiver, _Recorder() as catalog:
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(work),
+            "LOOPBACK_GUARD_LOG": str(guard_log),
+            "MLFLOW_TRACING_DESTINATION": "0",
+            "OTEL_EXPORTER_OTLP_HEADERS": "x-api-key=other-vendor-placeholder",
+            "MLFLOW_MODEL_CATALOG_URI": catalog.origin + "/catalog",
+        }
+        app = " ".join(shlex.quote(part) for part in (sys.executable, str(GUARD), str(APP), QUESTION))
+        script = "\n".join(
+            ["set -eu", *_readme_setup_lines(receiver.origin), _emit_line(emitted, stale_names), "exec " + app]
+        )
+        with _working_directory(work):
+            result = run(
+                ["/bin/bash", "--noprofile", "--norc", "-c", script],
+                env=env,
+                stdin=None,
+                timeout=RUN_TIMEOUT_SECONDS,
+            )
+        requests = receiver.requests()
+        spans = receiver.spans()
+        catalog_calls = list(catalog.calls)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert not result.timed_out
+    assert result.returncode == 0, stderr
+    assert ANSWER in result.stdout.decode("utf-8", "replace")
+    assert requests, "no export reached the intended receiver"
+    assert {span["name"] for span in spans} == {ROOT, LLM}
+    for request in requests:
+        assert request["path"] == "/tracer/v1/traces"
+        assert request["headers"].get("x-api-key") == FI_API_KEY
+        assert request["headers"].get("x-secret-key") == FI_SECRET_KEY
+        assert "other-vendor-placeholder" not in json.dumps(request["headers"])
+        for resource in request["resource_attributes"]:
+            assert resource.get("project_name") == "my-mlflow-app"
+    assert catalog_calls == []
+    assert json.loads(emitted.read_text()) == {
+        "MLFLOW_MODEL_CATALOG_URI": "",
+        "MLFLOW_TRACING_DESTINATION": None,
+        "OTEL_EXPORTER_OTLP_HEADERS": None,
+    }
+    assert not guard_log.exists(), guard_log.read_text()
+    # No ./mlflow.db (destination) and no telemetry file under HOME.
+    assert sorted(p.name for p in work.rglob("*")) == []
+
+
+@pytest.mark.parametrize("pasted", [False, True], ids=["script", "pasted"])
+@pytest.mark.parametrize("missing", ["FI_API_KEY", "FI_SECRET_KEY"])
+def test_readme_header_line_stops_when_a_key_is_missing(
+    tmp_path: Path, missing: str, pasted: bool
+) -> None:
+    """README.md's header line fails loudly instead of exporting an empty value.
+
+    With OTEL_EXPORTER_OTLP_TRACES_HEADERS empty, the exporter would send
+    OTEL_EXPORTER_OTLP_HEADERS instead. FI_API_KEY is left unset and
+    FI_SECRET_KEY empty. "pasted" feeds the lines to an interactive bash, as
+    when they are pasted into a terminal: the shell goes on after an error.
+    """
+    emitted = tmp_path / "emitted.json"
+    lines = []
+    for line in _readme_setup_lines("http://127.0.0.1:9"):
+        if line.startswith("export {0}=".format(missing)):
+            if missing == "FI_API_KEY":
+                continue
+            line = 'export {0}=""'.format(missing)
+        lines.append(line)
+    lines.append(_emit_line(emitted, ("OTEL_EXPORTER_OTLP_TRACES_HEADERS",)))
+    script = "\n".join(lines) + "\n"
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(tmp_path),
+        "HISTFILE": str(tmp_path / "history"),
+        "BASH_SILENCE_DEPRECATION_WARNING": "1",
+    }
+    argv = ["/bin/bash", "--noprofile", "--norc"] + (["-i"] if pasted else ["-c", script])
+    result = run(argv, env=env, stdin=script.encode("utf-8") if pasted else None, timeout=60)
+    stderr = result.stderr.decode("utf-8", "replace")
+    assert not result.timed_out
+    assert missing in stderr
+    if pasted:
+        # The line fails and the variable is not exported; the next lines run.
+        assert json.loads(emitted.read_text()) == {"OTEL_EXPORTER_OTLP_TRACES_HEADERS": None}
+    else:
+        assert result.returncode != 0
+        assert not emitted.exists()
 
 
 # --------------------------------------------------------------------------
