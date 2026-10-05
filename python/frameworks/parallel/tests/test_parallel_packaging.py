@@ -78,12 +78,13 @@ def test_fi_instrumentation_floor_is_1_1_0():
 
 
 def test_classifiers_and_python_range_match_the_tested_versions():
-    # The suite runs on 3.10, 3.11 and 3.13 (PRD matrix 3.10/3.13, plus 3.11).
+    # The suite runs with parallel-web 1.0.1 and 1.3.5 on 3.10, 3.11, 3.12 and
+    # 3.13: every minor the python range admits.
     text = PYPROJECT.read_text()
     versions = re.findall(r'"Programming Language :: Python :: (3\.\d+)"', text)
-    assert versions == ["3.10", "3.11", "3.13"]
+    assert versions == ["3.10", "3.11", "3.12", "3.13"]
     python = _dependency("python")
-    for version in ("3.10.0", "3.11.9", "3.13.1"):
+    for version in ("3.10.0", "3.11.9", "3.12.10", "3.13.1"):
         assert python.contains(version), version
     for version in ("3.9.18", "3.14.0"):
         assert not python.contains(version), version

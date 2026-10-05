@@ -15,8 +15,8 @@ pip install traceAI-parallel
 ```
 
 It accepts `parallel-web>=1.0.1,<2` and `fi-instrumentation-otel>=1.1.0`.
-The suite runs with `parallel-web` 1.0.1 and 1.3.5 on Python 3.10, 3.11 and
-3.13.
+The suite runs with `parallel-web` 1.0.1 and 1.3.5 on Python 3.10, 3.11, 3.12
+and 3.13.
 
 ## Usage
 
