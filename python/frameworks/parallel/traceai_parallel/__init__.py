@@ -9,7 +9,7 @@ import logging
 from importlib import import_module
 from typing import Any, Collection, Dict, Tuple
 
-from fi_instrumentation import TraceConfig
+from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
@@ -44,9 +44,11 @@ class ParallelInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """Instrument Parallel's Search and Extract client methods.
 
     ``instrument()`` accepts ``tracer_provider``, ``config`` (a
-    ``fi_instrumentation.TraceConfig``; its ``hide_inputs`` / ``hide_outputs``
-    are honoured), ``capture_urls`` and ``capture_objective`` (both off by
-    default).
+    ``fi_instrumentation.TraceConfig``; its ``hide_inputs``, ``hide_outputs``
+    and ``pii_redaction`` are honoured), ``capture_urls`` and
+    ``capture_objective`` (both off by default). Spans come from an
+    ``FITracer``, so ``using_session`` / ``using_user`` / ``using_metadata`` /
+    ``using_tags`` / ``using_attributes`` context attributes are stamped on them.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -67,9 +69,14 @@ class ParallelInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             capture_objective=_flag(kwargs, "capture_objective"),
             hide_inputs=bool(config.hide_inputs),
             hide_outputs=bool(config.hide_outputs),
+            pii_redaction=bool(config.pii_redaction),
         )
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
-        tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
+        # FITracer applies the config's masking and PII redaction to every
+        # attribute and stamps the using_* context attributes.
+        tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
+        )
 
         self._originals: Dict[Tuple[str, str], Any] = {}
         self._state = _State()

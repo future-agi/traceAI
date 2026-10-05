@@ -84,6 +84,21 @@ carry the request attributes and status only.
 No model name, token count or cost is recorded: Parallel Search and Extract
 do not return them, and `client_model` is not recorded.
 
+Spans come from an `fi_instrumentation.FITracer`, so the context attributes
+of `using_session`, `using_user`, `using_metadata`, `using_tags` and
+`using_attributes` are stamped on every Parallel span started inside them
+(`session.id`, `user.id`, `metadata`, `tag.tags`):
+
+```python
+from fi_instrumentation import using_session, using_user
+
+with using_session("session-1"), using_user("user-1"):
+    client.search(search_queries=["open telemetry retrieval"])
+```
+
+`parallel.session_id` is Parallel's own session id and is a separate
+attribute.
+
 ## Privacy
 
 Recorded by default: the search queries (redacted and capped as above),
@@ -113,22 +128,23 @@ it: `client.api_key` (also set from `PARALLEL_API_KEY`), the `x-api-key`
 header in `default_headers` (or `PARALLEL_CUSTOM_HEADERS`), and a per-call
 `extra_headers={"x-api-key": ...}`.
 
-`TraceConfig` hide flags apply. Pass `config=TraceConfig(...)` or set the
+`TraceConfig` settings apply. Pass `config=TraceConfig(...)` or set the
 environment variables before calling `instrument()`:
 
 | Setting | Effect |
 |---|---|
-| `hide_inputs` / `FI_HIDE_INPUTS=true` | Drops `gen_ai.retrieval.query`, `input.value`, `parallel.urls` and `parallel.objective`. Counts, mode and ids stay. |
+| `hide_inputs` / `FI_HIDE_INPUTS=true` | Records `input.value` as `__REDACTED__` when `search_queries` were passed, and drops `gen_ai.retrieval.query`, `parallel.urls` and `parallel.objective`. No query text is recorded. Counts, mode and ids stay. |
 | `hide_outputs` / `FI_HIDE_OUTPUTS=true` | Drops `parallel.warning.message`. Warning types and counts stay. |
+| `pii_redaction` / `FI_PII_REDACTION=true` | Replaces emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` style keys with tokens such as `<EMAIL_ADDRESS>`, in every recorded text: attributes, warning messages, the error status and the `exception` event. It runs after the API key is removed and before the size caps, so a cut cannot leave part of an email. The patterns also match ids: an id with a run of ten digits is replaced too. |
 
 `config` must be a `fi_instrumentation.TraceConfig`; anything else raises
 `TypeError` and nothing is wrapped.
 
 Server-written text is recorded as the server wrote it, with only the key
-removed: a warning message or an error message that quotes your request
-shows that text even with `hide_inputs`. `hide_outputs` drops warning
-messages; error messages and stack traces are always recorded on failed
-calls.
+removed (and PII, with `pii_redaction`): a warning message or an error
+message that quotes your request shows that text even with `hide_inputs`.
+`hide_outputs` drops warning messages; error messages and stack traces are
+always recorded on failed calls.
 
 ## Errors and cancellation
 

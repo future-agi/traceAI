@@ -10,6 +10,8 @@ from collections.abc import Sequence as _SequenceABC
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
+from fi_instrumentation import REDACTED_VALUE
+from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
@@ -52,12 +54,17 @@ _API_KEY_HEADER = "x-api-key"
 
 @dataclass(frozen=True)
 class Options:
-    """What a span may carry beyond counts and ids. Everything is off by default."""
+    """What a span may carry beyond counts and ids, and how text is cleaned.
+
+    The capture switches are off by default. ``hide_*`` and ``pii_redaction``
+    come from the ``TraceConfig`` that ``FITracer`` also applies.
+    """
 
     capture_urls: bool = False
     capture_objective: bool = False
     hide_inputs: bool = False
     hide_outputs: bool = False
+    pii_redaction: bool = False
 
 
 class _State:
@@ -85,9 +92,19 @@ def _redact(value: str, keys: Sequence[str]) -> str:
     return value
 
 
-def _clean(value: str, keys: Sequence[str], limit: int = MAX_VALUE_BYTES) -> str:
-    """Redact first, then cap, so a key cut by the cap cannot leave a prefix."""
-    return _cap(_redact(value, keys), limit)
+def _clean(
+    value: str, keys: Sequence[str], limit: int = MAX_VALUE_BYTES, pii: bool = False
+) -> str:
+    """Redact the key, then PII when enabled, then cap.
+
+    Redacting before the cap means a key or an email cut by the cap cannot
+    leave a prefix. ``FITracer`` applies its PII pass to attributes again,
+    after the cap; span events and the status are written only from here.
+    """
+    value = _redact(value, keys)
+    if pii:
+        value = redact_pii_in_string(value)
+    return _cap(value, limit)
 
 
 def _api_keys(instance: Any, kwargs: Mapping[str, Any]) -> List[str]:
@@ -142,36 +159,43 @@ def _request_attributes(
     keys: Sequence[str],
     options: Options,
 ) -> Dict[str, Any]:
+    pii = options.pii_redaction
     attributes: Dict[str, Any] = {FI_SPAN_KIND: RETRIEVER}
     if operation == SEARCH:
         mode = kwargs.get("mode")
         if isinstance(mode, str):
-            attributes[MODE] = _clean(mode, keys, MAX_NAME_BYTES)
+            attributes[MODE] = _clean(mode, keys, MAX_NAME_BYTES, pii)
     else:
         urls = _sequence(kwargs.get("urls"))
         if urls is not None:
             attributes[URL_COUNT] = len(urls)
             if options.capture_urls and not options.hide_inputs:
                 attributes[URLS] = [
-                    _clean(url, keys) for url in urls[:MAX_CAPTURED_URLS] if isinstance(url, str)
+                    _clean(url, keys, pii=pii)
+                    for url in urls[:MAX_CAPTURED_URLS]
+                    if isinstance(url, str)
                 ]
 
     queries = _sequence(kwargs.get("search_queries"))
     if queries is not None:
         attributes[QUERY_COUNT] = len(queries)
-        if queries and not options.hide_inputs:
-            text = _clean("\n".join(str(query) for query in queries), keys)
+        if queries and options.hide_inputs:
+            # The placeholder FITracer writes for a hidden input.value; the
+            # query text never reaches the span.
+            attributes[INPUT_VALUE] = REDACTED_VALUE
+        elif queries:
+            text = _clean("\n".join(str(query) for query in queries), keys, pii=pii)
             attributes[RETRIEVAL_QUERY] = text
             # The backend input panel reads input.value; keep both keys equal.
             attributes[INPUT_VALUE] = text
 
     objective = kwargs.get("objective")
     if options.capture_objective and not options.hide_inputs and isinstance(objective, str):
-        attributes[OBJECTIVE] = _clean(objective, keys)
+        attributes[OBJECTIVE] = _clean(objective, keys, pii=pii)
 
     session_id = kwargs.get("session_id")
     if isinstance(session_id, str) and session_id:
-        attributes[SESSION_ID] = _clean(session_id, keys, MAX_NAME_BYTES)
+        attributes[SESSION_ID] = _clean(session_id, keys, MAX_NAME_BYTES, pii)
     return attributes
 
 
@@ -207,7 +231,7 @@ def _response_attributes(
     for field, key in ((id_field, id_key), ("session_id", SESSION_ID)):
         value = getattr(result, field, None)
         if isinstance(value, str) and value:
-            attributes[key] = _clean(value, keys, MAX_NAME_BYTES)
+            attributes[key] = _clean(value, keys, MAX_NAME_BYTES, options.pii_redaction)
 
     usage = getattr(result, "usage", None)
     if isinstance(usage, (list, tuple)):
@@ -234,7 +258,7 @@ def _response_attributes(
                 event[WARNING_TYPE] = _cap(kind, MAX_NAME_BYTES)
             message = getattr(warning, "message", None)
             if isinstance(message, str) and not options.hide_outputs:
-                event[WARNING_MESSAGE] = _clean(message, keys)
+                event[WARNING_MESSAGE] = _clean(message, keys, pii=options.pii_redaction)
             events.append(event)
     return attributes, events
 
@@ -246,11 +270,14 @@ def _describe(error: BaseException) -> str:
         return "<unprintable {0}>".format(type(error).__name__)
 
 
-def _exception_attributes(error: BaseException, keys: Sequence[str]) -> Dict[str, Any]:
+def _exception_attributes(
+    error: BaseException, keys: Sequence[str], pii: bool = False
+) -> Dict[str, Any]:
     """The OTel exception event, with the Parallel key removed from every text.
 
-    The message is then cut to 1 KB and the stacktrace to 16 KB of UTF-8: a
-    server error can echo a large request into both.
+    PII is replaced next when enabled. The message is then cut to 1 KB and
+    the stacktrace to 16 KB of UTF-8: a server error can echo a large
+    request into both.
     """
     error_type = type(error)
     module = error_type.__module__
@@ -262,8 +289,8 @@ def _exception_attributes(error: BaseException, keys: Sequence[str]) -> Dict[str
     stacktrace = "".join(traceback.format_exception(error_type, error, error.__traceback__))
     return {
         "exception.type": qualified,
-        "exception.message": _clean(_describe(error), keys),
-        "exception.stacktrace": _clean(stacktrace, keys, MAX_STACKTRACE_BYTES),
+        "exception.message": _clean(_describe(error), keys, pii=pii),
+        "exception.stacktrace": _clean(stacktrace, keys, MAX_STACKTRACE_BYTES, pii),
     }
 
 
@@ -324,13 +351,17 @@ class _Call:
         # No result count: nothing was returned, so the count is unknown.
         try:
             description = "{0}: {1}".format(
-                type(error).__name__, _clean(_describe(error), self.keys)
+                type(error).__name__,
+                _clean(_describe(error), self.keys, pii=self.options.pii_redaction),
             )
             self.span.set_status(Status(StatusCode.ERROR, description))
         except Exception:
             logger.debug("Could not set the error status", exc_info=True)
         try:
-            self.span.add_event("exception", _exception_attributes(error, self.keys))
+            self.span.add_event(
+                "exception",
+                _exception_attributes(error, self.keys, self.options.pii_redaction),
+            )
         except Exception:
             logger.debug("Could not record the exception", exc_info=True)
         self._end()

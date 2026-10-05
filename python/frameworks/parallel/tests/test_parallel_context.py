@@ -1,8 +1,13 @@
-"""Trace context: the Parallel span is current while the SDK sends HTTP, and nests."""
+"""Trace context: the Parallel span is current while the SDK sends HTTP, and nests.
+
+fi_instrumentation context attributes (using_session, using_user, ...) are
+stamped on Parallel spans.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -12,8 +17,10 @@ import httpx  # noqa: E402
 from opentelemetry import trace as trace_api  # noqa: E402
 
 from _parallel_support import (  # noqa: E402
+    SESSION_ID,
     FakeParallel,
     async_client,
+    attrs,
     instrumented,
     sync_client,
 )
@@ -105,3 +112,56 @@ def test_one_span_per_call_with_sdk_retries(fake):
 
     assert len(fake.calls) == 2
     assert [span.name for span in traced.spans()] == ["parallel.search"]
+
+
+def test_using_session_and_using_user_stamp_search_and_extract_spans(fake):
+    from fi_instrumentation import using_session, using_user
+
+    async def call() -> None:
+        client = async_client(fake)
+        try:
+            await client.search(search_queries=["async q"])
+            await client.extract(urls=["https://x.example/b"])
+        finally:
+            await client.close()
+
+    with instrumented() as traced:
+        with using_session("s1"), using_user("u1"):
+            client = sync_client(fake)
+            client.search(search_queries=["q"])
+            client.extract(urls=["https://x.example/a"])
+            asyncio.run(call())
+        sync_client(fake).search(search_queries=["outside"])
+
+    spans = traced.spans()
+    assert [span.name for span in spans] == [
+        "parallel.search",
+        "parallel.extract",
+        "parallel.search",
+        "parallel.extract",
+        "parallel.search",
+    ]
+    for span in spans[:4]:
+        values = attrs(span)
+        assert values["session.id"] == "s1", span.name
+        assert values["user.id"] == "u1", span.name
+    # The vendor's own session id stays on its own key.
+    assert attrs(spans[0])["parallel.session_id"] == SESSION_ID
+    # Nothing leaks past the with block.
+    assert "session.id" not in attrs(spans[4])
+    assert "user.id" not in attrs(spans[4])
+
+
+def test_using_attributes_stamps_metadata_and_tags(fake):
+    from fi_instrumentation import using_attributes
+
+    metadata = {"team": "search", "run": 3}
+    with instrumented() as traced:
+        with using_attributes(session_id="s2", user_id="u2", metadata=metadata, tags=["t1", "t2"]):
+            sync_client(fake).extract(urls=["https://x.example/a"])
+
+    values = attrs(traced.one())
+    assert values["session.id"] == "s2"
+    assert values["user.id"] == "u2"
+    assert json.loads(values["metadata"]) == metadata
+    assert list(values["tag.tags"]) == ["t1", "t2"]

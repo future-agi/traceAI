@@ -7,6 +7,7 @@ first search query (or, without queries, the first URL) picks the behaviour:
 - ``fail-401``: HTTP 401 whose error message echoes the request's x-api-key
 - ``fail-500``: HTTP 500
 - ``fail-huge``: HTTP 400 whose ~24 KB error message echoes the x-api-key
+- ``fail-echo``: HTTP 400 whose error message echoes the first search query
 - ``slow``: held open until the fake closes (for cancellation)
 - ``warn``: a successful response with two warnings
 - ``echo-key-into-notice``: one oversized warning that echoes the x-api-key
@@ -38,6 +39,8 @@ FAIL_500 = "fail-500"
 # HTTP 400 whose error message echoes the x-api-key, then 8000 euro signs.
 FAIL_HUGE = "fail-huge"
 HUGE_ERROR_CHARS = 8000
+# HTTP 400 whose error message echoes the first search query.
+FAIL_ECHO = "fail-echo"
 SLOW = "slow"
 WARN = "warn"
 # Echoes the request's x-api-key into one oversized warning message.
@@ -130,6 +133,8 @@ class FakeParallel:
                         headers.get("x-api-key", ""), "\u20ac" * HUGE_ERROR_CHARS
                     )
                     self._send(400, {"error": {"message": message}})
+                elif FAIL_ECHO in trigger:
+                    self._send(400, {"error": {"message": "rejected query: " + trigger}})
                 elif SLOW in trigger:
                     owner._release.wait(30)
                     self._send(503, {"error": {"message": "released"}})
