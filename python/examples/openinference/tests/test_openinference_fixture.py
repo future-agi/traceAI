@@ -13,9 +13,9 @@ Nothing imports ``openinference-instrumentation`` or the backend's Python
 adapter (``tracer.utils.adapters.openinference``). The harness sends no auth
 header, so no key, real or placeholder, is involved.
 
-Two opt-in tests read fi-collector's Go source (``FI_COLLECTOR_SRC``) to check
-that the collector reads the keys this fixture sets. They read the source; they
-do not run the collector.
+Four opt-in tests read fi-collector's Go source (``FI_COLLECTOR_SRC``) and match
+the tables and statements behind the README's source-reading facts. They read
+the source; they do not run the collector.
 """
 
 from __future__ import annotations
@@ -332,8 +332,34 @@ def _collector_source() -> dict[str, str]:
         "adapter": "pkg/adapter/adapter.go",
         "converter": "exporter/clickhouse25exporter/converter.go",
         "stamp": "pkg/auth/stamp.go",
+        "auth": "pkg/auth/auth.go",
+        "server": "pkg/server/server.go",
     }
     return {name: (Path(root) / path).read_text(encoding="utf-8") for name, path in files.items()}
+
+
+_GO_STRING_OR_COMMENT = re.compile(r'"(?:\\.|[^"\\\n])*"|`[^`]*`|//[^\n]*|/\*.*?\*/', flags=re.DOTALL)
+
+
+def _go_code(source: str) -> str:
+    """Go source with comments removed and whitespace collapsed to one space,
+    so a commented-out or reflowed statement does not match as live code."""
+    source = _GO_STRING_OR_COMMENT.sub(lambda m: " " if m.group().startswith("/") else m.group(), source)
+    return " ".join(source.split())
+
+
+def _go_func(source: str, name: str) -> str:
+    """The body of top-level function or method ``name``, as ``_go_code``.
+    gofmt puts a function's closing brace, and only that, in column 0."""
+    match = re.search(r"^func (?:\([^)]*\) )?" + re.escape(name) + r"\(", source, flags=re.MULTILINE)
+    assert match, name
+    start = source.index(" {\n", match.end()) + 3
+    return _go_code(source[start : source.index("\n}\n", start)])
+
+
+def _has_statements(code: str, *statements: str) -> None:
+    for statement in statements:
+        assert statement in code, statement
 
 
 def _go_literal(source: str, name: str) -> str:
@@ -358,27 +384,43 @@ def _go_map_keys(source: str, name: str) -> set[str]:
 def test_collector_reads_the_keys_the_fixture_sets() -> None:
     source = _collector_source()
     kind_keys = _go_strings(source["converter"], "spanKindAttrKeys")
-    assert KIND_KEY in kind_keys
     operation_keys = _go_strings(source["converter"], "operationNameAttrKeys")
-    # Every key the collector would read a kind from, other than ours, is
-    # absent from the fixture, so the stored type comes from KIND_KEY alone.
-    assert set(kind_keys + operation_keys) - {KIND_KEY} == set(OTHER_KIND_KEYS)
-    # The fixture's model and token keys are the first alias of each list.
+    # KIND_KEY is the fourth kind key. Every other key the collector would
+    # read a kind from is absent from the fixture, so the stored type comes
+    # from KIND_KEY alone.
+    assert kind_keys + operation_keys == [*OTHER_KIND_KEYS[:3], KIND_KEY, OTHER_KIND_KEYS[3]]
+    # The fixture's model and token keys are the first alias of each list,
+    # and it sets no total key, so total_tokens is derived.
     assert _go_strings(source["adapter"], "modelNameKeys")[0] == "llm.model_name"
     assert _go_strings(source["adapter"], "inputTokenKeys")[0] == "llm.token_count.prompt"
     assert _go_strings(source["adapter"], "outputTokenKeys")[0] == "llm.token_count.completion"
-    # input.value goes to the JSON overflow and is lifted into the input column.
-    assert "input.value" in _go_strings(source["adapter"], "overflowKeyPrefixes")
-    assert 'overflowAsString(overflow, "input.value")' in source["converter"]
-    assert 'getStrAttr(attrs, "project_name")' in source["stamp"]
+    llm_keys = set(attributes(by_name(body_spans(load_body()))[LLM]))
+    assert not llm_keys & set(_go_strings(source["adapter"], "totalTokenKeys"))
+    # input.value goes to the JSON overflow; the kind, model and token keys
+    # do not, so they stay readable as strings and numbers.
+    prefixes = _go_strings(source["adapter"], "overflowKeyPrefixes")
+    assert "input.value" in prefixes
+    for key in llm_keys:
+        assert not any(key.startswith(prefix) for prefix in prefixes), key
+    _has_statements(
+        _go_func(source["adapter"], "hasOverflowPrefix"),
+        "for _, p := range overflowKeyPrefixes { if strings.HasPrefix(key, p) { return true } }",
+    )
 
 
 def test_collector_type_list_has_the_fixture_kinds_but_not_the_unknown_ones() -> None:
-    """converter.go lowercases the raw kind, applies spanKindSynonyms and
-    stores ``unknown`` for anything not in knownObservationTypes. This reads
-    those two tables; it does not run resolveObservationType."""
+    """converter.go takes the first non-empty kind key, lowercases it, applies
+    spanKindSynonyms and returns ``unknown`` for anything not in
+    knownObservationTypes. This reads those tables and statements; it does
+    not run resolveObservationType."""
     source = _collector_source()
-    assert "strings.ToLower(strings.TrimSpace(raw))" in source["converter"]
+    _has_statements(
+        _go_func(source["converter"], "resolveObservationType"),
+        'raw := "" for _, k := range spanKindAttrKeys { if v := attrsStr[k]; v != "" { raw = v break } }',
+        "t := strings.ToLower(strings.TrimSpace(raw)) if syn, ok := spanKindSynonyms[t]; ok { t = syn }",
+        "if _, ok := knownObservationTypes[t]; !ok { return observationTypeUnknown } return t",
+    )
+    assert 'observationTypeUnknown = "unknown"' in _go_code(source["converter"])
     known = _go_map_keys(source["converter"], "knownObservationTypes")
     synonyms = _go_map_keys(source["converter"], "spanKindSynonyms")
     assert "unknown" in known
@@ -386,3 +428,76 @@ def test_collector_type_list_has_the_fixture_kinds_but_not_the_unknown_ones() ->
         assert kind.lower() in known, kind
     for kind in UNKNOWN_KINDS:
         assert kind.lower() not in known | synonyms, kind
+
+
+def test_collector_stores_the_kind_model_tokens_and_input() -> None:
+    """The statements between the span's attributes and the stored row:
+    Split routes strings and ints, DeriveHotKeys picks the model and tokens
+    (deriving the total), and spanToRow stores what they and the kind
+    resolver return. Matched as source text; nothing is run."""
+    source = _collector_source()
+    _has_statements(
+        _go_func(source["adapter"], "Split"),
+        "if hasOverflowPrefix(k) { overflow[k] = otelValueToJSON(v) return true }",
+        "case pcommon.ValueTypeStr: attrsString[k] = v.Str()",
+        "n := v.Int() if n >= minSafeInt && n <= maxSafeInt { attrsNumber[k] = float64(n) }",
+    )
+    _has_statements(
+        _go_func(source["adapter"], "DeriveHotKeys"),
+        "hk.Model = firstString(attrsString, modelNameKeys)",
+        "if v, ok := firstNumber(attrsString, attrsNumber, inputTokenKeys); ok { hk.PromptTokens = int32(v) }",
+        "if v, ok := firstNumber(attrsString, attrsNumber, outputTokenKeys); ok { hk.CompletionTokens = int32(v) }",
+        "if v, ok := firstNumber(attrsString, attrsNumber, totalTokenKeys); ok { hk.TotalTokens = int32(v) }"
+        " else if hk.PromptTokens+hk.CompletionTokens > 0 { hk.TotalTokens = hk.PromptTokens + hk.CompletionTokens }",
+    )
+    row = _go_func(source["converter"], "spanToRow")
+    _has_statements(
+        row,
+        "adapter.Split(span.Attributes(), attrsStr, attrsNum, attrsBool, overflow)",
+        "hot := adapter.DeriveHotKeys(attrsStr, attrsNum)",
+        "observationType := resolveObservationType(attrsStr)",
+        'input := overflowAsString(overflow, "input.value")',
+        '"observation_type": observationType,',
+        '"model": hot.Model,',
+        '"prompt_tokens": hot.PromptTokens,',
+        '"completion_tokens": hot.CompletionTokens,',
+        '"total_tokens": hot.TotalTokens,',
+        '"attributes_extra": overflow,',
+        '"input": input,',
+    )
+    # One return, with a nil error: no kind value can fail the export.
+    assert row.count("return ") == row.count("return row, identity, nil") == 1
+
+
+def test_collector_project_name_rules() -> None:
+    """A missing project_name is a 400 only on an authenticated request; a
+    name not yet in the workspace is created; one that still does not
+    resolve is dropped and the request answered 200 (handleHTTPTraces,
+    StampResourceAttrs, ResolveProjectsForKey). Matched as source text."""
+    source = _collector_source()
+    handler = _go_func(source["server"], "handleHTTPTraces")
+    assert handler.count("auth.StampResourceAttrs(") == 1
+    # Stamping runs only inside the authenticated branch. Its error is the
+    # 400; a drop is only logged, and the handler goes on to its 200.
+    assert re.search(
+        r"if result := auth\.FromContext\(r\.Context\(\)\); result != nil \{[^}]*"
+        r"dropped, err := auth\.StampResourceAttrs\(.*?\) "
+        r'if err != nil \{ http\.Error\(w, "auth stamp: "\+err\.Error\(\), http\.StatusBadRequest\) return \} '
+        r"if dropped > 0 \{ s\.log\.Warn\([^{}]*\) \}",
+        handler,
+    )
+    assert handler.endswith("w.WriteHeader(http.StatusOK) _, _ = w.Write(out)")
+    _has_statements(
+        _go_func(source["stamp"], "StampResourceAttrs"),
+        "if result == nil { return 0, nil }",
+        'pn := getStrAttr(attrs, "project_name") if pn == "" { missing = append(missing, i) continue }',
+        "if len(missing) > 0 { return 0, fmt.Errorf(",
+        'if !ok || projectID == "" { unresolvable[projectName] = struct{}{} continue }',
+        "rss.RemoveIf(",
+        "return before - rss.Len(), nil",
+    )
+    assert re.search(
+        r'return resolver\.GetOrCreateProject\(ctx, result\.OrgID, result\.WorkspaceID, name, "observe"\) \}\) '
+        r'if err != nil \{ a\.log\.Warn\("project auto-create failed"[^{}]*\) continue \}',
+        _go_func(source["auth"], "ResolveProjectsForKey"),
+    )
