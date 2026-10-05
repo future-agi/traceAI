@@ -915,7 +915,7 @@ class FutureAGICallback(BaseCallbackHandler):
         if name:
             self._set(span, RESPONSE_MODEL, name)
         if reasons:
-            self._set(span, FINISH_REASONS, [cap(reason, MAX_NAME_BYTES) for reason in reasons])
+            self._set(span, FINISH_REASONS, [self._name(reason) for reason in reasons])
         if isinstance(usage, Mapping):
             self._set(span, INPUT_TOKENS, _int(usage.get("input_tokens")))
             self._set(span, OUTPUT_TOKENS, _int(usage.get("output_tokens")))
