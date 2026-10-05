@@ -589,6 +589,7 @@ def test_packed_tarball_has_no_sdk_sources_or_native_binary(built_package: Path,
             assert "node_modules" not in member.name
             assert "__tests__" not in member.name
             assert not relative.endswith((".mjs", ".node", ".exe", ".wasm")), relative
+            assert not relative.endswith(".tsbuildinfo"), f"build cache in tarball: {relative}"
             assert Path(relative).name not in {"sdk.mjs", "sdk.d.ts", "sdk-tools.d.ts", "bridge.mjs", "claude", "cli.js"}
             assert not data.startswith(NATIVE_MAGIC), f"native binary in tarball: {relative}"
             assert _sha256(data) not in sdk_hashes, f"{relative} is a copy of {sdk_hashes[_sha256(data)]}"

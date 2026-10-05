@@ -48,7 +48,33 @@ export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentP
   };
 }
 
-const knownProviders = new Set<TracerProvider>();
+/**
+ * Providers passed to an instrumentation, for `shutdown()` with no argument.
+ * Held weakly: an app that drops a provider and its instrumentation lets both
+ * be collected. Dead entries are pruned whenever the set is read or added to.
+ */
+const knownProviders = new Set<WeakRef<TracerProvider>>();
+
+function liveProviders(): TracerProvider[] {
+  const live: TracerProvider[] = [];
+  for (const ref of knownProviders) {
+    const provider = ref.deref();
+    if (provider) live.push(provider);
+    else knownProviders.delete(ref);
+  }
+  return live;
+}
+
+function trackProvider(provider: TracerProvider): void {
+  if (!liveProviders().includes(provider)) {
+    knownProviders.add(new WeakRef(provider));
+  }
+}
+
+/** Providers currently tracked for `shutdown()`. */
+export function trackedProviderCount(): number {
+  return liveProviders().length;
+}
 
 /**
  * Traces Claude Agent SDK `query()` calls.
@@ -75,7 +101,7 @@ export class ClaudeAgentSDKInstrumentation {
 
   setTracerProvider(tracerProvider: TracerProvider): void {
     this.tracerProvider = tracerProvider;
-    knownProviders.add(tracerProvider);
+    trackProvider(tracerProvider);
   }
 
   /** The content policy this instrumentation applies. */
@@ -133,7 +159,7 @@ export function wrapQuery<Q extends QueryFunctionLike>(
 export async function shutdown(tracerProvider?: TracerProvider): Promise<void> {
   const providers = tracerProvider
     ? [tracerProvider]
-    : [...knownProviders, trace.getTracerProvider()];
+    : [...liveProviders(), trace.getTracerProvider()];
   const seen = new Set<unknown>();
   for (const provider of providers) {
     const target = resolveDelegate(provider);

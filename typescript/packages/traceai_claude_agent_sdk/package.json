@@ -34,13 +34,13 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/futureagi/traceai.git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
     "directory": "typescript/packages/traceai_claude_agent_sdk"
   },
   "bugs": {
-    "url": "https://github.com/futureagi/traceai/issues"
+    "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/futureagi/traceai#readme",
+  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_claude_agent_sdk#readme",
   "engines": {
     "node": ">=18.0.0"
   },
@@ -67,7 +67,8 @@
   "files": [
     "dist",
     "src",
-    "!**/__tests__/**"
+    "!**/__tests__/**",
+    "!**/*.tsbuildinfo"
   ],
   "publishConfig": {
     "access": "public"
