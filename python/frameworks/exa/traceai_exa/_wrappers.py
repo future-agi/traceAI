@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+import wrapt
+from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 _FI_SPAN_KIND = "fi.span.kind"
@@ -165,6 +167,17 @@ class _BaseWrapper:
         span.end()
 
 
+def _current(span: Span) -> Any:
+    """Make ``span`` current for the vendor call so HTTP client spans nest under it.
+
+    The span is ended by the wrapper, not on exit, and errors are recorded once
+    by ``_finish_error``.
+    """
+    return trace_api.use_span(
+        span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+    )
+
+
 class OperationWrapper(_BaseWrapper):
     """Trace a synchronous Exa operation."""
 
@@ -177,7 +190,8 @@ class OperationWrapper(_BaseWrapper):
     ) -> Any:
         span = self._start_span(instance, args, kwargs)
         try:
-            result = wrapped(*args, **kwargs)
+            with _current(span):
+                result = wrapped(*args, **kwargs)
         except BaseException as error:
             self._finish_error(span, error)
             raise
@@ -197,7 +211,8 @@ class AsyncOperationWrapper(_BaseWrapper):
     ) -> Any:
         span = self._start_span(instance, args, kwargs)
         try:
-            result = await wrapped(*args, **kwargs)
+            with _current(span):
+                result = await wrapped(*args, **kwargs)
         except BaseException as error:
             self._finish_error(span, error)
             raise
@@ -205,59 +220,81 @@ class AsyncOperationWrapper(_BaseWrapper):
         return result
 
 
-class _StreamIterator:
-    """Finish a synchronous stream span when its iterator completes or closes."""
+class _StreamState:
+    """Ends one stream span exactly once; counts citations as chunks arrive."""
+
+    def __init__(self, span: Span) -> None:
+        self.span = span
+        self.finished = False
+        # Citations accumulate over chunks; the total is known only at the end.
+        self.citations = 0
+
+    def observe(self, chunk: Any) -> None:
+        self.citations += _chunk_citations(chunk)
+
+    def ok(self) -> None:
+        if not self.finished:
+            self.finished = True
+            _BaseWrapper._finish_ok(self.span, self.citations)
+
+    def error(self, error: BaseException) -> None:
+        if not self.finished:
+            self.finished = True
+            _BaseWrapper._finish_error(self.span, error)
+
+
+def _state_of(proxy: Any) -> Optional[_StreamState]:
+    # A proxy whose __init__ failed has no state; __del__ must not raise.
+    try:
+        return proxy._self_state
+    except Exception:
+        return None
+
+
+class _TracedStream(wrapt.ObjectProxy):  # type: ignore[misc]
+    """A StreamSearchResponse/StreamAnswerResponse that ends its span.
+
+    An ObjectProxy, so ``isinstance`` against the vendor class still holds.
+    """
 
     def __init__(self, response: Any, span: Span) -> None:
-        self._response = response
-        self._iterator = iter(response)
-        self._span = span
-        self._finished = False
-        # Citations accumulate over chunks; the total is known only at the end.
-        self._citations = 0
+        super().__init__(response)
+        self._self_state = _StreamState(span)
+        self._self_iterator = None
 
-    def __iter__(self) -> "_StreamIterator":
+    def __iter__(self) -> "_TracedStream":
         return self
 
     def __next__(self) -> Any:
+        state = self._self_state
         try:
-            chunk = next(self._iterator)
+            if self._self_iterator is None:
+                self._self_iterator = iter(self.__wrapped__)
+            chunk = next(self._self_iterator)
         except StopIteration:
-            self._finish_ok()
+            state.ok()
             raise
         except BaseException as error:
-            self._finish_error(error)
+            state.error(error)
             raise
-        self._citations += _chunk_citations(chunk)
+        state.observe(chunk)
         return chunk
 
     def close(self) -> None:
         try:
-            close = getattr(self._iterator, "close", None)
+            close = getattr(self._self_iterator, "close", None)
             if close is not None:
                 close()
-            response_close = getattr(self._response, "close", None)
-            if response_close is not None and self._iterator is not self._response:
+            response_close = getattr(self.__wrapped__, "close", None)
+            if response_close is not None:
                 response_close()
         finally:
-            self._finish_error(RuntimeError("Exa stream cancelled"))
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._response, name)
+            self._self_state.error(RuntimeError("Exa stream cancelled"))
 
     def __del__(self) -> None:
-        if not getattr(self, "_finished", True):
-            self._finish_error(RuntimeError("Exa stream cancelled"))
-
-    def _finish_ok(self) -> None:
-        if not self._finished:
-            self._finished = True
-            _BaseWrapper._finish_ok(self._span, self._citations)
-
-    def _finish_error(self, error: BaseException) -> None:
-        if not self._finished:
-            self._finished = True
-            _BaseWrapper._finish_error(self._span, error)
+        state = _state_of(self)
+        if state is not None:
+            state.error(RuntimeError("Exa stream cancelled"))
 
 
 class StreamWrapper(_BaseWrapper):
@@ -272,66 +309,55 @@ class StreamWrapper(_BaseWrapper):
     ) -> Any:
         span = self._start_span(instance, args, kwargs)
         try:
-            response = wrapped(*args, **kwargs)
-            return _StreamIterator(response, span)
+            with _current(span):
+                response = wrapped(*args, **kwargs)
         except BaseException as error:
             self._finish_error(span, error)
             raise
+        return _TracedStream(response, span)
 
 
-class _AsyncStreamIterator:
-    """Finish an async stream span when its iterator completes or closes."""
+class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
+    """An AsyncStreamSearchResponse/AsyncStreamAnswerResponse that ends its span."""
 
     def __init__(self, response: Any, span: Span) -> None:
-        self._response = response
-        self._iterator = response.__aiter__()
-        self._span = span
-        self._finished = False
-        # Citations accumulate over chunks; the total is known only at the end.
-        self._citations = 0
+        super().__init__(response)
+        self._self_state = _StreamState(span)
+        self._self_iterator = None
 
-    def __aiter__(self) -> "_AsyncStreamIterator":
+    def __aiter__(self) -> "_TracedAsyncStream":
         return self
 
     async def __anext__(self) -> Any:
+        state = self._self_state
         try:
-            chunk = await self._iterator.__anext__()
+            if self._self_iterator is None:
+                self._self_iterator = self.__wrapped__.__aiter__()
+            chunk = await self._self_iterator.__anext__()
         except StopAsyncIteration:
-            self._finish_ok()
+            state.ok()
             raise
         except BaseException as error:
-            self._finish_error(error)
+            state.error(error)
             raise
-        self._citations += _chunk_citations(chunk)
+        state.observe(chunk)
         return chunk
 
     async def aclose(self) -> None:
         try:
-            close = getattr(self._iterator, "aclose", None)
+            close = getattr(self._self_iterator, "aclose", None)
             if close is not None:
                 await close()
-            response_close = getattr(self._response, "aclose", None)
-            if response_close is not None and self._iterator is not self._response:
+            response_close = getattr(self.__wrapped__, "aclose", None)
+            if response_close is not None:
                 await response_close()
         finally:
-            self._finish_error(RuntimeError("Exa stream cancelled"))
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._response, name)
+            self._self_state.error(RuntimeError("Exa stream cancelled"))
 
     def __del__(self) -> None:
-        if not getattr(self, "_finished", True):
-            self._finish_error(RuntimeError("Exa stream cancelled"))
-
-    def _finish_ok(self) -> None:
-        if not self._finished:
-            self._finished = True
-            _BaseWrapper._finish_ok(self._span, self._citations)
-
-    def _finish_error(self, error: BaseException) -> None:
-        if not self._finished:
-            self._finished = True
-            _BaseWrapper._finish_error(self._span, error)
+        state = _state_of(self)
+        if state is not None:
+            state.error(RuntimeError("Exa stream cancelled"))
 
 
 class AsyncStreamWrapper(_BaseWrapper):
@@ -346,10 +372,11 @@ class AsyncStreamWrapper(_BaseWrapper):
     ) -> Any:
         span = self._start_span(instance, args, kwargs)
         try:
-            response = wrapped(*args, **kwargs)
-            if inspect.isawaitable(response):
-                response = await response
-            return _AsyncStreamIterator(response, span)
+            with _current(span):
+                response = wrapped(*args, **kwargs)
+                if inspect.isawaitable(response):
+                    response = await response
         except BaseException as error:
             self._finish_error(span, error)
             raise
+        return _TracedAsyncStream(response, span)
