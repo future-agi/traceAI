@@ -535,3 +535,124 @@ def test_api_key_is_redacted_from_query_and_job_id(
         assert all(API_KEY not in str(value) for value in attrs(span).values()), span.name
     assert attrs(finished[0])["fi.retrieval.query"] == "find [redacted]"
     assert attrs(finished[1])["firecrawl.job_id"] == "job-[redacted]"
+
+
+# Coverage the installed review listed as missing.
+
+OPERATIONS = (
+    "scrape",
+    "search",
+    "map",
+    "crawl",
+    "start_crawl",
+    "get_crawl_status",
+    "cancel_crawl",
+)
+
+
+def test_map_emits_one_tool_span_without_links(fake: FakeFirecrawl, tracing: Tracing) -> None:
+    from _firecrawl_fake import RESULT_TITLE
+
+    _, exporter, _ = tracing
+    mapped = sync_client(fake).map("https://example.com/private/start", limit=2)
+
+    async def journey() -> Any:
+        return await async_client(fake).map("https://example.com/private/start", limit=2)
+
+    async_mapped = asyncio.run(journey())
+
+    assert len(mapped.links) == 2 and len(async_mapped.links) == 2
+    finished = spans(exporter)
+    assert [span.name for span in finished] == ["firecrawl.map"] * 2
+    for span in finished:
+        assert span.status.status_code is StatusCode.OK
+        assert attrs(span) == {"fi.span.kind": "TOOL", "server.address": "example.com"}
+        assert "/private" not in str(attrs(span)) and RESULT_TITLE not in str(attrs(span))
+
+
+def _sync_journey(fake: FakeFirecrawl) -> None:
+    client = sync_client(fake)
+    client.scrape("https://example.com/a", formats=["markdown"])
+    client.search("open telemetry", limit=2)
+    client.map("https://example.com")
+    client.crawl("https://example.com", limit=3, poll_interval=0)
+    client.start_crawl("https://example.com", limit=3)
+    client.get_crawl_status(JOB_ID)
+    client.cancel_crawl(JOB_ID)
+
+
+async def _async_journey(fake: FakeFirecrawl) -> None:
+    client = async_client(fake)
+    await client.scrape("https://example.com/a", formats=["markdown"])
+    await client.search("open telemetry", limit=2)
+    await client.map("https://example.com")
+    await client.crawl(url="https://example.com", limit=3, poll_interval=0)
+    await client.start_crawl("https://example.com", limit=3)
+    await client.get_crawl_status(JOB_ID)
+    await client.cancel_crawl(JOB_ID)
+
+
+def test_async_twins_record_the_same_spans_as_sync(fake: FakeFirecrawl, tracing: Tracing) -> None:
+    """AC-08 / J6: AsyncFirecrawl emits the same span names, attributes and status."""
+    _, exporter, _ = tracing
+
+    _sync_journey(fake)
+    sync_spans = spans(exporter)
+    exporter.clear()
+    asyncio.run(_async_journey(fake))
+    async_spans = spans(exporter)
+
+    def summary(finished: List[ReadableSpan]) -> List[Tuple[str, Dict[str, Any], StatusCode]]:
+        return [(span.name, attrs(span), span.status.status_code) for span in finished]
+
+    assert [span.name for span in sync_spans] == ["firecrawl." + name for name in OPERATIONS]
+    assert summary(async_spans) == summary(sync_spans)
+
+
+def test_uninstrument_restores_methods_and_stops_new_spans(fake: FakeFirecrawl) -> None:
+    from firecrawl.v2.client import FirecrawlClient
+    from firecrawl.v2.client_async import AsyncFirecrawlClient
+
+    classes = (FirecrawlClient, AsyncFirecrawlClient)
+    originals = {(cls, name): cls.__dict__[name] for cls in classes for name in OPERATIONS}
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = FirecrawlInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    try:
+        assert all(cls.__dict__[name] is not original for (cls, name), original in originals.items())
+    finally:
+        instrumentor.uninstrument()
+
+    assert all(cls.__dict__[name] is original for (cls, name), original in originals.items())
+    _sync_journey(fake)
+    asyncio.run(_async_journey(fake))
+    assert spans(exporter) == []
+
+
+def test_facade_methods_bind_at_construction(fake: FakeFirecrawl) -> None:
+    """R4, documented in the README: Firecrawl/AsyncFirecrawl copy the v2 client's
+    bound methods in __init__. Build the client after instrument(); a client built
+    before is not traced, and one built while instrumented keeps tracing after
+    uninstrument()."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = FirecrawlInstrumentor()
+
+    built_before = sync_client(fake)
+    instrumentor.instrument(tracer_provider=provider)
+    try:
+        built_during = sync_client(fake)
+        built_before.scrape("https://before.example.com")
+        built_during.scrape("https://during.example.com")
+    finally:
+        instrumentor.uninstrument()
+    built_during.scrape("https://during-after-uninstrument.example.com")
+    sync_client(fake).scrape("https://after.example.com")
+
+    assert [attrs(span)["server.address"] for span in spans(exporter)] == [
+        "during.example.com",
+        "during-after-uninstrument.example.com",
+    ]

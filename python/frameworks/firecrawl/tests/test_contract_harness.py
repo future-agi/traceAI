@@ -244,3 +244,57 @@ def test_no_key_path_or_content_is_exported(fake_firecrawl, monkeypatch):
     wire = json.dumps(spans) + json.dumps(exports)
     for secret in (FIRECRAWL_KEY, PAGE_BODY, RESULT_TITLE, SECRET_PATH):
         assert secret not in wire, secret
+
+
+_EXIT_SCRIPT = """
+import os
+import sys
+
+from firecrawl import Firecrawl
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
+from traceai_firecrawl import FirecrawlInstrumentor
+
+provider = register(project_type=ProjectType.OBSERVE, project_name=os.environ["PROJECT"], verbose=False)
+FirecrawlInstrumentor().instrument(tracer_provider=provider)
+Firecrawl(api_key=os.environ["FIRECRAWL_KEY"], api_url=os.environ["FIRECRAWL_BASE_URL"], max_retries=1).scrape(
+    "https://example.com"
+)
+# No force_flush(): the batch processor must export at interpreter exit.
+if sys.argv[1] == "hard-exit":
+    os._exit(0)
+"""
+
+
+@pytest.mark.parametrize("exit_mode,exported", [("normal", True), ("hard-exit", False)])
+def test_scrape_span_is_exported_at_process_exit(fake_firecrawl, exit_mode, exported):
+    """AC-09: a script that exits normally exports its span without an explicit
+    flush (register() uses a batch processor). The hard-exit control skips the
+    exit hooks and must export nothing, which shows the receiver is not fed any
+    other way."""
+    import os
+
+    from harness import run
+
+    with Receiver() as receiver:
+        env = dict(os.environ)
+        here = Path(__file__).resolve()
+        # The package and the in-repo fi_instrumentation, whatever the cwd.
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(here.parents[1]), str(here.parents[3])] + [p for p in [env.get("PYTHONPATH")] if p]
+        )
+        env.update(
+            FI_BASE_URL=receiver.origin,
+            FI_API_KEY=FI_API_KEY,
+            FI_SECRET_KEY=FI_SECRET_KEY,
+            PROJECT=PROJECT,
+            FIRECRAWL_KEY=FIRECRAWL_KEY,
+            FIRECRAWL_BASE_URL=fake_firecrawl.origin,
+        )
+        result = run([sys.executable, "-c", _EXIT_SCRIPT, exit_mode], env=env, stdin=None, timeout=60)
+        spans = receiver.spans()
+
+    assert not result.timed_out, result.stderr.decode(errors="replace")
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    assert fake_firecrawl.calls == [("POST", "/v2/scrape")]
+    assert [span["name"] for span in spans] == (["firecrawl.scrape"] if exported else [])
