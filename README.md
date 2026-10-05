@@ -275,6 +275,7 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-mcp`](https://pypi.org/project/traceAI-mcp/) | Model Context Protocol | [![PyPI](https://img.shields.io/pypi/v/traceAI-mcp)](https://pypi.org/project/traceAI-mcp/) |
 | [`traceAI-pipecat`](https://pypi.org/project/traceAI-pipecat/) | Pipecat (Voice AI) | [![PyPI](https://img.shields.io/pypi/v/traceAI-pipecat)](https://pypi.org/project/traceAI-pipecat/) |
 | [`traceAI-livekit`](https://pypi.org/project/traceAI-livekit/) | LiveKit (Real-time) | [![PyPI](https://img.shields.io/pypi/v/traceAI-livekit)](https://pypi.org/project/traceAI-livekit/) |
+| [`traceAI-tavily`](https://pypi.org/project/traceAI-tavily/) | Tavily (search client) | [![PyPI](https://img.shields.io/pypi/v/traceAI-tavily)](https://pypi.org/project/traceAI-tavily/) |
 
 #### Vector Databases
 
