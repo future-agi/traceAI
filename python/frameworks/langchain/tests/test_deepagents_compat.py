@@ -155,6 +155,7 @@ def test_tested_versions(capsys):
         "langchain": importlib.metadata.version("langchain"),
         "langchain-core": importlib.metadata.version("langchain-core"),
         "langgraph": importlib.metadata.version("langgraph"),
+        "langgraph-prebuilt": importlib.metadata.version("langgraph-prebuilt"),
         "traceai-langchain": traceai_langchain_version,
     }
     with capsys.disabled():
@@ -296,8 +297,10 @@ def test_ac05_cancelled_astream_closes_every_span(traced, capsys):
     _assert_no_open_spans(instrumentor)
     [root] = [s for s in spans if s.parent is None]
     assert root.end_time is not None
-    # Recorded, not asserted: LangChain reports the consumer's aclose() as a
-    # chain error, so the root span ends ERROR with a GeneratorExit description.
+    # LangChain reports the consumer's aclose() as a chain error, so the root
+    # span ends ERROR with a GeneratorExit description (README "Errors").
+    assert root.status.status_code.name == "ERROR"
+    assert "GeneratorExit" in (root.status.description or "")
     with capsys.disabled():
         print(
             "\nDEEPAGENTS_CANCELLED_ASTREAM spans={0} root_status={1} root_description={2!r}".format(

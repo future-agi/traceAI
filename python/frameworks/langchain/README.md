@@ -88,7 +88,7 @@ LangGraph-specific setup. You get:
 - **Per-node spans** named after the graph node (`agent`, `tools`, `ask_human`, …)
 - **Tool and LLM spans** nested under their node
 - **Graph-node enrichment** — the node's own span carries `gen_ai.agent.graph.node_name` and `gen_ai.agent.graph.node_id`
-- **Session grouping** — LangGraph's `configurable.thread_id` becomes `session.id` on every span (an explicit `using_session(...)` or `metadata={"session_id": ...}` wins)
+- **Session grouping** — LangGraph's `configurable.thread_id` becomes `session.id` on every span (an explicit `using_session(...)` or `metadata={"session_id": ...}` wins). *Unreleased:* this is in the repository after 0.2.0, not in the published 0.2.0; with 0.2.0, wrap the call in `using_session(thread_id)`.
 - **HITL interrupts** traced correctly — an interrupted node/tool span stays `OK` (not `ERROR`) and is marked with `langgraph.interrupt`
 
 > **`LangGraphInstrumentor` is a deprecated no-op** kept for backwards compatibility.
@@ -137,7 +137,7 @@ Node, tool and LLM runs are standard LangChain spans (`gen_ai.span.kind` =
 
 - `gen_ai.agent.graph.node_name`, `gen_ai.agent.graph.node_id` — the graph node (on the node's own span)
 - `langgraph_node`, `langgraph_step`, `langgraph_triggers`, `langgraph_path`, `langgraph_checkpoint_ns` — LangGraph's raw callback metadata
-- `session.id` — from `using_session(...)`, else `config={"metadata": {"session_id": ...}}`, else LangGraph's `configurable.thread_id`
+- `session.id` — from `config={"metadata": {"session_id": ...}}`, else `using_session(...)`, else LangGraph's `configurable.thread_id` (unreleased; a blank `thread_id` sets nothing). The choice is made per run: set an explicit session around the whole `invoke`/`stream`, because a session set for only part of a run (inside a node, or in an inner `with_config`) covers only the runs inside it, and the outer spans fall back to `thread_id`.
 - `langgraph.interrupt` (attribute + event) on a HITL pause; a `langgraph.resume` event on resume
 
 ---
@@ -160,7 +160,8 @@ Tested versions, as printed by the compatibility test:
 | `langchain` | 1.4.3 |
 | `langchain-core` | 1.6.6 (the floor `deepagents` 0.7.21 requires, and the latest on PyPI when tested) |
 | `langgraph` | 1.2.12 |
-| `traceAI-langchain` | 0.2.0 from this repository, including the `thread_id` → `session.id` change |
+| `langgraph-prebuilt` | as resolved with `langgraph` 1.2.12 (printed by the test); its `ToolNode` re-raises tool errors |
+| `traceAI-langchain` | this repository after 0.2.0 (unreleased): the `thread_id` → `session.id` change is **not** in the published 0.2.0, whose version string is the same |
 | Python | 3.11.12 and 3.13.7 |
 
 `traceAI-langchain`'s own lower bound (`langchain-core>=0.2.43`) is unchanged.
@@ -169,6 +170,8 @@ Deep Agents itself needs `langchain-core>=1.6.6` and `langgraph`.
 ```bash
 pip install traceAI-langchain "deepagents==0.7.21" langgraph
 ```
+
+With the published `traceAI-langchain` 0.2.0, `thread_id` is not yet copied to `session.id`: wrap the call in `using_session(thread_id)` until the next release.
 
 ```python
 from deepagents import create_deep_agent
@@ -189,7 +192,7 @@ LangChainInstrumentor().instrument(
 agent = create_deep_agent(model=model, tools=[my_tool], backend=StateBackend())
 result = agent.invoke(
     {"messages": [{"role": "user", "content": "..."}]},
-    config={"configurable": {"thread_id": "t-1"}},  # becomes session.id
+    config={"configurable": {"thread_id": "t-1"}},  # becomes session.id (unreleased; with 0.2.0 use using_session)
 )
 trace_provider.force_flush()
 ```
@@ -202,18 +205,22 @@ What you get (all from `traceAI-langchain`; Deep Agents adds no keys):
 - **TOOL** spans named after the tool that ran. With the default `StateBackend`,
   0.7.21 binds `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`,
   `grep` and `task`, plus your tools. `execute` is bound only for a sandbox backend.
-  `write_todos` is not a default tool at this version.
+  `write_todos` is not a default tool at this version; harness profiles can add tools
+  (the OpenAI Codex profile adds `write_todos` for `openai:gpt-5.x-codex` models).
 - **Subagents**: the `task` TOOL span is the parent of the subagent's span (named
   after the subagent, e.g. `general-purpose`, kind `CHAIN`) and of its model and
   tool spans, all in one trace. Subagent spans also carry `lc_agent_name`.
 - **Graph nodes** (`model`, `tools`, middleware nodes) are `CHAIN` spans; a node whose
   name contains "agent" (e.g. `PatchToolCallsMiddleware.before_agent`) is reported as
   `AGENT` by the existing name heuristic.
-- **Session**: `configurable.thread_id` → `session.id` on every span, subagents included.
+- **Session**: `configurable.thread_id` → `session.id` on every span, subagents included
+  (unreleased; see the session note above).
 - **Errors**: a tool that raises ends its TOOL span `ERROR` with an `exception`
   event (LangGraph's default tool error handler re-raises, so `invoke` raises too).
   Cancelling an `astream` early closes every span; the root span ends `ERROR`
-  with a `GeneratorExit` description.
+  with a `GeneratorExit` description (asserted by the compatibility test).
+- **CI**: no CI job installs `deepagents`, so the compatibility test skips unless it is
+  installed; the results above come from manual runs on Python 3.11 and 3.13.
 
 Not emitted: cost, user id (set `using_attributes(user_id=...)` yourself),
 retrieval (Deep Agents has no retriever tool), and a `gen_ai.provider.name`

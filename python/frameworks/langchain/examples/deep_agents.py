@@ -17,6 +17,8 @@ selects Deep Agents' deprecated ``claude-sonnet-4-6`` default.
 Run::
 
     pip install traceAI-langchain "deepagents==0.7.21" langgraph
+    # The published traceAI-langchain 0.2.0 does not yet copy thread_id to
+    # session.id; until the next release, wrap run() in using_session(thread_id).
     export FI_API_KEY="YOUR_API_KEY"
     export FI_SECRET_KEY="YOUR_SECRET_KEY"
     export FI_PROJECT_NAME="deep-agents-cookbook"

@@ -1029,7 +1029,8 @@ def _session_id_from_thread_id(
     LLM and tool run of a thread carries it. It is used only when nothing more
     specific set the session: ``using_session(...)`` (already on the span from
     ``captured_context``) and ``metadata["session_id"]`` (emitted by ``_metadata``)
-    both win.
+    both win. A blank ``thread_id`` sets nothing. The choice is made per run, so a
+    session set for only part of a graph run covers only the runs inside it.
     """
     if SESSION_ID in captured_context:
         return
@@ -1037,8 +1038,10 @@ def _session_id_from_thread_id(
         return
     if metadata.get(LANGCHAIN_SESSION_ID) is not None:
         return
-    if (thread_id := metadata.get(LANGCHAIN_THREAD_ID)) is not None:
-        yield SESSION_ID, str(thread_id)
+    thread_id = metadata.get(LANGCHAIN_THREAD_ID)
+    if thread_id is None or (isinstance(thread_id, str) and not thread_id.strip()):
+        return
+    yield SESSION_ID, str(thread_id)
 
 
 @stop_on_exception

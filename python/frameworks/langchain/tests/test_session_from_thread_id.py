@@ -6,7 +6,8 @@ LLM and tool run of a thread carries it. traceai-langchain already emitted it as
 LangGraph or Deep Agents run passing ``config={"configurable": {"thread_id": ...}}``
 had no session in Observe unless the app also wrapped it in ``using_session``.
 
-Precedence: ``using_session(...)`` > ``metadata={"session_id": ...}`` > ``thread_id``.
+Precedence: ``metadata={"session_id": ...}`` > ``using_session(...)`` > ``thread_id``.
+The first two predate this change (``_metadata`` overwrites the captured context).
 """
 
 from __future__ import annotations
@@ -83,6 +84,49 @@ def test_using_session_wins_over_thread_id(exporter):
     with using_session("from-context"):
         RunnableLambda(lambda x: x).invoke(1, {"metadata": {"thread_id": "t-9"}})
     assert _sessions(exporter) == ["from-context"]
+
+
+def test_metadata_session_id_wins_over_using_session(exporter):
+    from fi_instrumentation.instrumentation.context_attributes import using_session
+
+    with using_session("from-context"):
+        RunnableLambda(lambda x: x).invoke(1, {"metadata": {"thread_id": "t-9", "session_id": "explicit"}})
+    assert _sessions(exporter) == ["explicit"]
+
+
+@pytest.mark.parametrize("empty", ["", "   "])
+def test_blank_thread_id_sets_no_session_id(exporter, empty):
+    RunnableLambda(lambda x: x).invoke(1, {"metadata": {"thread_id": empty}})
+    assert _sessions(exporter) == [None]
+
+
+def test_session_set_inside_a_node_only_covers_that_node(exporter):
+    """Documented limit: the fallback is decided per run. A session set for only part of a
+    graph run (here, using_session inside a node) applies to the runs inside it; the outer
+    graph and node runs fall back to thread_id. Wrap the whole invoke to get one session."""
+    langgraph = pytest.importorskip("langgraph.graph")
+    from typing import TypedDict
+
+    from fi_instrumentation.instrumentation.context_attributes import using_session
+
+    class State(TypedDict):
+        n: int
+
+    inner = RunnableLambda(lambda x: x + 1).with_config(run_name="inner")
+
+    def step(state):
+        with using_session("narrow"):
+            return {"n": inner.invoke(state["n"])}
+
+    graph = langgraph.StateGraph(State)
+    graph.add_node("step", step)
+    graph.add_edge(langgraph.START, "step")
+    graph.add_edge("step", langgraph.END)
+    graph.compile().invoke({"n": 0}, {"configurable": {"thread_id": "t-outer"}})
+
+    by_name = {span.name: (span.attributes or {}).get("session.id") for span in exporter.get_finished_spans()}
+    assert by_name["inner"] == "narrow"
+    assert by_name["step"] == "t-outer"
 
 
 def test_no_thread_id_no_session_id(exporter):
