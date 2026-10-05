@@ -127,6 +127,17 @@ covered by mapping unit tests only.
 | Errors | Exceptions keep OTel's ERROR status. A model call that raises keeps ERROR, and upstream sets `error.type` to the exception class (for example `BadRequestError`, `llm_wrapper.py:97-101`); the span has no usage or cost. A failing tool is caught inside `ConversableAgent.execute_function`, so upstream only sets `error.type=ExecutionError`; this package sets status ERROR from `error.type`. A non-zero code exit (`error.type=CodeExecutionError`) also becomes ERROR. | |
 | Retrieval | Not emitted upstream. | Always. |
 
+## Limits
+
+- To tell a nested chat from the outermost one, `AG2ClassicSpanProcessor`
+  tracks every live span on the provider (AG2 or not) and frees each entry
+  when its span ends. Tracking caps at 10000 live spans. The nested-session
+  split (an inner chat getting its own `session.id`) returns only if that many
+  spans leak (start and never end) or run concurrently on the provider; spans
+  started past the cap are not tracked. Upstream ends every span it starts
+  (`with tracer.start_as_current_span(...)`), so a leak needs other code on
+  the same provider.
+
 ## Privacy
 
 Content is off unless you opt in with `setup(..., capture_content=True)`.
