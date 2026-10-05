@@ -1,0 +1,47 @@
+[tool.poetry]
+name = "traceAI-ag2-classic"
+version = "0.1.0"
+description = "Future AGI tracing for AG2 Classic (autogen 0.14.x) through its built-in autogen.opentelemetry"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/future-agi/traceAI"
+repository = "https://github.com/future-agi/traceAI"
+keywords = ["opentelemetry", "ag2", "autogen", "ag2-classic", "tracing", "observability", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+packages = [
+    { include = "traceai_ag2_classic" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+# AG2 Classic: the `autogen` distribution only. Never vendored or bundled.
+# No dependency on `ag2` 1.x, `pyautogen` or `autogen-agentchat`.
+autogen = ">=0.14.0,<0.15"
+fi-instrumentation-otel = ">=1.0.0"
+opentelemetry-api = ">=1.29.0"
+opentelemetry-sdk = ">=1.29.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0.0"
+openai = ">=2.44.0,<3.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
