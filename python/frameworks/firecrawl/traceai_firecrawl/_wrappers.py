@@ -49,9 +49,28 @@ _CANCELLATION_ERRORS = (asyncio.CancelledError, concurrent.futures.CancelledErro
 _ACTIVE: ContextVar[bool] = ContextVar("traceai_firecrawl_active", default=False)
 
 
+def _api_keys(instance: Any) -> list[str]:
+    """API keys the client holds. firecrawl-py 4.46.2 keeps the key on
+    ``http_client`` (sync and async), ``async_http_client`` (async) and
+    ``config`` (sync), not on the client; it also resolves FIRECRAWL_API_KEY
+    into those objects."""
+    keys: list[str] = []
+    for holder in (
+        instance,
+        getattr(instance, "http_client", None),
+        getattr(instance, "async_http_client", None),
+        getattr(instance, "config", None),
+    ):
+        if holder is None:
+            continue
+        api_key = getattr(holder, "api_key", None)
+        if isinstance(api_key, str) and api_key and api_key not in keys:
+            keys.append(api_key)
+    return keys
+
+
 def _redact(value: str, instance: Any) -> str:
-    api_key = getattr(instance, "api_key", None)
-    if isinstance(api_key, str) and api_key:
+    for api_key in _api_keys(instance):
         value = value.replace(api_key, "[redacted]")
     return value[:_MAX_QUERY_LENGTH]
 
@@ -202,13 +221,15 @@ class _BaseWrapper:
             logger.debug("Could not start %s span", self._span_name, exc_info=True)
             return None
 
-    def _record_result(self, span: Span, result: Any, kwargs: Mapping[str, Any]) -> None:
+    def _record_result(
+        self, span: Span, instance: Any, result: Any, kwargs: Mapping[str, Any]
+    ) -> None:
         if self._method_name == "search":
             span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, _document_count(result))
         if self._method_name in _CRAWL_METHODS:
             job_id = _job_id(result, kwargs)
             if job_id:
-                span.set_attribute(_JOB_ID, _redact(job_id, span))
+                span.set_attribute(_JOB_ID, _redact(job_id, instance))
             if self._method_name == "crawl":
                 span.set_attribute(_PAGE_COUNT, _page_count(result))
         if self._method_name == "cancel_crawl" and isinstance(result, bool):
@@ -228,9 +249,11 @@ class _BaseWrapper:
         else:
             span.set_status(Status(StatusCode.OK))
 
-    def _finish_ok(self, span: Span, result: Any, kwargs: Mapping[str, Any]) -> None:
+    def _finish_ok(
+        self, span: Span, instance: Any, result: Any, kwargs: Mapping[str, Any]
+    ) -> None:
         try:
-            self._record_result(span, result, kwargs)
+            self._record_result(span, instance, result, kwargs)
         except Exception:
             logger.debug("Could not read %s result", self._span_name, exc_info=True)
         finally:
@@ -306,7 +329,7 @@ class OperationWrapper(_BaseWrapper):
             raise
         finally:
             _ACTIVE.reset(token)
-        self._finish_ok(span, result, kwargs)
+        self._finish_ok(span, instance, result, kwargs)
         return result
 
 
@@ -334,5 +357,5 @@ class AsyncOperationWrapper(_BaseWrapper):
             raise
         finally:
             _ACTIVE.reset(token)
-        self._finish_ok(span, result, kwargs)
+        self._finish_ok(span, instance, result, kwargs)
         return result

@@ -493,3 +493,45 @@ def test_vendor_error_records_status_code_and_code(
     assert attrs(span)["firecrawl.error.status_code"] == 429
     assert attrs(span)["firecrawl.error.code"] == "RATE_LIMIT_EXCEEDED"
     assert "firecrawl.cancelled" not in attrs(span)
+
+
+# R8 / AC-06: the API key is redacted from every recorded string. firecrawl-py
+# keeps it on the client's HTTP clients, not on the client itself.
+
+
+def test_api_key_is_redacted_from_query_and_job_id(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeFirecrawl, tracing: Tracing
+) -> None:
+    _, exporter, _ = tracing
+    leaky_id = "job-" + API_KEY
+    fake.routes[("POST", "/v2/crawl")] = (200, {"success": True, "id": leaky_id, "url": "unused"})
+
+    client = sync_client(fake)
+    client.search("find " + API_KEY)
+    client.start_crawl("https://example.com")
+
+    async def journey() -> None:
+        aclient = async_client(fake)
+        await aclient.search("find " + API_KEY)
+        await aclient.start_crawl("https://example.com")
+
+    asyncio.run(journey())
+
+    # A key taken from FIRECRAWL_API_KEY is redacted too.
+    monkeypatch.setenv("FIRECRAWL_API_KEY", API_KEY)
+    from firecrawl import Firecrawl
+
+    Firecrawl(api_url=fake.origin, max_retries=1).search("find " + API_KEY)
+
+    finished = spans(exporter)
+    assert [span.name for span in finished] == [
+        "firecrawl.search",
+        "firecrawl.start_crawl",
+        "firecrawl.search",
+        "firecrawl.start_crawl",
+        "firecrawl.search",
+    ]
+    for span in finished:
+        assert all(API_KEY not in str(value) for value in attrs(span).values()), span.name
+    assert attrs(finished[0])["fi.retrieval.query"] == "find [redacted]"
+    assert attrs(finished[1])["firecrawl.job_id"] == "job-[redacted]"
