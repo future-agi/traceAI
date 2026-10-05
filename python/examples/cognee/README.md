@@ -282,9 +282,11 @@ is on; option B exports them:
 
 The test plants markers in the document and the question and asserts that,
 with option A's defaults, none of them arrives anywhere (attributes, status,
-events), and that with content capture on they arrive under exactly these
-keys and nowhere else. Embedding spans carry metadata only, not the embedded
-text.
+events). With content capture on, it asserts that among span attributes they
+arrive under exactly the attribute keys above and no others; error text
+(exception events and status descriptions) is then exported as Cognee
+recorded it, so it also carries content whenever an error quotes it.
+Embedding spans carry metadata only, not the embedded text.
 
 Not exported: the LLM and embedding API keys and the Future AGI keys (those
 travel only as request headers). The test asserts both.
