@@ -12,10 +12,11 @@ classifiers and ships no license file. It is a dependency of this example
 only, not of any traceAI package. 0.62.4 imports `httpx` and `requests`
 without declaring them, so `requirements.txt` lists both.
 
-The contract test (see "Tests") passes on Python 3.11.12 and 3.13.15 with
-`openai` 3.24.0, `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http`
-1.45.0 and `opentelemetry-instrumentation-openai` 0.62.4, the versions uv
-resolved on 2026-10-05.
+The contract test (see "Tests") passes on Python 3.10.17, 3.11.12, 3.12.10
+and 3.13.15 with `openai` 3.24.0 (pinned in `requirements.txt`),
+`opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` 1.45.0 and
+`opentelemetry-instrumentation-openai` 0.62.4, the versions uv resolved on
+2026-10-05.
 
 ## Run
 
@@ -90,7 +91,9 @@ headers that fi-collector reads. HTTP header names are case-insensitive.
 
 Percent-encode the values. The SDK splits on every comma, so an unencoded
 comma cuts a value short (tested), and it drops, with only a logged warning,
-any pair whose value has a space, `"`, `;` or `\`.
+any pair whose value has a space, `"`, `;` or `\`. That warning prints the
+whole pair, value included, so an unencoded secret with one of those
+characters ends up in your logs.
 
 Do not set `TRACELOOP_API_KEY`. That key is for Traceloop's own host.
 Without `TRACELOOP_HEADERS` the SDK sends it as `Authorization: Bearer` on
@@ -189,10 +192,15 @@ resource, or in the app's output (tested).
 - Traceloop uses a `BatchSpanProcessor` and registers an `atexit` flush, so
   a short script exports on exit and a server exports in batches.
 - With content on, 0.62.4 writes messages as `gen_ai.input.messages` and
-  `gen_ai.output.messages`. The backend adapter reads indexed
-  `gen_ai.prompt.<i>.*` and `gen_ai.completion.<i>.*` keys. Whether the
-  backend renders the newer keys as the span's input and output was not
-  tested here.
+  `gen_ai.output.messages`. The backend adapter (future-agi `main` 4af5338,
+  `futureagi/tracer/utils/adapters/openllmetry.py`) builds the span's input
+  and output only from indexed `gen_ai.prompt.<i>.*` and
+  `gen_ai.completion.<i>.*` keys (`:114`, `:214-215`), then deletes every
+  `gen_ai.*` key (`:231`). Nothing in it reads `gen_ai.input.messages`, and
+  the model-call span carries no `traceloop.entity.input`, so with 0.62.4 the
+  model call's input and output are dropped by that adapter, not shown. This
+  is read from the backend source, not run against a backend; it is a backend
+  item (SF-1), and the recipe keeps content off.
 - No call to fi-collector, Traceloop or OpenAI was made. Auth rejection
   (401 without keys), project stamping and storage are fi-collector
   behaviour the harness receiver does not reproduce.
@@ -205,7 +213,8 @@ subprocess, with the real `traceloop-sdk` 0.62.4 instrumenting the real
 Completions API; the spans go to the shared harness `Receiver`
 (`python/tests/harness`), which serves `/v1/traces` and `/tracer/v1/traces`
 on 127.0.0.1. `tests/_guarded_run.py` blocks and logs every non-loopback
-connection. All keys are placeholders.
+connection; a positive control (`tests/_guard_probe.py`) proves it refuses
+and logs IPv4, IPv6 and DNS attempts. All keys are placeholders.
 
 The tests check the request path, the auth headers, the resource
 attributes, the span kinds and tree, content off and on, metrics off and
@@ -221,12 +230,12 @@ env -u PYTHONPATH PYTHONPATH="python/examples/openllmetry:python:python/tests" \
   --with pytest --with pytest-asyncio --with opentelemetry-api \
   --with opentelemetry-sdk --with opentelemetry-exporter-otlp-proto-http \
   --with requests --with jsonschema --with protobuf --with opentelemetry-proto \
-  --with 'traceloop-sdk==0.62.4' --with openai --with httpx \
+  --with 'traceloop-sdk==0.62.4' --with 'openai==3.24.0' --with httpx \
   pytest python/examples/openllmetry/tests -q -p no:cacheprovider \
   --noconftest -o addopts= -rfEs
 ```
 
-For Python 3.13, replace `--python 3.11` with `--python 3.13`. Without
+For Python 3.10, 3.12 or 3.13, replace `--python 3.11`. Without
 `--with httpx` every run fails at `import traceloop.sdk`.
 
 Two tests are opt-in. They read `_TRACELOOP_KIND_MAP` and
@@ -239,6 +248,8 @@ git -C <future-agi checkout> show origin/main:futureagi/tracer/utils/adapters/op
 export FI_BACKEND_OPENLLMETRY_PY=/tmp/openllmetry.py   # then run the command above
 ```
 
-Without it they are skipped. The tests start the app in a new process 10
+Without it they are skipped. No CI job runs this example, so run the pair
+whenever the backend adapter or this recipe changes; otherwise the kind table
+above can drift from the backend unnoticed. The tests start the app in a new process 10
 times, and importing and initialising the SDK and its instrumentors takes
 most of each run, so a full run takes about 5 minutes.

@@ -4,4 +4,4 @@ traceloop-sdk==0.62.4
 # openai 3.x depends on httpx2, not httpx. Without them the import fails.
 httpx
 requests
-openai
+openai==3.24.0  # the version the contract test ran with; the instrumentor is pinned by traceloop-sdk
