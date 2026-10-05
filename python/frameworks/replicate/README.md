@@ -15,7 +15,7 @@ pip install traceAI-replicate
 ```
 
 It accepts `replicate>=1.0.0,<2` and is tested with `replicate` 1.0.0 and
-1.0.7 on Python 3.10, 3.11 and 3.13.
+1.0.7 on Python 3.10, 3.11, 3.12 and 3.13.
 
 ## Usage
 
