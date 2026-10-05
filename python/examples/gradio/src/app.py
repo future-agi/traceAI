@@ -3,8 +3,9 @@
 Recipe example, not a package. Gradio emits no GenAI spans. The one span per
 chat turn comes from ``traceai_openai`` instrumenting the OpenAI client that
 ``predict`` calls. This file calls ``register()`` once at startup, instruments
-the OpenAI client with content capture off, and passes Gradio's session hash
-to ``using_session`` so the turns of one browser session share a session id.
+the OpenAI client with content capture off, and passes a keyed digest of
+Gradio's session hash to ``using_session`` so the turns of one browser session
+share a session id.
 
     python src/app.py
 
@@ -15,7 +16,10 @@ OPENAI_MODEL. See README.md.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import secrets
 from contextlib import nullcontext
 
 import gradio as gr
@@ -55,13 +59,28 @@ def _text(content) -> str:
     return "".join(part["text"] for part in content if part.get("type") == "text")
 
 
+# Gradio's session hash identifies one browser session (one page load), not a
+# user. It is also the key to that session's live state in the running app,
+# so it is not exported. The span gets a digest keyed with a random
+# per-process key that never leaves the process. Gradio's reload mode re-runs
+# this file in the same namespace; keeping the key keeps the ids of open
+# sessions.
+_SESSION_KEY = globals().get("_SESSION_KEY") or secrets.token_bytes(32)
+
+
+def _session_id(request: gr.Request | None) -> str | None:
+    if request is None or not request.session_hash:
+        return None
+    digest = hmac.new(_SESSION_KEY, request.session_hash.encode("utf-8"), hashlib.sha256)
+    return digest.hexdigest()[:32]
+
+
 def predict(message: str, history: list, request: gr.Request = None) -> str:
     messages = [{"role": m["role"], "content": _text(m["content"])} for m in history]
     messages.append({"role": "user", "content": message})
-    # Gradio's session hash identifies one browser session (one page load),
-    # not a user. With it, every turn of that session carries the same
-    # session.id; without it, each turn is an unrelated trace.
-    session_id = request.session_hash if request is not None else None
+    # With a Gradio session, every turn of it carries the same session.id;
+    # without one, each turn is an unrelated trace.
+    session_id = _session_id(request)
     with using_session(session_id) if session_id else nullcontext():
         response = client.chat.completions.create(model=MODEL, messages=messages)
     return response.choices[0].message.content or ""

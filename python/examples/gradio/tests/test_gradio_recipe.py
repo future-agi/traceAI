@@ -22,10 +22,13 @@ host or Future AGI.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import importlib.util
 import json
 import logging
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -71,6 +74,8 @@ REDACTED = "__REDACTED__"
 
 LLM_SPAN = "ChatCompletion"
 SESSION_KEYS = ("session.id", "gen_ai.conversation.id")
+# What the recipe exports instead of a session hash: a 128-bit hex digest.
+SESSION_ID = re.compile(r"[0-9a-f]{32}")
 # A hang guard, not a speed check: one run imports Gradio, openai and traceAI.
 RUN_TIMEOUT_SECONDS = 180
 
@@ -142,6 +147,12 @@ def _attrs(span: Any) -> dict[str, Any]:
     return dict(span.attributes or {})
 
 
+def _session_digest(app: Any, session_hash: str) -> str:
+    """The session id the recipe should export for a Gradio session hash."""
+    digest = hmac.new(app._SESSION_KEY, session_hash.encode("utf-8"), hashlib.sha256)
+    return digest.hexdigest()[:32]
+
+
 def _submit_event(demo: gr.Blocks) -> Any:
     """The ChatInterface's textbox-submit event, which calls predict."""
     (event,) = [fn for fn in demo.fns.values() if fn.api_name == "_submit_fn"]
@@ -174,6 +185,23 @@ def test_each_turn_exports_exactly_one_llm_span(recipe: Any) -> None:
     assert len({span.context.trace_id for span in spans}) == 3
 
 
+def test_the_session_id_is_a_keyed_digest_of_the_session_hash(recipe: Any) -> None:
+    """Gradio's session hash is the key to that session's live state: not exported."""
+    recipe.app.predict(QUESTION, [], gr.Request(session_hash="tab-1"))
+    (span,) = recipe.exporter.get_finished_spans()
+    attrs = _attrs(span)
+    # A per-process 32-byte key, so the digest cannot be recomputed from a
+    # guessed session hash without it.
+    assert isinstance(recipe.app._SESSION_KEY, bytes)
+    assert len(recipe.app._SESSION_KEY) == 32
+    for key in SESSION_KEYS:
+        assert attrs[key] == _session_digest(recipe.app, "tab-1")
+        assert SESSION_ID.fullmatch(attrs[key])
+        assert attrs[key] != "tab-1"
+        assert attrs[key] != hashlib.sha256(b"tab-1").hexdigest()[:32]
+    assert "tab-1" not in json.dumps(attrs)
+
+
 def test_two_turns_in_one_gradio_session_share_its_session_id(recipe: Any) -> None:
     session = gr.Request(session_hash="tab-1")
     recipe.app.predict(QUESTION, [], session)
@@ -181,15 +209,21 @@ def test_two_turns_in_one_gradio_session_share_its_session_id(recipe: Any) -> No
     recipe.app.predict(QUESTION, [], gr.Request(session_hash="tab-2"))
     first, second, other = (_attrs(span) for span in recipe.exporter.get_finished_spans())
     for key in SESSION_KEYS:
-        assert first[key] == second[key] == "tab-1"
-        assert other[key] == "tab-2"
+        assert first[key] == second[key] == _session_digest(recipe.app, "tab-1")
+        assert other[key] == _session_digest(recipe.app, "tab-2")
+        assert first[key] != other[key]
+    for attrs in (first, second, other):
+        dump = json.dumps(attrs)
+        assert "tab-1" not in dump
+        assert "tab-2" not in dump
 
 
 def test_turns_without_a_gradio_session_carry_no_session_id(recipe: Any) -> None:
     recipe.app.predict(QUESTION, [])
     recipe.app.predict(QUESTION, [], None)
+    recipe.app.predict(QUESTION, [], gr.Request())  # a request without a session hash
     spans = recipe.exporter.get_finished_spans()
-    assert len(spans) == 2
+    assert len(spans) == 3
     for span in spans:
         assert not set(SESSION_KEYS) & set(_attrs(span)), span.name
 
@@ -223,8 +257,8 @@ def test_gradio_dispatch_runs_predict_on_a_worker_thread_with_the_session(
     (span,) = recipe.exporter.get_finished_spans()
     # Gradio ran the sync predict off the event loop's thread ...
     assert recipe.threads[span.context.span_id] != loop_thread
-    # ... and injected gr.Request, whose session hash reached the span.
-    assert _attrs(span)["session.id"] == "tab-9"
+    # ... and injected gr.Request, whose session hash reached the span as a digest.
+    assert _attrs(span)["session.id"] == _session_digest(recipe.app, "tab-9")
 
 
 def test_gradio_history_reaches_the_model_as_plain_text(recipe: Any) -> None:
@@ -285,7 +319,7 @@ def test_turn_span_inside_predict_parents_the_llm_span(recipe: Any) -> None:
     assert _attrs(turn_span)["gen_ai.span.kind"] == "CHAIN"
     assert recipe.threads[llm.context.span_id] != loop_thread
     assert llm.parent.span_id == turn_span.context.span_id
-    assert _attrs(llm)["session.id"] == "tab-1"
+    assert _attrs(llm)["session.id"] == _session_digest(recipe.app, "tab-1")
 
 
 def test_sync_generator_turn_span_detaches_after_the_first_yield(
@@ -441,6 +475,14 @@ def recipe_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     return record
 
 
+@pytest.fixture(scope="module")
+def content_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    """The same two turns with init_tracing(trace_content=True), in another process."""
+    record = _run_driver(tmp_path_factory.mktemp("content"), "--content")
+    _assert_ran(record)
+    return record
+
+
 def test_recipe_runs_with_loopback_network_only(recipe_run: dict[str, Any]) -> None:
     assert recipe_run["guard_attempts"] == []
     assert _report(recipe_run)["turns"] == 2
@@ -513,8 +555,28 @@ def test_one_llm_span_per_turn_with_the_session(recipe_run: dict[str, Any]) -> N
         assert attrs["gen_ai.usage.input_tokens"] == USAGE["prompt_tokens"]
         assert attrs["gen_ai.usage.output_tokens"] == USAGE["completion_tokens"]
         assert attrs["gen_ai.usage.total_tokens"] == USAGE["total_tokens"]
-        for key in SESSION_KEYS:
-            assert attrs[key] == DRIVER_SESSION
+    # Both turns of the one Gradio session carry one id, on both keys, and it
+    # is a digest, not the session hash.
+    (session_id,) = {_otlp_attrs(span)[key] for span in spans for key in SESSION_KEYS}
+    assert SESSION_ID.fullmatch(session_id)
+    assert session_id != DRIVER_SESSION
+
+
+def test_the_raw_session_hash_is_not_exported(recipe_run: dict[str, Any]) -> None:
+    assert DRIVER_SESSION not in _export_dump(recipe_run)
+    assert DRIVER_SESSION not in recipe_run["stdout"] + recipe_run["stderr"]
+
+
+def test_each_process_has_its_own_session_key(
+    recipe_run: dict[str, Any], content_run: dict[str, Any]
+) -> None:
+    """Two runs, one session hash: two ids, so the id cannot be precomputed."""
+    ids = [
+        {_otlp_attrs(span)["session.id"] for span in record["spans"]}
+        for record in (recipe_run, content_run)
+    ]
+    assert all(len(run_ids) == 1 for run_ids in ids), ids
+    assert ids[0] != ids[1]
 
 
 def test_content_is_off_by_default(recipe_run: dict[str, Any]) -> None:
@@ -544,10 +606,9 @@ def test_the_prompt_is_never_printed(recipe_run: dict[str, Any]) -> None:
         assert marker not in output
 
 
-def test_content_is_exported_when_the_recipe_turns_it_on(tmp_path: Path) -> None:
+def test_content_is_exported_when_the_recipe_turns_it_on(content_run: dict[str, Any]) -> None:
     """Control for the content-off test: init_tracing(trace_content=True)."""
-    record = _run_driver(tmp_path, "--content")
-    _assert_ran(record)
+    record = content_run
     first, second = (_otlp_attrs(span) for span in record["spans"])
     assert first["gen_ai.input.messages.0.message.content"] == QUESTION
     assert first["gen_ai.output.messages.0.message.content"] == ANSWER
@@ -579,6 +640,9 @@ def test_reload_keeps_the_first_provider_and_ignores_tracing_edits(tmp_path: Pat
     assert "Attempting to instrument while already instrumented" in record["stderr"]
     for marker in CONTENT_MARKERS:
         assert marker not in _export_dump(record)
+    # The session key survived the reload: one id for both turns.
+    first, second = (_otlp_attrs(span) for span in record["spans"])
+    assert first["session.id"] == second["session.id"]
 
 
 def test_building_a_gradio_app_contacts_gradio_analytics_unless_turned_off(
@@ -605,6 +669,9 @@ def test_readme_shows_the_recipe_as_written() -> None:
         "project_type=ProjectType.OBSERVE,",
         "config = TraceConfig(hide_inputs=True, hide_outputs=True)",
         "OpenAIInstrumentor().instrument(tracer_provider=provider, config=config)",
+        '_SESSION_KEY = globals().get("_SESSION_KEY") or secrets.token_bytes(32)',
+        'digest = hmac.new(_SESSION_KEY, request.session_hash.encode("utf-8"), hashlib.sha256)',
+        "session_id = _session_id(request)",
         "with using_session(session_id) if session_id else nullcontext():",
         "demo = gr.ChatInterface(predict, analytics_enabled=False)",
     ):
@@ -612,3 +679,4 @@ def test_readme_shows_the_recipe_as_written() -> None:
         assert line in readme, line
     for fact in ("gradio==6.29.1", "/tracer/v1/traces", "project_type=observe"):
         assert fact in readme, fact
+

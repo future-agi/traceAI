@@ -66,10 +66,20 @@ def _text(content) -> str:
     return "".join(part["text"] for part in content if part.get("type") == "text")
 
 
+_SESSION_KEY = globals().get("_SESSION_KEY") or secrets.token_bytes(32)
+
+
+def _session_id(request: gr.Request | None) -> str | None:
+    if request is None or not request.session_hash:
+        return None
+    digest = hmac.new(_SESSION_KEY, request.session_hash.encode("utf-8"), hashlib.sha256)
+    return digest.hexdigest()[:32]
+
+
 def predict(message: str, history: list, request: gr.Request = None) -> str:
     messages = [{"role": m["role"], "content": _text(m["content"])} for m in history]
     messages.append({"role": "user", "content": message})
-    session_id = request.session_hash if request is not None else None
+    session_id = _session_id(request)
     with using_session(session_id) if session_id else nullcontext():
         response = client.chat.completions.create(model=MODEL, messages=messages)
     return response.choices[0].message.content or ""
@@ -96,10 +106,27 @@ if __name__ == "__main__":
   recipe passes `hide_inputs=True, hide_outputs=True`. See [Privacy](#privacy).
 - **Session.** Gradio passes a `gr.Request` to any chat function that
   declares one. Its `session_hash` identifies one browser session (one page
-  load), not a user, and it is not a Future AGI user id. Passed to
-  `using_session`, it puts the same `session.id` on every turn of that
-  session. Without it (`predict` called with no request), turns carry no
-  session id.
+  load), not a user, and it is not a Future AGI user id. It is also a Gradio
+  session key: any client that sends it can read that session's live state
+  back from the running app (for example through
+  `/gradio_api/deep_link?session_hash=...`; source reading of Gradio
+  6.29.1's `routes.py`). So the recipe deliberately does not export it.
+  `_session_id` exports an HMAC-SHA256 of it instead, keyed with 32 random
+  bytes drawn once per process, cut to 32 hex characters. Passed to
+  `using_session`, that id goes on every turn of the session as `session.id`
+  and `gen_ai.conversation.id`: the same within one session, different
+  across sessions, and not the hash, which appears nowhere in the export
+  (tested). Without a session (`predict` called with no request, or a
+  request with no hash), turns carry no session id.
+- **Why a keyed digest.** Gradio's browser client makes the hash with
+  `Math.random().toString(36)` (in the 6.29.1 frontend bundle), so it has at
+  most 53 random bits, one JavaScript double. A plain SHA-256 of it could be
+  reversed by trying every value, for all sessions in one pass. Without the
+  key, which never leaves the process, the id cannot be computed from a
+  hash. The cost: each process has its own key, so the same hash gets
+  another id after a restart (tested). Gradio's reload mode re-runs the file
+  in the same namespace; `globals().get` keeps the first key, so open
+  sessions keep their id (tested).
 - **History.** Gradio 6 passes each history message's `content` as a list of
   parts (`[{"type": "text", "text": ...}]`). `_text` turns it back into the
   plain string the Chat Completions API takes (tested with Gradio's own
@@ -118,7 +145,7 @@ One span per chat turn, from `traceai_openai`:
 
 | Span | Parent | Attributes |
 |---|---|---|
-| `ChatCompletion` | none: each turn is its own trace | `gen_ai.span.kind=LLM`, `gen_ai.provider.name=openai`, `gen_ai.request.model`, `gen_ai.request.parameters`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens`, `gen_ai.tool.definitions` (`null` here), `input.value` and `output.value` (both `__REDACTED__`), and, with a Gradio session, `session.id` and `gen_ai.conversation.id` |
+| `ChatCompletion` | none: each turn is its own trace | `gen_ai.span.kind=LLM`, `gen_ai.provider.name=openai`, `gen_ai.request.model`, `gen_ai.request.parameters`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens`, `gen_ai.tool.definitions` (`null` here), `input.value` and `output.value` (both `__REDACTED__`), and, with a Gradio session, `session.id` and `gen_ai.conversation.id` (both the session digest, not Gradio's session hash) |
 
 - fi-collector reads the span kind from `gen_ai.span.kind` and stores this
   span as `llm`. It promotes `gen_ai.request.model`, `gen_ai.provider.name`
@@ -157,7 +184,8 @@ description.
 No Future AGI key, secret or OpenAI key appears in any exported span or
 resource, or in the app's output (tested). The keys travel only as request
 headers: the Future AGI keys to fi-collector, the OpenAI key to the model
-host.
+host. Gradio's session hash is not exported either (see Session above;
+tested).
 
 ## Gradio's thread pool and a turn span
 
@@ -236,6 +264,8 @@ The replay re-runs `src/app.py` the way `watchfn` does. It is not a
   `traceai_openai`.
 - **Turns not grouped by session.** `predict` ran without a `gr.Request`,
   so no session id was set.
+- **`session.id` is not Gradio's session hash.** By design: it is a keyed
+  digest of the hash (see Session above).
 - **A tracing change did nothing after a save.** Reload mode keeps the
   first instrumentation. Restart the process.
 
@@ -254,10 +284,12 @@ Gradio server port.
 - **In-process.** `src/app.py` is imported and `register` is swapped for a
   provider with an `InMemorySpanExporter`; the recipe's own `init_tracing()`
   installs the instrumentor. The tests call `predict` directly and through
-  Gradio's event dispatch: one LLM span per turn, the session id only when
-  the turn has a Gradio session, zero spans with the instrumentor removed
-  (with that provider also set as the global one), Gradio's history format,
-  and the turn-span results above.
+  Gradio's event dispatch: one LLM span per turn, the session digest (equal
+  to the HMAC the recipe describes, shared within a session, different
+  across sessions, never the hash) only when the turn has a Gradio session,
+  zero spans with the instrumentor removed (with that provider also set as
+  the global one), Gradio's history format, and the turn-span results
+  above.
 - **Contract.** `tests/drive_turns.py` runs two turns with the real
   `register()` in a subprocess. `tests/_guarded_run.py` blocks and logs
   every non-loopback connection; a positive control
@@ -268,9 +300,10 @@ Gradio server port.
   `/tracer/v1/traces` like fi-collector but does not authenticate or store
   anything. The tests check the request path, both key headers, the
   resource (`project_name`, `project_type=observe`), the exit flush, the
-  span attributes, content off and (as a control) on, that no key reaches
-  the export or the output, that the prompt is never printed, the reload
-  replay and the Gradio analytics probe (`tests/_analytics_probe.py`).
+  span attributes, content off and (as a control) on, that no key and no
+  session hash reaches the export or the output, a new session key per
+  process, that the prompt is never printed, the reload replay and the
+  Gradio analytics probe (`tests/_analytics_probe.py`).
 
 All keys are placeholders. From the repository root, Python 3.11:
 
