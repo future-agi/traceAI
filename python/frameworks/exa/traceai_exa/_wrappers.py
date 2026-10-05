@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -15,6 +16,7 @@ _RETRIEVAL_QUERY = "fi.retrieval.query"
 _RETRIEVAL_DOCUMENT_COUNT = "fi.retrieval.document_count"
 _RETRIEVAL_URL_COUNT = "fi.retrieval.url_count"
 _RETRIEVAL_URLS = "fi.retrieval.urls"
+_CANCELLED = "exa.cancelled"
 _RETRIEVER = "RETRIEVER"
 _REDACTED = "[redacted]"
 _MAX_QUERY_BYTES = 1024
@@ -166,6 +168,13 @@ class _BaseWrapper:
         )
         span.end()
 
+    @staticmethod
+    def _finish_cancelled(span: Span) -> None:
+        # Cancellation is not an exception: no event and no document count.
+        span.set_attribute(_CANCELLED, True)
+        span.set_status(Status(StatusCode.ERROR, "cancelled"))
+        span.end()
+
 
 def _current(span: Span) -> Any:
     """Make ``span`` current for the vendor call so HTTP client spans nest under it.
@@ -213,6 +222,9 @@ class AsyncOperationWrapper(_BaseWrapper):
         try:
             with _current(span):
                 result = await wrapped(*args, **kwargs)
+        except asyncio.CancelledError:
+            self._finish_cancelled(span)
+            raise
         except BaseException as error:
             self._finish_error(span, error)
             raise
@@ -241,6 +253,11 @@ class _StreamState:
         if not self.finished:
             self.finished = True
             _BaseWrapper._finish_error(self.span, error)
+
+    def cancelled(self) -> None:
+        if not self.finished:
+            self.finished = True
+            _BaseWrapper._finish_cancelled(self.span)
 
 
 def _state_of(proxy: Any) -> Optional[_StreamState]:
@@ -289,12 +306,12 @@ class _TracedStream(wrapt.ObjectProxy):  # type: ignore[misc]
             if response_close is not None:
                 response_close()
         finally:
-            self._self_state.error(RuntimeError("Exa stream cancelled"))
+            self._self_state.cancelled()
 
     def __del__(self) -> None:
         state = _state_of(self)
         if state is not None:
-            state.error(RuntimeError("Exa stream cancelled"))
+            state.cancelled()
 
 
 class StreamWrapper(_BaseWrapper):
@@ -337,6 +354,9 @@ class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
         except StopAsyncIteration:
             state.ok()
             raise
+        except asyncio.CancelledError:
+            state.cancelled()
+            raise
         except BaseException as error:
             state.error(error)
             raise
@@ -352,12 +372,12 @@ class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
             if response_close is not None:
                 await response_close()
         finally:
-            self._self_state.error(RuntimeError("Exa stream cancelled"))
+            self._self_state.cancelled()
 
     def __del__(self) -> None:
         state = _state_of(self)
         if state is not None:
-            state.error(RuntimeError("Exa stream cancelled"))
+            state.cancelled()
 
 
 class AsyncStreamWrapper(_BaseWrapper):
@@ -376,6 +396,9 @@ class AsyncStreamWrapper(_BaseWrapper):
                 response = wrapped(*args, **kwargs)
                 if inspect.isawaitable(response):
                     response = await response
+        except asyncio.CancelledError:
+            self._finish_cancelled(span)
+            raise
         except BaseException as error:
             self._finish_error(span, error)
             raise

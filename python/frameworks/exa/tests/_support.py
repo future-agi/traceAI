@@ -3,8 +3,9 @@
 ``FakeExa`` speaks just enough of api.exa.ai for exa-py 2.25.0: JSON for
 ``/search``, ``/contents`` and ``/answer``, and server-sent events when the
 request body has ``"stream": true`` (``stream_search`` / ``stream_answer``).
-A query of ``fail-401`` gets HTTP 401 on every route. Nothing here reaches
-the network beyond 127.0.0.1, and every key is a placeholder.
+A query of ``fail-401`` gets HTTP 401 on every route; a query of ``slow`` is
+held open until the fake closes. Nothing here reaches the network beyond
+127.0.0.1, and every key is a placeholder.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 EXA_KEY = "placeholder-exa-key-must-not-be-exported"
 FAIL_QUERY = "fail-401"
+# The fake holds a "slow" request (and a "slow" stream after its first chunk)
+# until the test ends, so a caller can cancel mid-call.
+SLOW_QUERY = "slow"
 # Response content the fake returns. None of it may reach a span.
 RESULT_TITLE = "RESULT-TITLE-MUST-NOT-BE-EXPORTED"
 RESULT_TEXT = "RESULT-TEXT-MUST-NOT-BE-EXPORTED"
@@ -62,11 +66,18 @@ def _stream_events() -> List[Dict[str, Any]]:
 STREAM_CHUNKS = len(_stream_events())
 
 
+class _QuietServer(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # A cancelled client leaves a broken pipe behind; that is expected.
+        return
+
+
 class FakeExa:
     """Loopback stand-in for api.exa.ai."""
 
     def __init__(self) -> None:
         self.calls: List[Tuple[str, str, Dict[str, Any]]] = []
+        self._release = threading.Event()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -75,13 +86,24 @@ class FakeExa:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 path = self.path.split("?")[0]
                 owner.calls.append(("POST", path, body))
+                slow = body.get("query") == SLOW_QUERY
                 if body.get("query") == FAIL_QUERY:
                     self._send(401, "application/json", {"error": "invalid api key"})
                 elif body.get("stream"):
-                    events = "".join(
+                    events = [
                         "data: {0}\n\n".format(json.dumps(event)) for event in _stream_events()
+                    ]
+                    events.append("data: [DONE]\n\n")
+                    # A slow stream sends its first chunk, then stalls.
+                    self._send(
+                        200,
+                        "text/event-stream",
+                        "".join(events),
+                        stall_after=len(events[0].encode("utf-8")) if slow else None,
                     )
-                    self._send(200, "text/event-stream", events + "data: [DONE]\n\n")
+                elif slow:
+                    owner._release.wait(30)
+                    self._send(200, "application/json", {"results": []})
                 elif path == "/search":
                     results = [_document(i) for i in range(SEARCH_RESULTS)]
                     self._send(200, "application/json", {"requestId": "req-1", "results": results})
@@ -98,27 +120,37 @@ class FakeExa:
                 else:
                     self._send(404, "application/json", {"error": "not found"})
 
-            def _send(self, status: int, content_type: str, payload: Any) -> None:
+            def _send(
+                self, status: int, content_type: str, payload: Any, stall_after: Any = None
+            ) -> None:
                 text = payload if isinstance(payload, str) else json.dumps(payload)
                 data = text.encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
+                if stall_after is not None:
+                    self.wfile.write(data[:stall_after])
+                    self.wfile.flush()
+                    owner._release.wait(30)
+                    data = data[stall_after:]
                 self.wfile.write(data)
 
             def log_message(self, *_: Any) -> None:
                 return
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = _QuietServer(("127.0.0.1", 0), Handler)
         self.origin = "http://127.0.0.1:{0}".format(self._server.server_port)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        )
         self._thread.start()
 
     def paths(self) -> List[str]:
         return [path for _, path, _ in self.calls]
 
     def close(self) -> None:
+        self._release.set()
         self._server.shutdown()
         self._server.server_close()
         self._thread.join()
