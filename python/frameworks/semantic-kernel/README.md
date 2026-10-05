@@ -104,6 +104,7 @@ Not available: retrieval spans (memory/vector connectors were not inspected), ca
 
 - Collector down or slow: the OTLP exporter logs and drops; your kernel call returns normally (covered by `test_collector_down_never_breaks_the_kernel`).
 - The processor swallows its own exceptions and never raises into the OpenTelemetry SDK.
+- `instrument()` does not raise into your startup when a Semantic Kernel module it expects cannot be imported (the diagnostics are experimental upstream and may move in a later release). It logs a WARNING naming the module, skips it, and instruments the rest. A provider that is not an OpenTelemetry SDK `TracerProvider` (for example the global `ProxyTracerProvider` before any provider is set) gets a WARNING and nothing is changed. `uninstrument()` is safe in both cases.
 - A full batch queue (default 2048) drops spans inside OpenTelemetry; the agent does not see it.
 - If a stream is abandoned mid-way, Semantic Kernel owns the span end; this package does not open a second span to close it.
 

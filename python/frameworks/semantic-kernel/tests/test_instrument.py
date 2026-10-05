@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import importlib
+import logging
 import os
 from pathlib import Path
 
@@ -241,11 +242,52 @@ def test_uninstrument_restores_module_tracers(provider):
         assert importlib.import_module(name).tracer is originals[name], name
 
 
-def test_non_sdk_provider_is_rejected(instrumentor):
-    with pytest.raises(TypeError, match="register"):
+def test_non_sdk_provider_warns_and_changes_nothing(instrumentor, caplog):
+    """A provider without an SDK span-processor chain must not break host startup."""
+    originals = {name: importlib.import_module(name).tracer for name in TRACER_MODULES}
+    assert isinstance(trace_api.get_tracer_provider(), trace_api.ProxyTracerProvider)
+    with caplog.at_level(logging.WARNING, logger="traceai_semantic_kernel"):
         instrumentor.instrument(tracer_provider=trace_api.NoOpTracerProvider())
+        instrumentor.instrument()  # global provider not set yet: a ProxyTracerProvider
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("NoOpTracerProvider" in m and "register" in m for m in warnings), warnings
+    assert any("ProxyTracerProvider" in m for m in warnings), warnings
     assert not instrumentor.is_instrumented
     assert not any(s.enable_otel_diagnostics for s in _settings())
+    for name in TRACER_MODULES:
+        assert importlib.import_module(name).tracer is originals[name], name
+    instrumentor.uninstrument()  # still safe
+
+
+def test_moved_sk_module_is_skipped_with_a_warning(instrumentor, provider, monkeypatch, caplog):
+    """An experimental module that moves in a future Semantic Kernel is skipped, not raised."""
+    import traceai_semantic_kernel as package
+
+    missing = "semantic_kernel.utils.telemetry.moved_in_a_future_release"
+    monkeypatch.setattr(package, "DIAGNOSTICS_SETTINGS_MODULES", (missing,) + DIAGNOSTICS_SETTINGS_MODULES)
+    monkeypatch.setattr(package, "TRACER_MODULES", TRACER_MODULES + (missing,))
+    originals = {name: importlib.import_module(name).tracer for name in TRACER_MODULES}
+
+    with caplog.at_level(logging.WARNING, logger="traceai_semantic_kernel"):
+        instrumentor.instrument(tracer_provider=provider)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(missing in m for m in warnings), warnings
+    # Everything that does exist is still switched, routed and mapped.
+    assert instrumentor.is_instrumented
+    assert all(s.enable_otel_diagnostics for s in _settings())
+    for name in TRACER_MODULES:
+        assert importlib.import_module(name).tracer is not originals[name], name
+    assert provider._active_span_processor._span_processors[0] is instrumentor.processor
+
+    instrumentor.uninstrument()
+    instrumentor.uninstrument()
+    assert not any(s.enable_otel_diagnostics for s in _settings())
+    for name in TRACER_MODULES:
+        assert importlib.import_module(name).tracer is originals[name], name
+    assert not any(
+        isinstance(p, SemanticKernelSpanProcessor) for p in provider._active_span_processor._span_processors
+    )
 
 
 def test_failed_instrument_rolls_back(provider, monkeypatch):

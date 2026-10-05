@@ -16,7 +16,8 @@ from __future__ import annotations
 import importlib
 import logging
 import threading
-from typing import Any, List, Optional, Tuple
+from types import ModuleType
+from typing import Any, Dict, List, Optional, Tuple
 
 from opentelemetry import trace as trace_api
 
@@ -68,15 +69,34 @@ class _NullLock:
         return None
 
 
-def _active_multi_processor(provider: Any) -> Any:
+def _span_processor_chain(provider: Any) -> Any:
+    """Return the provider's SDK multi span processor, or None for a non-SDK provider."""
     active = getattr(provider, "_active_span_processor", None)
     if active is None or not hasattr(active, "_span_processors"):
-        raise TypeError(
-            "SemanticKernelInstrumentor.instrument() needs an OpenTelemetry SDK TracerProvider, "
-            "for example the one returned by fi_instrumentation.register(project_type="
-            "ProjectType.OBSERVE, project_name=...). Got {0}.".format(type(provider).__name__)
-        )
+        return None
     return active
+
+
+def _import_modules(names: Tuple[str, ...], cache: Dict[str, Optional[ModuleType]]) -> List[ModuleType]:
+    """Import each module once; skip, with a WARNING naming it, any that cannot be imported."""
+    modules: List[ModuleType] = []
+    for name in names:
+        if name not in cache:
+            try:
+                cache[name] = importlib.import_module(name)
+            except Exception as exc:
+                logger.warning(
+                    "traceai-semantic-kernel: skipping %s, which could not be imported (%s: %s). This Semantic "
+                    "Kernel release may have moved its experimental diagnostics; the rest stays instrumented.",
+                    name,
+                    type(exc).__name__,
+                    exc,
+                )
+                cache[name] = None
+        module = cache[name]
+        if module is not None:
+            modules.append(module)
+    return modules
 
 
 def _sk_version() -> Optional[str]:
@@ -144,6 +164,13 @@ class SemanticKernelInstrumentor:
         No environment variable is required. Calling this more than once (on
         any instance) installs one processor; later calls are no-ops until
         :meth:`uninstrument`.
+
+        It does not raise into your startup for a Semantic Kernel module this
+        package expects but cannot import (the diagnostics are experimental
+        upstream and may move): that module is skipped with a WARNING naming
+        it, and the rest is instrumented. A provider that is not an
+        OpenTelemetry SDK ``TracerProvider`` gets a WARNING and nothing is
+        changed.
         """
         if kwargs:
             logger.debug("traceai-semantic-kernel: ignoring unsupported instrument() arguments %s", sorted(kwargs))
@@ -163,10 +190,20 @@ class SemanticKernelInstrumentor:
                 return
 
             provider = tracer_provider if tracer_provider is not None else trace_api.get_tracer_provider()
-            active = _active_multi_processor(provider)
+            active = _span_processor_chain(provider)
+            if active is None:
+                logger.warning(
+                    "traceai-semantic-kernel: not instrumenting. instrument() needs an OpenTelemetry SDK "
+                    "TracerProvider, for example the one returned by fi_instrumentation.register(project_type="
+                    "ProjectType.OBSERVE, project_name=...), passed as tracer_provider=. Got %s. Semantic Kernel "
+                    "is left unchanged.",
+                    type(provider).__name__,
+                )
+                return
 
-            settings_modules = [importlib.import_module(name) for name in DIAGNOSTICS_SETTINGS_MODULES]
-            tracer_modules = [importlib.import_module(name) for name in TRACER_MODULES]
+            cache: Dict[str, Optional[ModuleType]] = {}
+            settings_modules = _import_modules(DIAGNOSTICS_SETTINGS_MODULES, cache)
+            tracer_modules = _import_modules(TRACER_MODULES, cache)
 
             new_state = _State()
             new_state.provider = provider
@@ -206,10 +243,16 @@ class SemanticKernelInstrumentor:
         for module in settings_modules:
             settings = getattr(module, "MODEL_DIAGNOSTICS_SETTINGS", None)
             if settings is None:
-                logger.warning("traceai-semantic-kernel: %s has no MODEL_DIAGNOSTICS_SETTINGS", module.__name__)
+                logger.warning(
+                    "traceai-semantic-kernel: %s has no MODEL_DIAGNOSTICS_SETTINGS; skipping it", module.__name__
+                )
                 continue
-            was_on = bool(settings.enable_otel_diagnostics)
-            was_sensitive = bool(settings.enable_otel_diagnostics_sensitive)
+            try:
+                was_on = bool(settings.enable_otel_diagnostics)
+                was_sensitive = bool(settings.enable_otel_diagnostics_sensitive)
+            except AttributeError as exc:
+                logger.warning("traceai-semantic-kernel: skipping %s: %s", module.__name__, exc)
+                continue
             if was_sensitive and not sensitive:
                 logger.warning(
                     "traceai-semantic-kernel: Semantic Kernel sensitive diagnostics were on (environment "
@@ -225,7 +268,9 @@ class SemanticKernelInstrumentor:
             for module in tracer_modules:
                 original = getattr(module, "tracer", None)
                 if original is None:
-                    logger.warning("traceai-semantic-kernel: %s has no module-level tracer", module.__name__)
+                    logger.warning(
+                        "traceai-semantic-kernel: %s has no module-level tracer; skipping it", module.__name__
+                    )
                     continue
                 new_state.tracers.append((module, original))
                 module.tracer = tracer_provider.get_tracer(module.__name__, version)
