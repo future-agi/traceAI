@@ -29,8 +29,8 @@ REDACTED_VALUE = "__REDACTED__"
 DENIED_QUERY = FAIL_DENIED + " ask about " + EMAIL
 # An apostrophe, a double quote, a backslash and a non-ASCII letter: the
 # status detail the fake adds quotes it escaped (protobuf text format).
-QUOTED_QUERY = FAIL_DETAILS + " Zelda's \"quoted\" a\\b café"
-QUOTED_DETAIL = r'Zelda\'s \"quoted\" a\\b caf' + "é"
+QUOTED_QUERY = FAIL_DETAILS + " Zelda's \"quoted\" a\\b caf\xe9"
+QUOTED_DETAIL = r'Zelda\'s \"quoted\" a\\b caf' + "\xe9"
 
 
 @pytest.fixture()

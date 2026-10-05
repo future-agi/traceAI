@@ -336,18 +336,18 @@ def test_a_token_straddling_the_cap_is_redacted_before_the_cut():
     assert len(message.encode("utf-8")) <= _wrappers.MAX_VALUE_BYTES
 
 
-ESCAPED_QUERY = "Zelda's \"quoted\" a\\b café 2024"
+ESCAPED_QUERY = "Zelda's \"quoted\" a\\b caf\xe9 2024"
 
 
 @pytest.mark.parametrize(
     "copy",
     [
         # Python repr (single quotes, as for a text with both quote marks).
-        r"""Zelda\'s "quoted" a\\b caf""" + "é 2024",
+        r"""Zelda\'s "quoted" a\\b caf""" + "\xe9 2024",
         # JSON string, non-ASCII as \u.
-        r"""Zelda's \"quoted\" a\\b café 2024""",
+        r"""Zelda's \"quoted\" a\\b caf""" + "\\u00e9 2024",
         # Protobuf text format: a status detail google-api-core appends.
-        r"""Zelda\'s \"quoted\" a\\b caf""" + "é 2024",
+        r"""Zelda\'s \"quoted\" a\\b caf""" + "\xe9 2024",
         # absl CHexEscape (debug_error_string of older gRPC cores): bytes
         # outside printable ASCII as \xHH.
         r"""Zelda\'s \"quoted\" a\\b caf\xc3\xa9 2024""",
@@ -370,10 +370,10 @@ def test_an_escaped_copy_of_a_hidden_query_is_removed(copy):
 
 
 def test_a_hex_digit_after_a_hex_escape_is_matched_as_grpc_escapes_it():
-    # absl escapes a hex digit that follows \xHH too: "é1" is \xc3\xa9\x31.
+    # absl escapes a hex digit that follows \xHH too: U+00E9 then 1 is \xc3\xa9\x31.
     error = core_exceptions.InvalidArgument(r"bad query 'caf\xc3\xa9\x31\x32 x'")
     span = _call_wrapper(
-        _wrappers.OperationWrapper, "search", _Client(None), error, search_request("café12 x")
+        _wrappers.OperationWrapper, "search", _Client(None), error, search_request("caf\xe912 x")
     )
 
     assert event(span, "exception")["exception.message"] == "400 bad query '__REDACTED__'"

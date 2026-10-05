@@ -12,8 +12,9 @@ First release.
   `discoveryengine.answer.length`, `discoveryengine.answer.state` and
   `discoveryengine.session`. No model name, tokens or cost.
 - Query text only with `capture_query=True`; off by default, and removed
-  from error text whenever it is not recorded. Results and answer text are
-  never recorded.
+  from error text whenever it is not recorded, verbatim and in the escaped
+  copies the client libraries write. Results and answer text are never
+  recorded.
 - Google credentials (transport credentials, read again when an error is
   recorded; `client_options.api_key`; per-call auth metadata; and Google
   token shapes, including JWTs) are removed from every recorded value.

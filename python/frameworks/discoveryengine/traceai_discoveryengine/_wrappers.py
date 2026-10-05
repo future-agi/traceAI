@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import json
 import logging
 import re
 import traceback
@@ -62,6 +63,11 @@ _TOKEN_SHAPES = (
 )
 # Only in server-written text: the value after "Bearer" in a quoted header.
 _BEARER = re.compile(r"(?i)(\bbearer\s+)(?!\[redacted\])[^\s'\",;]+")
+# C-style string escapes, as protobuf text format writes the status details
+# google-api-core appends to an error's message, and as gRPC core's
+# CHexEscape writes debug_error_string in older releases.
+_C_ESCAPES = {"\n": "\\n", "\r": "\\r", "\t": "\\t", '"': '\\"', "'": "\\'", "\\": "\\\\"}
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 # Set while a traced call runs, so a wrapped method called from inside it
 # (no 0.20.5 method does) does not open a second span.
@@ -124,7 +130,7 @@ Hidden = Optional[Tuple[str, ...]]
 
 
 def _hide(value: str, hidden: Hidden) -> str:
-    """Replace every verbatim occurrence of a hidden input with ``__REDACTED__``."""
+    """Replace every occurrence of a hidden input's copies with ``__REDACTED__``, in one pass."""
     if hidden is None:
         return REDACTED_VALUE
     if not hidden:
@@ -309,21 +315,58 @@ def _hides_query(options: Options) -> bool:
     return options.hide_inputs or not options.capture_query
 
 
+def _c_escaped(text: str) -> str:
+    """``text`` as protobuf text format writes a string field (non-ASCII kept)."""
+    return "".join(_C_ESCAPES.get(char, char) for char in text)
+
+
+def _c_hex_escaped(text: str) -> str:
+    """``text`` as absl ``CHexEscape`` writes it: bytes outside printable ASCII as ``\\xHH``.
+
+    Like absl, it also escapes a hex digit that follows a ``\\xHH``.
+    """
+    pieces: List[str] = []
+    after_hex = False
+    for byte in text.encode("utf-8", "replace"):
+        char = chr(byte)
+        if char in _C_ESCAPES:
+            pieces.append(_C_ESCAPES[char])
+            after_hex = False
+        elif not 0x20 <= byte < 0x7F or (after_hex and char in _HEX_DIGITS):
+            pieces.append("\\x{0:02x}".format(byte))
+            after_hex = True
+        else:
+            pieces.append(char)
+            after_hex = False
+    return "".join(pieces)
+
+
 def _hidden_inputs(
     operation: str, request: Any, secrets: Optional[Sequence[str]], options: Options
 ) -> Tuple[str, ...]:
     """The query text to remove from server-written text, as it reads after scrubbing.
 
-    Empty when the query is recorded (``capture_query`` without
-    ``hide_inputs``) or empty.
+    Besides the verbatim text, the copies the client libraries escape: the
+    Python repr and JSON string forms, protobuf text format (a status
+    detail ``str(error)`` appends) and gRPC core's CHexEscape (the chained
+    gRPC error's ``debug_error_string`` in older releases). Longest first,
+    so a longer copy wins where two match at the same place. Empty when the
+    query is recorded (``capture_query`` without ``hide_inputs``) or empty.
     """
     if not _hides_query(options):
         return ()
     query = _query_text(operation, request)
     if not query:
         return ()
-    text = _scrub(query, secrets or (), server=True)
-    return (text,) if text else ()
+    copies = (
+        query,
+        repr(query)[1:-1],
+        json.dumps(query)[1:-1],
+        _c_escaped(query),
+        _c_hex_escaped(query),
+    )
+    texts = dict.fromkeys(_scrub(copy, secrets or (), server=True) for copy in copies)
+    return tuple(sorted((text for text in texts if text), key=len, reverse=True))
 
 
 def _response_attributes(

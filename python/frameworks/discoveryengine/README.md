@@ -154,10 +154,16 @@ DiscoveryEngineInstrumentor().instrument(
 UTF-8 on a character boundary. It must be a boolean.
 
 While the query is not recorded (the default, or with `hide_inputs`), each
-verbatim occurrence of it in server-written text (the error status
-description, the `exception` event's message and stack trace) becomes
-`__REDACTED__`. A short query is removed wherever it occurs, including
-inside other words. A copy the server escaped or reformatted is not matched.
+occurrence of it in server-written text (the error status description, the
+`exception` event's message and stack trace) becomes `__REDACTED__`. That
+covers the verbatim text and the escaped copies the client libraries write:
+protobuf text format (a status detail that quotes the query, which
+`google-api-core` appends to the error message with `'`, `"` and `\`
+backslash-escaped), the hex escapes of older gRPC cores (the chained gRPC
+error's `debug_error_string`, with non-ASCII bytes as `\xHH`; seen with
+grpcio 1.62, not with 1.82 or 1.84), and the Python repr and JSON string
+forms. A short query is removed wherever it occurs, including inside other
+words. A copy escaped or reformatted any other way is not matched.
 If the query cannot be read, the error message is recorded as
 `__REDACTED__`. Other request fields that a server error may quote (a
 `filter`, `user_pseudo_id`) are not removed.
@@ -177,7 +183,7 @@ pairs, so metadata given as a generator still reaches the server; if
 reading it raises, the client raises the same error, as without the package.
 Text shaped like a Google credential is replaced too, even if the client
 never held it: `ya29.` access tokens, `AIza` API keys, `1//` refresh tokens,
-JWTs (`eyJ…`: three base64url parts, such as a service account's
+JWTs (`eyJ...`: three base64url parts, such as a service account's
 self-signed token), and, in server-written text only, the value after
 `Bearer`. If the place the client keeps credentials (or the call's
 `metadata`) cannot be read, before or after the call, the call is traced
@@ -240,7 +246,7 @@ your call proceeds with its own result or exception.
   of credentials that require scopes, such as service-account credentials
   without scopes. A token minted on that copy during the call (a self-signed
   JWT or an access token) is never on the credentials the client holds, so
-  only its shape (`eyJ…` or `ya29.`) removes it.
+  only its shape (`eyJ...` or `ya29.`) removes it.
 - Only v1 is traced. `google.cloud.discoveryengine` (v1beta at 0.20.5),
   `discoveryengine_v1beta` and `discoveryengine_v1alpha` clients produce no
   spans.
