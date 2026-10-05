@@ -211,13 +211,14 @@ class _Operation:
         if keys is None or message is None:
             event = {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
         elif keys:
-            stacktrace = "".join(
-                traceback.format_exception(type(error), error, error.__traceback__)
-            )
-            event = {
-                "exception.message": message,
-                "exception.stacktrace": _redact(stacktrace, keys),
-            }
+            try:
+                stacktrace = _redact(
+                    "".join(traceback.format_exception(type(error), error, error.__traceback__)),
+                    keys,
+                )
+            except Exception:
+                stacktrace = _REDACTED
+            event = {"exception.message": message, "exception.stacktrace": stacktrace}
         try:
             span.record_exception(error, attributes=event)
         except Exception:
