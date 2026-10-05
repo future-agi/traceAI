@@ -716,6 +716,29 @@ describe("wrapQuery", () => {
       },
     );
 
+    it("M1: close() after a background subagent finishes post-result (its messages arrive after the result) ends OK", async () => {
+      const { provider, exporter } = memoryProvider();
+      const base = backgroundedSubagentJourney();
+      const result = base[base.length - 1];
+      const idx = base.findIndex((m) => m.type === "assistant" && m.message.id === "msg_13");
+      // Main loop answers and yields its result; the background subagent's tool_result,
+      // final turn and task_notification arrive afterwards.
+      const journey = [...base.slice(0, idx + 1), result, ...base.slice(idx + 1, base.length - 1)];
+      const fake = makeFakeQuery(journey);
+      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      for (;;) {
+        const step = await q.next();
+        if (step.done) throw new Error("stream ended early");
+        if (step.value.type === "system" && step.value.subtype === "task_notification") break;
+      }
+      q.close();
+      const spans = exporter.getFinishedSpans();
+      const conversation = one(spans, "claude_agent.conversation");
+      expect(conversation.status.code).toBe(SpanStatusCode.OK);
+      expect(conversation.attributes["claude_agent.cancelled"]).toBeUndefined();
+      expect(one(spans, "claude_agent.subagent.code-reviewer").status.code).toBe(SpanStatusCode.OK);
+    });
+
     it("N1: close() after a result while a background subagent still runs stays cancelled", async () => {
       const { provider, exporter } = memoryProvider();
       // The result arrives before the background subagent's task_notification.

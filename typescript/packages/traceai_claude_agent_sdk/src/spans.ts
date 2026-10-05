@@ -287,7 +287,7 @@ export class QueryTracer {
   private conversationContext?: Context;
   private conversationIsError = false;
   private resultSeen = false;
-  /** A result arrived and no assistant/user message has followed it yet. */
+  /** A result arrived and no main-loop assistant/user message has followed it yet. */
   private idleAfterResult = false;
   private sessionId?: string;
   private finished = false;
@@ -380,7 +380,13 @@ export class QueryTracer {
     }
     try {
       const type = (message as { type?: unknown }).type;
-      if (type === "assistant" || type === "user") {
+      if (
+        (type === "assistant" || type === "user") &&
+        ((message as { parent_tool_use_id?: unknown }).parent_tool_use_id ?? null) === null
+      ) {
+        // Main-loop activity after a result starts a new turn. Background
+        // subagent messages (parent_tool_use_id set) do not: nothingInFlight()
+        // already covers subagents that are still open.
         this.idleAfterResult = false;
       }
       if (type === "assistant") {
@@ -409,8 +415,8 @@ export class QueryTracer {
     }
     // close()/asyncDispose/abort right after a result, with nothing still
     // running (no open turn, tool or subagent), cancels nothing: end it as
-    // returned. Any assistant/user message after the result means a new turn
-    // is under way, even between model steps when no span is open.
+    // returned. Any main-loop assistant/user message after the result means a
+    // new turn is under way, even between model steps when no span is open.
     if (outcome.kind === "aborted" && this.idleAfterResult && this.nothingInFlight()) {
       outcome = { kind: "returned" };
     }
