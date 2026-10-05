@@ -583,6 +583,38 @@ def test_mcp_use_formatted_tool_error_is_an_error_span():
             assert ARG not in wire(spans)
 
 
+@pytest.mark.parametrize("as_message", [True, False])
+@pytest.mark.parametrize("tool_key", [None, "fail", 42])
+def test_a_tool_result_shaped_like_an_mcp_use_error_is_still_a_result(tool_key, as_message):
+    # format_error output always carries tool=<this tool's name>
+    # (langchain_adapter.py:197-205, tool_error_middleware.py:61). A tool's
+    # own result with the error/details/stack/code keys (an incident
+    # lookup, say) and no matching tool key is a successful call.
+    exporter, handler = _handler(capture_content=True)
+    run = Run(handler)
+    node, tool = run.start_tool("incidents", {"id": "INC-1"})
+    body: Dict[str, Any] = {
+        "error": "DiskFull",
+        "details": "INCIDENT-MARKER disk full on db-1",
+        "stack": "n/a",
+        "code": "E42",
+    }
+    if tool_key is not None:
+        body["tool"] = tool_key
+    content = json.dumps(body)
+    output = ToolMessage(content=content, tool_call_id="call-1") if as_message else body
+    handler.on_tool_end(output, run_id=tool, parent_run_id=node)
+    run.end_node(node)
+    run.finish()
+    spans = exporter.get_finished_spans()
+    span = only(spans, "execute_tool incidents")
+    assert span.status.status_code is StatusCode.OK
+    assert span.events == ()
+    assert "mcp_use.tool.error_type" not in span.attributes
+    assert span.attributes["gen_ai.tool.call.result"] == content
+    assert attrs(only(spans, AGENT))["mcp_use.agent.tool_error_count"] == 0
+
+
 def test_tool_message_with_error_status_is_an_error_span():
     exporter, handler = _handler()
     run = Run(handler)

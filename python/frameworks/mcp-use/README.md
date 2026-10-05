@@ -198,7 +198,10 @@ A failed tool call is a tool span with status ERROR and one `exception`
 event. mcp-use 1.7.1 does not raise for a failed MCP call: it returns a
 formatted error to the model as the tool's result
 (`mcp_use/agents/adapters/langchain_adapter.py:181-206`). The callback
-recognises that result, takes the error type from it
+recognises that result (an object with mcp-use's `error`, `details`,
+`stack` and `code` keys and a `tool` key equal to the tool's name; a tool's
+own result with those keys but no matching `tool` is a result), takes the
+error type from it
 (`mcp_use.tool.error_type`) and counts it in
 `mcp_use.agent.tool_error_count`. A tool call LangChain reports as failed
 (for example arguments that fail validation) is recorded the same way,
@@ -277,7 +280,11 @@ the TypeScript agent).
 - With `use_server_manager=True`, mcp-use restarts the graph run when the
   tool set changes during a run, up to 3 times
   (`mcp_use/agents/mcpagent.py:741-876`); each restart is a new agent span.
-  This path is not covered by the tests.
+  The server manager's own tools return their failures as mcp-use errors
+  without a `tool` key (`mcp_use/agents/managers/tools/connect_server.py:73`,
+  `disconnect_server.py:39`, `list_servers_tool.py:47`), so those tool spans
+  end OK with the error as their result. This path is not covered by the
+  tests.
 - With `output_schema`, mcp-use formats the answer after the graph run with
   a model call that gets no callbacks (`mcp_use/agents/mcpagent.py:595`),
   so that call has no span.

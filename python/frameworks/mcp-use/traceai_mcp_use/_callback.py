@@ -97,7 +97,9 @@ MAX_CHUNK_EVENTS = 128
 MAX_OPEN_RUNS = 10_000
 
 # mcp-use 1.7.1 returns a failed MCP tool call as this dict
-# (mcp_use/errors/error_formatting.py format_error) instead of raising.
+# (mcp_use/errors/error_formatting.py format_error) instead of raising, plus
+# a "tool" key holding the tool's name (agents/adapters/langchain_adapter.py
+# :197-205, agents/middleware/tool_error_middleware.py:61).
 _MCP_USE_ERROR_KEYS = frozenset(("error", "details", "stack", "code"))
 
 _ROLES = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
@@ -135,6 +137,8 @@ class _Run:
     parent: Optional[UUID]
     span: Optional[Span] = None
     chunks: int = 0
+    # A tool run's name as LangChain reported it (not capped or redacted).
+    tool_name: Optional[str] = None
 
 
 def _describe(error: BaseException) -> str:
@@ -258,8 +262,12 @@ def _replayed_outputs(messages: Iterable[Any]) -> List[Optional[str]]:
     return texts
 
 
-def _mcp_use_error(output: Any) -> Optional[Mapping[str, Any]]:
-    """The mcp-use formatted error a tool returned, if this output is one."""
+def _mcp_use_error(output: Any, tool: Optional[str]) -> Optional[Mapping[str, Any]]:
+    """The mcp-use formatted error the tool named ``tool`` returned, if this
+    output is one. A tool's own result with the same keys but no matching
+    "tool" key is a result, not an error."""
+    if not isinstance(tool, str):
+        return None
     candidate: Any = output
     content = getattr(output, "content", None)
     if content is not None and not isinstance(output, Mapping):
@@ -276,6 +284,7 @@ def _mcp_use_error(output: Any) -> Optional[Mapping[str, Any]]:
         isinstance(candidate, Mapping)
         and _MCP_USE_ERROR_KEYS.issubset(candidate.keys())
         and isinstance(candidate.get("error"), str)
+        and candidate.get("tool") == tool
     ):
         return candidate
     return None
@@ -1007,10 +1016,11 @@ class FutureAGICallback(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         try:
-            tool = None
+            raw_name = None
             if isinstance(serialized, Mapping):
-                tool = serialized.get("name")
-            tool = self._name(tool or kwargs.get("name")) or "unknown"
+                raw_name = serialized.get("name")
+            raw_name = raw_name or kwargs.get("name")
+            tool = self._name(raw_name) or "unknown"
             attributes: Dict[str, Any] = {
                 SPAN_KIND: FiSpanKindValues.TOOL.value,
                 OPERATION: "execute_tool",
@@ -1022,7 +1032,11 @@ class FutureAGICallback(BaseCallbackHandler):
             run, root = self._begin(
                 run_id, parent_run_id, _TOOL, "execute_tool {0}".format(tool), attributes
             )
-            if run is None or run.span is None:
+            if run is None:
+                return
+            if isinstance(raw_name, str):
+                run.tool_name = raw_name
+            if run.span is None:
                 return
             arguments = _json(inputs) if isinstance(inputs, Mapping) else input_str
             texts: List[Optional[str]] = [arguments, input_str]
@@ -1056,7 +1070,7 @@ class FutureAGICallback(BaseCallbackHandler):
                 self._end_incomplete(orphan, None)
             failure: Optional[_Failure] = None
             try:
-                formatted = _mcp_use_error(output)
+                formatted = _mcp_use_error(output, run.tool_name)
                 if formatted is not None:
                     error_type = str(formatted.get("error"))
                     details = formatted.get("details")

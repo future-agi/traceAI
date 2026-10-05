@@ -20,7 +20,10 @@
 - Secrets (values passed in `redact=`, secret-named environment variables,
   bearer tokens and key-shaped strings) are removed from everything written,
   names and ids included. Recorded text is size-capped.
-- Failed tool calls are ERROR tool spans; a failed run is an ERROR agent
-  span and the exception reaches the caller unchanged; cancelled runs end
-  their spans as `cancelled`. Callback failures never reach the agent.
+- Failed tool calls are ERROR tool spans, including an MCP failure mcp-use
+  returns as the tool's result (recognised by its `tool` key matching the
+  tool, so a tool's own error-shaped result stays a result); a failed run
+  is an ERROR agent span and the exception reaches the caller unchanged;
+  cancelled runs end their spans as `cancelled`. Callback failures never
+  reach the agent.
 - Tested with mcp-use 1.7.1 on Python 3.11, 3.12 and 3.13.
