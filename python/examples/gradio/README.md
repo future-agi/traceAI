@@ -36,7 +36,7 @@ python src/app.py
 
 Open the URL Gradio prints and chat. Each turn is one LLM span in the
 `my-chatbot` project. `OPENAI_BASE_URL` points the client at any
-OpenAI-compatible host; the span is the same.
+OpenAI-compatible host; the tests use a loopback one.
 
 ## The recipe
 
@@ -300,7 +300,9 @@ releases pinned in `requirements.txt`. The published `traceAI-openai` 0.1.10
 wheel's `traceai_openai` package is byte-identical to
 `python/frameworks/openai/traceai_openai`. The published
 `fi-instrumentation-otel` 1.1.0 differs from `python/fi_instrumentation`
-only in shutdown logging and locking and one extra provider enum value.
+only in shutdown handling (log calls instead of `print`, a lock, and its
+exporters also calling the base `shutdown()`) and one extra provider enum
+value.
 
 No CI job runs this example. Re-run the command above when Gradio, anyio or
 the OpenAI instrumentor changes.
