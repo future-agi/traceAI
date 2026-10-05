@@ -298,15 +298,14 @@ class _TracedStream(wrapt.ObjectProxy):  # type: ignore[misc]
         return chunk
 
     def close(self) -> None:
+        """End the span as cancelled (no-op after completion), then close."""
+        self._self_state.cancelled()
         try:
             close = getattr(self._self_iterator, "close", None)
             if close is not None:
                 close()
-            response_close = getattr(self.__wrapped__, "close", None)
-            if response_close is not None:
-                response_close()
         finally:
-            self._self_state.cancelled()
+            self.__wrapped__.close()
 
     def __del__(self) -> None:
         state = _state_of(self)
@@ -363,16 +362,30 @@ class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
         state.observe(chunk)
         return chunk
 
+    def close(self) -> None:
+        """End the span as cancelled, then delegate to the vendor's close().
+
+        exa-py 2.25.0's async close() calls httpx's sync close, which raises on
+        an async response; that outcome is the vendor's and is not changed.
+        """
+        self._self_state.cancelled()
+        self.__wrapped__.close()
+
     async def aclose(self) -> None:
+        """End the span as cancelled, then release the HTTP response."""
+        self._self_state.cancelled()
         try:
             close = getattr(self._self_iterator, "aclose", None)
             if close is not None:
                 await close()
+        finally:
+            # exa-py 2.25.0 has no aclose(); its httpx response does.
             response_close = getattr(self.__wrapped__, "aclose", None)
+            if response_close is None:
+                raw_response = getattr(self.__wrapped__, "_raw_response", None)
+                response_close = getattr(raw_response, "aclose", None)
             if response_close is not None:
                 await response_close()
-        finally:
-            self._self_state.cancelled()
 
     def __del__(self) -> None:
         state = _state_of(self)

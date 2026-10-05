@@ -162,3 +162,67 @@ def test_async_stream_cancelled_mid_chunk_is_marked_cancelled(fake):
         asyncio.run(call())
 
     _assert_cancelled(traced.one())
+
+
+async def _close_after_one_chunk(fake, after_close=lambda: None) -> type:
+    """Call close() on an async stream after one chunk; return what it raised.
+
+    ``after_close`` runs while the stream is still referenced, so a span ended
+    there was ended by close() and not by garbage collection.
+    """
+    client = AsyncExa(api_key=EXA_KEY, api_base=fake.origin)
+    try:
+        stream = await client.stream_search("q")
+        await stream.__aiter__().__anext__()
+        raised: type = type(None)
+        try:
+            stream.close()
+        except Exception as error:  # exa-py 2.25.0 + httpx raise here; see below
+            raised = type(error)
+        after_close()
+        await stream._raw_response.aclose()
+        return raised
+    finally:
+        await client.client.aclose()
+
+
+def test_async_stream_close_ends_the_span_now_and_still_delegates(fake):
+    # The vendor's close() calls httpx's sync close on an async response,
+    # which raises. Tracing must not change that outcome.
+    vendor_outcome = asyncio.run(_close_after_one_chunk(fake))
+
+    with instrumented() as traced:
+        outcome = asyncio.run(
+            _close_after_one_chunk(fake, after_close=lambda: _assert_cancelled(traced.one()))
+        )
+
+    assert outcome is vendor_outcome
+
+
+def test_async_stream_aclose_releases_the_http_response(fake):
+    async def call(traced) -> None:
+        client = AsyncExa(api_key=EXA_KEY, api_base=fake.origin)
+        try:
+            stream = await client.stream_answer("q")
+            await stream.__anext__()
+            await stream.aclose()
+            _assert_cancelled(traced.one())
+            assert stream._raw_response.is_closed
+        finally:
+            await client.client.aclose()
+
+    with instrumented() as traced:
+        asyncio.run(call(traced))
+
+
+def test_sync_stream_close_ends_the_span_even_if_the_vendor_close_fails(fake, monkeypatch):
+    def broken_close(_self):
+        raise OSError("socket already gone")
+
+    monkeypatch.setattr(StreamSearchResponse, "close", broken_close)
+    with instrumented() as traced:
+        stream = Exa(api_key=EXA_KEY, base_url=fake.origin).stream_search("q")
+        next(iter(stream))
+        with pytest.raises(OSError, match="socket already gone"):
+            stream.close()
+        _assert_cancelled(traced.one())
