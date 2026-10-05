@@ -194,11 +194,20 @@ into a browser bundle.
 - `forceFlush()` rejects when the collector is unreachable and can wait for
   the exporter's 10 s timeout when the collector accepts but does not answer.
   `flushTraces()` logs either case, waits at most 2 s (`FLUSH_TIMEOUT_MS`),
-  and never throws, so `chat()` and the route still answer.
+  and never throws, so `chat()` and the route still answer. Pass
+  `flushTraces(tracerProvider, { timeoutMs })` for a different bound.
 - The per-request flush is for serverless routes, where the process can be
-  frozen after the response. In a long-lived server, do not await a flush on
-  the request path: the default `SimpleSpanProcessor` exports each span when
-  it ends. Call `shutdownTraces()` when the process stops.
+  frozen after the response. The bound stops the wait, not the export: spans
+  still pending when it runs out keep exporting in the background, and are
+  lost if the runtime then freezes or exits. Raise `timeoutMs` if your
+  platform allows the time.
+- In a long-lived server, do not await a flush on the request path: the
+  default `SimpleSpanProcessor` exports each span when it ends, in its own
+  OTLP request (4 requests for a chat with one tool call). The OTLP/HTTP
+  exporter allows 30 exports in flight and waits up to 10 s for each; with a
+  slow collector, spans past that limit are dropped with "Concurrent export
+  limit reached", from about 8 concurrent chats of 4 spans. Call
+  `shutdownTraces()` when the process stops.
 - Do not also register the OpenInference TanStack middleware or wrap `chat()`.
   Either duplicates spans.
 
