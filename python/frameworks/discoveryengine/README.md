@@ -169,14 +169,19 @@ where the client keeps them: the transport's google.auth credentials
 `token`), `client_options.api_key`, and per-call `metadata` entries named
 `authorization`, `proxy-authorization`, `x-goog-api-key` or
 `x-goog-iam-authorization-token` (with and without the `Bearer` prefix).
+It reads them before the call and again when it records an error, so a
+token set on those credentials during the call (on first use or by a
+refresh) is removed too.
 The package reads `metadata` once and passes the client a tuple of the same
 pairs, so metadata given as a generator still reaches the server; if
 reading it raises, the client raises the same error, as without the package.
 Text shaped like a Google credential is replaced too, even if the client
 never held it: `ya29.` access tokens, `AIza` API keys, `1//` refresh tokens,
-and, in server-written text only, the value after `Bearer`. If the place the
-client keeps credentials (or the call's `metadata`) cannot be read, the call
-is traced without the query and with
+JWTs (`eyJ…`: three base64url parts, such as a service account's
+self-signed token), and, in server-written text only, the value after
+`Bearer`. If the place the client keeps credentials (or the call's
+`metadata`) cannot be read, before or after the call, the call is traced
+without the query and with
 `[not recorded: the client credentials could not be read]` in place of the
 error message, and without a stack trace.
 
@@ -231,6 +236,11 @@ your call proceeds with its own result or exception.
 - A token carried by a gRPC channel you build yourself (call credentials on
   a `channel=` you pass to the transport) is not visible to the package;
   only the credential shapes above are removed from text.
+- When it builds the gRPC channel, `google-api-core` gives it a scoped copy
+  of credentials that require scopes, such as service-account credentials
+  without scopes. A token minted on that copy during the call (a self-signed
+  JWT or an access token) is never on the credentials the client holds, so
+  only its shape (`eyJ…` or `ya29.`) removes it.
 - Only v1 is traced. `google.cloud.discoveryengine` (v1beta at 0.20.5),
   `discoveryengine_v1beta` and `discoveryengine_v1alpha` clients produce no
   spans.

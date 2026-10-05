@@ -419,6 +419,33 @@ def test_credentials_that_cannot_be_read_fail_closed():
     assert "exception.stacktrace" not in exception
 
 
+def test_credentials_that_cannot_be_read_again_after_the_call_fail_closed():
+    # They are read again when an error is recorded; if that read fails,
+    # no free text is recorded, as when the first read fails.
+    class Transport:
+        def __init__(self):
+            self.reads = 0
+
+        @property
+        def _credentials(self):
+            self.reads += 1
+            if self.reads > 1:
+                raise RuntimeError("credential lookup failed")
+            return None
+
+    client = _Client(None)
+    client._transport = Transport()
+    error = core_exceptions.PermissionDenied("denied for secret-credential")
+    span = _call_wrapper(_wrappers.OperationWrapper, "search", client, error, search_request("q"))
+
+    assert client._transport.reads == 2
+    assert span.status.description == "PermissionDenied: " + _wrappers.UNREADABLE
+    exception = event(span, "exception")
+    assert exception["exception.message"] == _wrappers.UNREADABLE
+    assert "exception.stacktrace" not in exception
+    assert "secret-credential" not in span.to_json()
+
+
 def test_async_errors_are_redacted_the_same_way(fake):
     async def call():
         client = async_search_client(fake, credentials=oauth_credentials())

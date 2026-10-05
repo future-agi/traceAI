@@ -56,6 +56,9 @@ _TOKEN_SHAPES = (
     re.compile(r"ya29\.[0-9A-Za-z_\-.~+/]+=*"),  # OAuth 2.0 access token
     re.compile(r"AIza[0-9A-Za-z_\-]{35}"),  # API key
     re.compile(r"1//[0-9A-Za-z_\-]{20,}"),  # OAuth 2.0 refresh token
+    # JWT, such as a service account's self-signed token: three base64url
+    # parts, the first a JSON object ("eyJ" is base64 of '{"').
+    re.compile(r"(?<![0-9A-Za-z_\-])eyJ[0-9A-Za-z_\-]+\.[0-9A-Za-z_\-]+\.[0-9A-Za-z_\-]+"),
 )
 # Only in server-written text: the value after "Bearer" in a quoted header.
 _BEARER = re.compile(r"(?i)(\bbearer\s+)(?!\[redacted\])[^\s'\",;]+")
@@ -465,12 +468,16 @@ class _Call:
         secrets: Optional[List[str]],
         options: Options,
         hidden: Hidden = (),
+        instance: Any = None,
+        metadata: Optional[Tuple[Any, ...]] = (),
     ) -> None:
         self.span = span
         self.operation = operation
         self.secrets = secrets
         self.options = options
         self.hidden = hidden
+        self.instance = instance
+        self.metadata = metadata
 
     def ok(self, result: Any) -> None:
         failure = None
@@ -492,15 +499,33 @@ class _Call:
             logger.debug("Could not set the span status", exc_info=True)
         self._end()
 
+    def _secrets_after_call(self) -> Optional[List[str]]:
+        """The credentials read before the call and any set during it, longest first.
+
+        A token minted during the call (first use or a refresh) is set on
+        the credentials the client holds after they were first read, so
+        they are read again (attribute reads only; nothing is refreshed).
+        None, failing closed, if either read failed.
+        """
+        if self.secrets is None:
+            return None
+        try:
+            current = _credential_values(self.instance, self.metadata)
+        except Exception:
+            logger.debug("Could not read the Discovery Engine credentials again", exc_info=True)
+            return None
+        return sorted(dict.fromkeys(self.secrets + current), key=len, reverse=True)
+
     def error(self, error: BaseException) -> None:
         # No result count: nothing was returned, so the count is unknown.
+        secrets = self._secrets_after_call()
         try:
-            if self.secrets is None:
+            if secrets is None:
                 message = UNREADABLE
             else:
                 message = _clean(
                     _describe(error),
-                    self.secrets,
+                    secrets,
                     pii=self.options.pii_redaction,
                     hidden=self.hidden,
                     server=True,
@@ -518,9 +543,7 @@ class _Call:
         try:
             self.span.add_event(
                 "exception",
-                _exception_attributes(
-                    error, self.secrets, self.options.pii_redaction, self.hidden
-                ),
+                _exception_attributes(error, secrets, self.options.pii_redaction, self.hidden),
             )
         except Exception:
             logger.debug("Could not record the exception", exc_info=True)
@@ -594,7 +617,8 @@ class _BaseWrapper:
         except Exception:
             logger.debug("Could not start the Discovery Engine span", exc_info=True)
             return None, kwargs
-        return _Call(span, self._operation, secrets, self._options, hidden), kwargs
+        call = _Call(span, self._operation, secrets, self._options, hidden, instance, metadata)
+        return call, kwargs
 
 
 class OperationWrapper(_BaseWrapper):

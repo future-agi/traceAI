@@ -14,9 +14,10 @@ First release.
 - Query text only with `capture_query=True`; off by default, and removed
   from error text whenever it is not recorded. Results and answer text are
   never recorded.
-- Google credentials (transport credentials, `client_options.api_key`,
-  per-call auth metadata, and Google token shapes) are removed from every
-  recorded value. Errors record the gRPC status and code, then re-raise.
+- Google credentials (transport credentials, read again when an error is
+  recorded; `client_options.api_key`; per-call auth metadata; and Google
+  token shapes, including JWTs) are removed from every recorded value.
+  Errors record the gRPC status and code, then re-raise.
 - `TraceConfig` `hide_inputs` and `pii_redaction` apply, including to error
   text. Spans come from `FITracer`, so `using_*` context attributes apply.
 - Accepts `google-cloud-discoveryengine>=0.20.5,<1`; tested with 0.20.5 on
