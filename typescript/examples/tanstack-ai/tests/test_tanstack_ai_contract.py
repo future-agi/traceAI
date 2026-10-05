@@ -396,6 +396,20 @@ def test_failed_model_call_exports_error_spans():
     # No thread id was passed, so no session (chat() generated its own id).
     for name in (ROOT, ITERATION_0):
         assert "session.id" not in _attributes(spans[name]), name
+    # The provider's error text is exported whatever captureContent is: as
+    # the status message above and as an exception event with a stack trace
+    # (README "Privacy"). The request content is not.
+    for name in (ROOT, ITERATION_0):
+        exceptions = [
+            _attributes(event) for event in spans[name].get("events", [])
+            if event.get("name") == "exception"
+        ]
+        assert exceptions, (name, spans[name].get("events"))
+        assert all("boom" in event["exception.message"] for event in exceptions), exceptions
+        assert all(event.get("exception.stacktrace") for event in exceptions), exceptions
+    exported = json.dumps(raw_spans)
+    for marker in (PROMPT, CITY, SYSTEM_PROMPT, "PROMPT-MARKER"):
+        assert marker not in exported, marker
     # The provider error is printed; the credentials are not.
     _assert_no_placeholder_keys(raw_spans, result)
 

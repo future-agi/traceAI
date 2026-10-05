@@ -159,6 +159,12 @@ or tool argument or result reaches a span. Do not pass `captureContent: true`.
 If you opt in, use `redact`: a redactor that throws emits `[redaction_failed]`,
 never the raw text.
 
+Errors are exported whatever `captureContent` is. When a model call or a tool
+fails, `otelMiddleware` sets the error's message as the span status and
+records an `exception` event with its message and stack trace. That text
+comes from the provider or your tool, not from the recipe: if it repeats
+request content, that content reaches Future AGI.
+
 Keep `FI_API_KEY` and `FI_SECRET_KEY` on the server. Never import this code
 into a browser bundle.
 
