@@ -10,12 +10,14 @@ and changes only what that exporter sends. It exports copies, so Cognee's
 own span buffer and any other processor still see the original spans.
 
 Content. Cognee 1.6.2 writes prompts, document text, answers and search
-questions to span attributes and has no setting to stop that. By default the
-filter removes those attributes (``CONTENT_KEYS``) and, in the same span's
-status description and event attributes (exception messages and stack
-traces), replaces their text with ``__REDACTED__``. Pass
-``capture_content=True``, or set ``COGNEE_FI_CAPTURE_CONTENT=true``, to export
-everything.
+questions to span attributes and has no setting to stop that, and its
+errors can quote them (a content-policy rejection quotes the whole prompt).
+By default the filter removes those attributes (``CONTENT_KEYS``) and, on
+every span, all free-text error detail: exception messages and status
+descriptions are replaced, stack traces keep only their headers, frame lines
+and the exception type, and other event values are kept only if they are
+not text. Pass ``capture_content=True``, or set
+``COGNEE_FI_CAPTURE_CONTENT=true``, to export everything.
 
 Span kinds. Cognee sets no span-kind attribute, so Future AGI would store
 search and LLM spans as ``unknown``. The filter sets ``fi.span.kind`` by span
@@ -28,9 +30,9 @@ span. It never raises into the export path.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
+import re
 from typing import Any, Mapping, Optional, Sequence
 
 from opentelemetry.sdk.trace import Event, ReadableSpan
@@ -62,7 +64,23 @@ SPAN_KIND_KEYS = (
 # Cognee names a span after the decorated method; every
 # @observe(as_type="generation") method in Cognee 1.6.2 is acreate_structured_output.
 LLM_SPANS = frozenset({"cognee.observe.acreate_structured_output"})
-REDACTED = "__REDACTED__"
+# What replaces error text by default.
+DETAIL_REMOVED = "__REDACTED__ (content capture off)"
+TYPE_ONLY = "{0} (detail removed: content capture off)"
+# The only event keys whose string values are kept: the exception's class name
+# and "True"/"False". Cognee 1.6.2 adds no events other than OpenTelemetry's
+# "exception" events; any other event gets the same allowlist.
+SAFE_EVENT_KEYS = frozenset({"exception.type", "exception.escaped"})
+# The lines of a Python stack trace (traceback.format_exception) that hold no
+# message or source text.
+TRACEBACK_HEADER = "Traceback (most recent call last):"
+CHAIN_SEPARATORS = frozenset(
+    {
+        "During handling of the above exception, another exception occurred:",
+        "The above exception was the direct cause of the following exception:",
+    }
+)
+FRAME_LINE = re.compile(r'  File "[^"]*", line \d+, in [\w<>.]+')
 
 
 def span_kind(name: str) -> Optional[str]:
@@ -115,11 +133,18 @@ class CogneeExportFilter(SpanExporter):
             attributes["fi.span.kind"] = kind
         if self._capture_content:
             return _copy(span, attributes, span.events, span.status)
-        texts = _content_texts([attributes.pop(key) for key in CONTENT_KEYS if key in attributes])
-        events = [Event(e.name, _redacted(e.attributes, texts), e.timestamp) for e in span.events]
+        for key in CONTENT_KEYS:
+            attributes.pop(key, None)
+        events = [Event(e.name, _without_detail(e.attributes), e.timestamp) for e in span.events]
         status = span.status
         if status.description:
-            status = Status(status.status_code, _redact(status.description, texts))
+            # Only an ERROR status has a description; name the type of the
+            # exception that ended the span, if the span recorded one.
+            types = [e.attributes.get("exception.type") for e in events if e.name == "exception"]
+            if types and isinstance(types[-1], str):
+                status = Status(status.status_code, TYPE_ONLY.format(types[-1]))
+            else:
+                status = Status(status.status_code, DETAIL_REMOVED)
         return _copy(span, attributes, events, status)
 
     def _stripped(self, span: ReadableSpan) -> ReadableSpan:
@@ -128,33 +153,58 @@ class CogneeExportFilter(SpanExporter):
         return _copy(span, attributes, (), Status(span.status.status_code))
 
 
-def _content_texts(values: Sequence[Any]) -> list[str]:
-    """The text to redact: each removed value and, for a JSON object, its string fields."""
-    texts = set()
-    for value in map(str, values):
-        texts.add(value)
-        try:
-            parsed = json.loads(value)
-        except ValueError:
+def _without_detail(attributes: Optional[Mapping[str, Any]]) -> dict:
+    """An event's attributes without free text: an allowlist of keys and value types."""
+    attributes = attributes or {}
+    out = {}
+    for key, value in attributes.items():
+        if key == "exception.message":
+            out[key] = DETAIL_REMOVED
+        elif key == "exception.stacktrace":
+            out[key] = _trace_structure(str(value), attributes.get("exception.type"))
+        elif key in SAFE_EVENT_KEYS or _not_text(value):
+            out[key] = value
+    return out
+
+
+def _not_text(value: Any) -> bool:
+    """True for a number or boolean, or a sequence of them."""
+    if isinstance(value, (bool, int, float)):
+        return True
+    return isinstance(value, (list, tuple)) and all(
+        isinstance(item, (bool, int, float)) for item in value
+    )
+
+
+def _trace_structure(stacktrace: str, exception_type: Any) -> str:
+    """A Python stack trace reduced to the lines that match its structure.
+
+    Kept: each ``Traceback (most recent call last):`` header that starts the
+    trace or follows a chained-exception separator, the ``File "...", line N,
+    in name`` lines below that header, the separators, and a last line with
+    the exception type. Everything else (source lines, every line of every
+    message and note, layouts this does not recognise) is left out.
+    """
+    lines = stacktrace.splitlines()
+    kept = []
+    in_frames = False
+    for index, line in enumerate(lines):
+        if in_frames and line.startswith(" "):
+            if FRAME_LINE.fullmatch(line):
+                kept.append(line)
             continue
-        if isinstance(parsed, dict):
-            texts.update(field for field in parsed.values() if isinstance(field, str))
-    # Longest first, so a field inside a longer value does not split it.
-    return sorted((text for text in texts if text.strip()), key=len, reverse=True)
-
-
-def _redact(text: str, texts: Sequence[str]) -> str:
-    for content in texts:
-        text = text.replace(content, REDACTED)
-    return text
-
-
-def _redacted(attributes: Optional[Mapping[str, Any]], texts: Sequence[str]) -> dict:
-    return {
-        key: _redact(value, texts) if isinstance(value, str) else value
-        for key, value in (attributes or {}).items()
-        if key not in CONTENT_KEYS
-    }
+        # A section's frames end at its first unindented line (the message).
+        in_frames = line == TRACEBACK_HEADER and (
+            index == 0
+            or (index >= 2 and lines[index - 1] == "" and lines[index - 2] in CHAIN_SEPARATORS)
+        )
+        if in_frames:
+            kept.append(line)
+        elif line in CHAIN_SEPARATORS:
+            kept += ["", line, ""]
+    if isinstance(exception_type, str):
+        kept.append(exception_type)
+    return "\n".join(kept).strip("\n") + "\n"
 
 
 def _copy(

@@ -7,8 +7,8 @@ call, so Cognee attaches to that provider instead of creating its own
 (``setup_tracing`` in ``cognee/modules/observability/tracing.py``). It adds
 no instrumentor and never calls ``setup_tracing``. The Future AGI exporter is
 wrapped in ``CogneeExportFilter`` (``cognee_filter.py``, next to this file),
-which keeps Cognee's prompts, documents, answers and queries out of the
-export and marks search and LLM spans.
+which keeps Cognee's prompts, documents, answers and queries, and error text
+that can quote them, out of the export and marks search and LLM spans.
 
     COGNEE_TRACING_ENABLED=true python src/app.py "Who works on Lighthouse?"
 

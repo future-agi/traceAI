@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -85,7 +86,11 @@ CONTENT_KEYS = {
 # What the filter removes by default: every key above, plus the graph query
 # text (cognee.db.query, which held no marker in the recorded run).
 FILTERED_KEYS = set().union(*CONTENT_KEYS.values()) | {"cognee.db.query"}
-REDACTED = "__REDACTED__"
+# What the filter puts in place of error text by default.
+DETAIL_REMOVED = "__REDACTED__ (content capture off)"
+TYPE_ONLY = " (detail removed: content capture off)"
+TRACEBACK_HEADER = "Traceback (most recent call last):"
+FRAME_LINE = re.compile(r'  File "[^"]*", line \d+, in \S+')
 
 APP_SPAN = "remember_and_ask"
 INTERNAL = "SPAN_KIND_INTERNAL"
@@ -372,6 +377,32 @@ def filtered(
     return export_spans(
         spans, lambda exporter: cognee_filter.CogneeExportFilter(exporter, **options)
     )
+
+
+def without_error_detail(span: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """A recorded span's events and status as the filter should export them by default.
+
+    The recorded run's error spans each hold one exception event with a
+    single-section stack trace (test_recorded_error_spans_are_vector_search_probes).
+    """
+    events = copy.deepcopy(span.get("events", []))
+    for event in events:
+        exception_type = attributes(event)["exception.type"]
+        for attribute in event["attributes"]:
+            if attribute["key"] == "exception.message":
+                attribute["value"] = {"stringValue": DETAIL_REMOVED}
+            elif attribute["key"] == "exception.stacktrace":
+                lines = attribute["value"]["stringValue"].splitlines()
+                kept = [TRACEBACK_HEADER, *frame_lines(lines), exception_type]
+                attribute["value"] = {"stringValue": "\n".join(kept) + "\n"}
+    status = dict(span.get("status", {}))
+    if "message" in status:
+        status["message"] = attributes(events[-1])["exception.type"] + TYPE_ONLY
+    return events, status
+
+
+def frame_lines(lines: list[str]) -> list[str]:
+    return [line for line in lines if FRAME_LINE.fullmatch(line)]
 
 
 def filtered_attributes(span: dict[str, Any], capture_content: bool) -> dict[str, Any]:
@@ -783,11 +814,13 @@ def test_filter_keeps_content_off_the_wire_by_default(
     wire = filtered(cognee_filter, recorded)
     assert len(wire) == len(recorded)
     assert_no_content(wire)
-    # Everything else is unchanged.
+    # Error text is reduced to the exception type and frame lines; everything
+    # else is unchanged.
     for before, after in zip(recorded, wire):
         assert attributes(after) == filtered_attributes(before, capture_content=False)
-        assert after.get("events", []) == before.get("events", [])
-        assert after.get("status") == before.get("status")
+        events, status = without_error_detail(before)
+        assert after.get("events", []) == events
+        assert after.get("status") == status
 
 
 def test_filter_sets_span_kinds_only_where_none_is_set(
@@ -801,7 +834,7 @@ def test_filter_sets_span_kinds_only_where_none_is_set(
     assert "fi.span.kind" not in attributes(wire)
 
 
-def test_filter_redacts_content_quoted_in_status_and_events(
+def test_filter_removes_error_text_quoting_content(
     cognee_filter: Any, recorded: list[dict[str, Any]]
 ) -> None:
     # Cognee did not quote content in errors in the recorded run; plant it.
@@ -812,27 +845,352 @@ def test_filter_redacts_content_quoted_in_status_and_events(
     for span, quoted in ((search, QUESTION), (generation, DOCUMENT)):
         span["status"] = {"code": "STATUS_CODE_ERROR", "message": "ValueError: bad " + quoted}
         span["events"] = [
-            {
-                "timeUnixNano": span["endTimeUnixNano"],
-                "name": "exception",
-                "attributes": [
-                    {"key": "exception.type", "value": {"stringValue": "ValueError"}},
-                    {"key": "exception.message", "value": {"stringValue": "bad " + quoted}},
-                    {
-                        "key": "exception.stacktrace",
-                        "value": {"stringValue": "Traceback ...\nValueError: bad " + quoted},
-                    },
-                ],
-            }
+            exception_event(
+                "ValueError",
+                "bad " + quoted,
+                '{0}\n  File "/app/x.py", line 3, in run\nValueError: bad {1}\n'.format(
+                    TRACEBACK_HEADER, quoted
+                ),
+                span["endTimeUnixNano"],
+            )
         ]
     wire = filtered(cognee_filter, [search, generation])
     assert_no_content(wire)
     for span in wire:
-        assert span["status"]["message"] == "ValueError: bad " + REDACTED
-        event_attrs = attributes(span["events"][0])
-        assert event_attrs["exception.type"] == "ValueError"
-        assert event_attrs["exception.message"] == "bad " + REDACTED
-        assert event_attrs["exception.stacktrace"].endswith("ValueError: bad " + REDACTED)
+        assert span["status"]["message"] == "ValueError" + TYPE_ONLY
+        assert attributes(span["events"][0]) == {
+            "exception.type": "ValueError",
+            "exception.message": DETAIL_REMOVED,
+            "exception.stacktrace": TRACEBACK_HEADER
+            + '\n  File "/app/x.py", line 3, in run\nValueError\n',
+            "exception.escaped": "False",
+        }
+
+
+# A content-policy rejection as Cognee 1.6.2 raises it (litellm_native/
+# native_adapter.py:512-518): the message quotes the whole prompt. The payload
+# is longer than Cognee's 8000-character attribute cap (get_observe.py:12, :46)
+# and has several lines; the marker is on every line, so also past the cap.
+PAYLOAD_MARKER = "PMARK2c6d"
+PAYLOAD = "\n".join([PAYLOAD_MARKER + " Ada works on the Lighthouse project."] * 220)
+POLICY_ERROR = "cognee.infrastructure.llm.exceptions.ContentPolicyFilterError"
+TASK_SPAN = "cognee.pipeline.task.extract_graph_and_summarize"
+
+
+class ContentPolicyViolationError(Exception):
+    """Stands in for litellm's exception of that name."""
+
+
+class ContentPolicyFilterError(Exception):
+    """Stands in for Cognee's ContentPolicyFilterError."""
+
+
+def raise_policy_rejection() -> None:
+    try:
+        raise ContentPolicyViolationError("litellm.ContentPolicyViolationError: content_filter")
+    except ContentPolicyViolationError as error:
+        # str() of Cognee's error: CogneeApiError.__str__ (cognee/exceptions/exceptions.py:62-66).
+        raise ContentPolicyFilterError(
+            "CogneeValidationError: The provided input contains content that is not aligned "
+            "with our content policy: {0} (Status code: 422)".format(PAYLOAD)
+        ) from error
+
+
+def exception_event(type_: str, message: str, stacktrace: str, time: str) -> dict[str, Any]:
+    """The event OpenTelemetry's record_exception() adds, in OTLP JSON form."""
+    return {
+        "timeUnixNano": time,
+        "name": "exception",
+        "attributes": [
+            {"key": "exception.type", "value": {"stringValue": type_}},
+            {"key": "exception.message", "value": {"stringValue": message}},
+            {"key": "exception.stacktrace", "value": {"stringValue": stacktrace}},
+            {"key": "exception.escaped", "value": {"stringValue": "False"}},
+        ],
+    }
+
+
+def policy_rejection_spans(recorded: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A recorded LLM span and its pipeline task span, as a content-policy rejection ends them.
+
+    The LLM span's input attribute is the prompt JSON cut at 8000 characters,
+    which does not parse. The task span has no content attribute and records
+    the error twice: run_tasks_base.py:243-245, then new_span's
+    start_as_current_span (observability/__init__.py:110-118).
+    """
+    llm = copy.deepcopy(
+        next(
+            span
+            for span in spans_named(recorded, GENERATION_SPAN)
+            for parent in recorded
+            if parent["spanId"] == span["parentSpanId"] and parent["name"] == TASK_SPAN
+        )
+    )
+    (task,) = [copy.deepcopy(s) for s in recorded if s["spanId"] == llm["parentSpanId"]]
+    try:
+        raise_policy_rejection()
+    except ContentPolicyFilterError as raised:
+        error = raised
+    stacktrace = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    prompt = json.dumps({"text_input": PAYLOAD, "system_prompt": "Extract a graph."})[:8000]
+    with pytest.raises(ValueError):
+        json.loads(prompt)
+    for attribute in llm["attributes"]:
+        if attribute["key"] == "langfuse.observation.input":
+            attribute["value"] = {"stringValue": prompt}
+    for span, recorded_times in ((llm, 1), (task, 2)):
+        span["status"] = {
+            "code": "STATUS_CODE_ERROR",
+            "message": "ContentPolicyFilterError: " + str(error),
+        }
+        span["events"] = [
+            exception_event(POLICY_ERROR, str(error), stacktrace, span["endTimeUnixNano"])
+        ] * recorded_times
+    return [llm, task]
+
+
+def test_filter_removes_error_detail_on_every_span_by_default(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    # N1: the rejection quotes the whole prompt in the exception message, the
+    # stack trace and the status, on the LLM span (whose cut-off input does not
+    # parse) and again on its pipeline task span (which has no content key).
+    spans = policy_rejection_spans(recorded)
+    assert found_in(spans, [PAYLOAD_MARKER]) == [PAYLOAD_MARKER]
+    wire = filtered(cognee_filter, spans)
+    assert [span["name"] for span in wire] == [GENERATION_SPAN, TASK_SPAN]
+    assert found_in(wire, [PAYLOAD_MARKER]) == []
+    assert_no_content(wire)
+    for before, after in zip(spans, wire):
+        assert after["status"] == {
+            "code": "STATUS_CODE_ERROR",
+            "message": POLICY_ERROR + TYPE_ONLY,
+        }
+        assert len(after["events"]) == len(before["events"])
+        for event_before, event_after in zip(before["events"], after["events"]):
+            original = attributes(event_before)["exception.stacktrace"].splitlines()
+            event_attrs = attributes(event_after)
+            assert event_attrs["exception.type"] == POLICY_ERROR
+            assert event_attrs["exception.escaped"] == "False"
+            assert event_attrs["exception.message"] == DETAIL_REMOVED
+            trace = event_attrs["exception.stacktrace"].splitlines()
+            assert trace[0] == TRACEBACK_HEADER
+            assert trace[-1] == POLICY_ERROR
+            # One frame per section of the chained traceback, all kept.
+            assert len(frame_lines(trace)) >= 2
+            assert frame_lines(trace) == frame_lines(original)
+
+
+def test_filter_capture_content_keeps_error_detail(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    spans = policy_rejection_spans(recorded)
+    wire = filtered(cognee_filter, spans, capture_content=True)
+    for before, after in zip(spans, wire):
+        assert attributes(after) == filtered_attributes(before, capture_content=True)
+        assert after["events"] == before["events"]
+        assert after["status"] == before["status"]
+
+
+def test_filter_removes_detail_of_a_raised_chained_exception(cognee_filter: Any) -> None:
+    # The real record_exception() and use_span() output on this Python version,
+    # for a chained exception with a multi-line message.
+    filtered_out, raw_out = InMemorySpanExporter(), InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(cognee_filter.CogneeExportFilter(filtered_out)))
+    provider.add_span_processor(SimpleSpanProcessor(raw_out))
+    with pytest.raises(ContentPolicyFilterError):
+        with provider.get_tracer("test").start_as_current_span(GENERATION_SPAN):
+            raise_policy_rejection()
+    (raw,) = raw_out.get_finished_spans()
+    (clean,) = filtered_out.get_finished_spans()
+    assert PAYLOAD_MARKER in raw.status.description
+    exported = {
+        "attributes": dict(clean.attributes),
+        "status": clean.status.description,
+        "events": [[event.name, dict(event.attributes)] for event in clean.events],
+    }
+    assert found_in(exported, [PAYLOAD_MARKER]) == []
+    (event,) = clean.events
+    exception_type = event.attributes["exception.type"]
+    assert exception_type.endswith(".ContentPolicyFilterError")
+    assert clean.status.description == exception_type + TYPE_ONLY
+    trace = event.attributes["exception.stacktrace"].splitlines()
+    original = raw.events[0].attributes["exception.stacktrace"].splitlines()
+    assert len(frame_lines(trace)) >= 2
+    assert frame_lines(trace) == frame_lines(original)
+    assert "The above exception was the direct cause of the following exception:" in trace
+    assert trace[-1] == exception_type
+
+
+MARK = "TMARK5e0a"
+
+
+@pytest.mark.parametrize(
+    ("trace", "exception_type", "expected"),
+    [
+        pytest.param(
+            [
+                TRACEBACK_HEADER,
+                '  File "/app/client.py", line 12, in post',
+                "    raise ContentPolicyViolationError(body)  # " + MARK,
+                "    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+                "litellm.ContentPolicyViolationError: rejected " + MARK,
+                "a second message line " + MARK,
+                '  File "/forged.py", line 1, in ' + MARK,
+                "",
+                "The above exception was the direct cause of the following exception:",
+                "",
+                TRACEBACK_HEADER,
+                '  File "/app/adapter.py", line 515, in acreate_structured_output',
+                "    raise ContentPolicyFilterError(message) from error",
+                "cognee.ContentPolicyFilterError: policy " + MARK,
+                MARK + " on a second line",
+            ],
+            "cognee.ContentPolicyFilterError",
+            [
+                TRACEBACK_HEADER,
+                '  File "/app/client.py", line 12, in post',
+                "",
+                "The above exception was the direct cause of the following exception:",
+                "",
+                TRACEBACK_HEADER,
+                '  File "/app/adapter.py", line 515, in acreate_structured_output',
+                "cognee.ContentPolicyFilterError",
+            ],
+            id="direct-cause-multi-line-messages",
+        ),
+        pytest.param(
+            [
+                TRACEBACK_HEADER,
+                '  File "/app/a.py", line 3, in run',
+                "    step(" + MARK + ")",
+                '  File "/app/a.py", line 7, in step',
+                "    step(" + MARK + ")",
+                "  [Previous line repeated 2 more times]",
+                "KeyError: '" + MARK + "'",
+                "",
+                "During handling of the above exception, another exception occurred:",
+                "",
+                TRACEBACK_HEADER,
+                '  File "/app/a.py", line 5, in run',
+                "    raise ValueError(" + MARK + ")",
+                "ValueError: " + MARK,
+                "a note added with add_note() " + MARK,
+            ],
+            "ValueError",
+            [
+                TRACEBACK_HEADER,
+                '  File "/app/a.py", line 3, in run',
+                '  File "/app/a.py", line 7, in step',
+                "",
+                "During handling of the above exception, another exception occurred:",
+                "",
+                TRACEBACK_HEADER,
+                '  File "/app/a.py", line 5, in run',
+                "ValueError",
+            ],
+            id="during-handling-with-repeats-and-notes",
+        ),
+        pytest.param(
+            [
+                "ValueError: " + MARK,
+                "",
+                "The above exception was the direct cause of the following exception:",
+                "",
+                TRACEBACK_HEADER,
+                '  File "/app/a.py", line 3, in run',
+                "RuntimeError: " + MARK,
+            ],
+            "RuntimeError",
+            [
+                "The above exception was the direct cause of the following exception:",
+                "",
+                TRACEBACK_HEADER,
+                '  File "/app/a.py", line 3, in run',
+                "RuntimeError",
+            ],
+            id="cause-without-traceback",
+        ),
+        pytest.param(
+            [
+                TRACEBACK_HEADER,
+                '  File "/app/a.py", line 3, in run',
+                "ValueError: " + MARK,
+                TRACEBACK_HEADER,
+                '  File "/app/' + MARK + '.py", line 1, in ' + MARK,
+                MARK,
+            ],
+            "ValueError",
+            [TRACEBACK_HEADER, '  File "/app/a.py", line 3, in run', "ValueError"],
+            id="message-that-looks-like-a-traceback",
+        ),
+        pytest.param(
+            [
+                "  + Exception Group Traceback (most recent call last):",
+                '  |   File "/app/a.py", line 3, in run',
+                '  |     raise ExceptionGroup("' + MARK + '", errors)',
+                "  | ExceptionGroup: " + MARK + " (1 sub-exception)",
+                "  +-+---------------- 1 ----------------",
+                "    | ValueError: " + MARK,
+                "    +------------------------------------",
+            ],
+            "ExceptionGroup",
+            ["ExceptionGroup"],
+            id="unrecognised-layout",
+        ),
+    ],
+)
+def test_filter_keeps_only_the_structure_of_a_stack_trace(
+    cognee_filter: Any, trace: list[str], exception_type: str, expected: list[str]
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(cognee_filter.CogneeExportFilter(exporter)))
+    with provider.get_tracer("test").start_as_current_span(TASK_SPAN) as span:
+        span.add_event(
+            "exception",
+            {
+                "exception.type": exception_type,
+                "exception.message": MARK,
+                "exception.stacktrace": "\n".join(trace) + "\n",
+                "exception.escaped": "False",
+            },
+        )
+    (exported,) = exporter.get_finished_spans()
+    assert exported.events[0].attributes["exception.stacktrace"] == "\n".join(expected) + "\n"
+
+
+def test_filter_keeps_only_known_keys_and_non_text_values_in_events(cognee_filter: Any) -> None:
+    # Cognee 1.6.2 adds no events other than "exception"; anything else gets
+    # the same allowlist.
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(cognee_filter.CogneeExportFilter(exporter)))
+    with provider.get_tracer("test").start_as_current_span(APP_SPAN) as span:
+        span.add_event(
+            "retry",
+            {
+                "attempt": 2,
+                "delay.seconds": 1.5,
+                "final": False,
+                "scores": [0.5, 1.0],
+                "reason": "rejected " + MARK,
+                "inputs": ["first " + MARK, "second"],
+                "exception.type": "ValueError",
+            },
+        )
+        span.set_status(Status(StatusCode.ERROR, "gave up on " + MARK))
+    (exported,) = exporter.get_finished_spans()
+    assert dict(exported.events[0].attributes) == {
+        "attempt": 2,
+        "delay.seconds": 1.5,
+        "final": False,
+        "scores": (0.5, 1.0),
+        "exception.type": "ValueError",
+    }
+    # An event that is not named "exception" does not give the status a type.
+    assert exported.status.description == DETAIL_REMOVED
 
 
 def test_filter_capture_content_keeps_cognees_content(
@@ -891,8 +1249,9 @@ def test_filter_does_not_change_spans_other_processors_see(cognee_filter: Any) -
     assert dict(raw.events[0].attributes) == {"exception.message": "bad " + QUESTION}
     assert raw.status.description == "bad " + QUESTION
     assert dict(clean.attributes) == {"fi.span.kind": "RETRIEVER"}
-    assert dict(clean.events[0].attributes) == {"exception.message": "bad " + REDACTED}
-    assert clean.status.description == "bad " + REDACTED
+    assert dict(clean.events[0].attributes) == {"exception.message": DETAIL_REMOVED}
+    # The exception event names no type, so the status cannot either.
+    assert clean.status.description == DETAIL_REMOVED
     assert clean.context == raw.context and clean.parent == raw.parent
 
 
@@ -945,7 +1304,8 @@ def test_readme_states_what_the_tests_check() -> None:
         "COGNEE_FI_CAPTURE_CONTENT=true",
         "capture_content=True",
         "fi.span.kind",
-        REDACTED,
+        DETAIL_REMOVED,
+        TYPE_ONLY.strip(" ()"),
         *FILTERED_KEYS,
         *SPAN_KINDS,
     ):
@@ -960,6 +1320,7 @@ def test_readme_states_what_the_tests_check() -> None:
         pytest.param('pip install "cognee[tracing]==1.6.2"', id="R5-option-b-install"),
         pytest.param("cognee.disable_tracing()", id="R7-disable-tracing"),
         pytest.param("License-Expression: Apache-2.0", id="D9-license-metadata"),
+        pytest.param("less useful for debugging", id="N1-error-detail-trade-off"),
     ],
 )
 def test_readme_covers_review_items(fact: str) -> None:
