@@ -9,6 +9,7 @@ from google.api_core import exceptions as core_exceptions
 
 from _discoveryengine_support import (
     FAIL_DENIED,
+    FAIL_DETAILS,
     SERVING_CONFIG,
     FakeDiscoveryEngine,
     answer_client,
@@ -26,6 +27,10 @@ EMAIL = "jane.doe@example.com"
 EMAIL_TOKEN = "<EMAIL_ADDRESS>"
 REDACTED_VALUE = "__REDACTED__"
 DENIED_QUERY = FAIL_DENIED + " ask about " + EMAIL
+# An apostrophe, a double quote, a backslash and a non-ASCII letter: the
+# status detail the fake adds quotes it escaped (protobuf text format).
+QUOTED_QUERY = FAIL_DETAILS + " Zelda's \"quoted\" a\\b café"
+QUOTED_DETAIL = r'Zelda\'s \"quoted\" a\\b caf' + "é"
 
 
 @pytest.fixture()
@@ -79,6 +84,36 @@ def test_capture_query_records_it_and_keeps_it_in_error_text(fake):
     assert values["gen_ai.retrieval.query"] == DENIED_QUERY
     for text in _error_texts(span):
         assert DENIED_QUERY in text
+
+
+def _quoted(fake, traced_options):
+    with instrumented(**traced_options) as traced:
+        with pytest.raises(core_exceptions.InvalidArgument) as raised:
+            search_client(fake).search(request=search_request(QUOTED_QUERY))
+    # google-api-core appends the BadRequest detail, escaped, to the message.
+    assert QUOTED_QUERY in str(raised.value)
+    assert QUOTED_DETAIL in str(raised.value)
+    return traced.one()
+
+
+def test_the_server_echo_of_the_query_includes_an_escaped_copy(fake):
+    # Control for the test below: with capture on, both copies are kept.
+    span = _quoted(fake, {"capture_query": True})
+    for text in _error_texts(span):
+        assert QUOTED_QUERY in text
+        assert QUOTED_DETAIL in text
+
+
+@pytest.mark.parametrize("hide_inputs", [False, True], ids=["default", "hide_inputs"])
+def test_escaped_copies_of_the_query_are_removed_from_error_text(fake, hide_inputs):
+    options = {"capture_query": True, "config": _config(hide_inputs=True)} if hide_inputs else {}
+    span = _quoted(fake, options)
+    for text in _error_texts(span):
+        assert text
+        assert "Zelda" not in text
+        assert "quoted" not in text
+        assert REDACTED_VALUE in text
+    assert "Zelda" not in span.to_json()
 
 
 def _config(**fields):

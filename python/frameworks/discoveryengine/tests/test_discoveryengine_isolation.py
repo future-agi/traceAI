@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 from google.api_core import exceptions as core_exceptions
@@ -11,12 +12,15 @@ from opentelemetry.trace import StatusCode
 from _discoveryengine_support import (
     ANSWER_REFERENCES,
     FAIL_DENIED,
+    METADATA_TOKEN,
     SEARCH_RESULTS,
     FakeDiscoveryEngine,
     answer_client,
     answer_request,
     async_answer_client,
+    async_search_client,
     attrs,
+    event,
     instrumented,
     search_client,
     search_request,
@@ -108,6 +112,57 @@ def test_a_failing_credential_lookup_still_runs_the_call(fake, monkeypatch):
     values = attrs(traced.one())
     assert "input.value" not in values
     assert values["discoveryengine.result_count"] == SEARCH_RESULTS
+
+
+def _metadata_pairs():
+    # A one-shot iterable: a generator can be read once only.
+    yield ("x-caller-header", "caller-value")
+    yield ("x-goog-api-key", METADATA_TOKEN)
+
+
+@pytest.mark.parametrize("traced", [False, True], ids=["uninstrumented", "instrumented"])
+def test_metadata_from_a_generator_reaches_the_server(fake, traced):
+    async def call():
+        client = async_search_client(fake)
+        try:
+            await client.search_lite(request=search_request(), metadata=_metadata_pairs())
+        finally:
+            await client.transport.close()
+
+    with instrumented() if traced else contextlib.nullcontext() as tracing:
+        with pytest.raises(core_exceptions.PermissionDenied):
+            search_client(fake).search(request=search_request(FAIL_DENIED), metadata=_metadata_pairs())
+        answer_client(fake).answer_query(request=answer_request(), metadata=_metadata_pairs())
+        asyncio.run(call())
+
+    assert fake.methods() == ["Search", "AnswerQuery", "SearchLite"]
+    for received in fake.calls:
+        assert received.metadata["x-caller-header"] == "caller-value"
+        assert received.metadata["x-goog-api-key"] == METADATA_TOKEN
+    if traced:
+        assert len(tracing.spans()) == 3
+        # The pairs read once also feed the credential lookup.
+        assert METADATA_TOKEN not in tracing.wire()
+
+
+def _failing_metadata_pairs():
+    yield ("x-caller-header", "caller-value")
+    raise RuntimeError("caller metadata failed")
+
+
+@pytest.mark.parametrize("traced", [False, True], ids=["uninstrumented", "instrumented"])
+def test_metadata_that_fails_while_read_raises_as_without_instrumentation(fake, traced):
+    with instrumented() if traced else contextlib.nullcontext() as tracing:
+        with pytest.raises(RuntimeError, match="caller metadata failed"):
+            search_client(fake).search(request=search_request(), metadata=_failing_metadata_pairs())
+
+    # The client raised before sending anything, as it does uninstrumented.
+    assert fake.calls == []
+    if traced:
+        span = tracing.one()
+        # Nothing from metadata that could not be read: no free text at all.
+        assert span.status.description == "RuntimeError: " + _wrappers.UNREADABLE
+        assert event(span, "exception")["exception.message"] == _wrappers.UNREADABLE
 
 
 class _BrokenTracer:

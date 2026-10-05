@@ -27,6 +27,11 @@ selects the behaviour:
 - ``fail-unseen``: INVALID_ARGUMENT quoting token-shaped strings the client
   never held (a ``ya29.`` access token, an ``AIza`` key, a ``1//`` refresh
   token, a bearer value)
+- ``fail-token``: UNAUTHENTICATED quoting the access token the client sent,
+  without its ``Bearer`` prefix
+- ``fail-details``: INVALID_ARGUMENT quoting the query in its message and
+  again in a ``BadRequest`` status detail, which ``str(error)`` appends in
+  protobuf text format (escaped)
 - ``fail-unavailable``: UNAVAILABLE on every call
 - ``unavailable-once``: UNAVAILABLE on the first call, then success
 - ``pages``: a first page with ``next_page_token`` and a second page
@@ -38,6 +43,7 @@ selects the behaviour:
 from __future__ import annotations
 
 import contextlib
+import datetime
 import threading
 from concurrent import futures
 from dataclasses import dataclass
@@ -54,7 +60,9 @@ from google.cloud.discoveryengine_v1.types import (
     SearchResponse,
     Session,
 )
-from google.protobuf import struct_pb2
+from google.protobuf import any_pb2, struct_pb2
+from google.rpc import code_pb2, error_details_pb2, status_pb2
+from grpc_status import rpc_status
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -88,12 +96,17 @@ METADATA_TOKEN = "placeholder-metadata-token-must-not-be-exported"
 UNSEEN_ACCESS_TOKEN = "ya29.a0AfB_unseenTokenValue-123"
 UNSEEN_API_KEY = "AIza" + "S" * 35
 UNSEEN_REFRESH_TOKEN = "1//0g" + "R" * 30
+# Set on the credentials during the call (first use or refresh), after the
+# wrapper first read them.
+MINTED_TOKEN = "placeholder-minted-token-must-not-be-exported"
 
 FAIL_DENIED = "fail-denied"
 FAIL_HUGE = "fail-huge"
 HUGE_ERROR_CHARS = 8000
 FAIL_UNSEEN = "fail-unseen"
 BEARER_VALUE = "opaque-bearer-value-must-not-be-exported"
+FAIL_TOKEN = "fail-token"
+FAIL_DETAILS = "fail-details"
 FAIL_UNAVAILABLE = "fail-unavailable"
 UNAVAILABLE_ONCE = "unavailable-once"
 PAGES = "pages"
@@ -251,6 +264,29 @@ class FakeDiscoveryEngine:
                     UNSEEN_ACCESS_TOKEN, UNSEEN_API_KEY, UNSEEN_REFRESH_TOKEN, BEARER_VALUE
                 ),
             )
+        if FAIL_TOKEN in trigger:
+            token = metadata.get("authorization", "").split(" ", 1)[-1]
+            context.abort(
+                grpc.StatusCode.UNAUTHENTICATED,
+                "Request had invalid authentication credentials: {0}".format(token),
+            )
+        if FAIL_DETAILS in trigger:
+            detail = any_pb2.Any()
+            detail.Pack(
+                error_details_pb2.BadRequest(
+                    field_violations=[
+                        error_details_pb2.BadRequest.FieldViolation(
+                            field="query", description="Query '{0}' is not supported".format(query)
+                        )
+                    ]
+                )
+            )
+            status = status_pb2.Status(
+                code=code_pb2.INVALID_ARGUMENT,
+                message="Invalid query '{0}'".format(query),
+                details=[detail],
+            )
+            context.abort_with_status(rpc_status.to_status(status))
         if FAIL_UNAVAILABLE in trigger:
             context.abort(grpc.StatusCode.UNAVAILABLE, "backend unavailable")
         if UNAVAILABLE_ONCE in trigger:
@@ -446,6 +482,49 @@ def oauth_credentials(token: str = ACCESS_TOKEN) -> Any:
     from google.oauth2.credentials import Credentials
 
     return Credentials(token=token)
+
+
+def minting_credentials(token: Optional[str] = None) -> Any:
+    """User credentials that set ``MINTED_TOKEN`` when the gRPC auth plugin asks for a token.
+
+    With no ``token`` (first use) or an expired one (refresh), the plugin
+    calls ``refresh`` during the call, after the wrapper first read the
+    credentials. Nothing is fetched.
+    """
+    from google.oauth2.credentials import Credentials
+
+    class MintingCredentials(Credentials):
+        def refresh(self, request: Any) -> None:
+            self.token = MINTED_TOKEN
+            self.expiry = None
+
+    expiry = None if token is None else datetime.datetime(2000, 1, 1)
+    return MintingCredentials(token=token, expiry=expiry)
+
+
+def self_signed_jwt_credentials() -> Any:
+    """Service-account credentials that sign their own JWT, with a placeholder signer.
+
+    google-auth mints the JWT (``eyJ...``) when the call first needs a
+    token, on the scoped copy google-api-core gives the channel. The token
+    endpoint is a closed loopback port: a token request (none is expected)
+    would fail locally.
+    """
+    from google.auth import crypt
+    from google.oauth2 import service_account
+
+    class PlaceholderSigner(crypt.Signer):
+        @property
+        def key_id(self) -> str:
+            return "placeholder-key-id"
+
+        def sign(self, message: Any) -> bytes:
+            return b"placeholder-signature"
+
+    credentials = service_account.Credentials(
+        PlaceholderSigner(), "placeholder@example.invalid", "http://127.0.0.1:9/token"
+    )
+    return credentials.with_always_use_jwt_access(True)
 
 
 def api_key_credentials(key: str = API_KEY) -> Any:
