@@ -11,7 +11,7 @@ _FI_SPAN_KIND = "fi.span.kind"
 _RETRIEVAL_QUERY = "fi.retrieval.query"
 _RETRIEVAL_DOCUMENT_COUNT = "fi.retrieval.document_count"
 _RETRIEVER = "RETRIEVER"
-_MAX_QUERY_LENGTH = 1024
+_MAX_QUERY_BYTES = 1024
 
 
 def _query_from_call(
@@ -39,7 +39,14 @@ def _query_from_call(
     api_key = _api_key(instance)
     if api_key:
         query = query.replace(api_key, "[redacted]")
-    return query[:_MAX_QUERY_LENGTH]
+    return _cap(query)
+
+
+def _cap(value: str, limit: int = _MAX_QUERY_BYTES) -> str:
+    """Return the longest whole-character prefix of at most ``limit`` UTF-8 bytes."""
+    # A cut inside a multi-byte character leaves an invalid tail; "ignore"
+    # drops it. "replace" keeps a lone surrogate from raising in user code.
+    return value.encode("utf-8", "replace")[:limit].decode("utf-8", "ignore")
 
 
 def _api_key(instance: Any) -> Optional[str]:
