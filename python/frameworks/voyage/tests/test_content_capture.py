@@ -261,6 +261,23 @@ def test_captured_content_is_capped(fake):
     assert len(captured.encode("utf-8")) == 2048
 
 
+@pytest.mark.parametrize("capture_content", [False, True], ids=["default", "capture"])
+def test_rerank_scores_are_capped_and_the_result_count_stays_exact(fake, capture_content):
+    documents = ["d{0}".format(i) for i in range(70)]
+    with instrumented(capture_content=capture_content) as traced:
+        result = client(fake).rerank(QUERY, documents, model=RERANK_MODEL)
+
+    assert len(result.results) == 70
+    values = attrs(traced.one())
+    assert values["voyage.rerank.document_count"] == 70
+    assert values["voyage.rerank.result_count"] == 70
+    # The first 64 results, in the client's order.
+    assert json.loads(values["output.value"]) == [
+        {"index": item.index, "relevance_score": item.relevance_score}
+        for item in result.results[:64]
+    ]
+
+
 def test_pii_redaction_in_trace_config_applies_to_captured_content(fake):
     email = "jane.doe@example.com"
     with instrumented(capture_content=True, config=TraceConfig(pii_redaction=True)) as traced:

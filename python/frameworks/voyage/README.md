@@ -132,9 +132,11 @@ VoyageInstrumentor().instrument(
 )
 ```
 
-Captured content holds at most 64 texts or documents, and the query and each
-text or document are cut to 2 KB of UTF-8 on a character boundary; the counts
-stay exact. `pii_redaction=True` applies to every recorded value.
+At most 64 texts, 64 documents and 64 scores (the first 64 results, in the
+client's order) are recorded, and the query and each text or document are
+cut to 2 KB of UTF-8 on a character boundary; `voyage.embedding.count`,
+`voyage.rerank.document_count` and `voyage.rerank.result_count` stay exact.
+`pii_redaction=True` applies to every recorded value.
 
 Embedding vectors are never recorded, with or without capture, and
 `hide_embedding_vectors` has nothing to hide here.

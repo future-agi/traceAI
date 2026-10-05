@@ -42,8 +42,9 @@ SERVER_ADDRESS = "server.address"
 JSON_MIME_TYPE = "application/json"
 TEXT_MIME_TYPE = "text/plain"
 
-# Captured content limits: at most this many texts or documents, each cut to
-# this many UTF-8 bytes on a character boundary. Counts stay exact.
+# Recorded content limits: at most this many texts, documents or rerank
+# scores, and each text, document or query cut to this many UTF-8 bytes on a
+# character boundary. Counts stay exact.
 MAX_CAPTURED_ITEMS = 64
 MAX_CAPTURED_BYTES = 2048
 
@@ -343,12 +344,14 @@ def _output_content(operation: Operation, result: Any, config: TraceConfig) -> D
     results = getattr(result, "results", None)
     if not isinstance(results, (list, tuple)):
         return {}
+    # At most MAX_CAPTURED_ITEMS, like texts and documents; result_count
+    # stays exact.
     scores = [
         {
             "index": getattr(item, "index", None),
             "relevance_score": getattr(item, "relevance_score", None),
         }
-        for item in results
+        for item in results[:MAX_CAPTURED_ITEMS]
     ]
     return {
         SpanAttributes.OUTPUT_VALUE: json.dumps(scores),
