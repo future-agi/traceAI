@@ -337,6 +337,8 @@ def test_context_attributes_are_copied_onto_ag2_spans():
         assert tuple(by_name[name]["tag.tags"]) == ("t1",), name
     # The user's session wins over the upstream chat id; the chat id is kept.
     assert by_name["conversation c"]["gen_ai.conversation.id"] == "chat-1"
+    # Other AG2 spans carry the session id there (fi using_* sets it in context).
+    assert by_name["chat m"]["gen_ai.conversation.id"] == "my-session"
     # Spans from other instrumentations are left to their own tracer.
     assert "session.id" not in by_name["x"] and "user.id" not in by_name["x"]
 

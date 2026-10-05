@@ -604,6 +604,11 @@ def test_using_attributes_sets_session_and_user_on_ag2_spans(pipeline, fake):
         assert span.attributes["user.id"] == "u-1", span.name
     conversation = next(s for s in finished if s.name == "conversation user").attributes
     assert conversation["gen_ai.conversation.id"] == str(result.chat_id)
+    # Only the initiate_chat conversation span keeps the chat id there; every
+    # other AG2 span carries the session id that using_attributes put in context.
+    for span in finished:
+        if span.name != "conversation user":
+            assert span.attributes["gen_ai.conversation.id"] == "my-session", span.name
 
 
 def _initiate_chats(tracing, fake):
