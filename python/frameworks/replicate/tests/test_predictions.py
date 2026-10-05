@@ -161,12 +161,14 @@ def test_failed_prediction_after_wait_sets_error_from_the_error_field():
 def test_prefer_wait_create_that_returns_terminal_ends_at_create():
     with FakeReplicate() as fake, instrumented() as traced:
         client = make_client(fake)
-        prediction = client.predictions.create(model=TEXT_MODEL, input={}, wait=True)
+        # replicate 1.0.x drops wait= when predictions.create delegates a
+        # model= call, so the version route is the one that sends Prefer.
+        prediction = client.predictions.create(version=TEXT_VERSION, input={}, wait=True)
         assert prediction.status == "succeeded"
         span = traced.one()  # no wait call needed
         assert prediction.status == "succeeded"
 
-    assert fake.request_headers("POST", "/v1/models/acme/text-model/predictions")["prefer"] == "wait"
+    assert fake.request_headers("POST", "/v1/predictions")["prefer"] == "wait"
     values = attrs(span)
     assert values["replicate.prediction.status"] == "succeeded"
     assert json.loads(values["gen_ai.request.parameters"])["wait"] is True
@@ -239,26 +241,33 @@ def test_wait_on_a_terminal_prediction_adds_no_span():
         assert len(traced.replicate_spans()) == 1
 
 
+def _outcome(operation, value):
+    try:
+        result = operation(value)
+    except Exception as error:  # e.g. the client's httpx transport is not picklable
+        return type(error)
+    return type(result), result.id
+
+
 def test_returned_prediction_stays_a_plain_prediction_to_the_caller():
     with FakeReplicate() as fake, instrumented():
         client = make_client(fake)
         prediction = client.predictions.create(model=SLOW_MODEL, input={})
+        plain = client.predictions.get(prediction.id)  # untraced: a plain Prediction
+        assert type(plain) is Prediction
         assert isinstance(prediction, Prediction)
-        assert set(prediction.dict()) == _PLAIN_KEYS
-        for clone in (
-            pickle.loads(pickle.dumps(prediction)),
-            copy.copy(prediction),
-            copy.deepcopy(prediction),
-        ):
-            assert type(clone) is Prediction
-            assert clone.id == prediction.id
+        assert set(prediction.dict()) == _PLAIN_KEYS == set(plain.dict())
+        assert type(copy.copy(prediction)) is Prediction
+        # Copying and pickling behave exactly as they do for a plain Prediction.
+        for operation in (copy.copy, copy.deepcopy, lambda p: pickle.loads(pickle.dumps(p))):
+            assert _outcome(operation, prediction) == _outcome(operation, plain)
 
 
 def test_webhook_url_is_not_recorded():
     hook = "https://hooks.example.invalid/WEBHOOK-SECRET-MARKER"
     with FakeReplicate() as fake, instrumented() as traced:
         client = make_client(fake)
-        client.predictions.create(model=TEXT_MODEL, input={}, webhook=hook, wait=True)
+        client.predictions.create(version=TEXT_VERSION, input={}, webhook=hook, wait=True)
 
     params = json.loads(attrs(traced.one())["gen_ai.request.parameters"])
     assert params["webhook"] is True

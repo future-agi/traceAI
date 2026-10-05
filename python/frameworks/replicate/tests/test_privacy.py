@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("replicate", reason="replicate must be installed to test its instrumentor")
 
 import replicate  # noqa: E402
+import traceai_replicate  # noqa: E402
 from fi_instrumentation import TraceConfig  # noqa: E402
 
 from _support import (  # noqa: E402
@@ -106,3 +109,12 @@ def test_data_uri_output_records_only_its_media_type():
     assert values["replicate.output.type"] == "url"
     assert values["output.value"].startswith("data:image/png;base64,")
     assert DATA_PAYLOAD not in traced.wire()
+
+
+def test_the_package_never_reads_the_environment():
+    # PRD R-06: the instrumentor never reads REPLICATE_API_TOKEN; it only
+    # redacts the copies the client itself stored.
+    package = Path(traceai_replicate.__file__).parent
+    for source in package.glob("*.py"):
+        text = source.read_text()
+        assert not re.search(r"\benviron\b|\bgetenv\b", text), source.name

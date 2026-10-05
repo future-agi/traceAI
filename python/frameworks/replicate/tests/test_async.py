@@ -158,3 +158,19 @@ def test_cancelling_an_async_run_task_ends_the_span_as_cancelled():
     assert attrs(span)["replicate.cancelled"] is True
     assert attrs(span)["replicate.prediction.id"] == "pred0001"
     assert exception_events(span) == []
+
+
+def test_chained_async_create_then_wait_or_cancel_is_one_span_each():
+    async def main(client):
+        await (await client.predictions.async_create(model=TEXT_MODEL, input={})).async_wait()
+        await (await client.predictions.async_create(model=SLOW_MODEL, input={})).async_cancel()
+
+    with FakeReplicate() as fake, instrumented() as traced:
+        asyncio.run(main(make_client(fake)))
+
+    spans = traced.replicate_spans()
+    assert [span.name for span in spans] == ["replicate.predictions.create"] * 2
+    assert [attrs(span)["replicate.prediction.status"] for span in spans] == [
+        "succeeded",
+        "canceled",
+    ]

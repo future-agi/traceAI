@@ -52,6 +52,12 @@ def _current():
     }
 
 
+def _identical(left, right):
+    # A wrapt FunctionWrapper compares equal to the function it wraps, so
+    # restoration is checked by identity, never with ==.
+    return all(left[key] is right[key] for key in TARGETS)
+
+
 def test_every_wrapped_method_is_restored_by_identity():
     before = _current()
     functions = {name: getattr(replicate, name) for name in MODULE_FUNCTIONS}
@@ -60,8 +66,7 @@ def test_every_wrapped_method_is_restored_by_identity():
         for key in TARGETS:
             assert during[key] is not before[key], key
     after = _current()
-    for key in TARGETS:
-        assert after[key] is before[key], key
+    assert _identical(after, before)
     for name in MODULE_FUNCTIONS:
         assert getattr(replicate, name) is functions[name], name
 
@@ -99,7 +104,7 @@ def test_instrument_twice_and_uninstrument_twice_are_safe():
     instrumentor.instrument(tracer_provider=provider)
     instrumentor.uninstrument()
     instrumentor.uninstrument()
-    assert _current() == before
+    assert _identical(_current(), before)
 
 
 def test_instrument_accepts_a_trace_config_and_rejects_unknown_options():
@@ -110,7 +115,30 @@ def test_instrument_accepts_a_trace_config_and_rejects_unknown_options():
         ReplicateInstrumentor().instrument(tracer_provider=TracerProvider(), capture_everything=True)
     with pytest.raises(TypeError, match="TraceConfig"):
         ReplicateInstrumentor().instrument(tracer_provider=TracerProvider(), config={"hide": 1})
-    assert _current() == before  # nothing was patched by a rejected call
+    assert _identical(_current(), before)  # nothing was patched by a rejected call
 
     with instrumented(config=TraceConfig(hide_inputs=True)):
-        assert _current() != before
+        during = _current()
+        assert all(during[key] is not before[key] for key in TARGETS)
+
+
+def test_a_method_missing_from_the_installed_sdk_is_skipped_with_a_warning(monkeypatch, caplog):
+    import replicate.deployment
+
+    monkeypatch.setattr(replicate.deployment, "DeploymentPredictions", type("Moved", (), {}))
+    before = _current_except("DeploymentPredictions")
+    with caplog.at_level("WARNING", logger="traceai_replicate"):
+        with FakeReplicate() as fake, instrumented() as traced:
+            make_client(fake).run(TEXT_MODEL, input={})
+    assert "DeploymentPredictions.create was not found" in caplog.text
+    assert [span.name for span in traced.replicate_spans()] == ["replicate.run"]
+    after = _current_except("DeploymentPredictions")
+    assert all(after[key] is before[key] for key in before)
+
+
+def _current_except(class_name):
+    return {
+        (module, cls, name): getattr(import_module(module), cls).__dict__[name]
+        for module, cls, name in TARGETS
+        if cls != class_name
+    }
