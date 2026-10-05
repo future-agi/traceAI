@@ -11,8 +11,9 @@ Span model (TH-8320):
   later ``wait`` / ``cancel`` ends it (one span, not two). If neither is
   called, it ends with the create-time status and the create-time end
   timestamp when the prediction object is released, when the tracer
-  provider is flushed or shut down, at ``uninstrument()``, or at
-  interpreter exit.
+  provider is flushed or shut down, at the first traced call after it has
+  been held for ``max_pending_seconds`` (default 600), at
+  ``uninstrument()``, or at interpreter exit.
 * ``replicate.prediction.wait`` / ``replicate.predictions.cancel`` - wait or
   cancel on a prediction that has no open create span.
 
@@ -30,7 +31,7 @@ import threading
 import time
 import traceback
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Mapping, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple, TypeVar
 
 import wrapt
 from fi_instrumentation import REDACTED_VALUE, TraceConfig
@@ -68,6 +69,10 @@ STREAM = "replicate.stream"
 CREATE = "replicate.predictions.create"
 WAIT = "replicate.prediction.wait"
 CANCEL = "replicate.predictions.cancel"
+
+# The longest a create span is held open waiting for wait()/cancel().
+DEFAULT_MAX_PENDING_SECONDS = 600.0
+_monotonic = time.monotonic
 
 # The traced call whose vendor code is running in this context. A wrapped
 # method reached from inside it (run -> predictions.create -> Prediction.wait,
@@ -279,10 +284,17 @@ class _Call:
 
 
 class PendingRegistry:
-    """Create spans still open on a prediction, by prediction id."""
+    """Create spans still open on a prediction, by prediction id.
 
-    def __init__(self) -> None:
-        self._calls: Dict[str, _Call] = {}
+    A span is held for at most ``max_pending_seconds``. Expiry is lazy: every
+    registry operation (and every traced call, through :meth:`touch`) first
+    ends, as of create time, the held spans older than that. Entries are kept
+    in the order they were held, so a check stops at the first young one.
+    """
+
+    def __init__(self, max_pending_seconds: float = DEFAULT_MAX_PENDING_SECONDS) -> None:
+        self._calls: Dict[str, Tuple[_Call, float]] = {}
+        self._max_age = max_pending_seconds
         # Re-entrant: a PendingPrediction released by the cyclic GC while this
         # thread holds the lock ends its span and calls discard() right here.
         self._lock = threading.RLock()
@@ -290,25 +302,44 @@ class PendingRegistry:
     def add(self, prediction_id: str, call: _Call) -> None:
         call.on_finish = lambda finished: self.discard(prediction_id, finished)
         with self._lock:
-            previous = self._calls.get(prediction_id)
-            self._calls[prediction_id] = call
-        if previous is not None and previous is not call:
-            previous.expire()
+            previous = self._calls.pop(prediction_id, None)
+            self._calls[prediction_id] = (call, _monotonic())
+        if previous is not None and previous[0] is not call:
+            previous[0].expire()
+        self.touch()
 
     def get(self, prediction_id: Any) -> Optional[_Call]:
+        self.touch()
         if not isinstance(prediction_id, str):
             return None
         with self._lock:
-            return self._calls.get(prediction_id)
+            entry = self._calls.get(prediction_id)
+        return entry[0] if entry is not None else None
 
     def discard(self, prediction_id: str, call: _Call) -> None:
         with self._lock:
-            if self._calls.get(prediction_id) is call:
+            entry = self._calls.get(prediction_id)
+            if entry is not None and entry[0] is call:
                 del self._calls[prediction_id]
+
+    def touch(self) -> None:
+        """End the held spans that are older than the cap."""
+        deadline = _monotonic() - self._max_age
+        stale: List[_Call] = []
+        with self._lock:
+            # A fresh iterator per step: nothing iterates while an entry goes.
+            while self._calls:
+                prediction_id, (call, held_since) = next(iter(self._calls.items()))
+                if held_since > deadline:
+                    break
+                del self._calls[prediction_id]
+                stale.append(call)
+        for call in stale:
+            call.expire()
 
     def expire_all(self) -> None:
         with self._lock:
-            calls = list(self._calls.values())
+            calls = [call for call, _ in self._calls.values()]
             self._calls.clear()
         for call in calls:
             call.expire()
@@ -504,6 +535,10 @@ class _Wrapper:
             logger.debug("traceai-replicate: could not start a span", exc_info=True)
             return None
 
+    def _touch(self) -> None:
+        """On entry to a traced call: end held spans that are past the cap."""
+        _guard(self._registry.touch, None)
+
     def _pending(self, prediction_id: Any) -> Optional[_Call]:
         return _guard(lambda: self._registry.get(prediction_id), None)
 
@@ -536,6 +571,7 @@ class RunWrapper(_Wrapper):
     def __call__(self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]) -> Any:
         if _ACTIVE.get() is not None:
             return wrapped(*args, **kwargs)
+        self._touch()
         call = self._start(wrapped, instance, args, kwargs, stream=self._stream)
         if call is None:
             return wrapped(*args, **kwargs)
@@ -556,6 +592,7 @@ class AsyncRunWrapper(RunWrapper):
     ) -> Any:
         if _ACTIVE.get() is not None:
             return await wrapped(*args, **kwargs)
+        self._touch()
         call = self._start(wrapped, instance, args, kwargs, stream=self._stream)
         if call is None:
             return await wrapped(*args, **kwargs)
@@ -580,6 +617,7 @@ class CreateWrapper(_Wrapper):
             prediction = wrapped(*args, **kwargs)
             _guard(lambda: outer.observe(prediction), None)
             return prediction
+        self._touch()
         call = self._start(wrapped, instance, args, kwargs)
         if call is None:
             return wrapped(*args, **kwargs)
@@ -601,6 +639,7 @@ class AsyncCreateWrapper(_Wrapper):
             prediction = await wrapped(*args, **kwargs)
             _guard(lambda: outer.observe(prediction), None)
             return prediction
+        self._touch()
         call = self._start(wrapped, instance, args, kwargs)
         if call is None:
             return await wrapped(*args, **kwargs)
@@ -648,6 +687,7 @@ class LifecycleWrapper(_LifecycleWrapper):
     def __call__(self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]) -> Any:
         if _ACTIVE.get() is not None:
             return wrapped(*args, **kwargs)
+        self._touch()
         call = self._pending(_guard(lambda: self._prediction_id(instance, args, kwargs), None))
         if call is None:
             if self._untraced(instance):
@@ -671,6 +711,7 @@ class AsyncLifecycleWrapper(_LifecycleWrapper):
     ) -> Any:
         if _ACTIVE.get() is not None:
             return await wrapped(*args, **kwargs)
+        self._touch()
         call = self._pending(_guard(lambda: self._prediction_id(instance, args, kwargs), None))
         if call is None:
             if self._untraced(instance):

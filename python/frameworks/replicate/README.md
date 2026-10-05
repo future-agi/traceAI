@@ -38,8 +38,13 @@ attributes. Instrument before you use the client. A function imported with
 `replicate.async_stream` looked up after `instrument()`, and every
 `replicate.Client` method, are traced.
 
-`instrument()` accepts `tracer_provider` and `config` (a
-`fi_instrumentation.TraceConfig`); any other option raises `TypeError`.
+`instrument()` accepts `tracer_provider`, `config` (a
+`fi_instrumentation.TraceConfig`) and `max_pending_seconds` (a positive
+number, default `600`; see [create, wait and cancel](#create-wait-and-cancel)).
+Any other option, a `config` that is not a `TraceConfig`, or a
+`max_pending_seconds` that is not an `int` or `float` raises `TypeError`; a
+`max_pending_seconds` that is not a positive, finite number raises
+`ValueError`.
 
 ## Instrumented calls
 
@@ -68,9 +73,28 @@ The span stays open on the returned prediction:
   exported when the prediction object is released, when the tracer provider
   you passed to `instrument()` is flushed or shut down (`force_flush()`,
   `shutdown()`, and the SIGTERM/SIGINT handler that `register()` installs,
-  which calls `shutdown()`), at `uninstrument()`, or at interpreter exit.
-  A `wait()` or `cancel()` after that gets its own span. Such a span is not
-  a completion. This package never polls a prediction you did not wait for.
+  which calls `shutdown()`), at the first traced call after it has been held
+  for `max_pending_seconds`, at `uninstrument()`, or at interpreter exit. A
+  `wait()` or `cancel()` after that gets its own span. Such a span is not a
+  completion. This package never polls a prediction you did not wait for.
+
+**Deviation from spec J2.4.** The spec says a create that is not waited on
+ends at create. Ending it there would make create followed by `wait()` two
+spans, and AC-03 asks for one; AC-02 asks that a create nobody waits on
+records the create-time status. Both hold here because the span is held
+open on the returned prediction instead, and when nothing continues it, it
+is ended with the create-time status and end timestamp (AC-02). What is
+deferred is delivery, not the recorded data. Delivery is bounded:
+
+- **Cap.** A span is held for at most `max_pending_seconds` (default 600).
+  An older held span is ended, as of create time and with its create-time
+  status, the next time any traced call runs or the provider is flushed or
+  shut down. A later `wait()` on that prediction gets its own
+  `replicate.prediction.wait` span.
+- **Flush and shutdown.** `force_flush()` and `shutdown()` on the provider
+  you passed to `instrument()` end every held span first, so a flush at the
+  end of a request, a container stop (SIGTERM) or Ctrl-C (SIGINT) under
+  `register()` exports it. `uninstrument()` restores both methods.
 
 The prediction you get back is the client's `Prediction` behind a thin
 `wrapt.ObjectProxy`: `isinstance(p, Prediction)` holds, and fields, methods,

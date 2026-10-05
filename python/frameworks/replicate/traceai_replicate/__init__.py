@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import math
 from importlib import import_module
 from typing import Any, Collection, List, Tuple
 
@@ -15,6 +16,7 @@ from wrapt import wrap_function_wrapper
 from traceai_replicate._wrappers import (
     CANCEL,
     CREATE,
+    DEFAULT_MAX_PENDING_SECONDS,
     RUN,
     STREAM,
     WAIT,
@@ -32,7 +34,7 @@ from traceai_replicate.version import __version__
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_OPTIONS = frozenset({"tracer_provider", "config"})
+_OPTIONS = frozenset({"tracer_provider", "config", "max_pending_seconds"})
 # replicate/__init__.py binds these to default_client at import time.
 _MODULE_FUNCTIONS = ("run", "async_run", "stream", "async_stream")
 # Provider methods that end held create spans before they run (see _hook_provider).
@@ -64,12 +66,33 @@ class _EndPendingFirst:
         return self.original(*args, **kwargs)
 
 
+def _max_pending_seconds(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(
+            "max_pending_seconds must be a number of seconds (int or float), not {0}".format(
+                type(value).__name__
+            )
+        )
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(
+            "max_pending_seconds must be a positive, finite number of seconds, not {0!r}".format(
+                value
+            )
+        )
+    return float(value)
+
+
 class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """Trace ``replicate`` predictions: run, stream, create, wait and cancel.
 
-    ``instrument(tracer_provider=..., config=TraceConfig(...))``. Trainings,
-    file uploads, and reads (``predictions.get``/``list``, ``reload``) are not
-    wrapped.
+    ``instrument(tracer_provider=..., config=TraceConfig(...),
+    max_pending_seconds=600)``. Trainings, file uploads, and reads
+    (``predictions.get``/``list``, ``reload``) are not wrapped.
+
+    ``max_pending_seconds`` is the longest a create span is held open on its
+    prediction for a ``wait()``/``cancel()``; an older one is ended, as of
+    create time, the next time a traced call runs or the provider is flushed
+    or shut down.
     """
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -92,11 +115,14 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                     type(config).__name__
                 )
             )
+        max_pending_seconds = _max_pending_seconds(
+            kwargs.get("max_pending_seconds", DEFAULT_MAX_PENDING_SECONDS)
+        )
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
         )
-        self._registry = PendingRegistry()
+        self._registry = PendingRegistry(max_pending_seconds)
         self._originals: List[Tuple[Any, str, Any]] = []
         self._module_functions: List[Tuple[Any, str, Any, Any]] = []
 
