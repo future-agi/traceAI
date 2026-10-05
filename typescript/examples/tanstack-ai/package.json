@@ -1,0 +1,23 @@
+{
+  "name": "traceai-example-tanstack-ai",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Recipe: send TanStack AI otelMiddleware spans to Future AGI. No traceAI TanStack package.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "start": "node src/chat.mjs"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@tanstack/ai": "0.64.0",
+    "@tanstack/ai-openai": "0.26.0",
+    "@traceai/fi-core": "1.0.0"
+  },
+  "overrides": {
+    "@opentelemetry/sdk-trace-node": "2.11.0"
+  }
+}

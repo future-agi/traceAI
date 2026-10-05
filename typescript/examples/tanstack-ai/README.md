@@ -1,0 +1,236 @@
+# TanStack AI → Future AGI (recipe)
+
+There is no `@traceai/tanstack-ai` package. TanStack AI's own `otelMiddleware`
+creates the spans. This example registers a Future AGI tracer provider with
+`@traceai/fi-core`, passes its tracer to `otelMiddleware`, and leaves content
+capture off.
+
+Pinned: `@tanstack/ai` 0.64.0, `@tanstack/ai-openai` 0.26.0,
+`@traceai/fi-core` 1.0.0, `@opentelemetry/api` 1.9.1. Node `>=20.6.0`, the
+floor of the pinned OpenTelemetry SDK 2.11.0 on the Node 20 line. The
+contract test and `node --test` suite (see "Contract test") pass on Node
+20.20.2, 22.23.3 and 26.8.1.
+`package.json` `overrides` also pins `@opentelemetry/sdk-trace-node` 2.11.0,
+which pins `@opentelemetry/sdk-trace-base` and `@opentelemetry/sdk-trace`
+2.11.0: the root usage move in `src/tracing.mjs` edits the SDK span's
+attributes object, which is not public API, so re-run the tests before
+changing that pin.
+`@tanstack/ai` is MIT and is a dependency of this example only. It is not
+vendored and not a dependency of any traceAI package.
+
+## Run
+
+```bash
+cd typescript/examples/tanstack-ai
+npm install
+
+export FI_API_KEY="YOUR_API_KEY"        # sent as X-Api-Key
+export FI_SECRET_KEY="YOUR_SECRET_KEY"  # sent as X-Secret-Key
+export FI_PROJECT_NAME="my-chatbot"     # resource attribute project_name
+export OPENAI_API_KEY="YOUR_OPENAI_KEY"
+# Optional: FI_BASE_URL (default https://api.futureagi.com), OPENAI_BASE_URL
+
+node src/chat.mjs "What is the weather in Paris?"
+```
+
+`register()` exports OTLP/HTTP to `{FI_BASE_URL}/tracer/v1/traces` with the
+`project_name` and `project_type=observe` resource attributes. The collector
+drops a batch without `project_name`.
+
+## The recipe
+
+Copy `src/tracing.mjs` into your app. It wraps TanStack AI's
+`otelMiddleware` (imported from the `@tanstack/ai/middlewares/otel` subpath,
+not from `@tanstack/ai`) with the Future AGI span kinds, the root usage move
+and the optional session, and registers the tracer provider with
+`@traceai/fi-core`. Do not pass a bare `otelMiddleware` to `chat()`: its root
+span repeats every model call's usage, so Future AGI would count it twice.
+
+The SDK pin does not travel with `src/tracing.mjs`: it lives in this
+example's `package.json` `overrides`
+(`"@opentelemetry/sdk-trace-node": "2.11.0"`). Copy that entry into your
+app's `package.json` too (npm reads `overrides`; pnpm and Yarn have their own
+field, `pnpm.overrides` and `resolutions`). Without it your app resolves the
+SDK through `@traceai/fi-core`'s `^2.0.1` range, and the root usage move is
+tested only on 2.11.0. If an SDK version stopped exposing the span's plain
+`attributes` object, the move would do nothing, silently, and Future AGI
+would count every model call's usage twice.
+
+A route then looks like this:
+
+```js
+import { chat } from "@tanstack/ai";
+import { openaiChatCompletions } from "@tanstack/ai-openai";
+import {
+  flushTraces,
+  futureAgiOtelMiddleware,
+  registerFutureAgiTracing,
+} from "./tracing.mjs";
+
+// Once per process. register() reads FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL.
+const tracerProvider = registerFutureAgiTracing();
+
+// `signal` is the request's abort signal: `request.signal` in a Fetch API
+// handler, or an AbortController you abort on `res.on("close")` in node:http.
+export async function chatRoute(question, { threadId, signal } = {}) {
+  // captureContent stays at its default of false.
+  const middleware = futureAgiOtelMiddleware(
+    tracerProvider.getTracer("tanstack-ai"),
+    { threadIdAsSession: Boolean(threadId) },
+  );
+  // When the client disconnects, abort chat() so its spans end as cancelled
+  // and export. Without this chat() never learns the client left.
+  const abortController = new AbortController();
+  const abort = () => abortController.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    // Read the stream to the end, even after RUN_ERROR, so the spans end
+    // and export. Do not use chat()'s non-streaming mode.
+    let text = "";
+    let runError = null;
+    for await (const chunk of chat({
+      adapter: openaiChatCompletions(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
+      messages: [{ role: "user", content: question }],
+      middleware: [middleware],
+      abortController,
+      ...(threadId ? { threadId } : {}),
+    })) {
+      if (chunk.type === "RUN_ERROR") runError ??= chunk;
+      else if (chunk.type === "TEXT_MESSAGE_CONTENT") text += chunk.delta ?? "";
+    }
+    if (runError) throw new Error(runError.message);
+    return text;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    // Waits at most 2 s and never throws. A long-lived server can drop
+    // this flush: see Notes.
+    await flushTraces(tracerProvider);
+  }
+}
+```
+
+Never stop reading `chat()`'s stream without aborting its `abortController`:
+a `break`, an early `return` or a dropped response body ends no span, so the
+whole trace is lost. TanStack ends the spans only when the run finishes,
+fails or is aborted. When you stream to the client with
+`toServerSentEventsResponse(stream, { abortController })`, pass it the same
+controller you passed to `chat()`, so a closed response aborts the run.
+
+`src/chat.mjs` is the runnable version of this route, with a tool and a
+system prompt; it takes the tracer provider as an argument. The contract
+test runs this snippet as written.
+
+## What is traced
+
+| Span | Name | Kind set by the recipe | Key attributes |
+|---|---|---|---|
+| chat() call | `chat <model>` | `AGENT` when it ran more than one model call, else none | `gen_ai.request.model`, `tanstack.ai.iterations`, and TanStack's sum of every model call's usage, renamed: each `gen_ai.usage.<suffix>` becomes `tanstack.ai.root_usage.<suffix>` and each `gen_ai.cost.<suffix>` becomes `tanstack.ai.root_usage.cost.<suffix>`. Future AGI sums `gen_ai.usage.*` over the trace, so the root's copy would double tokens, cache, reasoning and cost. The root keeps `gen_ai.usage.*` only when no model call reported usage. |
+| model call | `chat <model> #<n>` | `LLM` | `gen_ai.operation.name=chat`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `tanstack.ai.iteration` |
+| tool call | `execute_tool <name>` | `TOOL` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` |
+
+Usage is a span attribute, not only a metric: `gen_ai.usage.input_tokens`,
+`gen_ai.usage.output_tokens`, and, when the provider reports them,
+`gen_ai.usage.total_tokens`, `gen_ai.usage.cost`,
+`gen_ai.usage.cache_read.input_tokens`,
+`gen_ai.usage.cache_creation.input_tokens` and
+`gen_ai.usage.reasoning.output_tokens`.
+
+The kind (`gen_ai.span.kind`) is keyed on the middleware's span scope. Only
+model-call spans carry `gen_ai.operation.name`. The root's kind is set in
+`onSpanEnd`, because `attributeEnricher` runs for the root before the number
+of model calls is known.
+
+## Session
+
+Pass the caller's conversation id as TanStack's `threadId`, and build the
+middleware with `threadIdAsSession: true`. Every span then carries
+`session.id` = that thread id, so Future AGI groups the conversation's traces:
+
+```js
+const middleware = futureAgiOtelMiddleware(tracer, { threadIdAsSession: true });
+chat({ adapter, messages, threadId: conversationId, middleware: [middleware] });
+```
+
+`src/chat.mjs` takes it as a second argument:
+`node src/chat.mjs "What is the weather in Paris?" conversation-42`.
+
+The thread id is copied verbatim to `session.id` on every span and leaves
+your process. Use an opaque id, such as a random UUID per conversation, not
+an email address, a user name or anything else that identifies a person.
+The same goes for `chat()`'s legacy `conversationId` option: TanStack uses it
+as the thread id when `threadId` is not set.
+
+Deviation from the traceAI context helper: `setSession()` from
+`@traceai/fi-core` only sets an OpenTelemetry context value. Neither
+`otelMiddleware` nor the plain SDK tracer that `register()`'s provider hands
+out reads it, so it would not reach these spans. The
+recipe uses `threadId` instead. Leave `threadIdAsSession` off when the caller
+has no conversation id: `chat()` then generates a new `thread-<ms>-<random>`
+id per call, and each request would become its own session.
+
+## Privacy
+
+`captureContent` defaults to `false`, so no prompt, completion, system prompt,
+or tool argument or result reaches a span. Do not pass `captureContent: true`.
+If you opt in, use `redact`: a redactor that throws emits `[redaction_failed]`,
+never the raw text.
+
+Errors are exported whatever `captureContent` is. When a model call or a tool
+fails, `otelMiddleware` sets the error's message as the span status and
+records an `exception` event with its message and stack trace. That text
+comes from the provider or your tool, not from the recipe: if it repeats
+request content, that content reaches Future AGI.
+
+Keep `FI_API_KEY` and `FI_SECRET_KEY` on the server. Never import this code
+into a browser bundle.
+
+## Notes
+
+- Spans are exported by `register()`'s default `SimpleSpanProcessor`.
+  `register({ batch: true })` does not attach its batch processor with
+  `@traceai/fi-core` 1.0.0 on `@opentelemetry/sdk-trace(-base)` 2.11.0 (the
+  versions this example installs), so it is not passed.
+- `forceFlush()` rejects when the collector is unreachable and can wait for
+  the exporter's 10 s timeout when the collector accepts but does not answer.
+  `flushTraces()` logs either case, waits at most 2 s (`FLUSH_TIMEOUT_MS`),
+  and never throws, so `chat()` and the route still answer. Pass
+  `flushTraces(tracerProvider, { timeoutMs })` for a different bound.
+- The per-request flush is for serverless routes, where the process can be
+  frozen after the response. The bound stops the wait, not the export: spans
+  still pending when it runs out keep exporting in the background, and are
+  lost if the runtime then freezes or exits. Raise `timeoutMs` if your
+  platform allows the time.
+- In a long-lived server, do not await a flush on the request path: the
+  default `SimpleSpanProcessor` exports each span when it ends, in its own
+  OTLP request (4 requests for a chat with one tool call). The OTLP/HTTP
+  exporter allows 30 exports in flight and waits up to 10 s for each; with a
+  slow collector, spans past that limit are dropped with "Concurrent export
+  limit reached", from about 8 concurrent chats of 4 spans. Call
+  `shutdownTraces()` when the process stops.
+- Do not also register the OpenInference TanStack middleware or wrap `chat()`.
+  Either duplicates spans.
+
+## Contract test
+
+Runs the example against a loopback fake of the OpenAI Chat Completions API
+and the shared harness receiver. No vendor API is called.
+
+```bash
+cd <repo root>
+PYTHONPATH="python/tests" uv run --no-project --python 3.11 \
+  --with pytest --with protobuf --with opentelemetry-proto \
+  pytest typescript/examples/tanstack-ai/tests -q -p no:cacheprovider \
+  --noconftest -o addopts=''
+```
+
+It also runs `tests/span_kinds.test.mjs` with `node --test` (span kinds,
+root usage move and session against fake spans and the pinned SDK span) and
+the snippet under "The recipe" as written.
+
+`tests/capture_content_on.mjs` is a test control that turns content capture
+on, to prove the no-content check would catch a leak. `tests/timed_route.mjs`
+and `tests/abort_mid_stream.mjs` are fixtures for the flush bound and the
+abort case. `tests/disconnect_route.mjs` serves one HTTP request with the
+route (the README snippet's or `src/chat.mjs`'s) and aborts its signal when
+the client disconnects mid-stream. None of them is part of the recipe.
