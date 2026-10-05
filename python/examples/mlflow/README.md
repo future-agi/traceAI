@@ -41,11 +41,16 @@ export FI_SECRET_KEY="YOUR_SECRET_KEY"
 # The full URL: MLflow does not append /v1/traces to this variable.
 export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="https://YOUR_FI_COLLECTOR_ORIGIN/tracer/v1/traces"
 export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="http/protobuf"   # MLflow's default is gRPC
-export OTEL_EXPORTER_OTLP_TRACES_HEADERS="$(python -c 'import os; from urllib.parse import quote; print("x-api-key={0},x-secret-key={1}".format(quote(os.environ["FI_API_KEY"], safe=""), quote(os.environ["FI_SECRET_KEY"], safe="")))')"
+# Stops with an error, and exports nothing, if FI_API_KEY or FI_SECRET_KEY is empty.
+: "${FI_API_KEY:?}" "${FI_SECRET_KEY:?}" && export OTEL_EXPORTER_OTLP_TRACES_HEADERS="$(python -c 'import os; from urllib.parse import quote; print("x-api-key={0},x-secret-key={1}".format(quote(os.environ["FI_API_KEY"], safe=""), quote(os.environ["FI_SECRET_KEY"], safe="")))')"
 export OTEL_RESOURCE_ATTRIBUTES="project_name=my-mlflow-app,project_type=observe"
 export OTEL_SERVICE_NAME="my-mlflow-app"   # optional: service.name
 export MLFLOW_DISABLE_TELEMETRY=true
+export MLFLOW_MODEL_CATALOG_URI=""   # no model-catalog fetch from github.com
 unset OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+# The exporter falls back to these when the TRACES headers are empty, which could send another vendor's key to Future AGI.
+unset OTEL_EXPORTER_OTLP_HEADERS
+unset MLFLOW_TRACING_DESTINATION   # it replaces the OTLP export
 
 python src/app.py "What is the refund window?"
 ```
