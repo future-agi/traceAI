@@ -15,6 +15,14 @@
 //        tool       one query() that runs the Read tool.
 //        close      two query() calls stopped mid-tool: one with close(), one
 //                   with Symbol.asyncDispose.
+//        resume     two query() calls; the second resumes the first's session.
+//        continue_fork  three query() calls: a new session, options.continue,
+//                   then resume + forkSession from the first session id.
+//        restart    one query() per process, sharing WORKDIR (HOME): PHASE=first
+//                   starts a session, PHASE=second resumes RESUME_SESSION_ID.
+//        streaming  one query() with an AsyncIterable prompt of two user turns;
+//                   the second turn is sent after the first result.
+//      WORKDIR (optional): use and keep this directory instead of a temp dir.
 // Prints {"requests": [...], "messages": [...], "queries": [[...], ...]} on stdout.
 import http from "node:http";
 import fs from "node:fs";
@@ -32,7 +40,9 @@ const PROMPT = "Read README.md and summarize it. SECRET_PROMPT_MARKER";
 const SCENARIO = process.env.SCENARIO || "tool";
 const TOOL_FLOW = SCENARIO === "tool" || SCENARIO === "close";
 
-const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "th8235-real-sdk-"));
+const keepWorkdir = Boolean(process.env.WORKDIR);
+const workdir = keepWorkdir ? process.env.WORKDIR : fs.mkdtempSync(path.join(os.tmpdir(), "th8235-real-sdk-"));
+fs.mkdirSync(workdir, { recursive: true });
 const readmePath = path.join(workdir, "README.md");
 fs.writeFileSync(readmePath, "# Demo\nSECRET_TOOL_OUTPUT_MARKER\n");
 
@@ -161,7 +171,63 @@ const SCENARIOS = {
     await disposed[Symbol.asyncDispose]();
     return [first, second];
   },
+  async resume() {
+    const first = await drain(tracedQuery({ prompt: "First question.", options: options({ persistSession: true }) }));
+    const second = await drain(
+      tracedQuery({ prompt: "Second question.", options: options({ persistSession: true, resume: sessionOf(first) }) }),
+    );
+    return [first, second];
+  },
+  async continue_fork() {
+    const first = await drain(tracedQuery({ prompt: "First question.", options: options({ persistSession: true }) }));
+    const second = await drain(
+      tracedQuery({ prompt: "Second question.", options: options({ persistSession: true, continue: true }) }),
+    );
+    const third = await drain(
+      tracedQuery({
+        prompt: "Third question.",
+        options: options({ persistSession: true, resume: sessionOf(first), forkSession: true }),
+      }),
+    );
+    return [first, second, third];
+  },
+  async restart() {
+    const resume = process.env.PHASE === "second" ? process.env.RESUME_SESSION_ID : undefined;
+    if (process.env.PHASE === "second" && !resume) throw new Error("PHASE=second needs RESUME_SESSION_ID");
+    return [
+      await drain(
+        tracedQuery({
+          prompt: resume ? "Second question." : "First question.",
+          options: options({ persistSession: true, ...(resume ? { resume } : {}) }),
+        }),
+      ),
+    ];
+  },
+  async streaming() {
+    let resultSeen;
+    let waitForResult = new Promise((resolve) => (resultSeen = resolve));
+    const userTurn = (content) => ({ type: "user", message: { role: "user", content }, parent_tool_use_id: null });
+    async function* prompt() {
+      yield userTurn("First question.");
+      await waitForResult;
+      waitForResult = new Promise((resolve) => (resultSeen = resolve));
+      yield userTurn("Second question.");
+      await waitForResult;
+    }
+    const out = [];
+    for await (const message of tracedQuery({ prompt: prompt(), options: options() })) {
+      out.push(message);
+      if (message.type === "result") resultSeen();
+    }
+    return [out];
+  },
 };
+
+function sessionOf(messages) {
+  const init = messages.find((m) => m.type === "system" && m.subtype === "init");
+  if (!init) throw new Error("no init message");
+  return init.session_id;
+}
 
 const queries = [];
 try {
@@ -173,7 +239,7 @@ try {
   await shutdown(provider);
   await provider.shutdown();
   server.close();
-  fs.rmSync(workdir, { recursive: true, force: true });
+  if (!keepWorkdir) fs.rmSync(workdir, { recursive: true, force: true });
 }
 
 process.stdout.write(JSON.stringify({ mockOrigin, requests, messages: queries.flat(), queries }));

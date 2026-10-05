@@ -141,6 +141,21 @@ export const TraceAIAttributes = {
   SUBAGENT_TASK_ID: "claude_agent.subagent.task_id",
   /** Final status from `system/task_notification`. */
   SUBAGENT_STATUS: "claude_agent.subagent.status",
+  /**
+   * Session running totals from the latest result (`total_cost_usd`, `modelUsage`
+   * summed over models). Not promoted by the collector; the promoted
+   * `gen_ai.usage.*` / `gen_ai.cost.total` carry only this query's new spend.
+   */
+  CUMULATIVE_COST_USD: "claude_agent.cumulative.cost_usd",
+  CUMULATIVE_INPUT_TOKENS: "claude_agent.cumulative.input_tokens",
+  CUMULATIVE_OUTPUT_TOKENS: "claude_agent.cumulative.output_tokens",
+  CUMULATIVE_CACHE_READ_TOKENS: "claude_agent.cumulative.cache_read_tokens",
+  CUMULATIVE_CACHE_CREATION_TOKENS: "claude_agent.cumulative.cache_creation_tokens",
+  /**
+   * True when a resumed / continued / forked session's earlier totals are not
+   * known in this process, so no promoted usage or cost key was written.
+   */
+  USAGE_BASELINE_UNKNOWN: "claude_agent.usage.baseline_unknown",
 } as const;
 
 /**

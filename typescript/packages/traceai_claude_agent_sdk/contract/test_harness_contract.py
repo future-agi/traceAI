@@ -322,6 +322,162 @@ def test_real_sdk_close_and_async_dispose_end_every_span_cancelled(built_package
     _assert_exported_with_both_keys(exported, "th8235-real-sdk-close")
 
 
+# Keys fi-collector promotes into hot columns on ANY span; Observe sums them per
+# trace and per session.id, so they must equal new spend exactly once.
+PROMOTED_PREFIXES = ("gen_ai.usage.", "llm.token_count.")
+PROMOTED_KEYS = ("gen_ai.cost.total", "llm.cost.total")
+
+
+def _promoted(attributes: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in attributes.items() if k.startswith(PROMOTED_PREFIXES) or k in PROMOTED_KEYS}
+
+
+def _results(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [m for m in messages if m["type"] == "result"]
+
+
+def _init_session(messages: List[Dict[str, Any]]) -> str:
+    return [m for m in messages if m["type"] == "system" and m.get("subtype") == "init"][0]["session_id"]
+
+
+def _cumulative(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The running totals a result carries: total_cost_usd and modelUsage summed over models."""
+    usage = result["modelUsage"].values()
+    return {
+        "cost": result["total_cost_usd"],
+        "input": sum(u["inputTokens"] for u in usage),
+        "output": sum(u["outputTokens"] for u in usage),
+    }
+
+
+def _conversations_in_query_order(spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    conversations = _by_name(spans, "claude_agent.conversation")
+    return sorted(conversations, key=lambda span: int(span["startTimeUnixNano"]))
+
+
+def _assert_only_conversations_carry_usage(spans: List[Dict[str, Any]]) -> None:
+    for span in spans:
+        if span["name"] != "claude_agent.conversation":
+            assert not _promoted(_attrs(span)), (span["name"], _promoted(_attrs(span)))
+
+
+def _assert_promoted_sum_equals(conversations: List[Dict[str, Any]], final: Dict[str, Any]) -> None:
+    attrs = [_attrs(c) for c in conversations]
+    assert sum(a["gen_ai.cost.total"] for a in attrs) == pytest.approx(final["cost"], rel=1e-9)
+    assert sum(a["gen_ai.usage.input_tokens"] for a in attrs) == final["input"]
+    assert sum(a["gen_ai.usage.output_tokens"] for a in attrs) == final["output"]
+    assert sum(a["gen_ai.usage.total_tokens"] for a in attrs) == final["input"] + final["output"]
+
+
+@requires_real_sdk
+def test_real_sdk_resume_counts_cost_and_tokens_once(built_package: Path) -> None:
+    """R1: a resumed session's first result already carries the earlier turns (sdk.d.ts:5679).
+
+    Two query() calls, the second with options.resume. The promoted cost/tokens summed
+    over both traces must equal the final cumulative totals, not exceed them.
+    """
+    output, spans, exported = _run_real_sdk("resume", "th8235-real-sdk-resume")
+    first, second = output["queries"]
+    (r1,), (r2,) = _results(first), _results(second)
+    session_id = _init_session(first)
+    assert _init_session(second) == session_id
+    final = _cumulative(r2)
+    # What the reviewer saw: the resumed result is cumulative over both queries.
+    assert final["cost"] > _cumulative(r1)["cost"] > 0 and final["input"] > _cumulative(r1)["input"]
+
+    conversations = _conversations_in_query_order(spans)
+    assert len(conversations) == 2 and len({c["traceId"] for c in conversations}) == 2
+    _assert_promoted_sum_equals(conversations, final)
+    c1, c2 = (_attrs(c) for c in conversations)
+    assert c1["gen_ai.cost.total"] == pytest.approx(r1["total_cost_usd"])
+    assert (c2["session.id"], c2["claude_agent.session.is_new"], c2["claude_agent.session.is_resumed"]) == (
+        session_id, False, True,
+    )
+    assert c2["claude_agent.cumulative.cost_usd"] == pytest.approx(final["cost"])
+    assert (c2["claude_agent.cumulative.input_tokens"], c2["claude_agent.cumulative.output_tokens"]) == (
+        final["input"], final["output"],
+    )
+    assert c2["claude_agent.usage.baseline_unknown"] is False
+    _assert_only_conversations_carry_usage(spans)
+    _assert_exported_with_both_keys(exported, "th8235-real-sdk-resume")
+
+
+@requires_real_sdk
+def test_real_sdk_continue_and_fork_count_cost_and_tokens_once(built_package: Path) -> None:
+    """R1: options.continue keeps the session id and its totals; a fork gets a new id but
+    starts from the parent's saved totals. Sum of promoted keys == the fork's final totals."""
+    output, spans, _ = _run_real_sdk("continue_fork", "th8235-real-sdk-continue-fork")
+    first, continued, forked = output["queries"]
+    parent = _init_session(first)
+    assert _init_session(continued) == parent
+    fork_id = _init_session(forked)
+    assert fork_id != parent
+    final = _cumulative(_results(forked)[-1])
+
+    conversations = _conversations_in_query_order(spans)
+    assert len(conversations) == 3
+    _assert_promoted_sum_equals(conversations, final)
+    _, c_continue, c_fork = (_attrs(c) for c in conversations)
+    assert (c_continue["claude_agent.session.is_new"], c_continue["claude_agent.session.is_resumed"]) == (False, True)
+    assert c_continue["claude_agent.is_resumed"] is True
+    assert (c_fork["session.id"], c_fork["claude_agent.session.fork_from"]) == (fork_id, parent)
+    assert c_fork["claude_agent.session.is_new"] is True
+    _assert_only_conversations_carry_usage(spans)
+
+
+@requires_real_sdk
+def test_real_sdk_resume_after_process_restart_marks_baseline_unknown(built_package: Path, tmp_path: Path) -> None:
+    """R1: a resume with no baseline in this process (restart) must not put promoted keys:
+    the result is cumulative and the earlier share is unknown. Cumulative values go on
+    claude_agent.cumulative.* and claude_agent.usage.baseline_unknown=true."""
+    workdir = tmp_path / "home"
+    first_out, first_spans, _ = _run_real_sdk("restart", "th8235-real-sdk-restart", {"WORKDIR": str(workdir), "PHASE": "first"})
+    session_id = _init_session(first_out["queries"][0])
+    second_out, second_spans, _ = _run_real_sdk(
+        "restart", "th8235-real-sdk-restart",
+        {"WORKDIR": str(workdir), "PHASE": "second", "RESUME_SESSION_ID": session_id},
+    )
+    (r1,), (r2,) = _results(first_out["queries"][0]), _results(second_out["queries"][0])
+    final = _cumulative(r2)
+    assert final["cost"] > r1["total_cost_usd"]
+
+    c1 = _attrs(_one(first_spans, "claude_agent.conversation"))
+    c2 = _attrs(_one(second_spans, "claude_agent.conversation"))
+    assert c1["gen_ai.cost.total"] == pytest.approx(r1["total_cost_usd"])  # a new session: baseline 0
+    assert c1["claude_agent.usage.baseline_unknown"] is False
+    assert _promoted(c2) == {}, _promoted(c2)
+    assert "claude_agent.cost.total_usd" not in c2
+    assert c2["claude_agent.usage.baseline_unknown"] is True
+    assert c2["claude_agent.cumulative.cost_usd"] == pytest.approx(final["cost"])
+    assert (c2["claude_agent.cumulative.input_tokens"], c2["claude_agent.cumulative.output_tokens"]) == (
+        final["input"], final["output"],
+    )
+    assert c2["session.id"] == session_id and c2["claude_agent.session.is_new"] is False
+    _assert_only_conversations_carry_usage(first_spans + second_spans)
+
+
+@requires_real_sdk
+def test_real_sdk_streaming_input_counts_tokens_once(built_package: Path) -> None:
+    """R2 + R5: one query() with two user turns yields two results. result.usage is per turn
+    (sdk.d.ts:5683); modelUsage and total_cost_usd are running totals (sdk.d.ts:5679, 5687).
+    The conversation span must carry the latest running totals, and turn 2 must start
+    after turn 1 ended."""
+    output, spans, _ = _run_real_sdk("streaming", "th8235-real-sdk-streaming")
+    (messages,) = output["queries"]
+    results = _results(messages)
+    assert len(results) == 2
+    final = _cumulative(results[-1])
+    # What the reviewer saw: usage on the last result is one turn only.
+    assert results[-1]["usage"]["input_tokens"] < final["input"]
+
+    conversation = _one(spans, "claude_agent.conversation")
+    _assert_promoted_sum_equals([conversation], final)
+    turns = sorted(_by_name(spans, "claude_agent.assistant_turn"), key=lambda s: int(s["startTimeUnixNano"]))
+    assert len(turns) == 2
+    assert int(turns[1]["startTimeUnixNano"]) >= int(turns[0]["endTimeUnixNano"])
+    _assert_only_conversations_carry_usage(spans)
+
+
 @requires_real_sdk
 def test_real_sdk_query_through_anthropic_base_url_mock(built_package: Path) -> None:
     """The real SDK query() and bundled CLI, wrapped, against a loopback Messages API mock.

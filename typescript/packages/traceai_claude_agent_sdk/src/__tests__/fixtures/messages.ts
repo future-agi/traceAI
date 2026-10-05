@@ -155,7 +155,8 @@ export function resultSuccess(resultText: string, overrides: Partial<SDKResultSu
     stop_reason: "end_turn",
     total_cost_usd: TOTAL_COST_USD,
     usage: resultUsage,
-    modelUsage: {},
+    // modelUsage is the running total the wrapper reads (sdk.d.ts:5687); usage is main-loop only.
+    modelUsage: { [MODEL]: modelUsage(120, 45, TOTAL_COST_USD, 11, 7) },
     permission_denials: [],
     uuid: uuid(),
     session_id: SESSION_ID,
@@ -174,7 +175,7 @@ export function resultError(overrides: Partial<SDKResultError> = {}): SDKResultE
     stop_reason: null,
     total_cost_usd: 0.002,
     usage: resultUsage,
-    modelUsage: {},
+    modelUsage: { [MODEL]: modelUsage(120, 45, 0.002, 11, 7) },
     permission_denials: [],
     errors: ["Reached maximum number of turns (3)"],
     uuid: uuid(),

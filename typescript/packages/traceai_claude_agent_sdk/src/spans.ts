@@ -129,6 +129,65 @@ interface ScopeState {
   nextTurnStartMs?: number;
 }
 
+/**
+ * Running totals a result message carries for its session: `total_cost_usd`
+ * and `modelUsage` summed over models (sdk.d.ts:5679, 5687). A field is absent
+ * when the result did not carry it.
+ */
+export interface UsageTotals {
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}
+
+const USAGE_FIELDS = ["costUsd", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const;
+
+/**
+ * Process-local map of session id -> the last running totals seen for it, so a
+ * resumed, continued or forked session promotes only its new spend. Bounded
+ * LRU: the oldest session is dropped past `capacity`.
+ */
+export class SessionUsageStore {
+  private readonly entries = new Map<string, UsageTotals>();
+
+  constructor(private readonly capacity: number) {}
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  get(sessionId: string): UsageTotals | undefined {
+    const totals = this.entries.get(sessionId);
+    if (!totals) return undefined;
+    this.entries.delete(sessionId);
+    this.entries.set(sessionId, totals);
+    return { ...totals };
+  }
+
+  set(sessionId: string, totals: UsageTotals): void {
+    this.entries.delete(sessionId);
+    this.entries.set(sessionId, { ...totals });
+    while (this.entries.size > this.capacity) {
+      const oldest = this.entries.keys().next().value as string;
+      this.entries.delete(oldest);
+    }
+  }
+
+  clear(): void {
+    this.entries.clear();
+  }
+}
+
+const SESSION_USAGE_CAPACITY = 1000;
+const sharedSessionUsage = new SessionUsageStore(SESSION_USAGE_CAPACITY);
+
+/** The store every QueryTracer in this process shares. */
+export function sessionUsageStore(): SessionUsageStore {
+  return sharedSessionUsage;
+}
+
 /** Truncate like the Python package: keep `max` chars, ending in "...". */
 export function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 3)}...` : value;
@@ -238,6 +297,14 @@ export class QueryTracer {
   /** task_id -> tool_use_id from task_started; task_updated carries only task_id. */
   private readonly taskToolUseIds = new Map<string, string>();
 
+  /** How this query relates to an earlier session, for the usage baseline. */
+  private readonly usageMode: "new" | "resume" | "fork" | "continue" | "continue-fork";
+  private readonly resumeId?: string;
+  /** undefined: no counted result yet; null: baseline unknown for this query. */
+  private usagePrev?: UsageTotals | null;
+  /** New spend counted in this query (sum of deltas), written to the promoted keys. */
+  private readonly usageCounted: UsageTotals = {};
+
   constructor(args: {
     tracer: Tracer;
     policy: ContentPolicy;
@@ -263,6 +330,18 @@ export class QueryTracer {
       // A plain resume continues the same session id.
       this.sessionId = this.options.resume;
     }
+    const resume = typeof this.options?.resume === "string" && this.options.resume ? this.options.resume : undefined;
+    const fork = this.options?.forkSession === true;
+    this.resumeId = resume;
+    this.usageMode = resume
+      ? fork
+        ? "fork"
+        : "resume"
+      : this.options?.continue === true
+        ? fork
+          ? "continue-fork"
+          : "continue"
+        : "new";
   }
 
   get isFinished(): boolean {
@@ -478,26 +557,7 @@ export class QueryTracer {
       this.setSessionId(message.session_id);
     }
 
-    const usage = message.usage;
-    if (usage && typeof usage === "object") {
-      const input = typeof usage.input_tokens === "number" ? usage.input_tokens : undefined;
-      const output = typeof usage.output_tokens === "number" ? usage.output_tokens : undefined;
-      if (input !== undefined) conversation.setAttribute(A.USAGE_INPUT_TOKENS, input);
-      if (output !== undefined) conversation.setAttribute(A.USAGE_OUTPUT_TOKENS, output);
-      if (input !== undefined || output !== undefined) {
-        conversation.setAttribute(A.USAGE_TOTAL_TOKENS, (input ?? 0) + (output ?? 0));
-      }
-      if (typeof usage.cache_read_input_tokens === "number") {
-        conversation.setAttribute(A.USAGE_CACHE_READ_TOKENS, usage.cache_read_input_tokens);
-      }
-      if (typeof usage.cache_creation_input_tokens === "number") {
-        conversation.setAttribute(A.USAGE_CACHE_CREATION_TOKENS, usage.cache_creation_input_tokens);
-      }
-    }
-    if (typeof message.total_cost_usd === "number") {
-      conversation.setAttribute(A.COST_TOTAL_USD, message.total_cost_usd);
-      conversation.setAttribute(T.GEN_AI_COST_TOTAL, message.total_cost_usd);
-    }
+    this.recordUsage(cumulativeUsage(message));
     if (typeof message.duration_ms === "number") {
       conversation.setAttribute(A.DURATION_MS, message.duration_ms);
     }
@@ -907,6 +967,89 @@ export class QueryTracer {
     this.conversation?.setAttributes(this.sessionAttributes());
   }
 
+  /**
+   * Record one result's running totals. The collector promotes gen_ai.usage.*
+   * and gen_ai.cost.total on any span and Observe sums them per trace and per
+   * session, so the promoted keys carry only the spend new since the session's
+   * last known totals. Without a known baseline nothing is promoted.
+   */
+  private recordUsage(cumulative: UsageTotals | undefined): void {
+    if (!cumulative) return;
+    const conversation = this.conversation!;
+    const store = sessionUsageStore();
+
+    const first = this.usagePrev === undefined;
+    if (first) {
+      this.usagePrev = this.resolveUsageBaseline();
+    }
+    let prev = this.usagePrev;
+    if (prev) {
+      const dropped = USAGE_FIELDS.some(
+        (f) => cumulative[f] !== undefined && prev![f] !== undefined && cumulative[f]! < prev![f]!,
+      );
+      if (dropped && first) {
+        // Below the saved baseline on the first result (e.g. resumeSessionAt an
+        // earlier message): the earlier share is unknown.
+        prev = null;
+      } else {
+        // Within one query a drop is a /clear: the running total restarted at 0.
+        for (const f of USAGE_FIELDS) {
+          const value = cumulative[f];
+          const base = dropped ? 0 : prev[f];
+          if (value === undefined || base === undefined) continue;
+          this.usageCounted[f] = (this.usageCounted[f] ?? 0) + (value - base);
+        }
+        prev = { ...prev, ...definedUsage(cumulative) };
+      }
+      this.usagePrev = prev;
+    }
+    if (this.sessionId) {
+      const stored = prev ?? { ...(store.get(this.sessionId) ?? {}), ...definedUsage(cumulative) };
+      store.set(this.sessionId, stored);
+    }
+
+    const setIf = (key: string, value: number | undefined) => {
+      if (value !== undefined) conversation.setAttribute(key, value);
+    };
+    setIf(T.CUMULATIVE_COST_USD, cumulative.costUsd);
+    setIf(T.CUMULATIVE_INPUT_TOKENS, cumulative.inputTokens);
+    setIf(T.CUMULATIVE_OUTPUT_TOKENS, cumulative.outputTokens);
+    setIf(T.CUMULATIVE_CACHE_READ_TOKENS, cumulative.cacheReadTokens);
+    setIf(T.CUMULATIVE_CACHE_CREATION_TOKENS, cumulative.cacheCreationTokens);
+    conversation.setAttribute(T.USAGE_BASELINE_UNKNOWN, prev === null);
+    if (prev === null) return;
+
+    const counted = this.usageCounted;
+    setIf(A.USAGE_INPUT_TOKENS, counted.inputTokens);
+    setIf(A.USAGE_OUTPUT_TOKENS, counted.outputTokens);
+    if (counted.inputTokens !== undefined || counted.outputTokens !== undefined) {
+      conversation.setAttribute(A.USAGE_TOTAL_TOKENS, (counted.inputTokens ?? 0) + (counted.outputTokens ?? 0));
+    }
+    setIf(A.USAGE_CACHE_READ_TOKENS, counted.cacheReadTokens);
+    setIf(A.USAGE_CACHE_CREATION_TOKENS, counted.cacheCreationTokens);
+    setIf(A.COST_TOTAL_USD, counted.costUsd);
+    setIf(T.GEN_AI_COST_TOTAL, counted.costUsd);
+  }
+
+  /** The session totals this query starts from, or null when they are not known here. */
+  private resolveUsageBaseline(): UsageTotals | null {
+    const store = sessionUsageStore();
+    switch (this.usageMode) {
+      case "new":
+        return { costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+      case "resume":
+      case "fork":
+        // A fork starts from the parent's saved totals under a new session id.
+        return (this.resumeId && store.get(this.resumeId)) || null;
+      case "continue":
+        return (this.sessionId && store.get(this.sessionId)) || null;
+      case "continue-fork":
+      default:
+        // The parent is "the most recent session in cwd": not identifiable here.
+        return null;
+    }
+  }
+
   private conversationStartAttributes(): Attributes {
     const options = this.options ?? {};
     const attributes: Record<string, AttributeValue> = {
@@ -924,18 +1067,22 @@ export class QueryTracer {
     }
 
     const resume = typeof options.resume === "string" && options.resume ? options.resume : undefined;
-    const fork = resume !== undefined && options.forkSession === true;
-    if (resume) {
+    // options.continue (sdk.d.ts:1594) resumes the most recent session in cwd.
+    const continuing = resume !== undefined || options.continue === true;
+    const fork = continuing && options.forkSession === true;
+    if (continuing) {
       attributes[A.AGENT_IS_RESUMED] = true;
+    }
+    if (resume) {
       attributes[A.AGENT_RESUME_SESSION_ID] = resume;
     }
-    attributes[A.SESSION_IS_RESUMED] = resume !== undefined && !fork;
-    attributes[A.SESSION_IS_NEW] = resume === undefined || fork;
+    attributes[A.SESSION_IS_RESUMED] = continuing && !fork;
+    attributes[A.SESSION_IS_NEW] = !continuing || fork;
     if (resume && !fork) {
       attributes[A.SESSION_PREVIOUS_ID] = resume;
     }
-    if (fork) {
-      attributes[A.SESSION_FORK_FROM] = resume!;
+    if (fork && resume) {
+      attributes[A.SESSION_FORK_FROM] = resume;
     }
 
     if (!this.policy.hideInputs) {
@@ -986,6 +1133,54 @@ function safeContextAttributes(ctx: Context): Attributes {
   } catch {
     return {};
   }
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function definedUsage(totals: UsageTotals): UsageTotals {
+  const out: UsageTotals = {};
+  for (const f of USAGE_FIELDS) {
+    if (totals[f] !== undefined) out[f] = totals[f];
+  }
+  return out;
+}
+
+/**
+ * Running totals from a result: cost from `total_cost_usd`, tokens from
+ * `modelUsage` summed over models (sdk.d.ts:5679, 5687). `result.usage` is not
+ * read: it is main-loop only and per turn (sdk.d.ts:5683). Returns undefined
+ * when the result carries nothing, or only zeros (a crash/startup-error result).
+ */
+function cumulativeUsage(message: ResultMessageLike): UsageTotals | undefined {
+  const totals: UsageTotals = {};
+  const cost = finiteNumber(message.total_cost_usd);
+  if (cost !== undefined) totals.costUsd = cost;
+  const models = message.modelUsage;
+  if (models && typeof models === "object") {
+    let seen = false;
+    let input = 0;
+    let output = 0;
+    let cacheRead = 0;
+    let cacheCreation = 0;
+    for (const entry of Object.values(models)) {
+      if (!entry || typeof entry !== "object") continue;
+      seen = true;
+      input += finiteNumber(entry.inputTokens) ?? 0;
+      output += finiteNumber(entry.outputTokens) ?? 0;
+      cacheRead += finiteNumber(entry.cacheReadInputTokens) ?? 0;
+      cacheCreation += finiteNumber(entry.cacheCreationInputTokens) ?? 0;
+    }
+    if (seen) {
+      totals.inputTokens = input;
+      totals.outputTokens = output;
+      totals.cacheReadTokens = cacheRead;
+      totals.cacheCreationTokens = cacheCreation;
+    }
+  }
+  const values = USAGE_FIELDS.map((f) => totals[f]).filter((v): v is number => v !== undefined);
+  return values.some((v) => v !== 0) ? totals : undefined;
 }
 
 /** Python `_set_tool_specific_attributes`. Only called when inputs are visible. */

@@ -66,6 +66,17 @@ export interface ResultMessageLike {
     cache_read_input_tokens?: number | null;
     cache_creation_input_tokens?: number | null;
   };
+  /** Running per-model totals for the session (sdk.d.ts ModelUsage). */
+  modelUsage?: Record<
+    string,
+    {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+      costUSD?: number;
+    }
+  >;
   errors?: string[];
   session_id?: string;
 }
@@ -113,6 +124,8 @@ export interface OptionsLike {
   allowedTools?: string[];
   systemPrompt?: unknown;
   resume?: string;
+  /** Continue the most recent conversation in cwd (sdk.d.ts:1594). */
+  continue?: boolean;
   forkSession?: boolean;
   sessionId?: string;
   mcpServers?: Record<string, unknown>;

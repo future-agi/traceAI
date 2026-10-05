@@ -75,15 +75,26 @@ A foreground subagent span ends with its `tool.Agent` / `tool.Task` result. A su
 |---|---|---|
 | Model | `gen_ai.request.model`, `claude_agent.model` | `options.model`, the init message, each assistant message |
 | Provider | `gen_ai.provider.name` = `anthropic`, or `custom` when `ANTHROPIC_BASE_URL` (from `options.env`, else `process.env`) is not an `anthropic.com` host | |
-| Tokens | `gen_ai.usage.input_tokens`, `output_tokens`, `total_tokens`; `gen_ai.usage.cache_read_tokens` / `cache_creation_tokens` when present | result message, on the conversation span |
-| Cost | `claude_agent.cost.total_usd` and `gen_ai.cost.total` | result `total_cost_usd`; never computed here |
-| Session | `session.id`, `claude_agent.session.id`, `claude_agent.session_id`; `claude_agent.session.fork_from` on fork | init / result `session_id`, `options.sessionId`, `options.resume` |
+| Tokens | `gen_ai.usage.input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cache_creation_tokens` | result `modelUsage` summed over every model, on the conversation span only. See "Usage and cost" |
+| Cost | `claude_agent.cost.total_usd` and `gen_ai.cost.total` | result `total_cost_usd`; never computed here. See "Usage and cost" |
+| Session | `session.id`, `claude_agent.session.id`, `claude_agent.session_id`; `claude_agent.session.is_new` / `is_resumed` (`resume` or `continue`); `claude_agent.session.fork_from` on fork | init / result `session_id`, `options.sessionId`, `options.resume`, `options.continue` |
 | Tools | `claude_agent.tool.name`, `gen_ai.tool.name`, `use_id`, `source` (`builtin` / `mcp` / `custom`), `is_error`, `duration_ms` | `tool_use` / `tool_result` blocks |
 | Errors | span status ERROR; `claude_agent.error.type` / `error.message`; `claude_agent.cancelled=true` on abort | error result, thrown error, `is_error` tool results, `AbortController` |
 
 The `claude_agent.*` names are the Python package's names (`_attributes.py`); a test fails if one is missing.
 
 An app-set fi-core `session.id` / `user.id` (fi-core context helpers) is kept; the SDK session id still goes to `claude_agent.session.id`.
+
+## Usage and cost
+
+The Future AGI collector promotes `gen_ai.usage.*` and `gen_ai.cost.total` on any span, and Observe sums them over a trace and over a `session.id`. So these keys are written once, on the conversation span, and hold only the spend that is new in this `query()` call. Turn, tool and subagent spans carry none of them.
+
+- Tokens come from the latest result's `modelUsage`, summed over every model (main loop, subagents, compaction). Cost comes from `total_cost_usd`. Both are running totals for the session (`sdk.d.ts:5679`, `5687`). `result.usage` is not read: the SDK documents it as main-loop only and per turn in streaming-input mode (`sdk.d.ts:5683`). This replaces the spec's "result message usage" mapping.
+- Streaming input (one `query()`, several user turns) yields one result per turn. The conversation span keeps the latest running totals, so tokens and cost cover every turn. It stays one conversation span per `query()`; the Python `ClaudeSDKClient` path makes one per user turn.
+- A resumed (`resume`), continued (`continue`) or forked (`forkSession`) session's first result already carries the earlier turns. The wrapper keeps an in-process map of session id to the last totals it saw (at most 1000 sessions) and writes only the difference. A fork starts from its parent's totals. A drop in the running total within one query (a `/clear`) counts the spend on both sides of it.
+- When there is no baseline in this process (resume after a restart, `continue` + `forkSession`, or a first result below the saved totals), no `gen_ai.usage.*` / `gen_ai.cost.total` / `claude_agent.cost.total_usd` is written and `claude_agent.usage.baseline_unknown=true`.
+- Every conversation span with a result also carries the running totals on unpromoted keys: `claude_agent.cumulative.cost_usd`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`.
+- A result with no cost and no `modelUsage`, or a zeroed crash result, writes none of these keys and leaves the session's saved totals unchanged.
 
 ## Privacy: content is off by default
 
