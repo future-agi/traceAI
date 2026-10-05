@@ -169,12 +169,16 @@ where the client keeps them: the transport's google.auth credentials
 `token`), `client_options.api_key`, and per-call `metadata` entries named
 `authorization`, `proxy-authorization`, `x-goog-api-key` or
 `x-goog-iam-authorization-token` (with and without the `Bearer` prefix).
+The package reads `metadata` once and passes the client a tuple of the same
+pairs, so metadata given as a generator still reaches the server; if
+reading it raises, the client raises the same error, as without the package.
 Text shaped like a Google credential is replaced too, even if the client
 never held it: `ya29.` access tokens, `AIza` API keys, `1//` refresh tokens,
 and, in server-written text only, the value after `Bearer`. If the place the
-client keeps credentials cannot be read, the call is traced without the
-query and with `[not recorded: the client credentials could not be read]`
-in place of the error message, and without a stack trace.
+client keeps credentials (or the call's `metadata`) cannot be read, the call
+is traced without the query and with
+`[not recorded: the client credentials could not be read]` in place of the
+error message, and without a stack trace.
 
 `TraceConfig` settings apply. Pass `config=TraceConfig(...)` or set the
 environment variables before calling `instrument()`:

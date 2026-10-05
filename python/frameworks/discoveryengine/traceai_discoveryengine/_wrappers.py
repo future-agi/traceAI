@@ -186,16 +186,48 @@ def _count(value: Any) -> Optional[int]:
         return None
 
 
-def _credential_values(instance: Any, kwargs: Mapping[str, Any]) -> List[str]:
+def _replay(items: Sequence[Any], error: Exception) -> Iterator[Any]:
+    """The pairs read before ``error``, then ``error``: what the vendor would have read."""
+    yield from items
+    raise error
+
+
+def _read_metadata(
+    kwargs: Mapping[str, Any],
+) -> Tuple[Mapping[str, Any], Optional[Tuple[Any, ...]]]:
+    """Read the call's ``metadata`` once; return the kwargs to call with and its pairs.
+
+    ``metadata`` may be a one-shot iterable such as a generator, so it is
+    read here once and the vendor gets a tuple of the same pairs (it makes
+    a tuple of it too). If reading raises, the vendor gets the pairs read so
+    far and then the same error, as without the wrapper, and the pairs are
+    None: the credential lookup then fails closed.
+    """
+    if kwargs.get("metadata") is None:
+        return kwargs, ()
+    items: List[Any] = []
+    try:
+        for item in kwargs["metadata"]:
+            items.append(item)
+    except Exception as error:
+        return dict(kwargs, metadata=_replay(items, error)), None
+    pairs = tuple(items)
+    return dict(kwargs, metadata=pairs), pairs
+
+
+def _credential_values(instance: Any, metadata: Optional[Sequence[Any]]) -> List[str]:
     """Every credential this call could send, longest first.
 
     The clients keep the google.auth credentials on the transport
     (``client._transport._credentials``; the async clients wrap a sync client
     in ``_client``) and ``client_options.api_key`` in ``_client_options``.
-    A caller can also pass auth headers per call through ``metadata``.
+    A caller can also pass auth headers per call through ``metadata``, the
+    pairs ``_read_metadata`` read (None if they could not be read).
     Anything that cannot be read raises: the caller then records no free
     text for the call.
     """
+    if metadata is None:
+        raise LookupError("the call's metadata could not be read")
     values: List[str] = []
 
     def add(value: Any) -> None:
@@ -212,7 +244,7 @@ def _credential_values(instance: Any, kwargs: Mapping[str, Any]) -> List[str]:
             add(getattr(credentials, name, None))
         add(_field(getattr(client, "_client_options", None), "api_key"))
 
-    for item in kwargs.get("metadata") or ():
+    for item in metadata:
         if not (isinstance(item, (tuple, list)) and len(item) == 2):
             continue
         key, value = item
@@ -526,16 +558,21 @@ class _BaseWrapper:
 
     def _start(
         self, instance: Any, args: Tuple[Any, ...], kwargs: Mapping[str, Any]
-    ) -> Optional[_Call]:
-        """Start the span, or return None to run the call untraced."""
+    ) -> Tuple[Optional[_Call], Mapping[str, Any]]:
+        """Start the span (None to run the call untraced); return it and the kwargs to call with.
+
+        The kwargs differ from the caller's only in ``metadata``, read once
+        by ``_read_metadata``.
+        """
         if not self._state.enabled or _ACTIVE.get():
-            return None
+            return None, kwargs
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
-            return None
+            return None, kwargs
         request = _request(args, kwargs)
+        kwargs, metadata = _read_metadata(kwargs)
         secrets: Optional[List[str]]
         try:
-            secrets = _credential_values(instance, kwargs)
+            secrets = _credential_values(instance, metadata)
         except Exception:
             # Fail closed: without the credentials, no free text is recorded.
             logger.debug("Could not read the Discovery Engine credentials", exc_info=True)
@@ -556,8 +593,8 @@ class _BaseWrapper:
             span = self._tracer.start_span(self._span_name, attributes=attributes)
         except Exception:
             logger.debug("Could not start the Discovery Engine span", exc_info=True)
-            return None
-        return _Call(span, self._operation, secrets, self._options, hidden)
+            return None, kwargs
+        return _Call(span, self._operation, secrets, self._options, hidden), kwargs
 
 
 class OperationWrapper(_BaseWrapper):
@@ -570,7 +607,7 @@ class OperationWrapper(_BaseWrapper):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        call = self._start(instance, args, kwargs)
+        call, kwargs = self._start(instance, args, kwargs)
         if call is None:
             return wrapped(*args, **kwargs)
         try:
@@ -593,7 +630,7 @@ class AsyncOperationWrapper(_BaseWrapper):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        call = self._start(instance, args, kwargs)
+        call, kwargs = self._start(instance, args, kwargs)
         if call is None:
             return await wrapped(*args, **kwargs)
         try:
