@@ -79,7 +79,9 @@ span status.
 A count, id or usage value that the response does not carry is omitted,
 never written as 0. Calls through `with_raw_response` and
 `with_streaming_response` return an unparsed HTTP response, so their spans
-carry the request attributes and status only.
+carry the request attributes and status only. For `with_streaming_response`,
+the span covers the request up to the response headers, not the body read:
+a failure while reading the body is not recorded on the span.
 
 No model name, token count or cost is recorded: Parallel Search and Extract
 do not return them, and `client_model` is not recorded.

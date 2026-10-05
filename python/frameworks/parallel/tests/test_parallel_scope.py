@@ -86,6 +86,9 @@ def test_with_streaming_response_is_traced_until_the_response_is_returned(fake):
         with sync_client(fake).with_streaming_response.extract(
             urls=["https://x.example/a"]
         ) as response:
+            # The span covers the request up to the headers (the README says
+            # so): it has already ended before the body is read.
+            assert [span.name for span in traced.spans()] == ["parallel.extract"]
             assert response.http_response.status_code == 200
             assert len(response.parse().results) == 1
 
