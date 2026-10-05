@@ -16,7 +16,9 @@ Two parts, no browser and no Gradio server port:
   does not authenticate, stamp projects or store anything.
 
 All keys are placeholders. Nothing here contacts OpenAI, Gradio's analytics
-host or Future AGI.
+host or Future AGI. One opt-in test (``GRADIO_RECIPE_PUBLISHED_PINS=1``)
+installs ``requirements.txt`` from PyPI into a fresh virtualenv; it is
+skipped otherwise.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
 from http import HTTPStatus
@@ -52,6 +55,7 @@ RECIPE_DIR = TESTS_DIR.parent
 PYTHON_DIR = RECIPE_DIR.parents[1]
 APP = RECIPE_DIR / "src" / "app.py"
 README = RECIPE_DIR / "README.md"
+REQUIREMENTS = RECIPE_DIR / "requirements.txt"
 DRIVER = TESTS_DIR / "drive_turns.py"
 GUARD = TESTS_DIR / "_guarded_run.py"
 GUARD_PROBE = TESTS_DIR / "_guard_probe.py"
@@ -408,10 +412,13 @@ def _run_driver(
     tmp_path: Path,
     *flags: str,
     status: int = HTTPStatus.OK,
+    python: str = sys.executable,
+    **overrides: Optional[str],
 ) -> dict[str, Any]:
     """Run drive_turns.py under the loopback guard; return everything the tests read.
 
-    ``status`` is what the fake model host answers.
+    ``status`` is what the fake model host answers; ``overrides`` change the
+    child's environment (``None`` removes a variable).
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     guard_log = tmp_path / "guard.jsonl"
@@ -421,9 +428,10 @@ def _run_driver(
             guard_log,
             FI_BASE_URL=receiver.origin,
             OPENAI_BASE_URL=fake.base_url,
+            **overrides,
         )
         result = run(
-            [sys.executable, str(GUARD), str(DRIVER), QUESTION, *flags],
+            [python, str(GUARD), str(DRIVER), QUESTION, *flags],
             env=env,
             stdin=None,
             timeout=RUN_TIMEOUT_SECONDS,
@@ -726,3 +734,88 @@ def test_readme_shows_the_recipe_as_written() -> None:
     for fact in ("gradio==6.29.1", "/tracer/v1/traces", "project_type=observe"):
         assert fact in readme, fact
 
+
+# --------------------------------------------------------------------------
+# Opt-in: requirements.txt from PyPI, not this repository's source
+# --------------------------------------------------------------------------
+
+PUBLISHED_PINS = os.environ.get("GRADIO_RECIPE_PUBLISHED_PINS") == "1"
+INSTALL_TIMEOUT_SECONDS = 900
+# Run with ``python -I`` in the fresh virtualenv: which traceAI it imports.
+INSTALLED_PROBE = """
+import json
+from importlib import metadata
+
+import fi_instrumentation
+import traceai_openai
+
+names = ["fi-instrumentation-otel", "traceAI-openai", "gradio", "openai", "anyio",
+         "wrapt", "opentelemetry-api", "opentelemetry-sdk",
+         "opentelemetry-exporter-otlp-proto-http", "opentelemetry-instrumentation"]
+print(json.dumps({
+    "versions": {name: metadata.version(name) for name in names},
+    "files": {"fi_instrumentation": fi_instrumentation.__file__,
+              "traceai_openai": traceai_openai.__file__},
+}))
+"""
+
+
+@pytest.mark.skipif(
+    not PUBLISHED_PINS,
+    reason="opt-in: GRADIO_RECIPE_PUBLISHED_PINS=1 installs requirements.txt from PyPI",
+)
+def test_requirements_txt_from_pypi_traces_into_the_receiver(tmp_path: Path) -> None:
+    """A fresh virtualenv with ``pip install -r requirements.txt``, then the contract run."""
+    venv = tmp_path / "venv"
+    # PATH and HOME only (pip's cache and config); no PYTHONPATH.
+    install_env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(venv)], env=install_env, cwd=tmp_path, check=True
+    )
+    python = str(venv / "bin" / "python")
+    install = subprocess.run(
+        [python, "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "-q"]
+        + ["-r", str(REQUIREMENTS)],
+        env=install_env,
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=INSTALL_TIMEOUT_SECONDS,
+    )
+    assert install.returncode == 0, install.stderr.decode("utf-8", "replace")
+    probe = subprocess.run(
+        [python, "-I", "-c", INSTALLED_PROBE],
+        env=install_env,
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=RUN_TIMEOUT_SECONDS,
+    )
+    assert probe.returncode == 0, probe.stderr.decode("utf-8", "replace")
+    installed = json.loads(probe.stdout)
+    print(json.dumps(installed, indent=1, sort_keys=True))  # shown with -rP
+    assert installed["versions"]["fi-instrumentation-otel"] == "1.1.0"
+    assert installed["versions"]["traceAI-openai"] == "0.1.10"
+    for module_file in installed["files"].values():
+        assert Path(module_file).resolve().is_relative_to(venv.resolve()), module_file
+
+    record = _run_driver(tmp_path / "run", python=python, PYTHONPATH=None)
+    _assert_ran(record)
+    assert len(record["requests"]) == 1
+    (request,) = record["requests"]
+    assert request["path"] == "/tracer/v1/traces"
+    assert request["headers"].get("x-api-key") == FI_API_KEY
+    assert request["headers"].get("x-secret-key") == FI_SECRET_KEY
+    for resource in request["resource_attributes"]:
+        assert resource.get("project_name") == PROJECT
+        assert resource.get("project_type") == "observe"
+    spans = record["spans"]
+    assert [span["name"] for span in spans] == [LLM_SPAN, LLM_SPAN]
+    (session_id,) = {_otlp_attrs(span)[key] for span in spans for key in SESSION_KEYS}
+    assert SESSION_ID.fullmatch(session_id)
+    for span in spans:
+        attrs = _otlp_attrs(span)
+        assert attrs["gen_ai.span.kind"] == "LLM"
+        assert attrs["gen_ai.usage.total_tokens"] == USAGE["total_tokens"]
+        assert attrs["input.value"] == attrs["output.value"] == REDACTED
+    dump = _export_dump(record)
+    for text in (*CONTENT_MARKERS, DRIVER_SESSION, FI_API_KEY, FI_SECRET_KEY, OPENAI_KEY):
+        assert text not in dump, text

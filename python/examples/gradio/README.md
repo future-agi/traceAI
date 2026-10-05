@@ -14,7 +14,8 @@ dependency of this example only, not of any traceAI package. `openai` is
 pinned to 3.24.0, the version the tests ran with.
 
 The tests (see [Tests](#tests)) pass on Python 3.10, 3.11, 3.12 and 3.13
-against loopback fakes only: no model key, no live Future AGI project.
+against loopback fakes only: no model key, no live Future AGI project. One
+opt-in test also installs `requirements.txt` from PyPI.
 `fi-instrumentation-otel` and `traceAI-openai` declare Python <3.14.
 Statements marked "source reading" come from the pinned code and are not
 exercised by the tests.
@@ -301,8 +302,8 @@ fi-collector (authentication, project stamping and storage).
 
 ## Tests
 
-`tests/test_gradio_recipe.py` has two parts. Neither opens a browser or a
-Gradio server port.
+`tests/test_gradio_recipe.py` has two parts, plus one opt-in test. None
+opens a browser or a Gradio server port.
 
 - **In-process.** `src/app.py` is imported and `register` is swapped for a
   provider with an `InMemorySpanExporter`; the recipe's own `init_tracing()`
@@ -328,6 +329,15 @@ Gradio server port.
   process, that the prompt is never printed, a model error (the fake
   answers HTTP 500), the reload replay and the Gradio analytics probe
   (`tests/_analytics_probe.py`).
+- **Opt-in: the published releases.** With `GRADIO_RECIPE_PUBLISHED_PINS=1`,
+  one more test creates a fresh virtualenv, runs
+  `pip install -r requirements.txt` from PyPI, checks that
+  `fi_instrumentation` and `traceai_openai` load from that virtualenv at
+  `fi-instrumentation-otel` 1.1.0 and `traceAI-openai` 0.1.10, and runs the
+  same two turns into the `Receiver`: one export at `/tracer/v1/traces` with
+  both keys, two LLM spans with one session digest, content off, no key or
+  session hash in the export. It needs network access to PyPI and is
+  skipped otherwise.
 
 All keys are placeholders. From the repository root, Python 3.11:
 
@@ -350,15 +360,22 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 For Python 3.13, replace `--python 3.11`. A full run takes under a minute.
 The thread-pool results depend on anyio, so it is pinned with Gradio.
 
-`register()` and the instrumentor come from this repository's
-`python/fi_instrumentation` and `python/frameworks/openai`, not from the
-releases pinned in `requirements.txt`. The published `traceAI-openai` 0.1.10
-wheel's `traceai_openai` package is byte-identical to
+In that command, `register()` and the instrumentor come from this
+repository's `python/fi_instrumentation` and `python/frameworks/openai`, not
+from the releases pinned in `requirements.txt`. The published
+`traceAI-openai` 0.1.10 wheel's `traceai_openai` package is byte-identical to
 `python/frameworks/openai/traceai_openai`. The published
 `fi-instrumentation-otel` 1.1.0 differs from `python/fi_instrumentation`
 only in shutdown handling (log calls instead of `print`, a lock, and its
 exporters also calling the base `shutdown()`) and one extra provider enum
 value.
+
+The opt-in test runs the published releases instead. Add
+`GRADIO_RECIPE_PUBLISHED_PINS=1` after `env -u PYTHONPATH` in the command
+above. On 2026-10-05 it passed on Python 3.10, 3.11, 3.12 and 3.13; pip
+resolved `wrapt` 1.17.3, `anyio` 4.15.1 and OpenTelemetry 1.45.0 (API, SDK,
+OTLP/HTTP exporter) with `opentelemetry-instrumentation` 0.66b0. Run it
+again when `requirements.txt` changes.
 
 No CI job runs this example. Re-run the command above when Gradio, anyio or
 the OpenAI instrumentor changes.
