@@ -27,12 +27,19 @@ itself and installs no `ag2`. `ag2` 1.x ships only an `ag2` module.
 ## Install
 
 ```bash
-pip install "autogen>=0.14.0,<0.15"
-pip install traceAI-ag2-classic
+pip install traceAI-ag2-classic "autogen[openai]"
 ```
 
-`autogen[tracing]` also works. That extra adds `opentelemetry-sdk` and the OTLP
-gRPC exporter; this package never constructs that exporter.
+`traceAI-ag2-classic` pins `autogen` to `>=0.14.0,<0.15`. Plain `autogen`
+installs no model client; the `openai` extra adds the OpenAI client the quick
+start below needs (without it, creating an agent with an `llm_config` raises
+`ImportError: ... 'openai' is not installed`). For another provider, use its
+extra instead or as well, for example `"autogen[anthropic]"` or
+`"autogen[gemini]"`.
+
+`autogen[openai,tracing]` also works. The `tracing` extra adds
+`opentelemetry-sdk` and the OTLP gRPC exporter; this package never constructs
+that exporter.
 
 ```bash
 export FI_API_KEY="YOUR_API_KEY"

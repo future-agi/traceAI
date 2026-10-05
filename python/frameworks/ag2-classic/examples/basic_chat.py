@@ -1,5 +1,8 @@
 """Two-agent AG2 Classic chat with a tool, traced to Future AGI.
 
+Install: pip install traceAI-ag2-classic "autogen[openai]"
+(plain autogen has no OpenAI client; the openai extra adds it).
+
 Requires FI_API_KEY, FI_SECRET_KEY and OPENAI_API_KEY in the environment.
 This example calls a real model; the package tests use a loopback fake instead.
 """
