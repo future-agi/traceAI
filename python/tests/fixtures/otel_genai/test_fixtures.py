@@ -28,7 +28,7 @@ import re
 import socket
 import sys
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import pytest
 
@@ -46,8 +46,10 @@ PROJECT = "otel-genai-conformance"
 SPAN_NAMES = {
     "era_a.json": ["chat"],
     "era_b.json": ["invoke_agent", "retrieval", "chat gpt-test"],
-    "dual_emit.json": ["dual_emit"],
+    "dual_emit.json": ["dual_emit", "dual_emit prompt_tokens"],
 }
+# Prompt, completion and total token columns per dual-emit span.
+DUAL_EMIT_TOKENS = {"dual_emit": (3, 4, 7), "dual_emit prompt_tokens": (3, 0, 3)}
 # fi-collector reads a span kind from these keys before it falls back to
 # gen_ai.operation.name (exporter/clickhouse25exporter/converter.go:79-90).
 SPAN_KIND_KEYS = ("fi.span.kind", "gen_ai.span.kind", "llm.request.type", "openinference.span.kind")
@@ -84,16 +86,9 @@ def stored_values(span: dict[str, Any]) -> dict[str, Any]:
     return values
 
 
-def derive_columns(span: dict[str, Any], aliases: dict[str, list[str]]) -> dict[str, Any]:
-    """fi-collector's DeriveHotKeys (adapter.go:212-235) for the value types in these fixtures.
-
-    Split (:62-107) puts string values in attrs_string and int/double values in
-    attrs_number. firstString (:316-324) returns the first alias with a
-    non-empty string; firstNumber (:330-346) the first alias with a number or
-    a numeric string. Total falls back to prompt + completion when no total
-    alias is set and that sum is positive (:230-235). Nothing is ever added
-    across aliases.
-    """
+def split(span: dict[str, Any]) -> tuple[dict[str, str], dict[str, float]]:
+    """Split (adapter.go:62-107) for these value types: strings go to
+    attrs_string, int and double values to attrs_number."""
     strings: dict[str, str] = {}
     numbers: dict[str, float] = {}
     for attribute in span.get("attributes", []):
@@ -104,29 +99,55 @@ def derive_columns(span: dict[str, Any], aliases: dict[str, list[str]]) -> dict[
             numbers[key] = float(int(value["intValue"]))
         elif "doubleValue" in value:
             numbers[key] = float(value["doubleValue"])
+    return strings, numbers
 
-    def first_string(keys: list[str]) -> str:
-        return next((strings[key] for key in keys if strings.get(key)), "")
 
-    def first_number(keys: list[str]) -> Optional[float]:
-        for key in keys:
-            if key in numbers:
-                return numbers[key]
-            if key in strings:
-                try:
-                    return float(strings[key].strip())
-                except ValueError:
-                    continue
-        return None
+def first_string(strings: dict[str, str], keys: list[str]) -> str:
+    """firstString (adapter.go:317-324): the first alias with a non-empty string."""
+    return next((strings[key] for key in keys if strings.get(key)), "")
 
-    prompt = int(first_number(aliases["inputTokenKeys"]) or 0)
-    completion = int(first_number(aliases["outputTokenKeys"]) or 0)
-    total = first_number(aliases["totalTokenKeys"])
+
+def first_number(strings: dict[str, str], numbers: dict[str, float], keys: list[str]) -> Optional[float]:
+    """firstNumber (adapter.go:330-346): walk the aliases in order; for each,
+    a number, else a numeric string. The first hit wins; nothing is added."""
+    for key in keys:
+        if key in numbers:
+            return numbers[key]
+        if key in strings:
+            try:
+                return float(strings[key].strip())
+            except ValueError:
+                continue
+    return None
+
+
+def sum_numbers(strings: dict[str, str], numbers: dict[str, float], keys: list[str]) -> Optional[float]:
+    """Control only, not fi-collector: add every alias present."""
+    found = [numbers[key] for key in keys if key in numbers]
+    return sum(found) if found else None
+
+
+NumberRule = Callable[[dict[str, str], dict[str, float], list[str]], Optional[float]]
+
+
+def derive_columns(
+    span: dict[str, Any], aliases: dict[str, list[str]], number: NumberRule = first_number
+) -> dict[str, Any]:
+    """fi-collector's DeriveHotKeys (adapter.go:212-235) for the value types in these fixtures.
+
+    Total falls back to prompt + completion when no total alias is set and that
+    sum is positive (:230-235). ``number`` is the firstNumber mirror; the
+    dual-emit control passes ``sum_numbers`` to show the check catches a sum.
+    """
+    strings, numbers = split(span)
+    prompt = int(number(strings, numbers, aliases["inputTokenKeys"]) or 0)
+    completion = int(number(strings, numbers, aliases["outputTokenKeys"]) or 0)
+    total = number(strings, numbers, aliases["totalTokenKeys"])
     if total is None:
         total = prompt + completion if prompt + completion > 0 else 0
     return {
-        "model": first_string(aliases["modelNameKeys"]),
-        "provider": first_string(aliases["providerKeys"]),
+        "model": first_string(strings, aliases["modelNameKeys"]),
+        "provider": first_string(strings, aliases["providerKeys"]),
         "gen_ai_system": strings.get("gen_ai.system", ""),
         "gen_ai_operation": strings.get("gen_ai.operation.name", ""),
         "prompt_tokens": prompt,
@@ -309,26 +330,63 @@ def test_era_a_provider_comes_from_gen_ai_system_and_tokens_are_a_recorded_miss(
     assert "gen_ai.usage.completion_tokens" not in aliases["outputTokenKeys"]
 
 
-def test_dual_emit_prompt_tokens_are_3_not_6(
+def tokens(columns: dict[str, Any]) -> tuple[int, int, int]:
+    return columns["prompt_tokens"], columns["completion_tokens"], columns["total_tokens"]
+
+
+def check_dual_emit(columns: dict[str, dict[str, Any]]) -> None:
+    assert {name: tokens(span_columns) for name, span_columns in columns.items()} == DUAL_EMIT_TOKENS
+
+
+def test_dual_emit_takes_the_first_alias_and_does_not_add(
     aliases: dict[str, list[str]], columns_golden: dict[str, Any]
 ) -> None:
-    (span,) = post_fixture("dual_emit.json")["spans"]
-    stored = stored_values(span)
-    assert stored == {"gen_ai.usage.input_tokens": 3, "gen_ai.usage.prompt_tokens": 3}
-    columns = derive_columns(span, aliases)
-    assert columns["prompt_tokens"] == 3
-    assert columns["total_tokens"] == 3
-    assert columns_golden["columns"]["dual_emit.json"]["dual_emit"]["prompt_tokens"] == 3
+    spans = {span["name"]: span for span in post_fixture("dual_emit.json")["spans"]}
+    # Two names for each count, and both names are aliases, so a sum would show.
+    assert stored_values(spans["dual_emit"]) == {
+        "llm.token_count.prompt": 3,
+        "gen_ai.usage.input_tokens": 3,
+        "llm.token_count.completion": 4,
+        "gen_ai.usage.output_tokens": 4,
+    }
+    assert {"llm.token_count.prompt", "gen_ai.usage.input_tokens"} <= set(aliases["inputTokenKeys"])
+    assert {"llm.token_count.completion", "gen_ai.usage.output_tokens"} <= set(aliases["outputTokenKeys"])
+    # The era A name next to the era B name: only the era B name is an alias.
+    assert stored_values(spans["dual_emit prompt_tokens"]) == {
+        "gen_ai.usage.input_tokens": 3,
+        "gen_ai.usage.prompt_tokens": 3,
+    }
+    columns = {name: derive_columns(span, aliases) for name, span in spans.items()}
+    check_dual_emit(columns)
+    assert columns == columns_golden["columns"]["dual_emit.json"]
 
-    # Control: a summed value (6) fails both the stored-attribute golden and
-    # the column golden.
-    summed = copy.deepcopy(span)
-    for attribute in summed["attributes"]:
-        if attribute["key"] == "gen_ai.usage.input_tokens":
+    # Control: a stored 6 on the first alias fails both goldens.
+    stored_six = copy.deepcopy(spans["dual_emit"])
+    for attribute in stored_six["attributes"]:
+        if attribute["key"] == "llm.token_count.prompt":
             attribute["value"] = {"intValue": "6"}
     with pytest.raises(AssertionError, match="spans do not match golden"):
-        compare([summed], golden_path("dual_emit.json"))
-    assert derive_columns(summed, aliases) != columns_golden["columns"]["dual_emit.json"]["dual_emit"]
+        compare([stored_six, spans["dual_emit prompt_tokens"]], golden_path("dual_emit.json"))
+    assert derive_columns(stored_six, aliases) != columns_golden["columns"]["dual_emit.json"]["dual_emit"]
+
+
+def test_a_summing_derivation_fails_the_dual_emit_check(aliases: dict[str, list[str]]) -> None:
+    """Control: adding every alias present, instead of taking the first,
+    gives 6 / 8 / 14 on ``dual_emit`` and fails the check above."""
+    spans = {span["name"]: span for span in post_fixture("dual_emit.json")["spans"]}
+    summed = {name: derive_columns(span, aliases, number=sum_numbers) for name, span in spans.items()}
+    assert tokens(summed["dual_emit"]) == (6, 8, 14)
+    with pytest.raises(AssertionError):
+        check_dual_emit(summed)
+
+    # ``dual_emit prompt_tokens`` cannot tell the two apart while
+    # gen_ai.usage.prompt_tokens is not an alias. Appended as one (SF-1),
+    # first-wins would still give 3 and a sum 6.
+    old_name = spans["dual_emit prompt_tokens"]
+    assert derive_columns(old_name, aliases, number=sum_numbers)["prompt_tokens"] == 3
+    with_old_name = {**aliases, "inputTokenKeys": [*aliases["inputTokenKeys"], "gen_ai.usage.prompt_tokens"]}
+    assert derive_columns(old_name, with_old_name)["prompt_tokens"] == 3
+    assert derive_columns(old_name, with_old_name, number=sum_numbers)["prompt_tokens"] == 6
 
 
 # --------------------------------------------------------------------------

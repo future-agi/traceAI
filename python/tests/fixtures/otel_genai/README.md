@@ -7,8 +7,8 @@ labels name key sets, not spec versions. A secondary review of the spec
 history (not re-read from the spec repository here) dates two renames:
 `gen_ai.usage.prompt_tokens`/`completion_tokens` became
 `input_tokens`/`output_tokens` in v1.27, and `gen_ai.system` became
-`gen_ai.provider.name` in v1.37. Era A uses the old names, era B the new
-ones, and dual-emit sets both prompt-token names.
+`gen_ai.provider.name` in v1.37. Era A uses the old names and era B the new
+ones. Dual-emit sets two names for the same token count.
 
 Pinned 2026-10-05:
 
@@ -36,7 +36,8 @@ fi-collector fails a batch whose resource has no `project_name`
 | `era_b.json` | `chat gpt-test` | `gen_ai.provider.name=openai`, `gen_ai.request.model=gpt-test`, `gen_ai.response.model=gpt-test-actual`, `gen_ai.usage.input_tokens=3`, `gen_ai.usage.output_tokens=4`, `gen_ai.operation.name=chat` | model `gpt-test`, provider `openai`, tokens 3 / 4 / 7 |
 | `era_b.json` | `retrieval` | `gen_ai.operation.name=retrieval` only | none |
 | `era_b.json` | `invoke_agent` | `gen_ai.operation.name=invoke_agent` only | none |
-| `dual_emit.json` | `dual_emit` | `gen_ai.usage.input_tokens=3` and `gen_ai.usage.prompt_tokens=3` | prompt tokens 3, not 6; total 3 |
+| `dual_emit.json` | `dual_emit` | `llm.token_count.prompt=3`, `gen_ai.usage.input_tokens=3`, `llm.token_count.completion=4`, `gen_ai.usage.output_tokens=4` | tokens 3 / 4 / 7, not 6 / 8 / 14 |
+| `dual_emit.json` | `dual_emit prompt_tokens` | `gen_ai.usage.input_tokens=3` and `gen_ai.usage.prompt_tokens=3` | prompt tokens 3; total 3 |
 
 In `era_b.json`, `invoke_agent` is the parent of `retrieval` and
 `chat gpt-test`, all in one trace.
@@ -63,10 +64,16 @@ What that means for each fixture:
   are 0. The raw keys are still stored as attributes. Adding era A aliases is
   shared processor work (SF-1), not part of this change. The provider column
   is `openai`, read from `gen_ai.system`.
-- **Dual-emit is not summed.** The prompt-token column reads
-  `gen_ai.usage.input_tokens` and stops, so it is 3. It would also be 3 if
-  `gen_ai.usage.prompt_tokens` became an alias, as long as it stays a
-  first-wins lookup.
+- **Dual-emit is not summed.** `dual_emit` sets the FI name and the OTel
+  GenAI name for each count, the pairs traceAI's own note maps one to the
+  other (`docs/OTEL_GENAI_SEMANTIC_CONVENTIONS.md:204-205`). Both names are
+  aliases. The prompt column reads `llm.token_count.prompt` and stops, so
+  tokens are 3 / 4 / 7. Adding every alias present would give 6 / 8 / 14.
+- **The era A prompt name is stored, not read.** `dual_emit prompt_tokens`
+  sets `gen_ai.usage.input_tokens` and `gen_ai.usage.prompt_tokens`. Only the
+  first is an alias, so prompt tokens are 3 whether aliases are added or
+  not: this span cannot tell the two apart. If `gen_ai.usage.prompt_tokens`
+  became an alias (SF-1), a first-wins lookup would still give 3 and a sum 6.
 - **`retrieval` and `invoke_agent` are stored, and no kind is asserted.**
   `gen_ai.operation.name` is the only kind signal on those spans. The
   fixtures set no `fi.span.kind`, `gen_ai.span.kind`, `llm.request.type`,
@@ -108,8 +115,9 @@ for the string and integer values these fixtures use. The tests check:
 - every span of every fixture is stored and matches its golden;
 - the request carries `project_name` and goes to `/tracer/v1/traces`;
 - the columns match `columns.golden.json`;
-- dual-emit prompt tokens are 3. A control shows that a stored 6 fails both
-  goldens;
+- dual-emit tokens are 3 / 4 / 7. A control derives the columns by adding
+  every alias present instead, gets 6 / 8 / 14, and shows the check fails.
+  Another shows that a stored 6 fails both goldens;
 - era B's model is `gpt-test`, and era A's token columns are 0;
 - no span carries a span-kind key. `retrieval` and `invoke_agent` carry only
   `gen_ai.operation.name`;
