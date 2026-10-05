@@ -127,6 +127,8 @@ export interface OptionsLike {
   /** Continue the most recent conversation in cwd (sdk.d.ts:1594). */
   continue?: boolean;
   forkSession?: boolean;
+  /** Resume the transcript only up to this message uuid (sdk.d.ts:2101). */
+  resumeSessionAt?: string;
   sessionId?: string;
   mcpServers?: Record<string, unknown>;
   [key: string]: unknown;

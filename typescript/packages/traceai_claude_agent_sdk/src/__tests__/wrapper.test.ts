@@ -1,3 +1,4 @@
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { SpanStatusCode, context, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -423,6 +424,20 @@ describe("wrapQuery", () => {
         expect(subagent.status.code).toBe(SpanStatusCode.ERROR);
       },
     );
+
+    it("N2: matches a task_notification without tool_use_id (optional, sdk.d.ts:5997) by its task_id", async () => {
+      const journey = backgroundedSubagentJourney().map((m) => {
+        if (m.type === "system" && m.subtype === "task_notification") {
+          const { tool_use_id: _dropped, ...rest } = m as typeof m & { tool_use_id?: string };
+          return rest as SDKMessage;
+        }
+        return m;
+      });
+      const { spans } = await run(journey);
+      const subagent = one(spans, "claude_agent.subagent.code-reviewer");
+      expect(subagent.attributes["claude_agent.subagent.status"]).toBe("completed");
+      expect(subagent.status.code).toBe(SpanStatusCode.OK);
+    });
   });
 
   describe("J3: MCP tool error and error result", () => {
@@ -616,6 +631,65 @@ describe("wrapQuery", () => {
         expect(span.status.code).toBe(SpanStatusCode.OK);
         expect(span.attributes["claude_agent.cancelled"]).toBeUndefined();
       }
+    });
+
+    /** Read until the stream has yielded a result message (done is still false). */
+    async function readThroughResult(q: AsyncGenerator<SDKMessage, void>): Promise<void> {
+      for (;;) {
+        const step = await q.next();
+        if (step.done) throw new Error("stream ended before a result");
+        if (step.value.type === "result") return;
+      }
+    }
+
+    it.each([
+      ["close", "simpleToolJourney"],
+      ["asyncDispose", "simpleToolJourney"],
+      ["close", "streamingInputJourney"],
+      ["asyncDispose", "streamingInputJourney"],
+    ] as const)(
+      "N1: %s() after a result with nothing in flight ends the conversation OK, not cancelled (%s)",
+      async (method, journeyName) => {
+        const { provider, exporter } = memoryProvider();
+        const journey = journeyName === "simpleToolJourney" ? simpleToolJourney() : streamingInputJourney();
+        const fake = makeFakeQuery(journey);
+        const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+        await readThroughResult(q);
+        expect(exporter.getFinishedSpans().some((s) => s.name === "claude_agent.conversation")).toBe(false);
+
+        if (method === "close") {
+          q.close();
+        } else {
+          await (q as unknown as Record<symbol, () => Promise<void>>)[ASYNC_DISPOSE]();
+        }
+
+        const spans = exporter.getFinishedSpans();
+        const conversation = one(spans, "claude_agent.conversation");
+        expect(conversation.status.code).toBe(SpanStatusCode.OK);
+        expect(conversation.attributes["claude_agent.cancelled"]).toBeUndefined();
+        for (const span of spans) {
+          expect(span.ended).toBe(true);
+          expect(span.attributes["claude_agent.cancelled"]).toBeUndefined();
+        }
+      },
+    );
+
+    it("N1: close() after a result while a background subagent still runs stays cancelled", async () => {
+      const { provider, exporter } = memoryProvider();
+      // The result arrives before the background subagent's task_notification.
+      const journey = backgroundedSubagentJourney().filter(
+        (m) => !(m.type === "system" && m.subtype === "task_notification"),
+      );
+      const fake = makeFakeQuery(journey);
+      const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT });
+      await readThroughResult(q);
+      q.close();
+      const spans = exporter.getFinishedSpans();
+      const subagent = one(spans, "claude_agent.subagent.code-reviewer");
+      expect(subagent.attributes["claude_agent.cancelled"]).toBe(true);
+      const conversation = one(spans, "claude_agent.conversation");
+      expect(conversation.status.code).toBe(SpanStatusCode.ERROR);
+      expect(conversation.attributes["claude_agent.cancelled"]).toBe(true);
     });
 
     it("ends open spans when the consumer breaks out early", async () => {

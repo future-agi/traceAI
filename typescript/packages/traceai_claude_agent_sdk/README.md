@@ -52,7 +52,7 @@ await shutdown(); // flush before a short script exits
 ### What the wrapper does and does not do
 
 - Calls the original `query()` with the same params object. Options (`resume`, `forkSession`, `sessionId`, `hooks`, `mcpServers`, `agents`, `abortController`, `allowedTools`, `permissionMode`, `maxTurns`, `env`, ...) are passed through untouched. The wrapper never sets `ANTHROPIC_BASE_URL`.
-- Yields the same message objects, in order. Control methods on the returned `Query` (`interrupt()`, `setModel()`, ...) go to the original. `close()` and `Symbol.asyncDispose` first end the query's open spans as cancelled, then go to the original.
+- Yields the same message objects, in order. Control methods on the returned `Query` (`interrupt()`, `setModel()`, ...) go to the original. `close()` and `Symbol.asyncDispose` first end the query's open spans, then go to the original: as cancelled if a turn, tool or subagent was still running, or as a normal end if a result had arrived and nothing was running (the usual way to end a streaming-input session).
 - A tracing error never fails the agent. An exporter or collector failure is logged and does not reject the iterator.
 - `startup()` is not wrapped in 0.1.0.
 
@@ -69,7 +69,7 @@ One API response that the SDK splits over several assistant messages (same `mess
 
 ### Background subagents
 
-A foreground subagent span ends with its `tool.Agent` / `tool.Task` result. A subagent that runs in the background stays open after that tool result (which is only the "running in the background" placeholder) until its `system/task_notification`, so its later turns and tools still nest under a live span. A subagent counts as background when the tool input has `run_in_background: true`, `task_started.is_backgrounded` is true, a later `task_updated` carries `patch.is_backgrounded: true`, or the app calls `Query.backgroundTasks()` (all foreground subagents, or the one whose `tool_use_id` it was given; undone if the call rejects or returns `false`). The subagent span is ERROR when the notification status is `failed` or `stopped` (`claude_agent.subagent.status` has the value). A background subagent with no notification by the time the query ends is closed as ERROR "Subagent span not completed". The subagent span can therefore end after its parent tool span.
+A foreground subagent span ends with its `tool.Agent` / `tool.Task` result. A subagent that runs in the background stays open after that tool result (which is only the "running in the background" placeholder) until its `system/task_notification` (matched by `tool_use_id`, or by `task_id` through `task_started` when the notification has no `tool_use_id`), so its later turns and tools still nest under a live span. A subagent counts as background when the tool input has `run_in_background: true`, `task_started.is_backgrounded` is true, a later `task_updated` carries `patch.is_backgrounded: true`, or the app calls `Query.backgroundTasks()` (all foreground subagents, or the one whose `tool_use_id` it was given; undone if the call rejects or returns `false`). The subagent span is ERROR when the notification status is `failed` or `stopped` (`claude_agent.subagent.status` has the value). A background subagent with no notification by the time the query ends is closed as ERROR "Subagent span not completed". The subagent span can therefore end after its parent tool span.
 
 | Field | Attributes | Source |
 |---|---|---|
@@ -92,7 +92,8 @@ The Future AGI collector promotes `gen_ai.usage.*` and `gen_ai.cost.total` on an
 - Tokens come from the latest result's `modelUsage`, summed over every model (main loop, subagents, compaction). Cost comes from `total_cost_usd`. Both are running totals for the session (`sdk.d.ts:5679`, `5687`). `result.usage` is not read: the SDK documents it as main-loop only and per turn in streaming-input mode (`sdk.d.ts:5683`). This replaces the spec's "result message usage" mapping.
 - Streaming input (one `query()`, several user turns) yields one result per turn. The conversation span keeps the latest running totals, so tokens and cost cover every turn. It stays one conversation span per `query()`; the Python `ClaudeSDKClient` path makes one per user turn.
 - A resumed (`resume`), continued (`continue`) or forked (`forkSession`) session's first result already carries the earlier turns. The wrapper keeps an in-process map of session id to the last totals it saw (at most 1000 sessions) and writes only the difference. A fork starts from its parent's totals. A drop in the running total within one query (a `/clear`) counts the spend on both sides of it.
-- When there is no baseline in this process (resume after a restart, `continue` + `forkSession`, or a first result below the saved totals), no `gen_ai.usage.*` / `gen_ai.cost.total` / `claude_agent.cost.total_usd` is written and `claude_agent.usage.baseline_unknown=true`.
+- When there is no baseline in this process (resume after a restart, `continue` + `forkSession`, `resume` with `resumeSessionAt`, or a first result below the saved totals), the first result writes no `gen_ai.usage.*` / `gen_ai.cost.total` / `claude_agent.cost.total_usd` and the span has `claude_agent.usage.baseline_unknown=true`. Later results in the same `query()` (streaming input) use that first result's totals as their baseline, so the promoted keys then hold the spend after the first result and the flag stays `true`.
+- Known undercount: a `/clear` followed by more spend than the session had before it is not seen as a drop, so the pre-clear share of that query is missed. Nothing here can count spend twice.
 - Every conversation span with a result also carries the running totals on unpromoted keys: `claude_agent.cumulative.cost_usd`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`.
 - A result with no cost and no `modelUsage`, or a zeroed crash result, writes none of these keys and leaves the session's saved totals unchanged.
 
@@ -130,7 +131,7 @@ With 0.3.289 the CLI then calls `POST {ANTHROPIC_BASE_URL}/v1/messages?beta=true
 - **No traces.** `register()` needs `projectName` or `FI_PROJECT_NAME`.
 - **Zero spans from a short script.** `await shutdown()` before exit.
 - **Duplicate model spans.** Do not also run a provider instrumentor on the same calls.
-- **A span left open after abort.** Every span for the query is ended with status ERROR and `claude_agent.cancelled=true` when its `AbortController` aborts, when you call `close()` on the returned `Query` (the SDK's abort path), or when `await using` disposes it (`Symbol.asyncDispose`). Calling `close()` after the stream has completed changes nothing. Anything else is a bug here.
+- **A span left open after abort.** Every span for the query is ended with status ERROR and `claude_agent.cancelled=true` when its `AbortController` aborts, when you call `close()` on the returned `Query` (the SDK's abort path), or when `await using` disposes it (`Symbol.asyncDispose`). Calling `close()` after the stream has completed changes nothing, and `close()` after a result with nothing still running ends the conversation OK. Anything else is a bug here.
 
 ## Tests
 

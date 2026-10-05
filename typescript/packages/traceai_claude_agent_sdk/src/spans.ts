@@ -302,6 +302,8 @@ export class QueryTracer {
   private readonly resumeId?: string;
   /** undefined: no counted result yet; null: baseline unknown for this query. */
   private usagePrev?: UsageTotals | null;
+  /** Some spend before this query's first result is not in the promoted keys. */
+  private usageBaselineUnknown = false;
   /** New spend counted in this query (sum of deltas), written to the promoted keys. */
   private readonly usageCounted: UsageTotals = {};
 
@@ -400,6 +402,11 @@ export class QueryTracer {
     if (!this.conversation) {
       return;
     }
+    // close()/asyncDispose/abort after a result with nothing still running
+    // (no open turn, tool or subagent) cancels nothing: end it as returned.
+    if (outcome.kind === "aborted" && this.resultSeen && this.nothingInFlight()) {
+      outcome = { kind: "returned" };
+    }
     try {
       const signal = this.options?.abortController?.signal;
       const cancelled =
@@ -465,6 +472,18 @@ export class QueryTracer {
     } catch (error) {
       diag.debug(`@traceai/claude-agent-sdk: failed to finish spans: ${error}`);
     }
+  }
+
+  /** True when no turn, tool or subagent span of this query is still open. */
+  private nothingInFlight(): boolean {
+    if (this.tools.size > 0) return false;
+    for (const sub of this.subagents.values()) {
+      if (!sub.ended) return false;
+    }
+    for (const scope of this.scopes.values()) {
+      if (scope.currentTurn && !scope.currentTurn.ended) return false;
+    }
+    return true;
   }
 
   // --------------------------------------------------------------------------
@@ -641,7 +660,10 @@ export class QueryTracer {
         break;
       }
       case "task_notification": {
-        const id = message.tool_use_id;
+        // tool_use_id is optional (sdk.d.ts:5997); fall back to the task_started mapping.
+        const id =
+          message.tool_use_id ??
+          (typeof message.task_id === "string" ? this.taskToolUseIds.get(message.task_id) : undefined);
         const sub = id ? this.subagents.get(id) : undefined;
         if (sub && !sub.ended && typeof message.status === "string") {
           sub.status = message.status;
@@ -988,8 +1010,8 @@ export class QueryTracer {
         (f) => cumulative[f] !== undefined && prev![f] !== undefined && cumulative[f]! < prev![f]!,
       );
       if (dropped && first) {
-        // Below the saved baseline on the first result (e.g. resumeSessionAt an
-        // earlier message): the earlier share is unknown.
+        // Below the saved baseline on the first result (the transcript no longer
+        // matches the saved totals): the earlier share is unknown.
         prev = null;
       } else {
         // Within one query a drop is a /clear: the running total restarted at 0.
@@ -1002,6 +1024,12 @@ export class QueryTracer {
         prev = { ...prev, ...definedUsage(cumulative) };
       }
       this.usagePrev = prev;
+    }
+    if (prev === null) {
+      // No baseline for the spend up to this result, but its totals are an exact
+      // baseline for any later result in the same query (streaming input).
+      this.usageBaselineUnknown = true;
+      this.usagePrev = { ...definedUsage(cumulative) };
     }
     if (this.sessionId) {
       const stored = prev ?? { ...(store.get(this.sessionId) ?? {}), ...definedUsage(cumulative) };
@@ -1016,7 +1044,7 @@ export class QueryTracer {
     setIf(T.CUMULATIVE_OUTPUT_TOKENS, cumulative.outputTokens);
     setIf(T.CUMULATIVE_CACHE_READ_TOKENS, cumulative.cacheReadTokens);
     setIf(T.CUMULATIVE_CACHE_CREATION_TOKENS, cumulative.cacheCreationTokens);
-    conversation.setAttribute(T.USAGE_BASELINE_UNKNOWN, prev === null);
+    conversation.setAttribute(T.USAGE_BASELINE_UNKNOWN, this.usageBaselineUnknown);
     if (prev === null) return;
 
     const counted = this.usageCounted;
@@ -1039,6 +1067,9 @@ export class QueryTracer {
         return { costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
       case "resume":
       case "fork":
+        // resumeSessionAt rewinds to an earlier message: the saved totals are for
+        // a later point in the transcript, so the share already spent is unknown.
+        if (typeof this.options?.resumeSessionAt === "string" && this.options.resumeSessionAt) return null;
         // A fork starts from the parent's saved totals under a new session id.
         return (this.resumeId && store.get(this.resumeId)) || null;
       case "continue":

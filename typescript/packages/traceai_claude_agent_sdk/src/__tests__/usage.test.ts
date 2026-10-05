@@ -268,6 +268,50 @@ describe("R1: resumed, continued and forked sessions are counted once", () => {
     expect(conversation.attributes["claude_agent.usage.baseline_unknown"]).toBe(true);
   });
 
+  it("N3: an unknown baseline covers only the first result; later results in the query promote their delta", async () => {
+    const id = newSessionId(); // resumed, but this process never saw the session (e.g. after a restart)
+    const journey: SDKMessage[] = [
+      init({ session_id: id }),
+      assistant("msg_u1", [text("one")], null, { session_id: id }),
+      resultSuccess("one", { session_id: id, total_cost_usd: 0.001, modelUsage: { [MODEL]: modelUsage(100, 40, 0.001) } }),
+      assistant("msg_u2", [text("two")], null, { session_id: id }),
+      resultSuccess("two", { session_id: id, total_cost_usd: 0.0014, modelUsage: { [MODEL]: modelUsage(130, 52, 0.0014) } }),
+    ];
+    const { conversation } = await runQuery(journey, { resume: id });
+    expect(conversation.attributes["gen_ai.cost.total"]).toBeCloseTo(0.0004, 12);
+    expect(conversation.attributes["claude_agent.cost.total_usd"]).toBeCloseTo(0.0004, 12);
+    expect(conversation.attributes["gen_ai.usage.input_tokens"]).toBe(30);
+    expect(conversation.attributes["gen_ai.usage.output_tokens"]).toBe(12);
+    expect(conversation.attributes["gen_ai.usage.total_tokens"]).toBe(42);
+    // Still flagged: the spend before the first result is not in the promoted keys.
+    expect(conversation.attributes["claude_agent.usage.baseline_unknown"]).toBe(true);
+    expect(conversation.attributes["claude_agent.cumulative.cost_usd"]).toBeCloseTo(0.0014, 12);
+    // The next resume in this process starts from the latest totals.
+    const next = await runQuery(sessionQuery(id, { cost: 0.002, input: 160, output: 64 }), { resume: id });
+    expect(next.conversation.attributes["gen_ai.cost.total"]).toBeCloseTo(0.0006, 12);
+    expect(next.conversation.attributes["claude_agent.usage.baseline_unknown"]).toBe(false);
+  });
+
+  it.each([
+    ["resume", false],
+    ["fork", true],
+  ] as const)(
+    "N4: %s with resumeSessionAt has no known baseline (the saved totals are for a later message)",
+    async (_mode, forkSession) => {
+      const id = newSessionId();
+      await runQuery(sessionQuery(id, { cost: 0.001, input: 100, output: 40 }));
+      const target = forkSession ? newSessionId() : id;
+      const { conversation } = await runQuery(sessionQuery(target, { cost: 0.0015, input: 150, output: 60 }), {
+        resume: id,
+        resumeSessionAt: "msg-uuid-earlier",
+        ...(forkSession ? { forkSession: true } : {}),
+      });
+      expect(promoted(conversation)).toEqual({});
+      expect(conversation.attributes["claude_agent.cost.total_usd"]).toBeUndefined();
+      expect(conversation.attributes["claude_agent.usage.baseline_unknown"]).toBe(true);
+    },
+  );
+
   it("a mid-query /clear (running total drops) counts the spend before and after it", async () => {
     const id = newSessionId();
     const journey: SDKMessage[] = [

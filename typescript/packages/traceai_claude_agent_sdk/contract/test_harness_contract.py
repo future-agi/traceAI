@@ -479,6 +479,27 @@ def test_real_sdk_streaming_input_counts_tokens_once(built_package: Path) -> Non
 
 
 @requires_real_sdk
+def test_real_sdk_close_after_result_ends_streaming_session_ok(built_package: Path) -> None:
+    """N1: close() after a result, with nothing still running, is the normal end of a
+    streaming-input session (the prompt iterable stays open). The conversation must end
+    OK, not cancelled, and still carry the session's spend once."""
+    output, spans, exported = _run_real_sdk("streaming_close", "th8235-real-sdk-streaming-close")
+    (messages,) = output["queries"]
+    results = _results(messages)
+    assert len(results) == 1 and messages[-1]["type"] == "result"
+
+    names = sorted(span["name"] for span in spans)
+    assert names == sorted(["claude_agent.conversation", "claude_agent.assistant_turn"]), names
+    for span in spans:
+        assert "claude_agent.cancelled" not in _attrs(span), span["name"]
+    conversation = _one(spans, "claude_agent.conversation")
+    assert _status_code(conversation) == 1
+    _assert_promoted_sum_equals([conversation], _cumulative(results[0]))
+    _assert_only_conversations_carry_usage(spans)
+    _assert_exported_with_both_keys(exported, "th8235-real-sdk-streaming-close")
+
+
+@requires_real_sdk
 def test_real_sdk_query_through_anthropic_base_url_mock(built_package: Path) -> None:
     """The real SDK query() and bundled CLI, wrapped, against a loopback Messages API mock.
 

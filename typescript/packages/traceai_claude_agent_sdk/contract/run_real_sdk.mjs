@@ -22,6 +22,9 @@
 //                   starts a session, PHASE=second resumes RESUME_SESSION_ID.
 //        streaming  one query() with an AsyncIterable prompt of two user turns;
 //                   the second turn is sent after the first result.
+//        streaming_close  one streaming-input query(); after its result the app
+//                   calls close() while the prompt iterable is still open (the
+//                   usual way to end a streaming-input session).
 //      WORKDIR (optional): use and keep this directory instead of a temp dir.
 // Prints {"requests": [...], "messages": [...], "queries": [[...], ...]} on stdout.
 import http from "node:http";
@@ -219,6 +222,26 @@ const SCENARIOS = {
       out.push(message);
       if (message.type === "result") resultSeen();
     }
+    return [out];
+  },
+  async streaming_close() {
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    const userTurn = (content) => ({ type: "user", message: { role: "user", content }, parent_tool_use_id: null });
+    async function* prompt() {
+      yield userTurn("First question.");
+      await held; // more input could still come: the stream stays open
+    }
+    const q = tracedQuery({ prompt: prompt(), options: options() });
+    const out = [];
+    for (;;) {
+      const { value, done } = await q.next();
+      if (done) break;
+      out.push(value);
+      if (value.type === "result") break;
+    }
+    q.close();
+    release();
     return [out];
   },
 };
