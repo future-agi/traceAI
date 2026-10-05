@@ -9,11 +9,12 @@ embedding endpoints are a loopback fake of the OpenAI API
 serves ``/v1/traces`` and ``/tracer/v1/traces`` like fi-collector's HTTP mux
 but does not authenticate, stamp projects or store anything.
 
-The recorded fixture (``fixtures/cognee-1.6.2-recipe-spans.json``) is the
-recipe run's spans as the Receiver decoded them. The fixture tests post it
-with ``post_otlp()`` and check it with ``compare()`` and the same mapping
-assertions as the live run, without Cognee installed. Regenerate it with
-``COGNEE_RECORD_FIXTURE=1``.
+The recorded fixture (``fixtures/cognee-1.6.2-recipe-spans.json``) is
+Cognee's own spans from the recipe run, before the export filter
+(``src/cognee_filter.py``) changes them. The fixture tests post it with
+``post_otlp()`` and check it with ``compare()``, run the filter over it, and
+compare the live runs with the filtered result, without Cognee installed.
+Regenerate it with ``COGNEE_RECORD_FIXTURE=1``.
 
 All keys are placeholders. Nothing here contacts an LLM provider, Cognee's
 telemetry host or Future AGI.
@@ -21,7 +22,9 @@ telemetry host or Future AGI.
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures
+import copy
 import importlib.util
 import json
 import os
@@ -31,14 +34,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanContext, SpanKind, Status, StatusCode, TraceFlags
 
 from harness import Receiver, compare, post_otlp, run
 
 TESTS_DIR = Path(__file__).resolve().parent
 RECIPE_DIR = TESTS_DIR.parent
+SRC_DIR = RECIPE_DIR / "src"
 PYTHON_DIR = RECIPE_DIR.parents[1]
 REPO_ROOT = PYTHON_DIR.parent
-APP = RECIPE_DIR / "src" / "app.py"
+APP = SRC_DIR / "app.py"
 README = RECIPE_DIR / "README.md"
 ADD_SCRIPT = TESTS_DIR / "cognee_add.py"
 # Put first on a scenario's PYTHONPATH, so every interpreter it starts loads the guard.
@@ -46,6 +56,7 @@ GUARD_DIR = TESTS_DIR / "loopback_guard"
 FIXTURE = TESTS_DIR / "fixtures" / "cognee-1.6.2-recipe-spans.json"
 
 sys.path.insert(0, str(TESTS_DIR))
+sys.path.insert(0, str(SRC_DIR))
 from _fake_openai import ANSWER_MARKER, FakeOpenAI  # noqa: E402
 
 PROJECT = "cognee-recipe-contract"
@@ -61,14 +72,19 @@ DOC_MARKER = "DMARK7f3a"
 QUERY_MARKER = "QMARK91c2"
 DOCUMENT = "Ada works on the Lighthouse project. " + DOC_MARKER
 QUESTION = "Who works on Lighthouse? " + QUERY_MARKER
+MARKERS = (DOC_MARKER, QUERY_MARKER, ANSWER_MARKER)
 
-# Which attribute keys carry each kind of content by default (README.md,
-# "Content Cognee exports").
+# Which attribute keys carry each kind of content in Cognee's own spans
+# (README.md, "Content"). With capture_content=True the filter keeps them.
 CONTENT_KEYS = {
     DOC_MARKER: {"langfuse.observation.input"},
     QUERY_MARKER: {"langfuse.observation.input", "cognee.search.query", "memory.query.text"},
     ANSWER_MARKER: {"langfuse.observation.output"},
 }
+# What the filter removes by default: every key above, plus the graph query
+# text (cognee.db.query, which held no marker in the recorded run).
+FILTERED_KEYS = set().union(*CONTENT_KEYS.values()) | {"cognee.db.query"}
+REDACTED = "__REDACTED__"
 
 APP_SPAN = "remember_and_ask"
 INTERNAL = "SPAN_KIND_INTERNAL"
@@ -108,6 +124,13 @@ COGNEE_ROOTS = ("memory.store", "memory.process", "memory.retrieve")
 # fi-collector reads the span kind from these keys, then falls back to
 # gen_ai.operation.name (exporter/clickhouse25exporter/converter.go).
 SPAN_KIND_KEYS = ("fi.span.kind", "gen_ai.span.kind", "llm.request.type", "openinference.span.kind")
+# The fi.span.kind the filter sets, by span name, on the recipe run's spans.
+FILTER_KINDS = {
+    "memory.retrieve": "RETRIEVER",
+    "cognee.search.authorize": "RETRIEVER",
+    "cognee.search.dataset": "RETRIEVER",
+    GENERATION_SPAN: "LLM",
+}
 TOKEN_KEYS = (
     "llm.token_count.prompt",
     "llm.token_count.completion",
@@ -181,17 +204,30 @@ def scrub(spans: list[dict[str, Any]], tmp_base: Path) -> list[dict[str, Any]]:
     return json.loads(text)
 
 
+def without_filter_kinds(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop the fi.span.kind the filter adds, leaving Cognee's own spans."""
+    spans = copy.deepcopy(spans)
+    for span in spans:
+        span["attributes"] = [a for a in span.get("attributes", []) if a["key"] != "fi.span.kind"]
+    return spans
+
+
 def assert_span_names_and_kinds(spans: list[dict[str, Any]]) -> None:
     assert {span["name"]: span["kind"] for span in spans} == SPAN_KINDS
     for span in spans:
         assert span["kind"] == SPAN_KINDS[span["name"]], span["name"]
 
 
-def assert_collector_mapping_inputs(spans: list[dict[str, Any]]) -> None:
-    """Assert the keys fi-collector maps from, as README.md's table states."""
+def assert_collector_mapping_inputs(spans: list[dict[str, Any]], kinds: dict[str, str]) -> None:
+    """Assert the keys fi-collector maps from, as README.md's table states.
+
+    ``kinds`` is the fi.span.kind expected per span name: empty for Cognee's
+    own spans, FILTER_KINDS after the recipe's export filter.
+    """
     for span in spans:
         attrs = attributes(span)
-        assert not set(SPAN_KIND_KEYS) & set(attrs), span["name"]
+        expected_kind = {"fi.span.kind": kinds[span["name"]]} if span["name"] in kinds else {}
+        assert {key: attrs[key] for key in SPAN_KIND_KEYS if key in attrs} == expected_kind
         assert not set(TOKEN_KEYS) & set(attrs), span["name"]
         if span["name"] == EMBEDDING_SPAN:
             assert attrs["gen_ai.operation.name"] == "embeddings"
@@ -219,7 +255,7 @@ def assert_collector_mapping_inputs(spans: list[dict[str, Any]]) -> None:
 
 
 def assert_default_content(spans: list[dict[str, Any]]) -> None:
-    """Content is exported by default, under exactly the documented keys."""
+    """Cognee's content is present, under exactly the documented keys."""
     for marker, expected_keys in CONTENT_KEYS.items():
         found = {
             key
@@ -236,6 +272,16 @@ def found_in(payload: Any, needles: Any) -> list[str]:
     """The needles that occur in payload's JSON (a list keeps pytest's diff of it small)."""
     text = json.dumps(payload)
     return [needle for needle in needles if needle in text]
+
+
+def assert_no_content(spans: list[dict[str, Any]]) -> None:
+    """No marker anywhere on the wire (attributes, status, events), no content key."""
+    assert found_in(spans, MARKERS) == []
+    for span in spans:
+        keys = set(attributes(span))
+        for event in span.get("events", []):
+            keys |= set(attributes(event))
+        assert not keys & FILTERED_KEYS, span["name"]
 
 
 def assert_no_secrets(payload: Any) -> None:
@@ -255,6 +301,96 @@ def assert_one_trace_under_app_span(spans: list[dict[str, Any]]) -> None:
     for span in spans:
         if span.get("parentSpanId"):
             assert span["parentSpanId"] in by_id, span["name"]
+
+
+# --------------------------------------------------------------------------
+# Recorded spans as SDK spans, sent through the export filter
+# --------------------------------------------------------------------------
+
+
+def otlp_value(value: dict[str, Any]) -> Any:
+    ((kind, raw),) = value.items()
+    if kind == "intValue":
+        return int(raw)
+    if kind == "arrayValue":
+        return [otlp_value(item) for item in raw.get("values", [])]
+    return raw
+
+
+def sdk_span(span: dict[str, Any]) -> ReadableSpan:
+    """Rebuild an SDK span from its Receiver-decoded (OTLP JSON) form."""
+
+    def span_id(key: str) -> int:
+        return int.from_bytes(base64.b64decode(span[key]), "big")
+
+    def flat(items: list[dict[str, Any]]) -> dict[str, Any]:
+        return {item["key"]: otlp_value(item["value"]) for item in items}
+
+    trace_id = span_id("traceId")
+    parent = None
+    if span.get("parentSpanId"):
+        parent = SpanContext(trace_id, span_id("parentSpanId"), is_remote=False)
+    status = span.get("status", {})
+    return ReadableSpan(
+        name=span["name"],
+        context=SpanContext(
+            trace_id, span_id("spanId"), is_remote=False, trace_flags=TraceFlags(TraceFlags.SAMPLED)
+        ),
+        parent=parent,
+        resource=Resource({"project_name": PROJECT, "project_type": "observe"}),
+        attributes=flat(span.get("attributes", [])),
+        events=[
+            Event(event["name"], flat(event.get("attributes", [])), int(event["timeUnixNano"]))
+            for event in span.get("events", [])
+        ],
+        kind=SpanKind[span["kind"].replace("SPAN_KIND_", "")],
+        status=Status(
+            StatusCode[status.get("code", "STATUS_CODE_UNSET").replace("STATUS_CODE_", "")],
+            status.get("message"),
+        ),
+        start_time=int(span["startTimeUnixNano"]),
+        end_time=int(span["endTimeUnixNano"]),
+    )
+
+
+def export_spans(spans: list[dict[str, Any]], wrap: Any = None) -> list[dict[str, Any]]:
+    """Export recorded spans over OTLP/HTTP, optionally through ``wrap(exporter)``."""
+    with Receiver() as receiver:
+        exporter = OTLPSpanExporter(endpoint=receiver.collector_endpoint)
+        if wrap is not None:
+            exporter = wrap(exporter)
+        assert exporter.export([sdk_span(span) for span in spans]) == SpanExportResult.SUCCESS
+        exporter.shutdown()
+        return receiver.spans()
+
+
+def filtered(
+    cognee_filter: Any, spans: list[dict[str, Any]], **options: Any
+) -> list[dict[str, Any]]:
+    """Export recorded spans through src/cognee_filter.py; return what arrives."""
+    return export_spans(
+        spans, lambda exporter: cognee_filter.CogneeExportFilter(exporter, **options)
+    )
+
+
+def filtered_attributes(span: dict[str, Any], capture_content: bool) -> dict[str, Any]:
+    """A recorded span's attributes as the filter should export them."""
+    expected = {
+        key: value
+        for key, value in attributes(span).items()
+        if capture_content or key not in FILTERED_KEYS
+    }
+    if span["name"] in FILTER_KINDS:
+        expected["fi.span.kind"] = FILTER_KINDS[span["name"]]
+    return expected
+
+
+@pytest.fixture(scope="module")
+def cognee_filter() -> Any:
+    """src/cognee_filter.py. Imported here so a missing filter fails only its tests."""
+    import cognee_filter as module
+
+    return module
 
 
 # --------------------------------------------------------------------------
@@ -302,6 +438,8 @@ class Scenario:
         }
         if self.name != "tracing_off":
             env["COGNEE_TRACING_ENABLED"] = "true"
+        if self.name == "capture":
+            env["COGNEE_FI_CAPTURE_CONTENT"] = "true"
         if self.name == "otlp_env":
             # The no-register() option: Cognee's own exporter, configured
             # exactly as README.md says (with the Receiver's origin).
@@ -381,20 +519,23 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Scenario]:
         pytest.skip("cognee==1.6.2 is not installed")
     scenarios = [
         Scenario("recipe", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("recipe")),
+        Scenario("capture", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("capture")),
         Scenario("tracing_off", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("off")),
         Scenario("no_readd", ADD_SCRIPT, ["no-readd"], tmp_path_factory.mktemp("noreadd")),
         Scenario(
             "otlp_env", ADD_SCRIPT, ["otlp-env", *OTLP_URL_FORMS], tmp_path_factory.mktemp("env")
         ),
     ]
-    # Importing cognee alone takes about a minute, so the four processes
-    # run side by side.
+    # Importing cognee alone takes about a minute, so the processes run side
+    # by side.
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(scenarios)) as pool:
         done = list(pool.map(Scenario.execute, scenarios))
     by_name = {scenario.name: scenario for scenario in done}
-    recipe = by_name["recipe"]
-    if os.environ.get("COGNEE_RECORD_FIXTURE") == "1" and recipe.result.returncode == 0:
-        spans = scrub(recipe.spans, tmp_path_factory.getbasetemp())
+    capture = by_name["capture"]
+    if os.environ.get("COGNEE_RECORD_FIXTURE") == "1" and capture.result.returncode == 0:
+        # The fixture is Cognee's own output: the capture run (all content
+        # kept) without the fi.span.kind the filter adds.
+        spans = scrub(without_filter_kinds(capture.spans), tmp_path_factory.getbasetemp())
         FIXTURE.write_text(json.dumps(spans, indent=1) + "\n", encoding="utf-8")
     return by_name
 
@@ -458,12 +599,14 @@ def test_recipe_does_not_duplicate_spans(runs: dict[str, Scenario]) -> None:
     assert len({span["spanId"] for span in recipe.spans}) == len(recipe.spans)
 
 
-def test_recipe_spans_carry_the_keys_the_collector_maps(runs: dict[str, Scenario]) -> None:
-    assert_collector_mapping_inputs(runs["recipe"].spans)
+def test_recipe_marks_search_and_llm_spans_for_the_collector(runs: dict[str, Scenario]) -> None:
+    # memory.retrieve and cognee.search.* arrive as RETRIEVER, LLM calls as
+    # LLM; embedding spans keep gen_ai.operation.name only.
+    assert_collector_mapping_inputs(runs["recipe"].spans, FILTER_KINDS)
 
 
-def test_recipe_exports_content_by_default(runs: dict[str, Scenario]) -> None:
-    assert_default_content(runs["recipe"].spans)
+def test_recipe_exports_no_content_by_default(runs: dict[str, Scenario]) -> None:
+    assert_no_content(runs["recipe"].spans)
 
 
 def test_recipe_exports_no_secrets(runs: dict[str, Scenario]) -> None:
@@ -472,9 +615,27 @@ def test_recipe_exports_no_secrets(runs: dict[str, Scenario]) -> None:
     assert_no_secrets([request["resource_attributes"] for request in recipe.requests])
 
 
-def test_recipe_run_matches_recorded_fixture(runs: dict[str, Scenario]) -> None:
-    recorded = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert shape(runs["recipe"].spans) == shape(recorded)
+def test_recipe_run_matches_recorded_fixture(
+    runs: dict[str, Scenario], recorded: list[dict[str, Any]], cognee_filter: Any
+) -> None:
+    assert shape(runs["recipe"].spans) == shape(filtered(cognee_filter, recorded))
+
+
+def test_capture_content_exports_content_under_documented_keys(
+    runs: dict[str, Scenario],
+) -> None:
+    capture = runs["capture"]
+    capture.assert_ran_offline()
+    assert_default_content(capture.spans)
+    assert_no_secrets(capture.spans)
+
+
+def test_capture_run_matches_recorded_fixture(
+    runs: dict[str, Scenario], recorded: list[dict[str, Any]], cognee_filter: Any
+) -> None:
+    capture = runs["capture"]
+    assert_collector_mapping_inputs(capture.spans, FILTER_KINDS)
+    assert shape(capture.spans) == shape(filtered(cognee_filter, recorded, capture_content=True))
 
 
 def test_tracing_off_exports_no_cognee_spans(runs: dict[str, Scenario]) -> None:
@@ -563,9 +724,10 @@ def test_recorded_fixture_round_trips_through_the_harness(recorded: list[dict[st
 
 
 def test_recorded_fixture_matches_documented_mapping(recorded: list[dict[str, Any]]) -> None:
+    # Cognee's own spans: no span-kind key, content under the documented keys.
     assert_span_names_and_kinds(recorded)
     assert_one_trace_under_app_span(recorded)
-    assert_collector_mapping_inputs(recorded)
+    assert_collector_mapping_inputs(recorded, {})
     assert_default_content(recorded)
     assert_no_secrets(recorded)
     assert found_in(recorded, host_paths()) == []
@@ -584,11 +746,184 @@ def test_scrub_removes_host_and_tmp_paths(tmp_path_factory: pytest.TempPathFacto
     assert found_in(scrubbed, host_paths()) == []
 
 
+def test_fixture_spans_rebuild_as_sdk_spans(recorded: list[dict[str, Any]]) -> None:
+    # The helper the filter tests rely on: rebuilt spans export back to the
+    # same names, attributes, statuses and events.
+    wire = export_spans(recorded)
+    compare(wire, FIXTURE)
+    for before, after in zip(recorded, wire):
+        assert after.get("events", []) == before.get("events", []), before["name"]
+
+
+# --------------------------------------------------------------------------
+# The export filter (src/cognee_filter.py), on the recorded spans
+# --------------------------------------------------------------------------
+
+
+def test_filter_lists_the_tested_content_keys_and_span_names(cognee_filter: Any) -> None:
+    assert cognee_filter.CONTENT_KEYS == FILTERED_KEYS
+    assert cognee_filter.SPAN_KIND_KEYS == SPAN_KIND_KEYS
+    for name in SPAN_KINDS:
+        assert cognee_filter.span_kind(name) == FILTER_KINDS.get(name), name
+
+
+def test_filter_keeps_content_off_the_wire_by_default(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    wire = filtered(cognee_filter, recorded)
+    assert len(wire) == len(recorded)
+    assert_no_content(wire)
+    # Everything else is unchanged.
+    for before, after in zip(recorded, wire):
+        assert attributes(after) == filtered_attributes(before, capture_content=False)
+        assert after.get("events", []) == before.get("events", [])
+        assert after.get("status") == before.get("status")
+
+
+def test_filter_sets_span_kinds_only_where_none_is_set(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    assert_collector_mapping_inputs(filtered(cognee_filter, recorded), FILTER_KINDS)
+    (search,) = copy.deepcopy(spans_named(recorded, "memory.retrieve"))
+    search["attributes"].append({"key": "gen_ai.span.kind", "value": {"stringValue": "CHAIN"}})
+    (wire,) = filtered(cognee_filter, [search])
+    assert attributes(wire)["gen_ai.span.kind"] == "CHAIN"
+    assert "fi.span.kind" not in attributes(wire)
+
+
+def test_filter_redacts_content_quoted_in_status_and_events(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    # Cognee did not quote content in errors in the recorded run; plant it.
+    (search,) = copy.deepcopy(spans_named(recorded, "memory.retrieve"))
+    generation = copy.deepcopy(
+        next(s for s in spans_named(recorded, GENERATION_SPAN) if DOC_MARKER in json.dumps(s))
+    )
+    for span, quoted in ((search, QUESTION), (generation, DOCUMENT)):
+        span["status"] = {"code": "STATUS_CODE_ERROR", "message": "ValueError: bad " + quoted}
+        span["events"] = [
+            {
+                "timeUnixNano": span["endTimeUnixNano"],
+                "name": "exception",
+                "attributes": [
+                    {"key": "exception.type", "value": {"stringValue": "ValueError"}},
+                    {"key": "exception.message", "value": {"stringValue": "bad " + quoted}},
+                    {
+                        "key": "exception.stacktrace",
+                        "value": {"stringValue": "Traceback ...\nValueError: bad " + quoted},
+                    },
+                ],
+            }
+        ]
+    wire = filtered(cognee_filter, [search, generation])
+    assert_no_content(wire)
+    for span in wire:
+        assert span["status"]["message"] == "ValueError: bad " + REDACTED
+        event_attrs = attributes(span["events"][0])
+        assert event_attrs["exception.type"] == "ValueError"
+        assert event_attrs["exception.message"] == "bad " + REDACTED
+        assert event_attrs["exception.stacktrace"].endswith("ValueError: bad " + REDACTED)
+
+
+def test_filter_capture_content_keeps_cognees_content(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    wire = filtered(cognee_filter, recorded, capture_content=True)
+    assert_default_content(wire)
+    assert_collector_mapping_inputs(wire, FILTER_KINDS)
+    for before, after in zip(recorded, wire):
+        assert attributes(after) == filtered_attributes(before, capture_content=True)
+
+
+@pytest.mark.parametrize(
+    ("env_value", "argument", "kept"),
+    [
+        (None, None, False),
+        ("true", None, True),
+        ("TRUE", None, True),
+        ("false", None, False),
+        ("true", False, False),
+        (None, True, True),
+    ],
+)
+def test_filter_capture_switch(
+    cognee_filter: Any, monkeypatch: pytest.MonkeyPatch, env_value: Any, argument: Any, kept: bool
+) -> None:
+    if env_value is None:
+        monkeypatch.delenv("COGNEE_FI_CAPTURE_CONTENT", raising=False)
+    else:
+        monkeypatch.setenv("COGNEE_FI_CAPTURE_CONTENT", env_value)
+    exporter = InMemorySpanExporter()
+    options = {} if argument is None else {"capture_content": argument}
+    provider = TracerProvider()
+    provider.add_span_processor(
+        SimpleSpanProcessor(cognee_filter.CogneeExportFilter(exporter, **options))
+    )
+    with provider.get_tracer("test").start_as_current_span("memory.retrieve") as span:
+        span.set_attribute("memory.query.text", QUESTION)
+    (exported,) = exporter.get_finished_spans()
+    assert ("memory.query.text" in exported.attributes) is kept
+
+
+def test_filter_does_not_change_spans_other_processors_see(cognee_filter: Any) -> None:
+    filtered_out, raw_out = InMemorySpanExporter(), InMemorySpanExporter()
+    provider = TracerProvider()
+    # The filter runs first; the plain exporter after it must see the original.
+    provider.add_span_processor(SimpleSpanProcessor(cognee_filter.CogneeExportFilter(filtered_out)))
+    provider.add_span_processor(SimpleSpanProcessor(raw_out))
+    with provider.get_tracer("test").start_as_current_span("memory.retrieve") as span:
+        span.set_attribute("memory.query.text", QUESTION)
+        span.add_event("exception", {"exception.message": "bad " + QUESTION})
+        span.set_status(Status(StatusCode.ERROR, "bad " + QUESTION))
+    (raw,) = raw_out.get_finished_spans()
+    (clean,) = filtered_out.get_finished_spans()
+    assert dict(raw.attributes) == {"memory.query.text": QUESTION}
+    assert dict(raw.events[0].attributes) == {"exception.message": "bad " + QUESTION}
+    assert raw.status.description == "bad " + QUESTION
+    assert dict(clean.attributes) == {"fi.span.kind": "RETRIEVER"}
+    assert dict(clean.events[0].attributes) == {"exception.message": "bad " + REDACTED}
+    assert clean.status.description == "bad " + REDACTED
+    assert clean.context == raw.context and clean.parent == raw.parent
+
+
+def test_filter_that_raises_still_exports_spans_without_content(
+    cognee_filter: Any, recorded: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("filter bug")
+
+    monkeypatch.setattr(cognee_filter.CogneeExportFilter, "_filtered", broken)
+    wire = filtered(cognee_filter, recorded)
+    assert [span["name"] for span in wire] == [span["name"] for span in recorded]
+    assert_no_content(wire)
+    for span in wire:
+        assert "events" not in span and "message" not in span.get("status", {})
+
+
+def test_filter_drops_a_span_it_cannot_strip(
+    cognee_filter: Any, recorded: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("filter bug")
+
+    monkeypatch.setattr(cognee_filter.CogneeExportFilter, "_filtered", broken)
+    monkeypatch.setattr(cognee_filter.CogneeExportFilter, "_stripped", broken)
+    assert filtered(cognee_filter, recorded) == []
+
+
+# --------------------------------------------------------------------------
+# README and requirements
+# --------------------------------------------------------------------------
+
+
 def test_readme_states_what_the_tests_check() -> None:
     readme = README.read_text(encoding="utf-8")
     app = APP.read_text(encoding="utf-8")
-    line = "provider.add_span_processor(BatchSpanProcessor())"
-    assert line in app and line in readme
+    for line in (
+        "exporter = CogneeExportFilter(HTTPSpanExporter())",
+        "provider.add_span_processor(BatchSpanProcessor(exporter))",
+    ):
+        assert line in app and line in readme, line
     for fact in (
         "cognee==1.6.2",
         "COGNEE_TRACING_ENABLED",
@@ -597,8 +932,11 @@ def test_readme_states_what_the_tests_check() -> None:
         "X-Secret-Key",
         "project_type=observe",
         "https://api.futureagi.com:443/tracer/v1/traces",
-        *CONTENT_KEYS[QUERY_MARKER],
-        *CONTENT_KEYS[ANSWER_MARKER],
+        "COGNEE_FI_CAPTURE_CONTENT=true",
+        "capture_content=True",
+        "fi.span.kind",
+        REDACTED,
+        *FILTERED_KEYS,
         *SPAN_KINDS,
     ):
         assert fact in readme, fact

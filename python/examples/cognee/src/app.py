@@ -5,13 +5,17 @@ Recipe example, not a package. Cognee 1.6.2 creates its spans itself when
 provider as the global OpenTelemetry provider before Cognee's first traced
 call, so Cognee attaches to that provider instead of creating its own
 (``setup_tracing`` in ``cognee/modules/observability/tracing.py``). It adds
-no instrumentor and never calls ``setup_tracing``.
+no instrumentor and never calls ``setup_tracing``. The Future AGI exporter is
+wrapped in ``CogneeExportFilter`` (``cognee_filter.py``, next to this file),
+which keeps Cognee's prompts, documents, answers and queries out of the
+export and marks search and LLM spans.
 
     COGNEE_TRACING_ENABLED=true python src/app.py "Who works on Lighthouse?"
 
 FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME and (optionally) FI_BASE_URL are
 read from the environment; so are Cognee's own LLM_* and EMBEDDING_*
-settings. See README.md.
+settings, and COGNEE_FI_CAPTURE_CONTENT=true to export content after all.
+See README.md.
 """
 
 from __future__ import annotations
@@ -22,7 +26,9 @@ import sys
 
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
-from fi_instrumentation.otel import BatchSpanProcessor
+from fi_instrumentation.otel import BatchSpanProcessor, HTTPSpanExporter
+
+from cognee_filter import CogneeExportFilter
 
 DOCUMENT = "Ada works on the Lighthouse project."
 
@@ -41,8 +47,10 @@ def init_tracing():
     # calls add_span_processor() on the global provider to attach its
     # in-memory buffer, which would silently drop the Future AGI exporter.
     # Adding the exporter again makes it a regular processor that Cognee's
-    # call leaves in place.
-    provider.add_span_processor(BatchSpanProcessor())
+    # call leaves in place. HTTPSpanExporter() reads FI_BASE_URL, FI_API_KEY
+    # and FI_SECRET_KEY like register()'s own exporter.
+    exporter = CogneeExportFilter(HTTPSpanExporter())
+    provider.add_span_processor(BatchSpanProcessor(exporter))
     return provider
 
 
