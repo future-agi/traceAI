@@ -285,6 +285,46 @@ def test_pending_context_sessions_are_bounded_and_released_on_end():
     assert len(processor._session_by_span) == 0
 
 
+def _limited_pipeline(max_span_attributes: int, config: TraceConfig = TraceConfig(), max_attribute_length=None):
+    from opentelemetry.sdk.trace import SpanLimits
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(
+        span_limits=SpanLimits(max_span_attributes=max_span_attributes, max_attribute_length=max_attribute_length),
+        shutdown_on_exit=False,
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    assert install_span_processor(provider, config=config) is True
+    return provider, exporter
+
+
+def test_normalizing_keeps_the_sdk_dropped_attribute_count():
+    """ReadableSpan.dropped_attributes (exported as dropped_attributes_count)
+    reads the BoundedAttributes counter; replacing the attributes must keep it."""
+    from opentelemetry.attributes import BoundedAttributes
+
+    provider, exporter = _limited_pipeline(2, TraceConfig(hide_inputs=True), max_attribute_length=64)
+    # The SDK keeps the two newest keys and counts "a" as dropped.
+    _emit(provider, {"a": 1, "b": 2, "gen_ai.input.messages": "secret"})
+    (span,) = exporter.get_finished_spans()
+    assert attrs(span) == {"b": 2}
+    assert span.dropped_attributes == 1
+    assert isinstance(span._attributes, BoundedAttributes)
+    assert (span._attributes.maxlen, span._attributes.max_value_len) == (2, 64)
+    with pytest.raises(TypeError):
+        span._attributes["late"] = "write"  # ended spans stay immutable
+
+
+def test_keys_the_processor_adds_count_against_span_limits():
+    provider, exporter = _limited_pipeline(2)
+    _emit(provider, {"x": 1, "gen_ai.operation.name": "chat"})  # full, nothing dropped yet
+    (span,) = exporter.get_finished_spans()
+    # Adding gen_ai.span.kind evicts the oldest key, as the SDK would, and
+    # the eviction is counted.
+    assert attrs(span) == {"gen_ai.operation.name": "chat", "gen_ai.span.kind": "LLM"}
+    assert span.dropped_attributes == 1
+
+
 def test_processor_only_adds_keys_by_default(pipeline):
     """Nothing AG2 set is stripped, including propagation-related keys."""
     provider, exporter = pipeline

@@ -186,7 +186,10 @@ Notes:
   compaction and uninstrumented sub-agent spend does not reach the trace.
 - Network trace propagation (`ag2.otel.traceparent`) is upstream. Apart from
   that usage move, the processor never removes attributes it did not hide by
-  request.
+  request, except under a span attribute limit: the processor keeps the
+  span's `BoundedAttributes` (limits and `dropped_attributes_count` carry
+  over), so on a span already at `max_span_attributes` (128 by default) a key
+  it adds evicts the oldest one and the drop is counted, as the SDK does.
 
 ## Troubleshooting
 

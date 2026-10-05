@@ -43,3 +43,7 @@
   that reset and is put back first. Installing on a provider that uses
   `ConcurrentMultiSpanProcessor` logs a warning (normalization before export
   is not guaranteed there).
+- Normalized spans keep the SDK's `BoundedAttributes` instead of a plain
+  dict, so `dropped_attributes_count` is no longer reset to 0 and the span's
+  attribute limits still apply (a key the processor adds to a full span
+  evicts the oldest one and is counted).

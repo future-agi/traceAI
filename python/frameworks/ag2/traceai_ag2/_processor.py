@@ -43,6 +43,7 @@ from typing import AbstractSet, Any, Dict, FrozenSet, Mapping, Optional, Set, Tu
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from fi_instrumentation.instrumentation.config import TraceConfig
 from fi_instrumentation.instrumentation.context_attributes import get_attributes_from_context
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
@@ -235,6 +236,29 @@ def _apply_trace_config(attributes: Dict[str, Any], config: TraceConfig) -> Dict
     return masked
 
 
+def _bounded_like(previous: Any, attributes: Dict[str, Any]) -> Any:
+    """Return ``attributes`` in the container the span already used.
+
+    The SDK keeps span attributes in ``BoundedAttributes``, and
+    ``ReadableSpan.dropped_attributes`` (exported as
+    ``dropped_attributes_count``) reads its ``dropped`` counter, which a plain
+    dict would reset to 0. The span's limits and immutability are kept and the
+    count is carried over. Keys this processor adds count against the same
+    ``max_span_attributes`` limit: when the span is full the oldest key is
+    evicted and counted, as the SDK does for ``set_attribute``.
+    """
+    if not isinstance(previous, BoundedAttributes):
+        return attributes
+    bounded = BoundedAttributes(
+        maxlen=previous.maxlen,
+        attributes=attributes,
+        immutable=getattr(previous, "_immutable", True),
+        max_value_len=previous.max_value_len,
+    )
+    bounded.dropped += previous.dropped
+    return bounded
+
+
 class AG2SpanProcessor(SpanProcessor):
     """Normalize AG2 ``TelemetryMiddleware`` spans before export.
 
@@ -331,7 +355,7 @@ class AG2SpanProcessor(SpanProcessor):
                 # ``ReadableSpan.attributes`` is a read-only view over
                 # ``_attributes``; every later processor and exporter in the
                 # chain receives this same object.
-                span._attributes = mapped  # type: ignore[attr-defined]
+                span._attributes = _bounded_like(span._attributes, mapped)  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover - defensive
             logger.debug("traceai-ag2: could not normalize span %r", getattr(span, "name", None), exc_info=True)
 
