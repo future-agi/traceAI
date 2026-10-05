@@ -31,6 +31,8 @@ _FAILED_RESULT_COUNT = "tavily.failed_result_count"
 _CANCELLED = "tavily.cancelled"
 _CANCELLATION_ERRORS = (asyncio.CancelledError, concurrent.futures.CancelledError)
 _REDACTED = "[redacted]"
+# What fi_instrumentation's hide_inputs writes in place of input.value.
+_HIDDEN = "__REDACTED__"
 _MAX_TEXT_BYTES = 1024
 
 
@@ -80,12 +82,22 @@ def _redact(text: str, keys: Sequence[str]) -> str:
     return text
 
 
-def _safe_text(text: str, keys: Optional[Sequence[str]]) -> Optional[str]:
-    """``text`` with every key redacted, then capped; None when keys are unknown."""
+def _scrub(text: str, keys: Sequence[str], hidden: Optional[str] = None) -> str:
+    """``text`` with every key redacted, then every ``hidden`` query replaced."""
+    text = _redact(text, keys)
+    if hidden:
+        text = text.replace(hidden, _HIDDEN)
+    return text
+
+
+def _safe_text(
+    text: str, keys: Optional[Sequence[str]], hidden: Optional[str] = None
+) -> Optional[str]:
+    """``text`` scrubbed (see ``_scrub``), then capped; None when keys are unknown."""
     if keys is None:
         return None
     # Redact first, then cap, so a key cut at the limit leaves no prefix.
-    return _cap(_redact(text, keys))
+    return _cap(_scrub(text, keys, hidden))
 
 
 def _cap(text: str, limit: int = _MAX_TEXT_BYTES) -> str:
@@ -125,9 +137,11 @@ def _count(result: Any, key: str) -> Optional[int]:
 class _Operation:
     """Span bookkeeping shared by the sync and async wrappers."""
 
-    def __init__(self, tracer: Any, method: str) -> None:
+    def __init__(self, tracer: Any, method: str, hide_inputs: bool = False) -> None:
         self._tracer = tracer
         self._method = method
+        # TraceConfig.hide_inputs: also keep the query out of error text.
+        self._hide_inputs = hide_inputs
         self._span_name = "tavily.{0}".format(method)
         # Signature of each wrapped function, read once.
         self._signatures: Dict[Any, inspect.Signature] = {}
@@ -210,7 +224,11 @@ class _Operation:
         _end(span)
 
     def _finish_error(
-        self, span: Span, error: BaseException, keys: Optional[Sequence[str]]
+        self,
+        span: Span,
+        error: BaseException,
+        keys: Optional[Sequence[str]],
+        query: Optional[str],
     ) -> None:
         try:
             if isinstance(error, _CANCELLATION_ERRORS):
@@ -218,34 +236,53 @@ class _Operation:
                 span.set_attribute(_CANCELLED, True)
                 span.set_status(Status(StatusCode.ERROR, "cancelled"))
             else:
-                self._record_error(span, error, keys)
+                self._record_error(span, error, keys, query)
         except Exception:
             logger.debug("Could not record the %s error", self._span_name, exc_info=True)
         _end(span)
 
+    def _hidden_query(
+        self, query: Optional[str], keys: Optional[Sequence[str]]
+    ) -> Optional[str]:
+        """The query to remove from error text: only with inputs hidden.
+
+        It is the query as it reads after the key is redacted, because the key
+        is removed from the text first. None when there is nothing to remove.
+        """
+        if not self._hide_inputs or not query or keys is None:
+            return None
+        return _redact(query, keys) or None
+
     def _record_error(
-        self, span: Span, error: BaseException, keys: Optional[Sequence[str]]
+        self,
+        span: Span,
+        error: BaseException,
+        keys: Optional[Sequence[str]],
+        query: Optional[str],
     ) -> None:
         name = type(error).__name__
         try:
-            message = _safe_text(str(error), keys)
+            hidden = self._hidden_query(query, keys)
+            message = _safe_text(str(error), keys, hidden)
         except Exception:
-            message = None
+            hidden, message = None, None
         description = name if message is None else _cap("{0}: {1}".format(name, message))
         try:
             span.set_status(Status(StatusCode.ERROR, description))
         except Exception:
             logger.debug("Could not set the %s status", self._span_name, exc_info=True)
         # The SDK copies str(error) and the traceback into the event; an error
-        # body can repeat the query, so the key is removed there too.
+        # body can repeat the query, so the key (and, with inputs hidden, the
+        # query) is removed there too.
         event: Optional[Dict[str, Any]] = None
         if keys is None or message is None:
             event = {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
-        elif keys:
+        elif keys or hidden:
             try:
-                stacktrace = _redact(
+                stacktrace = _scrub(
                     "".join(traceback.format_exception(type(error), error, error.__traceback__)),
                     keys,
+                    hidden,
                 )
             except Exception:
                 stacktrace = _REDACTED
@@ -301,7 +338,7 @@ class SyncWrapper(_Operation):
             result = wrapped(*args, **kwargs)
         except BaseException as error:
             _detach(token)
-            self._finish_error(span, error, keys)
+            self._finish_error(span, error, keys, query)
             raise
         _detach(token)
         self._finish_ok(span, result)
@@ -328,7 +365,7 @@ class AsyncWrapper(_Operation):
             result = await wrapped(*args, **kwargs)
         except BaseException as error:
             _detach(token)
-            self._finish_error(span, error, keys)
+            self._finish_error(span, error, keys, query)
             raise
         _detach(token)
         self._finish_ok(span, result)

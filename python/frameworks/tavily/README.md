@@ -159,16 +159,21 @@ Context attributes from `fi_instrumentation` (`using_session`, `using_user`,
   description, and `[redacted]` as the exception message.
 - **Hiding queries**: `FI_HIDE_INPUTS=true`, or
   `instrument(config=TraceConfig(hide_inputs=True))`, records `input.value` as
-  `__REDACTED__`. `config` must be a `fi_instrumentation.TraceConfig`; anything
-  else raises `TypeError`.
+  `__REDACTED__`. It also removes the query text from error messages: after the
+  key is redacted, each verbatim occurrence of the query in the error status
+  description and the exception event's message and stacktrace becomes
+  `__REDACTED__`. Other error text is recorded as thrown, with the key
+  redacted. `config` must be a `fi_instrumentation.TraceConfig`; anything else
+  raises `TypeError`.
 
 ## Errors and cancellation
 
 An exception from the call (tested with `InvalidAPIKeyError`,
 `BadRequestError`, `TavilyKeylessLimitError`, `requests.HTTPError` and
 `httpx.HTTPStatusError`) sets the span status to ERROR with
-`<ExceptionType>: <message>` (key redacted, 1 KB cap), records one exception
-event, and is re-raised unchanged. There is no retry.
+`<ExceptionType>: <message>` (key redacted, the query too when inputs are
+hidden, 1 KB cap), records one exception event, and is re-raised unchanged.
+There is no retry.
 
 Cancelling an `AsyncTavilyClient` call ends the span with status ERROR,
 description `cancelled`, and `tavily.cancelled` = `true`, without an exception

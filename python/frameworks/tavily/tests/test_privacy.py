@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Dict
 
 import pytest
 
@@ -152,6 +152,99 @@ def test_key_in_an_error_message_is_redacted_from_status_and_event(fake, mode):
     assert "[redacted]" in event.attributes["exception.stacktrace"]
     assert TAVILY_KEY not in _wire(traced)
     assert "tvly-" not in _wire(traced)
+
+
+PRIVATE = "private question"
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("hide", ["config", "env"])
+@pytest.mark.parametrize("keyed", [True, False], ids=["keyed", "keyless"])
+def test_hidden_inputs_remove_the_query_from_error_text(fake, monkeypatch, mode, hide, keyed):
+    """The fake's 400 repeats the query; with inputs hidden it must not leave."""
+    from fi_instrumentation import TraceConfig
+    from tavily import AsyncTavilyClient, BadRequestError, TavilyClient
+
+    api_key = TAVILY_KEY if keyed else None
+    query = "{0} {1}".format(ECHO_400, PRIVATE) + (" " + TAVILY_KEY if keyed else "")
+    options: Dict[str, Any] = {}
+    if hide == "config":
+        options["config"] = TraceConfig(hide_inputs=True)
+    else:
+        monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+
+    async def call_async() -> None:
+        client = AsyncTavilyClient(api_key=api_key, api_base_url=fake.origin)
+        try:
+            await client.search(query)
+        finally:
+            await client.close()
+
+    with instrumented(**options) as traced:
+        with pytest.raises(BadRequestError) as info:
+            if mode == "sync":
+                TavilyClient(api_key=api_key, api_base_url=fake.origin).search(query)
+            else:
+                asyncio.run(call_async())
+
+    assert str(info.value) == "Bad query: " + query  # unchanged for the caller
+    span = traced.one()
+    assert attrs(span)["input.value"] == "__REDACTED__"
+    assert span.status.description == "BadRequestError: Bad query: __REDACTED__"
+    (event,) = [event for event in span.events if event.name == "exception"]
+    assert event.attributes["exception.message"] == "Bad query: __REDACTED__"
+    assert "Bad query: __REDACTED__" in event.attributes["exception.stacktrace"]
+    wire = _wire(traced)
+    assert PRIVATE not in wire
+    assert "tvly-" not in wire
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_without_hidden_inputs_error_text_keeps_the_query(fake, mode):
+    from tavily import AsyncTavilyClient, BadRequestError, TavilyClient
+
+    query = "{0} {1}".format(ECHO_400, PRIVATE)
+
+    async def call_async() -> None:
+        client = AsyncTavilyClient(api_key=TAVILY_KEY, api_base_url=fake.origin)
+        try:
+            await client.search(query)
+        finally:
+            await client.close()
+
+    with instrumented() as traced:
+        with pytest.raises(BadRequestError):
+            if mode == "sync":
+                TavilyClient(api_key=TAVILY_KEY, api_base_url=fake.origin).search(query)
+            else:
+                asyncio.run(call_async())
+
+    span = traced.one()
+    assert attrs(span)["input.value"] == query
+    assert span.status.description == "BadRequestError: Bad query: " + query
+    (event,) = [event for event in span.events if event.name == "exception"]
+    assert event.attributes["exception.message"] == "Bad query: " + query
+    assert "Bad query: " + query in event.attributes["exception.stacktrace"]
+
+
+def test_hidden_inputs_leave_error_text_alone_for_an_empty_query():
+    """An empty query has nothing to remove; the error text stays readable."""
+    import requests
+    from fi_instrumentation import TraceConfig
+    from tavily import TavilyClient
+
+    # Nothing listens on port 1, so the call fails before any response.
+    client = TavilyClient(api_key=TAVILY_KEY, api_base_url="http://127.0.0.1:1")
+    with instrumented(config=TraceConfig(hide_inputs=True)) as traced:
+        with pytest.raises(requests.ConnectionError) as info:
+            client.search("")
+
+    span = traced.one()
+    assert span.status.description.startswith("ConnectionError: ")
+    assert "__REDACTED__" not in span.status.description
+    (event,) = [event for event in span.events if event.name == "exception"]
+    assert "__REDACTED__" not in event.attributes["exception.message"]
+    assert event.attributes["exception.message"] == str(info.value)[:1024]
 
 
 def test_query_is_capped_at_1024_utf8_bytes_on_a_character_boundary(fake):
