@@ -54,9 +54,14 @@ pytest.importorskip("opentelemetry.proto", reason="the harness decodes OTLP prot
 from _tavily_fake import CONTENT_MARKERS, TAVILY_KEY, FakeTavily  # noqa: E402
 from harness import Receiver, _flatten_attributes, run  # noqa: E402
 
+import fi_instrumentation  # noqa: E402
+
 TESTS = Path(__file__).resolve().parent
 PACKAGE = TESTS.parent
 PYTHON_ROOT = PACKAGE.parents[1]
+# Subprocesses import fi_instrumentation from where this process did: the
+# source tree in a repo run, the installed wheel in a published-release run.
+FI_ROOT = Path(fi_instrumentation.__file__).resolve().parents[1]
 LANGCHAIN_PACKAGE = PYTHON_ROOT / "frameworks" / "langchain"
 MEASUREMENT = TESTS / "measurement"
 FI_API_KEY = "placeholder-fi-api-key"
@@ -112,7 +117,7 @@ def measure(
                     [
                         str(PACKAGE),
                         str(LANGCHAIN_PACKAGE),
-                        str(PYTHON_ROOT),
+                        str(FI_ROOT),
                         os.environ.get("PYTHONPATH", ""),
                     ]
                 ),
