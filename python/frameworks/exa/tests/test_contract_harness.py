@@ -160,7 +160,11 @@ def test_real_client_calls_reach_the_collector_contract(fake_exa, monkeypatch):
     assert ok["fi.retrieval.query"] == "open telemetry retrieval"
     assert ok["input.value"] == "open telemetry retrieval"
     assert int(ok["fi.retrieval.document_count"]) == 2
-    assert ok_search.get("status", {}).get("code") in (None, "STATUS_CODE_OK", "STATUS_CODE_UNSET")
+    # register()'s processor also promotes UNSET to OK on export
+    # (fi_instrumentation/otel.py _auto_set_ok_status), so the wrapper's own
+    # OK is pinned by the in-memory tests (test_async_parity, test_streams).
+    assert ok_search["status"]["code"] == "STATUS_CODE_OK"
+    assert by_name["exa.answer"][0]["status"]["code"] == "STATUS_CODE_OK"
 
     answer = _flatten_attributes(by_name["exa.answer"][0]["attributes"])
     assert answer["fi.span.kind"] == "RETRIEVER"
