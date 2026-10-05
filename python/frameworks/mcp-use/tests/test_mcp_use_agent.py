@@ -467,3 +467,31 @@ def test_the_structured_output_formatting_call_has_no_span():
 
     assert asyncio.run(go()) == Sum(total=5)
     _assert_j1_tree(exporter.get_finished_spans())
+
+
+def test_callbacks_run_on_the_event_loop_thread():
+    # run_inline: LangChain would otherwise run each sync callback in an
+    # executor thread, where a cancelled run can end a parent before its
+    # child's start callback has finished.
+    import threading
+
+    exporter, provider = new_provider()
+    threads: List[int] = []
+
+    class Recording(FutureAGICallback):
+        def on_chain_start(self, *args: Any, **kwargs: Any) -> None:
+            threads.append(threading.get_ident())
+            super().on_chain_start(*args, **kwargs)
+
+        def on_chat_model_start(self, *args: Any, **kwargs: Any) -> None:
+            threads.append(threading.get_ident())
+            super().on_chat_model_start(*args, **kwargs)
+
+        def on_tool_start(self, *args: Any, **kwargs: Any) -> None:
+            threads.append(threading.get_ident())
+            super().on_tool_start(*args, **kwargs)
+
+    assert run_agent(add_script(), [Recording(tracer_provider=provider)]) == ANSWER
+    assert len(threads) >= 4
+    assert set(threads) == {threading.get_ident()}
+    _assert_j1_tree(exporter.get_finished_spans())
