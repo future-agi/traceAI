@@ -19,6 +19,7 @@ import shutil
 import socket
 import sys
 import threading
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
@@ -382,3 +383,58 @@ def test_abort_mid_stream_ends_spans_as_cancelled():
     # One iteration: LLM on the iteration span, no kind on the root.
     assert _attributes(spans[ITERATION_0])["gen_ai.span.kind"] == "LLM"
     assert "gen_ai.span.kind" not in _attributes(spans[ROOT])
+
+
+def _readme_recipe() -> str:
+    readme = (EXAMPLE / "README.md").read_text(encoding="utf-8")
+    section = readme.split("\n## The recipe\n", 1)[1].split("\n## ", 1)[0]
+    blocks = re.findall(r"```js\n(.*?)```", section, re.S)
+    assert len(blocks) == 1, blocks
+    return blocks[0]
+
+
+def test_readme_recipe_uses_the_recipe_middleware_and_bounded_flush():
+    code = _readme_recipe()
+    # Bare otelMiddleware has no span kinds and no root usage move, so Future
+    # AGI would count every call twice. An unguarded forceFlush() rejects
+    # when the collector is down and replaces the route's answer.
+    assert "futureAgiOtelMiddleware(" in code
+    assert "flushTraces(" in code
+    assert "otelMiddleware({" not in code
+    assert "forceFlush" not in code
+    assert "stream: false" not in code
+    imported = re.search(r"import \{([^}]*)\} from \"\./tracing\.mjs\"", code)
+    assert imported, code
+    tracing = (EXAMPLE / "src" / "tracing.mjs").read_text(encoding="utf-8")
+    for name in (n.strip() for n in imported.group(1).split(",") if n.strip()):
+        assert re.search(r"export (async )?(function|const) {0}\b".format(name), tracing), name
+
+
+def test_readme_recipe_runs_and_exports_the_contract_spans():
+    """Run the README snippet itself, saved next to src/tracing.mjs."""
+    script = EXAMPLE / "src" / ".readme-recipe-{0}.mjs".format(uuid.uuid4().hex)
+    script.write_text(
+        _readme_recipe()
+        + "\nconsole.log(await chatRoute(process.argv[2], { threadId: process.argv[3] }));\n",
+        encoding="utf-8",
+    )
+    try:
+        with Receiver() as receiver, FakeOpenAI(CITY, ANSWER) as fake:
+            result = _node(script, receiver.origin, fake, THREAD_ID)
+            spans = _by_name(receiver.spans())
+    finally:
+        script.unlink()
+    assert result.returncode == 0, result.stderr.decode()
+    assert ANSWER in result.stdout.decode()
+    # The snippet offers no tools, so the fake model answers in one call.
+    assert sorted(spans) == sorted([ROOT, ITERATION_0])
+    root = _attributes(spans[ROOT])
+    first = _attributes(spans[ITERATION_0])
+    assert "gen_ai.span.kind" not in root
+    assert first["gen_ai.span.kind"] == "LLM"
+    assert not [k for k in root if k.startswith(("gen_ai.usage.", "gen_ai.cost."))], root
+    assert root["tanstack.ai.root_usage.input_tokens"] == ANSWER_USAGE["prompt_tokens"]
+    assert first["gen_ai.usage.input_tokens"] == ANSWER_USAGE["prompt_tokens"]
+    for name, span in spans.items():
+        assert _attributes(span)["session.id"] == THREAD_ID, name
+    assert PROMPT not in json.dumps(list(spans.values()))

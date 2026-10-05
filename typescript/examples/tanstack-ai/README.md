@@ -36,27 +36,59 @@ drops a batch without `project_name`.
 
 ## The recipe
 
+Copy `src/tracing.mjs` into your app. It wraps TanStack AI's
+`otelMiddleware` (imported from the `@tanstack/ai/middlewares/otel` subpath,
+not from `@tanstack/ai`) with the Future AGI span kinds, the root usage move
+and the optional session, and registers the tracer provider with
+`@traceai/fi-core`. Do not pass a bare `otelMiddleware` to `chat()`: its root
+span repeats every model call's usage, so Future AGI would count it twice.
+A route then looks like this:
+
 ```js
-import { register, ProjectType } from "@traceai/fi-core";
-// Subpath import: otelMiddleware is not exported from "@tanstack/ai".
-import { otelMiddleware } from "@tanstack/ai/middlewares/otel";
+import { chat } from "@tanstack/ai";
+import { openaiChatCompletions } from "@tanstack/ai-openai";
+import {
+  flushTraces,
+  futureAgiOtelMiddleware,
+  registerFutureAgiTracing,
+} from "./tracing.mjs";
 
-const tracerProvider = register({
-  projectType: ProjectType.OBSERVE,
-  projectName: "my-chatbot",
-});
+// Once per process. register() reads FI_API_KEY, FI_SECRET_KEY, FI_BASE_URL.
+const tracerProvider = registerFutureAgiTracing();
 
-const middleware = otelMiddleware({
-  tracer: tracerProvider.getTracer("tanstack-ai"),
-  // captureContent defaults to false. Leave it unset.
-});
-
-// chat({ adapter, messages, middleware: [middleware] })
-// then, in the route's finally: await tracerProvider.forceFlush()
+export async function chatRoute(question, { threadId } = {}) {
+  // captureContent stays at its default of false.
+  const middleware = futureAgiOtelMiddleware(
+    tracerProvider.getTracer("tanstack-ai"),
+    { threadIdAsSession: Boolean(threadId) },
+  );
+  try {
+    // Read the stream to the end, even after RUN_ERROR, so the spans end
+    // and export. Do not use chat()'s non-streaming mode.
+    let text = "";
+    let runError = null;
+    for await (const chunk of chat({
+      adapter: openaiChatCompletions(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
+      messages: [{ role: "user", content: question }],
+      middleware: [middleware],
+      ...(threadId ? { threadId } : {}),
+    })) {
+      if (chunk.type === "RUN_ERROR") runError ??= chunk;
+      else if (chunk.type === "TEXT_MESSAGE_CONTENT") text += chunk.delta ?? "";
+    }
+    if (runError) throw new Error(runError.message);
+    return text;
+  } finally {
+    // Waits at most 2 s and never throws. A long-lived server can drop
+    // this flush: see Notes.
+    await flushTraces(tracerProvider);
+  }
+}
 ```
 
-`src/tracing.mjs` adds the span kinds and a flush that never throws.
-`src/chat.mjs` is the route.
+`src/chat.mjs` is the runnable version of this route, with a tool and a
+system prompt; it takes the tracer provider as an argument. The contract
+test runs this snippet as written.
 
 ## What is traced
 
@@ -140,6 +172,11 @@ PYTHONPATH="python/tests" uv run --no-project --python 3.11 \
   --noconftest -o addopts=''
 ```
 
+It also runs `tests/span_kinds.test.mjs` with `node --test` (span kinds,
+root usage move and session against fake spans and the pinned SDK span) and
+the snippet under "The recipe" as written.
+
 `tests/capture_content_on.mjs` is a test control that turns content capture
-on, to prove the no-content check would catch a leak. It is not part of the
-recipe.
+on, to prove the no-content check would catch a leak. `tests/timed_route.mjs`
+and `tests/abort_mid_stream.mjs` are fixtures for the flush bound and the
+abort case. None of them is part of the recipe.
