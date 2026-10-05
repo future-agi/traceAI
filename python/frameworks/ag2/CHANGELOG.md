@@ -27,3 +27,12 @@
   `using_attributes`, ...) now reach AG2 spans: `AG2SpanProcessor.on_start`
   copies `get_attributes_from_context()` without overriding keys AG2 sets,
   except `session.id`, where the context wins over `span_attributes`.
+- `TraceConfig` text flags now act on AG2 content. AG2 records messages as one
+  JSON string per span, which `TraceConfig.mask`'s `hide_input_text` /
+  `hide_output_text` rules never matched, so those flags used to leave content
+  in place. They now drop the whole input-side / output-side content
+  attributes (messages, system instructions, tool arguments/results,
+  human-input text), as `hide_inputs` / `hide_outputs` do;
+  `hide_input_messages` also drops `gen_ai.system_instructions`. The README
+  lists which flags apply; `hide_input_images` and `hide_embedding_vectors`
+  have nothing to act on.

@@ -122,8 +122,23 @@ or human-input text.
 setup(agent, tracer_provider=trace_provider, capture_content=True)  # opt in
 ```
 
-`TraceConfig(hide_inputs=True)` / `hide_outputs=True` (or `FI_HIDE_INPUTS` /
-`FI_HIDE_OUTPUTS`) still removes captured content in the span processor.
+With content on, `TraceConfig` (or the matching `FI_HIDE_*` variables) still
+removes it in the span processor. AG2 records message content as one JSON
+string per span (`gen_ai.input.messages`, `gen_ai.output.messages`), not as
+the per-message keys that `TraceConfig.mask`'s text and image rules match, so
+the processor drops whole attributes:
+
+| `TraceConfig` flag | Removed from AG2 spans |
+|---|---|
+| `hide_inputs`, `hide_input_text` | `gen_ai.input.messages`, `gen_ai.system_instructions`, `gen_ai.tool.call.arguments`, `ag2.human_input.prompt` |
+| `hide_outputs`, `hide_output_text` | `gen_ai.output.messages`, `gen_ai.tool.call.result`, `ag2.human_input.response` |
+| `hide_input_messages` | `gen_ai.input.messages`, `gen_ai.system_instructions` |
+| `hide_output_messages` | `gen_ai.output.messages` |
+| `hide_llm_invocation_parameters` | `gen_ai.request.parameters` (through `TraceConfig.mask`) |
+| `hide_input_images`, `hide_embedding_vectors` | Nothing: AG2 records only text parts (binary inputs are omitted) and no embeddings |
+
+The text flags cannot redact just the text inside the JSON, so they remove the
+whole message attribute, which is the privacy-safe choice.
 
 ## Conformance
 

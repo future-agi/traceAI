@@ -155,6 +155,65 @@ def test_later_setup_without_config_keeps_installed_config(caplog):
 # --- span shape, kinds, model, usage ----------------------------------------
 
 
+def test_text_hide_flags_remove_ag2_message_json():
+    """hide_input_text / hide_output_text act on AG2's real JSON-string content."""
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(
+        agent,
+        tracer_provider=provider,
+        capture_content=True,
+        config=TraceConfig(hide_input_text=True, hide_output_text=True),
+    )
+    ask(agent)
+    spans = exporter.get_finished_spans()
+    assert find(spans, "chat")
+    for span in spans:
+        assert_no_content(attrs(span), span.name)
+
+
+def test_hide_input_text_keeps_outputs():
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(agent, tracer_provider=provider, capture_content=True, config=TraceConfig(hide_input_text=True))
+    ask(agent)
+    spans = exporter.get_finished_spans()
+    (final_chat,) = find(spans, f"chat {MODEL}")
+    assert "gen_ai.input.messages" not in attrs(final_chat)
+    assert FINAL_ANSWER in attrs(final_chat)["gen_ai.output.messages"]
+    (tool,) = find(spans, "execute_tool")
+    assert "gen_ai.tool.call.arguments" not in attrs(tool)
+    assert attrs(tool)["gen_ai.tool.call.result"] == TOOL_RESULT
+
+
+def test_ag2_never_records_image_bytes():
+    """Why hide_input_images has nothing to act on: AG2 serialises only text
+    parts into gen_ai.input.messages, even with capture_content=True."""
+    from ag2 import Agent
+    from ag2.events import BinaryInput, TextInput
+    from ag2.testing import TestConfig
+
+    try:
+        from ag2.events import BinaryType
+
+        image = BinaryInput(b"\x89PNG-SECRET-PIXELS", type=BinaryType.IMAGE, media_type="image/png")
+    except Exception as exc:  # pragma: no cover - older BinaryInput signature
+        pytest.skip(f"cannot build an image BinaryInput on this ag2: {exc!r}")
+    provider, exporter = memory_provider()
+    agent = Agent("img_bot", config=TestConfig("seen"))
+    setup(agent, tracer_provider=provider, capture_content=True)
+
+    async def _run():
+        return await agent.ask(TextInput("describe"), image)
+
+    asyncio.run(_run())
+    (chat,) = find(exporter.get_finished_spans(), "chat")
+    assert "describe" in attrs(chat)["gen_ai.input.messages"]
+    for span in exporter.get_finished_spans():
+        for value in attrs(span).values():
+            assert "SECRET-PIXELS" not in str(value), span.name
+
+
 def test_one_tool_run_span_shape():
     provider, exporter = memory_provider()
     agent = weather_agent()

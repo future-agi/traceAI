@@ -323,6 +323,58 @@ def test_trace_config_hides_content_when_capture_was_on():
         assert kept[key] == value
 
 
+# AG2 records message content as JSON strings, not as the flattened
+# ``gen_ai.input.messages.{i}.message.content`` keys TraceConfig.mask's text
+# and image rules match, so those flags drop the whole JSON attribute.
+_AG2_CONTENT = {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "m",
+    "gen_ai.system_instructions": '[{"type": "text", "content": "be terse"}]',
+    "gen_ai.input.messages": '[{"content": "my secret prompt", "role": "user"}]',
+    "gen_ai.output.messages": '[{"content": "secret answer", "role": "assistant"}]',
+    "gen_ai.tool.call.arguments": '{"city": "Paris"}',
+    "gen_ai.tool.call.result": "sunny",
+    "ag2.human_input.prompt": "ok?",
+    "ag2.human_input.response": "yes",
+}
+_INPUT_TEXT_KEYS = {
+    "gen_ai.system_instructions",
+    "gen_ai.input.messages",
+    "gen_ai.tool.call.arguments",
+    "ag2.human_input.prompt",
+}
+_OUTPUT_TEXT_KEYS = {"gen_ai.output.messages", "gen_ai.tool.call.result", "ag2.human_input.response"}
+
+
+@pytest.mark.parametrize(
+    "flags, dropped",
+    [
+        ({"hide_input_text": True}, _INPUT_TEXT_KEYS),
+        ({"hide_output_text": True}, _OUTPUT_TEXT_KEYS),
+        ({"hide_inputs": True}, _INPUT_TEXT_KEYS),
+        ({"hide_outputs": True}, _OUTPUT_TEXT_KEYS),
+        ({"hide_input_messages": True}, {"gen_ai.input.messages", "gen_ai.system_instructions"}),
+        ({"hide_output_messages": True}, {"gen_ai.output.messages"}),
+        ({"hide_input_text": True, "hide_output_text": True}, _INPUT_TEXT_KEYS | _OUTPUT_TEXT_KEYS),
+    ],
+    ids=lambda v: "+".join(sorted(v)) if isinstance(v, dict) else None,
+)
+def test_trace_config_flags_on_ag2_json_content(flags, dropped):
+    got = normalize_attributes(_AG2_CONTENT, TraceConfig(**flags))
+    assert not dropped & set(got), sorted(dropped & set(got))
+    for key in set(_AG2_CONTENT) - dropped:
+        assert got[key] == _AG2_CONTENT[key], key
+
+
+@pytest.mark.parametrize("flag", ["hide_input_images", "hide_embedding_vectors"])
+def test_flags_with_nothing_to_act_on_leave_ag2_content(flag):
+    """AG2 records only text parts (binary inputs are omitted) and no
+    embeddings, so these flags change nothing."""
+    got = normalize_attributes(_AG2_CONTENT, TraceConfig(**{flag: True}))
+    for key, value in _AG2_CONTENT.items():
+        assert got[key] == value, key
+
+
 def test_trace_config_reads_env(monkeypatch):
     monkeypatch.setenv("FI_HIDE_INPUTS", "true")
     processor = AG2SpanProcessor()

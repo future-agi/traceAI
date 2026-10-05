@@ -15,8 +15,16 @@ does not create spans. On every span from AG2's instrumentation scope it only:
   ``output_tokens`` / ``total_tokens`` to ``ag2.usage.*`` so the trace total
   counts each model call once. ``aggregation`` and ``compaction`` usage keeps
   its promoted tokens: AG2 calls the model outside the middleware for those;
-* applies ``TraceConfig`` as a second content gate (``hide_inputs`` /
-  ``hide_outputs`` and the other ``TraceConfig.mask`` rules);
+* applies ``TraceConfig`` as a second content gate. AG2 records message
+  content as one JSON string per span, so ``hide_inputs`` /
+  ``hide_input_text`` drop every input-side content key (input messages,
+  system instructions, tool arguments, human-input prompt), ``hide_outputs`` /
+  ``hide_output_text`` every output-side one (output messages, tool result,
+  human-input response), and ``hide_input_messages`` /
+  ``hide_output_messages`` the message keys only. ``hide_input_images`` and
+  ``hide_embedding_vectors`` have nothing to act on (AG2 records neither);
+  ``hide_llm_invocation_parameters`` and ``base64_image_max_length`` apply
+  through ``TraceConfig.mask`` as usual;
 * in ``on_start``, copies traceAI context attributes (``using_session``,
   ``using_user``, ``using_metadata``, ``using_attributes``, ...) onto the span
   without overriding keys AG2 sets, except ``session.id``, where the context
@@ -68,14 +76,26 @@ USAGE_KEY_ALIASES: Mapping[str, str] = {
     "gen_ai.usage.thinking_tokens": "gen_ai.usage.reasoning.output_tokens",
 }
 
-# Content keys ``TraceConfig.mask`` does not know about. AG2 sets them only
-# when ``capture_content=True`` (telemetry.py lines 541, 555, 578, 588).
+# Content keys ``TraceConfig.mask`` does not fully cover. AG2 sets the tool
+# and human-input keys only when ``capture_content=True`` (telemetry.py lines
+# 541, 555, 578, 588 at 1.1.2) and records message content as one JSON string
+# per span (``gen_ai.input.messages`` line 477, ``gen_ai.output.messages`` line
+# 517), never as the flattened ``gen_ai.input.messages.{i}.message.content``
+# keys that ``mask``'s ``hide_input_text`` / ``hide_output_text`` /
+# ``hide_input_images`` rules match. So the text flags drop the whole JSON
+# attribute. ``gen_ai.system_instructions`` is not emitted by ag2 1.0.0-1.1.2;
+# it is listed so a later release that adds it is still hidden.
+_INPUT_MESSAGES = SpanAttributes.GEN_AI_INPUT_MESSAGES  # gen_ai.input.messages
+_OUTPUT_MESSAGES = SpanAttributes.GEN_AI_OUTPUT_MESSAGES  # gen_ai.output.messages
+_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
 _TOOL_ARGUMENTS = SpanAttributes.GEN_AI_TOOL_CALL_ARGUMENTS  # gen_ai.tool.call.arguments
 _TOOL_RESULT = SpanAttributes.GEN_AI_TOOL_CALL_RESULT  # gen_ai.tool.call.result
 _HUMAN_INPUT_PROMPT = "ag2.human_input.prompt"
 _HUMAN_INPUT_RESPONSE = "ag2.human_input.response"
-_INPUT_CONTENT_KEYS = (_TOOL_ARGUMENTS, _HUMAN_INPUT_PROMPT)
-_OUTPUT_CONTENT_KEYS = (_TOOL_RESULT, _HUMAN_INPUT_RESPONSE)
+_INPUT_MESSAGE_KEYS = (_INPUT_MESSAGES, _SYSTEM_INSTRUCTIONS)
+_OUTPUT_MESSAGE_KEYS = (_OUTPUT_MESSAGES,)
+_INPUT_CONTENT_KEYS = _INPUT_MESSAGE_KEYS + (_TOOL_ARGUMENTS, _HUMAN_INPUT_PROMPT)
+_OUTPUT_CONTENT_KEYS = _OUTPUT_MESSAGE_KEYS + (_TOOL_RESULT, _HUMAN_INPUT_RESPONSE)
 
 
 def span_kind_for(attributes: Mapping[str, Any]) -> Optional[str]:
@@ -180,12 +200,29 @@ def _demote_duplicate_usage(mapped: Dict[str, Any], instrumented_agents: Abstrac
             mapped.setdefault("ag2.usage." + key.rsplit(".", 1)[1], value)
 
 
-def _apply_trace_config(attributes: Dict[str, Any], config: TraceConfig) -> Dict[str, Any]:
-    hidden = set()
-    if config.hide_inputs:
+def _hidden_content_keys(config: TraceConfig) -> Set[str]:
+    """Keys the config hides on AG2 spans, beyond what ``TraceConfig.mask`` does.
+
+    * ``hide_inputs`` / ``hide_input_text``: every input-side text key
+      (input messages, system instructions, tool arguments, human prompt).
+    * ``hide_outputs`` / ``hide_output_text``: every output-side text key
+      (output messages, tool result, human response).
+    * ``hide_input_messages`` / ``hide_output_messages``: the message keys only.
+    """
+    hidden: Set[str] = set()
+    if config.hide_inputs or config.hide_input_text:
         hidden.update(_INPUT_CONTENT_KEYS)
-    if config.hide_outputs:
+    elif config.hide_input_messages:
+        hidden.update(_INPUT_MESSAGE_KEYS)
+    if config.hide_outputs or config.hide_output_text:
         hidden.update(_OUTPUT_CONTENT_KEYS)
+    elif config.hide_output_messages:
+        hidden.update(_OUTPUT_MESSAGE_KEYS)
+    return hidden
+
+
+def _apply_trace_config(attributes: Dict[str, Any], config: TraceConfig) -> Dict[str, Any]:
+    hidden = _hidden_content_keys(config)
 
     masked: Dict[str, Any] = {}
     for key, value in attributes.items():
