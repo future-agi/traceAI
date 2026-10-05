@@ -190,8 +190,9 @@ def test_tool_span_carries_only_the_kind(posted: dict[str, Any]) -> None:
 
 
 def test_resource_carries_the_project(posted: dict[str, Any]) -> None:
-    """fi-collector fails a batch whose resource has no project_name
-    (pkg/auth/stamp.go:31-45; the handler answers 400, server.go:461-464)."""
+    """On an authenticated request, fi-collector fails a batch whose resource
+    has no project_name (pkg/auth/stamp.go:31-46; the handler answers 400,
+    server.go:458-465)."""
     (request,) = posted["requests"]
     assert request["resource_attributes"] == [
         {"service.name": SERVICE_NAME, "project_name": PROJECT, "project_type": "observe"}
@@ -315,6 +316,25 @@ def test_readme_states_what_the_tests_check() -> None:
         "attributes_extra",
         "project_name",
         *UNKNOWN_KINDS[:2],
+    ):
+        assert fact in readme, fact
+
+
+def _readme_text() -> str:
+    """The README with line breaks and runs of spaces collapsed."""
+    return " ".join(README.read_text(encoding="utf-8").split())
+
+
+def test_readme_qualifies_the_project_name_rules() -> None:
+    """The 400 for a missing project_name needs an authenticated request, and
+    a project_name that does not resolve is dropped with a 200, not rejected.
+    The opt-in test_collector_project_name_rules reads the source lines."""
+    readme = _readme_text()
+    for fact in (
+        "On an authenticated request, fi-collector fails a batch whose resource has no `project_name` with HTTP 400",
+        "A collector with auth disabled skips this check",
+        "is created",
+        "the request is still answered 200",
     ):
         assert fact in readme, fact
 

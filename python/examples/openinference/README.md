@@ -41,8 +41,15 @@ post to it, or call the Python adapter. Ingestion is fi-collector's
 | `lookup_refund_policy` | `retrieve` | `openinference.span.kind=TOOL` |
 
 The resource carries `service.name`, `project_name` and
-`project_type=observe`. fi-collector fails a batch whose resource has no
-`project_name` with HTTP 400 (`pkg/auth/stamp.go:31-45`, `server.go:461-464`).
+`project_type=observe`. On an authenticated request, fi-collector fails a
+batch whose resource has no `project_name` with HTTP 400
+(`pkg/auth/stamp.go:31-46`, `server.go:458-465`). A collector with auth
+disabled skips this check (`server.go:458`, `stamp.go:19-21`). A
+`project_name` that is not yet a project in the key's workspace is created
+(`pkg/auth/auth.go:202-216`). One that still does not resolve, for example
+because that create failed, is not rejected: the spans under that resource
+are dropped and the request is still answered 200, with only a warning in
+the collector log (`stamp.go:57-85`, `server.go:466-468`).
 
 Kind values are posted exactly as OpenInference sets them, in upper case. The
 fixture sets no other key fi-collector reads a kind from (`fi.span.kind`,
