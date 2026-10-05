@@ -16,7 +16,11 @@ does not create spans. On every span from AG2's instrumentation scope it only:
   counts each model call once. ``aggregation`` and ``compaction`` usage keeps
   its promoted tokens: AG2 calls the model outside the middleware for those;
 * applies ``TraceConfig`` as a second content gate (``hide_inputs`` /
-  ``hide_outputs`` and the other ``TraceConfig.mask`` rules).
+  ``hide_outputs`` and the other ``TraceConfig.mask`` rules);
+* in ``on_start``, copies traceAI context attributes (``using_session``,
+  ``using_user``, ``using_metadata``, ``using_attributes``, ...) onto the span
+  without overriding keys AG2 sets, except ``session.id``, where the context
+  wins.
 
 Spans from any other instrumentation scope pass through untouched.
 """
@@ -26,10 +30,11 @@ from __future__ import annotations
 import logging
 import threading
 from collections import OrderedDict
-from typing import AbstractSet, Any, Dict, FrozenSet, Mapping, Optional, Set
+from typing import AbstractSet, Any, Dict, FrozenSet, Mapping, Optional, Set, Tuple
 
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from fi_instrumentation.instrumentation.config import TraceConfig
+from fi_instrumentation.instrumentation.context_attributes import get_attributes_from_context
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
@@ -141,6 +146,16 @@ _ALWAYS_DUPLICATE_USAGE_KINDS = frozenset({"model_call"})
 _SUBTASK_USAGE_KIND = "subtask"
 _USAGE_LABEL = "ag2.usage.label"
 _AGENT_NAME = "gen_ai.agent.name"
+_SESSION_ID = SpanAttributes.SESSION_ID  # session.id
+
+
+def _scope_name(span: Any) -> Optional[str]:
+    return getattr(getattr(span, "instrumentation_scope", None), "name", None)
+
+
+def _span_key(span: Any) -> Tuple[int, int]:
+    ctx = span.context
+    return (ctx.trace_id, ctx.span_id) if ctx is not None else (0, id(span))
 
 
 def _demote_duplicate_usage(mapped: Dict[str, Any], instrumented_agents: AbstractSet[str] = frozenset()) -> None:
@@ -200,6 +215,9 @@ class AG2SpanProcessor(SpanProcessor):
         self._shutdown = False
         self._max_tracked_traces = max(1, int(max_tracked_traces))
         self._agents_by_trace: "OrderedDict[int, Set[str]]" = OrderedDict()
+        # Context session ids of AG2 spans that started but have not ended.
+        self._max_pending_spans = 16 * self._max_tracked_traces
+        self._session_by_span: "OrderedDict[Tuple[int, int], Any]" = OrderedDict()
         self._lock = threading.Lock()
 
     def _note_agent(self, trace_id: int, attributes: Mapping[str, Any]) -> None:
@@ -222,21 +240,56 @@ class AG2SpanProcessor(SpanProcessor):
         with self._lock:
             return frozenset(self._agents_by_trace.get(trace_id, ()))
 
+    def update_config(self, config: TraceConfig) -> bool:
+        """Replace the ``TraceConfig`` applied to later spans; ``True`` if it changed."""
+        with self._lock:
+            if config == self._config:
+                return False
+            self._config = config
+            return True
+
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
-        return
+        """Copy traceAI context attributes (``using_session``, ``using_user``,
+        ``using_metadata``, ``using_attributes``, ...) onto AG2 spans.
+
+        A key AG2 already set is not overridden, and a key AG2 sets later wins,
+        except ``session.id``: a session from the context replaces one from
+        ``span_attributes`` (re-applied in ``on_end``).
+        """
+        if self._shutdown or _scope_name(span) != AG2_INSTRUMENTATION_SCOPE:
+            return
+        try:
+            context_attributes = dict(get_attributes_from_context())
+            if not context_attributes:
+                return
+            present = span.attributes or {}
+            for key, value in context_attributes.items():
+                if key == _SESSION_ID or key not in present:
+                    span.set_attribute(key, value)
+            session = context_attributes.get(_SESSION_ID)
+            if session is not None:
+                with self._lock:
+                    self._session_by_span[_span_key(span)] = session
+                    while len(self._session_by_span) > self._max_pending_spans:
+                        self._session_by_span.popitem(last=False)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("traceai-ag2: could not read context attributes for %r", getattr(span, "name", None), exc_info=True)
 
     def on_end(self, span: ReadableSpan) -> None:
         if self._shutdown:
             return
-        scope = getattr(getattr(span, "instrumentation_scope", None), "name", None)
-        if scope != AG2_INSTRUMENTATION_SCOPE:
+        if _scope_name(span) != AG2_INSTRUMENTATION_SCOPE:
             return
         try:
+            with self._lock:
+                session = self._session_by_span.pop(_span_key(span), None)
             current = dict(span.attributes or {})
             trace_id = span.context.trace_id if span.context is not None else 0
             self._note_agent(trace_id, current)
             agents = self._agents_in(trace_id) if current.get("ag2.usage.kind") == _SUBTASK_USAGE_KIND else frozenset()
             mapped = normalize_attributes(current, self._config, instrumented_agents=agents)
+            if session is not None:
+                mapped[_SESSION_ID] = session
             if mapped != current:
                 # ``ReadableSpan.attributes`` is a read-only view over
                 # ``_attributes``; every later processor and exporter in the

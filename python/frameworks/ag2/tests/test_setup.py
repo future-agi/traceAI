@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 
 import pytest
 from fi_instrumentation.instrumentation.config import TraceConfig
@@ -114,6 +115,43 @@ def test_trace_config_is_a_second_gate_when_content_is_on():
         assert_no_content(attrs(span), span.name)
 
 
+def test_later_setup_config_replaces_installed_processor_config(caplog):
+    """README path: setup(tracer_provider=...) first, then setup(agent, config=...).
+    The most recent explicit config wins and the change is logged."""
+    provider, exporter = memory_provider()
+    setup(tracer_provider=provider)
+    agent = weather_agent()
+    with caplog.at_level(logging.WARNING, logger="traceai_ag2"):
+        setup(
+            agent,
+            tracer_provider=provider,
+            capture_content=True,
+            config=TraceConfig(hide_inputs=True, hide_outputs=True),
+        )
+    assert any("TraceConfig" in r.getMessage() for r in caplog.records), caplog.text
+    chain = provider._active_span_processor._span_processors
+    assert sum(isinstance(p, AG2SpanProcessor) for p in chain) == 1
+    ask(agent)
+    spans = exporter.get_finished_spans()
+    assert spans
+    for span in spans:
+        assert_no_content(attrs(span), span.name)
+
+
+def test_later_setup_without_config_keeps_installed_config(caplog):
+    """config=None means "no change": a later setup() never re-exposes content."""
+    provider, exporter = memory_provider()
+    setup(tracer_provider=provider, config=TraceConfig(hide_inputs=True, hide_outputs=True))
+    agent = weather_agent()
+    with caplog.at_level(logging.WARNING, logger="traceai_ag2"):
+        setup(agent, tracer_provider=provider, capture_content=True)
+        setup(agent, tracer_provider=provider, config=TraceConfig(hide_inputs=True, hide_outputs=True))
+    assert not [r for r in caplog.records if "TraceConfig" in r.getMessage()], caplog.text
+    ask(agent)
+    for span in exporter.get_finished_spans():
+        assert_no_content(attrs(span), span.name)
+
+
 # --- span shape, kinds, model, usage ----------------------------------------
 
 
@@ -190,6 +228,75 @@ def test_app_can_stamp_session_through_span_attributes():
     assert spans
     for span in spans:
         assert attrs(span)["session.id"] == "sess-42", span.name
+
+
+def _ask_inside(agent, *context_managers):
+    from contextlib import ExitStack
+
+    async def _run():
+        with ExitStack() as stack:
+            for cm in context_managers:
+                stack.enter_context(cm)
+            return await agent.ask(USER_PROMPT)
+
+    return asyncio.run(_run())
+
+
+def test_using_session_sets_session_on_every_ag2_span():
+    from fi_instrumentation import using_session
+
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(agent, tracer_provider=provider)
+    _ask_inside(agent, using_session("sess-ctx-1"))
+    spans = exporter.get_finished_spans()
+    assert {s.name for s in spans} >= {"invoke_agent weather_bot", "execute_tool get_weather"}
+    for span in spans:
+        assert attrs(span).get("session.id") == "sess-ctx-1", span.name
+
+
+def test_using_attributes_context_reaches_ag2_spans():
+    from fi_instrumentation import using_attributes
+
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(agent, tracer_provider=provider)
+    _ask_inside(agent, using_attributes(session_id="s-1", user_id="u-1", metadata={"tenant": "acme"}, tags=["t1"]))
+    for span in exporter.get_finished_spans():
+        a = attrs(span)
+        assert a.get("session.id") == "s-1", span.name
+        assert a.get("user.id") == "u-1", span.name
+        assert "acme" in a.get("metadata", ""), span.name
+        assert list(a.get("tag.tags", ())) == ["t1"], span.name
+
+
+def test_context_session_wins_but_other_ag2_keys_are_not_overridden():
+    """session.id from using_session replaces a static span_attributes value;
+    any other key AG2 set itself is kept."""
+    from fi_instrumentation import using_session, using_user
+
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(agent, tracer_provider=provider, span_attributes={"session.id": "static", "user.id": "from-ag2"})
+    _ask_inside(agent, using_session("dynamic"), using_user("from-context"))
+    spans = exporter.get_finished_spans()
+    assert spans
+    for span in spans:
+        a = attrs(span)
+        assert a["session.id"] == "dynamic", span.name
+        assert a["user.id"] == "from-ag2", span.name
+
+
+def test_context_attributes_skip_foreign_scope_spans():
+    from fi_instrumentation import using_session
+
+    provider, exporter = memory_provider()
+    setup(tracer_provider=provider)
+    with using_session("sess-ctx-1"):
+        with provider.get_tracer("some.other.instrumentation").start_as_current_span("other"):
+            pass
+    (span,) = exporter.get_finished_spans()
+    assert "session.id" not in attrs(span)
 
 
 # --- AC-06 errors and cancellation -------------------------------------------

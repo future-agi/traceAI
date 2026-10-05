@@ -19,3 +19,11 @@
 - Requires `fi-instrumentation-otel>=1.1.0` (was `>=1.0.0`): published 1.0.0
   crashes in `register()` with `opentelemetry-exporter-otlp-proto-http` 1.45.0
   (`AttributeError: 'HTTPSpanExporter' object has no attribute '_headers'`).
+- A later `setup(..., config=...)` on a provider that already has an
+  `AG2SpanProcessor` now replaces that processor's `TraceConfig` (most recent
+  call wins, warning logged when it changes) instead of being ignored;
+  `config=None` keeps the installed config.
+- traceAI context helpers (`using_session`, `using_user`, `using_metadata`,
+  `using_attributes`, ...) now reach AG2 spans: `AG2SpanProcessor.on_start`
+  copies `get_attributes_from_context()` without overriding keys AG2 sets,
+  except `session.id`, where the context wins over `span_attributes`.

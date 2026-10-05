@@ -268,6 +268,21 @@ def test_agent_name_map_is_bounded():
     assert [set(v) for v in processor._agents_by_trace.values()] == [{"b"}, {"c"}]
 
 
+def test_pending_context_sessions_are_bounded_and_released_on_end():
+    from fi_instrumentation import using_session
+
+    processor = AG2SpanProcessor(config=TraceConfig(), max_tracked_traces=1)
+    provider = TracerProvider()
+    provider.add_span_processor(processor)
+    tracer = provider.get_tracer(AG2_INSTRUMENTATION_SCOPE)
+    with using_session("s"):
+        open_spans = [tracer.start_span(f"s{i}") for i in range(40)]
+    assert len(processor._session_by_span) == processor._max_pending_spans == 16
+    for span in open_spans:
+        span.end()
+    assert len(processor._session_by_span) == 0
+
+
 def test_processor_only_adds_keys_by_default(pipeline):
     """Nothing AG2 set is stripped, including propagation-related keys."""
     provider, exporter = pipeline

@@ -79,7 +79,10 @@ def install_span_processor(
     """Install :class:`AG2SpanProcessor` ahead of the provider's exporters.
 
     Returns ``True`` when installed, ``False`` when the provider has no span
-    processor chain or already has an ``AG2SpanProcessor``.
+    processor chain or already has an ``AG2SpanProcessor``. In the latter case
+    an explicit ``config`` replaces the installed processor's ``TraceConfig``
+    (the most recent call wins) and a warning is logged when it changes;
+    ``config=None`` leaves the installed config as it is.
 
     The processor is prepended to the active multi-processor rather than added
     with ``add_span_processor``: the provider returned by
@@ -102,15 +105,23 @@ def install_span_processor(
     if lock is not None:
         with lock:
             existing = tuple(active._span_processors)
-            if any(isinstance(p, AG2SpanProcessor) for p in existing):
-                return False
-            active._span_processors = (processor,) + existing
+            installed = next((p for p in existing if isinstance(p, AG2SpanProcessor)), None)
+            if installed is None:
+                active._span_processors = (processor,) + existing
     else:  # pragma: no cover - SDK multi-processors always carry a lock
         existing = tuple(active._span_processors)
-        if any(isinstance(p, AG2SpanProcessor) for p in existing):
-            return False
-        active._span_processors = (processor,) + existing
-    return True
+        installed = next((p for p in existing if isinstance(p, AG2SpanProcessor)), None)
+        if installed is None:
+            active._span_processors = (processor,) + existing
+    if installed is None:
+        return True
+    if config is not None and installed.update_config(config):
+        logger.warning(
+            "traceai-ag2: an AG2SpanProcessor was already installed on this provider; "
+            "its TraceConfig is now replaced by the one from the latest call: %r",
+            config,
+        )
+    return False
 
 
 def _has_telemetry_middleware(agent: Any) -> bool:
@@ -154,10 +165,15 @@ def setup(
         capture_content: Forwarded to ``TelemetryMiddleware``. Defaults to
             ``False``, overriding AG2's upstream default of ``True``.
         provider_name, model_name, span_attributes, max_tool_result_chars:
-            Forwarded to ``TelemetryMiddleware``. ``span_attributes`` is how an
-            app stamps ``session.id`` on every span; AG2 emits no session id.
+            Forwarded to ``TelemetryMiddleware``. ``span_attributes`` is one
+            way to stamp ``session.id`` on every span (AG2 emits no session
+            id); traceAI's ``using_session`` context takes precedence.
         config: ``TraceConfig`` applied by the span processor as a second
             content gate. Defaults to ``TraceConfig()`` (reads ``FI_HIDE_*``).
+            One processor serves the whole provider: when it is already
+            installed, an explicit ``config`` replaces its config (the most
+            recent call wins, with a warning when it changes) and
+            ``config=None`` keeps the installed one.
 
     Returns:
         The tracer provider in use. Short scripts call ``force_flush()`` on it

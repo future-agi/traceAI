@@ -87,7 +87,23 @@ worker = Agent("worker", config=cfg, middleware=[mw])
 
 Call `setup(tracer_provider=trace_provider)` once in that case too, so the span
 processor is installed. `setup` is idempotent: an agent that already has a
-`TelemetryMiddleware` is skipped.
+`TelemetryMiddleware` is skipped. One `AG2SpanProcessor` serves the provider:
+a later `setup(..., config=TraceConfig(...))` replaces its `TraceConfig` (the
+most recent call wins and a warning is logged when it changes), while
+`config=None` keeps the current one.
+
+Sessions and users come from traceAI's context helpers, as with the other
+traceAI integrations:
+
+```python
+from fi_instrumentation import using_attributes, using_session
+
+with using_session("chat-123"):
+    reply = await agent.ask("Hello")  # every AG2 span gets session.id="chat-123"
+
+with using_attributes(session_id="chat-123", user_id="user-7", metadata={"tier": "pro"}):
+    reply = await agent.ask("Hello")
+```
 
 `provider_name` is never invented. Pass it if you want it on every span;
 otherwise AG2 fills it from the model response when the client reports one.
@@ -117,8 +133,8 @@ setup(agent, tracer_provider=trace_provider, capture_content=True)  # opt in
 | Model | `gen_ai.request.model`, `gen_ai.response.model` pass through | When AG2 did not set them |
 | Provider | `gen_ai.provider.name` from `provider_name` or the model response | When neither is known |
 | Tokens | `gen_ai.usage.input_tokens` / `output_tokens` pass through; cache and thinking tokens are aliased and kept | When the usage field is zero/absent. Cost is not emitted |
-| Session | Not emitted by AG2 | Set it yourself: `setup(..., span_attributes={"session.id": "..."})` |
-| User | Not emitted | Always |
+| Session | Not emitted by AG2. `session.id` from traceAI's `using_session` / `using_attributes` context, which wins over a static value; or set it yourself: `setup(..., span_attributes={"session.id": "..."})` | When neither is set |
+| User, metadata, tags | `user.id`, `metadata`, `tag.tags` (and the other traceAI context keys) from `using_user` / `using_metadata` / `using_tags` / `using_attributes`; a key AG2 or `span_attributes` already set is not overridden | When the context does not set them |
 | Tools | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`; arguments/result only with `capture_content=True` | |
 | Errors | OTel status `ERROR` on failing tool / model / agent spans | |
 
