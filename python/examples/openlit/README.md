@@ -3,10 +3,13 @@
 There is no traceAI package for OpenLIT and no OpenLIT adapter in Future
 AGI. OpenLIT already exports OTLP/HTTP. This example points `openlit.init()`
 at fi-collector, passes the Future AGI keys as OTLP headers, puts the
-project on the resource with `OTEL_RESOURCE_ATTRIBUTES`, and turns content
-capture, metrics, events and OpenLIT's price download off. It adds no
-mapping of its own: the key inventory below lists what OpenLIT sent and
-which of those keys fi-collector reads.
+project on the resource with `OTEL_RESOURCE_ATTRIBUTES`, and turns off
+metrics, events, OpenLIT's price download and its message capture. With
+message capture off, the prompt and the answer are not exported, but
+model-generated tool-call arguments, the `user` argument and error bodies
+still are (see "Privacy"). The recipe adds no mapping or filtering of its
+own: the key inventory below lists what OpenLIT sent and which of those keys
+fi-collector reads.
 
 Pinned: `openlit` 1.45.0. Its wheel METADATA declares `License: Apache-2.0`
 and the OSI Apache classifier, ships the Apache 2.0 text, and declares
@@ -262,8 +265,10 @@ Not sent (tested): `gen_ai.usage.total_tokens`, `gen_ai.system`, and every
 key fi-collector reads a span kind from: `fi.span.kind`, `gen_ai.span.kind`,
 `llm.request.type`, `openinference.span.kind`
 (`exporter/clickhouse25exporter/converter.go:79-84`). No span events were
-sent. Tool calls, streaming, embeddings and errors were not exercised, so
-their keys are not in this inventory.
+sent. A tool call adds `gen_ai.tool.name`, `gen_ai.tool.call.id` and
+`gen_ai.tool.args`, and a failed call adds `error.type`, two `exception`
+events and an error status; "Privacy" covers them because they are sent
+with content off (tested). Streaming and embeddings were not exercised.
 
 ## What Future AGI shows
 
@@ -313,7 +318,8 @@ carries `gen_ai.input.messages` (system prompt and question),
 `gen_ai.output.messages` (the answer) and `gen_ai.system_instructions`
 (tested). The recipe passes `False`, and the test finds none of those keys,
 no span events, and none of the question, answer or system-prompt text
-anywhere in the export.
+anywhere in the export. The switch covers those messages only. The list
+below is what it does not cover; the recipe filters nothing.
 
 `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false` turns content off
 even when `init()` is called with `True` (tested; `__init__.py:410-414`).
@@ -323,6 +329,33 @@ read from source).
 
 Not covered by the content switch:
 
+- Tool calls. When the request passes `tools` and the model answers with
+  tool calls, the model-call span carries `gen_ai.tool.name`,
+  `gen_ai.tool.call.id` and `gen_ai.tool.args`, the arguments the model
+  generated, verbatim (`instrumentation/openai/utils.py:1524-1551`, before
+  the content check at `:1616`). Those arguments often repeat what the user
+  typed: an email address, an order number. The test plants an email address
+  in the fake model's tool-call arguments and finds it in `gen_ai.tool.args`
+  (`tests/tool_call.py`). The Responses API sets the same keys
+  (`utils.py:991-1022`; not tested).
+- `user`. The `user` argument of `chat.completions.create()` is sent as
+  `gen_ai.request.user` (`utils.py:1484-1487`). The test passes an email
+  address and finds it there. Without the argument the key is an empty
+  string.
+- Errors. When the OpenAI call raises, OpenLIT records the exception on the
+  model-call span (`instrumentation/openai/openai.py:186-209`,
+  `utils.py:77-84`) and re-raises inside `start_as_current_span`, whose
+  context manager records it again and sets the span status
+  (`opentelemetry-api` 1.45.0 `trace/__init__.py:609-622`, called from
+  `opentelemetry-sdk` `trace/__init__.py:1130-1136`). So a failed call
+  carries two `exception` events, each with `exception.message` and
+  `exception.stacktrace`, and the same text as the status description,
+  `status.message`. The `openai` SDK puts the whole error response body in
+  that text (`openai/_base_client.py:430-435`). Tested with a fake 500 and
+  `max_retries=0` (`tests/failed_call.py`): the fake's error body appeared
+  in all three places, and no prompt or answer text did. An
+  OpenAI-compatible server or proxy behind `OPENAI_BASE_URL` whose error
+  bodies echo the request would put prompt text there (not tested).
 - `@openlit.trace` records the decorated function's arguments
   (`function.args`, `function.kwargs`) and its return value
   (`gen_ai.output.messages`) whatever the switch says
@@ -333,8 +366,15 @@ Not covered by the content switch:
 - OpenLIT's Firecrawl instrumentor ignores the switch (see "Firecrawl").
 - With traceai-openai also enabled, its span carries the prompt and the
   answer whatever OpenLIT's switch says (tested; see "traceai-openai").
-- When an instrumented call raises, OpenLIT records the exception, message
-  included, on the span (`__helpers.py:492-502`; not tested).
+
+If your tool arguments or `user` values can carry personal data, choose one:
+
+- Turn OpenLIT's OpenAI instrumentor off with
+  `disabled_instrumentors=["openai"]`. OpenLIT then makes no model-call span,
+  so none of the tool, `user` or error keys above is recorded by it (tested
+  with traceai-openai enabled; see "traceai-openai"). The httpx `POST` span
+  and its `http.url` stay.
+- Or accept that these keys reach Future AGI.
 
 No Future AGI key, secret or OpenAI key appears in any exported span or
 resource, or in the app's output (tested).

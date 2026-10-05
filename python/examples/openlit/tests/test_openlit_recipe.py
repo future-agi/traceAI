@@ -36,6 +36,8 @@ APP = RECIPE_DIR / "src" / "app.py"
 README = RECIPE_DIR / "README.md"
 VARIANT = TESTS_DIR / "recipe_variant.py"
 TRACED_FUNCTION = TESTS_DIR / "traced_function.py"
+TOOL_CALL_SCRIPT = TESTS_DIR / "tool_call.py"
+FAILED_CALL = TESTS_DIR / "failed_call.py"
 GUARD = TESTS_DIR / "_guarded_run.py"
 GUARD_PROBE = TESTS_DIR / "_guard_probe.py"
 
@@ -56,6 +58,26 @@ QUESTION = "QMARK7c1e what is the refund window?"
 ANSWER = "AMARK5d2b refunds are accepted for 30 days."
 POLICY = "Refunds are accepted within 30 days of purchase."
 CONTENT_MARKERS = ("QMARK7c1e", "AMARK5d2b", POLICY)
+
+# Markers that DO reach the export with content off; README.md, Privacy,
+# lists them as exceptions. A tool call whose generated arguments carry an
+# email, the caller's ``user`` parameter, and a server error body.
+TOOL_ARGS_MARKER = "TMARK3f9a"
+TOOL_CALL = {
+    "id": "call_fake0001",
+    "name": "lookup_order",
+    "arguments": json.dumps({"email": TOOL_ARGS_MARKER + "@example.com"}),
+}
+END_USER = "UMARK8e4c@example.com"
+ERROR_MARKER = "EMARK41d7"
+ERROR_BODY = {
+    "error": {
+        "message": ERROR_MARKER + " The server had an error processing your request.",
+        "type": "server_error",
+        "param": None,
+        "code": None,
+    }
+}
 
 LLM_SPAN = "chat gpt-4o-mini"
 HTTP_SPAN = "POST"
@@ -209,17 +231,32 @@ def _guard_attempts(guard_log: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in guard_log.read_text().splitlines()]
 
 
-def _run_script(tmp_path: Path, script: Path, **overrides: Optional[str]) -> dict[str, Any]:
-    """Run one script under the loopback guard; return everything the tests read."""
+def _launch(
+    tmp_path: Path, script: Path, endpoint: str, fake: FakeOpenAI, **overrides: Optional[str]
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Run one script under the loopback guard; return its result and the guard log."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     guard_log = tmp_path / "guard.jsonl"
-    with Receiver() as receiver, FakeOpenAI(ANSWER) as fake:
-        env = _child_env(tmp_path, guard_log, receiver.origin, fake.base_url, **overrides)
-        result = run(
-            [sys.executable, str(GUARD), str(script), QUESTION],
-            env=env,
-            stdin=None,
-            timeout=RUN_TIMEOUT_SECONDS,
+    env = _child_env(tmp_path, guard_log, endpoint, fake.base_url, **overrides)
+    result = run(
+        [sys.executable, str(GUARD), str(script), QUESTION],
+        env=env,
+        stdin=None,
+        timeout=RUN_TIMEOUT_SECONDS,
+    )
+    return result, _guard_attempts(guard_log)
+
+
+def _run_script(
+    tmp_path: Path, script: Path, fake: Optional[dict[str, Any]] = None, **overrides: Optional[str]
+) -> dict[str, Any]:
+    """Run one script against a Receiver; return everything the tests read.
+
+    ``fake`` holds extra FakeOpenAI arguments (``tool_call``, ``error``).
+    """
+    with Receiver() as receiver, FakeOpenAI(ANSWER, **(fake or {})) as fake_openai:
+        result, guard_attempts = _launch(
+            tmp_path, script, receiver.origin, fake_openai, **overrides
         )
         record = {
             "result": result,
@@ -227,10 +264,10 @@ def _run_script(tmp_path: Path, script: Path, **overrides: Optional[str]) -> dic
             "stderr": result.stderr.decode("utf-8", "replace"),
             "requests": receiver.requests(),
             "spans": receiver.spans(),
-            "model_requests": list(fake.requests),
-            "model_authorizations": list(fake.authorizations),
+            "model_requests": list(fake_openai.requests),
+            "model_authorizations": list(fake_openai.authorizations),
+            "guard_attempts": guard_attempts,
         }
-    record["guard_attempts"] = _guard_attempts(guard_log)
     return record
 
 
@@ -292,6 +329,17 @@ def _export_dump(record: dict[str, Any]) -> str:
         },
         sort_keys=True,
     )
+
+
+def _keys_carrying(record: dict[str, Any], marker: str) -> set[str]:
+    """Span attribute, event attribute and status keys whose value contains ``marker``."""
+    keys: set[str] = set()
+    for span in record["spans"]:
+        for attributes in [_attrs(span)] + [_attrs(event) for event in span.get("events", [])]:
+            keys |= {key for key, value in attributes.items() if marker in str(value)}
+        if marker in span.get("status", {}).get("message", ""):
+            keys.add("status.message")
+    return keys
 
 
 def _assert_ran(record: dict[str, Any]) -> None:
@@ -568,6 +616,90 @@ def test_trace_decorator_ignores_the_content_switch(tmp_path: Path) -> None:
     assert spans[LLM_SPAN]["parentSpanId"] == spans["support_request"]["spanId"]
 
 
+# The next tests prove the exceptions README.md lists under Privacy. They
+# show what still leaks with content off; they are not privacy guarantees.
+
+
+@pytest.fixture(scope="module")
+def tool_call_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    record = _run_script(
+        tmp_path_factory.mktemp("tool_call"),
+        TOOL_CALL_SCRIPT,
+        fake={"tool_call": TOOL_CALL},
+        RECIPE_USER=END_USER,
+    )
+    _assert_ran(record)
+    return record
+
+
+def test_content_off_still_exports_the_models_tool_calls(tool_call_run: dict[str, Any]) -> None:
+    """Tool name, call ID and the model's generated arguments (utils.py:1524-1551)."""
+    request = tool_call_run["model_requests"][0]
+    assert [tool["function"]["name"] for tool in request["tools"]] == [TOOL_CALL["name"]]
+    assert tool_call_run["stdout"].strip() == TOOL_CALL["name"]
+    llm = _attrs(_by_name(tool_call_run["spans"])[LLM_SPAN])
+    assert llm["gen_ai.tool.name"] == TOOL_CALL["name"]
+    assert llm["gen_ai.tool.call.id"] == TOOL_CALL["id"]
+    # The arguments arrive verbatim, planted email included.
+    assert llm["gen_ai.tool.args"] == TOOL_CALL["arguments"]
+    assert TOOL_ARGS_MARKER in llm["gen_ai.tool.args"]
+    # The messages themselves stay out.
+    assert not CONTENT_KEYS & set(llm)
+    dump = _export_dump(tool_call_run)
+    for marker in CONTENT_MARKERS:
+        assert marker not in dump, marker
+
+
+def test_content_off_still_exports_the_request_user(tool_call_run: dict[str, Any]) -> None:
+    """The ``user`` argument goes to gen_ai.request.user (utils.py:1484-1487)."""
+    assert tool_call_run["model_requests"][0]["user"] == END_USER
+    llm = _attrs(_by_name(tool_call_run["spans"])[LLM_SPAN])
+    assert llm["gen_ai.request.user"] == END_USER
+
+
+@pytest.fixture(scope="module")
+def failed_call_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    record = _run_script(
+        tmp_path_factory.mktemp("failed_call"),
+        FAILED_CALL,
+        fake={"error": (HTTPStatus.INTERNAL_SERVER_ERROR, ERROR_BODY)},
+    )
+    _assert_ran(record)
+    return record
+
+
+def test_failed_call_records_the_error_body_but_no_content(failed_call_run: dict[str, Any]) -> None:
+    """OpenLIT records the exception, then the SDK's span context records it again."""
+    assert failed_call_run["stdout"].strip() == "raised InternalServerError 500"
+    assert len(failed_call_run["model_requests"]) == 1  # max_retries=0
+    spans = _by_name(failed_call_run["spans"])
+    assert set(spans) == {LLM_SPAN, HTTP_SPAN}
+    llm = spans[LLM_SPAN]
+    # openai.py:186-209 -> utils.py:77-84, then opentelemetry-api use_span.
+    events = llm.get("events", [])
+    assert [event["name"] for event in events] == ["exception", "exception"]
+    for event in events:
+        attributes = _attrs(event)
+        assert attributes["exception.type"] == "openai.InternalServerError"
+        # The openai SDK puts the whole response body in the message.
+        assert attributes["exception.message"] == "Error code: 500 - {0}".format(ERROR_BODY)
+        assert attributes["exception.message"] in attributes["exception.stacktrace"]
+    assert llm["status"]["code"] == "STATUS_CODE_ERROR"
+    assert llm["status"]["message"] == "InternalServerError: Error code: 500 - {0}".format(
+        ERROR_BODY
+    )
+    assert _attrs(llm)["error.type"] == "InternalServerError"
+    assert _keys_carrying(failed_call_run, ERROR_MARKER) == {
+        "exception.message",
+        "exception.stacktrace",
+        "status.message",
+    }
+    # The fake's error body echoes no input, so no prompt or answer text arrives.
+    dump = _export_dump(failed_call_run)
+    for marker in CONTENT_MARKERS:
+        assert marker not in dump, marker
+
+
 def test_rejected_export_is_logged_and_the_app_still_exits_zero(tmp_path: Path) -> None:
     """fi-collector answers 401 without valid keys; OpenLIT only logs it."""
     result, calls, guard_attempts = _run_against_recorder(
@@ -663,6 +795,24 @@ def test_readme_key_inventory_matches_the_emitted_keys() -> None:
     section = _readme_section("Key inventory")
     listed = set(re.findall(r"^\| `([a-z_.]+)` \|", section, flags=re.MULTILINE))
     assert listed == LLM_SPAN_KEYS | CONTENT_KEYS | HTTP_SPAN_KEYS
+
+
+def test_readme_privacy_names_what_content_off_still_exports(
+    tool_call_run: dict[str, Any], failed_call_run: dict[str, Any]
+) -> None:
+    """Each key a tool call adds, and each key a planted marker reached, is listed."""
+    privacy = _readme_section("Privacy")
+    not_covered = privacy[privacy.index("Not covered by the content switch") :]
+    tool_llm = _attrs(_by_name(tool_call_run["spans"])[LLM_SPAN])
+    exported = (
+        (set(tool_llm) - LLM_SPAN_KEYS)
+        | _keys_carrying(tool_call_run, TOOL_ARGS_MARKER)
+        | _keys_carrying(tool_call_run, END_USER)
+        | _keys_carrying(failed_call_run, ERROR_MARKER)
+    )
+    assert {"gen_ai.tool.args", "gen_ai.request.user", "exception.message"} <= exported
+    missing = sorted(key for key in exported if "`{0}`".format(key) not in not_covered)
+    assert missing == [], "not listed in README Privacy: {0}".format(missing)
 
 
 def _collector_aliases() -> dict[str, Any]:
