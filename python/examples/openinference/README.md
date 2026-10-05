@@ -117,9 +117,14 @@ what is stored. They check:
   without error and arrive unchanged. The `Receiver` never reads a kind, so
   this checks only the body; the collector side is the source reading above;
 - that `post_otlp()` refuses non-loopback endpoints before opening a
-  connection (the control for the only network path), that no
-  `openinference` or `tracer` module was imported, and that the fixture holds
-  no key material. The harness sends no auth header and no key is used.
+  connection (the control for the only network path), and that the fixture
+  holds no key material. The harness sends no auth header and no key is used;
+- that no `.py` file in this example, nor the harness, imports
+  `openinference` or `tracer`. This is read from the source with `ast`, with
+  a control, so it also catches an import that never runs. A second check
+  finds no such module loaded after a post. The command below installs
+  neither package, so only the source scan can fail here; the run-time check
+  is for an environment that has them.
 
 From the repository root:
 

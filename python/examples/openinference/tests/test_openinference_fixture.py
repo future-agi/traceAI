@@ -20,6 +20,7 @@ do not run the collector.
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import os
@@ -233,7 +234,54 @@ def test_post_otlp_refuses_non_loopback_endpoints(monkeypatch: pytest.MonkeyPatc
             post_otlp(load_body(), endpoint)
 
 
-def test_nothing_imports_the_instrumentor_or_the_python_adapter(posted: dict[str, Any]) -> None:
+def _adapter_imports(source: str) -> list[str]:
+    """Modules under ``openinference`` or ``tracer`` that Python source imports,
+    read with ``ast``: ``import``, ``from ... import``, and
+    ``importlib.import_module()`` or ``__import__()`` of a string literal."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            names = [node.module or ""]
+        elif (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", None)) in ("import_module", "__import__")
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            names = [node.args[0].value]
+        else:
+            continue
+        found += [name for name in names if name.split(".")[0] in ("openinference", "tracer")]
+    return found
+
+
+def test_no_file_here_imports_the_instrumentor_or_the_python_adapter() -> None:
+    """Reads the source of every .py file in this example, and the harness.
+    This catches an import that never runs here: one inside a function or a
+    skipped test, or one of a package that is not installed."""
+    # Control: the scan finds each import form it looks for, and only those.
+    assert _adapter_imports(
+        "import harness, opentelemetry\n"
+        "import openinference.instrumentation\n"
+        "from tracer.utils.adapters import openinference\n"
+        "def later():\n"
+        "    importlib.import_module('openinference.semconv')\n"
+    ) == ["openinference.instrumentation", "tracer.utils.adapters", "openinference.semconv"]
+    files = [*sorted(RECIPE_DIR.rglob("*.py")), Path(harness.__file__).resolve()]
+    assert Path(__file__).resolve() in files
+    for path in files:
+        assert _adapter_imports(path.read_text(encoding="utf-8")) == [], path
+
+
+def test_no_instrumentor_or_adapter_module_is_loaded(posted: dict[str, Any]) -> None:
+    """Run-time complement to the source scan above: no ``openinference`` or
+    ``tracer`` module is loaded after a post, including one imported
+    indirectly by a dependency. With the README command neither package is
+    installed, so this can fail only where one is (e.g. a round-trip run
+    with the instrumentor)."""
     assert posted["spans"]
     loaded = [
         name
