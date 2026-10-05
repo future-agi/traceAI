@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from opentelemetry import context as context_api
@@ -15,6 +17,8 @@ _INPUT_VALUE = "input.value"
 _URL_COUNT = "tavily.url_count"
 _RESULT_COUNT = "tavily.result_count"
 _FAILED_RESULT_COUNT = "tavily.failed_result_count"
+_CANCELLED = "tavily.cancelled"
+_CANCELLATION_ERRORS = (asyncio.CancelledError, concurrent.futures.CancelledError)
 
 # extract(urls, include_images, extract_depth, format, timeout,
 #         include_favicon, include_usage, query, ...) in tavily-python 0.8.4.
@@ -79,6 +83,19 @@ class _Operation:
         span.set_status(Status(StatusCode.OK))
         span.end()
 
+    @staticmethod
+    def _finish_error(span: Span, error: BaseException) -> None:
+        if isinstance(error, _CANCELLATION_ERRORS):
+            # Cancellation is not a failure of the call: no exception event.
+            span.set_attribute(_CANCELLED, True)
+            span.set_status(Status(StatusCode.ERROR, "cancelled"))
+        else:
+            span.record_exception(error)
+            span.set_status(
+                Status(StatusCode.ERROR, "{0}: {1}".format(type(error).__name__, error))
+            )
+        span.end()
+
 
 def _attach(span: Span) -> Any:
     return context_api.attach(trace_api.set_span_in_context(span))
@@ -102,8 +119,8 @@ class SyncWrapper(_Operation):
         token = _attach(span)
         try:
             result = wrapped(*args, **kwargs)
-        except BaseException:
-            span.end()
+        except BaseException as error:
+            self._finish_error(span, error)
             raise
         finally:
             _detach(token)
@@ -125,8 +142,8 @@ class AsyncWrapper(_Operation):
         token = _attach(span)
         try:
             result = await wrapped(*args, **kwargs)
-        except BaseException:
-            span.end()
+        except BaseException as error:
+            self._finish_error(span, error)
             raise
         finally:
             _detach(token)
