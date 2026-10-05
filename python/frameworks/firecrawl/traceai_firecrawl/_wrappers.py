@@ -209,7 +209,9 @@ class _BaseWrapper:
                 attributes[_JOB_ID] = _redact(job_id, instance)
         return attributes
 
-    def _start(self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Optional[Span]:
+    def _start(
+        self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
+    ) -> Optional[Span]:
         try:
             attributes = self._attributes(instance, args, kwargs)
         except Exception:
@@ -276,7 +278,8 @@ class _BaseWrapper:
         except Exception:
             logger.debug("Could not record %s exception", self._span_name, exc_info=True)
         try:
-            span.set_status(Status(StatusCode.ERROR, "cancelled" if cancelled else _describe(error)))
+            description = "cancelled" if cancelled else _describe(error)
+            span.set_status(Status(StatusCode.ERROR, description))
         except Exception:
             logger.debug("Could not set %s status", self._span_name, exc_info=True)
         finally:
