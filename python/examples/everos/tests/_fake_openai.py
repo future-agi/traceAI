@@ -11,6 +11,12 @@ EverOS's LanceDB tables are created with.
 ``malformed_atomic_facts=True`` answers the atomic-fact prompt with JSON that
 everalgo rejects, quoting ``LLM_ERROR_MARKER``, for the test that shows what
 an extraction error exports with content capture off.
+
+``reject_embedding_of=<text>`` answers any embeddings request whose input
+contains ``<text>`` with HTTP 400 and an OpenAI-style error body that quotes
+the rejected input, as some gateways do, followed by ``ERROR_TAIL_MARKER`` at
+character ``ERROR_TAIL_AT`` of the error message, past EverOS's
+4096-character content cap. Other embeddings requests are answered normally.
 """
 
 from __future__ import annotations
@@ -21,12 +27,15 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Optional
 
 # The episode text the fake "extracts"; with capture on it is exported.
 EPISODE_MARKER = "EMARK-everos-7c1e"
 EPISODE_TEXT = "Ada works on the Lighthouse project. " + EPISODE_MARKER
 LLM_ERROR_MARKER = "LMARK-everos-4b2d"
+# Ends the rejected-embedding error message, starting at this character.
+ERROR_TAIL_MARKER = "TMARK-everos-0e7a"
+ERROR_TAIL_AT = 4200
 EMBEDDING_DIMENSIONS = 1024
 USAGE = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 EMBEDDING_USAGE = {"prompt_tokens": 3, "total_tokens": 3}
@@ -78,8 +87,11 @@ def _instance(schema: dict, root: dict, name: str = "value") -> Any:
 class FakeOpenAI:
     """Serves /v1/chat/completions and /v1/embeddings on 127.0.0.1 only."""
 
-    def __init__(self, malformed_atomic_facts: bool = False) -> None:
+    def __init__(
+        self, malformed_atomic_facts: bool = False, reject_embedding_of: Optional[str] = None
+    ) -> None:
         self.malformed_atomic_facts = malformed_atomic_facts
+        self.reject_embedding_of = reject_embedding_of
         self._lock = threading.Lock()
         self._requests: list[dict[str, Any]] = []
         owner = self
@@ -97,14 +109,14 @@ class FakeOpenAI:
                         }
                     )
                 if self.path.endswith("/chat/completions"):
-                    payload = owner._chat(body)
+                    status, payload = HTTPStatus.OK, owner._chat(body)
                 elif self.path.endswith("/embeddings"):
-                    payload = owner._embeddings(body)
+                    status, payload = owner._embeddings(body)
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 data = json.dumps(payload).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -167,17 +179,26 @@ class FakeOpenAI:
             "usage": USAGE,
         }
 
-    def _embeddings(self, body: dict) -> dict:
+    def _embeddings(self, body: dict) -> tuple[HTTPStatus, dict]:
         inputs = body.get("input", [])
         if isinstance(inputs, str):
             inputs = [inputs]
+        if self.reject_embedding_of and any(self.reject_embedding_of in str(t) for t in inputs):
+            message = "invalid input: {0}".format(json.dumps(inputs)).ljust(ERROR_TAIL_AT, ".")
+            error = {
+                "message": message + ERROR_TAIL_MARKER,
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": None,
+            }
+            return HTTPStatus.BAD_REQUEST, {"error": error}
         size = int(body.get("dimensions") or EMBEDDING_DIMENSIONS)
         data = []
         for index, text in enumerate(inputs):
             digest = hashlib.sha256(str(text).encode("utf-8")).digest()
             vector = [((digest[i % len(digest)] / 255.0) - 0.5) for i in range(size)]
             data.append({"object": "embedding", "index": index, "embedding": vector})
-        return {
+        return HTTPStatus.OK, {
             "object": "list",
             "data": data,
             "model": body.get("model", "text-embedding-3-small"),

@@ -62,6 +62,8 @@ from _fake_openai import (  # noqa: E402
     EMBEDDING_USAGE,
     EPISODE_MARKER,
     EPISODE_TEXT,
+    ERROR_TAIL_AT,
+    ERROR_TAIL_MARKER,
     LLM_ERROR_MARKER,
     USAGE,
     FakeOpenAI,
@@ -540,6 +542,7 @@ class Scenario:
         script: Path,
         work: Path,
         malformed_atomic_facts: bool = False,
+        reject_embedding_of: Optional[str] = None,
         everos_toml: Optional[str] = None,
         **overrides: Optional[str],
     ) -> None:
@@ -547,6 +550,7 @@ class Scenario:
         self.script = script
         self.work = work
         self.malformed_atomic_facts = malformed_atomic_facts
+        self.reject_embedding_of = reject_embedding_of
         # Written to $EVEROS_ROOT/everos.toml; "{origin}" becomes the Receiver's.
         self.everos_toml = everos_toml
         # Environment changes; None removes a variable, "{origin}" as above.
@@ -559,7 +563,9 @@ class Scenario:
 
     def execute(self) -> "Scenario":
         self.work.mkdir(parents=True, exist_ok=True)
-        with Receiver() as receiver, FakeOpenAI(self.malformed_atomic_facts) as fake:
+        with Receiver() as receiver, FakeOpenAI(
+            self.malformed_atomic_facts, self.reject_embedding_of
+        ) as fake:
             overrides = {
                 key: (value.replace("{origin}", receiver.origin) if value else value)
                 for key, value in self.overrides.items()
@@ -628,6 +634,13 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Scenario]:
             EVEROS_OBSERVABILITY__CAPTURE_CONTENT="true",
         ),
         Scenario("llm_error", SESSION, tmp_path_factory.mktemp("llmerror"), malformed_atomic_facts=True),
+        # The embedding endpoint rejects the search query, quoting it.
+        Scenario(
+            "embedding_error",
+            SESSION,
+            tmp_path_factory.mktemp("embeddingerror"),
+            reject_embedding_of=QUERY_MARKER,
+        ),
     ]
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(scenarios)) as pool:
         done = {scenario.name: scenario for scenario in pool.map(Scenario.execute, scenarios)}
@@ -748,6 +761,68 @@ def test_an_extraction_error_exports_the_model_reply_with_capture_off(
     # Content capture stayed off: no content key on any span.
     for span in error_run.spans:
         assert not set(CONTENT_KEYS) & set(attributes(span)), span["name"]
+
+
+def test_a_rejected_query_embedding_exports_the_provider_error_body_with_capture_off(
+    runs: dict[str, Scenario],
+) -> None:
+    """A provider error body is exported uncut as status and exception text (README.md, Privacy)."""
+    error_run = runs["embedding_error"]
+    error_run.assert_ran_offline()
+    outcome = error_run.json_line()
+    assert outcome["flush"] == [200, {"status": "extracted"}]
+    assert outcome["indexed_episodes"] == 1
+    # EmbeddingInputError is an InvalidInputError: EverOS answers 422.
+    assert outcome["search"] == [422, []]
+    # The fake rejected the query's embedding once (openai does not retry a 400).
+    rejected = [
+        request
+        for request in error_run.fake_requests
+        if request["path"] == "/v1/embeddings" and found_in(request["body"], [QUERY_MARKER])
+    ]
+    assert len(rejected) == 1
+
+    (search,) = spans_named(error_run.spans, "everos.memory.search")
+    search_trace = [span for span in error_run.spans if span["traceId"] == search["traceId"]]
+    # The embedding span and the two spans the error propagates out of.
+    assert sorted(span["name"] for span in search_trace) == [
+        "everos.embedding",
+        "everos.memory.search",
+        "everos.search.recall",
+    ]
+    assert edges(search_trace) == {
+        ("everos.search.recall", "everos.memory.search"),
+        ("everos.embedding", "everos.search.recall"),
+    }
+    for span in search_trace:
+        status = span.get("status", {})
+        assert status.get("code") == "STATUS_CODE_ERROR", span["name"]
+        description = status["message"]
+        assert description.startswith(
+            "EmbeddingInputError: embedding input rejected (400): Error code: 400 - "
+        ), span["name"]
+        (event,) = span["events"]
+        assert event["name"] == "exception"
+        event_attributes = attributes(event)
+        assert event_attributes["exception.type"] == "everos.core.errors.EmbeddingInputError"
+        # The chained stack trace includes openai's own error and its message.
+        assert "openai.BadRequestError" in event_attributes["exception.stacktrace"]
+        for text in (
+            description,
+            event_attributes["exception.message"],
+            event_attributes["exception.stacktrace"],
+        ):
+            # The query, and the marker past EverOS's 4096-character content cap.
+            assert QUERY_MARKER in text, span["name"]
+            assert ERROR_TAIL_MARKER in text, span["name"]
+            assert text.index(ERROR_TAIL_MARKER) > ERROR_TAIL_AT > 4096, span["name"]
+    # Content capture stayed off: neither marker is in any attribute, and no
+    # span has a content key. Only the status and the exception event carry them.
+    for span in error_run.spans:
+        assert not set(CONTENT_KEYS) & set(attributes(span)), span["name"]
+        assert found_in(attributes(span), [QUERY_MARKER, ERROR_TAIL_MARKER]) == [], span["name"]
+    resources = [r for request in error_run.requests for r in request["resource_attributes"]]
+    assert found_in(resources, [QUERY_MARKER, ERROR_TAIL_MARKER]) == []
 
 
 # --------------------------------------------------------------------------
@@ -882,6 +957,47 @@ def test_without_otel_resource_attributes_there_is_no_project(tmp_path: Path) ->
 # README and requirements
 # --------------------------------------------------------------------------
 
+ERROR_TEXT_HEADING = "Error text is not covered by the switch"
+# What README.md's error-text caveat must state: the channels, the spans the
+# embedding_error and llm_error runs show them on, that none of EverOS's
+# content controls applies, where the text comes from, and the advice.
+ERROR_TEXT_FACTS = (
+    "ERROR status",
+    "`exception` event",
+    "stack trace",
+    "error body",
+    "`everos.embedding`",
+    "`everos.search.recall`",
+    "`everos.memory.search`",
+    "`everos.ome.extract_atomic_facts`",
+    "`capture_content = false`",
+    "`set_redactor`",
+    "4096",
+    "`attributes.py:61-77`",
+    "`component/embedding/openai_provider.py:39-49",
+    "`component/llm/openai_provider.py:106-109`",
+    "`embedding_error`",
+    "`llm_error`",
+    "EVEROS_OBSERVABILITY__ENABLED",
+)
+
+
+def readme_section(title: str) -> str:
+    """README text under a heading, up to the next heading, on one line ("" if absent)."""
+    match = re.search(
+        r"^#+ {0}\n(.*?)(?=^#|\Z)".format(re.escape(title)),
+        README.read_text(encoding="utf-8"),
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    return " ".join(match.group(1).split()) if match else ""
+
+
+def readme_bullet(section: str, label: str) -> str:
+    """The bullet in a README section whose bold label starts with ``label``."""
+    bullets = [b for b in readme_section(section).split("- **")[1:] if b.startswith(label)]
+    assert len(bullets) == 1, (section, label)
+    return bullets[0]
+
 
 def test_readme_first_paragraph_names_the_project_and_excludes_lookalikes() -> None:
     text = README.read_text(encoding="utf-8")
@@ -898,6 +1014,37 @@ def test_readme_span_table_matches_the_fixture() -> None:
     )
     assert dict(rows) == OBSERVATION_TYPES
     assert len(rows) == len(OBSERVATION_TYPES)
+
+
+@pytest.mark.parametrize("label", ["Model:", "Tokens:"])
+def test_readme_collector_summary_names_every_span_with_a_model_and_tokens(
+    label: str, recorded: dict[str, list[dict[str, Any]]]
+) -> None:
+    spans = recorded["off"]
+    carrying = {span["name"] for span in spans if "gen_ai.usage.input_tokens" in attributes(span)}
+    assert carrying == {span["name"] for span in spans if "gen_ai.request.model" in attributes(span)}
+    assert carrying == set(GENERATION_MODELS)
+    bullet = readme_bullet("What Future AGI derives today", label)
+    for name in sorted(carrying):
+        observation_type = OBSERVATION_TYPES[name]
+        same_type = {n for n, t in OBSERVATION_TYPES.items() if t == observation_type}
+        if same_type <= carrying:
+            # Every span of this type carries them, so naming the type is enough.
+            assert observation_type in bullet, name
+        else:
+            # Only some spans of this type do (the atomic-fact agent): name it.
+            assert "`{0}`".format(name) in bullet, name
+
+
+def test_readme_states_that_error_text_is_not_covered_by_the_content_switch() -> None:
+    section = readme_section(ERROR_TEXT_HEADING)
+    missing = [fact for fact in ERROR_TEXT_FACTS if fact not in section]
+    assert not missing, "README.md, {0!r}, lacks: {1}".format(ERROR_TEXT_HEADING, missing)
+    # The capture-off and never-exported summaries point at the caveat
+    # instead of claiming the switch keeps content out of every export.
+    anchor = "(#{0})".format(ERROR_TEXT_HEADING.lower().replace(" ", "-"))
+    for label in ("Capture off", "Never exported"):
+        assert anchor in readme_bullet("Privacy", label), label
 
 
 def test_readme_states_what_the_tests_check() -> None:
