@@ -8,6 +8,7 @@ patch through ``AG2ClassicTracing.uninstrument()``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -335,6 +336,32 @@ def test_setup_rejects_a_non_sdk_provider():
     # NoOpTracerProvider has no span processors: setup() refuses instead of creating a provider.
     with pytest.raises(TypeError, match="SDK TracerProvider"):
         setup(tracer_provider=trace_api.NoOpTracerProvider())
+
+
+def test_setup_warns_when_span_processors_run_concurrently(caplog):
+    """ConcurrentMultiSpanProcessor runs every on_end in parallel, so an
+    exporter can serialize a span before this processor removed its content.
+    """
+    from opentelemetry.sdk.trace import ConcurrentMultiSpanProcessor
+
+    concurrent = TracerProvider(active_span_processor=ConcurrentMultiSpanProcessor())
+    plain = TracerProvider()
+    try:
+        with caplog.at_level(logging.WARNING, logger="traceai_ag2_classic"):
+            setup(tracer_provider=concurrent, instrument_llm=False)
+        warnings = [
+            r for r in caplog.records if r.levelno == logging.WARNING and r.name.startswith("traceai_ag2_classic")
+        ]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "ConcurrentMultiSpanProcessor" in warnings[0].getMessage()
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="traceai_ag2_classic"):
+            setup(tracer_provider=plain, instrument_llm=False)
+        assert not [r for r in caplog.records if "ConcurrentMultiSpanProcessor" in r.getMessage()]
+    finally:
+        concurrent.shutdown()
+        plain.shutdown()
 
 
 def test_setup_rolls_back_the_llm_patch_when_an_agent_fails(fake):

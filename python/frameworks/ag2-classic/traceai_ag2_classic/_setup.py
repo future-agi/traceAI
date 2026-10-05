@@ -41,6 +41,25 @@ def _active_multi_processor(provider: Any) -> Any:
     return active
 
 
+def _warn_if_concurrent(active: Any) -> None:
+    """Warn when the provider runs its span processors in parallel.
+
+    The SDK's ``ConcurrentMultiSpanProcessor`` calls every processor's
+    ``on_end`` at once on a thread pool, so an exporting processor can
+    serialize a span before this package has removed its content. Filtering
+    is only ordered on the default ``SynchronousMultiSpanProcessor``.
+    """
+    from opentelemetry.sdk.trace import ConcurrentMultiSpanProcessor
+
+    if isinstance(active, ConcurrentMultiSpanProcessor):
+        logger.warning(
+            "traceai-ag2-classic: this tracer provider uses ConcurrentMultiSpanProcessor, which runs "
+            "span processors in parallel, so an exporter may send a span before message content is "
+            "removed and attributes are mapped. Use a provider with the default "
+            "SynchronousMultiSpanProcessor (for example fi_instrumentation.register())."
+        )
+
+
 def _install_processor(provider: Any, capture_content: bool) -> AG2ClassicSpanProcessor:
     """Prepend our processor so it runs before the exporting processor.
 
@@ -57,6 +76,7 @@ def _install_processor(provider: Any, capture_content: bool) -> AG2ClassicSpanPr
     processor installed, first and enabled.
     """
     active = _active_multi_processor(provider)
+    _warn_if_concurrent(active)
     processor = getattr(getattr(provider, "add_span_processor", None), _GUARD_ATTR, None)
     if not isinstance(processor, AG2ClassicSpanProcessor):
         processor = next(

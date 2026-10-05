@@ -147,6 +147,10 @@ exporting processor. `setup()` keeps it first on the provider:
   processor down without going through `trace_provider.add_span_processor`,
   bypasses this; call `setup()` again to put the processor back first and
   re-enable it.
+- A provider built with the SDK's `ConcurrentMultiSpanProcessor` runs every
+  processor's `on_end` in parallel, so an exporter can send a span before its
+  content is removed. `setup()` logs a WARNING for it; use the default
+  `SynchronousMultiSpanProcessor`, which `register()` uses.
 
 ## Attribute inventory (autogen 0.14.1)
 
