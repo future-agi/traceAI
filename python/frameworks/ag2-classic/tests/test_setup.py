@@ -266,7 +266,7 @@ def _assert_no_content_and_no_promoted_usage_off_llm(spans):
         blob = json.dumps(attrs, default=str)
         assert SECRET_PROMPT not in blob and TOOL_SECRET_CITY not in blob, span.name
         if attrs.get("gen_ai.span.kind") != "LLM":
-            leaked = [k for k in attrs if k in PROMOTED_USAGE_KEYS]
+            leaked = [k for k in attrs if k in PROMOTED_USAGE_KEYS or k.startswith("gen_ai.usage.")]
             assert not leaked, (span.name, leaked)
 
 

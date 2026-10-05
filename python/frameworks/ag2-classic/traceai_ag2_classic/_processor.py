@@ -87,6 +87,7 @@ UPSTREAM_COST = "gen_ai.usage.cost"
 ERROR_TYPE = "error.type"
 INPUT_TOKENS = "gen_ai.usage.input_tokens"
 OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+USAGE_PREFIX = "gen_ai.usage."
 
 # Every key that carries user or model content. Removed unless capture is on.
 CONTENT_KEYS = (
@@ -219,13 +220,14 @@ def map_ag2_attributes(
             mapped[SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS] = inp + out
         _bundle_request_parameters(mapped)
     else:
-        # fi-collector promotes these keys into the token columns on any span
+        # fi-collector promotes token keys into the token columns on any span
         # (adapter.go inputTokenKeys/outputTokenKeys/totalTokenKeys) and Observe
         # sums total_tokens over a trace. Only LLM spans carry per-call usage;
-        # the conversation span's chat-wide sum (chat.py:81-82) would double it.
-        for key in (INPUT_TOKENS, OUTPUT_TOKENS, SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS):
-            if key in mapped:
-                mapped.setdefault("ag2.usage." + key.rsplit(".", 1)[1], mapped.pop(key))
+        # the conversation span's chat-wide sum (chat.py:73-82) would double it.
+        # Every gen_ai.usage.* key, including upstream's aggregate
+        # gen_ai.usage.cost, moves to ag2.usage.* on non-LLM spans.
+        for key in [k for k in mapped if k.startswith(USAGE_PREFIX)]:
+            mapped.setdefault("ag2.usage." + key[len(USAGE_PREFIX) :], mapped.pop(key))
 
     if capture_content:
         _surface_content(mapped, str(span_type))

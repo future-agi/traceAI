@@ -98,6 +98,23 @@ def test_conversation_aggregate_usage_is_not_relabelled():
     mapped = map_ag2_attributes(attrs)
     assert "gen_ai.usage.total_tokens" not in mapped
     assert "gen_ai.cost.total" not in mapped
+    # The chat-wide cost moves off the gen_ai.usage.* namespace like the tokens.
+    assert "gen_ai.usage.cost" not in mapped
+    assert mapped["ag2.usage.cost"] == 0.0002
+
+
+@pytest.mark.parametrize("span_type", sorted(set(EXPECTED_KINDS) - {"llm"}))
+def test_no_gen_ai_usage_key_survives_on_a_non_llm_span(span_type):
+    attrs = {
+        "ag2.span.type": span_type,
+        "gen_ai.usage.input_tokens": 22,
+        "gen_ai.usage.output_tokens": 14,
+        "gen_ai.usage.total_tokens": 36,
+        "gen_ai.usage.cost": 0.0002,
+    }
+    mapped = map_ag2_attributes(attrs)
+    assert not [key for key in mapped if key.startswith("gen_ai.usage.") or key == "gen_ai.cost.total"]
+    assert mapped["ag2.usage.total_tokens"] == 36
 
 
 def test_conversation_aggregate_tokens_do_not_double_count_the_trace():

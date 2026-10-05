@@ -188,6 +188,31 @@ def test_ag2_classic_contract_content_off_round_trip():
         assert SECRET_PROMPT not in blob, span["name"]
         assert TOOL_SECRET_CITY not in blob, span["name"]
 
+    # Usage and cost live on LLM spans only. fi-collector promotes token and
+    # cost keys on any span and Observe sums them over a trace, so an
+    # aggregate on a conversation/agent span would count every call twice.
+    llm_spans = [s for s in spans if _flatten(s).get("gen_ai.span.kind") == "LLM"]
+    for span in spans:
+        attrs = _flatten(span)
+        if attrs.get("gen_ai.span.kind") == "LLM":
+            continue
+        leaked = [
+            key
+            for key in attrs
+            if key.startswith("gen_ai.usage.") or key in ("gen_ai.cost.total", "llm.cost.total")
+        ]
+        assert not leaked, "usage/cost keys {0} on non-LLM span {1}".format(leaked, span["name"])
+    assert len(llm_spans) == app["llm_requests"]
+    per_trace: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
+    for span in spans:
+        tokens = _flatten(span).get("gen_ai.usage.total_tokens", 0)
+        per_trace[span["traceId"]][0] += tokens
+    for span in llm_spans:
+        per_trace[span["traceId"]][1] += 1
+    for trace_id, (total, calls) in per_trace.items():
+        assert total == calls * 18, (trace_id, total, calls)
+    assert sum(total for total, _calls in per_trace.values()) == app["llm_requests"] * 18
+
 
 def test_ag2_classic_contract_content_on_round_trip():
     with Receiver() as receiver:
