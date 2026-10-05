@@ -195,6 +195,47 @@ def test_real_client_calls_reach_the_collector_contract(fake_firecrawl, monkeypa
     assert any(event["name"] == "exception" for event in failed_scrape.get("events", []))
 
 
+def test_async_client_emits_one_span_per_call(fake_firecrawl, monkeypatch):
+    """AsyncFirecrawl.crawl awaits the wrapped start_crawl; that must not add a span."""
+    import asyncio
+
+    from firecrawl import AsyncFirecrawl
+    from fi_instrumentation import register
+    from fi_instrumentation.fi_types import ProjectType
+
+    from traceai_firecrawl import FirecrawlInstrumentor
+
+    async def journey() -> None:
+        client = AsyncFirecrawl(api_key=FIRECRAWL_KEY, api_url=fake_firecrawl.origin, max_retries=1)
+        await client.scrape("https://example.com" + SECRET_PATH)
+        job = await client.crawl(url="https://example.com", limit=3, poll_interval=0)
+        assert job.status == "completed" and len(job.data) == 3
+
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        monkeypatch.setenv("FI_API_KEY", FI_API_KEY)
+        monkeypatch.setenv("FI_SECRET_KEY", FI_SECRET_KEY)
+        provider = register(project_type=ProjectType.OBSERVE, project_name=PROJECT, verbose=False)
+        instrumentor = FirecrawlInstrumentor()
+        instrumentor.instrument(tracer_provider=provider)
+        try:
+            asyncio.run(journey())
+            assert provider.force_flush(timeout_millis=10_000)
+        finally:
+            instrumentor.uninstrument()
+            provider.shutdown()
+        spans = receiver.spans()
+
+    assert fake_firecrawl.calls == [
+        ("POST", "/v2/scrape"),
+        ("POST", "/v2/crawl"),
+        ("GET", "/v2/crawl/crawl-job-1"),
+    ]
+    assert sorted(span["name"] for span in spans) == ["firecrawl.crawl", "firecrawl.scrape"]
+    crawl = next(span for span in spans if span["name"] == "firecrawl.crawl")
+    assert _flatten_attributes(crawl["attributes"])["firecrawl.job_id"] == "crawl-job-1"
+
+
 def test_no_key_path_or_content_is_exported(fake_firecrawl, monkeypatch):
     with Receiver() as receiver:
         spans = _journey(receiver, fake_firecrawl, monkeypatch)

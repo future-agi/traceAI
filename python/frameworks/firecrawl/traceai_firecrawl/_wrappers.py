@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
@@ -19,6 +20,12 @@ _MAX_QUERY_LENGTH = 1024
 
 # One span per call. crawl polls internally, so it must not emit one span per page.
 _CRAWL_METHODS = {"crawl", "start_crawl", "get_crawl_status", "cancel_crawl"}
+
+# True while a traced Firecrawl call runs in this context. firecrawl-py 4.46.2
+# AsyncFirecrawlClient.crawl awaits self.start_crawl, which is wrapped as well;
+# the nested call runs untraced so one user call yields one span. A context
+# variable follows asyncio tasks, so concurrent calls do not suppress each other.
+_ACTIVE: ContextVar[bool] = ContextVar("traceai_firecrawl_active", default=False)
 
 
 def _redact(value: str, instance: Any) -> str:
@@ -133,14 +140,19 @@ class OperationWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
+        if _ACTIVE.get():
+            return wrapped(*args, **kwargs)
         span = self._tracer.start_span(
             self._span_name, attributes=self._attributes(instance, args, kwargs)
         )
+        token = _ACTIVE.set(True)
         try:
             result = wrapped(*args, **kwargs)
         except BaseException as error:
             self._finish_error(span, error)
             raise
+        finally:
+            _ACTIVE.reset(token)
         self._finish_ok(span, result, kwargs)
         return result
 
@@ -155,13 +167,18 @@ class AsyncOperationWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
+        if _ACTIVE.get():
+            return await wrapped(*args, **kwargs)
         span = self._tracer.start_span(
             self._span_name, attributes=self._attributes(instance, args, kwargs)
         )
+        token = _ACTIVE.set(True)
         try:
             result = await wrapped(*args, **kwargs)
         except BaseException as error:
             self._finish_error(span, error)
             raise
+        finally:
+            _ACTIVE.reset(token)
         self._finish_ok(span, result, kwargs)
         return result
