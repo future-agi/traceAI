@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import inspect
 import logging
 import traceback
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
@@ -31,10 +32,6 @@ _CANCELLED = "tavily.cancelled"
 _CANCELLATION_ERRORS = (asyncio.CancelledError, concurrent.futures.CancelledError)
 _REDACTED = "[redacted]"
 _MAX_TEXT_BYTES = 1024
-
-# extract(urls, include_images, extract_depth, format, timeout,
-#         include_favicon, include_usage, query, ...) in tavily-python 0.8.4.
-_EXTRACT_QUERY_POSITION = 7
 
 
 def _bearer_token(value: Any) -> Optional[str]:
@@ -98,15 +95,16 @@ def _cap(text: str, limit: int = _MAX_TEXT_BYTES) -> str:
     return text.encode("utf-8", "replace")[:limit].decode("utf-8", "ignore")
 
 
-def _query(method: str, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Optional[str]:
-    """The search query, or extract's optional rerank query."""
-    if "query" in kwargs:
-        value = kwargs["query"]
-    elif method == "search":
-        value = args[0] if args else None
-    else:
-        value = args[_EXTRACT_QUERY_POSITION] if len(args) > _EXTRACT_QUERY_POSITION else None
-    return None if value is None else str(value)
+def _function(wrapped: Any) -> Any:
+    """The plain function behind what wrapt passes as ``wrapped``.
+
+    ``client.extract(...)`` gives a bound method; ``TavilyClient.extract(client,
+    ...)`` gives a wrapt partial proxy whose ``__wrapped__`` is the function.
+    """
+    function = getattr(wrapped, "__func__", None)
+    if function is None:
+        function = getattr(wrapped, "__wrapped__", wrapped)
+    return function
 
 
 def _url_count(args: Sequence[Any], kwargs: Mapping[str, Any]) -> Optional[int]:
@@ -131,12 +129,41 @@ class _Operation:
         self._tracer = tracer
         self._method = method
         self._span_name = "tavily.{0}".format(method)
+        # Signature of each wrapped function, read once.
+        self._signatures: Dict[Any, inspect.Signature] = {}
+
+    def _query(
+        self, wrapped: Any, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
+    ) -> Optional[str]:
+        """The search query, or extract's optional rerank query, bound by name.
+
+        None when there is none, or when the arguments cannot be bound to the
+        method's signature or the value cannot be printed.
+        """
+        try:
+            function = _function(wrapped)
+            signature = self._signatures.get(function)
+            if signature is None:
+                signature = inspect.signature(function)
+                self._signatures[function] = signature
+            # The function's first parameter is ``self``.
+            bound = signature.bind_partial(
+                *((instance,) if instance is not None else ()), *args, **kwargs
+            )
+            value = bound.arguments.get("query")
+            return None if value is None else str(value)
+        except Exception:
+            logger.debug("Could not read the %s query", self._span_name, exc_info=True)
+            return None
 
     def _attributes(
-        self, keys: Optional[Sequence[str]], args: Sequence[Any], kwargs: Mapping[str, Any]
+        self,
+        keys: Optional[Sequence[str]],
+        query: Optional[str],
+        args: Sequence[Any],
+        kwargs: Mapping[str, Any],
     ) -> Dict[str, Any]:
         attributes: Dict[str, Any] = {_SPAN_KIND: _TOOL, _TOOL_NAME: self._span_name}
-        query = _query(self._method, args, kwargs)
         if query is not None:
             value = _safe_text(query, keys)
             if value is not None:
@@ -148,10 +175,14 @@ class _Operation:
         return attributes
 
     def _start(
-        self, keys: Optional[Sequence[str]], args: Sequence[Any], kwargs: Mapping[str, Any]
+        self,
+        keys: Optional[Sequence[str]],
+        query: Optional[str],
+        args: Sequence[Any],
+        kwargs: Mapping[str, Any],
     ) -> Optional[Span]:
         try:
-            attributes = self._attributes(keys, args, kwargs)
+            attributes = self._attributes(keys, query, args, kwargs)
         except Exception:
             logger.debug("Could not read %s arguments", self._span_name, exc_info=True)
             attributes = {_SPAN_KIND: _TOOL, _TOOL_NAME: self._span_name}
@@ -261,7 +292,8 @@ class SyncWrapper(_Operation):
         kwargs: Mapping[str, Any],
     ) -> Any:
         keys = _api_keys(instance)
-        span = self._start(keys, args, kwargs)
+        query = self._query(wrapped, instance, args, kwargs)
+        span = self._start(keys, query, args, kwargs)
         if span is None:
             return wrapped(*args, **kwargs)
         token = _attach(span)
@@ -287,7 +319,8 @@ class AsyncWrapper(_Operation):
         kwargs: Mapping[str, Any],
     ) -> Any:
         keys = _api_keys(instance)
-        span = self._start(keys, args, kwargs)
+        query = self._query(wrapped, instance, args, kwargs)
+        span = self._start(keys, query, args, kwargs)
         if span is None:
             return await wrapped(*args, **kwargs)
         token = _attach(span)

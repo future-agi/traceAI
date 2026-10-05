@@ -82,6 +82,21 @@ def test_an_unreadable_key_holder_drops_free_text_and_keeps_the_call(fake):
     assert TAVILY_KEY not in traced.wire()
 
 
+def test_an_unreadable_signature_records_no_query_and_keeps_the_call(fake, monkeypatch):
+    import inspect
+
+    with instrumented() as traced:
+        monkeypatch.setattr(inspect, "signature", _boom)
+        result = _client(fake).search("q")
+        monkeypatch.undo()
+
+    assert len(result["results"]) == 2
+    span = traced.one()
+    assert "input.value" not in attrs(span)
+    assert attrs(span)["tavily.result_count"] == 2
+    assert span.status.status_code is StatusCode.OK
+
+
 def test_an_unprintable_query_gets_the_vendors_own_error(fake):
     class Unprintable:
         def __str__(self) -> str:

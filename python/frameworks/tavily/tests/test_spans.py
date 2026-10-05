@@ -18,7 +18,7 @@ pytest.importorskip("tavily", reason="tavily-python must be installed to test it
 from opentelemetry import trace as trace_api  # noqa: E402
 from opentelemetry.trace import StatusCode  # noqa: E402
 
-from _support import attrs, instrumented  # noqa: E402
+from _support import attrs, instrumented, new_provider  # noqa: E402
 from _tavily_fake import CONTENT_MARKERS, TAVILY_KEY, FakeTavily  # noqa: E402
 
 QUERY = "who maintains OpenTelemetry?"
@@ -153,13 +153,157 @@ def test_extract_records_its_rerank_query_as_input(fake, mode):
     assert values["tavily.url_count"] == 1
 
 
-def test_extract_reads_a_positional_query(fake):
-    with instrumented() as traced:
-        # extract(urls, include_images, extract_depth, format, timeout,
-        #         include_favicon, include_usage, query)
-        _sync_client(fake).extract(URLS[:1], None, None, None, 30, None, None, "positional")
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("style", ["keyword", "positional", "class_call"])
+def test_extract_reads_its_query_by_name(fake, mode, style):
+    from tavily import AsyncTavilyClient, TavilyClient
 
-    assert attrs(traced.one())["input.value"] == "positional"
+    if style == "keyword":
+        args, kwargs = (URLS[:1],), {"query": "by name"}
+    else:
+        # extract(urls, include_images, extract_depth, format, timeout,
+        #         include_favicon, include_usage, query) in tavily-python 0.8.4
+        args, kwargs = (URLS[:1], None, None, None, 30, None, None, "by name"), {}
+
+    async def call_async() -> None:
+        client = _async_client(fake)
+        try:
+            if style == "class_call":
+                await AsyncTavilyClient.extract(client, *args, **kwargs)
+            else:
+                await client.extract(*args, **kwargs)
+        finally:
+            await client.close()
+
+    with instrumented() as traced:
+        if mode == "async":
+            asyncio.run(call_async())
+        elif style == "class_call":
+            TavilyClient.extract(_sync_client(fake), *args, **kwargs)
+        else:
+            _sync_client(fake).extract(*args, **kwargs)
+
+    assert attrs(traced.one())["input.value"] == "by name"
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_arguments_that_do_not_bind_record_no_query_and_keep_the_vendor_error(fake, mode):
+    # One positional argument more than extract takes: the arguments cannot be
+    # bound, and the vendor call itself raises TypeError.
+    args = (URLS[:1], None, None, None, 30, None, None, "too many", None, "extra")
+    with instrumented() as traced:
+        with pytest.raises(TypeError, match="positional argument"):
+            if mode == "sync":
+                _sync_client(fake).extract(*args)
+            else:
+                asyncio.run(_async_call(fake, "extract", *args))
+
+    assert fake.paths() == []
+    span = traced.one()
+    assert "input.value" not in attrs(span)
+    assert span.status.status_code is StatusCode.ERROR
+
+
+def _shifted_client(mode: str, tracer: Any) -> Any:
+    """A client whose extract moved ``query`` to second place, as a release might."""
+    import wrapt
+
+    from traceai_tavily._wrappers import AsyncWrapper, SyncWrapper
+
+    result = {"results": [], "failed_results": []}
+    if mode == "sync":
+
+        class Shifted:
+            def extract(
+                self,
+                urls: Any,
+                query: Any = None,
+                include_images: Any = None,
+                extract_depth: Any = None,
+                format: Any = None,
+                timeout: Any = 30,
+                include_favicon: Any = None,
+                include_usage: Any = None,
+                chunks_per_source: Any = None,
+                **kwargs: Any,
+            ) -> Any:
+                return result
+
+        wrapper: Any = SyncWrapper(tracer, "extract")
+    else:
+
+        class Shifted:  # type: ignore[no-redef]
+            async def extract(
+                self,
+                urls: Any,
+                query: Any = None,
+                include_images: Any = None,
+                extract_depth: Any = None,
+                format: Any = None,
+                timeout: Any = 30,
+                include_favicon: Any = None,
+                include_usage: Any = None,
+                chunks_per_source: Any = None,
+                **kwargs: Any,
+            ) -> Any:
+                return result
+
+        wrapper = AsyncWrapper(tracer, "extract")
+    wrapt.wrap_function_wrapper(Shifted, "extract", wrapper)
+    return Shifted
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("style", ["keyword", "positional", "every_positional", "class_call"])
+def test_a_shifted_extract_signature_still_finds_query_by_name(mode, style):
+    from fi_instrumentation import FITracer, TraceConfig
+
+    traced = new_provider()
+    cls = _shifted_client(mode, FITracer(traced.provider.get_tracer("test"), TraceConfig()))
+    client = cls()
+    url = URLS[:1]
+    calls = {
+        "keyword": (client.extract, (url,), {"query": "shifted"}),
+        "positional": (client.extract, (url, "shifted"), {}),
+        # The eighth positional argument is include_usage here, not query.
+        "every_positional": (
+            client.extract,
+            (url, "shifted", False, "basic", "markdown", 30, False, True, 3),
+            {},
+        ),
+        "class_call": (cls.extract, (client, url, "shifted"), {}),
+    }
+    method, args, kwargs = calls[style]
+    result = method(*args, **kwargs)
+    if mode == "async":
+        result = asyncio.run(result)
+
+    assert result == {"results": [], "failed_results": []}
+    span = traced.one()
+    assert attrs(span)["input.value"] == "shifted"
+    assert attrs(span)["tavily.url_count"] == 1
+
+
+def test_the_signature_is_read_once_per_wrapped_function(fake, monkeypatch):
+    from tavily import TavilyClient
+
+    real = inspect.signature
+    read: List[Any] = []
+
+    def spy(obj: Any, *args: Any, **kwargs: Any) -> Any:
+        read.append(obj)
+        return real(obj, *args, **kwargs)
+
+    with instrumented() as traced:
+        monkeypatch.setattr(inspect, "signature", spy)
+        client = _sync_client(fake)
+        for _ in range(3):
+            client.extract(URLS[:1], query="cached")
+        TavilyClient.extract(client, URLS[:1], query="cached")
+        monkeypatch.undo()
+
+    assert [attrs(span)["input.value"] for span in traced.spans()] == ["cached"] * 4
+    assert [getattr(obj, "__qualname__", None) for obj in read] == ["TavilyClient.extract"]
 
 
 # --- context ------------------------------------------------------------------

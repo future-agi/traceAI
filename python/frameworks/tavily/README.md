@@ -133,6 +133,11 @@ A count is absent when it is unknown (an error, a cancellation, or a response
 whose list is missing or not a list); it is never written as 0 for unknown. An
 `extract` with some failed URLs is still a successful call.
 
+The query is read by its parameter name, `query`, from the method's signature
+(read once per method), so it does not depend on argument positions. If the
+arguments do not fit the signature, no `input.value` is recorded; the call
+still goes to tavily-python unchanged.
+
 Context attributes from `fi_instrumentation` (`using_session`, `using_user`,
 ...) are added to the span; `session.id` and `user.id` are tested.
 `suppress_tracing()` records nothing.
