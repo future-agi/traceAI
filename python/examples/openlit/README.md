@@ -516,22 +516,32 @@ Read from source; no Firecrawl call was made.
 `tests/test_openlit_recipe.py` runs `src/app.py` as written, in a
 subprocess, with the real `openlit` 1.45.0 instrumenting the real `openai`
 client. `tests/_fake_openai.py` is a loopback fake of the Chat Completions
-API; the spans go to the shared harness `Receiver` (`python/tests/harness`),
-which serves `/v1/traces` and `/tracer/v1/traces` on 127.0.0.1.
+API that answers with text, a tool call or an error; the spans go to the
+shared harness `Receiver` (`python/tests/harness`), which serves
+`/v1/traces` and `/tracer/v1/traces` on 127.0.0.1.
 `tests/_guarded_run.py` blocks and logs every non-loopback connection; a
 positive control (`tests/_guard_probe.py`) proves it refuses and logs IPv4,
 IPv6 and DNS attempts. All keys are placeholders.
 
 `tests/recipe_variant.py` runs `src/app.py` with one `openlit.init()`
-argument changed or removed, or with traceai-openai also enabled.
-`tests/traced_function.py` wraps the recipe's model call in
-`@openlit.trace`. Both are fixtures, not part of the recipe.
+argument changed or removed, or with traceai-openai also enabled. The other
+scripts run the recipe's own `init_tracing()` first:
+`tests/traced_function.py` wraps the model call in `@openlit.trace`,
+`tests/tool_call.py` makes a call with `tools` and `user`,
+`tests/failed_call.py` makes the call with `max_retries=0` against an error,
+`tests/register_first.py` calls traceAI's `register()` before it, and
+`tests/second_exporter.py` builds another OTLP exporter after it. All are
+fixtures, not part of the recipe.
 
 The tests check the request path for each endpoint form, the auth headers,
 the resource, the span tree, the exact key inventory and its values,
-content off and on, the environment override, the metrics and events paths,
-the price download, the decorator, a 401 reply, the app's start-up checks,
-both instrumentors together, and that no key reaches the export.
+content off and on, the content environment override, the metrics and
+events paths, the price download, what content off still exports (the
+decorator, tool calls, `user`, a failed call), a 401 reply, the environment
+that overrides the recipe, the app's start-up checks, both instrumentors
+together, `register()` before `openlit.init()`, that no key reaches the
+export, and that the README's `openlit.init()` call and "Run" block match
+`src/app.py`.
 
 From the repository root, Python 3.11:
 
@@ -568,4 +578,4 @@ export FI_COLLECTOR_SRC=<future-agi checkout>/fi-collector   # then run the comm
 Without it the test is skipped. No CI job runs this example, so run it
 whenever fi-collector's alias lists or this recipe change; otherwise the
 table can drift unnoticed. A full run starts the app in a new process about
-20 times and takes under a minute.
+30 times and takes under a minute.
