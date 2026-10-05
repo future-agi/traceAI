@@ -50,6 +50,11 @@ trace_provider.force_flush()   # short scripts: the batch exporter sends in the 
 
 A runnable example with a mocked model (no model key) is in [`examples/basic_agent.py`](examples/basic_agent.py).
 
+## Ordering and other instrumentors
+
+- **Call `instrument()` after any `add_span_processor()` of your own on the provider `register()` returned.** `fi_instrumentation`'s `TracerProvider.add_span_processor` treats the processor chain `register()` set up as a replaceable default: its first call shuts down and empties the whole chain before adding yours (`fi_instrumentation/otel.py`, `TracerProvider.add_span_processor`; existing `fi_instrumentation` behaviour). That also removes this package's processor, while `instrument()` still reports instrumented and Semantic Kernel keeps emitting, so spans export without span kinds, session copy or `TraceConfig` hiding. If you must add a processor later, call `uninstrument()` and then `instrument()` again (covered by `test_later_add_span_processor_drops_ours_until_reinstrumented`).
+- **Do not also enable a client-level instrumentor for the same model calls** (`traceAI-openai`, `traceAI-anthropic`, `traceAI-litellm`, ...). Semantic Kernel already puts `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` on its `chat` span, and this package keeps them there. A client instrumentor adds a second `LLM` span for the same request with the same tokens, and the processor only touches Semantic Kernel spans, so Observe's trace and session token sums count every model call twice. Use one or the other: this package for the Semantic Kernel tree, or the client instrumentor alone.
+
 ## Sensitive content
 
 > **Warning.** `sensitive=True` turns on Semantic Kernel's *sensitive* diagnostics. Semantic Kernel then puts agent input and output messages, tool-call arguments and tool results on spans, and this package copies them to `input.value` / `output.value`. Leave `sensitive=False` (the default) unless you want that text stored in Future AGI.
@@ -88,7 +93,7 @@ invoke_agent Assistant                    AGENT
 | Provider | `gen_ai.provider.name` | Copied from Semantic Kernel's `gen_ai.system` when absent. `gen_ai.system` is kept. |
 | Input / output tokens | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | Semantic Kernel, on `chat` spans only (`decorators.py` 421-427). Streaming included (the OpenAI connector requests `include_usage`). |
 | Total tokens | `gen_ai.usage.total_tokens` | Derived on `LLM` spans when both parts exist. |
-| Token/cost on other spans | `semantic_kernel.usage.*` | Any promoted token/cost key on a non-`LLM` span is moved here so Observe's trace-wide sums count each model call once. Semantic Kernel 1.44.1 puts none there; this is a guard. |
+| Token/cost on other spans | `semantic_kernel.usage.*` | Any promoted token/cost key on a non-`LLM` Semantic Kernel span is moved here so Observe's trace-wide sums count each Semantic Kernel model call once. Semantic Kernel 1.44.1 puts none there; this is a guard. It does not cover spans from a client-level instrumentor (see "Ordering and other instrumentors"). |
 | Cost | none | Not emitted. Not invented. |
 | Session | `session.id` | From `gen_ai.conversation.id` when present (Semantic Kernel 1.44.1 emits none), or from `using_session` / `using_attributes`, which the processor copies onto Semantic Kernel spans at start. |
 | User | `user.id` | Only from `using_attributes(user_id=...)`. |

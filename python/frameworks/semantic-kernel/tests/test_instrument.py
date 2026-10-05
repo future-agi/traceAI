@@ -387,6 +387,37 @@ def test_moved_sk_module_is_skipped_with_a_warning(instrumentor, provider, monke
     )
 
 
+def test_later_add_span_processor_drops_ours_until_reinstrumented(monkeypatch):
+    """Pins the README ordering note (R4); the reset is fi_instrumentation behaviour.
+
+    fi's TracerProvider.add_span_processor shuts down and empties the chain on
+    its first call after construction (fi_instrumentation/otel.py), which also
+    removes this package's processor. uninstrument() + instrument() recovers.
+    """
+    from fi_instrumentation.otel import TracerProvider as FiTracerProvider
+
+    monkeypatch.setenv("FI_API_KEY", "placeholder-api-key")
+    monkeypatch.setenv("FI_SECRET_KEY", "placeholder-secret-key")
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")  # default exporter is replaced before any span
+    fi_provider = FiTracerProvider(verbose=False)
+    tracer_scope = "semantic_kernel.utils.telemetry.model_diagnostics.decorators"
+    inst = SemanticKernelInstrumentor()
+    try:
+        inst.instrument(tracer_provider=fi_provider)
+        exporter = InMemorySpanExporter()
+        fi_provider.add_span_processor(SimpleSpanProcessor(exporter))  # after instrument(): wrong order
+        assert inst.processor not in fi_provider._active_span_processor._span_processors
+        fi_provider.get_tracer(tracer_scope).start_span("chat m", attributes={"gen_ai.operation.name": "chat"}).end()
+        assert "fi.span.kind" not in exporter.get_finished_spans()[-1].attributes
+
+        inst.uninstrument()
+        inst.instrument(tracer_provider=fi_provider)
+        fi_provider.get_tracer(tracer_scope).start_span("chat m", attributes={"gen_ai.operation.name": "chat"}).end()
+        assert exporter.get_finished_spans()[-1].attributes["fi.span.kind"] == "LLM"
+    finally:
+        inst.uninstrument()
+
+
 def test_failed_instrument_rolls_back(provider, monkeypatch):
     import traceai_semantic_kernel as package
 
