@@ -62,9 +62,11 @@ client.search("What is OpenTelemetry?")
 
 If your own LangChain tool calls `TavilyClient.search` and both instrumentors
 are on, one tool call gives two spans: the LangChain tool span and a
-`tavily.search` span. `traceAI-langchain` does not make its spans current, so
-`tavily.search` starts its own trace. To make it a child of the tool span, make
-that span current around the call:
+`tavily.search` span. `tavily.search` is a child of whatever OpenTelemetry span
+is current when the client is called, and starts its own trace only when no
+span is current. `traceAI-langchain` does not make its tool span current, so
+`tavily.search` is not a child of it. To make it one, make the tool span current
+around the call:
 
 ```python
 from opentelemetry import trace
