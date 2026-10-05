@@ -416,10 +416,29 @@ does not do it for you. To keep only traceai-openai's span, pass
 only `ChatCompletion` and `POST`. To keep only OpenLIT's, do not enable
 traceai-openai.
 
-If traceAI's `register()`, or anything else, has already set a global tracer
-provider, `openlit.init()` reuses it and adds no exporter, so
-`otlp_endpoint` and `otlp_headers` do nothing for spans
-(`tracing.py:56-59`; read from source, not tested).
+### traceAI's `register()`
+
+`openlit.init()` reuses the global tracer provider if it is an SDK
+`TracerProvider`, and otherwise creates its own (`tracing.py:56-59`).
+traceAI's `register()` makes its provider global only when asked
+(`set_global_tracer_provider: bool = False`,
+`python/fi_instrumentation/otel.py:102`, `:245-246`). The test
+(`tests/register_first.py`) calls `register()` first, then the recipe's
+`init_tracing()`, and makes the model call inside a span from `register()`'s
+provider. Both cases were tested:
+
+- `register(set_global_tracer_provider=True)` first: `openlit.init()` reuses
+  that provider and adds no exporter, so `otlp_endpoint`, `otlp_headers` and
+  `OTEL_RESOURCE_ATTRIBUTES` are ignored for spans. All three spans went to
+  `register()`'s endpoint (`FI_BASE_URL` plus `/tracer/v1/traces`) with
+  `register()`'s keys and project.
+- `register()` with its default first: the process has two providers and
+  two exports. OpenLIT's spans (`chat gpt-4o-mini`, `POST`) went to
+  `otlp_endpoint` under the `OTEL_RESOURCE_ATTRIBUTES` project, and the
+  `register()` span went to `FI_BASE_URL` under `register()`'s project. They
+  are still one trace: the model-call span's parent is the `register()` span,
+  which is in the other export, and in the other project unless the two
+  project names match.
 
 ### Firecrawl
 
@@ -489,8 +508,9 @@ env -u PYTHONPATH PYTHONPATH="python/examples/openlit:python:python/tests" \
 ```
 
 For Python 3.13, replace `--python 3.11`. `python` is on the path and
-`jsonschema` is installed only because pytest imports `python/__init__.py`,
-which imports `fi_instrumentation`; the recipe needs neither.
+`jsonschema` is installed because pytest imports `python/__init__.py`, which
+imports `fi_instrumentation`, and because the `register()` test imports
+`fi_instrumentation` from `python/`. The recipe needs neither.
 
 The two traceai-openai tests skip in that environment. To run them, add
 `--with 'traceai-openai==0.1.10'`. That package requires `wrapt<2` (through

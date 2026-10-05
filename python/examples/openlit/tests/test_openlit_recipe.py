@@ -39,6 +39,7 @@ VARIANT = TESTS_DIR / "recipe_variant.py"
 TRACED_FUNCTION = TESTS_DIR / "traced_function.py"
 TOOL_CALL_SCRIPT = TESTS_DIR / "tool_call.py"
 FAILED_CALL = TESTS_DIR / "failed_call.py"
+REGISTER_FIRST = TESTS_DIR / "register_first.py"
 GUARD = TESTS_DIR / "_guarded_run.py"
 GUARD_PROBE = TESTS_DIR / "_guard_probe.py"
 
@@ -783,6 +784,58 @@ def test_disabling_openlits_openai_instrumentor_leaves_one_model_span(tmp_path: 
     spans = _by_name(record["spans"])
     assert set(spans) == {"ChatCompletion", HTTP_SPAN}
     assert spans[HTTP_SPAN]["parentSpanId"] == spans["ChatCompletion"]["spanId"]
+
+
+REGISTER_PROJECT = "register-project"
+
+
+@pytest.mark.parametrize("global_provider", [False, True], ids=["default", "global"])
+def test_register_before_openlit_init(tmp_path: Path, global_provider: bool) -> None:
+    """traceAI's register() first: one provider only if it was made global."""
+    with Receiver() as recipe_collector, Receiver() as register_collector, FakeOpenAI(
+        ANSWER
+    ) as fake:
+        result, guard_attempts = _launch(
+            tmp_path,
+            REGISTER_FIRST,
+            recipe_collector.origin,
+            fake,
+            FI_BASE_URL=register_collector.origin,
+            REGISTER_PROJECT=REGISTER_PROJECT,
+            REGISTER_GLOBAL="1" if global_provider else None,
+        )
+        recipe_requests, recipe_spans = recipe_collector.requests(), recipe_collector.spans()
+        register_requests = register_collector.requests()
+        register_spans = register_collector.spans()
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert guard_attempts == []
+    assert ANSWER in result.stdout.decode("utf-8", "replace")
+
+    def projects(requests: list[dict[str, Any]]) -> set[str]:
+        return {r["project_name"] for request in requests for r in request["resource_attributes"]}
+
+    # One trace either way: the model call is a child of register()'s span.
+    spans = _by_name(recipe_spans + register_spans)
+    assert set(spans) == {"traceai_span", LLM_SPAN, HTTP_SPAN}
+    assert len({span["traceId"] for span in spans.values()}) == 1
+    assert spans[LLM_SPAN]["parentSpanId"] == spans["traceai_span"]["spanId"]
+    if global_provider:
+        # openlit.init() reused register()'s provider: otlp_endpoint,
+        # otlp_headers and OTEL_RESOURCE_ATTRIBUTES did nothing for spans.
+        assert recipe_requests == []
+        assert {span["name"] for span in register_spans} == set(spans)
+    else:
+        # Two providers, two exports, two projects.
+        assert {span["name"] for span in recipe_spans} == {LLM_SPAN, HTTP_SPAN}
+        assert {request["path"] for request in recipe_requests} == {"/v1/traces"}
+        assert projects(recipe_requests) == {PROJECT}
+        assert {span["name"] for span in register_spans} == {"traceai_span"}
+    assert {request["path"] for request in register_requests} == {"/tracer/v1/traces"}
+    assert projects(register_requests) == {REGISTER_PROJECT}
+    for request in register_requests:
+        assert request["headers"].get("x-api-key") == FI_API_KEY
+        assert request["headers"].get("x-secret-key") == FI_SECRET_KEY
 
 
 # --------------------------------------------------------------------------
