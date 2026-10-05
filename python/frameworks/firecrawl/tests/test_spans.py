@@ -317,3 +317,60 @@ def test_error_recording_failure_still_reraises_the_vendor_error(
     finished = spans(exporter)
     assert [span.name for span in finished] == ["firecrawl.scrape"]
     assert finished[0].status.status_code is StatusCode.ERROR
+
+
+# R6: the vendor call runs with the TOOL span current, so HTTP client spans
+# (and anything else the SDK traces) nest under it.
+
+
+def test_http_spans_nest_under_the_tool_span(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeFirecrawl, tracing: Tracing
+) -> None:
+    from firecrawl.v2.utils.http_client import HttpClient
+    from firecrawl.v2.utils.http_client_async import AsyncHttpClient
+    from opentelemetry import trace
+
+    provider, exporter, _ = tracing
+    http_tracer = provider.get_tracer("fake-http-instrumentation")
+    sync_post, async_post = HttpClient.post, AsyncHttpClient.post
+
+    def traced_post(self: Any, *args: Any, **kwargs: Any) -> Any:
+        with http_tracer.start_as_current_span("HTTP POST"):
+            return sync_post(self, *args, **kwargs)
+
+    async def traced_async_post(self: Any, *args: Any, **kwargs: Any) -> Any:
+        with http_tracer.start_as_current_span("HTTP POST"):
+            return await async_post(self, *args, **kwargs)
+
+    monkeypatch.setattr(HttpClient, "post", traced_post)
+    monkeypatch.setattr(AsyncHttpClient, "post", traced_async_post)
+
+    sync_client(fake).scrape("https://example.com")
+
+    async def journey() -> None:
+        await async_client(fake).scrape("https://example.com")
+
+    asyncio.run(journey())
+    # The TOOL span is not left current after the call returns.
+    assert not trace.get_current_span().get_span_context().is_valid
+
+    finished = spans(exporter)
+    assert [span.name for span in finished] == ["HTTP POST", "firecrawl.scrape"] * 2
+    for http_span, tool_span in (finished[0:2], finished[2:4]):
+        assert http_span.parent is not None
+        assert http_span.parent.span_id == tool_span.context.span_id
+        assert http_span.context.trace_id == tool_span.context.trace_id
+
+
+def test_vendor_error_is_recorded_once_and_reraised(fake: FakeFirecrawl, tracing: Tracing) -> None:
+    from firecrawl.v2.utils.error_handler import FirecrawlError
+
+    _, exporter, _ = tracing
+    fake.routes[("POST", "/v2/scrape")] = (500, {"success": False, "error": "internal error"})
+
+    with pytest.raises(FirecrawlError):
+        sync_client(fake).scrape("https://example.com")
+
+    (span,) = spans(exporter)
+    assert span.status.status_code is StatusCode.ERROR
+    assert [event.name for event in span.events] == ["exception"]

@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
+from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 logger = logging.getLogger(__name__)
@@ -199,6 +200,14 @@ def _describe(error: BaseException) -> str:
         return type(error).__name__
 
 
+def _current(span: Span) -> Any:
+    """Make the span current for the vendor call so HTTP client spans nest under
+    it. The wrapper records the exception and ends the span itself."""
+    return trace_api.use_span(
+        span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+    )
+
+
 def _end(span: Span) -> None:
     try:
         span.end()
@@ -223,7 +232,8 @@ class OperationWrapper(_BaseWrapper):
             return wrapped(*args, **kwargs)
         token = _ACTIVE.set(True)
         try:
-            result = wrapped(*args, **kwargs)
+            with _current(span):
+                result = wrapped(*args, **kwargs)
         except BaseException as error:
             self._finish_error(span, error)
             raise
@@ -250,7 +260,8 @@ class AsyncOperationWrapper(_BaseWrapper):
             return await wrapped(*args, **kwargs)
         token = _ACTIVE.set(True)
         try:
-            result = await wrapped(*args, **kwargs)
+            with _current(span):
+                result = await wrapped(*args, **kwargs)
         except BaseException as error:
             self._finish_error(span, error)
             raise
