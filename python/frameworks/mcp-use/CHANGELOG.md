@@ -14,7 +14,9 @@
 - Content (prompts, messages, model output, tool arguments and results,
   error messages and stack traces) is off by default; `capture_content=True`
   turns it on. `hide_inputs`, `hide_outputs` and `pii_redaction` also apply
-  to error text.
+  to error text. Under `hide_outputs`, model replies and tool results that
+  `MCPAgent` memory or `external_history` sends back on a later turn are
+  outputs too.
 - Secrets (values passed in `redact=`, secret-named environment variables,
   bearer tokens and key-shaped strings) are removed from everything written,
   names and ids included. Recorded text is size-capped.

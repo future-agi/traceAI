@@ -30,6 +30,7 @@ from _mcp_use_support import (
     add_script,
     answer,
     attrs,
+    drive,
     mcp_client,
     new_provider,
     only,
@@ -204,6 +205,102 @@ def test_tool_error_text_is_recorded_with_capture_and_scrubbed_with_hide_inputs(
     assert ARG not in event.attributes["exception.message"]
     assert ARG not in event.attributes["exception.stacktrace"]
     assert ARG not in wire(spans) and "PROMPT-MARKER" not in wire(spans)
+
+
+SECOND_ANSWER = "SECOND-ANSWER done"
+EARLIER_TURN = ("SUM-RESULT", "ANSWER-MARKER")
+
+
+def _quote_the_history(messages: List[Any]) -> Any:
+    """A model step that fails with an error quoting the earlier turns."""
+    earlier = [str(m.content) for m in messages if m.type in ("ai", "tool") and m.content]
+    raise ValueError("model rejected the history: " + " | ".join(earlier))
+
+
+def _three_turns(method: str, external: bool, **options: Any) -> List[Any]:
+    """Three queries on one MCPAgent; returns each turn's spans.
+
+    Turn 1 calls add (SUM-RESULT-5) and answers ANSWER-MARKER. With memory
+    on (mcp-use's default) or the history passed back as external_history,
+    turns 2 and 3 send turn 1's messages to the model again. Turn 2 echoes
+    and answers; in turn 3 the model raises an error quoting the history.
+    """
+    exporter, handler = _traced(capture_content=True, **options)
+    script = add_script() + [
+        tool_call("echo", {"text": "SECOND-ARG"}, "call-2"),
+        answer(SECOND_ANSWER),
+        _quote_the_history,
+    ]
+    turns: List[Any] = []
+
+    async def go() -> None:
+        client = mcp_client()
+        try:
+            agent = MCPAgent(llm=ChatFake(script=script), client=client, callbacks=[handler])
+            assert agent.memory_enabled
+            kwargs: Dict[str, Any] = {}
+            await drive(agent, method, PROMPT)
+            if external:
+                kwargs["external_history"] = list(agent.get_conversation_history())
+                agent.clear_conversation_history()
+            assert kwargs.get("external_history") or agent.get_conversation_history()
+            turns.append(exporter.get_finished_spans())
+            exporter.clear()
+            await drive(agent, method, "SECOND-PROMPT echo it", **kwargs)
+            turns.append(exporter.get_finished_spans())
+            exporter.clear()
+            with pytest.raises(ValueError):
+                await drive(agent, method, "THIRD-PROMPT", **kwargs)
+            turns.append(exporter.get_finished_spans())
+        finally:
+            await client.close_all_sessions()
+
+    asyncio.run(go())
+    assert handler._runs == {}
+    return turns
+
+
+_TURN_MODES = [("run", False), ("stream", False), ("stream_events", False), ("run", True)]
+
+
+@pytest.mark.parametrize("method,external", _TURN_MODES)
+def test_hide_outputs_keeps_earlier_turns_out_of_later_turns(method, external):
+    _, second, third = _three_turns(method, external, config=TraceConfig(hide_outputs=True))
+    for spans in (second, third):
+        text = wire(spans)
+        for marker in EARLIER_TURN + ("ECHO-RESULT", "SECOND-ANSWER"):
+            assert marker not in text, marker
+    assert "SECOND-ARG" not in wire(third)  # turn 2's tool-call arguments are model output
+    # The replayed messages keep their roles and the count; only the
+    # assistant and tool content is dropped.
+    replay = sorted(spans_named(second, LLM_SPAN), key=lambda span: span.start_time)[0]
+    values = attrs(replay)
+    roles = [values["gen_ai.input.messages.{0}.message.role".format(i)] for i in range(5)]
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+    assert values["mcp_use.llm.input_message_count"] == 6
+    assert values["gen_ai.input.messages.5.message.content"] == "SECOND-PROMPT echo it"
+    for index in (2, 3, 4):
+        assert "gen_ai.input.messages.{0}.message.content".format(index) not in values
+    # Inputs are still recorded, and the error text is kept with the earlier
+    # outputs taken out of it.
+    assert attrs(only(third, AGENT))["input.value"] == "THIRD-PROMPT"
+    for span in (only(third, AGENT), only(third, LLM_SPAN)):
+        assert span.status.description.startswith("ValueError: model rejected the history: ")
+        assert REDACTED_VALUE in span.status.description
+        (event,) = span.events
+        assert REDACTED_VALUE in event.attributes["exception.message"]
+
+
+@pytest.mark.parametrize("method,external", _TURN_MODES)
+def test_without_hide_outputs_later_turns_record_the_earlier_turns(method, external):
+    # Control for the test above: the same turns carry turn 1's tool result
+    # and answer as input messages, and the error quotes them.
+    _, second, third = _three_turns(method, external)
+    replay = attrs(sorted(spans_named(second, LLM_SPAN), key=lambda span: span.start_time)[0])
+    assert replay["gen_ai.input.messages.3.message.content"] == "SUM-RESULT-5"
+    assert replay["gen_ai.input.messages.4.message.content"] == ANSWER
+    assert "SUM-RESULT-5" in only(third, LLM_SPAN).status.description
+    assert ANSWER in only(third, AGENT).status.description
 
 
 @pytest.mark.parametrize("retry_on_error", [True, False])

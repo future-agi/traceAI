@@ -47,17 +47,22 @@ FI_SECRET_KEY = "placeholder-fi-secret-key"
 PROJECT = "mcp-use-contract"
 
 
-def _journey(receiver: Receiver, monkeypatch, **options: Any) -> List[Dict[str, Any]]:
-    """J1 (add, then answer) and a failing tool call, through register()."""
+def _register(receiver: Receiver, monkeypatch) -> Any:
     from fi_instrumentation import register
     from fi_instrumentation.fi_types import ProjectType
-    from mcp_use import MCPAgent
 
     monkeypatch.setenv("FI_BASE_URL", receiver.origin)
     monkeypatch.setenv("FI_API_KEY", FI_API_KEY)
     monkeypatch.setenv("FI_SECRET_KEY", FI_SECRET_KEY)
     monkeypatch.setenv(ENV_SECRET_NAME, ENV_SECRET)
-    provider = register(project_type=ProjectType.OBSERVE, project_name=PROJECT, verbose=False)
+    return register(project_type=ProjectType.OBSERVE, project_name=PROJECT, verbose=False)
+
+
+def _journey(receiver: Receiver, monkeypatch, **options: Any) -> List[Dict[str, Any]]:
+    """J1 (add, then answer) and a failing tool call, through register()."""
+    from mcp_use import MCPAgent
+
+    provider = _register(receiver, monkeypatch)
     handler = FutureAGICallback(tracer_provider=provider, **options)
 
     async def go() -> None:
@@ -169,3 +174,47 @@ def test_opt_in_capture_reaches_the_collector_without_keys(monkeypatch):
         assert secret not in text, secret
     agent = _attrs(_trees(spans)[0][0])
     assert agent["input.value"] == PROMPT + " [redacted]"
+
+
+def _two_turns(receiver: Receiver, monkeypatch, **options: Any) -> List[Dict[str, Any]]:
+    """J1, then a second query on the same MCPAgent (memory on, the default)."""
+    from mcp_use import MCPAgent
+
+    provider = _register(receiver, monkeypatch)
+    handler = FutureAGICallback(tracer_provider=provider, capture_content=True, **options)
+
+    async def go() -> None:
+        client = mcp_client("stdio")
+        try:
+            agent = MCPAgent(
+                llm=ChatFake(script=add_script() + [answer("SECOND-ANSWER done")]),
+                client=client,
+                callbacks=[handler],
+            )
+            assert await agent.run(PROMPT) == ANSWER
+            assert await agent.run("SECOND-PROMPT") == "SECOND-ANSWER done"
+        finally:
+            await client.close_all_sessions()
+
+    try:
+        asyncio.run(go())
+        assert provider.force_flush(timeout_millis=10_000)
+    finally:
+        provider.shutdown()
+    return receiver.spans()
+
+
+@pytest.mark.parametrize("hide_outputs", [False, True])
+def test_hide_outputs_keeps_the_first_turn_out_of_the_second_turn_export(monkeypatch, hide_outputs):
+    from fi_instrumentation import TraceConfig
+
+    with Receiver() as receiver:
+        spans = _two_turns(receiver, monkeypatch, config=TraceConfig(hide_outputs=hide_outputs))
+
+    _, second = _trees(spans)
+    assert [span["name"] for span in second] == [AGENT, LLM_SPAN]
+    assert _attrs(second[0])["input.value"] == "SECOND-PROMPT"
+    text = json.dumps(second)
+    for marker in ("SUM-RESULT-5", "ANSWER-MARKER"):
+        # The control (hide_outputs off) shows the second turn replays them.
+        assert (marker in text) is not hide_outputs, marker

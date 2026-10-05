@@ -159,12 +159,29 @@ environment variables before creating the callback:
 | Setting | Effect |
 |---|---|
 | `hide_inputs` / `FI_HIDE_INPUTS=true` | `input.value` is `__REDACTED__`; input messages and tool-call arguments (on tool spans and in model replies) are dropped. With `capture_content`, error messages and stack traces have every input text of the run replaced with `__REDACTED__`: the user messages, the messages sent to the model, and each string value of each tool call's arguments. |
-| `hide_outputs` / `FI_HIDE_OUTPUTS=true` | `output.value` is `__REDACTED__`; output messages and tool results are dropped. The error text of a tool failure that came back as the tool's result is dropped, and other error text has every output of the run (model replies, their tool-call arguments, tool results) replaced with `__REDACTED__`. |
+| `hide_outputs` / `FI_HIDE_OUTPUTS=true` | `output.value` is `__REDACTED__`; output messages and tool results are dropped. Model replies and tool results sent back to the model as input messages (later in the same run, or from earlier turns; see below) keep their role but lose their content and tool-call arguments, and an LLM span whose last input message is one of them has `input.value` `__REDACTED__`. The error text of a tool failure that came back as the tool's result is dropped, and other error text has every output the run has seen (model replies, their tool-call arguments, tool results, earlier turns' included) replaced with `__REDACTED__`. |
 | `pii_redaction` / `FI_PII_REDACTION=true` | Emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` keys become tokens such as `<EMAIL_ADDRESS>` in every recorded text: attributes, the error status and the `exception` event. It runs after secrets (and hidden inputs/outputs) are removed and before the size caps. |
 
 `config` must be a `fi_instrumentation.TraceConfig`; anything else raises
 `TypeError`. Other `TraceConfig` fields act only through `FITracer`'s
 attribute masking.
+
+Multi-turn conversations: `MCPAgent` keeps memory by default
+(`memory_enabled=True`) and sends the earlier turns, model replies and tool
+results included, back to the model as input on the next `run()`,
+`stream()` or `stream_events()` call (`mcp_use/agents/mcpagent.py:76`,
+`:724-732`, `:879-880`, `:981-983`); `external_history` does the same.
+Each call is its own agent span. Under `hide_outputs`, every assistant- or
+tool-role message (any role other than user and system) among a run's
+input messages counts as an output: its content and tool-call arguments
+are dropped from the input messages and removed from every other text of
+that run, error text included. The callback reads them when the run
+starts, before it writes any of the run's spans. This is
+tested over three turns on one agent through `run()`, `stream()`,
+`stream_events()` and `external_history`, and on the export. User messages
+of earlier turns are inputs: they are recorded unless `hide_inputs` is on.
+The texts a run remembers include its replayed history, so in a long
+conversation the per-run limit below is reached sooner.
 
 The hide flags match each text verbatim, and also in its Python-repr and
 JSON-quoted forms; a copy that was escaped differently, cut or reworded

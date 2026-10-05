@@ -196,6 +196,12 @@ def _role(message: Any) -> str:
     return "unknown"
 
 
+def _is_output_role(role: str) -> bool:
+    """A message the model or a tool wrote: assistant, tool, or any role
+    other than user and system (fail closed for hide_outputs)."""
+    return role not in ("user", "system")
+
+
 def _content(message: Any) -> Optional[str]:
     """Text of a LangChain message object or a {"role", "content"} dict."""
     if isinstance(message, Mapping):
@@ -232,6 +238,24 @@ def _strings_in(value: Any, depth: int = 0) -> Iterable[str]:
     elif isinstance(value, (list, tuple)):
         for item in value:
             yield from _strings_in(item, depth + 1)
+
+
+def _replayed_outputs(messages: Iterable[Any]) -> List[Optional[str]]:
+    """Content and tool-call argument strings of the output-role messages
+    among a run's input messages.
+
+    MCPAgent keeps memory by default and sends earlier turns (their replies,
+    tool calls and tool results) back as input on the next run, as does
+    ``external_history``: for hide_outputs these are outputs.
+    """
+    texts: List[Optional[str]] = []
+    for message in messages:
+        if not _is_output_role(_role(message)):
+            continue
+        texts.append(_content(message))
+        for call in _tool_calls(message):
+            texts.extend(_strings_in(call.get("args")))
+    return texts
 
 
 def _mcp_use_error(output: Any) -> Optional[Mapping[str, Any]]:
@@ -610,20 +634,20 @@ class FutureAGICallback(BaseCallbackHandler):
                 OPERATION: "invoke_agent",
             }
             run, root = self._begin(run_id, parent_run_id, _CHAIN, AGENT_SPAN_NAME, attributes)
-            if run is None or run.kind != _AGENT or run.span is None:
+            if run is None or run.kind != _AGENT:
                 return
             messages = inputs.get("messages") if isinstance(inputs, Mapping) else None
-            texts = [_content(m) for m in messages or []] if isinstance(
-                messages, list
-            ) else []
-            self._remember(root, texts, output=False)
-            if not self._capture:
+            history = messages if isinstance(messages, list) else []
+            self._remember(root, [_content(m) for m in history], output=False)
+            # Earlier turns' outputs, known before any content of this run is written.
+            self._remember(root, _replayed_outputs(history), output=True)
+            if run.span is None or not self._capture:
                 return
             if self._hide_inputs:
                 self._set(run.span, INPUT_VALUE, REDACTED_VALUE)
                 return
             query = None
-            for message in reversed(messages or []) if isinstance(messages, list) else []:
+            for message in reversed(history):
                 if _role(message) == "user":
                     query = _content(message)
                     break
@@ -751,8 +775,13 @@ class FutureAGICallback(BaseCallbackHandler):
         attributes: Dict[str, Any] = {}
         for index, message in enumerate(list(messages)[-MAX_MESSAGES:]):
             base = "{0}.{1}.message".format(prefix, index)
-            attributes[base + ".role"] = _role(message)
-            text = self._clean(_content(message), root, MAX_VALUE_BYTES)
+            role = _role(message)
+            attributes[base + ".role"] = role
+            # Replies and tool results sent back as input (the run's own, or
+            # earlier turns' from MCPAgent memory) are outputs: hide_outputs
+            # drops their content and tool-call arguments.
+            hidden = self._hide_outputs and _is_output_role(role)
+            text = None if hidden else self._clean(_content(message), root, MAX_VALUE_BYTES)
             if text:
                 attributes[base + ".content"] = text
             for call_index, call in enumerate(_tool_calls(message)[:MAX_TOOL_CALLS]):
@@ -765,7 +794,7 @@ class FutureAGICallback(BaseCallbackHandler):
                     attributes[call_base + ".id"] = call_id
                 # Tool-call arguments are the tool's input, also when they
                 # appear in the model's output: hide_inputs drops them.
-                if self._hide_inputs:
+                if self._hide_inputs or hidden:
                     continue
                 arguments = self._clean(_json(call.get("args")), root, MAX_VALUE_BYTES)
                 if arguments:
@@ -791,6 +820,7 @@ class FutureAGICallback(BaseCallbackHandler):
             for call in _tool_calls(message):
                 texts.extend(_strings_in(call.get("args")))
         self._remember(root, texts, output=False)
+        self._remember(root, _replayed_outputs(messages), output=True)
         if not self._capture:
             return
         if self._hide_inputs:
@@ -799,6 +829,9 @@ class FutureAGICallback(BaseCallbackHandler):
         for key, value in self._message_attributes(INPUT_MESSAGES, messages, root).items():
             self._set(run.span, key, value)
         if messages:
+            if self._hide_outputs and _is_output_role(_role(messages[-1])):
+                self._set(run.span, INPUT_VALUE, REDACTED_VALUE)
+                return
             last = self._clean(_content(messages[-1]), root, MAX_VALUE_BYTES)
             if last:
                 self._set(run.span, INPUT_VALUE, last)

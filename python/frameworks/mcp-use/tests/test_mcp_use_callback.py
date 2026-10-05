@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import UUID, uuid4
 
 import pytest
@@ -88,10 +88,11 @@ def _result(message: AIMessage) -> LLMResult:
 class Run:
     """One agent run, driven callback by callback like LangGraph does."""
 
-    def __init__(self, handler: FutureAGICallback, query: str = PROMPT) -> None:
+    def __init__(self, handler: FutureAGICallback, query: str = PROMPT, earlier: Sequence[Any] = ()) -> None:
         self.handler = handler
         self.root = uuid4()
-        self.history: List[Any] = [HumanMessage(content=query)]
+        # ``earlier``: messages of previous turns (MCPAgent memory).
+        self.history: List[Any] = list(earlier) + [HumanMessage(content=query)]
         handler.on_chain_start(
             {}, {"messages": list(self.history)}, run_id=self.root, name="LangGraph"
         )
@@ -295,6 +296,59 @@ def test_hide_outputs_drops_every_output():
         assert not any(key.startswith("gen_ai.output.messages") for key in values)
         assert "gen_ai.tool.call.result" not in values
     assert attrs(only(spans, AGENT))["input.value"] == PROMPT
+
+
+def test_hide_outputs_drops_earlier_turns_replayed_as_input():
+    # mcp-use's memory (or external_history) sends earlier turns' replies
+    # and tool results back as input: under hide_outputs they are outputs.
+    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_outputs=True))
+    earlier = [
+        HumanMessage(content="OLD-PROMPT"),
+        AIMessage(
+            content="OLD-THINKING",
+            tool_calls=[{"name": "add", "args": {"note": "OLD-ARG"}, "id": "c0", "type": "tool_call"}],
+        ),
+        ToolMessage(content="OLD-RESULT", tool_call_id="c0"),
+        {"role": "assistant", "content": "OLD-ANSWER"},
+    ]
+    run = Run(handler, earlier=earlier)
+    node = run.node("model")
+    llm = uuid4()
+    handler.on_chat_model_start(
+        {}, [[SystemMessage(content="You are an MCP agent.")] + run.history], run_id=llm, parent_run_id=node
+    )
+    error = ValueError("cannot use OLD-RESULT, OLD-ANSWER, OLD-ARG or OLD-THINKING")
+    handler.on_llm_error(error, run_id=llm, parent_run_id=node)
+    handler.on_chain_error(error, run_id=node, parent_run_id=run.root)
+    handler.on_chain_error(error, run_id=run.root)
+    spans = exporter.get_finished_spans()
+    text = wire(spans)
+    for marker in ("OLD-RESULT", "OLD-ANSWER", "OLD-ARG", "OLD-THINKING"):
+        assert marker not in text, marker
+    llm_span = attrs(only(spans, "chat"))
+    roles = [llm_span["gen_ai.input.messages.{0}.message.role".format(i)] for i in range(6)]
+    assert roles == ["system", "user", "assistant", "tool", "assistant", "user"]
+    assert llm_span["gen_ai.input.messages.1.message.content"] == "OLD-PROMPT"
+    assert llm_span["gen_ai.input.messages.5.message.content"] == PROMPT
+    for index in (2, 3, 4):
+        assert "gen_ai.input.messages.{0}.message.content".format(index) not in llm_span
+    call = "gen_ai.input.messages.2.message.tool_calls.0.tool_call."
+    assert llm_span[call + "function.name"] == "add"
+    assert call + "function.arguments" not in llm_span
+    assert llm_span["input.value"] == PROMPT
+    for span in spans:
+        assert span.status.description == "ValueError: cannot use {0}, {0}, {0} or {0}".format(REDACTED_VALUE)
+
+
+def test_hide_outputs_with_a_replayed_reply_last_redacts_the_llm_input_value():
+    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_outputs=True))
+    run = Run(handler)
+    run.history.append(ToolMessage(content="OLD-RESULT", tool_call_id="c0"))
+    run.llm(AIMessage(content=ANSWER))
+    run.finish()
+    llm = attrs(only(exporter.get_finished_spans(), LLM_SPAN))
+    assert llm["input.value"] == REDACTED_VALUE
+    assert "OLD-RESULT" not in wire(exporter.get_finished_spans())
 
 
 def test_hide_flags_are_read_from_the_environment(monkeypatch):
