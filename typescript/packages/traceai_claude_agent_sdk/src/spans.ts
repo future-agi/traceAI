@@ -287,6 +287,8 @@ export class QueryTracer {
   private conversationContext?: Context;
   private conversationIsError = false;
   private resultSeen = false;
+  /** A result arrived and no assistant/user message has followed it yet. */
+  private idleAfterResult = false;
   private sessionId?: string;
   private finished = false;
   private abortListener?: () => void;
@@ -378,6 +380,9 @@ export class QueryTracer {
     }
     try {
       const type = (message as { type?: unknown }).type;
+      if (type === "assistant" || type === "user") {
+        this.idleAfterResult = false;
+      }
       if (type === "assistant") {
         this.onAssistant(message as AssistantMessageLike);
       } else if (type === "user") {
@@ -402,9 +407,11 @@ export class QueryTracer {
     if (!this.conversation) {
       return;
     }
-    // close()/asyncDispose/abort after a result with nothing still running
-    // (no open turn, tool or subagent) cancels nothing: end it as returned.
-    if (outcome.kind === "aborted" && this.resultSeen && this.nothingInFlight()) {
+    // close()/asyncDispose/abort right after a result, with nothing still
+    // running (no open turn, tool or subagent), cancels nothing: end it as
+    // returned. Any assistant/user message after the result means a new turn
+    // is under way, even between model steps when no span is open.
+    if (outcome.kind === "aborted" && this.idleAfterResult && this.nothingInFlight()) {
       outcome = { kind: "returned" };
     }
     try {
@@ -576,6 +583,7 @@ export class QueryTracer {
       this.setSessionId(message.session_id);
     }
 
+    this.idleAfterResult = true;
     this.recordUsage(cumulativeUsage(message));
     if (typeof message.duration_ms === "number") {
       conversation.setAttribute(A.DURATION_MS, message.duration_ms);

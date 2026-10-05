@@ -26,12 +26,18 @@ import {
   TOOL_INPUT_MARKER,
   TOOL_OUTPUT_MARKER,
   TOTAL_COST_USD,
+  assistant,
   backgroundedSubagentJourney,
+  init,
   mcpErrorJourney,
+  resultSuccess,
   simpleToolJourney,
   streamingInputJourney,
   subagentJourney,
   taskNotification,
+  text,
+  toolResult,
+  toolUse,
 } from "./fixtures/messages";
 import { StackContextManager, allAttributeText, byName, drain, memoryProvider, one, parentId } from "./helpers";
 
@@ -671,6 +677,42 @@ describe("wrapQuery", () => {
           expect(span.ended).toBe(true);
           expect(span.attributes["claude_agent.cancelled"]).toBeUndefined();
         }
+      },
+    );
+
+    /** Streaming input: turn 1 ends with a result, turn 2 is mid-tool-loop (its turn span already ended). */
+    function secondTurnBetweenModelSteps(): SDKMessage[] {
+      return [
+        init(),
+        assistant("msg_s1", [text("First answer.")]),
+        resultSuccess("First answer.", { num_turns: 1 }),
+        assistant("msg_s2", [toolUse("toolu_read_2", "Read", { file_path: "/tmp/b.md" })]),
+        toolResult("toolu_read_2", "# b"),
+        assistant("msg_s3", [text("Second answer.")]),
+        resultSuccess("Second answer.", { num_turns: 2 }),
+      ];
+    }
+
+    it.each(["close", "asyncDispose", "abort"] as const)(
+      "M1: %s() in a later streaming turn, between model steps, stays cancelled",
+      async (method) => {
+        const { provider, exporter } = memoryProvider();
+        const abortController = new AbortController();
+        const fake = makeFakeQuery(secondTurnBetweenModelSteps());
+        const q = wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT, options: { abortController } });
+        // Read through turn 2's tool_result: the turn span has ended, the next model step has no span yet.
+        for (;;) {
+          const step = await q.next();
+          if (step.done) throw new Error("stream ended early");
+          if (step.value.type === "user") break;
+        }
+        if (method === "close") q.close();
+        else if (method === "asyncDispose") await (q as unknown as Record<symbol, () => Promise<void>>)[ASYNC_DISPOSE]();
+        else abortController.abort();
+
+        const conversation = one(exporter.getFinishedSpans(), "claude_agent.conversation");
+        expect(conversation.status.code).toBe(SpanStatusCode.ERROR);
+        expect(conversation.attributes["claude_agent.cancelled"]).toBe(true);
       },
     );
 

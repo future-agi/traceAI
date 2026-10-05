@@ -7,7 +7,8 @@
  * forwards every control method (`interrupt()`, `setModel()`, ...) to the
  * original. `next`, `return`, `throw` and `Symbol.asyncIterator` are
  * intercepted to drive the span model in `spans.ts`; `close()` and
- * `Symbol.asyncDispose` end the open spans as cancelled, then forward.
+ * `Symbol.asyncDispose` end the open spans (as cancelled unless the query was
+ * idle right after a result), then forward.
  */
 import { Tracer, context as otelContext, diag } from "@opentelemetry/api";
 import { ContentPolicy, QueryTracer, clockMs } from "./spans";
@@ -128,7 +129,8 @@ function proxyQuery<G extends AsyncGenerator<unknown, unknown, unknown>>(
       if (typeof value !== "function") return value;
       // close() is the SDK's abort path (sdk.d.ts Query.close) and asyncDispose
       // runs on `await using`: neither goes through next/return/throw, so end
-      // every open span as cancelled before forwarding.
+      // every open span before forwarding (cancelled, unless the query was idle
+      // right after a result: see QueryTracer.finish).
       if (property === "close") {
         return function close(this: unknown, ...args: unknown[]) {
           safe(() => queryTracer.finish({ kind: "aborted", reason: "close" }));
