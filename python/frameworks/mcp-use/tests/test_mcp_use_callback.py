@@ -496,7 +496,7 @@ def test_llm_error_fails_the_llm_and_agent_spans():
 
 def test_mcp_use_formatted_tool_error_is_an_error_span():
     # mcp-use 1.7.1 returns a failed MCP call as format_error()'s dict, as
-    # JSON in the ToolMessage (agents/adapters/langchain_adapter.py:186-205).
+    # JSON in the ToolMessage (agents/adapters/langchain_adapter.py:181-206).
     for capture in (False, True):
         exporter, handler = _handler(capture_content=capture)
         run = Run(handler)
@@ -749,3 +749,19 @@ def test_constructor_validates_its_arguments():
         FutureAGICallback(redact="secret-value")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="strings"):
         FutureAGICallback(redact=[b"secret-value"])  # type: ignore[list-item]
+
+
+def test_hide_flags_fail_closed_when_a_run_remembers_too_much(monkeypatch):
+    import traceai_mcp_use._text as text_module
+
+    monkeypatch.setattr(text_module, "MAX_KNOWN_TEXTS", 4)
+    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_inputs=True))
+    _journey(handler)
+    _failing_tool(handler, ValueError("tool failed because " + ARG))
+    spans = exporter.get_finished_spans()
+    text = wire(spans)
+    for marker in CONTENT_MARKERS + (ANSWER,):
+        assert marker not in text, marker
+    tool = only(spans, "execute_tool fail")
+    assert tool.status.description == "ValueError"
+    assert dict(tool.events[0].attributes) == {"exception.type": "ValueError"}

@@ -172,7 +172,7 @@ def test_capture_content_records_content_without_secrets(monkeypatch):
 
 def test_mcp_tool_error_fails_the_tool_span_and_the_agent_recovers():
     # mcp-use 1.7.1 turns a failed MCP call into a formatted error the LLM
-    # reads (agents/adapters/langchain_adapter.py:186-205), so the run
+    # reads (agents/adapters/langchain_adapter.py:181-206), so the run
     # succeeds; the tool span is ERROR and the agent counts the error.
     exporter, handler = _traced()
     script = [tool_call("fail", {"reason": ARG}), answer()]
@@ -438,3 +438,32 @@ def test_sync_and_async_langchain_dispatch_give_the_same_spans():
         assert attrs(only(spans, "execute_tool add"))["gen_ai.tool.call.result"] == "SUM-RESULT-5"
         shapes.append(sorted((span.name, tuple(sorted(attrs(span)))) for span in spans))
     assert shapes[0] == shapes[1]
+
+
+def test_the_structured_output_formatting_call_has_no_span():
+    # With output_schema, mcp-use 1.7.1 formats the answer after the graph
+    # run with structured_llm.ainvoke(prompt), passing no callbacks
+    # (agents/mcpagent.py:595, 886). That call gets no span and does not
+    # start a second agent span.
+    from langchain_core.runnables import RunnableLambda
+    from pydantic import BaseModel
+
+    class Sum(BaseModel):
+        total: int
+
+    class ChatStructured(ChatFake):
+        def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
+            return RunnableLambda(lambda prompt: Sum(total=5))
+
+    exporter, handler = _traced()
+
+    async def go() -> Any:
+        client = mcp_client()
+        try:
+            agent = MCPAgent(llm=ChatStructured(script=add_script()), client=client, callbacks=[handler])
+            return await agent.run(PROMPT, output_schema=Sum)
+        finally:
+            await client.close_all_sessions()
+
+    assert asyncio.run(go()) == Sum(total=5)
+    _assert_j1_tree(exporter.get_finished_spans())
