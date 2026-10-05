@@ -14,12 +14,11 @@ and the OSI Apache classifier, ships the Apache 2.0 text, and declares
 `requirements.txt` pins `openai` 2.54.0, not the 3.x line. Both are
 dependencies of this example only, not of any traceAI package.
 
-The contract test (see "Tests") passes on Python 3.11.12 and 3.13.15 with
-`openai` 2.54.0, `opentelemetry-sdk` and
+The contract test (see "Tests") passes on Python 3.10, 3.11, 3.12 and 3.13
+with `openai` 2.54.0, `opentelemetry-sdk` and
 `opentelemetry-exporter-otlp-proto-http` 1.45.0 and
 `opentelemetry-instrumentation-httpx` 0.66b0, the versions uv resolved on
-2026-10-05. Python 3.9, 3.10 and 3.12 are inside openlit's range but were
-not tested here.
+2026-10-05. Python 3.9 is inside openlit's range but was not tested here.
 
 ## Run
 
