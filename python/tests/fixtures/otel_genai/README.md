@@ -111,8 +111,9 @@ What that means for each fixture:
 attributes and status. The Receiver stores what it receives. It does not
 authenticate, stamp projects or derive columns.
 
-`columns.golden.json` records the expected columns and the alias lists above,
-with their line numbers. `derive_columns()` applies those lists to the stored
+`columns.golden.json` records the expected columns, the alias lists above
+with their line numbers, and the source of `firstString` and `firstNumber`.
+`derive_columns()` applies those lists to the stored
 attributes the way `DeriveHotKeys` does (`adapter.go:212-235`, `:316-346`),
 for the string and integer values these fixtures use. The tests check:
 
