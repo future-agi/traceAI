@@ -11,14 +11,17 @@ Install the example first: ``npm install`` in typescript/examples/tanstack-ai.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import shutil
 import socket
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Iterator
 
 import pytest
 
@@ -289,6 +292,44 @@ def test_unreachable_collector_does_not_fail_chat():
     assert result.returncode == 0, result.stderr.decode()
     assert ANSWER in result.stdout.decode()
     assert "[futureagi] span export failed" in result.stderr.decode()
+
+
+@contextlib.contextmanager
+def _silent_collector() -> Iterator[str]:
+    """A collector that accepts connections and never answers."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(16)
+    held: list[socket.socket] = []
+
+    def accept() -> None:
+        while True:
+            try:
+                connection, _ = server.accept()
+            except OSError:
+                return
+            held.append(connection)
+
+    threading.Thread(target=accept, daemon=True).start()
+    try:
+        yield "http://127.0.0.1:{0}".format(server.getsockname()[1])
+    finally:
+        server.close()
+        for connection in held:
+            connection.close()
+
+
+def test_silent_collector_does_not_hold_the_response():
+    """The route's flush is bounded, so a collector that never answers costs
+    the request at most the flush bound, not the exporter's 10 s timeout."""
+    with _silent_collector() as fi_base_url, FakeOpenAI(CITY, ANSWER) as fake:
+        result = _node(TESTS / "timed_route.mjs", fi_base_url, fake)
+    stdout = result.stdout.decode()
+    assert result.returncode == 0, result.stderr.decode()
+    assert ANSWER in stdout
+    route_ms = int(re.search(r"routeMs=(\d+)", stdout).group(1))
+    assert route_ms < 3000, route_ms
+    assert "[futureagi] span export still pending" in result.stderr.decode()
 
 
 def test_failed_model_call_exports_error_spans():

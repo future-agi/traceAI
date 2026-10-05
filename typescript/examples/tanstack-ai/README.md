@@ -116,8 +116,14 @@ into a browser bundle.
   `register({ batch: true })` does not attach its batch processor with
   `@traceai/fi-core` 1.0.0 on `@opentelemetry/sdk-trace(-base)` 2.11.0 (the
   versions this example installs), so it is not passed.
-- `forceFlush()` rejects when the collector is unreachable. `flushTraces()`
-  logs that and returns, so `chat()` and the route still succeed.
+- `forceFlush()` rejects when the collector is unreachable and can wait for
+  the exporter's 10 s timeout when the collector accepts but does not answer.
+  `flushTraces()` logs either case, waits at most 2 s (`FLUSH_TIMEOUT_MS`),
+  and never throws, so `chat()` and the route still answer.
+- The per-request flush is for serverless routes, where the process can be
+  frozen after the response. In a long-lived server, do not await a flush on
+  the request path: the default `SimpleSpanProcessor` exports each span when
+  it ends. Call `shutdownTraces()` when the process stops.
 - Do not also register the OpenInference TanStack middleware or wrap `chat()`.
   Either duplicates spans.
 

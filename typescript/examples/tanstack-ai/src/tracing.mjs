@@ -32,15 +32,40 @@ function describe(error) {
   return errors.map((e) => e?.message ?? String(e)).join("; ");
 }
 
+/** How long the route waits for span export before it answers anyway. */
+export const FLUSH_TIMEOUT_MS = 2000;
+
 /**
- * Wait for in-flight span exports. Call it in the route's finally. An
- * unreachable collector is logged here and never fails the request.
+ * Wait for in-flight span exports, at most `timeoutMs`. Call it in the
+ * route's finally. Never throws: an unreachable collector is logged, and a
+ * collector that does not answer within the bound is logged and left to
+ * finish in the background (OTLP/HTTP gives up after its own 10 s timeout).
+ *
+ * This is for serverless routes, where the process may be frozen once the
+ * response is sent. In a long-lived server, do not await a flush on the
+ * request path at all: the SimpleSpanProcessor already exports each span when
+ * it ends, so call shutdownTraces() when the process stops instead.
  */
-export async function flushTraces(tracerProvider) {
+export async function flushTraces(tracerProvider, { timeoutMs = FLUSH_TIMEOUT_MS } = {}) {
+  let timer;
+  const timedOut = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(true), timeoutMs);
+    timer.unref?.();
+  });
   try {
-    await tracerProvider.forceFlush();
+    const flushed = tracerProvider.forceFlush().then(() => false);
+    if (await Promise.race([flushed, timedOut])) {
+      console.error(
+        `[futureagi] span export still pending after ${timeoutMs} ms; not waiting`,
+      );
+      flushed.catch((error) => {
+        console.error(`[futureagi] span export failed: ${describe(error)}`);
+      });
+    }
   } catch (error) {
     console.error(`[futureagi] span export failed: ${describe(error)}`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
