@@ -53,7 +53,14 @@ GENKIT_DIR = PKG_DIR / "node_modules" / "genkit"
 PROJECT = "th8240-harness-contract"
 PLACEHOLDER_API_KEY = "contract-api-key-PLACEHOLDER"
 PLACEHOLDER_SECRET_KEY = "contract-secret-key-PLACEHOLDER"
-CONTENT_MARKERS = ("SECRET_PROMPT_MARKER", "SECRET_OUTPUT_MARKER", "SECRET_TOOL_OUTPUT_MARKER", "SECRET_CHUNK_MARKER")
+CONTENT_MARKERS = (
+    "SECRET_PROMPT_MARKER",
+    "SECRET_OUTPUT_MARKER",
+    "SECRET_TOOL_OUTPUT_MARKER",
+    "SECRET_CHUNK_MARKER",
+    "SECRET_STRUCTURED_OUTPUT_MARKER",
+)
+REDACTED_NOTE = "[data redacted: captureContent is off]"
 PROMOTED_EXACT = {
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.output_tokens",
@@ -411,6 +418,62 @@ def test_throwing_action_marks_error_with_exception_event(built_package: Path) -
     # Genkit marks only the first failing span as the failure source (instrumentation.ts:164-172).
     assert _attrs(tool)["genkit:isFailureSource"] is True
     assert "genkit:isFailureSource" not in _attrs(root)
+
+
+def _exception_events(span: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        {i["key"]: _value(i["value"]) for i in e.get("attributes", [])} for e in span.get("events", []) if e["name"] == "exception"
+    ]
+
+
+def _run_schema_journey(extra: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    with Receiver() as receiver:
+        result = run([NODE, str(FIXTURE)], env=_fixture_env(receiver.origin, "schema", extra), stdin=None, timeout=90)
+        _check(result, "node run_fixture.mjs (schema)")
+        spans = receiver.spans()
+    output = _last_json_line(result.stdout)
+    # Control: Genkit's ValidationError really carried the model output after "Provided data:".
+    assert "Schema validation failed" in output["error"], output
+    assert "Provided data:" in output["error"] and "SECRET_STRUCTURED_OUTPUT_MARKER" in output["error"], output
+    return {"output": output, "spans": spans}
+
+
+def test_schema_validation_error_does_not_export_model_output_with_content_off(built_package: Path) -> None:
+    """N1: ai.generate with an output schema gets non-matching JSON from the model. Genkit's
+    ValidationError embeds that output in the error message, which Genkit writes to span status
+    and exception events. With captureContent off the model output must appear nowhere."""
+    run_ = _run_schema_journey()
+    spans, model_output = run_["spans"], run_["output"]["modelOutput"]
+    blob = json.dumps(spans)
+    assert "SECRET_STRUCTURED_OUTPUT_MARKER" not in blob
+    assert model_output not in blob and json.dumps(model_output) not in blob
+    _assert_no_content(spans)
+
+    flow = _one(spans, "structuredFlow")
+    generate = _one(spans, "generate")
+    for span in (flow, generate):
+        assert _status_code(span) == 2, span["name"]
+        message = span["status"]["message"]
+        assert message.startswith("INVALID_ARGUMENT: Schema validation failed. Parse Errors:"), message
+        assert message.endswith(REDACTED_NOTE) and "Provided data:" not in message, message
+        events = _exception_events(span)
+        assert len(events) == 1, span["name"]
+        # Kept as recorded: sdk-trace-base 1.25 Span.recordException uses `error.code` first
+        # (GenkitError.code is the HTTP status, 400 for INVALID_ARGUMENT).
+        assert events[0]["exception.type"] == "400"
+        assert events[0]["exception.message"] == message
+        assert events[0]["exception.stacktrace"].endswith(REDACTED_NOTE)
+    assert _attrs(generate)["genkit:isFailureSource"] is True
+
+
+def test_schema_validation_error_keeps_data_after_opt_in(built_package: Path) -> None:
+    """Control for N1: with captureContent the same error message is exported unchanged."""
+    spans = _run_schema_journey({"CAPTURE_CONTENT": "1"})["spans"]
+    generate = _one(spans, "generate")
+    assert "Provided data:" in generate["status"]["message"]
+    assert "SECRET_STRUCTURED_OUTPUT_MARKER" in generate["status"]["message"]
+    assert "SECRET_STRUCTURED_OUTPUT_MARKER" in _exception_events(generate)[0]["exception.message"]
+    assert REDACTED_NOTE not in json.dumps(spans)
 
 
 def test_beta_agent_session_id_maps_to_session_id(built_package: Path) -> None:

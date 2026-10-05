@@ -110,6 +110,80 @@ describe("FIGenkitSpanProcessor: forwarding to the Future AGI provider", () => {
   });
 });
 
+describe("FIGenkitSpanProcessor: schema-validation data in errors", () => {
+  // @genkit-ai/core 1.42.0 src/schema.ts:78 (ValidationError) and src/error.ts:78 (GenkitError prefix).
+  // core/src/tracing/instrumentation.ts:156-162 copies e.message to status.message and records the exception.
+  const DATA_MARKER = "SECRET_STRUCTURED_OUTPUT_MARKER";
+  const REDACTED = "[data redacted: captureContent is off]";
+  const head = "INVALID_ARGUMENT: Schema validation failed. Parse Errors:\n\n- /answer: must be string\n\n";
+  const message =
+    head +
+    `Provided data:\n\n${JSON.stringify({ answer: 42, note: DATA_MARKER }, null, 2)}\n\n` +
+    `Required JSON schema:\n\n${JSON.stringify({ type: "object", properties: { answer: { type: "string" } } }, null, 2)}`;
+  const stacktrace = `GenkitError: ${message}\n    at parseSchema (schema.js:71:11)\n    at GenerateResponse.assertValidSchema (response.js:124:7)`;
+  const validationSpan = (spanId: string) =>
+    v1Span({
+      name: "generate",
+      attributes: { ...generateAttributes(), "genkit:state": "error" },
+      spanId,
+      status: { code: 2, message },
+      events: [
+        { name: "custom", time: [1, 0], attributes: { note: "not an exception" } },
+        {
+          name: "exception",
+          time: [1, 5],
+          attributes: { "exception.type": "GenkitError", "exception.message": message, "exception.stacktrace": stacktrace },
+        },
+      ],
+    });
+
+  it("cuts everything from 'Provided data:' in status.message and exception events when content is off", async () => {
+    const { exporter, provider } = fiLikeProvider();
+    const span = validationSpan("9999999999999991");
+    const processor = new FIGenkitSpanProcessor({ tracerProvider: provider });
+    processor.onEnd(span);
+    await processor.forceFlush();
+    const [exported] = exporter.getFinishedSpans();
+    expect(JSON.stringify({ status: exported.status, events: exported.events })).not.toContain(DATA_MARKER);
+    expect(exported.status).toEqual({ code: 2, message: head + REDACTED });
+    expect(exported.events.map((e) => e.name)).toEqual(["custom", "exception"]);
+    expect(exported.events[0]).toEqual(span.events[0]);
+    const exception = exported.events[1];
+    expect(exception.time).toEqual([1, 5]);
+    expect(exception.attributes).toEqual({
+      "exception.type": "GenkitError",
+      "exception.message": head + REDACTED,
+      "exception.stacktrace": `GenkitError: ${head}${REDACTED}`,
+    });
+    // Genkit's own span (read by the Dev UI exporter) keeps the full message.
+    expect(span.status.message).toBe(message);
+    expect(span.events[1].attributes?.["exception.message"]).toBe(message);
+  });
+
+  it("exports status.message and exception events unchanged with captureContent", async () => {
+    const { exporter, provider } = fiLikeProvider();
+    const span = validationSpan("9999999999999992");
+    const processor = new FIGenkitSpanProcessor({ tracerProvider: provider, captureContent: true });
+    processor.onEnd(span);
+    await processor.forceFlush();
+    const [exported] = exporter.getFinishedSpans();
+    expect(exported.status).toEqual({ code: 2, message });
+    expect(exported.events).toEqual(span.events);
+    expect(JSON.stringify(exported.events)).toContain(DATA_MARKER);
+  });
+
+  it("leaves error messages without the marker unchanged when content is off", async () => {
+    const { exporter, provider } = fiLikeProvider();
+    const processor = new FIGenkitSpanProcessor({ tracerProvider: provider });
+    const events = [{ name: "exception", time: [1, 0] as [number, number], attributes: { "exception.type": "Error", "exception.message": "boom", "exception.stacktrace": "Error: boom\n    at x (y.js:1:1)" } }];
+    processor.onEnd(v1Span({ name: "lookup", attributes: toolAttributes(), spanId: "9999999999999993", status: { code: 2, message: "boom" }, events }));
+    await processor.forceFlush();
+    const [exported] = exporter.getFinishedSpans();
+    expect(exported.status).toEqual({ code: 2, message: "boom" });
+    expect(exported.events).toEqual(events);
+  });
+});
+
 describe("FIGenkitSpanProcessor: failure isolation", () => {
   it("onEnd never throws when the downstream processor throws", () => {
     const { provider } = fiLikeProvider();

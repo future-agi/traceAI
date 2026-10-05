@@ -9,7 +9,7 @@
  * Env:
  *   FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME   read by fi-core register()
  *   GENKIT_TELEMETRY_SERVER   optional; Genkit's own dev-UI trace exporter target
- *   JOURNEY                   tool | stream | error | agent | sigterm | devserver
+ *   JOURNEY                   tool | stream | error | schema | agent | sigterm | devserver
  *   CAPTURE_CONTENT=1         captureContent: true
  *   SESSION_ID                wrap the flow call in fi-core setSession()
  *   FI_GLOBAL_PROVIDER=1      misconfiguration control: register() as the global provider
@@ -107,6 +107,20 @@ const failingFlow = ai.defineFlow({ name: 'failingFlow', inputSchema: z.string()
   return response.text;
 });
 
+// Structured output the schema rejects: `answer` must be a string. Genkit's
+// ValidationError (@genkit-ai/core src/schema.ts:78) embeds the model output
+// after "Provided data:" and instrumentation.ts:156-162 writes that message to
+// the generate and flow spans' status and exception events.
+export const STRUCTURED_OUTPUT_TEXT = JSON.stringify({ answer: 42, note: 'SECRET_STRUCTURED_OUTPUT_MARKER' });
+const structuredModel = mockModel(ai, {
+  name: 'contract/structured-model',
+  respond: () => ({ text: STRUCTURED_OUTPUT_TEXT, usage: { inputTokens: 7, outputTokens: 5, totalTokens: 12 } }),
+});
+const structuredFlow = ai.defineFlow({ name: 'structuredFlow', inputSchema: z.string() }, async (question) => {
+  const response = await ai.generate({ model: structuredModel, prompt: question, output: { schema: z.object({ answer: z.string() }) } });
+  return response.output;
+});
+
 function withSession(fn) {
   const sessionId = process.env.SESSION_ID;
   if (!sessionId) return fn();
@@ -148,6 +162,13 @@ if (journey === 'tool') {
     await flushAndExit({ error: null });
   } catch (error) {
     await flushAndExit({ error: String(error && error.message) });
+  }
+} else if (journey === 'schema') {
+  try {
+    const result = await structuredFlow(prompt);
+    await flushAndExit({ result, error: null });
+  } catch (error) {
+    await flushAndExit({ error: String(error && error.message), modelOutput: STRUCTURED_OUTPUT_TEXT });
   }
 } else if (journey === 'agent') {
   // Beta agents (genkit/beta defineAgent): Genkit tags the agent span with

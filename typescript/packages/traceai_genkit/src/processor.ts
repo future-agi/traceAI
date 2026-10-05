@@ -89,7 +89,9 @@ export interface FIGenkitSpanProcessorOptions {
   tracerProvider: FITracerProviderLike;
   /**
    * Export Genkit's `genkit:input` / `genkit:output` (also copied to
-   * `input.value` / `output.value`). Default false: content is dropped.
+   * `input.value` / `output.value`). Default false: content is dropped, and
+   * the data Genkit's schema-validation errors embed after "Provided data:" is
+   * cut from the span status message and exception events.
    */
   captureContent?: boolean;
   /** Upper bound for `forceFlush()` / `shutdown()`. Default 30000 ms. They resolve, never reject. */
@@ -98,6 +100,50 @@ export interface FIGenkitSpanProcessorOptions {
 
 const DEFAULT_FLUSH_TIMEOUT_MILLIS = 30_000;
 const DEFAULT_SCOPE: InstrumentationScopeLike = { name: "genkit-tracer" };
+
+/**
+ * Genkit's schema ValidationError puts the rejected input or output after this
+ * marker (`@genkit-ai/core` 1.42.0 src/schema.ts:78), and Genkit copies the
+ * error message to the span status and the exception event
+ * (core/src/tracing/instrumentation.ts:156-162).
+ */
+export const GENKIT_PROVIDED_DATA_MARKER = "Provided data:";
+/** Replaces everything from {@link GENKIT_PROVIDED_DATA_MARKER} on when `captureContent` is off. */
+export const ERROR_DATA_REDACTED_NOTE = "[data redacted: captureContent is off]";
+const EXCEPTION_EVENT_NAME = "exception";
+const EXCEPTION_TEXT_KEYS = ["exception.message", "exception.stacktrace"] as const;
+
+/** Cut a Genkit error text at "Provided data:" and append the fixed note. Text without the marker is returned as is. */
+export function redactErrorData(text: string): string {
+  const at = text.indexOf(GENKIT_PROVIDED_DATA_MARKER);
+  return at === -1 ? text : text.slice(0, at) + ERROR_DATA_REDACTED_NOTE;
+}
+
+function redactStatus(status: SpanStatus): SpanStatus {
+  if (typeof status?.message !== "string") return status;
+  const message = redactErrorData(status.message);
+  return message === status.message ? status : { ...status, message };
+}
+
+/** New event objects for exception events whose message or stacktrace carries Genkit data; the rest are shared. */
+function redactExceptionEvents(events: TimedEventLike[]): TimedEventLike[] {
+  if (!Array.isArray(events)) return events;
+  let changed = false;
+  const out = events.map((event) => {
+    if (event?.name !== EXCEPTION_EVENT_NAME || !event.attributes) return event;
+    let attributes: Attributes | undefined;
+    for (const key of EXCEPTION_TEXT_KEYS) {
+      const value = event.attributes[key];
+      if (typeof value !== "string") continue;
+      const redacted = redactErrorData(value);
+      if (redacted !== value) attributes = { ...(attributes ?? event.attributes), [key]: redacted };
+    }
+    if (!attributes) return event;
+    changed = true;
+    return { ...event, attributes };
+  });
+  return changed ? out : events;
+}
 
 function resolveTarget(provider: FITracerProviderLike): { processor: TargetSpanProcessor; resource: unknown } {
   // sdk-trace-base 2.x keeps these as TypeScript-private fields; 1.x exposed
@@ -124,7 +170,12 @@ function isGlobalTracerProvider(provider: unknown): boolean {
 }
 
 /** Build the sdk-trace-base 2.x view of a span with new attributes and the Future AGI resource. */
-export function toExportableSpan(span: GenkitReadableSpan, attributes: Attributes, resource: unknown): ExportableSpan {
+export function toExportableSpan(
+  span: GenkitReadableSpan,
+  attributes: Attributes,
+  resource: unknown,
+  options: { captureContent?: boolean } = {},
+): ExportableSpan {
   const ctx = span.spanContext();
   let parentSpanContext = span.parentSpanContext;
   const parentSpanId = parentSpanContext?.spanId ?? span.parentSpanId;
@@ -132,6 +183,7 @@ export function toExportableSpan(span: GenkitReadableSpan, attributes: Attribute
     parentSpanContext = { traceId: ctx.traceId, spanId: parentSpanId, traceFlags: ctx.traceFlags, isRemote: false };
   }
   const scope = span.instrumentationScope ?? span.instrumentationLibrary ?? DEFAULT_SCOPE;
+  const captureContent = options.captureContent === true;
   return {
     name: span.name,
     kind: span.kind,
@@ -140,10 +192,10 @@ export function toExportableSpan(span: GenkitReadableSpan, attributes: Attribute
     parentSpanContext,
     startTime: span.startTime,
     endTime: span.endTime,
-    status: span.status,
+    status: captureContent ? span.status : redactStatus(span.status),
     attributes,
     links: span.links,
-    events: span.events,
+    events: captureContent ? span.events : redactExceptionEvents(span.events),
     duration: span.duration,
     ended: span.ended,
     resource,
@@ -247,7 +299,7 @@ export class FIGenkitSpanProcessor {
         captureContent: this.captureContent,
         contextAttributes,
       });
-      this.target.onEnd(toExportableSpan(span, attributes, this.resource));
+      this.target.onEnd(toExportableSpan(span, attributes, this.resource, { captureContent: this.captureContent }));
     } catch (error) {
       diag.warn(`FIGenkitSpanProcessor.onEnd: span not exported: ${error}`);
     }

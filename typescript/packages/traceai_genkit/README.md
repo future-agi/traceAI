@@ -100,7 +100,7 @@ Unavailable at 1.42.0, and not set: provider, cost, user id (unless the app sets
 
 Tokens are written only on model call spans. The `generate` span's `genkit:output` repeats the last turn's usage; it stays inside that JSON and is not promoted. If any non-model span carries a key the collector promotes (`gen_ai.usage.*`, `llm.token_count.*`, `llm.usage.*`, `gen_ai.cost.total`, `llm.cost.total`), the processor moves it to `genkit.usage.<key>`, so the trace-wide token sum equals the model calls.
 
-Errors: Genkit sets the OTel status to `ERROR` and records an `exception` event on every span the error passes through (`core/src/tracing/instrumentation.ts:153-172`); both pass through unchanged. `genkit:isFailureSource` marks the first failing span.
+Errors: Genkit sets the OTel status to `ERROR` and records an `exception` event on every span the error passes through (`core/src/tracing/instrumentation.ts:153-172`). Both are exported; with content off, schema-validation data is cut from them (see [Content](#content)). `genkit:isFailureSource` marks the first failing span.
 
 ### Session
 
@@ -122,8 +122,11 @@ Content is off by default. That is stricter than Genkit, which records inputs an
 | `genkit:input`, `genkit:output`, `genkit:init` | dropped | exported, and copied to `input.value` / `output.value` |
 | `genkit:metadata:interrupt`, `genkit:metadata:resumed` (tool interrupts) | dropped | exported |
 | `genkit:metadata:context` (request context; Genkit redacts `auth` and `secrets`, headers can remain) | dropped | dropped |
+| Span status message, `exception.message` and `exception.stacktrace` of `exception` events | cut at `Provided data:`, followed by `[data redacted: captureContent is off]` | exported unchanged |
 
 Usage and finish reason are read from `genkit:output` before it is dropped, so tokens are present with content off.
+
+Genkit's schema-validation error embeds the rejected data in its message: `Schema validation failed. Parse Errors: ... Provided data: <the JSON> Required JSON schema: ...` (`@genkit-ai/core` `src/schema.ts:78`). It is raised, for example, when `ai.generate({ output: { schema } })` gets model output that does not match the schema (the contract `schema` journey), and Genkit copies the message to the status and the exception event of every span the error passes through. With content off, the processor keeps the text before `Provided data:` (status, parse errors and paths), drops the rest (data, schema and, in the stack trace, the stack frames) and appends `[data redacted: captureContent is off]`. `exception.type` and the event itself are kept. Other error messages are exported as thrown: an error your own code throws with user input in its message is not redacted.
 
 The processor never changes Genkit's span. Genkit's Dev UI and any other exporter see the original attributes; Future AGI gets a mapped copy.
 
@@ -163,4 +166,4 @@ PYTHONPATH=python/tests uv run --no-project --python 3.11 --with pytest --with p
   pytest typescript/packages/traceai_genkit/contract -q -p no:cacheprovider --noconftest -o addopts=''
 ```
 
-The contract suite builds the package, runs `contract/run_fixture.mjs` against the real fi-core exporter and the shared receiver, and checks the collector path and headers, the resource, span names, kinds and parenting, model and tokens, the trace token sum, content off by default with an opt-in control run, one closed model span for a streamed flow, error status and exception events, SIGTERM flushing (with a control that shows a plain listener loses the race), a collector that is down, Genkit's Dev UI reflection server and telemetry export in `GENKIT_ENV=dev`, the inventory drift check, the packed tarball, and the CJS / ESM entry points. `NODE_BINARY` selects the node binary; `TRACEAI_NODE_MATRIX` (path-separated) widens the entry-point check.
+The contract suite builds the package, runs `contract/run_fixture.mjs` against the real fi-core exporter and the shared receiver, and checks the collector path and headers, the resource, span names, kinds and parenting, model and tokens, the trace token sum, content off by default with an opt-in control run, one closed model span for a streamed flow, error status and exception events, schema-validation data cut from status and exception events with content off (and kept after opt-in), SIGTERM flushing (with a control that shows a plain listener loses the race), a collector that is down, Genkit's Dev UI reflection server and telemetry export in `GENKIT_ENV=dev`, the inventory drift check, the packed tarball, and the CJS / ESM entry points. `NODE_BINARY` selects the node binary; `TRACEAI_NODE_MATRIX` (path-separated) widens the entry-point check.
