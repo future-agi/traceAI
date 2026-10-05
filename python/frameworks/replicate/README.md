@@ -68,13 +68,20 @@ The span stays open on the returned prediction:
 
 - `wait()` or `cancel()` on it (or `predictions.cancel(prediction.id)`) ends
   that same span with the final status. Create followed by wait is one span.
+  While that `wait()` or `cancel()` runs, the span belongs to it: the cap, a
+  `force_flush()` and releasing the prediction object leave it alone, so the
+  final status, output and duration are recorded however long the prediction
+  runs. Only `shutdown()` on the provider (including the SIGTERM/SIGINT
+  handler `register()` installs) or interpreter exit ends it earlier, as a
+  best effort: as of that moment, with the last status the client polled and
+  no output, so the span is exported before the processors stop. The call
+  still returns its result to you; it ends no second span.
 - If neither is called, the span ends with the status the create response
   carried (`starting` or `processing`) and the time `create` returned. That
   happens at the first of: the next traced call after the prediction object
   is released or after the span has been held for `max_pending_seconds`;
-  `force_flush()` or `shutdown()` on the tracer provider you passed to
-  `instrument()` (including the SIGTERM/SIGINT handler that `register()`
-  installs, which calls `shutdown()`); `uninstrument()`; interpreter exit. A
+  `force_flush()` or `shutdown()` on the tracer provider (see
+  [which provider](#which-provider)); `uninstrument()`; interpreter exit. A
   `wait()` or `cancel()` after that gets its own span. Such a span is not a
   completion. This package never polls a prediction you did not wait for.
 
@@ -92,9 +99,22 @@ deferred is delivery, not the recorded data. Delivery is bounded:
   shut down. A later `wait()` on that prediction gets its own
   `replicate.prediction.wait` span.
 - **Flush and shutdown.** `force_flush()` and `shutdown()` on the provider
-  you passed to `instrument()` end every held span first, so a flush at the
-  end of a request, a container stop (SIGTERM) or Ctrl-C (SIGINT) under
-  `register()` exports it. `uninstrument()` restores both methods.
+  end every held span first, so a flush at the end of a request, a container
+  stop (SIGTERM) or Ctrl-C (SIGINT) under `register()` exports it. A flush
+  leaves a span whose `wait()`/`cancel()` is still running to that call;
+  `shutdown()` ends it too (see above). `uninstrument()` restores both
+  methods.
+
+#### Which provider
+
+The hooks go on the tracer provider you pass to `instrument()`. Without
+`tracer_provider=`, they go on the global provider at the time
+`instrument()` runs. Call `fi_instrumentation.register()` (or set your own
+global provider) **before** `instrument()`: until a provider is set, the
+global one is OpenTelemetry's placeholder, which has no `force_flush` or
+`shutdown`, so no hook is installed and held spans then depend on the exit
+hook alone, which runs after `register()`'s shutdown has stopped the
+processors.
 
 The prediction you get back is the client's `Prediction` behind a thin
 `wrapt.ObjectProxy`: `isinstance(p, Prediction)` holds, and fields, methods,
