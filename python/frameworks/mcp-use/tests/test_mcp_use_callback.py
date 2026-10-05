@@ -708,6 +708,42 @@ def test_open_runs_are_bounded(monkeypatch):
     assert handler._runs == {}
 
 
+def test_ending_a_run_only_looks_at_its_own_agent_run(monkeypatch):
+    # The open-descendant check on each run end covers the runs under the
+    # same agent run, not every open run of every agent on the handler.
+    exporter, handler = _handler()
+    busy = Run(handler)
+    for _ in range(50):
+        busy.start_tool("slow", {})
+    looked_at: List[UUID] = []
+    descends = handler._descends
+
+    def spy(run: Any, ancestor: UUID) -> bool:
+        looked_at.append(run.root)
+        return descends(run, ancestor)
+
+    monkeypatch.setattr(handler, "_descends", spy)
+    journey = _journey(handler)
+    assert looked_at and set(looked_at) == {journey.root}
+    assert len(handler._runs) == 101  # busy: the root, 50 tools nodes, 50 tools
+    exporter.clear()
+    busy.finish()
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans].count("execute_tool slow") == 50
+    assert all(span.attributes.get("mcp_use.incomplete") for span in spans if span.name != AGENT)
+    assert handler._runs == {} and len(handler._roots) == 0
+
+
+def test_a_repeated_start_of_an_open_agent_run_still_cleans_up():
+    exporter, handler = _handler()
+    run = Run(handler)
+    run.start_tool("slow", {})
+    handler.on_chain_start({}, {"messages": []}, run_id=run.root)  # same id again
+    run.finish()
+    assert handler._runs == {} and len(handler._roots) == 0
+    assert only(exporter.get_finished_spans(), "execute_tool slow").attributes["mcp_use.incomplete"] is True
+
+
 def test_the_current_span_parents_the_agent_span():
     exporter, handler = _handler()
     tracer = new_provider()[1].get_tracer("test")

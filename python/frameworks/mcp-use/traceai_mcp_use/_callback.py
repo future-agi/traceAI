@@ -127,6 +127,9 @@ class _Root:
     llm_calls: int = 0
     tool_calls: int = 0
     tool_errors: int = 0
+    # Ids of the open runs under this agent run, its own included (a dict
+    # as an insertion-ordered set), so ending a run looks at its own tree only.
+    runs: Dict[UUID, None] = field(default_factory=dict)
 
 
 @dataclass
@@ -445,7 +448,8 @@ class FutureAGICallback(BaseCallbackHandler):
                 root_id = run_id
                 if kind == _CHAIN:
                     kind = _AGENT
-                self._roots[root_id] = _Root()
+                # setdefault: a repeated start of an open root keeps its index.
+                self._roots.setdefault(root_id, _Root())
             else:
                 root_id = parent.root
             root = self._roots.get(root_id)
@@ -457,6 +461,7 @@ class FutureAGICallback(BaseCallbackHandler):
                 root.tool_calls += 1
             run = _Run(run_id=run_id, kind=kind, root=root_id, parent=parent_run_id)
             self._runs[run_id] = run
+            root.runs[run_id] = None
             traced_parent = self._traced_ancestor(parent)
             while len(self._runs) > MAX_OPEN_RUNS and len(self._roots) > 1:
                 oldest = next(iter(self._roots))
@@ -490,11 +495,12 @@ class FutureAGICallback(BaseCallbackHandler):
 
     def _forget_root(self, root_id: UUID) -> List[_Run]:
         """Drop an agent run and every run under it; caller holds the lock."""
-        self._roots.pop(root_id, None)
-        dropped = [run for run in self._runs.values() if run.root == root_id]
-        for run in dropped:
-            self._runs.pop(run.run_id, None)
-        return [run for run in dropped if run.span is not None]
+        root = self._roots.pop(root_id, None)
+        if root is None:
+            return []
+        dropped = [self._runs.pop(run_id, None) for run_id in root.runs]
+        root.runs.clear()
+        return [run for run in dropped if run is not None and run.span is not None]
 
     def _descends(self, run: _Run, ancestor: UUID) -> bool:
         parent = run.parent
@@ -513,15 +519,24 @@ class FutureAGICallback(BaseCallbackHandler):
             run = self._runs.pop(run_id, None)
             if run is None:
                 return None, None, []
-            orphans = [other for other in self._runs.values() if self._descends(other, run_id)]
-            for orphan in orphans:
-                self._runs.pop(orphan.run_id, None)
             root = self._roots.get(run.root)
+            if root is None:  # not expected: a root's runs leave with it
+                return run, None, []
+            root.runs.pop(run_id, None)
             if run.run_id == run.root:
+                # The agent run ended: whatever is still open under it.
                 self._roots.pop(run.root, None)
-                for leftover in [other for other in self._runs.values() if other.root == run.root]:
-                    self._runs.pop(leftover.run_id, None)
-                    orphans.append(leftover)
+                orphans = [self._runs.pop(other) for other in root.runs if other in self._runs]
+                root.runs.clear()
+            else:
+                orphans = [
+                    self._runs[other]
+                    for other in root.runs
+                    if other in self._runs and self._descends(self._runs[other], run_id)
+                ]
+                for orphan in orphans:
+                    self._runs.pop(orphan.run_id, None)
+                    root.runs.pop(orphan.run_id, None)
         return run, root, [orphan for orphan in orphans if orphan.span is not None]
 
     # ----------------------------------------------------------------- ending

@@ -276,7 +276,8 @@ the TypeScript agent).
   passed through it. At most 32 messages and 16 tool calls per message are
   recorded per LLM span, and 128 chunk events per streamed LLM span.
 - One callback tracks at most 10,000 open runs. Past that, the oldest
-  agent run is ended with `mcp_use.incomplete` and forgotten.
+  agent run is ended with `mcp_use.incomplete` and forgotten. Ending a run
+  looks only at the open runs of its own agent run, not at other agents'.
 - With `use_server_manager=True`, mcp-use restarts the graph run when the
   tool set changes during a run, up to 3 times
   (`mcp_use/agents/mcpagent.py:741-876`); each restart is a new agent span.
