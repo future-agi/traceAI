@@ -136,8 +136,8 @@ env -u PYTHONPATH PYTHONPATH="python:python/tests" \
 
 For Python 3.13, replace `--python 3.11`. The test itself needs only pytest.
 pytest imports `python/__init__.py` (fi_instrumentation) for any test under
-`python/`, which is why the other packages are listed. A run takes about a
-second.
+`python/`, which is why the other packages are listed. A run takes a few
+seconds.
 
 Two opt-in tests read fi-collector's Go source instead of copying its tables.
 They check that the kind, model, token, `input.value` and `project_name`
