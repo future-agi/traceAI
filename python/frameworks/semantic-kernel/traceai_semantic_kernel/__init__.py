@@ -230,13 +230,18 @@ class SemanticKernelInstrumentor:
         # provider.add_span_processor(): fi_instrumentation's TracerProvider
         # drops its default exporting processor on the first call after
         # register() (fi_instrumentation/otel.py TracerProvider.add_span_processor).
-        existing = [p for p in active._span_processors if isinstance(p, SemanticKernelSpanProcessor)]
-        if existing:
-            processor = existing[0]
-        else:
-            processor = SemanticKernelSpanProcessor(sensitive=sensitive)
-            with getattr(active, "_lock", _NullLock()):
-                active._span_processors = (processor,) + tuple(active._span_processors)
+        # A SemanticKernelSpanProcessor you installed yourself is not adopted:
+        # instrument() installs and owns its own, and uninstrument() removes
+        # only that one. Both then map the span; content keys stripped by
+        # either one stay stripped.
+        if any(isinstance(p, SemanticKernelSpanProcessor) for p in active._span_processors):
+            logger.warning(
+                "traceai-semantic-kernel: this provider already has a SemanticKernelSpanProcessor you installed; "
+                "instrument() adds its own and leaves yours in place. Use one or the other."
+            )
+        processor = SemanticKernelSpanProcessor(sensitive=sensitive)
+        with getattr(active, "_lock", _NullLock()):
+            active._span_processors = (processor,) + tuple(active._span_processors)
         new_state.processor = processor
 
         # 2. Diagnostics switches, in process.

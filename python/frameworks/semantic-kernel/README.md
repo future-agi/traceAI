@@ -46,7 +46,7 @@ with using_session("conversation-123"):   # Semantic Kernel emits no thread id; 
 trace_provider.force_flush()   # short scripts: the batch exporter sends in the background
 ```
 
-`instrument()` is process-wide and idempotent: calling it twice, or on two instances, installs one processor. `uninstrument()` restores Semantic Kernel's switches and tracers and removes the processor.
+`instrument()` is process-wide and idempotent: calling it twice, or on two instances, installs one processor. `uninstrument()` restores Semantic Kernel's switches and tracers and removes the processor. If you also put a `SemanticKernelSpanProcessor` on the provider yourself, `instrument()` does not take it over: it adds its own (with a warning), and `uninstrument()` removes and shuts down only that one. Use one or the other.
 
 A runnable example with a mocked model (no model key) is in [`examples/basic_agent.py`](examples/basic_agent.py).
 

@@ -127,6 +127,28 @@ def test_package_does_not_import_or_depend_on_wrapt():
     assert "wrapt" not in pyproject
 
 
+def test_user_installed_processor_is_not_adopted_or_removed(provider):
+    """instrument() owns only the processor it installs (R5)."""
+    users = SemanticKernelSpanProcessor(sensitive=False)
+    active = provider._active_span_processor
+    active._span_processors = (users,) + tuple(active._span_processors)
+    inst = SemanticKernelInstrumentor()
+    try:
+        inst.instrument(tracer_provider=provider, sensitive=True)
+        assert inst.processor is not users
+        assert inst.processor.sensitive is True
+        assert users.sensitive is False
+        assert users in active._span_processors
+    finally:
+        inst.uninstrument()
+
+    # The user's processor is still installed, not shut down, and still maps spans.
+    assert [p for p in active._span_processors if isinstance(p, SemanticKernelSpanProcessor)] == [users]
+    tracer = provider.get_tracer("semantic_kernel.utils.telemetry.model_diagnostics.decorators")
+    tracer.start_span("chat m", attributes={"gen_ai.operation.name": "chat"}).end()
+    assert provider.exporter.get_finished_spans()[-1].attributes["fi.span.kind"] == "LLM"
+
+
 def test_instrument_twice_installs_one_processor_first_in_line(provider):
     first = SemanticKernelInstrumentor()
     second = SemanticKernelInstrumentor()
