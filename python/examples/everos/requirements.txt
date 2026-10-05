@@ -1,0 +1,6 @@
+# Not a traceAI package: EverOS emits its own spans. These are the versions
+# the contract test ran with (Python >=3.12, EverOS's own floor).
+everos[otel]==1.4.1
+# The otel extra asks only for >=1.27.0; 1.45.0 is what the tests resolved.
+opentelemetry-sdk==1.45.0
+opentelemetry-exporter-otlp-proto-http==1.45.0

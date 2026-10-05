@@ -1,0 +1,10 @@
+{
+ "project_name": "everos-recipe-contract",
+ "project_type": "observe",
+ "service.instance.id": "564fa775-1743-4db2-8d60-82608c9edd50",
+ "service.name": "everos",
+ "service.version": "1.4.1",
+ "telemetry.sdk.language": "python",
+ "telemetry.sdk.name": "opentelemetry",
+ "telemetry.sdk.version": "1.45.0"
+}
