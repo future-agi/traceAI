@@ -74,7 +74,7 @@ def rerun_like_gradio(module, source: str) -> None:
 def main(argv: list[str]) -> int:
     message = argv[1]
     app = load_app()
-    provider = app.init_tracing(trace_content="--content" in argv)
+    provider = app.init_tracing(trace_content=True) if "--content" in argv else app.init_tracing()
     request = gr.Request(session_hash=SESSION_HASH)
     report = {"first_provider": provider.resource.attributes["project_version_id"]}
 

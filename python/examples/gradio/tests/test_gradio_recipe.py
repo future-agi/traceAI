@@ -716,10 +716,33 @@ def test_building_a_gradio_app_contacts_gradio_analytics_unless_turned_off(
     assert "'api.gradio.app'" in targets
 
 
+@pytest.mark.parametrize("content", [False, True], ids=["app-default", "explicit-optin"])
+def test_the_driver_uses_the_app_default_unless_content_is_requested(monkeypatch, content):
+    """The content-off contract run must exercise init_tracing()'s default."""
+    spec = importlib.util.spec_from_file_location("gradio_recipe_driver_v1", DRIVER)
+    assert spec is not None and spec.loader is not None
+    driver = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(driver)
+    calls = []
+
+    def init_tracing(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(
+            resource=SimpleNamespace(attributes={"project_version_id": "fixture-provider"})
+        )
+
+    app = SimpleNamespace(init_tracing=init_tracing, predict=lambda *args: "fixture answer")
+    monkeypatch.setattr(driver, "load_app", lambda: app)
+    argv = ["drive_turns.py", "fixture question"] + (["--content"] if content else [])
+    assert driver.main(argv) == 0
+    assert calls == [((), {"trace_content": True} if content else {})]
+
+
 def test_readme_shows_the_recipe_as_written() -> None:
     readme = README.read_text(encoding="utf-8")
     app = APP.read_text(encoding="utf-8")
     for line in (
+        "def init_tracing(trace_content: bool = False):",
         "project_type=ProjectType.OBSERVE,",
         "config = TraceConfig(hide_inputs=True, hide_outputs=True)",
         "OpenAIInstrumentor().instrument(tracer_provider=provider, config=config)",
