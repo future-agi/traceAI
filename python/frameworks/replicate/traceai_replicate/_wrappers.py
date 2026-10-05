@@ -282,7 +282,9 @@ class PendingRegistry:
 
     def __init__(self) -> None:
         self._calls: Dict[str, _Call] = {}
-        self._lock = threading.Lock()
+        # Re-entrant: a PendingPrediction released by the cyclic GC while this
+        # thread holds the lock ends its span and calls discard() right here.
+        self._lock = threading.RLock()
 
     def add(self, prediction_id: str, call: _Call) -> None:
         call.on_finish = lambda finished: self.discard(prediction_id, finished)
