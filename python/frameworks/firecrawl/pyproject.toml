@@ -12,18 +12,16 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.14"
-fi-instrumentation-otel = ">=0.1.11"
-firecrawl-py = "==4.46.2"
+python = ">=3.10,<3.14"
+fi-instrumentation-otel = ">=1.1.0"
+firecrawl-py = ">=4.46.2,<5"
 wrapt = ">=1.0.0"
 
 [tool.poetry.group.dev.dependencies]
