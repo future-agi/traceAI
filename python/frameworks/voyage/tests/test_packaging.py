@@ -73,7 +73,8 @@ def test_fi_instrumentation_floor_is_1_1_0():
 def test_classifiers_list_only_the_tested_python_versions():
     text = PYPROJECT.read_text()
     versions = re.findall(r'"Programming Language :: Python :: (3\.\d+)"', text)
-    assert versions == ["3.10", "3.11", "3.13"]
+    # Every version the suite runs on (3.10 to 3.13), and nothing else.
+    assert versions == ["3.10", "3.11", "3.12", "3.13"]
     assert _dependency("python") == SpecifierSet(">=3.10,<3.14")
 
 

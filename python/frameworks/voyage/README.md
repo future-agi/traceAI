@@ -16,7 +16,7 @@ pip install traceAI-voyage
 
 It accepts `voyageai>=0.3.7,<1` (0.3.7 is the first release that routes Atlas
 keys) and `fi-instrumentation-otel>=1.1.0`. The suite runs on Python 3.10,
-3.11 and 3.13 against `voyageai` 0.3.7 and 0.5.0.
+3.11, 3.12 and 3.13 against `voyageai` 0.3.7 and 0.5.0.
 
 ## Usage
 
