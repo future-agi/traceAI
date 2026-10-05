@@ -26,6 +26,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 import threading
 from http import HTTPStatus
@@ -564,6 +565,73 @@ def test_traces_endpoint_is_used_as_given(tmp_path: Path) -> None:
     )
     _assert_ran(record)
     assert {request["path"] for request in record["requests"]} == {"/tracer/v1/traces"}
+
+
+def _readme_otlp_setup(env: dict[str, str], origin: str) -> dict[str, Optional[str]]:
+    """Exercise the shipped Run block's OTLP setup with only dummy credentials.
+
+    Do not replace the recipe with a test-only environment reset. Both stale
+    signal-specific values are present before these exact shell lines run.
+    No pip, app, real endpoint or user-shell startup file is executed here.
+    """
+    block = README.read_text(encoding="utf-8").split("## Run\n", 1)[1].split("```bash\n", 1)[1].split("```", 1)[0]
+    lines = [
+        line for line in block.splitlines()
+        if line.startswith("export OTEL_EXPORTER_OTLP_")
+        or line.startswith("unset OTEL_EXPORTER_OTLP_")
+    ]
+    setup = "\n".join(lines).replace("https://YOUR_FI_COLLECTOR_ORIGIN", origin)
+    setup = setup.replace("python -c", shlex.quote(sys.executable) + " -c")
+    names = (
+        "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    )
+    # Serialize ONLY the four dummy test variables, never the ambient environment.
+    emit = "import json,os;print(json.dumps({k:os.environ.get(k) for k in " + repr(names) + "}))"
+    result = run(
+        ["/bin/bash", "--noprofile", "--norc", "-c", "set -eu\n" + setup + "\n" + shlex.quote(sys.executable) + " -c " + shlex.quote(emit)],
+        env={**env, "FI_API_KEY": FI_API_KEY, "FI_SECRET_KEY": FI_SECRET_KEY},
+        stdin=None, timeout=20,
+    )
+    assert not result.timed_out
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    return json.loads(result.stdout)
+
+
+@needs_sdk
+@pytest.mark.parametrize("stale", ["endpoint", "headers", "both"])
+def test_readme_setup_prevents_inherited_destination_and_key_crossover(tmp_path: Path, stale: str) -> None:
+    """The real exporter must honor the copied Run setup, not stale vendor config."""
+    guard_log = tmp_path / "guard.jsonl"
+    with Receiver() as intended, Receiver() as other_vendor:
+        env = _child_env(tmp_path, guard_log, intended.origin)
+        if stale in ("endpoint", "both"):
+            env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] = other_vendor.collector_endpoint
+        if stale in ("headers", "both"):
+            env["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = "x-api-key=other-vendor-placeholder"
+        setup = _readme_otlp_setup(env, intended.origin)
+        for name, value in setup.items():
+            if value is None:
+                env.pop(name, None)
+            else:
+                env[name] = value
+        result = run(
+            [sys.executable, str(GUARD), str(APP), QUESTION],
+            env=env, stdin=None, timeout=RUN_TIMEOUT_SECONDS,
+        )
+        assert not result.timed_out
+        assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+        # The unsafe old README delivers actual spans/keys to this wrong receiver.
+        assert other_vendor.requests() == [], "stale trace endpoint received the FI export"
+        requests = intended.requests()
+        assert requests, "no export reached the intended FI destination"
+        assert len(intended.spans()) == 3
+        for request in requests:
+            assert request["path"] == "/v1/traces"
+            assert request["headers"].get("x-api-key") == FI_API_KEY
+            assert request["headers"].get("x-secret-key") == FI_SECRET_KEY
+            assert "other-vendor-placeholder" not in json.dumps(request["headers"])
+        assert not guard_log.exists(), "a non-loopback request was attempted"
 
 
 @needs_sdk

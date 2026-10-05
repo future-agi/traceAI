@@ -18,11 +18,18 @@ of any traceAI package.
 
 ## What was tested, and what was not
 
-- **The SDK half was tested.** `src/app.py` ran with the real langsmith
-  0.14.4 in OTEL-only mode, with no LangSmith key, in a process whose network
-  was limited to 127.0.0.1. Its export reached a loopback OTLP receiver and
-  matched the hand-built fixture exactly. Python 3.10.17, 3.11.12, 3.12.10
-  and 3.13.15.
+- **The SDK half was tested in a deliberately narrow app scope.** It runs the
+  real langsmith 0.14.4 SDK in OTEL-only mode with this recipe's
+  `@traceable` chain/tool/LLM stand-in and no LangSmith key. The pinned
+  OTLP/HTTP export path reached a loopback receiver and matched the hand-built
+  fixture exactly. The test guard covers Python's `connect`, `connect_ex` and
+  `getaddrinfo` paths; it is not an OS-, native-, UDP-, or every-DNS-isolation
+  guarantee. Python 3.10.17, 3.11.12, 3.12.10 and 3.13.15.
+- **The SDK coverage does not generalize beyond that app scope.** It does not
+  test runs produced by LangChain or LangGraph callbacks, streaming, error
+  runs, other run types beyond the source maps below, any LangSmith SDK
+  version other than 0.14.4, or a real Future AGI collector, storage,
+  authentication or rendering path.
 - **The collector half was tested against a stand-in.** The fixture was
   posted to the shared harness receiver, not to a real fi-collector. What
   fi-collector derives from it (span type, model, provider, tokens) was read
@@ -52,9 +59,13 @@ warns (`langsmith/client.py:240-306`). `LANGSMITH_TRACING_MODE=otel` behaves
 like the first row (tested). `LANGSMITH_OTEL_ONLY` is not on LangSmith's page;
 it exists in 0.14.4, and the tests show that it stops the REST calls.
 
-`LANGSMITH_TRACING=true` is the on switch in both modes. Without it nothing
-is traced or exported (tested); the OTEL variables only choose where traces
-go.
+`LANGSMITH_TRACING=true` is the default environment on switch in both modes.
+Without an override, anything other than exactly `true` traces and exports
+nothing (tested); the OTEL variables only choose where traces go.
+`LANGSMITH_TRACING_V2`, when present, takes precedence; otherwise
+`LANGCHAIN_TRACING_V2`, when present, takes precedence. Each must be exactly
+`true` and overrides `LANGSMITH_TRACING`. `langsmith.configure(enabled=False)`
+and `tracing_context(enabled=False)` override the environment switches too.
 
 Without a key the SDK only warns, and not at all in `otel` mode
 (`client.py:734-760`). In `otel` mode it also skips the `GET /info` call
@@ -74,6 +85,9 @@ export LANGSMITH_OTEL_ONLY=true   # Future AGI only; remove it to fan out (needs
 export FI_API_KEY="YOUR_API_KEY"
 export FI_SECRET_KEY="YOUR_SECRET_KEY"
 export FI_PROJECT_NAME="my-langsmith-app"                            # resource attribute project_name
+# Clear inherited trace-specific overrides before setting the general FI values.
+unset OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+unset OTEL_EXPORTER_OTLP_TRACES_HEADERS
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://YOUR_FI_COLLECTOR_ORIGIN"  # no path
 export OTEL_EXPORTER_OTLP_HEADERS="$(python -c 'import os; from urllib.parse import quote; print("x-api-key={0},x-secret-key={1}".format(quote(os.environ["FI_API_KEY"], safe=""), quote(os.environ["FI_SECRET_KEY"], safe="")))')"
 
@@ -134,9 +148,19 @@ resource processor. This recipe does not build or test one.
 ### Endpoint and headers
 
 `OTEL_EXPORTER_OTLP_ENDPOINT` is the collector origin with no path; the
-exporter appends `/v1/traces` (tested). `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
-is a full URL and is used as given: `<origin>/tracer/v1/traces` posts there
-(tested). fi-collector serves both paths (`pkg/server/server.go:233-234`).
+exporter appends `/v1/traces` (tested). The signal-specific
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` takes precedence and is a full URL used
+as given: `<origin>/tracer/v1/traces` posts there (tested). fi-collector
+serves both paths (`pkg/server/server.go:233-234`).
+
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` likewise takes precedence over the
+general `OTEL_EXPORTER_OTLP_HEADERS`. The Run block clears both
+signal-specific variables before setting the general Future AGI endpoint and
+headers. Without those resets, a stale trace endpoint can send the new Future
+AGI credentials to another vendor, while stale trace headers can send another
+vendor's credential to Future AGI. If you intentionally use signal-specific
+settings, set both the full Future AGI trace endpoint and Future AGI headers
+together; they override the general values.
 
 The exporter percent-decodes each header value. The test's secret contains
 `,` and `=`; percent-encoded as in the `export` line above, it arrives intact
@@ -211,18 +235,25 @@ was not tested.
 is the whole message list, system prompt included, and the model's answer
 (tested). In fan-out mode LangSmith receives the same content.
 
-LangSmith's own switches remove it: with `LANGSMITH_HIDE_INPUTS=true` and
-`LANGSMITH_HIDE_OUTPUTS=true`, every span's `gen_ai.prompt` and
-`gen_ai.completion` are `{}`, and none of the question, the tool output or the
-answer is anywhere in the export (tested). They also apply to the LangSmith
-copy (source reading: `client.py:2468-2475` runs before either leg). The cost:
-the token counts come from the outputs, so with outputs hidden
-the LLM span has no `gen_ai.usage.*` and no `gen_ai.response.finish_reasons`,
+`LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true` control those
+input and output copies: together, every tested span's `gen_ai.prompt` and
+`gen_ai.completion` is `{}`. They do not scrub metadata. The switches also
+apply to the LangSmith copy (source reading: `client.py:2468-2475` runs before
+either leg). The token counts come from the outputs, so when outputs are
+hidden the LLM span has no `gen_ai.usage.*` and no
+`gen_ai.response.finish_reasons`,
 and the token columns stay empty. The model name stays, and
 `langsmith.metadata.usage_metadata` still carries the counts as a JSON string
 that fi-collector does not promote (tested). The `hide_inputs`,
 `hide_outputs` and `anonymizer` arguments of `langsmith.Client(...)` accept a
 function instead (`client.py:2958-2978`; not tested).
+
+Inputs can include `extra_headers`, `query` and `body` data (for example,
+`extra_query` and `extra_body`); those values can survive in the raw
+`gen_ai.prompt` JSON. A dict-valued
+`extra_headers` is not guaranteed to become a valid separate OpenTelemetry
+attribute, so do not assume headers land in a distinct attribute. Treat the
+raw input copy as sensitive unless you have applied the input-hiding control.
 
 **Metadata.** Every span also carries, as `langsmith.metadata.<NAME>`:
 
@@ -237,13 +268,17 @@ function instead (`client.py:2958-2978`; not tested).
   `git describe --tags --always --dirty` of the working directory
   (`env/_runtime_env.py:207-222`).
 
+That filter checks names, not values. For example, `LANGSMITH_ENDPOINT`,
+`LANGSMITH_PROJECT` and other allowed variables can be exported as metadata;
+a credential-bearing endpoint URL can therefore be exported. Review the values of allowed
+LangSmith/LangChain variables rather than treating the name filter as a
+privacy boundary.
+
 `LANGSMITH_HIDE_METADATA=true` drops all of it, and with it `ls_model_name`,
 so the model column empties too (source reading: `client.py:2480-2486`,
 `:2513-2519`, `_otel_exporter.py:516-522`).
 
-No Future AGI key appears in any exported span or resource, or in the app's
-output (tested); the keys travel only as request headers. No LangSmith key was
-set in any test.
+The tests use placeholder Future AGI credentials and set no LangSmith key.
 
 ## Not included
 
@@ -258,8 +293,11 @@ set in any test.
 ## Troubleshooting
 
 - **No traces and no error.** `LANGSMITH_TRACING` is not exactly `true`;
-  `True` and `1` do not count (`utils.py:121-142`). The OTEL variables alone
-  trace nothing.
+  `True` and `1` do not count (`utils.py:121-142`). Check
+  `LANGSMITH_TRACING_V2` first, then `LANGCHAIN_TRACING_V2`: when either is
+  present it overrides `LANGSMITH_TRACING` and must be exactly `true`. Also
+  check for `langsmith.configure(enabled=False)` or
+  `tracing_context(enabled=False)`. The OTEL variables alone trace nothing.
 - **fi-collector answers 400, "no project_name".** The spans went through
   LangSmith's own provider: `init_tracing()` ran after the LangSmith client
   was created, or not at all.
@@ -291,14 +329,16 @@ set in any test.
   with `compare()`, and assert one trace, the tool and LLM children, and the
   model, provider and token keys. These need no LangSmith install.
 - **SDK half.** `src/app.py` runs as written, in a subprocess, with the real
-  langsmith 0.14.4. `tests/_guarded_run.py` blocks and logs every
-  non-loopback connection; a positive control (`tests/_guard_probe.py`) proves
-  it refuses and logs IPv4, IPv6 and DNS attempts. The spans go to the shared
-  harness `Receiver` (`python/tests/harness`), which serves `/v1/traces` and
-  `/tracer/v1/traces` on 127.0.0.1. The recipe run leaves `LANGSMITH_ENDPOINT`
-  unset, so any LangSmith call would have gone to api.smith.langchain.com and
-  been refused; none was. The export must equal the fixture (names,
-  attributes and values, statuses). Other runs check the request path,
+  langsmith 0.14.4. `tests/_guarded_run.py` intercepts Python
+  `socket.connect`, `socket.connect_ex` and `socket.getaddrinfo` paths; its
+  positive control (`tests/_guard_probe.py`) exercises those paths for IPv4,
+  IPv6 and DNS attempts. It is not a guarantee of OS-, native-, UDP-, or every
+  DNS-path isolation. The pinned OTLP/HTTP export path is actually exercised:
+  spans go to the shared harness `Receiver` (`python/tests/harness`), which
+  serves `/v1/traces` and `/tracer/v1/traces` on 127.0.0.1. The recipe run
+  leaves `LANGSMITH_ENDPOINT` unset, so a LangSmith call on the tested Python
+  paths would be refused; none occurred. The export must equal the fixture
+  (names, attributes and values, statuses). Other runs check the request path,
   headers and resource, the three modes against a loopback LangSmith stub,
   tracing off, the hide switches, and LangSmith's own provider
   (`tests/sdk_own_provider.py`, a fixture, not part of the recipe).
