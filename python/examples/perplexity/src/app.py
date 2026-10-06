@@ -18,23 +18,41 @@ MODEL_ENV = "PERPLEXITY_MODEL"
 
 def check_base_url(url: str) -> str:
     """Reject documented endpoint mix-ups without changing an allowed URL."""
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        raise ValueError(f"{BASE_URL_ENV}: use a valid SDK base URL.") from None
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{BASE_URL_ENV}: remove URL credentials; pass the key to the client.")
     if (parsed.hostname or "").lower().rstrip(".") == "api.perplexity.ai":
+        if parsed.scheme != "https":
+            raise ValueError(
+                f"{BASE_URL_ENV}: use https://api.perplexity.ai/v1 with "
+                "client.responses.create; HTTP would send the key in cleartext."
+            )
+        if "?" in url or "#" in url:
+            raise ValueError(
+                f"{BASE_URL_ENV}: remove the query or fragment; use "
+                "https://api.perplexity.ai/v1 with client.responses.create."
+            )
         path = parsed.path.rstrip("/")
         if not path:
             raise ValueError(
-                "That root was the Sonar Chat Completions base URL, whose support "
+                f"{BASE_URL_ENV}: that root was the Sonar Chat Completions base URL, whose support "
                 "ended on 27 September 2026; use https://api.perplexity.ai/v1 "
                 "with client.responses.create."
             )
-        if path in ("/v1/sonar", "/v1/agent"):
+        if path in (
+            "/v1/sonar", "/v1/agent", "/v1/responses",
+            "/chat/completions", "/v1/chat/completions",
+        ):
             raise ValueError(
-                "Endpoint paths are not SDK base URLs: the SDK appends /responses; "
+                f"{BASE_URL_ENV}: Endpoint paths are not SDK base URLs: the SDK appends /responses; "
                 "use https://api.perplexity.ai/v1 with client.responses.create."
             )
         if path in ("/router", "/router/v1"):
             raise ValueError(
-                "The Router API is a separate private-preview product, not covered "
+                f"{BASE_URL_ENV}: the Router API is a separate private-preview product, not covered "
                 "here; use https://api.perplexity.ai/v1 with client.responses.create."
             )
     return url

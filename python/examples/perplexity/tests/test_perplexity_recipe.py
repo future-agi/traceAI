@@ -47,7 +47,7 @@ def clean_environment(monkeypatch):
     monkeypatch.setenv("FI_API_KEY", FI_KEY)
     monkeypatch.setenv("FI_SECRET_KEY", FI_SECRET)
     monkeypatch.setenv(app.API_KEY_ENV, VENDOR_KEY)
-    monkeypatch.setenv(app.MODEL_ENV, fake.MODEL)
+    monkeypatch.setenv(app.MODEL_ENV, fake.REQUEST_MODEL)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
 
@@ -69,6 +69,13 @@ def tracing(monkeypatch):
     return start
 
 
+@pytest.fixture(scope="module")
+def validation_servers():
+    """All rejected configurations must leave both loopback servers untouched."""
+    with Receiver() as receiver, fake.FakeOpenAI() as server:
+        yield receiver, server
+
+
 def _attributes(span):
     return {
         item["key"]: next(iter(item["value"].values()))
@@ -76,7 +83,7 @@ def _attributes(span):
     }
 
 
-def _assert_export(receiver, provider, project, error=False):
+def _assert_export(receiver, provider, project, error=False, requested_model=fake.REQUEST_MODEL):
     assert provider.force_flush()
     [span] = receiver.spans()
     [export] = receiver.requests()
@@ -84,9 +91,13 @@ def _assert_export(receiver, provider, project, error=False):
     assert span["name"] == "Response"
     assert attrs["gen_ai.span.kind"] == "LLM"
     assert attrs["gen_ai.provider.name"] == "openai"
-    # Responses extracts the requested model, including on streaming and errors.
-    assert attrs["gen_ai.request.model"] == fake.MODEL
-    assert json.loads(attrs["gen_ai.request.parameters"])["model"] == fake.MODEL
+    # A successful response overrides the request model, including on streams.
+    assert attrs["gen_ai.request.model"] == (requested_model if error else fake.RESPONSE_MODEL)
+    parameters = json.loads(attrs["gen_ai.request.parameters"])
+    if requested_model is None:
+        assert "model" not in parameters
+    else:
+        assert parameters["model"] == requested_model
     assert span["status"]["code"] == ("STATUS_CODE_ERROR" if error else "STATUS_CODE_OK")
     assert export["path"] == "/tracer/v1/traces"
     assert export["headers"]["x-api-key"] == FI_KEY
@@ -101,7 +112,7 @@ def _assert_export(receiver, provider, project, error=False):
     return span, attrs
 
 
-def _assert_vendor_request(request, streamed=False, prompt=None):
+def _assert_vendor_request(request, streamed=False, prompt=None, requested_model=fake.REQUEST_MODEL):
     assert str(request.url) == app.DEFAULT_BASE_URL + "/responses"
     assert request.method == "POST"
     assert request.headers["authorization"] == f"Bearer {VENDOR_KEY}"
@@ -110,45 +121,59 @@ def _assert_vendor_request(request, streamed=False, prompt=None):
     assert FI_KEY not in json.dumps(dict(request.headers))
     assert FI_SECRET not in json.dumps(dict(request.headers))
     body = json.loads(request.content)
-    assert body["model"] == fake.MODEL
+    if requested_model is None:
+        assert "model" not in body
+    else:
+        assert body["model"] == requested_model
     assert body.get("stream", False) is streamed
     if prompt is not None:
         assert body["input"] == prompt
 
 
-def _assert_usage(attrs, present=True):
+def _assert_usage(attrs, present=True, details=True):
     usage = {key: int(value) for key, value in attrs.items() if key.startswith("gen_ai.usage.")}
-    assert usage == ({
+    expected = {
         "gen_ai.usage.input_tokens": 17,
         "gen_ai.usage.output_tokens": 11,
         "gen_ai.usage.total_tokens": 28,
-    } if present else {})
+    } if present else {}
+    if present and details:
+        expected.update({
+            "gen_ai.usage.output_tokens.reasoning": 4,
+            "gen_ai.usage.input_tokens.cache_read": 9,
+        })
+    assert usage == expected
 
 
 def _call(handler, stream=False, prompt="What is a solar eclipse?"):
     with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
         if stream:
-            events = list(client.responses.create(model=fake.MODEL, input=prompt, stream=True))
+            events = list(client.responses.create(model=fake.REQUEST_MODEL, input=prompt, stream=True))
             assert [event.type for event in events] == [
                 "response.created", *["response.output_text.delta"] * len(fake.DELTAS),
                 "response.completed",
             ]
             assert events[-1].response.output_text == fake.ANSWER
             assert events[-1].response.output[0].type == "search_results"
+            assert events[-1].response.model == fake.RESPONSE_MODEL
+            assert fake.INSTRUCTIONS_MARKER in events[-1].response.instructions
+            assert fake.QUERY_MARKER in json.dumps(events[-1].response.output[0].queries)
             return "".join(event.delta for event in events if event.type == "response.output_text.delta")
-        response = client.responses.create(model=fake.MODEL, input=prompt)
+        response = client.responses.create(model=fake.REQUEST_MODEL, input=prompt)
         assert response.output[0].type == "search_results"
         assert response.output[1].type == "message"
-        assert response.model == fake.MODEL
+        assert response.model == fake.RESPONSE_MODEL
         return response.output_text
 
 
-def _handler(request, stream=False, include_usage=True):
+def _handler(request, stream=False, include_usage=True, include_usage_details=True):
     _assert_vendor_request(request, streamed=stream)
     if stream:
         return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
-                              content=fake.stream_fixture(include_usage=include_usage))
-    return httpx.Response(200, json=fake.response_fixture(include_usage=include_usage))
+                              content=fake.stream_fixture(
+                                  include_usage=include_usage, include_usage_details=include_usage_details))
+    return httpx.Response(200, json=fake.response_fixture(
+        include_usage=include_usage, include_usage_details=include_usage_details))
 
 
 def test_documented_base_url():
@@ -172,18 +197,49 @@ def test_make_client_overrides_and_missing_key(monkeypatch):
 
 
 def test_responses_at_documented_host(tracing):
+    assert fake.REQUEST_MODEL != fake.RESPONSE_MODEL
     with tracing() as (receiver, provider, project):
-        assert _call(_handler) == fake.ANSWER
+        with pytest.warns(UserWarning, match="search_results"):
+            assert _call(_handler) == fake.ANSWER
         _, attrs = _assert_export(receiver, provider, project)
         _assert_usage(attrs)
         raw = ast.literal_eval(attrs["output.value"])
         assert raw["output"][0]["type"] == "search_results"
         assert raw["output"][0]["results"][0]["url"] == fake.SEARCH_URL
         assert raw["output"][0]["results"][0]["snippet"] == fake.SEARCH_SNIPPET
+        assert raw["output"][0]["results"][0]["last_updated"] == "2026-10-02"
+        assert raw["output"][0]["results"][1]["date"] is None
+        assert fake.QUERY_MARKER in json.dumps(raw["output"][0]["queries"])
+        assert raw["output"][1]["id"] == "msg_placeholder"
         assert raw["output"][1]["content"][0]["text"] == fake.ANSWER
         assert raw["usage"]["cost"] == fake.USAGE["cost"]
+        # SDK serialization adds optional defaults such as cache_write_tokens=None.
+        for key, value in fake.USAGE["input_tokens_details"].items():
+            assert raw["usage"]["input_tokens_details"][key] == value
+        assert raw["usage"]["output_tokens_details"] == fake.USAGE["output_tokens_details"]
+        assert raw["usage"]["tool_calls_details"] == fake.USAGE["tool_calls_details"]
+        assert fake.INSTRUCTIONS_MARKER in raw["instructions"]
         assert fake.SEARCH_URL in attrs["output.value"]
         assert fake.SEARCH_SNIPPET in attrs["output.value"]
+
+
+def test_preset_fixture(tracing):
+    prompt = "preset-fixture-input-marker"
+
+    def handler(request):
+        _assert_vendor_request(request, prompt=prompt, requested_model=None)
+        assert json.loads(request.content)["preset"] == "low"
+        return httpx.Response(200, json=fake.response_fixture())
+
+    with tracing() as (receiver, provider, project):
+        with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
+            response = client.responses.create(input=prompt, extra_body={"preset": "low"})
+            assert response.output_text == fake.ANSWER
+            assert response.model == fake.RESPONSE_MODEL
+        _, attrs = _assert_export(receiver, provider, project, requested_model=None)
+        _assert_usage(attrs)
+        assert json.loads(attrs["gen_ai.request.parameters"]) == {}
+        assert "preset" not in attrs["gen_ai.request.parameters"]
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
@@ -192,6 +248,14 @@ def test_usage_absent(tracing, stream):
         assert _call(lambda request: _handler(request, stream, include_usage=False), stream) == fake.ANSWER
         _, attrs = _assert_export(receiver, provider, project)
         _assert_usage(attrs, present=False)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_usage_without_details(tracing, stream):
+    with tracing() as (receiver, provider, project):
+        assert _call(lambda request: _handler(request, stream, include_usage_details=False), stream) == fake.ANSWER
+        _, attrs = _assert_export(receiver, provider, project)
+        _assert_usage(attrs, details=False)
 
 
 def test_responses_stream(tracing):
@@ -203,6 +267,8 @@ def test_responses_stream(tracing):
         # The non-streamed test proves these markers exist in the provider fixture.
         assert fake.SEARCH_URL not in json.dumps(attrs)
         assert fake.SEARCH_SNIPPET not in json.dumps(attrs)
+        assert fake.QUERY_MARKER not in json.dumps(attrs)
+        assert fake.INSTRUCTIONS_MARKER not in json.dumps(attrs)
         assert json.loads(attrs["gen_ai.request.parameters"])["stream"] is True
 
 
@@ -236,6 +302,9 @@ def test_hide_inputs_with_control(tracing, monkeypatch):
             assert _call(handler, prompt=marker) == fake.ANSWER
             span, _ = _assert_export(receiver, provider, project)
             assert (marker in json.dumps(span)) is (not hidden)
+            # Output echoes remain visible even when the input itself is hidden.
+            for output_marker in (fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
+                assert output_marker in _attributes(span)["output.value"]
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
@@ -247,7 +316,7 @@ def test_hide_outputs_with_control(tracing, monkeypatch, stream):
             span, attrs = _assert_export(receiver, provider, project)
             _assert_usage(attrs)
             assert (fake.ANSWER in json.dumps(span)) is (not hidden)
-            for marker in (fake.SEARCH_URL, fake.SEARCH_SNIPPET):
+            for marker in (fake.SEARCH_URL, fake.SEARCH_SNIPPET, fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
                 assert (marker in json.dumps(span)) is (not hidden and not stream)
 
 
@@ -268,7 +337,7 @@ def _child_environment(receiver, fake_server, tmp_path):
         "FI_SECRET_KEY": FI_SECRET,
         app.API_KEY_ENV: VENDOR_KEY,
         app.BASE_URL_ENV: fake_server.base_url,
-        app.MODEL_ENV: fake.MODEL,
+        app.MODEL_ENV: fake.REQUEST_MODEL,
         "LOOPBACK_GUARD_LOG": str(tmp_path / "guard.log"),
         "LOOPBACK_GUARD_READY": str(tmp_path / "guard.ready"),
         "NO_PROXY": "127.0.0.1,localhost",
@@ -287,7 +356,7 @@ def test_subprocess_app(tmp_path, stream, cli_model):
             argv.append("--stream")
         if cli_model:
             environment.pop(app.MODEL_ENV)
-            argv.extend(["--model", fake.MODEL])
+            argv.extend(["--model", fake.REQUEST_MODEL])
         result = subprocess.run(argv, env=environment, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == fake.ANSWER
@@ -299,18 +368,21 @@ def test_subprocess_app(tmp_path, stream, cli_model):
         assert "x-api-key" not in request["headers"]
         assert "x-secret-key" not in request["headers"]
         assert request["body"]["input"] == prompt
-        assert request["body"]["model"] == fake.MODEL
+        assert request["body"]["model"] == fake.REQUEST_MODEL
         assert request["body"].get("stream", False) is stream
         [span] = receiver.spans()
         attrs = _attributes(span)
         assert span["name"] == "Response"
         assert attrs["gen_ai.span.kind"] == "LLM"
         assert attrs["gen_ai.provider.name"] == "openai"
-        assert attrs["gen_ai.request.model"] == fake.MODEL
+        assert attrs["gen_ai.request.model"] == fake.RESPONSE_MODEL
+        assert json.loads(attrs["gen_ai.request.parameters"])["model"] == fake.REQUEST_MODEL
         _assert_usage(attrs)
         assert fake.ANSWER in attrs["output.value"]
         assert (fake.SEARCH_URL in json.dumps(attrs)) is (not stream)
         assert (fake.SEARCH_SNIPPET in json.dumps(attrs)) is (not stream)
+        assert (fake.QUERY_MARKER in json.dumps(attrs)) is (not stream)
+        assert (fake.INSTRUCTIONS_MARKER in json.dumps(attrs)) is (not stream)
         [export] = receiver.requests()
         assert export["path"] == "/tracer/v1/traces"
         assert export["headers"]["x-api-key"] == FI_KEY
@@ -359,6 +431,9 @@ REFUSED_PATHS = [
     ("", "Sonar Chat Completions"), ("/", "Sonar Chat Completions"),
     ("/v1/sonar", "Endpoint paths"), ("/v1/sonar/", "Endpoint paths"),
     ("/v1/agent", "Endpoint paths"), ("/v1/agent/", "Endpoint paths"),
+    ("/v1/responses", "Endpoint paths"), ("/v1/responses/", "Endpoint paths"),
+    ("/chat/completions", "Endpoint paths"), ("/chat/completions/", "Endpoint paths"),
+    ("/v1/chat/completions", "Endpoint paths"), ("/v1/chat/completions/", "Endpoint paths"),
     ("/router/v1", "private-preview"), ("/router/v1/", "private-preview"),
     ("/router", "private-preview"), ("/router/", "private-preview"),
 ]
@@ -371,6 +446,7 @@ def test_check_base_url_refusals(host, path, reason):
     with pytest.raises(ValueError, match=reason) as raised:
         app.check_base_url(url)
     message = str(raised.value)
+    assert app.BASE_URL_ENV in message
     assert "\n" not in message
     assert "https://api.perplexity.ai/v1" in message
     assert "client.responses.create" in message
@@ -389,18 +465,58 @@ def test_check_base_url_allowed(url):
 
 
 @pytest.mark.parametrize("path,reason", REFUSED_PATHS)
-def test_main_refuses_urls_before_tracing(monkeypatch, capsys, path, reason):
-    with Receiver() as receiver, fake.FakeOpenAI() as server:
-        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
-        monkeypatch.setenv(app.BASE_URL_ENV, "https://API.PERPLEXITY.AI." + path)
-        monkeypatch.setattr(app, "setup_tracing", lambda *args, **kwargs: pytest.fail("Tracing started"))
-        assert app.main([]) == 2
-        captured = capsys.readouterr()
-        assert reason in captured.err
-        assert captured.out == ""
-        assert server.requests() == []
-        assert receiver.spans() == []
-        assert receiver.requests() == []
+@pytest.mark.parametrize("host", ["api.perplexity.ai", "api.perplexity.ai.", "API.PERPLEXITY.AI"])
+def test_main_refuses_urls_before_tracing(monkeypatch, capsys, validation_servers, host, path, reason):
+    _assert_main_refusal(f"https://{host}{path}", reason, monkeypatch, capsys, validation_servers)
+
+
+def _assert_main_refusal(url, reason, monkeypatch, capsys, validation_servers):
+    receiver, server = validation_servers
+    monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+    monkeypatch.setenv(app.BASE_URL_ENV, url)
+    monkeypatch.setattr(app, "setup_tracing", lambda *args, **kwargs: pytest.fail("Tracing started"))
+    assert app.main([]) == 2
+    captured = capsys.readouterr()
+    assert reason in captured.err
+    assert app.BASE_URL_ENV in captured.err
+    assert captured.err.count("\n") == 1
+    assert captured.out == ""
+    assert "placeholder-user" not in captured.err
+    assert "placeholder-password" not in captured.err
+    assert server.requests() == []
+    assert receiver.spans() == []
+    assert receiver.requests() == []
+
+
+@pytest.mark.parametrize("host", ["api.perplexity.ai", "api.perplexity.ai.", "API.PERPLEXITY.AI"])
+@pytest.mark.parametrize("url_template,reason", [
+    ("http://{host}/v1", "cleartext"),
+    ("https://{host}/v1?fixture=query", "query or fragment"),
+    ("https://{host}/v1?", "query or fragment"),
+    ("https://{host}/v1#fixture", "query or fragment"),
+    ("https://{host}/v1#", "query or fragment"),
+    ("https://placeholder-user:placeholder-password@{host}/v1", "URL credentials"),
+    ("https://placeholder-user@{host}/v1", "URL credentials"),
+    ("https://@{host}/v1", "URL credentials"),
+])
+def test_base_url_security_refusals(monkeypatch, capsys, validation_servers, host, url_template, reason):
+    url = url_template.format(host=host)
+    with pytest.raises(ValueError, match=reason) as raised:
+        app.check_base_url(url)
+    assert app.BASE_URL_ENV in str(raised.value)
+    assert "\n" not in str(raised.value)
+    _assert_main_refusal(url, reason, monkeypatch, capsys, validation_servers)
+
+
+@pytest.mark.parametrize("url", [
+    "http://placeholder-user:placeholder-password@127.0.0.1:1234/v1",
+    "http://placeholder-user@localhost:1234/v1",
+    "https://placeholder-user:placeholder-password@example.invalid/v1",
+])
+def test_url_credentials_refused_on_any_host(monkeypatch, capsys, validation_servers, url):
+    with pytest.raises(ValueError, match="URL credentials"):
+        app.check_base_url(url)
+    _assert_main_refusal(url, "URL credentials", monkeypatch, capsys, validation_servers)
 
 
 @pytest.mark.parametrize("variable", [app.MODEL_ENV, app.API_KEY_ENV])
@@ -432,8 +548,22 @@ def test_readme_pins():
     assert "https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview" in readme
     assert "client.responses.create" in readme
     assert "gen_ai.request.model" in readme
-    assert "including on streamed and failed calls" in readme
+    assert "on successful non-streamed and streamed calls records the model returned by the response" in readme
+    assert "Failed calls record the model you sent" in readme
+    assert "requested model remains in `gen_ai.request.parameters` on all three paths" in readme
+    assert "Search results are not traced as citations or retriever spans; they appear only inside raw `output.value` on non-streamed calls." in readme
     assert "Search-result URLs and snippets appear inside `output.value` on non-streamed calls; streamed `output.value` contains only the answer text." in readme
+    assert "gen_ai.usage.input_tokens.cache_read" in readme
+    assert "gen_ai.usage.output_tokens.reasoning" in readme
+    assert "when the response includes those details" in readme
+    assert "The nested `usage.cost` object round-trips inside raw non-streamed output" in readme
+    assert 'presets through the OpenAI SDK with `extra_body={"preset": ...}`' in readme
+    assert "one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`" in readme
+    assert '- Preset requests (`extra_body={"preset": ...}`).' in readme
+    assert "`FI_HIDE_INPUTS` does not remove them, so set `FI_HIDE_OUTPUTS=true` as well" in readme
+    assert "Streamed fixture spans include neither the queries nor instructions" in readme
+    assert "Synchronous and streaming requests keep working because they are being reformulated as Agent API requests, rolling out by model; asynchronous Sonar requests are no longer supported." in readme
+    assert "set_global_tracer_provider=False, verbose=False" in readme
     for variable in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY",
                      "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert variable in readme
