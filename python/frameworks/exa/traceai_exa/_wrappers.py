@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, Callable, Mapping, Optional, Sequence
+import traceback
+from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 import wrapt
+from fi_instrumentation import REDACTED_VALUE
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
@@ -25,6 +27,27 @@ _MAX_CAPTURED_URLS = 20
 
 def _redact(value: str, api_key: Optional[str]) -> str:
     return value.replace(api_key, _REDACTED) if api_key else value
+
+
+class _Scrub:
+    """What must not leave the process in error text for one call.
+
+    ``api_key`` is replaced by ``[redacted]``; with hidden inputs, the
+    recorded query (already key-redacted) is replaced by ``__REDACTED__``.
+    Only verbatim occurrences are found.
+    """
+
+    __slots__ = ("api_key", "hidden")
+
+    def __init__(self, api_key: Optional[str], hidden: Optional[str]) -> None:
+        self.api_key = api_key
+        self.hidden = hidden
+
+    def __call__(self, text: str) -> str:
+        text = _redact(text, self.api_key)
+        if self.hidden:
+            text = text.replace(self.hidden, REDACTED_VALUE)
+        return text
 
 
 def _query(args: Sequence[Any], kwargs: Mapping[str, Any]) -> Optional[str]:
@@ -55,30 +78,38 @@ def _request_attributes(
     kwargs: Mapping[str, Any],
     contents: bool,
     capture_urls: bool,
-) -> dict:
+    hide_inputs: bool = False,
+) -> Tuple[dict, _Scrub]:
     attributes: dict = {_FI_SPAN_KIND: _RETRIEVER}
     api_key = _api_key(instance)
     if contents:
         # get_contents: a URL count by default. URLs can carry tokens or
-        # personal data, so they are recorded only with capture_urls=True.
+        # personal data, so they are recorded only with capture_urls=True,
+        # and never when inputs are hidden.
         urls = _requested_urls(args, kwargs)
         if urls is not None:
             attributes[_RETRIEVAL_URL_COUNT] = len(urls)
-            if capture_urls:
+            if capture_urls and not hide_inputs:
                 attributes[_RETRIEVAL_URLS] = [
                     _cap(_redact(url, api_key))
                     for url in urls[:_MAX_CAPTURED_URLS]
                     if isinstance(url, str)
                 ]
-        return attributes
+        return attributes, _Scrub(api_key, None)
 
     query = _query(args, kwargs)
-    if query is not None:
-        query = _cap(_redact(query, api_key))
-        attributes[_RETRIEVAL_QUERY] = query
-        # The backend input panel reads input.value; keep both keys.
-        attributes[_INPUT_VALUE] = query
-    return attributes
+    if query is None:
+        return attributes, _Scrub(api_key, None)
+    if hide_inputs:
+        # FITracer masks input.value too; fi.retrieval.query is not one of
+        # its keys, so it is left out here.
+        attributes[_INPUT_VALUE] = REDACTED_VALUE
+        return attributes, _Scrub(api_key, _redact(query, api_key))
+    query = _cap(_redact(query, api_key))
+    attributes[_RETRIEVAL_QUERY] = query
+    # The backend input panel reads input.value; keep both keys.
+    attributes[_INPUT_VALUE] = query
+    return attributes, _Scrub(api_key, None)
 
 
 def _cap(value: str, limit: int = _MAX_QUERY_BYTES) -> str:
@@ -135,22 +166,26 @@ class _BaseWrapper:
         *,
         contents: bool = False,
         capture_urls: bool = False,
+        hide_inputs: bool = False,
     ) -> None:
         self._tracer = tracer
         self._span_name = span_name
         self._contents = contents
         self._capture_urls = capture_urls
+        self._hide_inputs = hide_inputs
 
     def _start_span(
         self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
-    ) -> Span:
+    ) -> Tuple[Span, Optional[_Scrub]]:
+        scrub: Optional[_Scrub]
         try:
-            attributes = _request_attributes(
-                instance, args, kwargs, self._contents, self._capture_urls
+            attributes, scrub = _request_attributes(
+                instance, args, kwargs, self._contents, self._capture_urls, self._hide_inputs
             )
         except Exception:  # an attribute must never break the user's call
-            attributes = {_FI_SPAN_KIND: _RETRIEVER}
-        return self._tracer.start_span(self._span_name, attributes=attributes)
+            # Unknown key and query: error text is withheld (see _error_text).
+            attributes, scrub = {_FI_SPAN_KIND: _RETRIEVER}, None
+        return self._tracer.start_span(self._span_name, attributes=attributes), scrub
 
     @staticmethod
     def _finish_ok(span: Span, document_count: Optional[int]) -> None:
@@ -160,12 +195,11 @@ class _BaseWrapper:
         span.end()
 
     @staticmethod
-    def _finish_error(span: Span, error: BaseException) -> None:
+    def _finish_error(span: Span, error: BaseException, scrub: Optional[_Scrub]) -> None:
         # No document count: nothing was returned, so the count is unknown.
-        span.record_exception(error)
-        span.set_status(
-            Status(StatusCode.ERROR, "{0}: {1}".format(type(error).__name__, error))
-        )
+        description, event = _error_text(error, scrub)
+        span.record_exception(error, attributes=event)
+        span.set_status(Status(StatusCode.ERROR, description))
         span.end()
 
     @staticmethod
@@ -174,6 +208,30 @@ class _BaseWrapper:
         span.set_attribute(_CANCELLED, True)
         span.set_status(Status(StatusCode.ERROR, "cancelled"))
         span.end()
+
+
+def _error_text(error: BaseException, scrub: Optional[_Scrub]) -> Tuple[str, dict]:
+    """The status description and exception-event text for ``error``.
+
+    exa-py copies the server's response body into its exceptions, and a body
+    can repeat the request. The key (and, with hidden inputs, the query) is
+    removed and the message is capped at 1 KB; the caller's exception object
+    is not changed. The stack trace is rebuilt from the frames plus the safe
+    message, so chained exceptions' text is not copied either.
+    """
+    name = type(error).__name__
+    if scrub is None:
+        return name, {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
+    try:
+        message = _cap(scrub(str(error)))
+        frames = scrub("".join(traceback.format_tb(error.__traceback__)))
+        stacktrace = "Traceback (most recent call last):\n{0}{1}: {2}\n".format(
+            frames, name, message
+        )
+    except Exception:
+        return name, {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
+    description = "{0}: {1}".format(name, message) if message else name
+    return description, {"exception.message": message, "exception.stacktrace": stacktrace}
 
 
 def _current(span: Span) -> Any:
@@ -197,12 +255,12 @@ class OperationWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
-        span = self._start_span(instance, args, kwargs)
+        span, scrub = self._start_span(instance, args, kwargs)
         try:
             with _current(span):
                 result = wrapped(*args, **kwargs)
         except BaseException as error:
-            self._finish_error(span, error)
+            self._finish_error(span, error, scrub)
             raise
         self._finish_ok(span, _document_count(result))
         return result
@@ -218,7 +276,7 @@ class AsyncOperationWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
-        span = self._start_span(instance, args, kwargs)
+        span, scrub = self._start_span(instance, args, kwargs)
         try:
             with _current(span):
                 result = await wrapped(*args, **kwargs)
@@ -226,7 +284,7 @@ class AsyncOperationWrapper(_BaseWrapper):
             self._finish_cancelled(span)
             raise
         except BaseException as error:
-            self._finish_error(span, error)
+            self._finish_error(span, error, scrub)
             raise
         self._finish_ok(span, _document_count(result))
         return result
@@ -235,8 +293,9 @@ class AsyncOperationWrapper(_BaseWrapper):
 class _StreamState:
     """Ends one stream span exactly once; counts citations as chunks arrive."""
 
-    def __init__(self, span: Span) -> None:
+    def __init__(self, span: Span, scrub: Optional[_Scrub]) -> None:
         self.span = span
+        self.scrub = scrub
         self.finished = False
         # Citations accumulate over chunks; the total is known only at the end.
         self.citations = 0
@@ -252,7 +311,7 @@ class _StreamState:
     def error(self, error: BaseException) -> None:
         if not self.finished:
             self.finished = True
-            _BaseWrapper._finish_error(self.span, error)
+            _BaseWrapper._finish_error(self.span, error, self.scrub)
 
     def cancelled(self) -> None:
         if not self.finished:
@@ -274,9 +333,9 @@ class _TracedStream(wrapt.ObjectProxy):  # type: ignore[misc]
     An ObjectProxy, so ``isinstance`` against the vendor class still holds.
     """
 
-    def __init__(self, response: Any, span: Span) -> None:
+    def __init__(self, response: Any, span: Span, scrub: Optional[_Scrub]) -> None:
         super().__init__(response)
-        self._self_state = _StreamState(span)
+        self._self_state = _StreamState(span, scrub)
         self._self_iterator = None
 
     def __iter__(self) -> "_TracedStream":
@@ -323,22 +382,22 @@ class StreamWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
-        span = self._start_span(instance, args, kwargs)
+        span, scrub = self._start_span(instance, args, kwargs)
         try:
             with _current(span):
                 response = wrapped(*args, **kwargs)
         except BaseException as error:
-            self._finish_error(span, error)
+            self._finish_error(span, error, scrub)
             raise
-        return _TracedStream(response, span)
+        return _TracedStream(response, span, scrub)
 
 
 class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
     """An AsyncStreamSearchResponse/AsyncStreamAnswerResponse that ends its span."""
 
-    def __init__(self, response: Any, span: Span) -> None:
+    def __init__(self, response: Any, span: Span, scrub: Optional[_Scrub]) -> None:
         super().__init__(response)
-        self._self_state = _StreamState(span)
+        self._self_state = _StreamState(span, scrub)
         self._self_iterator = None
 
     def __aiter__(self) -> "_TracedAsyncStream":
@@ -403,7 +462,7 @@ class AsyncStreamWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
-        span = self._start_span(instance, args, kwargs)
+        span, scrub = self._start_span(instance, args, kwargs)
         try:
             with _current(span):
                 response = wrapped(*args, **kwargs)
@@ -413,6 +472,6 @@ class AsyncStreamWrapper(_BaseWrapper):
             self._finish_cancelled(span)
             raise
         except BaseException as error:
-            self._finish_error(span, error)
+            self._finish_error(span, error, scrub)
             raise
-        return _TracedAsyncStream(response, span)
+        return _TracedAsyncStream(response, span, scrub)

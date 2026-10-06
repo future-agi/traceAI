@@ -24,6 +24,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 EXA_KEY = "placeholder-exa-key-must-not-be-exported"
 FAIL_QUERY = "fail-401"
+# A query starting with this gets HTTP 400 whose body echoes the whole query,
+# padded past 1 KB, as some APIs and proxies do; exa-py copies the body into
+# its ValueError.
+ECHO_QUERY = "echo-400"
+ECHO_PADDING = "p" * 3000
 # The fake holds a "slow" request (and a "slow" stream after its first chunk)
 # until the test ends, so a caller can cancel mid-call.
 SLOW_QUERY = "slow"
@@ -89,6 +94,9 @@ class FakeExa:
                 slow = body.get("query") == SLOW_QUERY
                 if body.get("query") == FAIL_QUERY:
                     self._send(401, "application/json", {"error": "invalid api key"})
+                elif str(body.get("query", "")).startswith(ECHO_QUERY):
+                    error = "Bad query: {0} {1}".format(body["query"], ECHO_PADDING)
+                    self._send(400, "application/json", {"error": error})
                 elif body.get("stream"):
                     events = [
                         "data: {0}\n\n".format(json.dumps(event)) for event in _stream_events()

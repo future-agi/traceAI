@@ -4,6 +4,7 @@ import logging
 from importlib import import_module
 from typing import Any, Collection, Dict, Tuple
 
+from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
@@ -36,7 +37,15 @@ _STREAM_OPERATIONS = {
 
 
 class ExaInstrumentor(BaseInstrumentor):
-    """Instrument Exa's search, contents, answer, and streaming APIs."""
+    """Instrument Exa's search, contents, answer, and streaming APIs.
+
+    ``instrument()`` accepts ``tracer_provider``, ``capture_urls`` and
+    ``config`` (a ``fi_instrumentation.TraceConfig``; by default one built
+    from the ``FI_*`` environment variables, such as ``FI_HIDE_INPUTS``).
+    Spans come from an ``FITracer``, so the config's masking and PII
+    redaction apply, and ``using_session`` / ``using_user`` /
+    ``using_metadata`` attributes reach the Exa spans.
+    """
 
     __slots__ = ("_original_methods",)
 
@@ -44,12 +53,24 @@ class ExaInstrumentor(BaseInstrumentor):
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
+        config = kwargs.get("config")
+        if config is None:
+            config = TraceConfig()
+        elif not isinstance(config, TraceConfig):
+            raise TypeError(
+                "config must be a fi_instrumentation.TraceConfig, got {0}".format(
+                    type(config).__name__
+                )
+            )
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
-        tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
+        tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
+        )
         # Off by default: get_contents records only a URL count. With
         # capture_urls=True it also records up to 20 requested URLs, each
-        # with the Exa key redacted and capped at 1 KB.
+        # with the Exa key redacted and capped at 1 KB. Hidden inputs win.
         capture_urls = bool(kwargs.get("capture_urls", False))
+        hide_inputs = bool(config.hide_inputs)
         api_module = import_module(_MODULE)
         self._original_methods: Dict[Tuple[str, str], Any] = {}
 
@@ -59,6 +80,7 @@ class ExaInstrumentor(BaseInstrumentor):
                 options = {
                     "contents": method_name == "get_contents",
                     "capture_urls": capture_urls,
+                    "hide_inputs": hide_inputs,
                 }
                 wrapper = (
                     AsyncOperationWrapper(tracer, span_name, **options)
@@ -69,9 +91,9 @@ class ExaInstrumentor(BaseInstrumentor):
 
             for method_name, span_name in _STREAM_OPERATIONS.items():
                 wrapper = (
-                    AsyncStreamWrapper(tracer, span_name)
+                    AsyncStreamWrapper(tracer, span_name, hide_inputs=hide_inputs)
                     if is_async
-                    else StreamWrapper(tracer, span_name)
+                    else StreamWrapper(tracer, span_name, hide_inputs=hide_inputs)
                 )
                 self._wrap_method(api_module, client_name, method_name, wrapper)
 
