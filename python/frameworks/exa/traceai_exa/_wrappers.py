@@ -33,21 +33,22 @@ def _redact(value: str, api_key: Optional[str]) -> str:
 class _Scrub:
     """What must not leave the process in error text for one call.
 
-    ``api_key`` is replaced by ``[redacted]``; with hidden inputs, the
-    recorded query (already key-redacted) is replaced by ``__REDACTED__``.
-    Only verbatim occurrences are found.
+    ``api_key`` is replaced by ``[redacted]``; with hidden inputs, each
+    request input (the query, or get_contents' URLs; already key-redacted)
+    is replaced by ``__REDACTED__``, longest first. Only verbatim
+    occurrences are found.
     """
 
     __slots__ = ("api_key", "hidden")
 
-    def __init__(self, api_key: Optional[str], hidden: Optional[str]) -> None:
+    def __init__(self, api_key: Optional[str], hidden: Sequence[str] = ()) -> None:
         self.api_key = api_key
-        self.hidden = hidden
+        self.hidden = tuple(sorted({value for value in hidden if value}, key=len, reverse=True))
 
     def __call__(self, text: str) -> str:
         text = _redact(text, self.api_key)
-        if self.hidden:
-            text = text.replace(self.hidden, REDACTED_VALUE)
+        for value in self.hidden:
+            text = text.replace(value, REDACTED_VALUE)
         return text
 
 
@@ -88,29 +89,35 @@ def _request_attributes(
         # personal data, so they are recorded only with capture_urls=True,
         # and never when inputs are hidden.
         urls = _requested_urls(args, kwargs)
-        if urls is not None:
-            attributes[_RETRIEVAL_URL_COUNT] = len(urls)
-            if capture_urls and not hide_inputs:
-                attributes[_RETRIEVAL_URLS] = [
-                    _cap(_redact(url, api_key))
-                    for url in urls[:_MAX_CAPTURED_URLS]
-                    if isinstance(url, str)
-                ]
-        return attributes, _Scrub(api_key, None)
+        if urls is None:
+            return attributes, _Scrub(api_key)
+        attributes[_RETRIEVAL_URL_COUNT] = len(urls)
+        if hide_inputs:
+            # An error body can echo the URLs; hidden inputs keep them out
+            # of error text as well as attributes.
+            hidden = [_redact(url, api_key) for url in urls if isinstance(url, str)]
+            return attributes, _Scrub(api_key, hidden)
+        if capture_urls:
+            attributes[_RETRIEVAL_URLS] = [
+                _cap(_redact(url, api_key))
+                for url in urls[:_MAX_CAPTURED_URLS]
+                if isinstance(url, str)
+            ]
+        return attributes, _Scrub(api_key)
 
     query = _query(args, kwargs)
     if query is None:
-        return attributes, _Scrub(api_key, None)
+        return attributes, _Scrub(api_key)
     if hide_inputs:
         # FITracer masks input.value too; fi.retrieval.query is not one of
         # its keys, so it is left out here.
         attributes[_INPUT_VALUE] = REDACTED_VALUE
-        return attributes, _Scrub(api_key, _redact(query, api_key))
+        return attributes, _Scrub(api_key, [_redact(query, api_key)])
     query = _cap(_redact(query, api_key))
     attributes[_RETRIEVAL_QUERY] = query
     # The backend input panel reads input.value; keep both keys.
     attributes[_INPUT_VALUE] = query
-    return attributes, _Scrub(api_key, None)
+    return attributes, _Scrub(api_key)
 
 
 def _cap(value: str, limit: int = _MAX_QUERY_BYTES) -> str:
@@ -198,10 +205,19 @@ class _BaseWrapper:
     @staticmethod
     def _finish_error(span: Span, error: BaseException, scrub: Optional[_Scrub]) -> None:
         # No document count: nothing was returned, so the count is unknown.
-        description, event = _error_text(error, scrub)
-        span.record_exception(error, attributes=event)
-        span.set_status(Status(StatusCode.ERROR, description))
-        span.end()
+        # The event is built here rather than by span.record_exception(),
+        # which calls str(error) unguarded; the span must end whatever the
+        # error's str() does, and the caller's exception must stay the same.
+        try:
+            description, event = _error_text(error, scrub)
+            event["exception.type"] = _exception_type(error)
+            event["exception.escaped"] = "False"
+            span.add_event("exception", attributes=event)
+            span.set_status(Status(StatusCode.ERROR, description))
+        except Exception:
+            pass
+        finally:
+            span.end()
 
     @staticmethod
     def _finish_cancelled(span: Span) -> None:
@@ -209,6 +225,13 @@ class _BaseWrapper:
         span.set_attribute(_CANCELLED, True)
         span.set_status(Status(StatusCode.ERROR, "cancelled"))
         span.end()
+
+
+def _exception_type(error: BaseException) -> str:
+    """The exception type as the OpenTelemetry SDK's record_exception names it."""
+    module = type(error).__module__
+    qualname = type(error).__qualname__
+    return "{0}.{1}".format(module, qualname) if module and module != "builtins" else qualname
 
 
 def _error_text(error: BaseException, scrub: Optional[_Scrub]) -> Tuple[str, dict]:

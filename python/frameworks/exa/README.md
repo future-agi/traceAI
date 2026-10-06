@@ -91,8 +91,8 @@ ExaInstrumentor().instrument(
 
 With `hide_inputs=True` (or `FI_HIDE_INPUTS=true`), `input.value` is
 `__REDACTED__`, `fi.retrieval.query` and `fi.retrieval.urls` are not recorded,
-and the query is replaced by `__REDACTED__` in error text. The URL and document
-counts stay. `pii_redaction` applies to the recorded attributes, and
+and the query or the requested URLs are replaced by `__REDACTED__` in error
+text. The URL and document counts stay. `pii_redaction` applies to the recorded attributes, and
 `using_session`, `using_user`, `using_metadata` and `using_tags` attributes are
 added to the Exa spans.
 
@@ -106,7 +106,8 @@ exa-py puts the server's response body in its error message, and a body can
 repeat the request. On the span, the status description
 (`<ExceptionType>: <message>`) and the event's `exception.message` therefore
 have the Exa key replaced by `[redacted]` (and, with hidden inputs, the query
-by `__REDACTED__`) and the message cut to 1 KB of UTF-8. The event's
+or the requested URLs by `__REDACTED__`) and the message cut to 1 KB of UTF-8.
+If the exception's own `str()` fails, the span records only its type. The event's
 `exception.stacktrace` is the traceback's frames, scrubbed the same way, plus
 that safe message; it does not copy chained exceptions' messages. Only verbatim
 copies are found: an escaped or truncated echo of the key or query is not.

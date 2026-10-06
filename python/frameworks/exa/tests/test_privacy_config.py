@@ -280,3 +280,105 @@ def test_capture_urls_reads_only_the_url_of_result_objects(fake):
     assert span_attributes["fi.retrieval.url_count"] == len(results)
     assert list(span_attributes["fi.retrieval.urls"]) == [result.url for result in results]
     assert RESULT_TITLE not in traced.wire()
+
+
+# --- get_contents error text (verify r3 V5) --------------------------------
+
+
+def test_hidden_inputs_remove_requested_urls_from_error_text(fake):
+    urls = [
+        "https://example.com/{0}?token=t-1".format(ECHO_QUERY),
+        "https://example.com/b?key={0}".format(EXA_KEY),
+    ]
+    with instrumented(config=TraceConfig(hide_inputs=True)) as traced:
+        with pytest.raises(ValueError) as caught:
+            _client(fake).get_contents(urls)
+
+    assert urls[0] in str(caught.value)
+    span = traced.one()
+    assert "example.com" not in traced.wire()
+    assert EXA_KEY not in traced.wire()
+    assert HIDDEN in span.status.description
+    assert attrs(span)["fi.retrieval.url_count"] == 2
+
+
+def test_requested_urls_stay_in_error_text_by_default_with_the_key_redacted(fake):
+    urls = ["https://example.com/{0}?key={1}".format(ECHO_QUERY, EXA_KEY)]
+    with instrumented() as traced:
+        with pytest.raises(ValueError):
+            _client(fake).get_contents(urls)
+
+    description = traced.one().status.description
+    assert "https://example.com/{0}?key=[redacted]".format(ECHO_QUERY) in description
+    assert EXA_KEY not in traced.wire()
+
+
+# --- an exception whose str() raises (verify r3 V4) -------------------------
+
+
+class _Unprintable(Exception):
+    def __str__(self) -> str:
+        raise RuntimeError("str() failed")
+
+
+def _raise_unprintable(*args, **kwargs):
+    raise _Unprintable()
+
+
+def _assert_unprintable_span(traced) -> None:
+    span = traced.one()
+    assert span.end_time is not None
+    assert span.status.description == "_Unprintable"
+    event = _exception_event(span)
+    assert event["exception.type"].endswith("_Unprintable")
+    assert event["exception.message"] == "[redacted]"
+    assert event["exception.stacktrace"] == "[redacted]"
+
+
+def test_unprintable_error_is_reraised_unchanged_and_the_span_ends():
+    from traceai_exa._wrappers import OperationWrapper
+
+    with instrumented() as traced:
+        wrapper = OperationWrapper(_tracer(traced), "exa.search")
+        with pytest.raises(_Unprintable):
+            wrapper(_raise_unprintable, None, ("q",), {})
+
+    _assert_unprintable_span(traced)
+
+
+def test_unprintable_async_error_is_reraised_unchanged_and_the_span_ends():
+    from traceai_exa._wrappers import AsyncOperationWrapper
+
+    async def wrapped(*args, **kwargs):
+        raise _Unprintable()
+
+    async def run(traced) -> None:
+        wrapper = AsyncOperationWrapper(_tracer(traced), "exa.search")
+        with pytest.raises(_Unprintable):
+            await wrapper(wrapped, None, ("q",), {})
+
+    with instrumented() as traced:
+        asyncio.run(run(traced))
+
+    _assert_unprintable_span(traced)
+
+
+def test_unprintable_mid_stream_error_ends_the_stream_span():
+    from traceai_exa._wrappers import StreamWrapper
+
+    class _UnprintableStream:
+        def __iter__(self):
+            yield _Chunk()
+            raise _Unprintable()
+
+        def close(self) -> None:
+            return None
+
+    with instrumented() as traced:
+        wrapper = StreamWrapper(_tracer(traced), "exa.search")
+        stream = wrapper(lambda *a, **k: _UnprintableStream(), None, ("q",), {})
+        next(stream)
+        with pytest.raises(_Unprintable):
+            next(stream)
+
+    _assert_unprintable_span(traced)

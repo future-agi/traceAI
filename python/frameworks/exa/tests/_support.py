@@ -24,9 +24,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 EXA_KEY = "placeholder-exa-key-must-not-be-exported"
 FAIL_QUERY = "fail-401"
-# A query starting with this gets HTTP 400 whose body echoes the whole query,
-# padded past 1 KB, as some APIs and proxies do; exa-py copies the body into
-# its ValueError.
+# A query starting with this (or a get_contents URL containing it) gets HTTP
+# 400 whose body echoes the request, padded past 1 KB, as some APIs and
+# proxies do; exa-py copies the body into its ValueError.
 ECHO_QUERY = "echo-400"
 ECHO_PADDING = "p" * 3000
 # The fake holds a "slow" request (and a "slow" stream after its first chunk)
@@ -116,6 +116,11 @@ class FakeExa:
                     count = int(body.get("numResults") or SEARCH_RESULTS)
                     results = [_document(i) for i in range(count)]
                     self._send(200, "application/json", {"requestId": "req-1", "results": results})
+                elif path == "/contents" and any(
+                    ECHO_QUERY in str(url) for url in body.get("urls", [])
+                ):
+                    error = "Bad urls: {0} {1}".format(", ".join(body["urls"]), ECHO_PADDING)
+                    self._send(400, "application/json", {"error": error})
                 elif path == "/contents":
                     results = [
                         dict(_document(i), url=url) for i, url in enumerate(body.get("urls", []))
