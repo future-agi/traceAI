@@ -1,4 +1,4 @@
-"""Fixture-only recipe contracts; .invalid is a syntactic test host, never contacted."""
+"""Fixture-only recipe contracts; syntactic endpoint hosts are never contacted."""
 
 import importlib.util
 import json
@@ -33,6 +33,7 @@ def load_module(name, path):
 app = load_module("lepton_recipe_app", RECIPE_DIR / "src" / "app.py")
 fake = load_module("lepton_fake_openai", TEST_DIR / "_fake_openai.py")
 TEST_BASE_URL = "https://endpoint.example.invalid/v1"
+XENON_TEST_BASE_URL = "https://ws0000-example.xenon.lepton.run/v1"
 MODEL = "nvidia/Nemotron-Research-Reasoning-Qwen-1.5B"
 VENDOR_KEY = "placeholder-lepton-key"
 FI_KEY = "placeholder-futureagi-key"
@@ -42,11 +43,29 @@ HIDE_FLAGS = (
     "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_IMAGES",
     "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT", "FI_HIDE_EMBEDDING_VECTORS",
 )
+INVALID_HOST_URLS = [
+    "https://endpoint.example.invalid\u00a0",
+    "https://endpoint.example.invalid\u200b",
+    *[f"https://endpoint{separator}example.invalid" for separator in ("\u3002", "\uff0e", "\uff61")],
+    "https://xn--.example.invalid",
+    "https://" + "a" * 64 + ".example.invalid",
+]
+ALLOWED_URLS = [
+    (TEST_BASE_URL, TEST_BASE_URL + "/"),
+    ("https://endpoint.example.invalid", "https://endpoint.example.invalid"),
+    ("https://endpoint.example.invalid/custom/root/", "https://endpoint.example.invalid/custom/root/"),
+    ("HTTPS://ENDPOINT.EXAMPLE.INVALID./Custom/Path", "https://endpoint.example.invalid./Custom/Path/"),
+    ("http://127.0.0.1:12345/inference", "http://127.0.0.1:12345/inference/"),
+    (XENON_TEST_BASE_URL, XENON_TEST_BASE_URL + "/"),
+    (XENON_TEST_BASE_URL + "/", XENON_TEST_BASE_URL + "/"),
+    ("HTTPS://WS0000-EXAMPLE.XENON.LEPTON.RUN./v1", "https://ws0000-example.xenon.lepton.run./v1/"),
+    ("https://nested.sdxl.lepton.run/v1", "https://nested.sdxl.lepton.run/v1/"),
+]
 REFUSED_URLS = [
     (f"https://{host}/v1", reason)
     for host, reason in (
         ("api.lepton.ai", "Legacy"), ("llm.lepton.run", "Legacy"),
-        ("sdxl.lepton.run", "Legacy"), ("nested.sdxl.lepton.run", "Legacy"),
+        ("sdxl.lepton.run", "Legacy"),
         ("dashboard.dgxc-lepton.nvidia.com", "Console"), ("dashboard.lepton.ai", "Console"),
         ("API.LEPTON.AI", "Legacy"), ("api.lepton.ai.", "Legacy"),
         ("LLM.LEPTON.RUN.", "Legacy"), ("SDXL.LEPTON.RUN.", "Legacy"),
@@ -64,6 +83,21 @@ REFUSED_URLS = [
         "https://endpoint.example.invalid/%45NDPOINT_URL",
         "https://endpoint.example.invalid/%2545NDPOINT_URL",
     )
+] + [
+    ("http://ws0000-example.xenon.lepton.run/v1", "https"),
+    ("HTTP://WS0000-EXAMPLE.XENON.LEPTON.RUN./v1", "https"),
+    ("https://ws0000-example.xenon.lepton.run", "append /v1"),
+    ("https://ws0000-example.xenon.lepton.run/", "append /v1"),
+    ("https://WS0000-EXAMPLE.XENON.LEPTON.RUN.", "append /v1"),
+    (XENON_TEST_BASE_URL + "?placeholder=query", "query or fragment"),
+    (XENON_TEST_BASE_URL + "#placeholder-fragment", "query or fragment"),
+    (XENON_TEST_BASE_URL + "?", "query or fragment"),
+    (XENON_TEST_BASE_URL + "#", "query or fragment"),
+    ("https://placeholder-user:placeholder-password@endpoint.example.invalid/v1", "credentials"),
+    ("https://placeholder-user@ws0000-example.xenon.lepton.run/v1", "credentials"),
+    ("http://placeholder-user@127.0.0.1:12345/v1", "credentials"),
+    ("https://@endpoint.example.invalid/v1", "credentials"),
+    *[(url, "valid HTTP endpoint base URL") for url in INVALID_HOST_URLS],
 ]
 
 
@@ -214,7 +248,7 @@ def assert_guard_installed(environment):
 
 def test_documented_forms_require_customer_configuration(monkeypatch):
     assert app.DEFAULT_BASE_URL is None
-    assert app.DOCUMENTED_BASE_URL_FORMS == ("<ENDPOINT_URL from the API tab>",)
+    assert app.DOCUMENTED_BASE_URL_FORMS == ("<ENDPOINT_URL from the API tab>/v1",)
     assert app.API_KEY_ENV == "LEPTON_API_TOKEN"
     assert app.BASE_URL_ENV == "LEPTON_ENDPOINT_URL"
     assert app.MODEL_ENV == "LEPTON_MODEL"
@@ -228,13 +262,7 @@ def test_documented_forms_require_customer_configuration(monkeypatch):
         app.make_client()
 
 
-@pytest.mark.parametrize("url,sdk_url", [
-    (TEST_BASE_URL, TEST_BASE_URL + "/"),
-    ("https://endpoint.example.invalid", "https://endpoint.example.invalid"),
-    ("https://endpoint.example.invalid/custom/root/", "https://endpoint.example.invalid/custom/root/"),
-    ("HTTPS://ENDPOINT.EXAMPLE.INVALID./Custom/Path", "https://endpoint.example.invalid./Custom/Path/"),
-    ("http://127.0.0.1:12345/inference", "http://127.0.0.1:12345/inference/"),
-])
+@pytest.mark.parametrize("url,sdk_url", ALLOWED_URLS)
 def test_allowed_base_urls_are_returned_unchanged(url, sdk_url):
     assert app.check_base_url(url) == url
     with app.make_client(base_url=url) as client:
@@ -248,25 +276,34 @@ def test_refused_base_urls_name_reason_without_disclosing_url(url, reason):
         app.check_base_url(url)
     message = str(caught.value)
     assert reason in message
-    assert "API tab" in message
     assert url not in message
+    if host := urlsplit(url).hostname:
+        assert host not in message
     assert "\n" not in message
+    if reason == "append /v1":
+        assert message == "append /v1 to the endpoint URL (NVIDIA documents <ENDPOINT_URL>/v1/chat/completions)"
+    elif url in INVALID_HOST_URLS:
+        assert message == "Set LEPTON_ENDPOINT_URL to a valid HTTP endpoint base URL."
+        assert caught.value.__suppress_context__ is True
+    elif reason == "credentials":
+        assert "placeholder-user" not in message
+        assert "placeholder-password" not in message
 
 
 @pytest.mark.parametrize("key", [None, "", "   "])
 def test_make_client_requires_nonempty_vendor_key(monkeypatch, key):
     if key is None:
         monkeypatch.delenv(app.API_KEY_ENV)
-        with pytest.raises(KeyError) as caught:
-            app.make_client()
-        assert caught.value.args == (app.API_KEY_ENV,)
     else:
         monkeypatch.setenv(app.API_KEY_ENV, key)
-        with pytest.raises(ValueError, match=app.API_KEY_ENV):
-            app.make_client()
+    with pytest.raises(ValueError, match=app.API_KEY_ENV) as caught:
+        app.make_client()
+    assert str(caught.value) == f"Set {app.API_KEY_ENV} to the non-empty token shown in the API tab."
 
 
-def test_chat_completion_contract(monkeypatch):
+@pytest.mark.parametrize("base_url", [TEST_BASE_URL, XENON_TEST_BASE_URL])
+def test_chat_completion_contract(monkeypatch, base_url):
+    monkeypatch.setenv(app.BASE_URL_ENV, base_url)
     requests = []
 
     def handler(request):
@@ -274,9 +311,10 @@ def test_chat_completion_contract(monkeypatch):
         assert json.loads(request.content)["model"] == MODEL
         return httpx.Response(200, json=fake.completion(MODEL))
 
-    with tracing(monkeypatch, "lepton-chat-contract") as (receiver, provider):
+    project_name = "lepton-chat-xenon" if base_url == XENON_TEST_BASE_URL else "lepton-chat-invalid"
+    with tracing(monkeypatch, project_name) as (receiver, provider):
         with mock_client(handler) as client:
-            assert str(client.base_url) == TEST_BASE_URL + "/"
+            assert str(client.base_url) == base_url + "/"
             assert chat(client).choices[0].message.content == fake.ANSWER
         span, values = one_span(receiver, provider)
         assert values["gen_ai.request.model"] == MODEL
@@ -286,9 +324,11 @@ def test_chat_completion_contract(monkeypatch):
             "gen_ai.usage.input_tokens": 11, "gen_ai.usage.output_tokens": 13, "gen_ai.usage.total_tokens": 24,
         }
         assert len(requests) == 1
-        assert str(requests[0].url) == TEST_BASE_URL + "/chat/completions"
+        assert str(requests[0].url) == base_url + "/chat/completions"
         assert_key_separation(receiver, requests[0])
-        assert all(resource["project_name"] == "lepton-chat-contract"
+        assert base_url not in telemetry(receiver)
+        assert urlsplit(base_url).hostname not in telemetry(receiver)
+        assert all(resource["project_name"] == project_name
                    for export in receiver.requests() for resource in export["resource_attributes"])
 
 
@@ -384,7 +424,9 @@ def test_privacy_flags_hide_text_with_visible_control(monkeypatch, flag, marker)
 
 @pytest.mark.parametrize("journey", ["chat", "stream", "error"])
 @pytest.mark.parametrize("hide", [False, True])
-def test_endpoint_url_and_host_are_not_exported(monkeypatch, journey, hide):
+@pytest.mark.parametrize("base_url", [TEST_BASE_URL, XENON_TEST_BASE_URL])
+def test_endpoint_url_and_host_are_not_exported(monkeypatch, journey, hide, base_url):
+    monkeypatch.setenv(app.BASE_URL_ENV, base_url)
     for flag in HIDE_FLAGS:
         monkeypatch.setenv(flag, str(hide).lower())
     requests = []
@@ -397,7 +439,8 @@ def test_endpoint_url_and_host_are_not_exported(monkeypatch, journey, hide):
             return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=fake.stream(MODEL))
         return httpx.Response(200, json=fake.completion(MODEL))
 
-    with tracing(monkeypatch, f"lepton-url-privacy-{journey}-{hide}") as (receiver, provider):
+    host_label = "xenon" if base_url == XENON_TEST_BASE_URL else "invalid"
+    with tracing(monkeypatch, f"lepton-url-privacy-{host_label}-{journey}-{hide}") as (receiver, provider):
         with mock_client(handler) as client:
             if journey == "error":
                 with pytest.raises(openai.AuthenticationError):
@@ -409,11 +452,11 @@ def test_endpoint_url_and_host_are_not_exported(monkeypatch, journey, hide):
         _, values = one_span(receiver, provider)
         # Positive controls: the endpoint was used, and real telemetry was exported.
         assert len(requests) == 1
-        assert str(requests[0].url) == TEST_BASE_URL + "/chat/completions"
+        assert str(requests[0].url) == base_url + "/chat/completions"
         assert receiver.requests()[0]["resource_attributes"]
         exported = telemetry(receiver)
-        assert TEST_BASE_URL not in exported
-        assert urlsplit(TEST_BASE_URL).hostname not in exported
+        assert base_url not in exported
+        assert urlsplit(base_url).hostname not in exported
         assert not {"server.address", "url.full", "http.url", "openai.base_url"}.intersection(values)
         if hide:
             assert "gen_ai.request.parameters" not in values
@@ -469,7 +512,8 @@ def test_app_subprocess_is_loopback_only(monkeypatch, tmp_path, stream):
 
 
 @pytest.mark.parametrize("operation", ["dns", "connect", "connect_ex"])
-def test_guard_refuses_syntactic_host_before_dns(tmp_path, operation):
+@pytest.mark.parametrize("host", [urlsplit(TEST_BASE_URL).hostname, urlsplit(XENON_TEST_BASE_URL).hostname])
+def test_guard_refuses_syntactic_host_before_dns(tmp_path, operation, host):
     with Receiver() as receiver, fake.FakeOpenAI() as server:
         environment = child_environment(tmp_path, receiver, server)
         # The positive control proves that the same guard permits a loopback request.
@@ -478,9 +522,9 @@ def test_guard_refuses_syntactic_host_before_dns(tmp_path, operation):
         assert_guard_installed(environment)
         assert Path(environment["LOOPBACK_GUARD_LOG"]).read_text() == ""
         code = "import socket; " + {
-            "dns": "socket.getaddrinfo('endpoint.example.invalid', 443)",
-            "connect": "socket.socket().connect(('endpoint.example.invalid', 443))",
-            "connect_ex": "socket.socket().connect_ex(('endpoint.example.invalid', 443))",
+            "dns": f"socket.getaddrinfo({host!r}, 443)",
+            "connect": f"socket.socket().connect(({host!r}, 443))",
+            "connect_ex": f"socket.socket().connect_ex(({host!r}, 443))",
         }[operation]
         refused = run_child(environment, "-c", code)
         assert refused.returncode != 0
@@ -511,7 +555,14 @@ def test_main_missing_configuration_exits_before_tracing(monkeypatch, capsys, va
     assert VENDOR_KEY not in captured.out + captured.err
 
 
-@pytest.mark.parametrize("url,reason", [REFUSED_URLS[0], REFUSED_URLS[4], REFUSED_URLS[-1]])
+@pytest.mark.parametrize("url,reason", [
+    ("https://api.lepton.ai/v1", "Legacy"),
+    ("https://dashboard.dgxc-lepton.nvidia.com/v1", "Console"),
+    (quote(quote(app.DOCUMENTED_BASE_URL_FORMS[0], safe=""), safe=""), "placeholder"),
+    ("http://ws0000-example.xenon.lepton.run/v1", "https"),
+    ("https://ws0000-example.xenon.lepton.run", "append /v1"),
+    (XENON_TEST_BASE_URL + "?placeholder=query", "query or fragment"),
+])
 def test_main_refuses_url_without_tracing_or_network(monkeypatch, capsys, tmp_path, url, reason):
     with Receiver() as receiver, fake.FakeOpenAI() as server:
         monkeypatch.setenv("FI_BASE_URL", receiver.origin)
@@ -538,6 +589,36 @@ def test_main_refuses_url_without_tracing_or_network(monkeypatch, capsys, tmp_pa
         assert receiver.requests() == []
 
 
+@pytest.mark.parametrize("url", INVALID_HOST_URLS)
+def test_main_rejects_invalid_hosts_without_disclosure(monkeypatch, capsys, tmp_path, url):
+    host = urlsplit(url).hostname
+    with Receiver() as receiver, fake.FakeOpenAI() as server:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        monkeypatch.setenv(app.BASE_URL_ENV, url)
+
+        def forbidden():
+            pytest.fail("Tracing started for an invalid host")
+
+        monkeypatch.setattr(app, "setup_tracing", forbidden)
+        assert app.main([]) == 2
+        captured = capsys.readouterr()
+        assert captured.err == "Set LEPTON_ENDPOINT_URL to a valid HTTP endpoint base URL.\n"
+        assert host not in captured.out + captured.err
+        assert "Traceback" not in captured.err
+        environment = child_environment(tmp_path, receiver, server)
+        environment[app.BASE_URL_ENV] = url
+        child = run_child(environment, str(RECIPE_DIR / "src" / "app.py"))
+        assert child.returncode == 2
+        assert child.stderr.strip().endswith("Set LEPTON_ENDPOINT_URL to a valid HTTP endpoint base URL.")
+        assert host not in child.stdout + child.stderr
+        assert "Traceback" not in child.stderr
+        assert_guard_installed(environment)
+        assert Path(environment["LOOPBACK_GUARD_LOG"]).read_text() == ""
+        assert server.requests == []
+        assert receiver.spans() == []
+        assert receiver.requests() == []
+
+
 def test_app_error_does_not_print_endpoint_url(tmp_path):
     with Receiver() as receiver, fake.FakeOpenAI(error=True) as server:
         environment = child_environment(tmp_path, receiver, server)
@@ -555,14 +636,15 @@ def test_app_error_does_not_print_endpoint_url(tmp_path):
         assert spans[0]["status"]["code"] == "STATUS_CODE_ERROR"
 
 
-def test_main_redacts_sdk_error_containing_endpoint_url(monkeypatch, capsys):
+@pytest.mark.parametrize("error_type", [openai.OpenAIError, RuntimeError])
+def test_main_redacts_client_errors_containing_endpoint_url(monkeypatch, capsys, error_type):
     flushed = []
 
     class Provider:
         def force_flush(self):
             flushed.append(True)
 
-    error = openai.OpenAIError(f"Request to {TEST_BASE_URL} failed using {VENDOR_KEY}")
+    error = error_type(f"Request to {TEST_BASE_URL} failed using {VENDOR_KEY}")
     assert TEST_BASE_URL in str(error)
     assert VENDOR_KEY in str(error)
 
@@ -576,6 +658,8 @@ def test_main_redacts_sdk_error_containing_endpoint_url(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "Endpoint request failed" in captured.err
     assert TEST_BASE_URL not in captured.out + captured.err
+    assert urlsplit(TEST_BASE_URL).hostname not in captured.out + captured.err
+    assert "Traceback" not in captured.err
     assert VENDOR_KEY not in captured.out + captured.err
     assert flushed == [True]
 
@@ -586,10 +670,15 @@ def test_readme_and_requirements_pin_customer_contract():
         *app.DOCUMENTED_BASE_URL_FORMS, app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV,
         "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS",
         "FI_HIDE_LLM_INVOCATION_PARAMETERS", "provider field says `openai`",
-        "stop if the API tab shows no OpenAI-compatible base URL", "anyone with the URL",
-        "treat the URL like a secret", "never commit it", "Do not guess `/v1`",
+        "If the endpoint is not OpenAI-compatible, stop", "anyone with the URL",
+        "treat the URL like a secret", "never commit it", "Append `/v1` yourself",
+        "https://<workspace>-<endpoint>.xenon.lepton.run", "lep endpoint get -n <name>",
+        "This recipe requires a non-empty `LEPTON_API_TOKEN`", "as NVIDIA recommends",
+        "lower-cases the scheme and host (the path keeps its case)",
+        "put `src/` on `PYTHONPATH` or run the snippet from `src/`",
+        "HTTPS", "credentials", XENON_TEST_BASE_URL,
         "gen_ai.request.model", "endpoint URL and host are absent",
-        "syntactic test host", "api.lepton.ai", "*.lepton.run", "leptonai",
+        "syntactic test host", "api.lepton.ai", "llm.lepton.run", "sdxl.lepton.run", "leptonai",
         "NVIDIA's Python SDK", "Non-OpenAI-compatible endpoints",
         'PYTHONPATH="python/examples/lepton/src:python:python/frameworks/openai:python/tests"',
         'PYTHONPATH="python/examples/lepton/src:python/tests"',
@@ -599,6 +688,10 @@ def test_readme_and_requirements_pin_customer_contract():
     ):
         assert text in readme
     assert "TBD" not in readme
+    assert "*.lepton.run" not in readme
+    assert "Do not guess `/v1`" not in readme
+    assert "The OpenAI SDK requires a non-empty API key" not in readme
+    assert "normalizes URL casing" not in readme
     assert "sk-" not in readme
     pins = (RECIPE_DIR / "requirements.txt").read_text().splitlines()
     assert pins[0].startswith("#")

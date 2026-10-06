@@ -1,6 +1,6 @@
 # NVIDIA DGX Cloud Lepton (OpenAI-compatible) with traceAI
 
-This recipe traces Chat Completions through the official `openai` Python SDK at the OpenAI-compatible base URL shown in your endpoint's API tab. It uses `traceai-openai`; there is no separate Lepton tracing package.
+This recipe traces Chat Completions through the official `openai` Python SDK at an OpenAI-compatible NVIDIA DGX Cloud Lepton LLM endpoint. It uses `traceai-openai`; there is no separate Lepton tracing package.
 
 ## Install
 
@@ -18,18 +18,18 @@ pip install traceAI-openai fi-instrumentation-otel openai
 
 ## Configure
 
-There is no shared public base URL. The documented form is `<ENDPOINT_URL from the API tab>`. Replace this placeholder before running the app.
+There is no shared public base URL. The endpoint URL from the API tab, or `lep endpoint get -n <name>`, looks like `https://<workspace>-<endpoint>.xenon.lepton.run`. Set `LEPTON_ENDPOINT_URL` to that URL plus `/v1`, as NVIDIA documents for LLM endpoints. The documented base-URL form is `<ENDPOINT_URL from the API tab>/v1`. Replace the placeholder before running the app.
 
 | Environment variable | Required | Purpose |
 |---|---|---|
 | `FI_API_KEY` | Yes | Future AGI API key; goes to the tracer only. |
 | `FI_SECRET_KEY` | Yes | Future AGI secret key; goes to the tracer only. |
 | `LEPTON_API_TOKEN` | Yes | Non-empty token shown in the endpoint's API tab; goes to the OpenAI client only. |
-| `LEPTON_ENDPOINT_URL` | Yes | OpenAI-compatible base URL from the endpoint details page, API tab. No default. |
+| `LEPTON_ENDPOINT_URL` | Yes | Endpoint URL from the endpoint details page, API tab, plus `/v1`. No default. |
 | `LEPTON_MODEL` | Yes, unless `--model` is supplied | Model served by your endpoint. |
 | `FI_BASE_URL` | No | Override the Future AGI collector origin; used by the tracer only. |
 
-Missing values and refused URLs exit with code 2 before tracing starts. The OpenAI SDK requires a non-empty API key. Use the token the API tab shows.
+Missing values and refused URLs exit with code 2 before tracing starts. This recipe requires a non-empty `LEPTON_API_TOKEN`. Create the endpoint with an access token, as NVIDIA recommends over making it public. Use the token the API tab shows.
 
 ## Run
 
@@ -39,7 +39,7 @@ From this directory:
 export FI_API_KEY='placeholder-futureagi-key'
 export FI_SECRET_KEY='placeholder-futureagi-secret'
 export LEPTON_API_TOKEN='placeholder-lepton-token'
-export LEPTON_ENDPOINT_URL='<ENDPOINT_URL from the API tab>'
+export LEPTON_ENDPOINT_URL='<ENDPOINT_URL from the API tab>/v1'
 export LEPTON_MODEL='nvidia/Nemotron-Research-Reasoning-Qwen-1.5B'
 # Replace the URL and key placeholders with your own values first.
 python src/app.py
@@ -50,7 +50,7 @@ You can also supply `--model` and `--prompt`. The example model is the model in 
 
 ## Code
 
-The essential sequence from `src/app.py` is:
+The essential sequence from `src/app.py` is below. To use `from app import check_base_url`, put `src/` on `PYTHONPATH` or run the snippet from `src/`.
 
 ```python
 import os
@@ -88,9 +88,11 @@ The span resource uses the project name passed to `register()`.
 
 Lepton here means [NVIDIA DGX Cloud Lepton endpoints](https://docs.nvidia.com/dgx-cloud/lepton/get-started/endpoint/). An endpoint is a running model that exposes an HTTP server.
 
-Copy the OpenAI-compatible base URL and token shown on the endpoint details page, in its API tab. Always stop if the API tab shows no OpenAI-compatible base URL; this recipe does not apply. Do not guess `/v1`.
+Copy the endpoint URL and API key from the endpoint details page, in its [API tab](https://docs.nvidia.com/dgx-cloud/lepton/features/endpoints/create-llm/). You can also run `lep endpoint get -n <name>` and read `external_endpoint`. The endpoint URL looks like `https://<workspace>-<endpoint>.xenon.lepton.run`. Append `/v1` yourself when setting `LEPTON_ENDPOINT_URL`: NVIDIA's [LLM endpoint example](https://docs.nvidia.com/dgx-cloud/lepton/examples/endpoint/deploy-gpt-oss/) uses `<ENDPOINT_URL>/v1/chat/completions`. If the endpoint is not OpenAI-compatible, stop; this recipe does not apply.
 
-`check_base_url()` returns an allowed URL exactly as given. It does not add or require a path. The tested OpenAI SDK appends a trailing slash to a non-empty base path and normalizes URL casing. For the syntactic test host `https://endpoint.example.invalid/v1`, the client base URL is `https://endpoint.example.invalid/v1/` and the request path is `/v1/chat/completions`. A base URL with no path is accepted; the tested SDK serializes it without a trailing slash. The reserved `.invalid` host is only a test shape; it is never contacted.
+`check_base_url()` returns an allowed URL exactly as given; it never appends `/v1`. For hosts under `*.xenon.lepton.run`, it requires HTTPS, rejects a host-only URL or `/` path, and refuses query strings and fragments. For every host, it refuses non-ASCII or malformed IDNA hostnames and credentials in the URL.
+
+The tested OpenAI SDK appends a trailing slash to a non-empty base path and lower-cases the scheme and host (the path keeps its case). For the syntactic test host `https://ws0000-example.xenon.lepton.run/v1`, the client base URL is `https://ws0000-example.xenon.lepton.run/v1/` and the request URL is `https://ws0000-example.xenon.lepton.run/v1/chat/completions`. The suite also keeps `https://endpoint.example.invalid/v1` as a syntactic test host on the reserved `.invalid` domain. Neither test host is contacted; both use in-process fixtures.
 
 Endpoints can be public and reachable by anyone with the URL. For a public endpoint, treat the URL like a secret and never commit it. The app does not print endpoint URLs in its configuration or request error messages. Legacy Lepton AI hosts and console hosts are refused even with upper-case or trailing-dot spellings. Literal and repeatedly percent-encoded placeholders are refused.
 
@@ -104,7 +106,7 @@ The vendor token is also absent from the exported spans, resources and collector
 
 ## Limits / not covered
 
-- Legacy Lepton AI hosts: `api.lepton.ai`, `llm.lepton.run` and `*.lepton.run`, including `sdxl.lepton.run`.
+- Named legacy Lepton AI hosts: `api.lepton.ai`, `llm.lepton.run` and `sdxl.lepton.run`.
 - Console URLs: `dashboard.dgxc-lepton.nvidia.com` and `dashboard.lepton.ai`.
 - The `leptonai` photon client.
 - NVIDIA's Python SDK. It is a workspace control-plane client for batch jobs, endpoints and secrets, not an inference client.
