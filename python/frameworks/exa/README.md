@@ -110,7 +110,8 @@ or the requested URLs by `__REDACTED__`) and the message cut to 1 KB of UTF-8.
 If the exception's own `str()` fails, the span records only its type. The event's
 `exception.stacktrace` is the traceback's frames, scrubbed the same way, plus
 that safe message; it does not copy chained exceptions' messages. Only verbatim
-copies are found: an escaped or truncated echo of the key or query is not.
+copies are found: an escaped, normalised or truncated echo of the key, query or
+URLs (for example a JSON-escaped `\/` or a percent-encoded URL) is not.
 
 Closing a stream before its last chunk (`close()` or `aclose()`), dropping it
 mid-iteration, or cancelling an `AsyncExa` call or stream ends the span with
