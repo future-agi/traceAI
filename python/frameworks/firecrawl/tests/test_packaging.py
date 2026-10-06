@@ -86,5 +86,15 @@ def test_pyproject_matches_the_supported_range() -> None:
 
 def test_classifiers_list_only_tested_pythons() -> None:
     classifiers = re.findall(r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text())
-    assert classifiers == ["3.10", "3.11", "3.13"]
+    # Include the already admitted 3.12 minor; match the declared constraint.
+    assert classifiers == ["3.10", "3.11", "3.12", "3.13"]
     assert _poetry_value("python") == ">=3.10,<3.14"
+
+
+def test_python_constraint_matches_classifiers() -> None:
+    from packaging.specifiers import SpecifierSet
+
+    classifiers = set(re.findall(r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text()))
+    constraint = SpecifierSet(_poetry_value("python"))
+    admitted = {"3." + str(minor) for minor in range(20) if constraint.contains("3." + str(minor))}
+    assert admitted == classifiers

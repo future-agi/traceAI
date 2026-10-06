@@ -6,6 +6,8 @@ from typing import Any, Collection, Dict, Tuple
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
+from fi_instrumentation import FITracer
+from fi_instrumentation.instrumentation import TraceConfig
 
 from traceai_firecrawl._wrappers import AsyncOperationWrapper, OperationWrapper
 from traceai_firecrawl.package import _instruments
@@ -44,8 +46,13 @@ class FirecrawlInstrumentor(BaseInstrumentor):
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
+        config = kwargs.get("config")
+        if config is None:
+            config = TraceConfig()
+        elif not isinstance(config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
-        tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
+        tracer = FITracer(trace_api.get_tracer(__name__, __version__, tracer_provider), config=config)
         self._original_methods: Dict[Tuple[str, str, str], Any] = {}
 
         for module_name, class_name, is_async in (
@@ -54,9 +61,9 @@ class FirecrawlInstrumentor(BaseInstrumentor):
         ):
             for method_name, span_name in _OPERATIONS.items():
                 wrapper = (
-                    AsyncOperationWrapper(tracer, span_name, method_name)
+                    AsyncOperationWrapper(tracer, span_name, method_name, config)
                     if is_async
-                    else OperationWrapper(tracer, span_name, method_name)
+                    else OperationWrapper(tracer, span_name, method_name, config)
                 )
                 self._wrap(module_name, class_name, method_name, wrapper)
 

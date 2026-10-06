@@ -249,12 +249,15 @@ def test_no_key_path_or_content_is_exported(fake_firecrawl, monkeypatch):
 _EXIT_SCRIPT = """
 import os
 import sys
+from pathlib import Path
+import fi_instrumentation
 
 from firecrawl import Firecrawl
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_firecrawl import FirecrawlInstrumentor
 
+print("FI_CORE_FILE=" + str(Path(fi_instrumentation.__file__).resolve()), flush=True)
 provider = register(project_type=ProjectType.OBSERVE, project_name=os.environ["PROJECT"], verbose=False)
 FirecrawlInstrumentor().instrument(tracer_provider=provider)
 Firecrawl(api_key=os.environ["FIRECRAWL_KEY"], api_url=os.environ["FIRECRAWL_BASE_URL"], max_retries=1).scrape(
@@ -273,15 +276,18 @@ def test_scrape_span_is_exported_at_process_exit(fake_firecrawl, exit_mode, expo
     exit hooks and must export nothing, which shows the receiver is not fed any
     other way."""
     import os
+    import fi_instrumentation
 
     from harness import run
 
     with Receiver() as receiver:
         env = dict(os.environ)
         here = Path(__file__).resolve()
-        # The package and the in-repo fi_instrumentation, whatever the cwd.
+        core_file = Path(fi_instrumentation.__file__).resolve()
+        # Test the same core the parent imported, including the published wheel.
         env["PYTHONPATH"] = os.pathsep.join(
-            [str(here.parents[1]), str(here.parents[3])] + [p for p in [env.get("PYTHONPATH")] if p]
+            [str(here.parents[1]), str(core_file.parent.parent)]
+            + [p for p in [env.get("PYTHONPATH")] if p]
         )
         env.update(
             FI_BASE_URL=receiver.origin,
@@ -296,5 +302,9 @@ def test_scrape_span_is_exported_at_process_exit(fake_firecrawl, exit_mode, expo
 
     assert not result.timed_out, result.stderr.decode(errors="replace")
     assert result.returncode == 0, result.stderr.decode(errors="replace")
+    assert "FI_CORE_FILE=" + str(core_file) in result.stdout.decode()
+    core_root = core_file.parent.parent
+    if core_root != Path(__file__).resolve().parents[3]:
+        assert "site-packages" in core_root.parts
     assert fake_firecrawl.calls == [("POST", "/v2/scrape")]
     assert [span["name"] for span in spans] == (["firecrawl.scrape"] if exported else [])

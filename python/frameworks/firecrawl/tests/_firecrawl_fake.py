@@ -18,7 +18,7 @@ RESULT_TITLE = "RESULT-TITLE-MUST-NOT-BE-EXPORTED"
 
 PAGE = {"markdown": PAGE_BODY, "metadata": {"sourceURL": "https://example.com/1", "statusCode": 200}}
 
-Payload = Union[Dict[str, Any], Callable[[Dict[str, Any]], Dict[str, Any]]]
+Payload = Union[bytes, Dict[str, Any], Callable[[Dict[str, Any]], Dict[str, Any]]]
 Route = Tuple[int, Payload]
 
 
@@ -91,7 +91,7 @@ class FakeFirecrawl:
                     )
                 if callable(payload):
                     payload = payload(body)
-                data = json.dumps(payload).encode()
+                data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))

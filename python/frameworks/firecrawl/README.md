@@ -10,16 +10,17 @@ This package wraps the v2 client only. It does not wrap `FirecrawlApp`, and it d
 
 ## Supported versions
 
-`firecrawl-py >=4.46.2,<5` on Python 3.10, 3.11 and 3.13. The tests run on `firecrawl-py==4.46.2`. Outside that range `instrument()` logs an error and wraps nothing.
+`firecrawl-py >=4.46.2,<5` on Python 3.10, 3.11, 3.12 and 3.13. The tests run on `firecrawl-py==4.46.2`. Outside that range `instrument()` logs an error and wraps nothing.
 
 ## Usage
 
 ```python
 from firecrawl import Firecrawl
 from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
 from traceai_firecrawl import FirecrawlInstrumentor
 
-tracer_provider = register(project_name="firecrawl")
+tracer_provider = register(project_name="firecrawl", project_type=ProjectType.OBSERVE)
 FirecrawlInstrumentor().instrument(tracer_provider=tracer_provider)
 
 # Construct the client after instrument(); see "Client construction order".
@@ -34,9 +35,9 @@ Each call to `scrape`, `search`, `map`, `crawl`, `start_crawl`, `get_crawl_statu
 | Attribute | Methods | Value |
 |---|---|---|
 | `server.address` | `scrape`, `map`, `crawl`, `start_crawl` | Host of the target URL. Never the path or query. |
-| `fi.retrieval.query` | `search` | The query, with the API key redacted, capped at 1024 characters. |
-| `fi.retrieval.document_count` | `search` | Number of results. |
-| `firecrawl.formats` | `scrape`, `search`, `crawl`, `start_crawl` | Names of the requested formats, from `formats=` or `scrape_options.formats`, when the caller passes them. A JSON format's prompt and schema are not recorded. |
+| `fi.retrieval.query` | `search` | The query, with the API key redacted, capped at 1024 characters. Omitted with `hide_inputs` or `hide_input_text`; shared PII redaction applies when enabled. |
+| `fi.retrieval.document_count` | `search` | Total returned records across SDK `web`, `news`, `images` and `tools` groups. Known empty groups count as zero; unknown or malformed shapes omit the attribute. |
+| `firecrawl.formats` | `scrape`, `search`, `crawl`, `start_crawl` | Bounded, deduplicated canonical SDK format names from `formats=` or `scrape_options.formats`. Unknown names, prompts and schemas are omitted. Snake-case aliases use the SDK's API spelling. |
 | `firecrawl.job_id` | `crawl`, `start_crawl`, `get_crawl_status`, `cancel_crawl` | The crawl job id, positional or keyword. The start, status and cancel spans of one job share it. |
 | `firecrawl.limit` | `crawl`, `start_crawl` | The `limit` argument, when passed. |
 | `firecrawl.page_count` | `crawl` | Pages the job completed. |
@@ -47,18 +48,24 @@ Each call to `scrape`, `search`, `map`, `crawl`, `start_crawl`, `get_crawl_statu
 
 `firecrawl.credits_used` caveat: for crawl jobs, firecrawl-py fills `credits_used` with `0` when the API response omits `creditsUsed`, so a recorded `0` on `crawl` or `get_crawl_status` can mean either "no credits" or "not reported".
 
+Format metadata follows SDK 4.46.2's payload: `scrape_options` takes precedence over convenience `formats`. A `ScrapeFormats` container contributes its explicit list and serialized enabled flags, including its default `markdown=true`. The SDK does not serialize its `images` or `json` boolean flags, so those flags add no metadata; explicit format entries still do.
+
+Search counts include `tools` because SDK 4.46.2 returns a list of `DiscoveredTool` discovery records, alongside web/news/image records. The count includes those records, not pages fetched by a tool. The prior generic `data`/`results`/`web` list fallback remains supported; no result contents are exported.
+
 ### Status
 
 - The SDK returns a failed or cancelled crawl job without raising. On a blocking `crawl()`, a job with status `failed` sets the span to ERROR `failed`, and a job with status `cancelled` sets ERROR `cancelled` and `firecrawl.cancelled=true`. A `get_crawl_status` poll that gets an answer stays OK and records the job's state in `firecrawl.status`.
 - `cancel_crawl` sets `firecrawl.cancelled` to the API's answer; the span itself is OK.
 - Cancelling an asyncio task that is awaiting a Firecrawl call ends the span ERROR `cancelled` with `firecrawl.cancelled=true`.
-- Any exception the SDK raises is recorded on the span, sets ERROR with the exception type and message, and is re-raised unchanged.
+- Any exception the SDK raises adds one safe exception event and sets ERROR with a recognized exception type (otherwise `Exception`). Exception free text and serialized tracebacks are omitted; the original exception is re-raised unchanged.
 
 ## What it never records
 
-This package has no content-capture setting. It never records page content (markdown, HTML, screenshots, links, titles, descriptions), URL paths or query strings, JSON-format prompts or schemas, or the Firecrawl API key. The key is redacted from every attribute the package sets, including a key taken from `FIRECRAWL_API_KEY`. The search query is recorded by design. On an error, the span status and exception event carry the SDK's exception message as raised.
+This package has no content-capture setting. It never records page content (markdown, HTML, screenshots, links, titles, descriptions), URL paths or query strings, JSON-format prompts or schemas, or the Firecrawl API key. The key is redacted from every attribute the package sets, including a key taken from `FIRECRAWL_API_KEY`. The search query is recorded by design. Error events contain a safe type and generic message; status descriptions contain that type or `cancelled`. Only HTTP status and recognized machine codes are retained from API errors; unknown codes are omitted.
 
 Instrumentation errors never reach your code: if reading an argument or a result fails, the call still returns the SDK's result or raises the SDK's exception, and the span still ends.
+
+Pass `config=TraceConfig(...)` from `fi_instrumentation.instrumentation` to `instrument()` to use shared privacy controls. `None` creates `TraceConfig()` using its `FI_*` environment settings; other objects raise `TypeError`. `hide_inputs` or `hide_input_text` omits the search query. `pii_redaction` (or `FI_PII_REDACTION=true`) applies the shared regex redactor to query text before truncation, followed by FITracer attribute masking. Other message, image and output hide flags are not applicable because no messages or page bodies are exported. Shared `suppress_tracing()` emits no Firecrawl spans, and `using_session()` supplies the shared session attribute. If API-key discovery fails, free-text attributes are omitted while safe format/count metadata remains. Error events and status use the separate safe metadata policy described above.
 
 ## Client construction order
 

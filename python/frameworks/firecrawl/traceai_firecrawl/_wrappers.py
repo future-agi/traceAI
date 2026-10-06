@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
+from fi_instrumentation.instrumentation import TraceConfig
+from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +43,29 @@ _JOB_OUTCOME_METHODS = {"crawl"}
 _ERROR_JOB_STATUSES = {"failed", "cancelled"}
 # Methods whose arguments carry the requested output formats.
 _FORMAT_METHODS = {"scrape", "search", "crawl", "start_crawl"}
-_MAX_FORMAT_NAME_LENGTH = 64
+# SDK 4.46.2 FormatString/model Literals and validation aliases. The finite
+# vocabulary bounds both label length and the deduplicated attribute list.
+_FORMAT_NAMES = {name: name for name in (
+    "markdown", "html", "rawHtml", "links", "images", "screenshot", "summary",
+    "changeTracking", "json", "attributes", "branding", "product", "menu",
+    "query", "audio", "video", "question", "highlights", "screenshot@fullPage",
+)}
+_FORMAT_NAMES.update(raw_html="rawHtml", change_tracking="changeTracking",
+                     screenshot_full_page="screenshot@fullPage")
 _CANCELLATION_ERRORS = (asyncio.CancelledError, concurrent.futures.CancelledError)
+# Fixed metadata vocabulary: arbitrary exception names/codes are caller content.
+_SAFE_EXCEPTION_TYPES = frozenset({
+    "Exception", "RuntimeError", "ValueError", "TypeError", "TimeoutError",
+    "CancelledError", "ValidationError", "FirecrawlError", "BadRequestError",
+    "UnauthorizedError", "PaymentRequiredError", "WebsiteNotSupportedError",
+    "ProviderTermsRequiredError", "RequestTimeoutError", "CrawlJobTimeoutError",
+    "RateLimitError", "InternalServerError",
+})
+_SAFE_ERROR_CODES = frozenset({
+    "RATE_LIMIT_EXCEEDED", "THIRD_PARTY_DATA_TERMS_REQUIRED", "duplicate_request",
+    "request_in_flight", "request_unresolved", "unknown_provider",
+    "insufficient_credits", "billing_unavailable",
+})
 
 # True while a traced Firecrawl call runs in this context. firecrawl-py 4.46.2
 # AsyncFirecrawlClient.crawl awaits self.start_crawl, which is wrapped as well;
@@ -71,9 +94,16 @@ def _api_keys(instance: Any) -> list[str]:
     return keys
 
 
-def _redact(value: str, instance: Any) -> str:
-    for api_key in _api_keys(instance):
+def _redact(value: str, instance: Any, config: Optional[TraceConfig] = None) -> Optional[str]:
+    try:
+        keys = _api_keys(instance)
+    except Exception:
+        logger.debug("Could not discover Firecrawl API keys; omitting free text")
+        return None
+    for api_key in keys:
         value = value.replace(api_key, "[redacted]")
+    if config is not None and config.pii_redaction:
+        value = redact_pii_in_string(value)
     return value[:_MAX_QUERY_LENGTH]
 
 
@@ -82,18 +112,28 @@ def _url_host(value: Any, instance: Any) -> str:
     if not isinstance(value, str) or not value:
         return ""
     host = urlsplit(value).hostname or ""
-    return _redact(host, instance)
+    return _redact(host, instance) or ""
 
 
-def _document_count(result: Any) -> int:
+def _document_count(result: Any) -> Optional[int]:
+    from firecrawl.v2.types import SearchData
+
+    if isinstance(result, SearchData):
+        count = 0
+        for group in ("web", "news", "images", "tools"):
+            records = getattr(result, group, None)
+            if records is not None:
+                if not isinstance(records, (list, tuple)):
+                    return None
+                count += len(records)
+        return count
+    # Preserve the prior generic list-result contract; strings, mappings and
+    # unrecognized objects do not establish a measured result count.
     for attribute in ("data", "results", "web"):
         value = getattr(result, attribute, None)
         if value is not None:
-            try:
-                return len(value)
-            except TypeError:
-                return 0
-    return 0
+            return len(value) if isinstance(value, (list, tuple)) else None
+    return None
 
 
 def _page_count(result: Any) -> int:
@@ -131,16 +171,30 @@ def _call_job_id(method_name: str, args: Sequence[Any], kwargs: Mapping[str, Any
     return _job_id(None, kwargs)
 
 
-def _formats(kwargs: Mapping[str, Any]) -> list[str]:
+def _formats(kwargs: Mapping[str, Any], method_name: str) -> list[str]:
     """Names of the requested formats. A format object's prompt or schema is
     content, so only its ``type`` is kept."""
-    formats = kwargs.get("formats")
-    if formats is None:
-        scrape_options = kwargs.get("scrape_options")
+    from firecrawl.v2.types import ScrapeFormats
+
+    scrape_options = kwargs.get("scrape_options")
+    # The SDK ignores convenience formats when scrape_options is supplied.
+    # Search has no supported top-level formats argument.
+    if scrape_options is not None or method_name == "search":
         if isinstance(scrape_options, Mapping):
             formats = scrape_options.get("formats")
         else:
             formats = getattr(scrape_options, "formats", None)
+    else:
+        formats = kwargs.get("formats")
+    if isinstance(formats, ScrapeFormats):
+        container = formats
+        formats = list(container.formats or ())
+        # Match prepare_scrape_options in 4.46.2: images/json flags are not
+        # serialized. Its markdown default is serialized, unless disabled.
+        for flag in ("markdown", "html", "raw_html", "summary", "links",
+                     "screenshot", "change_tracking"):
+            if getattr(container, flag) is True:
+                formats.append(flag)
     if not isinstance(formats, (list, tuple)):
         return []
     names = []
@@ -151,8 +205,10 @@ def _formats(kwargs: Mapping[str, Any]) -> list[str]:
             name = item.get("type")
         else:
             name = getattr(item, "type", None)
-        if isinstance(name, str) and name:
-            names.append(name[:_MAX_FORMAT_NAME_LENGTH])
+        if isinstance(name, str):
+            canonical = _FORMAT_NAMES.get(name)
+            if canonical is not None and canonical not in names:
+                names.append(canonical)
     return names
 
 
@@ -168,7 +224,7 @@ def _vendor_error_fields(error: BaseException) -> tuple[Optional[int], Optional[
     code = getattr(error, "code", None)
     return (
         status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else None,
-        code if isinstance(code, str) and code else None,
+        code if isinstance(code, str) and code in _SAFE_ERROR_CODES else None,
     )
 
 
@@ -181,25 +237,29 @@ class _BaseWrapper:
     that starts is ended exactly once.
     """
 
-    def __init__(self, tracer: Tracer, span_name: str, method_name: str) -> None:
+    def __init__(self, tracer: Tracer, span_name: str, method_name: str, config: TraceConfig) -> None:
         self._tracer = tracer
         self._span_name = span_name
         self._method_name = method_name
+        self._config = config
 
     def _attributes(
         self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
     ) -> dict[str, Any]:
         attributes = {_FI_SPAN_KIND: _TOOL}
         if self._method_name == "search":
-            query = kwargs.get("query", args[0] if args else "")
-            attributes[_RETRIEVAL_QUERY] = _redact(str(query or ""), instance)
+            if not (self._config.hide_inputs or self._config.hide_input_text):
+                query = kwargs.get("query", args[0] if args else "")
+                query_text = _redact(str(query or ""), instance, self._config)
+                if query_text is not None:
+                    attributes[_RETRIEVAL_QUERY] = query_text
         elif self._method_name in ("scrape", "map", "crawl", "start_crawl"):
             url = kwargs.get("url", args[0] if args else "")
             host = _url_host(url, instance)
             if host:
                 attributes["server.address"] = host
         if self._method_name in _FORMAT_METHODS:
-            formats = _formats(kwargs)
+            formats = _formats(kwargs, self._method_name)
             if formats:
                 attributes[_FORMATS] = formats
         if self._method_name in _CRAWL_METHODS:
@@ -208,7 +268,9 @@ class _BaseWrapper:
                 attributes[_LIMIT] = limit
             job_id = _call_job_id(self._method_name, args, kwargs)
             if job_id:
-                attributes[_JOB_ID] = _redact(job_id, instance)
+                safe_id = _redact(job_id, instance)
+                if safe_id is not None:
+                    attributes[_JOB_ID] = safe_id
         return attributes
 
     def _start(
@@ -229,11 +291,15 @@ class _BaseWrapper:
         self, span: Span, instance: Any, result: Any, kwargs: Mapping[str, Any]
     ) -> None:
         if self._method_name == "search":
-            span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, _document_count(result))
+            count = _document_count(result)
+            if count is not None:
+                span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, count)
         if self._method_name in _CRAWL_METHODS:
             job_id = _job_id(result, kwargs)
             if job_id:
-                span.set_attribute(_JOB_ID, _redact(job_id, instance))
+                safe_id = _redact(job_id, instance)
+                if safe_id is not None:
+                    span.set_attribute(_JOB_ID, safe_id)
             if self._method_name == "crawl":
                 span.set_attribute(_PAGE_COUNT, _page_count(result))
         if self._method_name == "cancel_crawl" and isinstance(result, bool):
@@ -275,15 +341,20 @@ class _BaseWrapper:
             if status_code is not None:
                 span.set_attribute(_ERROR_STATUS_CODE, status_code)
             if code is not None:
-                span.set_attribute(_ERROR_CODE, _redact(code, instance))
+                safe_code = _redact(code, instance)
+                if safe_code is not None:
+                    span.set_attribute(_ERROR_CODE, safe_code)
         except Exception:
             logger.debug("Could not read %s error", self._span_name, exc_info=True)
         try:
-            span.record_exception(error)
+            span.add_event("exception", {
+                "exception.type": _exception_type(error),
+                "exception.message": "Firecrawl call failed",
+            })
         except Exception:
             logger.debug("Could not record %s exception", self._span_name, exc_info=True)
         try:
-            description = "cancelled" if cancelled else _describe(error)
+            description = "cancelled" if cancelled else _exception_type(error)
             span.set_status(Status(StatusCode.ERROR, description))
         except Exception:
             logger.debug("Could not set %s status", self._span_name, exc_info=True)
@@ -291,11 +362,9 @@ class _BaseWrapper:
             _end(span)
 
 
-def _describe(error: BaseException) -> str:
-    try:
-        return "{0}: {1}".format(type(error).__name__, error)
-    except Exception:
-        return type(error).__name__
+def _exception_type(error: BaseException) -> str:
+    name = type(error).__name__
+    return name if name in _SAFE_EXCEPTION_TYPES else "Exception"
 
 
 def _current(span: Span) -> Any:
