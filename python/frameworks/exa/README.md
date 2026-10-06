@@ -34,7 +34,9 @@ client.search("recent retrieval research", num_results=5)
 deprecated `search_and_contents` alias (traced as `exa.search`) each produce
 one span. `stream_search` and `stream_answer` produce one span that stays open
 until the stream is fully read, closed, or garbage-collected; the returned
-object is still an instance of the vendor's stream class.
+object is still an instance of the vendor's stream class. A stream still open
+when the interpreter exits is ended as cancelled before `register()`'s exit
+hook shuts the exporter down (when `instrument()` runs after `register()`).
 
 Every span has `fi.span.kind` = `RETRIEVER`. It is a child of the active span
 when there is one, and a root span otherwise. The span is current while

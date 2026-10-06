@@ -1,5 +1,6 @@
 """OpenTelemetry instrumentation for the Exa client."""
 
+import atexit
 import logging
 from importlib import import_module
 from typing import Any, Collection, Dict, Tuple
@@ -14,6 +15,7 @@ from traceai_exa._wrappers import (
     AsyncStreamWrapper,
     OperationWrapper,
     StreamWrapper,
+    end_open_streams,
 )
 from traceai_exa.package import _instruments
 from traceai_exa.version import __version__
@@ -97,6 +99,11 @@ class ExaInstrumentor(BaseInstrumentor):
                 )
                 self._wrap_method(api_module, client_name, method_name, wrapper)
 
+        # register() adds an atexit hook that shuts the provider down. atexit
+        # runs hooks last-in first-out, so (re-)registering here makes open
+        # stream spans end before that shutdown, not after it.
+        atexit.unregister(end_open_streams)
+        atexit.register(end_open_streams)
         logger.debug("Exa instrumentation enabled")
 
     def _wrap_method(

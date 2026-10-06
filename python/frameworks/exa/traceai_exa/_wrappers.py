@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import traceback
+import weakref
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 import wrapt
@@ -290,6 +291,21 @@ class AsyncOperationWrapper(_BaseWrapper):
         return result
 
 
+# Stream spans not yet ended. A stream still referenced at interpreter exit
+# is finalised after atexit hooks, when the exporter is already shut down, so
+# end_open_streams() ends these first (see ExaInstrumentor._instrument).
+_OPEN_STREAMS: "weakref.WeakSet[_StreamState]" = weakref.WeakSet()
+
+
+def end_open_streams() -> None:
+    """End every still-open stream span as cancelled; registered with atexit."""
+    for state in list(_OPEN_STREAMS):
+        try:
+            state.cancelled()
+        except Exception:  # exit must not fail because of tracing
+            pass
+
+
 class _StreamState:
     """Ends one stream span exactly once; counts citations as chunks arrive."""
 
@@ -299,23 +315,28 @@ class _StreamState:
         self.finished = False
         # Citations accumulate over chunks; the total is known only at the end.
         self.citations = 0
+        _OPEN_STREAMS.add(self)
 
     def observe(self, chunk: Any) -> None:
         self.citations += _chunk_citations(chunk)
 
+    def _claim(self) -> bool:
+        if self.finished:
+            return False
+        self.finished = True
+        _OPEN_STREAMS.discard(self)
+        return True
+
     def ok(self) -> None:
-        if not self.finished:
-            self.finished = True
+        if self._claim():
             _BaseWrapper._finish_ok(self.span, self.citations)
 
     def error(self, error: BaseException) -> None:
-        if not self.finished:
-            self.finished = True
+        if self._claim():
             _BaseWrapper._finish_error(self.span, error, self.scrub)
 
     def cancelled(self) -> None:
-        if not self.finished:
-            self.finished = True
+        if self._claim():
             _BaseWrapper._finish_cancelled(self.span)
 
 
