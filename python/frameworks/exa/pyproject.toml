@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.14"
+python = ">=3.10,<3.14"
 fi-instrumentation-otel = ">=1.1.0"
 exa-py = ">=2.25.0,<3"
 wrapt = ">=1.0.0"

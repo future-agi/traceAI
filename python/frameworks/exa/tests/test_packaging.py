@@ -51,3 +51,22 @@ def test_classifiers_list_only_the_tested_python_versions():
         r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text()
     )
     assert versions == ["3.10", "3.11", "3.13"]
+
+
+def test_python_range_starts_at_the_lowest_tested_version():
+    # fi-instrumentation-otel 1.1.0 requires Python >3.9, and 3.9 is not tested.
+    match = re.search(r'^python\s*=\s*"([^"]+)"', PYPROJECT.read_text(), re.M)
+    assert match
+    spec = SpecifierSet(match.group(1))
+    assert not spec.contains("3.9.20")
+    for version in ("3.10.0", "3.11.9", "3.13.1"):
+        assert spec.contains(version), version
+    assert not spec.contains("3.14.0")
+
+
+def test_vendor_async_streams_have_no_aclose():
+    # The README says aclose() comes from traceAI-exa, not exa-py; keep that true.
+    from exa_py.api import AsyncStreamAnswerResponse, AsyncStreamSearchResponse
+
+    assert not hasattr(AsyncStreamSearchResponse, "aclose")
+    assert not hasattr(AsyncStreamAnswerResponse, "aclose")
