@@ -5,6 +5,8 @@ It uses `traceai-openai`, with no separate provider package.
 
 ## Install
 
+Requires Python 3.10 or later.
+
 From this example directory, install the pinned dependencies:
 
 ```bash
@@ -84,8 +86,10 @@ host forms. The span does not say `azure`.
 
 For a successful non-streamed response, `gen_ai.request.model` is the model id
 the provider returns in its response. The fixtures return the deployment name
-that was requested. Azure's `model` request parameter is your deployment name;
-the returned name can differ from an underlying catalog model id.
+that was requested. Azure's `model` request parameter is your deployment name.
+Azure may return the underlying model name rather than your deployment name;
+`gen_ai.request.model` then shows the returned name, and your deployment name is
+in `gen_ai.request.parameters`. Cost lookup keyed on one name may miss the other.
 
 Token usage is recorded only when the response has `usage`. Missing usage
 attributes are omitted, never replaced with 0. The Chat Completions stream is
@@ -93,8 +97,8 @@ accumulated by the same instrumentor. Its default test stream has no usage
 attributes. With `stream_options={"include_usage": True}` and a final usage
 chunk, the instrumentor records input, output and total token counts.
 
-In the current `traceai-openai` version, streamed Chat Completions and failed
-calls omit `gen_ai.request.model`. The requested deployment remains in the
+In the current `traceai-openai` version, streamed and failed Chat Completions calls omit `gen_ai.request.model`;
+Responses calls record it from the request. The requested deployment remains in the
 `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
 Errors set the span status to ERROR and record an exception event.
 
@@ -115,7 +119,9 @@ https://YOUR-RESOURCE-NAME.services.ai.azure.com/openai/v1/
 Both end in `/openai/v1/`. The SDK joins `chat/completions` or `responses` to
 that path. If the slash is omitted after `/openai/v1`, the SDK appends it.
 The example's validator returns allowed URLs exactly as supplied; it does not
-rewrite them. Azure hosts must have the path `/openai/v1` or `/openai/v1/`.
+rewrite them. Azure hosts must use `https://` and have the path `/openai/v1` or
+`/openai/v1/`, with no query string (the v1 API needs no `api-version`), no
+fragment and no percent-encoded path. Credentials in the URL are refused.
 Proxy hosts and loopback URLs are also allowed.
 
 `model` means your model deployment name, for example `my-gpt-deployment`,
@@ -163,6 +169,10 @@ Set `FI_HIDE_INPUTS=true` and/or `FI_HIDE_OUTPUTS=true` to keep prompt or respon
 text out of exported spans. The tests include visible control runs and verify
 both flags. You can also pass `TraceConfig(hide_inputs=True)` as the instrumentor's
 `config`. `FI_HIDE_LLM_INVOCATION_PARAMETERS=true` omits request parameters.
+
+On non-streamed Responses calls, `output.value` holds the whole response object,
+which can echo request fields such as `instructions`. `FI_HIDE_INPUTS` does not cover
+that field; set `FI_HIDE_OUTPUTS=true` as well if those must stay out of the export.
 
 Azure still receives the prompt. Future AGI masking does not change Azure's
 own logging or data handling.

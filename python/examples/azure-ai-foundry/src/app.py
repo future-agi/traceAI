@@ -1,5 +1,7 @@
 """Trace Azure OpenAI v1 Chat Completions with the OpenAI client."""
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -29,13 +31,20 @@ def check_base_url(url: str) -> str:
     if "your-resource-name" in decoded.lower() or "<" in decoded or ">" in decoded:
         raise ValueError(f"Replace placeholders in {BASE_URL_ENV} with your resource name.")
     try:
-        parsed = urlsplit(decoded)
+        # Structural checks use the URL as given; only the placeholder check decodes.
+        parsed = urlsplit(url)
         host = (parsed.hostname or "").lower().rstrip(".")
     except ValueError:
         raise ValueError(f"Set {BASE_URL_ENV} to a valid HTTP(S) base URL.") from None
     if parsed.scheme not in ("http", "https") or not host:
         raise ValueError(f"Set {BASE_URL_ENV} to a valid HTTP(S) base URL.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"Do not put credentials in {BASE_URL_ENV}.")
     if host.endswith((".openai.azure.com", ".services.ai.azure.com", ".cognitiveservices.azure.com")):
+        if parsed.scheme != "https":
+            raise ValueError(f"Azure hosts must use https; set {BASE_URL_ENV} to your resource's /openai/v1/ URL.")
+        if "%" in parsed.path:
+            raise ValueError(f"Percent-encoded paths are not accepted for Azure hosts in {BASE_URL_ENV}.")
         if parsed.path not in ("/openai/v1", "/openai/v1/"):
             if parsed.path.startswith("/api/projects"):
                 reason = "The project endpoint is for agents, not model inference."
@@ -46,6 +55,8 @@ def check_base_url(url: str) -> str:
             else:
                 reason = "A bare resource root or other Azure path is not an inference base URL."
             raise ValueError(f"{reason} Set {BASE_URL_ENV} to your resource's /openai/v1/ URL.")
+        if parsed.query or parsed.fragment:
+            raise ValueError(f"Remove the query string or fragment from {BASE_URL_ENV}; the v1 API needs no api-version.")
     return url
 
 

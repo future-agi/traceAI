@@ -316,6 +316,31 @@ AZURE_HOSTS = (
 )
 
 
+HARDENING_REFUSALS = (
+    # The SDK folds the path into a query string, so the request would miss /chat/completions.
+    ("https://test-resource-0000.openai.azure.com/openai/v1/?api-version=preview", "query string"),
+    ("https://test-resource-0000.openai.azure.com/openai/v1?api-version=preview", "query string"),
+    ("https://test-resource-0000.openai.azure.com/openai/v1/#frag", "query string"),
+    # Encoded paths would pass a decoded check but go on the wire as a different path.
+    ("https://test-resource-0000.openai.azure.com/openai%2Fv1/", "Percent-encoded paths"),
+    ("https://test-resource-0000.openai.azure.com/openai/v1%3F/api/projects/x", "Percent-encoded paths"),
+    # Plain http would send the Azure key in cleartext.
+    ("http://test-resource-0000.openai.azure.com/openai/v1/", "must use https"),
+    ("http://test-resource-0000.services.ai.azure.com/openai/v1/", "must use https"),
+    # Credentials in the URL; this one only looks like Azure and would go to another host.
+    ("https://test-resource-0000.openai.azure.com@proxy.example/openai/v1/", "credentials"),
+    ("https://user:pass@test-resource-0000.openai.azure.com/openai/v1/", "credentials"),
+)
+
+
+@pytest.mark.parametrize("url,reason", HARDENING_REFUSALS)
+def test_refuse_query_encoded_http_and_credentials(url, reason):
+    with pytest.raises(ValueError, match=reason) as error:
+        app.check_base_url(url)
+    assert app.BASE_URL_ENV in str(error.value)
+    assert "\n" not in str(error.value)
+
+
 @pytest.mark.parametrize("host", AZURE_HOSTS)
 @pytest.mark.parametrize("path,reason", WRONG_PATHS)
 def test_refuse_wrong_azure_surfaces(host, path, reason):
@@ -369,14 +394,13 @@ def test_missing_configuration_exits_before_tracing(missing, receiver, monkeypat
 
 
 def test_refused_url_main_exits_without_requests_or_spans(receiver, monkeypatch, capsys):
-    with FakeOpenAI() as fake:
-        refused = "https://TEST-RESOURCE-0000.SERVICES.AI.AZURE.COM./api/projects/my-project"
-        monkeypatch.setenv(app.BASE_URL_ENV, refused)
-        monkeypatch.setattr(app, "setup_tracing", lambda *args, **kwargs: pytest.fail("Tracing ran for refused URL"))
-        monkeypatch.setattr(app, "make_client", lambda *args, **kwargs: pytest.fail("Client created for refused URL"))
-        assert app.main([]) == 2
-        assert "project endpoint" in capsys.readouterr().err
-        assert fake.requests() == []
+    # The setup_tracing and make_client traps are the controls: no tracer, no client, no request.
+    refused = "https://TEST-RESOURCE-0000.SERVICES.AI.AZURE.COM./api/projects/my-project"
+    monkeypatch.setenv(app.BASE_URL_ENV, refused)
+    monkeypatch.setattr(app, "setup_tracing", lambda *args, **kwargs: pytest.fail("Tracing ran for refused URL"))
+    monkeypatch.setattr(app, "make_client", lambda *args, **kwargs: pytest.fail("Client created for refused URL"))
+    assert app.main([]) == 2
+    assert "project endpoint" in capsys.readouterr().err
     assert receiver.spans() == [] and receiver.requests() == []
 
 
@@ -491,6 +515,12 @@ def test_readme_and_requirement_pins():
     assert "https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle" in readme
     assert "syntactic test hosts" in readme and "not real" in readme
     assert "gen_ai.request.model" in readme and "TBD" not in readme
+    assert "streamed and failed Chat Completions calls omit `gen_ai.request.model`" in readme
+    assert "Responses calls record it from the request" in readme
+    assert "may return the underlying model name rather than your deployment name" in readme
+    assert "Requires Python 3.10 or later" in readme
+    assert "Azure hosts must use `https://`" in readme
+    assert "`FI_HIDE_INPUTS` does not cover" in readme
     assert "published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0`" in readme
     exports = dict(re.findall(r'^export (\w+)="([^"]*)"$', readme, re.MULTILINE))
     assert exports["FI_API_KEY"] == FI_KEY
