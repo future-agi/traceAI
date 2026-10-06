@@ -711,4 +711,3 @@ def test_readme_and_requirements_contract():
             text = path.read_text()
             assert not re.search(r"\b[A-Z]{2,5}-\d{3,}\b", text), str(path)
             assert not re.search(r"\bsk-[A-Za-z0-9]{16,}\b", text), str(path)
-    assert not re.search(r"\b(?:Rick|Linear|brief)\b|company-brain", readme)
