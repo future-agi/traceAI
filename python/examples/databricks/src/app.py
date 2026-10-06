@@ -35,7 +35,8 @@ def check_base_url(url: str) -> str:
             reason = "REST invocation URLs are not SDK base URLs; replace URL placeholders"
         raise ValueError(f"{reason}; {suffixes} in {BASE_URL_ENV}.")
     try:
-        parts = urlsplit(decoded)
+        # Host and path checks use the URL as given; only the placeholder check decodes.
+        parts = urlsplit(url)
         host = (parts.hostname or "").lower().rstrip(".")
     except ValueError:
         raise ValueError(f"Set {BASE_URL_ENV} to an absolute HTTP(S) URL.") from None
@@ -45,6 +46,10 @@ def check_base_url(url: str) -> str:
         raise ValueError(
             f"The sample host is a placeholder; set {BASE_URL_ENV} to your workspace; {suffixes}."
         )
+    if host.endswith(_HOST_SUFFIXES) and parts.scheme != "https":
+        raise ValueError(f"Databricks workspace URLs must use https; {suffixes} in {BASE_URL_ENV}.")
+    if host.endswith(_HOST_SUFFIXES) and (parts.query or parts.fragment):
+        raise ValueError(f"Remove the query or fragment; {suffixes} in {BASE_URL_ENV}.")
     if host.endswith(_HOST_SUFFIXES) and parts.path.rstrip("/") not in _PATHS:
         reason = "Unsupported Databricks SDK base URL"
         if parts.path.startswith("/serving-endpoints/") and parts.path.rstrip("/").endswith(
@@ -89,10 +94,10 @@ def main(argv=None) -> int:
         model = args.model or os.environ.get(MODEL_ENV)
         if not model:
             raise ValueError(f"Set {MODEL_ENV} or pass --model.")
-        key = os.environ[API_KEY_ENV]
+        key = os.environ.get(API_KEY_ENV)
         if not key:
             raise ValueError(f"Set {API_KEY_ENV} to a Databricks token from your secret store.")
-    except (ValueError, KeyError) as error:
+    except ValueError as error:
         print(str(error), file=sys.stderr)
         return 2
     provider = setup_tracing()

@@ -100,7 +100,7 @@ For Model Serving serving endpoints, use `/serving-endpoints` and send your endp
 
 `model` is the model service or endpoint name, not a frozen foundation-model id. A pricing row keyed by a foundation-model id will not match an endpoint name. An endpoint name needs a matching pricing row for cost lookup.
 
-The app refuses workspace roots, `/api/2.0/serving-endpoints`, and `/serving-endpoints/<name>/invocations`. The last form is a REST invocation URL, not an SDK base URL. It also refuses `/ai-gateway/gemini` and `/ai-gateway/anthropic`, which are gateway native APIs for other SDKs. Placeholder checks include percent-encoded forms. Host checks ignore case and trailing dots. Customer proxies and loopback URLs are allowed unchanged.
+The app refuses workspace roots, `/api/2.0/serving-endpoints`, and `/serving-endpoints/<name>/invocations`. The last form is a REST invocation URL, not an SDK base URL. It also refuses `/ai-gateway/gemini` and `/ai-gateway/anthropic`, which are gateway native APIs for other SDKs. Databricks workspace hosts must use `https://`; plain `http://` would send the token in cleartext before any redirect. A query string or fragment on a workspace URL is refused. Placeholder checks include percent-encoded forms. Host checks ignore case and trailing dots. Customer proxies and loopback URLs are allowed unchanged.
 
 ### Embeddings, only when the endpoint task is embeddings
 

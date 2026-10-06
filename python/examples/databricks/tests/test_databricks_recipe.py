@@ -380,6 +380,19 @@ for host in (
         ("/api/2.0/serving-endpoints", "Unsupported"),
     ):
         REFUSED.append((f"https://{host}{path}", reason))
+# Plain http to a Databricks workspace would send the token in cleartext before any redirect.
+for host in (
+    "dbc-00000000-0000.cloud.databricks.com",
+    "adb-0000000000000000.0.azuredatabricks.net",
+    "workspace-00000000.gcp.databricks.com",
+):
+    for path in ("/ai-gateway/mlflow/v1", "/serving-endpoints"):
+        REFUSED.append((f"http://{host}{path}", "must use https"))
+REFUSED.extend([
+    (SERVING + "?x=1", "query or fragment"),
+    (GATEWAY + "#frag", "query or fragment"),
+    ("https://dbc-00000000-0000.cloud.databricks.com/serving-endpoints%3F/x/invocations", "Unsupported"),
+])
 
 
 @pytest.mark.parametrize("url,reason", REFUSED)
@@ -442,6 +455,7 @@ def test_main_missing_configuration_exits_before_tracing(missing, empty, monkeyp
     assert app.main([]) == 2
     output = capsys.readouterr()
     assert missing in output.err
+    assert output.err.startswith("Set ")
     assert output.out == ""
     assert VENDOR_KEY not in output.err
 
@@ -560,6 +574,7 @@ def test_readme_and_requirement_pins():
     for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert name in readme
     assert "The provider field says `openai`" in readme
+    assert "Databricks workspace hosts must use `https://`" in readme
     assert "example.staging.cloud.databricks.com is a placeholder, not a real host." in readme
     assert "`databricks_openai.DatabricksOpenAI` 0.17.1 subclasses `openai.OpenAI` without overriding its request method, so `traceai-openai` wraps it the same way; this recipe does not test it." in readme
     assert "A pricing row keyed by a foundation-model id will not match an endpoint name." in readme
