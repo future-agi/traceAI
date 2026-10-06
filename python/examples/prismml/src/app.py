@@ -22,6 +22,15 @@ HTTP_WARNING = (
 )
 
 
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def check_base_url(url: str) -> str:
     """Validate without rewriting; warn once for HTTP outside loopback."""
     def refuse(reason):
@@ -41,28 +50,32 @@ def check_base_url(url: str) -> str:
         refuse("use an http or https URL")
     if not host or not host.isascii():
         refuse("use a plain ASCII host")
-    host = host.lower().rstrip(".")
+    host = host.lower()
+    host = host[:-1] if host.endswith(".") else host  # One trailing DNS dot only.
     try:
         if ":" in host:
             ipaddress.IPv6Address(host)
             if "%" in host:
                 raise ValueError
         else:
+            # Letters, digits and hyphens, plus underscores inside a label for
+            # container and Compose service names such as bonsai_server.
             if len(host) > 253 or not all(
-                re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                re.fullmatch(r"[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?", label)
                 for label in host.split(".")
             ):
                 raise ValueError
             host.encode("ascii").decode("idna")
     except (ValueError, UnicodeError):
-        refuse("use a valid ASCII host without malformed IDNA")
+        refuse("use a valid ASCII host name (letters, digits, hyphens, inner underscores) "
+               "or IP address, without malformed IDNA")
     if port == 0 or (parsed.netloc.endswith(":") and port is None):
         refuse("use a valid non-zero port")
     if "?" in url or "#" in url:
         refuse("remove the query or fragment, including an empty delimiter")
     if parsed.path not in ("/v1", "/v1/"):
         refuse(f"use the API path /v1 or /v1/, for example {DEFAULT_BASE_URL}")
-    if parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"):
+    if parsed.scheme == "http" and not _is_loopback(host):
         print(HTTP_WARNING, file=sys.stderr)
     return url
 

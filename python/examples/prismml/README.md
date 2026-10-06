@@ -2,6 +2,8 @@
 
 PrismML here means the Bonsai local server from prismml.com; this recipe traces Chat Completions through the `openai` SDK at `http://localhost:8080/v1` ([server docs](https://docs.prismml.com/run/server)). It uses `traceai-openai`, with no PrismML instrumentation package.
 
+Not these: other products named Prism are not covered here, for example the [ssimplifi Prism proxy guide](https://ssimplifi.com/guides/openai-compatible-api), [prism-proxy](https://git.sovereign-society.org/prism/prism-proxy) and [Prism PHP](https://mintlify.wiki/prism-php/prism/providers/overview).
+
 ## Install
 
 From this recipe directory, install the pinned dependencies:
@@ -100,15 +102,15 @@ According to the [PrismML server docs](https://docs.prismml.com/run/server):
 | llama.cpp | `http://localhost:8080/v1` |
 | MLX on Apple Silicon | `http://localhost:8081/v1` |
 
-The SDK appends a trailing slash to its stored base URL and calls `/v1/chat/completions`. The validator returns allowed URLs unchanged. It permits exactly `/v1` or `/v1/` on any host and refuses the root web chat, a full `/v1/chat/completions` URL, other paths, credentials, query or fragment delimiters, whitespace, control characters, non-ASCII hosts and malformed IDNA.
+The SDK appends a trailing slash to its stored base URL and calls `/v1/chat/completions`. The validator returns allowed URLs unchanged. It permits exactly `/v1` or `/v1/` on any host and refuses the root web chat, a full `/v1/chat/completions` URL, other paths, credentials, query or fragment delimiters, whitespace, control characters, non-ASCII hosts and malformed IDNA. Host names may use letters, digits, hyphens and underscores inside a label, so container or Compose service names such as `bonsai_server` work.
 
-Loopback HTTP is allowed for `localhost`, `127.0.0.1` and `::1`. HTTP outside loopback is allowed with one stderr warning about the unauthenticated server. Use it only on a trusted LAN. HTTPS URLs still need the same API path.
+Loopback HTTP is allowed without a warning for `localhost` and loopback IP addresses (`127.0.0.0/8`, `::1`). HTTP outside loopback is allowed with one stderr warning about the unauthenticated server. Use it only on a trusted LAN. HTTPS URLs still need the same API path.
 
 The [server docs](https://docs.prismml.com/run/server) warn:
 
 > The scripts bind to `127.0.0.1`, so the server is reachable only from the same machine and there is no authentication. Setting `BONSAI_HOST` to any non-loopback address (for example `0.0.0.0`) exposes an unauthenticated server to your network.
 
-For llama-server, any model string works because it serves the loaded model; `GET /v1/models` returns the real name. The documented Python example requests `bonsai` with streaming. The recorded non-streamed model name is what the server reports ([server docs](https://docs.prismml.com/run/server)). The loaded-model name used in tests is synthetic, not a promised filename.
+For llama-server, any model string works because it serves the loaded model; `GET /v1/models` returns the real name. The documented Python example requests `bonsai` with streaming ([server docs](https://docs.prismml.com/run/server)). `traceai-openai` records the `model` field of the server's non-streamed response, pinned by the tests; the loaded-model name used in tests is synthetic, not a promised filename.
 
 Thinking is controlled per request with `thinking_budget_tokens`; zero disables it ([server docs](https://docs.prismml.com/run/server)). Send it through the SDK's `extra_body`:
 

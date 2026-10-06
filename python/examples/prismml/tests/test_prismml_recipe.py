@@ -408,14 +408,17 @@ ALLOWED_URLS = [
     "http://127.0.0.1:8080/v1", "http://[::1]:8080/v1/",
     "https://trusted-lan.example/v1", "http://trusted-lan.example:8080/v1",
     "http://TRUSTED-LAN.EXAMPLE.:8080/v1/",
+    "http://bonsai_server:8080/v1",  # Compose-style service name: allowed, warned (not loopback).
+    "http://127.0.0.2:8080/v1", "http://[0:0:0:0:0:0:0:1]:8080/v1",  # Other loopback spellings: no warning.
 ]
+WARNED_HOSTS = ("trusted-lan", "bonsai_server")
 
 
 @pytest.mark.parametrize("url", ALLOWED_URLS)
 def test_allowed_base_urls_are_unchanged(url, capsys):
     result = app.check_base_url(url)
     assert result is url
-    warning = "trusted-lan" in url.lower() and url.startswith("http:")
+    warning = url.lower().startswith("http:") and any(host in url.lower() for host in WARNED_HOSTS)
     assert capsys.readouterr().err == (EXPECTED_HTTP_WARNING + "\n" if warning else "")
 
 
@@ -455,7 +458,9 @@ REFUSED_URLS = [
     ("http://xn--.example/v1", "IDNA"),
     ("http://xn--a.example/v1", "IDNA"),
     ("http://local%68ost:8080/v1", "ASCII host"),
-    ("http://local_host:8080/v1", "ASCII host"),
+    ("http://_bonsai:8080/v1", "ASCII host"),
+    ("http://bonsai_:8080/v1", "ASCII host"),
+    ("http://localhost..:8080/v1", "ASCII host"),
     ("http://-localhost:8080/v1", "ASCII host"),
     ("http://localhost..example/v1", "ASCII host"),
     ("http://localhost:invalid/v1", "port"),
@@ -503,7 +508,8 @@ def test_refused_base_urls_fail_before_tracing(url, reason, monkeypatch, capsys,
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == message + "\n"
-    assert fake.requests() == []
+    # main() never received a reachable provider URL here; the must_not_run patches are
+    # the guards. The receiver is the configured Future AGI collector, so these can fail.
     assert receiver.spans() == []
     assert receiver.requests() == []
 
@@ -520,6 +526,8 @@ def test_empty_cli_model_exits_before_tracing(monkeypatch, capsys, refusal_endpo
         pytest.fail("empty model reached tracing")
 
     monkeypatch.setattr(app, "setup_tracing", must_not_run)
+    monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+    monkeypatch.setenv(app.BASE_URL_ENV, fake.base_url)  # Reachable, so the absence checks below can fail.
     assert app.main(["--model", ""]) == 2
     assert app.MODEL_ENV in capsys.readouterr().err
     assert fake.requests() == []
@@ -707,7 +715,7 @@ def test_readme_and_requirements_contract():
     assert [line for line in requirements if not line.startswith("#")] == [
         "openai==3.24.0", "traceAI-openai==0.1.10", "fi-instrumentation-otel==1.1.0"]
     for path in ROOT.rglob("*"):
-        if path.is_file():
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix in {".py", ".md", ".txt"}:
             text = path.read_text()
             assert not re.search(r"\b[A-Z]{2,5}-\d{3,}\b", text), str(path)
             assert not re.search(r"\bsk-[A-Za-z0-9]{16,}\b", text), str(path)
