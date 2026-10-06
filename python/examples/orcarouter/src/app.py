@@ -32,6 +32,8 @@ def check_base_url(url: str) -> str:
         raise ValueError(f"{BASE_URL_ENV}: remove credentials from the URL; use {API_KEY_ENV}")
     if not host:
         raise ValueError(f"{BASE_URL_ENV}: supply a base URL with a host")
+    if "\\" in host or "%" in host or "" in (host[:-1] if host.endswith(".") else host).split("."):
+        raise ValueError(f"{BASE_URL_ENV}: use a host without backslashes, percent-encoding or empty labels")
     try:
         host.encode("ascii").decode("idna")
     except UnicodeError:

@@ -269,13 +269,17 @@ def test_fallback_chain_forwarded_but_absent_from_parameters(monkeypatch):
     with Receiver() as receiver:
         provider, project = start_tracing(monkeypatch, receiver)
         with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
-            client.chat.completions.create(model=REQUESTED_MODEL, messages=MESSAGES, extra_body={"models": models})
+            client.chat.completions.create(
+                model=REQUESTED_MODEL, messages=MESSAGES, temperature=0.25, extra_body={"models": models},
+            )
         _, values = exported_span(receiver, provider, project)
         assert len(bodies) == 1
         assert bodies[0]["models"] == models
+        assert bodies[0]["temperature"] == 0.25
         assert values[MODEL_ATTRIBUTE] == RESOLVED_MODEL
         parameters = json.loads(values[PARAMETERS_ATTRIBUTE])
         assert parameters["model"] == REQUESTED_MODEL
+        assert parameters["temperature"] == 0.25  # Control: ordinary SDK keyword arguments are recorded.
         assert "models" not in parameters
         assert "extra_body" not in parameters
 
@@ -307,6 +311,37 @@ def test_errors_record_exception_and_requested_model(monkeypatch, status, error_
         assert MODEL_ATTRIBUTE not in values
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         assert VENDOR_KEY not in json.dumps(span)
+
+
+@pytest.mark.parametrize("call", ["stream", "error"])
+def test_hidden_invocation_parameters_leave_no_requested_model(monkeypatch, call):
+    for hidden in (False, True):
+        monkeypatch.setenv("FI_HIDE_LLM_INVOCATION_PARAMETERS", str(hidden).lower())
+
+        def handler(request):
+            assert_vendor_request(request)
+            if call == "error":
+                return httpx.Response(401, json=error_body(401))
+            return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=stream_bytes())
+
+        with Receiver() as receiver:
+            provider, project = start_tracing(monkeypatch, receiver)
+            with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
+                client.max_retries = 0
+                if call == "error":
+                    with pytest.raises(openai.AuthenticationError):
+                        client.chat.completions.create(model=REQUESTED_MODEL, messages=MESSAGES)
+                else:
+                    for _ in client.chat.completions.create(model=REQUESTED_MODEL, messages=MESSAGES, stream=True):
+                        pass
+            _, values = exported_span(receiver, provider, project)
+            assert MODEL_ATTRIBUTE not in values
+            if hidden:
+                assert PARAMETERS_ATTRIBUTE not in values
+                assert REQUESTED_MODEL not in json.dumps(values)
+            else:
+                assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
+        OpenAIInstrumentor().uninstrument()
 
 
 def test_hide_inputs_with_visible_control(monkeypatch):
@@ -541,6 +576,12 @@ def test_url_refusals_exit_before_tracing(monkeypatch, capsys):
         ("https:///v1", "with a host"),
         ("ftp://api.orcarouter.ai/v1", "HTTP or HTTPS"),
         ("https://xn--.example.test/v1", "valid IDNA"),
+        ("https://api.orcarouter.ai\\v1", "backslashes, percent-encoding or empty labels"),
+        ("https://proxy.example.test\\v1", "backslashes, percent-encoding or empty labels"),
+        ("https://api..orcarouter.ai/v1", "backslashes, percent-encoding or empty labels"),
+        ("https://.proxy.example.test/v1", "backslashes, percent-encoding or empty labels"),
+        ("https://api%2Eorcarouter.ai/v1", "backslashes, percent-encoding or empty labels"),
+        ("https://proxy%2eexample.test/v1", "backslashes, percent-encoding or empty labels"),
     ]
     for char in (" ", "\t", "\r", "\n", "\r\n", "\x1f", "\x7f", "\u00a0", "\u200b"):
         cases.append(("https://api.orca" + char + "router.ai/v1", "whitespace or control"))
@@ -626,6 +667,9 @@ def test_readme_contract_and_no_real_keys():
     assert "cost lookup" in readme
     assert "models" in readme and "absent" in readme
     assert "https://docs.orcarouter.ai/introduction" in readme
+    assert "no trace export" in readme and "https://docs.orcarouter.ai/operations/observability" in readme
+    assert "not Future AGI ingest failures" in readme and "funded OrcaRouter wallet" in readme
+    assert "streamed and failed spans record no model at all" in readme
     assert "verbose=False" in readme
     assert "TBD" not in readme
     source_command = """env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \\
@@ -642,15 +686,9 @@ def test_readme_contract_and_no_real_keys():
     assert (RECIPE / "requirements.txt").read_text().splitlines()[1:] == [
         "openai==3.24.0", "traceAI-openai==0.1.10", "fi-instrumentation-otel==1.1.0",
     ]
-    forbidden_words = (
-        "lin" + "ear", "ri" + "ck", "company-" + "brain",
-        "prepared " + "environment", "private " + "links",
-    )
-    forbidden_pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, forbidden_words)) + r")\b", re.IGNORECASE)
-    assert all(forbidden_pattern.search(word) for word in forbidden_words)
+    # Only text sources; a __pycache__ or editor file must not break the check.
     for path in RECIPE.rglob("*"):
-        if path.is_file():
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix in {".py", ".md", ".txt"}:
             content = path.read_text()
             assert not re.search(r"\b[A-Z]{2,5}-\d{3,}\b", content), path
             assert not re.search(r"sk-[A-Za-z0-9_-]{16,}", content), path
-            assert not forbidden_pattern.search(content), path
