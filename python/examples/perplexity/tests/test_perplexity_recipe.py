@@ -225,17 +225,29 @@ def test_responses_at_documented_host(tracing):
 
 def test_preset_fixture(tracing):
     prompt = "preset-fixture-input-marker"
+    requests = []
 
     def handler(request):
+        requests.append(request)
         _assert_vendor_request(request, prompt=prompt, requested_model=None)
         assert json.loads(request.content)["preset"] == "low"
         return httpx.Response(200, json=fake.response_fixture())
 
     with tracing() as (receiver, provider, project):
         with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
-            response = client.responses.create(input=prompt, extra_body={"preset": "low"})
+            try:
+                response = client.responses.create(input=prompt, extra_body={"preset": "low"})
+            except TypeError as error:
+                # Older SDKs (for example openai 1.69.0) require `model` on responses.create,
+                # so a preset-only call fails in the SDK before any request or span.
+                assert "model" in str(error)
+                assert requests == []
+                assert provider.force_flush()
+                assert receiver.spans() == [] and receiver.requests() == []
+                return
             assert response.output_text == fake.ANSWER
             assert response.model == fake.RESPONSE_MODEL
+        assert len(requests) == 1
         _, attrs = _assert_export(receiver, provider, project, requested_model=None)
         _assert_usage(attrs)
         assert json.loads(attrs["gen_ai.request.parameters"]) == {}
@@ -560,6 +572,7 @@ def test_readme_pins():
     assert 'presets through the OpenAI SDK with `extra_body={"preset": ...}`' in readme
     assert "one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`" in readme
     assert '- Preset requests (`extra_body={"preset": ...}`).' in readme
+    assert "With older SDKs such as `openai` 1.69.0, `responses.create` requires `model`" in readme
     assert "`FI_HIDE_INPUTS` does not remove them, so set `FI_HIDE_OUTPUTS=true` as well" in readme
     assert "Streamed fixture spans include neither the queries nor instructions" in readme
     assert "Synchronous and streaming requests keep working because they are being reformulated as Agent API requests, rolling out by model; asynchronous Sonar requests are no longer supported." in readme

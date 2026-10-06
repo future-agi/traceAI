@@ -88,7 +88,7 @@ With OpenAI 3.24.0, the extra `search_results` item parses and `response.output_
 
 Perplexity documents the [Agent API through the OpenAI SDK's Responses interface](https://docs.perplexity.ai/docs/agent-api/openai-compatibility). The canonical Agent API endpoint is `/v1/agent`; `/v1/responses` is its OpenAI SDK alias. `client.responses.create` uses that alias automatically. Pass the base URL `https://api.perplexity.ai/v1`, rather than an endpoint path.
 
-Perplexity also documents presets through the OpenAI SDK with `extra_body={"preset": ...}`; this recipe passes a model id and was not tested with presets. In one MockTransport preset fixture with no request model, one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`; this does not establish preset support.
+Perplexity also documents presets through the OpenAI SDK with `extra_body={"preset": ...}`; this recipe passes a model id and was not tested with presets. In one MockTransport preset fixture with no request model, one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`; this does not establish preset support. With older SDKs such as `openai` 1.69.0, `responses.create` requires `model`, so a preset-only call raises `TypeError` before any request is sent.
 
 Sonar Chat Completions support ended on 27 September 2026. Synchronous and streaming requests keep working because they are being reformulated as Agent API requests, rolling out by model; asynchronous Sonar requests are no longer supported. New code should use the Agent API. See the [Sonar migration overview](https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview).
 
