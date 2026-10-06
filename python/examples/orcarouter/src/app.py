@@ -1,0 +1,110 @@
+"""Trace OrcaRouter's OpenAI-compatible Chat Completions with traceAI."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from urllib.parse import urlsplit
+
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
+from openai import OpenAI
+from traceai_openai import OpenAIInstrumentor
+
+DEFAULT_BASE_URL = "https://api.orcarouter.ai/v1"
+API_KEY_ENV = "ORCAROUTER_API_KEY"
+BASE_URL_ENV = "ORCAROUTER_BASE_URL"
+MODEL_ENV = "ORCAROUTER_MODEL"
+
+
+def check_base_url(url: str) -> str:
+    """Validate without rewriting; allow customer proxies and loopback servers."""
+    if not url or any(char.isspace() or not char.isprintable() for char in url):
+        raise ValueError(f"{BASE_URL_ENV}: use a URL without whitespace or control characters")
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        parts.port  # Validate the port without including the supplied URL in errors.
+    except ValueError:
+        raise ValueError(f"{BASE_URL_ENV}: supply a valid HTTP or HTTPS base URL") from None
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(f"{BASE_URL_ENV}: remove credentials from the URL; use {API_KEY_ENV}")
+    if not host:
+        raise ValueError(f"{BASE_URL_ENV}: supply a base URL with a host")
+    try:
+        host.encode("ascii").decode("idna")
+    except UnicodeError:
+        raise ValueError(f"{BASE_URL_ENV}: use a plain ASCII host with valid IDNA labels") from None
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(f"{BASE_URL_ENV}: use an HTTP or HTTPS base URL")
+    if host.lower().rstrip(".") == "api.orcarouter.ai":
+        if parts.scheme != "https":
+            raise ValueError(f"{BASE_URL_ENV}: use HTTPS for {DEFAULT_BASE_URL}")
+        if "?" in url or "#" in url:
+            raise ValueError(f"{BASE_URL_ENV}: remove the query or fragment; use {DEFAULT_BASE_URL}")
+        if parts.path in ("", "/"):
+            raise ValueError(
+                f"{BASE_URL_ENV}: the OpenAI SDK base URL is {DEFAULT_BASE_URL}; "
+                "the root also serves other protocol surfaces not covered here"
+            )
+        if parts.path not in ("/v1", "/v1/"):
+            raise ValueError(f"{BASE_URL_ENV}: use {DEFAULT_BASE_URL}, not an endpoint or another path")
+    return url
+
+
+def make_client(base_url: str | None = None, api_key: str | None = None, http_client=None) -> OpenAI:
+    base_url = check_base_url(base_url if base_url is not None else os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL)
+    api_key = os.environ[API_KEY_ENV] if api_key is None else api_key
+    return OpenAI(base_url=base_url, api_key=api_key, http_client=http_client)
+
+
+def setup_tracing(project_name: str | None = None):
+    provider = register(
+        project_name=project_name or "orcarouter-example",
+        project_type=ProjectType.OBSERVE,
+        set_global_tracer_provider=False,
+        verbose=False,
+    )
+    OpenAIInstrumentor().instrument(tracer_provider=provider)
+    return provider
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--stream", action="store_true")
+    parser.add_argument("--prompt", default="What is a coral reef?")
+    parser.add_argument("--model")
+    args = parser.parse_args(argv)
+    try:
+        base_url = check_base_url(os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL)
+        model = args.model or os.environ.get(MODEL_ENV)
+        if not model:
+            raise ValueError(f"Set {MODEL_ENV} or pass --model")
+        api_key = os.environ.get(API_KEY_ENV)
+        if not api_key:
+            raise ValueError(f"Set {API_KEY_ENV}")
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    provider = setup_tracing()
+    try:
+        with make_client(base_url=base_url, api_key=api_key) as client:
+            response = client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": args.prompt}], stream=args.stream,
+            )
+            if args.stream:
+                for chunk in response:
+                    if chunk.choices:
+                        print(chunk.choices[0].delta.content or "", end="", flush=True)
+                print()
+            else:
+                print(response.choices[0].message.content or "")
+    finally:
+        provider.force_flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

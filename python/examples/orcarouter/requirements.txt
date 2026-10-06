@@ -1,0 +1,4 @@
+# Recipe pins; the tests also target the openai==1.69.0 instrumentor floor.
+openai==3.24.0
+traceAI-openai==0.1.10
+fi-instrumentation-otel==1.1.0
