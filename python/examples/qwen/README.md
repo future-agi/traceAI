@@ -71,9 +71,9 @@ provider.force_flush()
 
 The tested call exports one `ChatCompletion` span with `gen_ai.span.kind=LLM`. On normal, non-streamed calls, `gen_ai.request.model` is the model id the provider returns in its response. The provider field says `openai`: `gen_ai.provider.name` is the shared instrumentor's label, even when the request goes to Qwen.
 
-Streamed calls record accumulated output text in `output.value`, but the span for a stream has no model attribute. With `stream_options={"include_usage": True}`, the local fixture supplies a final chunk with `usage` and no choices; the span records input, output, and total token counts of 5, 7, and 12. Without `include_usage`, the fixture supplies no usage and the span has no `gen_ai.usage.*` attributes. Missing usage attributes are omitted, never set to zero.
+Streamed calls record accumulated output text in `output.value`, but the span for a stream has no `gen_ai.request.model` attribute; the model you requested is still inside the `gen_ai.request.parameters` JSON (unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`). With `stream_options={"include_usage": True}`, the local fixture supplies a final chunk with `usage` and no choices; the span records input, output, and total token counts of 5, 7, and 12. Without `include_usage`, the fixture supplies no usage and the span has no `gen_ai.usage.*` attributes. Missing usage attributes are omitted, never set to zero.
 
-Failed calls produce an error span without a model attribute and include an exception event. The cross-region error fixture raises `openai.AuthenticationError` and exports an ERROR span. This is current `traceai-openai` behaviour, pinned by the tests. The observations use a local fake rather than the live provider.
+Failed calls produce an error span with no `gen_ai.request.model` attribute (the requested model is again inside `gen_ai.request.parameters`) and include an exception event. The cross-region error fixture raises `openai.AuthenticationError` and exports an ERROR span. This is current `traceai-openai` behaviour, pinned by the tests. The observations use a local fake rather than the live provider.
 
 ## Provider specifics
 
@@ -86,9 +86,9 @@ Model Studio documents these SDK bases. `{WorkspaceId}` is a placeholder: replac
 | Singapore | `https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` |
 | Japan (Tokyo) | `https://{WorkspaceId}.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1` |
 
-Migration: Beijing moves from `https://dashscope.aliyuncs.com` to `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`; Singapore moves from `https://dashscope-intl.aliyuncs.com` to `https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com`; Hong Kong moves from `https://cn-hongkong.dashscope.aliyuncs.com` to `https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com`. Append `/compatible-mode/v1` when using these origins as an OpenAI SDK base.
+Migration: Beijing moves from `https://dashscope.aliyuncs.com` to `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`; Singapore moves from `https://dashscope-intl.aliyuncs.com` to `https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com`; Hong Kong moves from `https://cn-hongkong.dashscope.aliyuncs.com` to `https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com`. Append `/compatible-mode/v1` when using these origins as an OpenAI SDK base. Alibaba recommends the workspace hosts; the legacy hosts are still accepted, which is why the worked example can use the legacy international host.
 
-The key and the region must match; a key from another region gets HTTP 401 `invalid_api_key` with the message "Incorrect API key provided". Select a current model name from Model Studio rather than assuming `qwen-plus` is available in every region.
+The key and the region must match; a key from another region gets HTTP 401 `invalid_api_key` with the message "Incorrect API key provided". This 401 comes from Model Studio on the provider request: it is a region mismatch, not a Future AGI authentication failure. Your `FI_API_KEY` and `FI_SECRET_KEY` are not involved, and the trace still shows the call as an ERROR span. Select a current model name from Model Studio rather than assuming `qwen-plus` is available in every region.
 
 `check_base_url` rejects literal `{WorkspaceId}` and URL-encoded `%7BWorkspaceId%7D` placeholders anywhere in the URL. An `aliyuncs.com` URL must end its path with `/compatible-mode/v1`, with one optional trailing slash. Allowed URLs are returned unchanged. The OpenAI SDK itself adds a trailing slash to `client.base_url`; it joins the default to `https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions`.
 
@@ -102,7 +102,7 @@ The provider still receives the prompt. Future AGI masking does not change the p
 
 ## Limits / not covered
 
-- Qwen-Audio does not support the OpenAI-compatible protocol and is not covered.
+- Qwen-Audio does not support the OpenAI-compatible protocol and is not covered; for Qwen-Audio, use the DashScope protocol (not traced by this recipe).
 - The DashScope native protocol/SDK is not covered.
 - The Responses API on the same prefix is not covered.
 - This recipe is not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API.
@@ -133,6 +133,15 @@ Subprocesses derive their package paths from the loaded `fi_instrumentation` and
 | 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
 | 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
 
-To run another row, change the `openai` pin in the command above, or replace the
-repository paths on `PYTHONPATH` with `--with 'traceAI-openai==0.1.10' --with
-'fi-instrumentation-otel==1.1.0'`.
+For the floor row, change `openai==3.24.0` to `openai==1.69.0` in the command above.
+For the published-package row, keep only the recipe source and the test harness on `PYTHONPATH`
+(any repository path would shadow the installed packages):
+
+```bash
+env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONPATH="python/examples/qwen/src:python/tests" \
+  uv run --no-project --python 3.11 \
+  --with 'openai==3.24.0' --with 'traceAI-openai==0.1.10' --with 'fi-instrumentation-otel==1.1.0' \
+  --with httpx --with protobuf --with opentelemetry-proto --with pytest \
+  pytest python/examples/qwen/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
+```

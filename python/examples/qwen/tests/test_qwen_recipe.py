@@ -63,6 +63,10 @@ REFUSED_URLS = [
     (DOCUMENTED_BASE + "/chat/completions", "/compatible-mode/v1"),
     (DOCUMENTED_BASE + "//", "/compatible-mode/v1"),
     ("https://aliyuncs.com/v1", "/compatible-mode/v1"),
+    # Host and encoding spellings must not bypass the checks.
+    ("https://dashscope.aliyuncs.com./", "/compatible-mode/v1"),
+    ("https://DashScope-Intl.AliyunCS.com.:443/v1", "/compatible-mode/v1"),
+    (REGION_BASES["Beijing"].replace("{WorkspaceId}", "%257BWorkspaceId%257D"), "workspace id from the console"),
 ]
 ALLOWED_URLS = [
     DOCUMENTED_BASE,
@@ -295,6 +299,8 @@ def test_stream_accumulates_text_and_optional_usage(traced, include_usage):
     span, attrs = assert_llm(receiver, project, model=None)
     assert span["status"]["code"] == "STATUS_CODE_OK"
     assert attrs["output.value"] == ANSWER
+    # The requested model is still exported inside the request parameters.
+    assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     if include_usage:
         assert_usage(attrs)
     else:
@@ -312,7 +318,8 @@ def test_cross_region_401_records_authentication_error(traced):
     assert provider.force_flush()
     [request] = requests
     assert_vendor_request(request)
-    span, _ = assert_llm(receiver, project, model=None)
+    span, attrs = assert_llm(receiver, project, model=None)
+    assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     assert span["status"]["code"] == "STATUS_CODE_ERROR"
     assert "AuthenticationError" in span["status"]["message"]
     [event] = [event for event in span["events"] if event["name"] == "exception"]
@@ -467,6 +474,15 @@ def test_main_missing_model_names_variable_before_tracing(monkeypatch, capsys):
     assert "DASHSCOPE_MODEL" in capsys.readouterr().err
 
 
+def test_main_missing_key_names_variable_before_tracing(monkeypatch, capsys):
+    monkeypatch.delenv(app.API_KEY_ENV)
+    monkeypatch.setattr(app, "setup_tracing", lambda *_args: pytest.fail("Missing key must fail before tracing"))
+    with pytest.raises(SystemExit) as caught:
+        app.main([])
+    assert caught.value.code == 2
+    assert "DASHSCOPE_API_KEY" in capsys.readouterr().err
+
+
 def test_cli_model_overrides_environment():
     with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="qwen-model-") as temporary:
         directory = Path(temporary)
@@ -530,8 +546,10 @@ def test_readme_and_requirements_pin_contract():
         "DashScope native", "Responses API", 'stream_options={"include_usage": True}',
         "Without `include_usage`", "1.69.0", "3.24.0", "not tested against the live provider",
         "trailing slash",
-        "model id the provider returns in its response", "stream has no model attribute",
-        "error span without a model attribute", "current `traceai-openai` behaviour",
+        "model id the provider returns in its response", "no `gen_ai.request.model` attribute",
+        "gen_ai.request.parameters", "current `traceai-openai` behaviour",
+        "not a Future AGI authentication failure", "legacy hosts are still accepted",
+        "use the DashScope protocol", 'PYTHONPATH="python/examples/qwen/src:python/tests"',
     ):
         assert phrase in readme
     assert TEST_COMMAND in readme

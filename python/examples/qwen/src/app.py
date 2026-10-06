@@ -16,11 +16,19 @@ BASE_URL_ENV = "DASHSCOPE_BASE_URL"
 MODEL_ENV = "DASHSCOPE_MODEL"
 
 
+def _fully_unquoted(value: str) -> str:
+    while (decoded := unquote(value)) != value:
+        value = decoded
+    return value
+
+
 def check_base_url(url: str) -> str:
-    if "{WorkspaceId}" in unquote(url):
+    """Refuse documented mistakes; return allowed URLs unchanged (never rewritten)."""
+    if "{WorkspaceId}" in _fully_unquoted(url):
         raise ValueError("Replace {WorkspaceId} with your workspace id from the console.")
     parsed = urlsplit(url)
-    host = (parsed.hostname or "").lower()
+    # Compare the host without case or an absolute-FQDN trailing dot.
+    host = (parsed.hostname or "").lower().rstrip(".")
     if (host == "aliyuncs.com" or host.endswith(".aliyuncs.com")) and not (
         parsed.path.removesuffix("/").endswith("/compatible-mode/v1")
     ):
@@ -63,6 +71,8 @@ def main(argv=None) -> int:
     model = args.model or os.environ.get(MODEL_ENV)
     if not model:
         parser.error(f"Set {MODEL_ENV} or pass --model.")
+    if not os.environ.get(API_KEY_ENV):
+        parser.error(f"Set {API_KEY_ENV}.")
 
     provider = setup_tracing()
     try:
