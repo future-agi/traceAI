@@ -97,14 +97,16 @@ accumulated by the same instrumentor. Its default test stream has no usage
 attributes. With `stream_options={"include_usage": True}` and a final usage
 chunk, the instrumentor records input, output and total token counts.
 
-In the current `traceai-openai` version, streamed and failed Chat Completions calls omit `gen_ai.request.model`;
-Responses calls record it from the request. The requested deployment remains in the
+In the current `traceai-openai` version, streamed and failed Chat Completions calls omit `gen_ai.request.model`.
+On the Responses API, a failed call records the requested deployment, and a successful Responses call records the model the response returns.
+The requested deployment remains in the
 `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
 Errors set the span status to ERROR and record an exception event.
 
 The non-streamed Responses fixture records the full parsed response as Python
 dictionary text in `output.value`, including its output text. It also records
-the response's model and usage, including the supplied reasoning and cache
+the model the response returns (the fixture returns a different model from the
+deployment requested) and usage, including the supplied reasoning and cache
 token counts. Responses streaming is not tested here.
 
 ## Provider specifics

@@ -280,10 +280,14 @@ def test_privacy_hiding_has_visible_control(flag, marker, receiver, tracing, mon
         assert (marker in json.dumps(receiver.spans())) is (not hidden)
 
 
+RETURNED_MODEL = "gpt-test-model-2026-09-01"
+
+
 def test_responses_api_span_and_exact_url(receiver, tracing):
     requests = []
     with tracing() as (provider, project):
-        with mock_client(TEST_BASE_URLS[0], responses_response(MODEL), requests) as client:
+        # The response names a different (underlying) model than the deployment requested.
+        with mock_client(TEST_BASE_URLS[0], responses_response(RETURNED_MODEL), requests) as client:
             response = client.responses.create(model=MODEL, input="What is a rainbow?")
             assert response.output_text == ANSWER
         provider.force_flush()
@@ -292,7 +296,10 @@ def test_responses_api_span_and_exact_url(receiver, tracing):
     assert_vendor_request(requests[0], TEST_BASE_URLS[0], "responses")
     assert requests[0].url.path == "/openai/v1/responses"
     assert json.loads(requests[0].content)["input"] == "What is a rainbow?"
-    assert attrs["gen_ai.request.model"] == MODEL
+    # On a successful Responses call the instrumentor records the model the response returns;
+    # the requested deployment stays in the request parameters.
+    assert attrs["gen_ai.request.model"] == RETURNED_MODEL
+    assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     # Non-streamed Responses records the full parsed response's Python dict text.
     assert attrs["output.value"] == str(response.model_dump())
     assert response.model_dump()["output"][0]["content"][0]["text"] == ANSWER
@@ -516,7 +523,7 @@ def test_readme_and_requirement_pins():
     assert "syntactic test hosts" in readme and "not real" in readme
     assert "gen_ai.request.model" in readme and "TBD" not in readme
     assert "streamed and failed Chat Completions calls omit `gen_ai.request.model`" in readme
-    assert "Responses calls record it from the request" in readme
+    assert "a successful Responses call records the model the response returns" in readme
     assert "may return the underlying model name rather than your deployment name" in readme
     assert "Requires Python 3.10 or later" in readme
     assert "Azure hosts must use `https://`" in readme
