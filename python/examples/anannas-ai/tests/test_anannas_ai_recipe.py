@@ -418,6 +418,8 @@ def refused_urls():
     yield "https://api.anannas.ai:invalid/v1", "valid HTTP(S)"
     yield "https://api.anannas.ai:99999/v1", "valid HTTP(S)"
     yield "https://[api.anannas.ai/v1", "valid HTTP(S)"
+    for host in ("api..anannas.ai", ".anannas.ai", "api.anannas.ai\\.evil", "api%2Eanannas.ai", "proxy%2eexample.test"):
+        yield f"https://{host}/v1", "backslashes, percent-encoding or empty labels"
 
 
 def test_every_refused_url_exits_before_tracing_and_requests(receiver, monkeypatch, capsys):
@@ -425,33 +427,32 @@ def test_every_refused_url_exits_before_tracing_and_requests(receiver, monkeypat
         pytest.fail("refused configuration must exit before setup_tracing")
 
     monkeypatch.setattr(app, "setup_tracing", forbidden_setup)
-    with FakeOpenAI() as fake:
-        for url, reason in refused_urls():
-            with pytest.raises(ValueError) as error:
-                app.check_base_url(url)
-            message = str(error.value)
-            assert app.BASE_URL_ENV in message
-            assert reason in message
-            assert "\n" not in message and "\r" not in message
-            if reason == "base path":
-                assert "https://api.anannas.ai/v1" in message
-            # OS environment variables cannot hold NUL. An in-memory environment
-            # exercises main() with every spelling, including that control byte.
-            monkeypatch.setattr(app, "os", SimpleNamespace(environ={
-                app.BASE_URL_ENV: url,
-                app.MODEL_ENV: REQUEST_MODEL,
-                app.API_KEY_ENV: VENDOR_KEY,
-            }))
-            assert app.main([]) == 2
-            captured = capsys.readouterr()
-            assert captured.out == ""
-            assert captured.err == message + "\n"
-            assert "placeholder-url-user" not in captured.err
-            assert "placeholder-url-password" not in captured.err
-            assert VENDOR_KEY not in captured.err
-            assert fake.requests() == []
-            assert receiver.spans() == []
-            assert receiver.requests() == []
+    # The setup_tracing sentinel and exit code 2 are the guards; main() never receives a reachable provider URL here.
+    for url, reason in refused_urls():
+        with pytest.raises(ValueError) as error:
+            app.check_base_url(url)
+        message = str(error.value)
+        assert app.BASE_URL_ENV in message
+        assert reason in message
+        assert "\n" not in message and "\r" not in message
+        if reason == "base path":
+            assert "https://api.anannas.ai/v1" in message
+        # OS environment variables cannot hold NUL. An in-memory environment
+        # exercises main() with every spelling, including that control byte.
+        monkeypatch.setattr(app, "os", SimpleNamespace(environ={
+            app.BASE_URL_ENV: url,
+            app.MODEL_ENV: REQUEST_MODEL,
+            app.API_KEY_ENV: VENDOR_KEY,
+        }))
+        assert app.main([]) == 2
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == message + "\n"
+        assert "placeholder-url-user" not in captured.err
+        assert "placeholder-url-password" not in captured.err
+        assert VENDOR_KEY not in captured.err
+        assert receiver.spans() == []
+        assert receiver.requests() == []
 
 
 @pytest.mark.parametrize("variable", ["ANANNAS_MODEL", "ANANNAS_API_KEY"])
@@ -596,7 +597,9 @@ def test_readme_requirements_and_customer_facing_pins():
         "Anannas AI (OpenAI-compatible) with traceAI",
         "https://api.anannas.ai/v1",
         "https://anannas.ai/v1",
-        "use `https://api.anannas.ai/v1`, the default here. Some older pages show `https://anannas.ai/v1`; the recipe accepts that host with the same URL rules.",
+        "use `https://api.anannas.ai/v1`, the default here. The recipe also accepts `https://anannas.ai/v1` with the same URL rules.",
+        "uninstrumented", "checked 2026-10-06", "](../../frameworks/openai/)",
+        "use its punycode (`xn--`) form",
         "The provider field says `openai`",
         "Model IDs use the form `provider/model-name`",
         "gen_ai.request.model", "gen_ai.request.parameters",

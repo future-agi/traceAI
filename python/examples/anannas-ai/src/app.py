@@ -30,6 +30,8 @@ def check_base_url(url: str) -> str:
         raise ValueError(f"{BASE_URL_ENV} must omit URL credentials; use {API_KEY_ENV}.")
     if not host or parts.scheme not in ("http", "https"):
         raise ValueError(f"{BASE_URL_ENV} must be an absolute HTTP(S) base URL.")
+    if "\\" in host or "%" in host or "" in (host[:-1] if host.endswith(".") else host).split("."):
+        raise ValueError(f"{BASE_URL_ENV} must use a host without backslashes, percent-encoding or empty labels.")
     try:
         host.lower().encode("ascii").decode("idna")
     except UnicodeError:
