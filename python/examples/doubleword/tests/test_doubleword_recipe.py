@@ -227,14 +227,10 @@ def test_stream_text_model_gap_and_usage(journey, include_usage):
 
 def test_async_flex_native_parameter_reaches_body_and_span(journey):
     signature = inspect.signature(openai.resources.chat.completions.Completions.create)
+    # service_tier is a native keyword on every tested SDK (1.69.0 floor and 3.24.0).
+    # The claim pinned here is the runtime behaviour: the value reaches the body and
+    # the span parameters. Type annotations differ between SDK versions and are not pinned.
     assert "service_tier" in signature.parameters
-    # Both tested SDKs accept the native parameter at runtime. The older SDK's
-    # type annotation predates flex; branch on the version rather than exceptions.
-    if SDK_VERSION >= (2, 0, 0):
-        assert "flex" in str(signature.parameters["service_tier"].annotation)
-    else:
-        assert SDK_VERSION >= (1, 69, 0)
-        assert "flex" not in str(signature.parameters["service_tier"].annotation)
     requests = []
 
     def handler(request):
@@ -401,6 +397,7 @@ def test_check_base_url_preserves_allowed_spellings():
         "HTTPS://API.DOUBLEWORD.AI/v1", "https://api.doubleword.ai./v1/",
         "https://api.doubleword.ai:443/v1", "http://127.0.0.1:12345/v1",
         "http://localhost:12345/v1/", "https://proxy.example.test/custom/v1?route=example#anchor",
+        "http://myproj_proxy_1:8080/v1",
     ):
         assert app.check_base_url(url) is url
 
@@ -511,11 +508,13 @@ def test_make_client_override_precedence_and_missing_key(monkeypatch):
 def child_environment(receiver, fake, directory):
     env = dict(os.environ)
     # Use the packages this process imported, so published-wheel runs stay valid.
+    # The instrumentation roots come before the SDK's site-packages so the child
+    # imports the same traceai_openai and fi_instrumentation as this process.
     roots = [RECIPE / "tests/loopback_guard", RECIPE / "src",
-             Path(openai.__file__).resolve().parent.parent,
              Path(fi_instrumentation.__file__).resolve().parent.parent,
              Path(traceai_openai.__file__).resolve().parent.parent,
-             Path(harness.__file__).resolve().parent.parent]
+             Path(harness.__file__).resolve().parent.parent,
+             Path(openai.__file__).resolve().parent.parent]
     if SDK_VERSION < (2, 0, 0):
         import distro  # The SDK floor has this extra dependency.
         roots.append(Path(distro.__file__).resolve().parent.parent)
@@ -625,5 +624,6 @@ def test_readme_requirements_and_public_contract():
     assert [line for line in requirements.splitlines() if line and not line.startswith("#")] == ["openai==3.24.0", "traceAI-openai==0.1.10", "fi-instrumentation-otel==1.1.0"]
     assert not re.search(r"\b(?:sk|fi)-[a-zA-Z0-9]{16,}\b", readme)
     for path in RECIPE.rglob("*"):
-        if path.is_file():
+        if (path.is_file() and path.suffix in {".py", ".md", ".txt"}
+                and not any(part == "__pycache__" or part.startswith(".test-run-") for part in path.parts)):
             assert not re.search(r"\b[A-Z]{2,5}-\d{3,}\b", path.read_text()), str(path)

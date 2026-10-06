@@ -47,7 +47,7 @@ def check_base_url(url: str) -> str:
         except UnicodeError:
             refuse("use a plain ASCII host with valid IDNA spelling")
         if len(structural_host) > 253 or not all(
-            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label)
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?", label)
             for label in structural_host.split(".")
         ):
             refuse("use a valid ASCII host")

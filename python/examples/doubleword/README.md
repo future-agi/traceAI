@@ -29,7 +29,7 @@ pip install traceAI-openai fi-instrumentation-otel openai
 
 The application exits 2 for a missing or empty `DOUBLEWORD_API_KEY`, a missing or empty `DOUBLEWORD_MODEL` without `--model`, or an invalid `DOUBLEWORD_BASE_URL`. It checks these before tracing or network calls. The recipe does not check the Future AGI keys itself.
 
-On `api.doubleword.ai`, the URL must use HTTPS and the path must be exactly `/v1` or `/v1/`. Endpoint paths, queries, fragments, URL credentials, whitespace, control characters, and invalid host spellings fail early. Uppercase hosts and a trailing DNS dot do not bypass these checks. Customer proxies and loopback servers can use their own HTTP(S) paths. Validation returns allowed URLs unchanged; the OpenAI SDK adds a trailing slash to `client.base_url`.
+On `api.doubleword.ai`, the URL must use HTTPS and the path must be exactly `/v1` or `/v1/`. Endpoint paths, queries, fragments, URL credentials, whitespace, control characters, and invalid host spellings fail early. Uppercase hosts and a trailing DNS dot do not bypass these checks. Customer proxies and loopback servers can use their own HTTP(S) paths; proxy host names may contain underscores inside a label (for example a Compose service name such as `myproj_proxy_1`). Validation returns allowed URLs unchanged; the OpenAI SDK adds a trailing slash to `client.base_url`.
 
 ## Run
 
@@ -76,7 +76,7 @@ Current `traceai-openai` behavior:
 
 - Non-streamed `gen_ai.request.model` is the model id the provider returns in its response. `gen_ai.request.parameters` contains the model id sent in the request. The fixtures deliberately return a different, synthetic dated id so this distinction is tested.
 - Streamed and failed calls omit `gen_ai.request.model`. The requested model remains in the `gen_ai.request.parameters` JSON unless invocation parameters are hidden.
-- Chat `output.value` contains the assistant content. Streams accumulate that content into one span. A stream with no output text exports an empty string, with no raw-response fallback. Extra response metadata is not copied into chat `output.value`.
+- Chat `output.value` contains the assistant content. Streams accumulate that content into one span. A stream with no output text exports an empty string, with no raw-response fallback. A non-streamed response with empty content exports no `output.value`. Extra response metadata is not copied into chat `output.value`.
 - The tests pin `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens`. Missing usage is omitted, never set to zero. Default stream fixtures omit usage; `stream_options={"include_usage": True}` with a final usage chunk exports all three counts.
 - The 401 and 429 fixtures produce ERROR spans with exception events. The recipe keeps the SDK's default retry policy; the error tests disable retries so each fixture sees one request.
 
@@ -92,7 +92,7 @@ Doubleword documents the following tiers in its [API reference](https://doublewo
 | Async | A standard request with `service_tier="flex"`. The fixture confirms the value reaches both the request body and `gen_ai.request.parameters`. |
 | Dedicated Realtime | Doubleword's production tier; deployments are outside this recipe. |
 
-Both tested SDK versions accept the native `service_tier` parameter at runtime. OpenAI 1.69.0's type annotation lists only `auto` and `default`; 3.24.0's annotation also includes `flex`. The test branches on the installed version and checks the transmitted value.
+Both tested SDK versions (the 1.69.0 floor and 3.24.0) accept the native `service_tier` parameter and send `flex` unchanged; the test checks the transmitted value and the recorded parameter. Older SDK type annotations may not list `flex`; that does not change the request.
 
 The same [API reference](https://doubleword.ai/llms.txt) lists embeddings. An OpenAI-shaped embedding fixture at `/v1/embeddings` produces a `CreateEmbeddingResponse` span with `gen_ai.span.kind=EMBEDDING` and provider `openai`. The model id from the response appears in `embedding.model_name`; `gen_ai.request.model` is absent. Requested model parameters and input/total token counts are recorded.
 
