@@ -20,7 +20,9 @@ MODEL_ENV = "BASETEN_MODEL"
 def check_base_url(url: str) -> str:
     """Reject the two Baseten surfaces that need a different recipe."""
     parsed = urlsplit(url)
-    host = parsed.hostname or ""
+    # Compare the host without an absolute-FQDN trailing dot; the URL itself is
+    # returned unchanged.
+    host = (parsed.hostname or "").rstrip(".")
     if host == "inference.baseten.co" and parsed.path in ("", "/"):
         raise ValueError(
             "Baseten's root is the Anthropic Messages beta endpoint; "

@@ -34,6 +34,12 @@ REFUSED = (
     ("https://inference.baseten.co/", "use https://inference.baseten.co/v1"),
     ("https://model-abc123.api.baseten.co/environments/production/sync/v1",
      "dedicated deployments"),
+    # Host spelling variants must not bypass the refusals.
+    ("https://inference.baseten.co.", "Anthropic Messages beta"),
+    ("https://INFERENCE.Baseten.CO/", "Anthropic Messages beta"),
+    ("https://user@inference.baseten.co:443", "Anthropic Messages beta"),
+    ("https://model-abc123.api.baseten.co./v1", "dedicated deployments"),
+    ("https://MODEL-abc123.API.baseten.co:8443/v1", "dedicated deployments"),
 )
 TEST_COMMAND = """env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \\
   PYTHONPATH="python/examples/baseten/src:python:python/frameworks/openai:python/tests" \\
@@ -252,6 +258,8 @@ def test_stream_accumulates_output(receiver, start_tracing):
     _, attrs = one_span(receiver, project, model=None)
     assert text in attrs["output.value"]
     assert not any(key.startswith("gen_ai.usage.") for key in attrs)
+    # The requested model is still exported inside the request parameters.
+    assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
 
 
 def test_authentication_error_is_exported(receiver, start_tracing):
@@ -260,7 +268,8 @@ def test_authentication_error_is_exported(receiver, start_tracing):
         with pytest.raises(openai.AuthenticationError, match="Invalid API key"):
             chat(client)
     assert provider.force_flush()
-    span, _ = one_span(receiver, project, model=None)
+    span, attrs = one_span(receiver, project, model=None)
+    assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     assert span["status"]["code"] == "STATUS_CODE_ERROR"
     exceptions = [event for event in span["events"] if event["name"] == "exception"]
     assert exceptions
@@ -290,14 +299,15 @@ def test_hide_inputs_has_control(hidden, monkeypatch, receiver, start_tracing):
     assert seen[0]["messages"][0]["content"] == marker
 
 
-def test_hide_outputs(monkeypatch, receiver, start_tracing):
-    monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
+@pytest.mark.parametrize("hidden", [False, True], ids=["control", "hidden"])
+def test_hide_outputs(hidden, monkeypatch, receiver, start_tracing):
+    monkeypatch.setenv("FI_HIDE_OUTPUTS", str(hidden).lower())
     provider, project = start_tracing()
     with mock_client(lambda _: httpx.Response(200, json=completion(MODEL))) as client:
         assert chat(client).choices[0].message.content == ANSWER
     assert provider.force_flush()
     span, _ = one_span(receiver, project)
-    assert ANSWER not in json.dumps(span)
+    assert (ANSWER in json.dumps(span)) is (not hidden)
 
 
 def test_session_context_is_independent_of_routing_header(receiver, start_tracing):
@@ -392,11 +402,14 @@ def test_main_rejects_url_before_tracing(url, reason, monkeypatch, receiver, cap
     def unexpected_tracing(*_args, **_kwargs):
         pytest.fail("a refused URL must fail before tracing setup")
 
+    def unexpected_client(*_args, **_kwargs):
+        pytest.fail("a refused URL must fail before a client is created")
+
     monkeypatch.setattr(app, "setup_tracing", unexpected_tracing)
+    monkeypatch.setattr(app, "make_client", unexpected_client)
+    monkeypatch.setattr(app, "OpenAI", unexpected_client)
     monkeypatch.setenv(app.BASE_URL_ENV, url)
-    with FakeOpenAI() as fake:
-        assert app.main([]) == 2
-        assert fake.requests() == []
+    assert app.main([]) == 2
     output = capsys.readouterr()
     assert reason in output.err
     assert output.out == ""
@@ -443,7 +456,8 @@ def test_readme_contract_and_pins():
     assert DOCUMENTED_URL in readme
     assert "provider field says `openai`" in readme
     assert "model id the provider returns" in readme
-    assert "no model attribute" in readme
+    assert "no `gen_ai.request.model` attribute" in readme
+    assert "gen_ai.request.parameters" in readme
     assert "no `gen_ai.usage.*` attributes" in readme
     assert "current `traceai-openai` behaviour" in readme
     for variable in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY",
