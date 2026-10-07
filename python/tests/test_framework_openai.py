@@ -291,3 +291,80 @@ class TestOpenAIFramework:
         # Methods should be restored (back to functions)
         assert openai.OpenAI.request == original_request
         assert openai.AsyncOpenAI.request == original_async_request 
+
+class TestProcessInputData:
+    """Unit tests for _process_input_data (issue #151 regression)."""
+
+    @pytest.fixture
+    def span(self):
+        from traceai_openai._span_io_handler import _process_input_data
+
+        mock = MagicMock()
+        yield mock, _process_input_data
+
+    def test_multi_message_input_preserves_all_messages(self, span):
+        """INPUT_VALUE must keep every message's text, not just the first."""
+        from fi_instrumentation.fi_types import SpanAttributes
+
+        mock, process = span
+        process(
+            [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "What is 2+2?"},
+                {"role": "assistant", "content": "4"},
+                {"role": "user", "content": "And 3+3?"},
+            ],
+            mock,
+        )
+        values = [
+            c.args[1]
+            for c in mock.set_attribute.call_args_list
+            if c.args[0] == SpanAttributes.INPUT_VALUE
+        ]
+        final = values[-1]
+        for text in ("You are helpful.", "What is 2+2?", "4", "And 3+3?"):
+            assert text in final
+
+    def test_multimodal_input_keeps_text_and_image_placeholders(self, span):
+        """Image parts become input_images placeholders inside the joined text."""
+        from fi_instrumentation.fi_types import SpanAttributes
+
+        mock, process = span
+        process(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/a.png"},
+                        },
+                        {"type": "text", "text": "in detail"},
+                    ],
+                }
+            ],
+            mock,
+        )
+        attrs = {c.args[0]: c.args[1] for c in mock.set_attribute.call_args_list}
+        final = attrs[SpanAttributes.INPUT_VALUE]
+        assert "describe this" in final
+        assert "in detail" in final
+        assert f"{{{SpanAttributes.INPUT_IMAGES}.0}}" in final
+        assert "https://example.com/a.png" in attrs[SpanAttributes.INPUT_IMAGES]
+
+    def test_single_message_still_sets_value(self, span):
+        from fi_instrumentation.fi_types import SpanAttributes
+
+        mock, process = span
+        process([{"role": "user", "content": "hello"}], mock)
+        attrs = {c.args[0]: c.args[1] for c in mock.set_attribute.call_args_list}
+        assert "hello" in attrs[SpanAttributes.INPUT_VALUE]
+
+    def test_non_list_input_serializes(self, span):
+        from fi_instrumentation.fi_types import SpanAttributes
+
+        mock, process = span
+        process("plain prompt", mock)
+        attrs = {c.args[0]: c.args[1] for c in mock.set_attribute.call_args_list}
+        assert attrs[SpanAttributes.INPUT_VALUE] == '"plain prompt"'
