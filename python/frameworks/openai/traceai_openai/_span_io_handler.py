@@ -59,8 +59,6 @@ def _process_input_data(input_data: Any, span: _WithSpan) -> None:
         if eval_input:
             eval_input_str = " \n ".join(map(str, eval_input))
             span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input_str)
-        if eval_input and len(eval_input) > 0:
-            span.set_attribute(SpanAttributes.INPUT_VALUE, eval_input[0])
     else:
         try:
             input_str = json.dumps(input_data, ensure_ascii=False).strip()
