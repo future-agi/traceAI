@@ -513,7 +513,7 @@ class TestUtilityFunctions:
         
         # Should return raw input attribute
         assert len(attributes) >= 1
-        assert attributes[0][0] == "raw.input"
+        assert attributes[0][0] == "input.value"
 
     def test_raw_input_empty(self):
         """Test raw input processing with None input."""

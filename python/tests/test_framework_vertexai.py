@@ -507,8 +507,8 @@ class TestUtilityFunctions:
         ]
         
         result = dict(_parse_predictions(predictions))
-        assert "llm.output_messages.0.message_content.image" in result
-        assert result["llm.output_messages.0.message_content.image"] == "base64data"
+        assert "gen_ai.output.messages.0.message.content.0.message_content.image" in result
+        assert result["gen_ai.output.messages.0.message.content.0.message_content.image"] == "base64data"
 
     def test_parse_predictions_empty(self):
         """Test _parse_predictions with empty predictions."""
@@ -525,10 +525,10 @@ class TestUtilityFunctions:
         mock_metadata.total_token_count = 15
         
         result = dict(_parse_usage_metadata(mock_metadata))
-        
-        assert "llm.token_count.prompt" in result
-        assert "llm.token_count.completion" in result
-        assert "llm.token_count.total" in result
+
+        assert "gen_ai.usage.input_tokens" in result
+        assert "gen_ai.usage.output_tokens" in result
+        assert "gen_ai.usage.total_tokens" in result
 
     def test_parse_content_with_role(self):
         """Test _parse_content with role."""
