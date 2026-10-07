@@ -23,7 +23,7 @@ from ._chat_input import ChatInput, mask_chat_input
 from ._errors import is_error_detail_key
 from ._image_cap import _normalize_image_cap, cap_base64_images
 from .logging import logger
-from .pii_redaction import redact_pii_in_value
+from .pii_redaction import key_carries_free_text, redact_pii_in_value
 
 
 class suppress_tracing:
@@ -313,7 +313,7 @@ class TraceConfig:
             "default_value": DEFAULT_PII_REDACTION,
         },
     )
-    """Enables regex-based PII redaction on attribute values"""
+    """Enables PII redaction, except on correlation identifiers and metadata."""
     _hide_error_details: Optional[bool] = field(
         default=None,
         metadata={
@@ -482,20 +482,34 @@ class TraceConfig:
         resolved = value() if callable(value) else value
         if resolved is None:
             return None
-        # Applied to retained text even when a content rule matched, whatever the key
-        return self.redact_value(resolved, image_key=_is_image_key(key))
+        # Image policy still applies to every retained value. Only the PII pass
+        # exempts correlation identifiers and metadata (#195).
+        return self.redact_value(
+            resolved, image_key=_is_image_key(key), attribute_key=key
+        )
 
-    def redact_value(self, value: AttributeValue, image_key: bool = False) -> AttributeValue:
-        """The value-level redaction every exported value gets, whatever its key: the
-        base64 image cap (``base64_image_max_length``, see ``_image_cap``), then PII
-        redaction when ``pii_redaction`` is on. The cap runs first so PII redaction never
-        rewrites part of an oversized image. ``mask`` applies it to span, event and link
-        attributes; ``FiSpan`` applies it to the recorded exception's message and stack
-        trace and to the ERROR status description."""
+    def redact_value(
+        self,
+        value: AttributeValue,
+        image_key: bool = False,
+        *,
+        attribute_key: Optional[str] = None,
+    ) -> AttributeValue:
+        """Apply the image cap, then the optional PII pass.
+
+        The image cap is independent of the attribute's PII scope and runs first.
+        ``mask`` supplies the key for span, event, link and sampler attributes;
+        correlation identifiers and metadata are exempt from PII only. Unkeyed
+        callers retain the full PII policy, including ``FiSpan``'s exception
+        message, stack trace, generated type and ERROR status description.
+        Unknown/custom attribute keys remain scanned for compatibility.
+        """
         capped = cap_base64_images(
             value, self.base64_image_max_length, REDACTED_VALUE, image_key=image_key
         )
-        if self.pii_redaction:
+        if self.pii_redaction and (
+            attribute_key is None or key_carries_free_text(attribute_key)
+        ):
             return redact_pii_in_value(capped)
         return capped
 
