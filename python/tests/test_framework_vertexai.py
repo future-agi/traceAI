@@ -487,7 +487,6 @@ class TestUtilityFunctions:
             "filtered_messages": None,
             "input_images": None,
             "eval_input": "",
-            "query": ""
         }
 
     def test_extract_image_data_with_text(self):
@@ -508,8 +507,8 @@ class TestUtilityFunctions:
         ]
         
         result = dict(_parse_predictions(predictions))
-        assert "llm.output_messages.0.message_content.image" in result
-        assert result["llm.output_messages.0.message_content.image"] == "base64data"
+        assert "gen_ai.output.messages.0.message.content.0.message_content.image" in result
+        assert result["gen_ai.output.messages.0.message.content.0.message_content.image"] == "base64data"
 
     def test_parse_predictions_empty(self):
         """Test _parse_predictions with empty predictions."""
@@ -526,10 +525,10 @@ class TestUtilityFunctions:
         mock_metadata.total_token_count = 15
         
         result = dict(_parse_usage_metadata(mock_metadata))
-        
-        assert "llm.token_count.prompt" in result
-        assert "llm.token_count.completion" in result
-        assert "llm.token_count.total" in result
+
+        assert "gen_ai.usage.input_tokens" in result
+        assert "gen_ai.usage.output_tokens" in result
+        assert "gen_ai.usage.total_tokens" in result
 
     def test_parse_content_with_role(self):
         """Test _parse_content with role."""
@@ -789,6 +788,21 @@ class TestErrorHandling:
         # Test with None callback
         result = _proxy("test", callback=None)
         assert result == "test"
+
+
+class TestInputValueMultiMessage:
+    """Regression: eval_input must keep every message; no query (#151 family)."""
+
+    def test_extract_image_data_joins_all_contents(self):
+        messages = [
+            {"role": "user", "parts": [{"text": "first"}]},
+            {"role": "model", "parts": [{"text": "second"}]},
+            {"role": "user", "parts": [{"text": "third"}]},
+        ]
+        result = _extract_image_data(messages)
+        assert "query" not in result
+        for text in ("first", "second", "third"):
+            assert text in result["eval_input"]
 
 
 if __name__ == "__main__":

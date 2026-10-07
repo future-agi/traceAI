@@ -513,7 +513,7 @@ class TestUtilityFunctions:
         
         # Should return raw input attribute
         assert len(attributes) >= 1
-        assert attributes[0][0] == "raw.input"
+        assert attributes[0][0] == "input.value"
 
     def test_raw_input_empty(self):
         """Test raw input processing with None input."""
@@ -768,6 +768,29 @@ class TestIntegrationScenarios:
         # Test response attribute extraction (basic creation and method existence)
         assert response_extractor is not None  
         assert hasattr(response_extractor, 'get_attributes_from_response')
+
+
+class TestInputValueMultiMessage:
+    """Regression: last INPUT_VALUE yield must keep every message (#151 family)."""
+
+    def test_joined_eval_input_wins(self):
+        import json as _json
+
+        from fi_instrumentation.fi_types import SpanAttributes
+
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "4"},
+            {"role": "user", "content": "And 3+3?"},
+        ]
+        attributes = list(_process_input_messages(messages))
+        input_values = [
+            v for k, v in attributes if k == SpanAttributes.INPUT_VALUE
+        ]
+        final = _json.loads(input_values[-1])
+        for text in ("You are helpful.", "What is 2+2?", "4", "And 3+3?"):
+            assert text in final
 
 
 if __name__ == "__main__":

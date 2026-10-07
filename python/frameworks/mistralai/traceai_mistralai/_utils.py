@@ -120,7 +120,6 @@ def _process_input_messages(messages: list) -> Iterator[Tuple[str, AttributeValu
             yield SpanAttributes.INPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
         if eval_input:
             yield SpanAttributes.INPUT_VALUE, safe_json_dumps("\n".join(eval_input))
-            yield SpanAttributes.INPUT_VALUE, safe_json_dumps(eval_input[0])
 
     except Exception as e:
         print(f"Error in _process_input_messages: {str(e)}")
