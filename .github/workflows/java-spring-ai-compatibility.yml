@@ -25,9 +25,9 @@ jobs:
       image: maven@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14fa8d150138f27f116d7105a639b82
     steps:
       - uses: actions/checkout@v4
-      - name: Deterministic Spring module suite (Spring AI 1.1.8)
+      - name: Deterministic Spring module and starter suites (Spring AI 1.1.8)
         working-directory: java
-        run: mvn -B -ntp -pl traceai-spring-ai -am -Dsurefire.failIfNoSpecifiedTests=false test
+        run: mvn -B -ntp -pl traceai-spring-ai,traceai-spring-boot-starter -am -Dsurefire.failIfNoSpecifiedTests=false test
       - name: Package candidate JARs
         working-directory: java
         run: mvn -B -ntp -pl traceai-spring-ai,traceai-spring-boot-starter -am -DskipTests package
