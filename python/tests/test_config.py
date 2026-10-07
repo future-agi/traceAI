@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from opentelemetry.context import get_current, get_value
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 
+from fi_instrumentation.fi_types import SpanAttributes
 from fi_instrumentation.instrumentation.config import (
     TraceConfig,
     suppress_tracing,
@@ -146,6 +147,72 @@ class TestTraceConfig:
         result = config.mask("input.value", "sensitive_input")
         # This should return the redacted value when inputs are hidden
         assert result == "__REDACTED__"
+
+
+class TestPiiRedactionScope:
+    """PII redaction applies only to free-text attribute keys, and the
+    credit-card check requires card shape + Luhn — identifier attributes
+    and incidental digit runs must pass through untouched (#195)."""
+
+    def test_session_id_uuid_not_corrupted(self, clean_env):
+        """The exact UUID from #195 — a 13+ digit run inside it used to
+        be replaced with <CREDIT_CARD>."""
+        config = TraceConfig(pii_redaction=True)
+        sid = "73630065-0794-4450-a1f9-8cc987a02b09"
+        assert config.mask(SpanAttributes.SESSION_ID, sid) == sid
+
+    def test_user_id_digit_run_not_corrupted(self, clean_env):
+        config = TraceConfig(pii_redaction=True)
+        uid = "1234567890123"
+        assert config.mask(SpanAttributes.USER_ID, uid) == uid
+
+    def test_metadata_numeric_ids_not_corrupted(self, clean_env):
+        config = TraceConfig(pii_redaction=True)
+        md = '{"request_id": "20240115103045123", "cost_usd": 3.14159}'
+        assert config.mask(SpanAttributes.METADATA, md) == md
+
+    def test_free_text_card_still_redacted(self, clean_env):
+        """A Luhn-valid, 4-4-4-4 grouped card inside input.value is
+        real PII and must still be masked."""
+        config = TraceConfig(pii_redaction=True)
+        out = config.mask(SpanAttributes.INPUT_VALUE, "my card is 4111 1111 1111 1111")
+        assert "<CREDIT_CARD>" in out
+        assert "4111" not in out
+
+    def test_free_text_contiguous_card_redacted(self, clean_env):
+        config = TraceConfig(pii_redaction=True)
+        out = config.mask(SpanAttributes.OUTPUT_VALUE, "charged 4111111111111111 today")
+        assert "<CREDIT_CARD>" in out
+
+    def test_non_luhn_digit_run_not_redacted(self, clean_env):
+        """A 17-digit request id inside a free-text attribute fails Luhn
+        and must survive — free-text scoping alone doesn't fix over-
+        redaction, the card check has to be real."""
+        config = TraceConfig(pii_redaction=True)
+        out = config.mask(SpanAttributes.INPUT_VALUE, "request 20240115103045123 failed")
+        assert "<CREDIT_CARD>" not in out
+        assert "20240115103045123" in out
+
+    def test_free_text_email_still_redacted(self, clean_env):
+        config = TraceConfig(pii_redaction=True)
+        out = config.mask(SpanAttributes.INPUT_VALUE, "reach me at jane@example.com")
+        assert "<EMAIL_ADDRESS>" in out
+        assert "jane@example.com" not in out
+
+    def test_message_content_key_scanned(self, clean_env):
+        """Nested message content keys carry free text and stay in scope."""
+        config = TraceConfig(pii_redaction=True)
+        key = "gen_ai.input.messages.0.message.content"
+        out = config.mask(key, "email jane@example.com")
+        assert "<EMAIL_ADDRESS>" in out
+
+    def test_identifier_key_with_pii_text_not_scanned(self, clean_env):
+        """Document the deliberate tradeoff: a non-free-text key is never
+        scanned, even when its value looks like PII — correctness of
+        correlation ids outranks coverage of stray keys."""
+        config = TraceConfig(pii_redaction=True)
+        val = "session tag jane@example.com"
+        assert config.mask("session.id", val) == val
 
 
 class TestSuppressTracing:
