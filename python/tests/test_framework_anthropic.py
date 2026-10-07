@@ -26,6 +26,16 @@ from fi_instrumentation.fi_types import (
 )
 from fi_instrumentation.instrumentation.context_attributes import using_attributes
 
+import importlib.util as _importlib_util
+
+_LEGACY_COMPLETIONS = (
+    _importlib_util.find_spec("anthropic.resources.completions") is not None
+)
+_REQUIRES_COMPLETIONS = pytest.mark.skipif(
+    not _LEGACY_COMPLETIONS,
+    reason="anthropic SDK dropped the legacy Completions resource",
+)
+
 
 class TestAnthropicFramework:
     """Test Anthropic framework instrumentation."""
@@ -202,6 +212,7 @@ class TestAnthropicFramework:
         finally:
             instrumentor.uninstrument()
     
+    @_REQUIRES_COMPLETIONS
     def test_anthropic_completions_legacy(self, mock_anthropic_requests):
         """Test Anthropic completions (legacy) instrumentation setup."""
         # Don't need to modify mock for this test - just testing setup
@@ -264,24 +275,102 @@ class TestAnthropicFramework:
     def test_instrumentor_uninstrumentation(self):
         """Test that uninstrumentation properly restores original behavior."""
         from anthropic.resources.messages import Messages
-        from anthropic.resources.completions import Completions
-        
+
         instrumentor = AnthropicInstrumentor()
-        
+
         # Store original methods
         original_messages_create = Messages.create
-        original_completions_create = Completions.create
-        
+
+        if _LEGACY_COMPLETIONS:
+            from anthropic.resources.completions import Completions
+
+            original_completions_create = Completions.create
+        else:
+            original_completions_create = None
+
         # Instrument
         instrumentor.instrument(tracer_provider=self.trace_provider)
-        
+
         # Methods should be wrapped (different types)
         assert type(Messages.create).__name__ == 'BoundFunctionWrapper'
-        assert type(Completions.create).__name__ == 'BoundFunctionWrapper'
-        
-        # Uninstrument  
+        if _LEGACY_COMPLETIONS:
+            assert type(Completions.create).__name__ == 'BoundFunctionWrapper'
+
+        # Uninstrument
         instrumentor.uninstrument()
-        
+
         # Methods should be restored (back to functions)
         assert Messages.create == original_messages_create
-        assert Completions.create == original_completions_create 
+        if _LEGACY_COMPLETIONS:
+            assert Completions.create == original_completions_create
+
+class TestInputValueMultiMessage:
+    """Regression for the same first-message overwrite fixed in openai/litellm.
+
+    The wrappers' attribute chain ended with _get_query(eval_input[0]), which
+    overwrote the joined multi-message INPUT_VALUE. The join must now win.
+    """
+
+    def test_extract_image_data_joins_all_messages(self):
+        from traceai_anthropic._wrappers import _extract_image_data
+
+        result = _extract_image_data(
+            [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "second"},
+                {"role": "user", "content": "third"},
+            ]
+        )
+        assert "query" not in result
+        for text in ("first", "second", "third"):
+            assert text in result["eval_input"]
+
+    def test_extract_image_data_embeds_image_placeholders(self):
+        from fi_instrumentation.fi_types import SpanAttributes
+        from traceai_anthropic._wrappers import _extract_image_data
+
+        result = _extract_image_data(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "data": "QUJD"},
+                        },
+                        {"type": "text", "text": "closely"},
+                    ],
+                }
+            ]
+        )
+        assert "describe" in result["eval_input"]
+        assert "closely" in result["eval_input"]
+        assert f"{{{SpanAttributes.INPUT_IMAGES}.0}}" in result["eval_input"]
+        assert result["input_images"] == ["QUJD"]
+
+    def test_eval_input_wins_over_raw_arguments(self):
+        """dict(chain(...)) keeps the last INPUT_VALUE — the join, not kwargs."""
+        from itertools import chain
+
+        from fi_instrumentation.fi_types import SpanAttributes
+        from traceai_anthropic._wrappers import (
+            _get_eval_input,
+            _get_raw_input,
+        )
+        import json
+
+        arguments = {
+            "model": "claude-3",
+            "messages": [
+                {"role": "user", "content": "one"},
+                {"role": "user", "content": "two"},
+            ],
+        }
+        attrs = dict(
+            chain(
+                _get_raw_input(arguments),
+                _get_eval_input("one\ntwo"),
+            )
+        )
+        assert json.loads(attrs[SpanAttributes.INPUT_VALUE]) == "one\ntwo"
