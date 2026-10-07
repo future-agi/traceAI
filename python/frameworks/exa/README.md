@@ -11,7 +11,7 @@ pip install traceAI-exa
 ```
 
 It accepts `exa-py>=2.25.0,<3` and is tested with `exa-py` 2.25.0 on Python
-3.10, 3.11 and 3.13.
+3.10, 3.11, 3.12 and 3.13.
 
 ## Usage
 

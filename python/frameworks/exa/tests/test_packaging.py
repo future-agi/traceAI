@@ -46,11 +46,11 @@ def test_fi_instrumentation_floor_is_1_1_0():
 
 
 def test_classifiers_list_only_the_tested_python_versions():
-    # The suite runs on 3.10, 3.11 and 3.13 (PRD matrix 3.10/3.13, plus 3.11).
+    # The suite runs on 3.10, 3.11, 3.12 and 3.13 (PRD matrix 3.10/3.13, plus 3.11 and 3.12).
     versions = re.findall(
         r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text()
     )
-    assert versions == ["3.10", "3.11", "3.13"]
+    assert versions == ["3.10", "3.11", "3.12", "3.13"]
 
 
 def test_python_range_starts_at_the_lowest_tested_version():
@@ -59,7 +59,7 @@ def test_python_range_starts_at_the_lowest_tested_version():
     assert match
     spec = SpecifierSet(match.group(1))
     assert not spec.contains("3.9.20")
-    for version in ("3.10.0", "3.11.9", "3.13.1"):
+    for version in ("3.10.0", "3.11.9", "3.12.7", "3.13.1"):
         assert spec.contains(version), version
     assert not spec.contains("3.14.0")
 
