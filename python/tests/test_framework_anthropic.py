@@ -26,6 +26,16 @@ from fi_instrumentation.fi_types import (
 )
 from fi_instrumentation.instrumentation.context_attributes import using_attributes
 
+import importlib.util as _importlib_util
+
+_LEGACY_COMPLETIONS = (
+    _importlib_util.find_spec("anthropic.resources.completions") is not None
+)
+_REQUIRES_COMPLETIONS = pytest.mark.skipif(
+    not _LEGACY_COMPLETIONS,
+    reason="anthropic SDK dropped the legacy Completions resource",
+)
+
 
 class TestAnthropicFramework:
     """Test Anthropic framework instrumentation."""
@@ -202,6 +212,7 @@ class TestAnthropicFramework:
         finally:
             instrumentor.uninstrument()
     
+    @_REQUIRES_COMPLETIONS
     def test_anthropic_completions_legacy(self, mock_anthropic_requests):
         """Test Anthropic completions (legacy) instrumentation setup."""
         # Don't need to modify mock for this test - just testing setup
@@ -264,27 +275,34 @@ class TestAnthropicFramework:
     def test_instrumentor_uninstrumentation(self):
         """Test that uninstrumentation properly restores original behavior."""
         from anthropic.resources.messages import Messages
-        from anthropic.resources.completions import Completions
-        
+
         instrumentor = AnthropicInstrumentor()
-        
+
         # Store original methods
         original_messages_create = Messages.create
-        original_completions_create = Completions.create
-        
+
+        if _LEGACY_COMPLETIONS:
+            from anthropic.resources.completions import Completions
+
+            original_completions_create = Completions.create
+        else:
+            original_completions_create = None
+
         # Instrument
         instrumentor.instrument(tracer_provider=self.trace_provider)
-        
+
         # Methods should be wrapped (different types)
         assert type(Messages.create).__name__ == 'BoundFunctionWrapper'
-        assert type(Completions.create).__name__ == 'BoundFunctionWrapper'
-        
-        # Uninstrument  
+        if _LEGACY_COMPLETIONS:
+            assert type(Completions.create).__name__ == 'BoundFunctionWrapper'
+
+        # Uninstrument
         instrumentor.uninstrument()
-        
+
         # Methods should be restored (back to functions)
         assert Messages.create == original_messages_create
-        assert Completions.create == original_completions_create 
+        if _LEGACY_COMPLETIONS:
+            assert Completions.create == original_completions_create
 
 class TestInputValueMultiMessage:
     """Regression for the same first-message overwrite fixed in openai/litellm.
