@@ -487,7 +487,6 @@ class TestUtilityFunctions:
             "filtered_messages": None,
             "input_images": None,
             "eval_input": "",
-            "query": ""
         }
 
     def test_extract_image_data_with_text(self):
@@ -789,6 +788,21 @@ class TestErrorHandling:
         # Test with None callback
         result = _proxy("test", callback=None)
         assert result == "test"
+
+
+class TestInputValueMultiMessage:
+    """Regression: eval_input must keep every message; no query (#151 family)."""
+
+    def test_extract_image_data_joins_all_contents(self):
+        messages = [
+            {"role": "user", "parts": [{"text": "first"}]},
+            {"role": "model", "parts": [{"text": "second"}]},
+            {"role": "user", "parts": [{"text": "third"}]},
+        ]
+        result = _extract_image_data(messages)
+        assert "query" not in result
+        for text in ("first", "second", "third"):
+            assert text in result["eval_input"]
 
 
 if __name__ == "__main__":

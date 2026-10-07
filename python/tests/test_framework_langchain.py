@@ -762,5 +762,22 @@ class TestIntegrationScenarios:
         tracer._send_span_data_to_api(mock_span, {"input": "test"}, {"output": "test"})
 
 
+class TestInputValueMultiMessage:
+    """Regression: eval_input must keep every message; no query (#151 family)."""
+
+    def test_filter_images_joins_all_messages(self):
+        from traceai_langchain._tracer import _filter_images
+
+        messages = [
+            [
+                {"kwargs": {"content": "first"}},
+                {"kwargs": {"content": "second"}},
+            ]
+        ]
+        filtered_data, images, eval_input = _filter_images(messages)
+        assert "first" in eval_input
+        assert "second" in eval_input
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"]) 

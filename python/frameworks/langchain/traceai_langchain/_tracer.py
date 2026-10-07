@@ -436,7 +436,7 @@ def _update_span(
     )
     span.set_attribute(GEN_AI_SPAN_KIND, span_kind.value)
     span.set_attributes(dict(captured_context))
-    filtered_data, images, eval_input, query = _filter_images(
+    filtered_data, images, eval_input = _filter_images(
         run.inputs.get("messages", [])
     )
 
@@ -458,7 +458,6 @@ def _update_span(
                     _as_span_input(filtered_data),
                     _as_output(_convert_io(run.outputs)),
                     _as_input_images(images),
-                    _as_eval_input(eval_input),
                     _prompts(run.inputs),
                     _input_messages(run.inputs),
                     _output_messages(run.outputs),
@@ -471,7 +470,7 @@ def _update_span(
                     _retrieval_documents(run),
                     _metadata(run),
                     _as_raw_input_output(run),
-                    _as_query(query),
+                    _as_eval_input(eval_input),
                 )
             )
         )
@@ -557,11 +556,6 @@ def _as_raw_input_output(run: Run) -> Iterator[Tuple[str, Any]]:
             yield OUTPUT_VALUE, safe_json_dumps(raw_output)
         elif hasattr(raw_output, "__dict__"):
             yield OUTPUT_VALUE, safe_json_dumps(raw_output.__dict__)
-
-
-def _as_query(values: Iterable[str]) -> Iterator[Tuple[str, str]]:
-    if values:
-        yield INPUT_VALUE, safe_json_dumps(values)
 
 
 def _convert_io(obj: Optional[Mapping[str, Any]]) -> Iterator[str]:
@@ -1107,14 +1101,13 @@ def _get_attributes_from_image(
         yield f"{IMAGE_URL}", url
 
 
-def _filter_images(messages: Any) -> Tuple[Any, List[str], str, str]:
+def _filter_images(messages: Any) -> Tuple[Any, List[str], str]:
     filtered_data = []
     images = []
     eval_input = []
-    query = ""
 
     if not messages or not isinstance(messages, list):
-        return messages, [], "", ""
+        return messages, [], ""
 
     for message_group in messages:
         if not isinstance(message_group, list):
@@ -1148,10 +1141,8 @@ def _filter_images(messages: Any) -> Tuple[Any, List[str], str, str]:
                                     {"type": "text", "text": f"[Image: {image_url}]"}
                                 )
 
-    if eval_input and len(eval_input) > 0:
-        query = eval_input[0]
     eval_input = " | ".join(map(str, eval_input))
-    return filtered_data, images, eval_input, query
+    return filtered_data, images, eval_input
 
 
 LANGCHAIN_SESSION_ID = "session_id"
