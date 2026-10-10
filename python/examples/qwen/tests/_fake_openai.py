@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ANSWER = "Hello from local Qwen."
 MODEL = "qwen-plus"
+# Synthetic dated id. Not a documented Model Studio rewrite. No live call.
+RESPONSE_MODEL = "qwen-plus-2026-09-01"
 USAGE = {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}
 AUTH_ERROR = {
     "error": {

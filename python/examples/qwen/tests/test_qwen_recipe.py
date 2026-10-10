@@ -36,6 +36,7 @@ _fake_spec.loader.exec_module(_fake)
 ANSWER = _fake.ANSWER
 AUTH_ERROR = _fake.AUTH_ERROR
 MODEL = _fake.MODEL
+RESPONSE_MODEL = _fake.RESPONSE_MODEL
 USAGE = _fake.USAGE
 FakeOpenAI = _fake.FakeOpenAI
 completion = _fake.completion
@@ -204,7 +205,7 @@ def assert_vendor_request(request):
     assert FI_SECRET not in str(request.headers)
 
 
-def mock_client(body, *, status=200, streaming=False):
+def mock_client(body, *, status=200, streaming=False, echo_request_model=True):
     requests = []
 
     def handler(request):
@@ -212,7 +213,7 @@ def mock_client(body, *, status=200, streaming=False):
         if streaming:
             return httpx.Response(status, content=body, headers={"Content-Type": "text/event-stream"})
         response_body = body
-        if status == 200 and body.get("object") == "chat.completion":
+        if status == 200 and body.get("object") == "chat.completion" and echo_request_model:
             response_body = {**body, "model": json.loads(request.content)["model"]}
         return httpx.Response(status, json=response_body)
 
@@ -264,6 +265,25 @@ def test_chat_exports_usage_and_keeps_keys_separate(traced):
     assert span["status"]["code"] == "STATUS_CODE_OK"
     assert attrs["output.value"] == ANSWER
     assert_usage(attrs)
+
+
+def test_response_model_differs_from_request(traced):
+    """Span model is the response field, not the request id."""
+    assert RESPONSE_MODEL != MODEL
+    receiver, provider, project = traced
+    client, requests = mock_client(completion(RESPONSE_MODEL), echo_request_model=False)
+    with client:
+        response = client.chat.completions.create(
+            model=MODEL, messages=[{"role": "user", "content": "Say hello."}]
+        )
+    assert response.model == RESPONSE_MODEL
+    assert provider.force_flush()
+    assert json.loads(requests[0].content)["model"] == MODEL
+    _, attrs = assert_llm(receiver, project, model=RESPONSE_MODEL)
+    assert attrs["gen_ai.request.model"] != MODEL
+    body = completion(RESPONSE_MODEL)
+    assert body["object"] == "chat.completion"
+    assert set(body["usage"]) == {"prompt_tokens", "completion_tokens", "total_tokens"}
 
 
 def test_missing_usage_is_omitted(traced):
