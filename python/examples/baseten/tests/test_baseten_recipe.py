@@ -25,6 +25,9 @@ from _fake_openai import ANSWER, ERROR, STREAM_PARTS, USAGE, FakeOpenAI, complet
 RECIPE = Path(__file__).resolve().parents[1]
 ROOT = RECIPE.parents[2]
 MODEL = "zai-org/GLM-5.2"
+# Synthetic. Not a documented Baseten model id. It exists so the span can be
+# told apart from the request slug. No live Baseten call is made.
+RESPONSE_MODEL = "fixture-served/not-a-live-baseten-model"
 VENDOR_KEY = "placeholder-baseten-key"
 FI_KEY = "placeholder-futureagi-api-key"
 FI_SECRET = "placeholder-futureagi-secret-key"
@@ -236,6 +239,30 @@ def test_chat_export_and_key_separation(receiver, start_tracing):
     assert attrs["gen_ai.usage.input_tokens"] == str(USAGE["prompt_tokens"])
     assert attrs["gen_ai.usage.output_tokens"] == str(USAGE["completion_tokens"])
     assert attrs["gen_ai.usage.total_tokens"] == str(USAGE["total_tokens"])
+
+
+def test_response_model_differs_from_request(receiver, start_tracing):
+    """Span model is the response field, not the request slug."""
+    assert RESPONSE_MODEL != MODEL
+    provider, project = start_tracing()
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json=completion(RESPONSE_MODEL))
+
+    with mock_client(handler) as client:
+        response = chat(client)
+    assert response.model == RESPONSE_MODEL
+    assert provider.force_flush()
+    assert json.loads(seen[0].content)["model"] == MODEL
+    _, attrs = one_span(receiver, project, model=RESPONSE_MODEL)
+    assert attrs["gen_ai.request.model"] != MODEL
+    body = completion(RESPONSE_MODEL)
+    assert body["object"] == "chat.completion"
+    assert body["model"] == RESPONSE_MODEL
+    assert set(body["usage"]) == {"prompt_tokens", "completion_tokens", "total_tokens"}
+    assert body["choices"][0]["message"]["content"] == ANSWER
 
 
 def test_usage_absent_is_omitted(receiver, start_tracing):
