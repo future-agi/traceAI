@@ -208,6 +208,24 @@ def test_chat_both_host_forms_and_key_separation(base_url, receiver, tracing, mo
     assert_usage(attrs, USAGE)
 
 
+def test_chat_response_model_differs_from_deployment(receiver, tracing):
+    """Chat span stores the response model, not the deployment name."""
+    assert RETURNED_MODEL != MODEL
+    requests = []
+    with tracing() as (provider, project):
+        with mock_client(TEST_BASE_URLS[0], chat_response(RETURNED_MODEL), requests) as client:
+            response = complete(client)
+        provider.force_flush()
+        _, attrs = assert_export(receiver, project)
+    assert response.model == RETURNED_MODEL
+    assert_vendor_request(requests[0], TEST_BASE_URLS[0], "chat/completions", model=MODEL)
+    assert attrs["gen_ai.request.model"] == RETURNED_MODEL
+    body = chat_response(RETURNED_MODEL)
+    assert body["object"] == "chat.completion"
+    assert body["model"] == RETURNED_MODEL
+    assert set(body["usage"]) >= {"prompt_tokens", "completion_tokens", "total_tokens"}
+
+
 def test_usage_absent_is_omitted(receiver, tracing):
     requests = []
     with tracing() as (provider, project):
