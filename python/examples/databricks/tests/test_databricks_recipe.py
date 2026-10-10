@@ -30,6 +30,8 @@ GATEWAY = "https://dbc-00000000-0000.cloud.databricks.com/ai-gateway/mlflow/v1"
 SERVING = "https://dbc-00000000-0000.cloud.databricks.com/serving-endpoints"
 GATEWAY_MODEL = "system.ai.claude-sonnet-4-5"
 ENDPOINT_MODEL = "openai-chat-endpoint"
+# Synthetic. Not a documented Databricks rewrite. No live call.
+RETURNED_MODEL = "system.ai.claude-sonnet-4-5-2026-09-01"
 VENDOR_KEY = "placeholder-databricks-key"
 FI_KEY = "placeholder-fi-api-key"
 FI_SECRET = "placeholder-fi-secret-key"
@@ -201,6 +203,30 @@ def test_both_surfaces_chat_and_key_separation(base, model, monkeypatch, tracing
     assert attributes(span)["input.value"] == PROMPT
     assert attributes(span)["output.value"] == ANSWER
     assert_usage(span)
+    assert_export(receiver, project)
+
+
+def test_response_model_differs_from_request(monkeypatch, tracing):
+    """Span stores the response model, not the gateway request name."""
+    assert RETURNED_MODEL not in (GATEWAY_MODEL, ENDPOINT_MODEL)
+    monkeypatch.setenv(app.BASE_URL_ENV, GATEWAY)
+    receiver, provider, project = tracing()
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json=chat_response(RETURNED_MODEL))
+
+    with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
+        response = complete(client, GATEWAY_MODEL)
+    assert response.model == RETURNED_MODEL
+    assert json.loads(requests[0].content)["model"] == GATEWAY_MODEL
+    span = only_span(receiver, provider)
+    assert attributes(span)["gen_ai.request.model"] == RETURNED_MODEL
+    body = chat_response(RETURNED_MODEL)
+    assert body["object"] == "chat.completion"
+    assert body["model"] == RETURNED_MODEL
+    assert set(body["usage"]) == {"prompt_tokens", "completion_tokens", "total_tokens"}
     assert_export(receiver, project)
 
 
