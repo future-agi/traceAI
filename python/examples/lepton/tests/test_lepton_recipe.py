@@ -35,6 +35,9 @@ fake = load_module("lepton_fake_openai", TEST_DIR / "_fake_openai.py")
 TEST_BASE_URL = "https://endpoint.example.invalid/v1"
 XENON_TEST_BASE_URL = "https://ws0000-example.xenon.lepton.run/v1"
 MODEL = "nvidia/Nemotron-Research-Reasoning-Qwen-1.5B"
+# Synthetic served id. NVIDIA docs do not publish a rewrite of this example model.
+# No live Lepton call. Host exclusions are unchanged.
+RESPONSE_MODEL = "fixture-served/not-a-live-lepton-model"
 VENDOR_KEY = "placeholder-lepton-key"
 FI_KEY = "placeholder-futureagi-key"
 FI_SECRET = "placeholder-futureagi-secret"
@@ -288,6 +291,33 @@ def test_refused_base_urls_name_reason_without_disclosing_url(url, reason):
     elif reason == "credentials":
         assert "placeholder-user" not in message
         assert "placeholder-password" not in message
+
+
+def test_response_model_differs_from_request(monkeypatch):
+    """Span stores the served model, not the requested example id."""
+    assert RESPONSE_MODEL != MODEL
+    monkeypatch.setenv(app.BASE_URL_ENV, TEST_BASE_URL)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json=fake.completion(RESPONSE_MODEL))
+
+    with tracing(monkeypatch, "lepton-response-model") as (receiver, provider):
+        with mock_client(handler) as client:
+            response = chat(client)
+        span, values = one_span(receiver, provider)
+    assert response.model == RESPONSE_MODEL
+    assert json.loads(requests[0].content)["model"] == MODEL
+    assert values["gen_ai.request.model"] == RESPONSE_MODEL
+    exports = receiver.requests()
+    assert exports and exports[0]["path"] == "/tracer/v1/traces"
+    assert exports[0]["headers"]["x-api-key"] == FI_KEY
+    body = fake.completion(RESPONSE_MODEL)
+    assert body["object"] == "chat.completion"
+    assert body["model"] == RESPONSE_MODEL
+    assert set(body["usage"]) == {"prompt_tokens", "completion_tokens", "total_tokens"}
+    assert TEST_BASE_URL not in telemetry(receiver)
 
 
 @pytest.mark.parametrize("key", [None, "", "   "])
