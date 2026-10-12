@@ -5,7 +5,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# Historical example from the public tracing guide; availability is not asserted.
+# Model id from Doubleword's API reference (doubleword.ai/llms.txt); availability is not asserted.
 MODEL = "deepseek-ai/DeepSeek-V4-Flash"
 RETURNED_MODEL = MODEL + "-2026-09-01"  # Synthetic dated response id.
 ANSWER = "A rainbow is refracted light."

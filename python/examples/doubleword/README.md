@@ -151,4 +151,4 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 | 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
 | 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
 
-The chat fixtures use the historical example `deepseek-ai/DeepSeek-V4-Flash` from the public [tracing guide](https://arize.com/docs/ax/integrations/llm-providers/doubleword/doubleword-tracing). Its current catalog availability is not asserted. The dated response model and embedding model are synthetic fixture ids.
+The chat fixtures use `deepseek-ai/DeepSeek-V4-Flash`, a model id listed in Doubleword's [API reference](https://doubleword.ai/llms.txt). Its current catalog availability is not asserted. The dated response model and embedding model are synthetic fixture ids.
