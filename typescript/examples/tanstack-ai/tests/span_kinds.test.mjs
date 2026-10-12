@@ -157,10 +157,11 @@ test("no model call reported usage: the root keeps its usage", () => {
   assert.equal(traceSum(spans, "gen_ai.usage.total_tokens"), 42);
 });
 
-test("one model call: no kind and no promoted usage on the root", () => {
+test("one model call: CHAIN and no promoted usage on the root", () => {
+  // Without a kind, fi-collector stores the root as observation_type "unknown".
   const call = usage(11, 7);
   const { root, modelCalls, spans } = run(futureAgiSpanKinds(), [call]);
-  assert.equal(root.attributes[GEN_AI_SPAN_KIND], undefined);
+  assert.equal(root.attributes[GEN_AI_SPAN_KIND], "CHAIN");
   assert.equal(modelCalls[0].attributes[GEN_AI_SPAN_KIND], "LLM");
   assert.deepEqual(promotedKeys(root.attributes), []);
   assert.equal(root.attributes["tanstack.ai.root_usage.input_tokens"], 11);

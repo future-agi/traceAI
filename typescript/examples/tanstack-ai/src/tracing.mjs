@@ -94,11 +94,12 @@ export async function shutdownTraces(tracerProvider) {
  *
  * - iteration (one provider model call) -> LLM
  * - tool (one tool execution)          -> TOOL
- * - chat root that ran more than one iteration -> AGENT
+ * - chat root that ran more than one iteration -> AGENT, else CHAIN
  *
  * The root's kind is set in onSpanEnd because attributeEnricher runs for the
- * root when chat() starts, before the iteration count is known. A
- * single-iteration root and media "generation" spans get no kind.
+ * root when chat() starts, before the iteration count is known. A root with
+ * no kind would be stored by Future AGI as observation type "unknown". Media
+ * "generation" spans get no kind.
  *
  * Usage: TanStack sums every model call's gen_ai.usage.* keys onto the root
  * (otel.ts applyRootUsage, set just before onSpanEnd): input, output and
@@ -179,9 +180,7 @@ export function futureAgiSpanKinds({ threadIdAsSession = false } = {}) {
         usageOnIterations.add(info.ctx);
       }
       if (info.kind === "chat") {
-        if ((iterationsByRun.get(info.ctx) ?? 0) > 1) {
-          span.setAttribute(GEN_AI_SPAN_KIND, "AGENT");
-        }
+        span.setAttribute(GEN_AI_SPAN_KIND, (iterationsByRun.get(info.ctx) ?? 0) > 1 ? "AGENT" : "CHAIN");
         if (usageOnIterations.has(info.ctx)) {
           moveRootUsage(span);
         }

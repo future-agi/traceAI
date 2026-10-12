@@ -393,6 +393,7 @@ def test_failed_model_call_exports_error_spans():
         assert status.get("message") == "500 boom", (name, status)
     assert spans[ITERATION_0]["parentSpanId"] == spans[ROOT]["spanId"]
     assert _attributes(spans[ITERATION_0])["gen_ai.span.kind"] == "LLM"
+    assert _attributes(spans[ROOT])["gen_ai.span.kind"] == "CHAIN"
     # No thread id was passed, so no session (chat() generated its own id).
     for name in (ROOT, ITERATION_0):
         assert "session.id" not in _attributes(spans[name]), name
@@ -427,9 +428,9 @@ def test_abort_mid_stream_ends_spans_as_cancelled():
         assert _is_error(status), status
         assert status.get("message") == "cancelled"
         assert _attributes(spans[name])["tanstack.ai.completion.reason"] == "cancelled"
-    # One iteration: LLM on the iteration span, no kind on the root.
+    # One iteration: LLM on the iteration span, CHAIN on the root.
     assert _attributes(spans[ITERATION_0])["gen_ai.span.kind"] == "LLM"
-    assert "gen_ai.span.kind" not in _attributes(spans[ROOT])
+    assert _attributes(spans[ROOT])["gen_ai.span.kind"] == "CHAIN"
 
 
 def _readme_recipe() -> str:
@@ -482,7 +483,7 @@ def test_readme_recipe_runs_and_exports_the_contract_spans():
     assert sorted(spans) == sorted([ROOT, ITERATION_0])
     root = _attributes(spans[ROOT])
     first = _attributes(spans[ITERATION_0])
-    assert "gen_ai.span.kind" not in root
+    assert root["gen_ai.span.kind"] == "CHAIN"
     assert first["gen_ai.span.kind"] == "LLM"
     assert not [k for k in root if k.startswith(("gen_ai.usage.", "gen_ai.cost."))], root
     assert root["tanstack.ai.root_usage.input_tokens"] == ANSWER_USAGE["prompt_tokens"]
