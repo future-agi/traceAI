@@ -56,11 +56,15 @@ def enable_fi_attribute_mapping(
     the global OTel tracer provider if none is passed). Idempotent: calling
     twice on the same provider only installs one processor.
 
+    Agent Framework emits its spans on the global tracer provider only, so the
+    provider you trace with must be the global one: call
+    ``fi_instrumentation.register(..., set_global_tracer_provider=True)``.
+
     Args:
         tracer_provider: The provider to install on. If omitted, the global
-            tracer provider is used. Pass the provider returned by
-            ``fi_instrumentation.register(...)`` when you kept the FI default
-            ``set_global_tracer_provider=False``.
+            tracer provider is used. A provider that is not the global one is
+            still accepted (it may be made global later), but a warning is
+            logged because no Agent Framework span reaches it until then.
 
     Returns:
         True if the processor was installed; False if there was no usable
@@ -69,6 +73,14 @@ def enable_fi_attribute_mapping(
     _ensure_native_instrumentation_enabled()
 
     provider = tracer_provider if tracer_provider is not None else trace_api.get_tracer_provider()
+    if tracer_provider is not None and tracer_provider is not trace_api.get_tracer_provider():
+        logger.warning(
+            "%s is not the global tracer provider. Agent Framework emits spans on the "
+            "global provider only, so none will reach this one. Call "
+            "register(set_global_tracer_provider=True) or "
+            "opentelemetry.trace.set_tracer_provider(...) first.",
+            type(provider).__name__,
+        )
 
     active = getattr(provider, "_active_span_processor", None)
     if active is None:

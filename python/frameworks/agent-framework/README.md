@@ -56,6 +56,10 @@ enable_instrumentation(enable_sensitive_data=True)
 enable_fi_attribute_mapping()
 ```
 
+`enable_sensitive_data=True` records prompts, completions and tool arguments on the spans. Leave it off to keep that content out of your traces.
+
+Agent Framework emits on the global tracer provider only, so keep `set_global_tracer_provider=True` in `register(...)`.
+
 ### Create Agent Framework Components
 Set up your Agent Framework client with built-in observability.
 
@@ -76,3 +80,20 @@ async def main():
 
 asyncio.run(main())
 ```
+
+### Sessions
+All spans of one run get the same `session.id`, which Observe groups sessions on. It comes from, in order:
+
+1. `using_session(...)` around the run. This works with every chat client, including ones that keep history locally such as `OpenAIChatCompletionClient`:
+
+```python
+from fi_instrumentation import using_session
+
+session = agent.create_session()
+with using_session("support-chat-42"):
+    await agent.run("What's the weather in Paris?", session=session)
+    await agent.run("And in Tokyo?", session=session)
+```
+
+2. The `gen_ai.conversation.id` the run starts with, which is the session's `service_session_id`. With the Responses API and no stored conversation, that id is the previous response id, so each turn lands in its own session. Use `using_session` for one session across turns.
+

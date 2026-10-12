@@ -94,6 +94,21 @@ def test_install_on_explicit_provider_does_not_require_global(fresh_global_provi
     assert _count_our_processors(provider) == 1
 
 
+def test_warns_when_explicit_provider_is_not_global(fresh_global_provider, caplog):
+    # Agent Framework only emits on the global provider, so nothing would reach this one.
+    provider = _register(set_global=False)
+    with caplog.at_level("WARNING", logger="traceai_agent_framework.integration"):
+        enable_fi_attribute_mapping(tracer_provider=provider)
+    assert "not the global tracer provider" in caplog.text
+
+
+def test_no_warning_when_explicit_provider_is_global(fresh_global_provider, caplog):
+    provider = _register(set_global=True)
+    with caplog.at_level("WARNING", logger="traceai_agent_framework.integration"):
+        enable_fi_attribute_mapping(tracer_provider=provider)
+    assert "not the global tracer provider" not in caplog.text
+
+
 def test_idempotent_install_on_explicit_provider(fresh_global_provider):
     provider = _register(set_global=False)
     assert enable_fi_attribute_mapping(tracer_provider=provider) is True
