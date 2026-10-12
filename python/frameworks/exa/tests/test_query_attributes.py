@@ -23,7 +23,7 @@ def test_api_key_embedded_in_query_is_redacted(fake):
     with instrumented() as traced:
         Exa(api_key=EXA_KEY, base_url=fake.origin).search(query)
 
-    assert attrs(traced.one())["fi.retrieval.query"] == "find [redacted] please"
+    assert attrs(traced.one())["gen_ai.retrieval.query"] == "find [redacted] please"
     assert EXA_KEY not in traced.wire()
     # Redaction is on the span only; the vendor still sent the caller's query.
     assert fake.calls[0][2]["query"] == query
@@ -40,7 +40,7 @@ def test_api_key_embedded_in_async_query_is_redacted(fake):
     with instrumented() as traced:
         asyncio.run(call())
 
-    assert attrs(traced.one())["fi.retrieval.query"] == "async [redacted]"
+    assert attrs(traced.one())["gen_ai.retrieval.query"] == "async [redacted]"
     assert EXA_KEY not in traced.wire()
 
 
@@ -58,7 +58,7 @@ def test_query_is_capped_at_1kb_of_utf8_on_a_character_boundary(fake, query):
     with instrumented() as traced:
         Exa(api_key=EXA_KEY, base_url=fake.origin).search(query)
 
-    recorded = attrs(traced.one())["fi.retrieval.query"]
+    recorded = attrs(traced.one())["gen_ai.retrieval.query"]
     assert len(recorded.encode("utf-8")) <= 1024
     # The longest whole-character prefix that fits: one more character would not.
     assert recorded == query[: len(recorded)]
@@ -77,7 +77,7 @@ def test_input_value_carries_the_same_redacted_capped_query(fake):
     assert [span.name for span in spans] == ["exa.search", "exa.answer", "exa.search"]
     for span in spans:
         values = attrs(span)
-        assert values["input.value"] == values["fi.retrieval.query"]
+        assert values["input.value"] == values["gen_ai.retrieval.query"]
         assert values["input.value"].startswith("[redacted] \u20ac")
         assert len(values["input.value"].encode("utf-8")) <= 1024
 
@@ -95,10 +95,10 @@ def test_get_contents_records_the_url_count_not_the_urls(fake):
     span = traced.one()
     values = attrs(span)
     assert span.name == "exa.get_contents"
-    assert values["fi.retrieval.url_count"] == 2
-    assert values["fi.retrieval.document_count"] == 2
-    assert "fi.retrieval.urls" not in values
-    assert "fi.retrieval.query" not in values
+    assert values["exa.url_count"] == 2
+    assert values["exa.result_count"] == 2
+    assert "exa.urls" not in values
+    assert "gen_ai.retrieval.query" not in values
     assert "input.value" not in values
     for secret in ("URL-SECRET", "x.example"):
         assert secret not in traced.wire()
@@ -113,7 +113,7 @@ def test_get_contents_counts_every_input_shape(fake):
         client.get_contents(found.results)
 
     counts = [
-        attrs(span).get("fi.retrieval.url_count")
+        attrs(span).get("exa.url_count")
         for span in traced.spans()
         if span.name == "exa.get_contents"
     ]
@@ -133,7 +133,7 @@ def test_async_get_contents_records_the_url_count_not_the_urls(fake):
     with instrumented() as traced:
         asyncio.run(call())
 
-    assert attrs(traced.one())["fi.retrieval.url_count"] == 1
+    assert attrs(traced.one())["exa.url_count"] == 1
     assert "URL-SECRET" not in traced.wire()
 
 
@@ -145,8 +145,8 @@ def test_capture_urls_opt_in_records_at_most_20_redacted_capped_urls(fake):
         Exa(api_key=EXA_KEY, base_url=fake.origin).get_contents(urls)
 
     values = attrs(traced.one())
-    assert values["fi.retrieval.url_count"] == 25
-    captured = list(values["fi.retrieval.urls"])
+    assert values["exa.url_count"] == 25
+    captured = list(values["exa.urls"])
     assert len(captured) == 20
     assert captured[0] == "https://x.example/k?key=[redacted]"
     assert all(len(url.encode("utf-8")) <= 1024 for url in captured)
@@ -159,7 +159,7 @@ def test_capture_urls_does_not_add_urls_to_search_spans(fake):
     with instrumented(capture_urls=True) as traced:
         Exa(api_key=EXA_KEY, base_url=fake.origin).search("plain search")
 
-    assert "fi.retrieval.urls" not in attrs(traced.one())
+    assert "exa.urls" not in attrs(traced.one())
 
 
 def test_missing_api_key_raises_in_the_constructor_before_any_span(monkeypatch):

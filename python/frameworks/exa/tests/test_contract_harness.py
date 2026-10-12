@@ -156,10 +156,10 @@ def test_real_client_calls_reach_the_collector_contract(fake_exa, monkeypatch):
 
     ok_search, failed_search = by_name["exa.search"]
     ok = _flatten_attributes(ok_search["attributes"])
-    assert ok["fi.span.kind"] == "RETRIEVER"
-    assert ok["fi.retrieval.query"] == "open telemetry retrieval"
+    assert ok["gen_ai.span.kind"] == "RETRIEVER"
+    assert ok["gen_ai.retrieval.query"] == "open telemetry retrieval"
     assert ok["input.value"] == "open telemetry retrieval"
-    assert int(ok["fi.retrieval.document_count"]) == 2
+    assert int(ok["exa.result_count"]) == 2
     # register()'s processor also promotes UNSET to OK on export
     # (fi_instrumentation/otel.py _auto_set_ok_status), so the wrapper's own
     # OK is pinned by the in-memory tests (test_async_parity, test_streams).
@@ -167,13 +167,13 @@ def test_real_client_calls_reach_the_collector_contract(fake_exa, monkeypatch):
     assert by_name["exa.answer"][0]["status"]["code"] == "STATUS_CODE_OK"
 
     answer = _flatten_attributes(by_name["exa.answer"][0]["attributes"])
-    assert answer["fi.span.kind"] == "RETRIEVER"
+    assert answer["gen_ai.span.kind"] == "RETRIEVER"
     # AnswerResponse carries citations, not results; the fake returns one.
-    assert int(answer["fi.retrieval.document_count"]) == 1
+    assert int(answer["exa.result_count"]) == 1
     assert not any("model" in key for key in answer)
 
     failed = _flatten_attributes(failed_search["attributes"])
-    assert failed["fi.retrieval.query"] == "fail-401"
+    assert failed["gen_ai.retrieval.query"] == "fail-401"
     assert failed_search["status"]["code"] == "STATUS_CODE_ERROR"
     assert any(event["name"] == "exception" for event in failed_search.get("events", []))
 

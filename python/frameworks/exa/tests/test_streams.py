@@ -73,7 +73,7 @@ def _assert_cancelled(span) -> None:
     assert span.status.description == "cancelled"
     assert values["exa.cancelled"] is True
     # A cancelled stream's total is unknown, and cancelling is not an exception.
-    assert "fi.retrieval.document_count" not in values
+    assert "exa.result_count" not in values
     assert not [event for event in span.events if event.name == "exception"]
 
 
@@ -249,7 +249,7 @@ def double_end_warnings(caplog):
 def _assert_complete(span) -> None:
     values = attrs(span)
     assert span.status.status_code is StatusCode.OK
-    assert values["fi.retrieval.document_count"] == STREAM_CITATIONS
+    assert values["exa.result_count"] == STREAM_CITATIONS
     assert "exa.cancelled" not in values
     assert not span.events
 
@@ -313,7 +313,7 @@ def _assert_failed(span) -> None:
     assert "401" in span.status.description
     assert [event.name for event in span.events] == ["exception"]
     assert "exa.cancelled" not in attrs(span)
-    assert "fi.retrieval.document_count" not in attrs(span)
+    assert "exa.result_count" not in attrs(span)
 
 
 def test_sync_stream_non_200_is_an_error_and_reraised(fake, double_end_warnings):

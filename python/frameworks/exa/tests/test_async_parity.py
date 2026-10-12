@@ -90,4 +90,4 @@ def test_async_vendor_error_is_recorded_and_reraised(fake):
     assert span.status.status_code is StatusCode.ERROR
     assert [event.name for event in span.events] == ["exception"]
     assert "exa.cancelled" not in attrs(span)
-    assert "fi.retrieval.document_count" not in attrs(span)
+    assert "exa.result_count" not in attrs(span)

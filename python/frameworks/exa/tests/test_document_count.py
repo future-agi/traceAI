@@ -1,4 +1,4 @@
-"""fi.retrieval.document_count from the real SDK against the loopback fake.
+"""exa.result_count from the real SDK against the loopback fake.
 
 The count is what the call returned: search/get_contents results, answer
 citations, and for streams the citations accumulated over every chunk. When
@@ -26,7 +26,7 @@ from _support import (  # noqa: E402
 )
 from exa_py import AsyncExa, Exa  # noqa: E402
 
-COUNT = "fi.retrieval.document_count"
+COUNT = "exa.result_count"
 
 
 @pytest.fixture()

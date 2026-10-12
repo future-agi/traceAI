@@ -55,9 +55,9 @@ def test_search_records_retrieval_contract(monkeypatch: pytest.MonkeyPatch) -> N
     span = spans[0]
     attrs = dict(span.attributes or {})
     assert span.name == "exa.search"
-    assert attrs["fi.span.kind"] == "RETRIEVER"
-    assert attrs["fi.retrieval.query"] == "retrieval query"
-    assert attrs["fi.retrieval.document_count"] == 2
+    assert attrs["gen_ai.span.kind"] == "RETRIEVER"
+    assert attrs["gen_ai.retrieval.query"] == "retrieval query"
+    assert attrs["exa.result_count"] == 2
     assert all(_API_KEY not in str(value) for value in attrs.values())
 
 

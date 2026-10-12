@@ -51,8 +51,8 @@ def test_hide_inputs_config_hides_the_query_and_keeps_the_count(fake):
 
     span_attributes = attrs(traced.one())
     assert span_attributes["input.value"] == HIDDEN
-    assert "fi.retrieval.query" not in span_attributes
-    assert span_attributes["fi.retrieval.document_count"] == 2
+    assert "gen_ai.retrieval.query" not in span_attributes
+    assert span_attributes["exa.result_count"] == 2
     assert PRIVATE not in traced.wire()
     # Hiding is on the span only; the vendor still got the caller's query.
     assert fake.calls[0][2]["query"] == PRIVATE
@@ -65,7 +65,7 @@ def test_fi_hide_inputs_environment_variable_is_honoured(fake, monkeypatch):
 
     span_attributes = attrs(traced.one())
     assert span_attributes["input.value"] == HIDDEN
-    assert "fi.retrieval.query" not in span_attributes
+    assert "gen_ai.retrieval.query" not in span_attributes
     assert PRIVATE not in traced.wire()
 
 
@@ -76,7 +76,7 @@ def test_hide_inputs_applies_to_streams(fake):
 
     span_attributes = attrs(traced.one())
     assert span_attributes["input.value"] == HIDDEN
-    assert "fi.retrieval.query" not in span_attributes
+    assert "gen_ai.retrieval.query" not in span_attributes
     assert PRIVATE not in traced.wire()
 
 
@@ -86,8 +86,8 @@ def test_hide_inputs_wins_over_capture_urls(fake):
         _client(fake).get_contents(urls)
 
     span_attributes = attrs(traced.one())
-    assert span_attributes["fi.retrieval.url_count"] == 2
-    assert "fi.retrieval.urls" not in span_attributes
+    assert span_attributes["exa.url_count"] == 2
+    assert "exa.urls" not in span_attributes
     assert "example.com" not in traced.wire()
 
 
@@ -246,7 +246,7 @@ def test_sync_stream_failing_mid_iteration_is_an_error_not_a_cancel():
     span = traced.one()
     assert span.status.description == "ConnectionError: connection dropped"
     assert "exa.cancelled" not in attrs(span)
-    assert "fi.retrieval.document_count" not in attrs(span)
+    assert "exa.result_count" not in attrs(span)
 
 
 def test_async_stream_failing_mid_iteration_is_an_error_not_a_cancel():
@@ -277,8 +277,8 @@ def test_capture_urls_reads_only_the_url_of_result_objects(fake):
         client.get_contents(results)
 
     span_attributes = attrs(traced.one())
-    assert span_attributes["fi.retrieval.url_count"] == len(results)
-    assert list(span_attributes["fi.retrieval.urls"]) == [result.url for result in results]
+    assert span_attributes["exa.url_count"] == len(results)
+    assert list(span_attributes["exa.urls"]) == [result.url for result in results]
     assert RESULT_TITLE not in traced.wire()
 
 
@@ -299,7 +299,7 @@ def test_hidden_inputs_remove_requested_urls_from_error_text(fake):
     assert "example.com" not in traced.wire()
     assert EXA_KEY not in traced.wire()
     assert HIDDEN in span.status.description
-    assert attrs(span)["fi.retrieval.url_count"] == 2
+    assert attrs(span)["exa.url_count"] == 2
 
 
 def test_requested_urls_stay_in_error_text_by_default_with_the_key_redacted(fake):

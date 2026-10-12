@@ -38,7 +38,9 @@ object is still an instance of the vendor's stream class. A stream still open
 when the interpreter exits is ended as cancelled before `register()`'s exit
 hook shuts the exporter down (when `instrument()` runs after `register()`).
 
-Every span has `fi.span.kind` = `RETRIEVER`. It is a child of the active span
+`gen_ai.span.kind` is `RETRIEVER` for `search`, `answer` and the two streams,
+and `TOOL` for `get_contents`, which fetches the pages you name rather than
+searching. Each span is a child of the active span
 when there is one, and a root span otherwise. The span is current while
 exa-py sends the request, so a span from an HTTP client instrumentation nests
 under it.
@@ -47,10 +49,10 @@ under it.
 
 | Attribute | Calls | Value |
 |---|---|---|
-| `fi.retrieval.query`, `input.value` | `search`, `answer`, streams | The query, with the client's Exa API key replaced by `[redacted]`, cut to 1 KB of UTF-8 on a character boundary. |
-| `fi.retrieval.url_count` | `get_contents` | Number of requested URLs (a single URL, a list of URLs, or a list of results). |
-| `fi.retrieval.urls` | `get_contents` with `capture_urls=True` | See [get_contents URLs](#get_contents-urls). |
-| `fi.retrieval.document_count` | successful calls | `results` for `search` and `get_contents`, `citations` for `answer`, and the citations summed over every chunk of a fully read stream. Absent when the count is unknown (an error or a cancellation), never 0 for unknown. |
+| `gen_ai.retrieval.query`, `input.value` | `search`, `answer`, streams | The query, with the client's Exa API key replaced by `[redacted]`, cut to 1 KB of UTF-8 on a character boundary. |
+| `exa.url_count` | `get_contents` | Number of requested URLs (a single URL, a list of URLs, or a list of results). |
+| `exa.urls` | `get_contents` with `capture_urls=True` | See [get_contents URLs](#get_contents-urls). |
+| `exa.result_count` | successful calls | `results` for `search` and `get_contents`, `citations` for `answer`, and the citations summed over every chunk of a fully read stream. Absent when the count is unknown (an error or a cancellation), never 0 for unknown. |
 | `exa.cancelled` | cancelled calls and streams | `true`; see [Errors and cancellation](#errors-and-cancellation). |
 
 The spans never carry response content: no result titles, text, highlights or
@@ -69,7 +71,7 @@ opt in when instrumenting:
 ExaInstrumentor().instrument(tracer_provider=tracer_provider, capture_urls=True)
 ```
 
-With `capture_urls=True`, `fi.retrieval.urls` holds at most the first 20
+With `capture_urls=True`, `exa.urls` holds at most the first 20
 requested URLs, each with the Exa API key replaced by `[redacted]` and cut to
 1 KB. Query strings are otherwise kept as given. Hidden inputs (below) turn
 URL capture off.
@@ -90,9 +92,10 @@ ExaInstrumentor().instrument(
 ```
 
 With `hide_inputs=True` (or `FI_HIDE_INPUTS=true`), `input.value` is
-`__REDACTED__`, `fi.retrieval.query` and `fi.retrieval.urls` are not recorded,
+`__REDACTED__`, `gen_ai.retrieval.query` and `exa.urls` are not recorded,
 and the query or the requested URLs are replaced by `__REDACTED__` in error
-text. The URL and document counts stay. `pii_redaction` applies to the recorded attributes, and
+text. The URL and result counts stay. `pii_redaction` applies to the recorded
+attributes and to the error text described below, and
 `using_session`, `using_user`, `using_metadata` and `using_tags` attributes are
 added to the Exa spans.
 
@@ -106,7 +109,8 @@ exa-py puts the server's response body in its error message, and a body can
 repeat the request. On the span, the status description
 (`<ExceptionType>: <message>`) and the event's `exception.message` therefore
 have the Exa key replaced by `[redacted]` (and, with hidden inputs, the query
-or the requested URLs by `__REDACTED__`) and the message cut to 1 KB of UTF-8.
+or the requested URLs by `__REDACTED__`; with `pii_redaction`, PII by tokens such
+as `<EMAIL_ADDRESS>`) and the message cut to 1 KB of UTF-8.
 If the exception's own `str()` fails, the span records only its type. The event's
 `exception.stacktrace` is the traceback's frames, scrubbed the same way, plus
 that safe message; it does not copy chained exceptions' messages. Only verbatim

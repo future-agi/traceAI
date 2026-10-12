@@ -56,10 +56,10 @@ def test_example_exports_one_exa_search_span():
     assert [span["name"] for span in spans] == ["exa.search"]
     span = spans[0]
     values = _flatten_attributes(span["attributes"])
-    assert values["fi.span.kind"] == "RETRIEVER"
-    assert values["fi.retrieval.query"] == "TraceAI Exa instrumentation example"
+    assert values["gen_ai.span.kind"] == "RETRIEVER"
+    assert values["gen_ai.retrieval.query"] == "TraceAI Exa instrumentation example"
     assert values["input.value"] == "TraceAI Exa instrumentation example"
-    assert int(values["fi.retrieval.document_count"]) == 1
+    assert int(values["exa.result_count"]) == 1
     assert span["status"]["code"] == "STATUS_CODE_OK"
 
     assert exports

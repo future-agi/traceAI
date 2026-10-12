@@ -10,17 +10,20 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 import wrapt
 from fi_instrumentation import REDACTED_VALUE
+from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
-_FI_SPAN_KIND = "fi.span.kind"
+_SPAN_KIND = "gen_ai.span.kind"
 _INPUT_VALUE = "input.value"
-_RETRIEVAL_QUERY = "fi.retrieval.query"
-_RETRIEVAL_DOCUMENT_COUNT = "fi.retrieval.document_count"
-_RETRIEVAL_URL_COUNT = "fi.retrieval.url_count"
-_RETRIEVAL_URLS = "fi.retrieval.urls"
+_RETRIEVAL_QUERY = "gen_ai.retrieval.query"
+_RESULT_COUNT = "exa.result_count"
+_URL_COUNT = "exa.url_count"
+_URLS = "exa.urls"
 _CANCELLED = "exa.cancelled"
 _RETRIEVER = "RETRIEVER"
+# get_contents fetches given URLs; it is not a search.
+_TOOL = "TOOL"
 _REDACTED = "[redacted]"
 _MAX_QUERY_BYTES = 1024
 _MAX_CAPTURED_URLS = 20
@@ -35,20 +38,25 @@ class _Scrub:
 
     ``api_key`` is replaced by ``[redacted]``; with hidden inputs, each
     request input (the query, or get_contents' URLs; already key-redacted)
-    is replaced by ``__REDACTED__``, longest first. Only verbatim
-    occurrences are found.
+    is replaced by ``__REDACTED__``, longest first; with ``pii_redaction``,
+    PII is replaced last. Only verbatim occurrences are found.
     """
 
-    __slots__ = ("api_key", "hidden")
+    __slots__ = ("api_key", "hidden", "pii")
 
-    def __init__(self, api_key: Optional[str], hidden: Sequence[str] = ()) -> None:
+    def __init__(
+        self, api_key: Optional[str], hidden: Sequence[str] = (), pii: bool = False
+    ) -> None:
         self.api_key = api_key
         self.hidden = tuple(sorted({value for value in hidden if value}, key=len, reverse=True))
+        self.pii = pii
 
     def __call__(self, text: str) -> str:
         text = _redact(text, self.api_key)
         for value in self.hidden:
             text = text.replace(value, REDACTED_VALUE)
+        if self.pii:
+            text = redact_pii_in_string(text)
         return text
 
 
@@ -81,8 +89,9 @@ def _request_attributes(
     contents: bool,
     capture_urls: bool,
     hide_inputs: bool = False,
+    pii: bool = False,
 ) -> Tuple[dict, _Scrub]:
-    attributes: dict = {_FI_SPAN_KIND: _RETRIEVER}
+    attributes: dict = {_SPAN_KIND: _TOOL if contents else _RETRIEVER}
     api_key = _api_key(instance)
     if contents:
         # get_contents: a URL count by default. URLs can carry tokens or
@@ -90,34 +99,34 @@ def _request_attributes(
         # and never when inputs are hidden.
         urls = _requested_urls(args, kwargs)
         if urls is None:
-            return attributes, _Scrub(api_key)
-        attributes[_RETRIEVAL_URL_COUNT] = len(urls)
+            return attributes, _Scrub(api_key, pii=pii)
+        attributes[_URL_COUNT] = len(urls)
         if hide_inputs:
             # An error body can echo the URLs; hidden inputs keep them out
             # of error text as well as attributes.
             hidden = [_redact(url, api_key) for url in urls if isinstance(url, str)]
-            return attributes, _Scrub(api_key, hidden)
+            return attributes, _Scrub(api_key, hidden, pii)
         if capture_urls:
-            attributes[_RETRIEVAL_URLS] = [
+            attributes[_URLS] = [
                 _cap(_redact(url, api_key))
                 for url in urls[:_MAX_CAPTURED_URLS]
                 if isinstance(url, str)
             ]
-        return attributes, _Scrub(api_key)
+        return attributes, _Scrub(api_key, pii=pii)
 
     query = _query(args, kwargs)
     if query is None:
-        return attributes, _Scrub(api_key)
+        return attributes, _Scrub(api_key, pii=pii)
     if hide_inputs:
-        # FITracer masks input.value too; fi.retrieval.query is not one of
-        # its keys, so it is left out here.
+        # FITracer masks input.value too; gen_ai.retrieval.query is not one
+        # of its keys, so it is left out here.
         attributes[_INPUT_VALUE] = REDACTED_VALUE
-        return attributes, _Scrub(api_key, [_redact(query, api_key)])
+        return attributes, _Scrub(api_key, [_redact(query, api_key)], pii)
     query = _cap(_redact(query, api_key))
     attributes[_RETRIEVAL_QUERY] = query
     # The backend input panel reads input.value; keep both keys.
     attributes[_INPUT_VALUE] = query
-    return attributes, _Scrub(api_key)
+    return attributes, _Scrub(api_key, pii=pii)
 
 
 def _cap(value: str, limit: int = _MAX_QUERY_BYTES) -> str:
@@ -175,32 +184,49 @@ class _BaseWrapper:
         contents: bool = False,
         capture_urls: bool = False,
         hide_inputs: bool = False,
+        pii: bool = False,
     ) -> None:
         self._tracer = tracer
         self._span_name = span_name
         self._contents = contents
         self._capture_urls = capture_urls
         self._hide_inputs = hide_inputs
+        self._pii = pii
 
     def _start_span(
         self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
-    ) -> Tuple[Span, Optional[_Scrub]]:
+    ) -> Tuple[Optional[Span], Optional[_Scrub]]:
+        """Start the span; (None, None) runs the call untraced."""
         scrub: Optional[_Scrub]
         try:
             attributes, scrub = _request_attributes(
-                instance, args, kwargs, self._contents, self._capture_urls, self._hide_inputs
+                instance,
+                args,
+                kwargs,
+                self._contents,
+                self._capture_urls,
+                self._hide_inputs,
+                self._pii,
             )
         except Exception:  # an attribute must never break the user's call
             # Unknown key and query: error text is withheld (see _error_text).
-            attributes, scrub = {_FI_SPAN_KIND: _RETRIEVER}, None
-        return self._tracer.start_span(self._span_name, attributes=attributes), scrub
+            attributes = {_SPAN_KIND: _TOOL if self._contents else _RETRIEVER}
+            scrub = None
+        try:
+            return self._tracer.start_span(self._span_name, attributes=attributes), scrub
+        except Exception:  # a tracer failure must never reach the caller
+            return None, None
 
     @staticmethod
     def _finish_ok(span: Span, document_count: Optional[int]) -> None:
-        if document_count is not None:
-            span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, document_count)
-        span.set_status(Status(StatusCode.OK))
-        span.end()
+        try:
+            if document_count is not None:
+                span.set_attribute(_RESULT_COUNT, document_count)
+            span.set_status(Status(StatusCode.OK))
+        except Exception:
+            pass
+        finally:
+            span.end()
 
     @staticmethod
     def _finish_error(span: Span, error: BaseException, scrub: Optional[_Scrub]) -> None:
@@ -280,6 +306,8 @@ class OperationWrapper(_BaseWrapper):
         kwargs: Mapping[str, Any],
     ) -> Any:
         span, scrub = self._start_span(instance, args, kwargs)
+        if span is None:
+            return wrapped(*args, **kwargs)
         try:
             with _current(span):
                 result = wrapped(*args, **kwargs)
@@ -301,6 +329,8 @@ class AsyncOperationWrapper(_BaseWrapper):
         kwargs: Mapping[str, Any],
     ) -> Any:
         span, scrub = self._start_span(instance, args, kwargs)
+        if span is None:
+            return await wrapped(*args, **kwargs)
         try:
             with _current(span):
                 result = await wrapped(*args, **kwargs)
@@ -427,6 +457,8 @@ class StreamWrapper(_BaseWrapper):
         kwargs: Mapping[str, Any],
     ) -> Any:
         span, scrub = self._start_span(instance, args, kwargs)
+        if span is None:
+            return wrapped(*args, **kwargs)
         try:
             with _current(span):
                 response = wrapped(*args, **kwargs)
@@ -507,6 +539,9 @@ class AsyncStreamWrapper(_BaseWrapper):
         kwargs: Mapping[str, Any],
     ) -> Any:
         span, scrub = self._start_span(instance, args, kwargs)
+        if span is None:
+            response = wrapped(*args, **kwargs)
+            return await response if inspect.isawaitable(response) else response
         try:
             with _current(span):
                 response = wrapped(*args, **kwargs)

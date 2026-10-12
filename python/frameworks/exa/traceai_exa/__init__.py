@@ -73,6 +73,7 @@ class ExaInstrumentor(BaseInstrumentor):
         # with the Exa key redacted and capped at 1 KB. Hidden inputs win.
         capture_urls = bool(kwargs.get("capture_urls", False))
         hide_inputs = bool(config.hide_inputs)
+        pii = bool(config.pii_redaction)
         api_module = import_module(_MODULE)
         self._original_methods: Dict[Tuple[str, str], Any] = {}
 
@@ -83,6 +84,7 @@ class ExaInstrumentor(BaseInstrumentor):
                     "contents": method_name == "get_contents",
                     "capture_urls": capture_urls,
                     "hide_inputs": hide_inputs,
+                    "pii": pii,
                 }
                 wrapper = (
                     AsyncOperationWrapper(tracer, span_name, **options)
@@ -93,9 +95,9 @@ class ExaInstrumentor(BaseInstrumentor):
 
             for method_name, span_name in _STREAM_OPERATIONS.items():
                 wrapper = (
-                    AsyncStreamWrapper(tracer, span_name, hide_inputs=hide_inputs)
+                    AsyncStreamWrapper(tracer, span_name, hide_inputs=hide_inputs, pii=pii)
                     if is_async
-                    else StreamWrapper(tracer, span_name, hide_inputs=hide_inputs)
+                    else StreamWrapper(tracer, span_name, hide_inputs=hide_inputs, pii=pii)
                 )
                 self._wrap_method(api_module, client_name, method_name, wrapper)
 
@@ -114,10 +116,14 @@ class ExaInstrumentor(BaseInstrumentor):
         wrapper: Any,
     ) -> None:
         client = getattr(api_module, client_name)
-        if not hasattr(client, method_name):
+        # Only a method defined on this class itself: AsyncExa subclasses Exa,
+        # and wrapping an inherited method would wrap Exa's (already wrapped)
+        # function a second time and leave it wrapped after uninstrument().
+        original = vars(client).get(method_name)
+        if original is None:
             return
 
-        self._original_methods[(client_name, method_name)] = getattr(client, method_name)
+        self._original_methods[(client_name, method_name)] = original
         wrap_function_wrapper(
             api_module,
             "{0}.{1}".format(client_name, method_name),
