@@ -15,6 +15,8 @@ that the framework doesn't emit:
   * For CHAIN spans (``workflow.run``, ``executor.process``, etc.) that the
     framework leaves without I/O, bubbles ``input.value`` / ``output.value``
     up from the earliest / latest descendant span.
+  * ``session.id`` on every framework span of a run, from ``using_session`` or
+    the run's ``gen_ai.conversation.id`` (see ``_run_session``)
 """
 
 import json
@@ -25,6 +27,7 @@ from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span
 from opentelemetry.sdk.trace import SpanProcessor
 
+from fi_instrumentation import get_attributes_from_context
 from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
@@ -45,6 +48,10 @@ _TOOL_RESULT = SpanAttributes.GEN_AI_TOOL_CALL_RESULT
 _INPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS
 _OUTPUT_TOKENS = SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS
 _TOTAL_TOKENS = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+_CONVERSATION_ID = "gen_ai.conversation.id"
+_SESSION_ID = SpanAttributes.SESSION_ID
+# Model calls whose conversation id is per call, not per conversation.
+_PER_CALL_OPS = ("chat", "embeddings")
 
 # The instrumentation scope Microsoft Agent Framework emits on.
 _AGENT_FRAMEWORK_SCOPE = "agent_framework"
@@ -331,10 +338,6 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         return mapped
     mapped[SpanAttributes.GEN_AI_SPAN_KIND] = kind
 
-    conversation_id = mapped.get("gen_ai.conversation.id")
-    if conversation_id and "session.id" not in mapped:
-        mapped["session.id"] = conversation_id
-
     if kind in (
         FiSpanKindValues.LLM.value,
         FiSpanKindValues.EMBEDDING.value,
@@ -394,6 +397,29 @@ class _SpanIO:
 
 
 # ---------------------------------------------------------------------------
+# session.id
+# ---------------------------------------------------------------------------
+
+
+def _run_session(attrs: Any, own: bool) -> Optional[str]:
+    """The session a span's own attributes put it in, or ``None``.
+
+    A ``session.id`` (set by the user or ``using_session``) wins. Otherwise a
+    framework span's ``gen_ai.conversation.id``, except on model calls: inside
+    a tool loop the framework hands each chat call the previous response id
+    as its conversation id, so on the Responses API every LLM call would get
+    its own session. Model calls take the session of the run they are in.
+    """
+    if not attrs:
+        return None
+    if attrs.get(_SESSION_ID):
+        return attrs[_SESSION_ID]
+    if not own or attrs.get(_OP) in _PER_CALL_OPS:
+        return None
+    return attrs.get(_CONVERSATION_ID) or None
+
+
+# ---------------------------------------------------------------------------
 # The SpanProcessor itself
 # ---------------------------------------------------------------------------
 
@@ -412,17 +438,30 @@ class AgentFrameworkSpanProcessor(SpanProcessor):
 
     def __init__(self) -> None:
         self._desc_io: Dict[int, _SpanIO] = {}
+        # Open spans, so a child can read its parent's attributes, and the
+        # session each open span inherited from its ancestors.
+        self._open: Dict[int, Span] = {}
+        self._inherited: Dict[int, str] = {}
         self._lock = threading.Lock()
         self._disabled = False
 
     # SpanProcessor interface ------------------------------------------------
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
-        return
+        if self._disabled:
+            return
+        try:
+            self._inherit_session(span)
+        except Exception:
+            return
 
     def on_end(self, span: ReadableSpan) -> None:
         if self._disabled:
             return
+        span_id = getattr(getattr(span, "context", None), "span_id", None)
+        with self._lock:
+            self._open.pop(span_id, None)
+            inherited = self._inherited.pop(span_id, None)
 
         scope = getattr(span.instrumentation_scope, "name", None)
         if scope != _AGENT_FRAMEWORK_SCOPE:
@@ -434,6 +473,10 @@ class AgentFrameworkSpanProcessor(SpanProcessor):
         try:
             current_attrs = _attrs_dict(span)
             mapped = _map_attributes_to_fi_conventions(current_attrs)
+            if SpanAttributes.GEN_AI_SPAN_KIND in mapped and _SESSION_ID not in mapped:
+                session = _run_session(mapped, own=True) or inherited
+                if session:
+                    mapped[_SESSION_ID] = session
 
             if mapped.get(SpanAttributes.GEN_AI_SPAN_KIND) == FiSpanKindValues.CHAIN.value:
                 self._apply_chain_bubble(span, mapped)
@@ -452,11 +495,45 @@ class AgentFrameworkSpanProcessor(SpanProcessor):
         self._disabled = True
         with self._lock:
             self._desc_io.clear()
+            self._open.clear()
+            self._inherited.clear()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
 
     # Internals --------------------------------------------------------------
+
+    def _inherit_session(self, span: Span) -> None:
+        """Record the session ``span`` inherits, and stamp FI context attributes.
+
+        The framework starts a span bare and sets its attributes right after,
+        so a span's own conversation id is read in ``on_end``. Its parent has
+        its attributes by the time the child starts, so the parent is read here.
+        Spans from other scopes are tracked so sessions pass through them, but
+        are not modified.
+        """
+        if getattr(span.instrumentation_scope, "name", None) == _AGENT_FRAMEWORK_SCOPE:
+            for key, value in get_attributes_from_context():
+                span.set_attribute(key, value)
+
+        inherited = None
+        parent = span.parent
+        if parent is not None and not parent.is_remote:
+            with self._lock:
+                parent_span = self._open.get(parent.span_id)
+                inherited = self._inherited.get(parent.span_id)
+            if parent_span is not None:
+                parent_own = (
+                    getattr(parent_span.instrumentation_scope, "name", None)
+                    == _AGENT_FRAMEWORK_SCOPE
+                )
+                inherited = _run_session(parent_span.attributes, parent_own) or inherited
+
+        sid = span.context.span_id
+        with self._lock:
+            self._open[sid] = span
+            if inherited:
+                self._inherited[sid] = inherited
 
     def _apply_chain_bubble(self, span: ReadableSpan, mapped: Dict[str, Any]) -> None:
         """If this CHAIN span is missing I/O, fill from accumulated descendants."""
@@ -486,6 +563,9 @@ class AgentFrameworkSpanProcessor(SpanProcessor):
         """Roll this span's I/O (plus any descendants') up to its parent's bucket."""
         parent = getattr(span, "parent", None)
         parent_id = getattr(parent, "span_id", None) if parent is not None else None
+        if getattr(parent, "is_remote", False):
+            # A remote parent never ends in this process; a bucket for it would leak.
+            parent_id = None
 
         sid = span.context.span_id
         with self._lock:
