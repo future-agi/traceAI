@@ -140,6 +140,27 @@ function moveRootUsage(span) {
 }
 
 export const SESSION_ID = "session.id";
+export const GEN_AI_PROVIDER_NAME = "gen_ai.provider.name";
+
+/**
+ * TanStack adapter name (`adapter.name`, which otelMiddleware copies to
+ * gen_ai.system) -> gen_ai.provider.name, the key fi-collector reads first for
+ * a span's provider. Names from the published adapters: openaiChatCompletions
+ * is "openai-chat", openaiText "openai", @tanstack/ai-gemini "gemini" and
+ * "gemini-text-interactions", @tanstack/ai-grok "grok". Any other adapter
+ * (OpenRouter, a custom one) leaves the provider unset. Future AGI prices a
+ * call from gen_ai.request.model and its tokens, not from the provider.
+ */
+const ADAPTER_PROVIDERS = {
+  openai: "openai",
+  "openai-chat": "openai",
+  anthropic: "anthropic",
+  gemini: "google",
+  "gemini-text-interactions": "google",
+  grok: "xai",
+  groq: "groq",
+  ollama: "ollama",
+};
 
 /**
  * Span kinds, usage and session for the spans otelMiddleware emits.
@@ -170,6 +191,11 @@ export function futureAgiSpanKinds({ threadIdAsSession = false } = {}) {
   return {
     attributeEnricher(info) {
       const attributes = kindAttributes(info);
+      const adapter = info.ctx?.provider;
+      const provider = Object.hasOwn(ADAPTER_PROVIDERS, adapter) ? ADAPTER_PROVIDERS[adapter] : undefined;
+      if (provider && (info.kind === "chat" || info.kind === "iteration")) {
+        attributes[GEN_AI_PROVIDER_NAME] = provider;
+      }
       if (threadIdAsSession && info.ctx?.threadId) {
         attributes[SESSION_ID] = info.ctx.threadId;
       }

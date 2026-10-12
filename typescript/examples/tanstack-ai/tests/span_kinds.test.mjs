@@ -321,3 +321,31 @@ test("no session.id by default, although TanStack always sets a threadId", () =>
     assert.equal(span.attributes["session.id"], undefined);
   }
 });
+
+test("gen_ai.provider.name from the adapter name, so Future AGI shows the vendor", () => {
+  // TanStack copies adapter.name to gen_ai.system ("openai-chat" for openaiChatCompletions);
+  // fi-collector reads gen_ai.provider.name first. Adapter names from the published adapters.
+  const cases = [
+    ["openai-chat", "openai"],
+    ["openai", "openai"],
+    ["anthropic", "anthropic"],
+    ["gemini", "google"],
+    ["gemini-text-interactions", "google"],
+    ["grok", "xai"],
+    ["groq", "groq"],
+    ["ollama", "ollama"],
+  ];
+  for (const [adapter, provider] of cases) {
+    const { root, modelCalls } = run(futureAgiSpanKinds(), [usage(1, 1)], { ctx: { provider: adapter } });
+    assert.equal(modelCalls[0].attributes["gen_ai.provider.name"], provider, adapter);
+    assert.equal(root.attributes["gen_ai.provider.name"], provider, adapter);
+  }
+});
+
+test("an adapter name with no known vendor leaves gen_ai.provider.name unset", () => {
+  for (const adapter of ["openrouter", "openrouter-responses", "my-adapter", "constructor", undefined]) {
+    const { root, modelCalls } = run(futureAgiSpanKinds(), [usage(1, 1)], { ctx: { provider: adapter } });
+    assert.equal(modelCalls[0].attributes["gen_ai.provider.name"], undefined, String(adapter));
+    assert.equal(root.attributes["gen_ai.provider.name"], undefined, String(adapter));
+  }
+});

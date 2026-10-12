@@ -130,7 +130,7 @@ test runs this snippet as written.
 | Span | Name | Kind set by the recipe | Key attributes |
 |---|---|---|---|
 | chat() call | `chat <model>` | `AGENT` when it ran more than one model call, else `CHAIN` (a root without a kind shows as type "unknown" in Future AGI) | `gen_ai.request.model`, `tanstack.ai.iterations`, and TanStack's sum of every model call's usage, renamed: each `gen_ai.usage.<suffix>` becomes `tanstack.ai.root_usage.<suffix>` and each `gen_ai.cost.<suffix>` becomes `tanstack.ai.root_usage.cost.<suffix>`. Future AGI sums `gen_ai.usage.*` over the trace, so the root's copy would double tokens, cache, reasoning and cost. The root keeps `gen_ai.usage.*` only when no model call reported usage. |
-| model call | `chat <model> #<n>` | `LLM` | `gen_ai.operation.name=chat`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `tanstack.ai.iteration` |
+| model call | `chat <model> #<n>` | `LLM` | `gen_ai.operation.name=chat`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.provider.name`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `tanstack.ai.iteration` |
 | tool call | `execute_tool <name>` | `TOOL` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` |
 
 Usage is a span attribute, not only a metric: `gen_ai.usage.input_tokens`,
@@ -139,6 +139,15 @@ Usage is a span attribute, not only a metric: `gen_ai.usage.input_tokens`,
 `gen_ai.usage.cache_read.input_tokens`,
 `gen_ai.usage.cache_creation.input_tokens` and
 `gen_ai.usage.reasoning.output_tokens`.
+
+Provider: TanStack sends the adapter name as `gen_ai.system` (`openai-chat`
+for `openaiChatCompletions`). The recipe adds `gen_ai.provider.name`, which
+Future AGI reads first, on the chat and model-call spans: `openai` /
+`openai-chat` → `openai`, `anthropic` → `anthropic`, `gemini` /
+`gemini-text-interactions` → `google`, `grok` → `xai`, `groq` → `groq`,
+`ollama` → `ollama`. Other adapters (OpenRouter, your own) get none. Future
+AGI prices each model call from `gen_ai.request.model` and its tokens, so a
+model its price table lists gets a cost whatever the provider.
 
 The kind (`gen_ai.span.kind`) is keyed on the middleware's span scope. Only
 model-call spans carry `gen_ai.operation.name`. The root's kind is set in
