@@ -9,6 +9,7 @@ the reply's ``usage`` on the last one. Spans go to an in-memory exporter or
 to a loopback OTLP/HTTP server in this file; nothing leaves the machine.
 """
 
+import gc
 import importlib.util
 import json
 import re
@@ -293,6 +294,53 @@ def test_provider_has_a_shutdown_finalizer():
     assert isinstance(filt._provider_finalizer, weakref.finalize)
     assert filt._provider_finalizer.alive
     provider.shutdown()
+
+
+def test_filter_finalizer_shuts_down_providers_after_gc(monkeypatch):
+    providers = []
+
+    class FakeProvider:
+        def __init__(self, **kwargs):
+            assert kwargs["shutdown_on_exit"] is False
+            self.shutdown_calls = 0
+            providers.append(self)
+
+        def add_span_processor(self, processor):
+            return None
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    class FakeBatchSpanProcessor:
+        def __init__(self, exporter, **kwargs):
+            return None
+
+    monkeypatch.setattr(_FILTER, "TracerProvider", FakeProvider)
+    monkeypatch.setattr(_FILTER, "BatchSpanProcessor", FakeBatchSpanProcessor)
+
+    filt = make_filter()
+    first = filt._provider_for(filt.valves)
+    changed = filt.Valves(
+        api_key="different-key",
+        secret_key="fi-secret-placeholder",
+        project="owui-test",
+    )
+    second = filt._provider_for(changed)
+    for _ in range(100):
+        if first.shutdown_calls:
+            break
+        time.sleep(0.001)
+    assert first.shutdown_calls == 1
+    assert providers == [first, second]
+
+    finalizer = filt._provider_finalizer
+    filter_ref = weakref.ref(filt)
+    del filt
+    gc.collect()
+
+    assert filter_ref() is None
+    assert not finalizer.alive
+    assert second.shutdown_calls == 1
 
 
 def test_priority_and_max_chars_are_configurable():

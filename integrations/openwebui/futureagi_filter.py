@@ -182,10 +182,47 @@ def turn_attributes(
     return root, llm
 
 
-def _shutdown_provider(reference: weakref.ReferenceType[Any]) -> None:
-    provider = reference()
-    if provider is not None:
-        provider.shutdown()
+class _ProviderCleanup:
+    """Own providers until the filter finalizer has shut them down."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._providers: list[Any] = []
+        self._shutdown_ids: set[int] = set()
+
+    def add(self, provider: Any) -> None:
+        with self._lock:
+            self._providers.append(provider)
+
+    def shutdown(self, provider: Any) -> None:
+        provider_id = id(provider)
+        with self._lock:
+            if provider_id in self._shutdown_ids or not any(
+                candidate is provider for candidate in self._providers
+            ):
+                return
+            self._shutdown_ids.add(provider_id)
+        try:
+            provider.shutdown()
+        except Exception:
+            with self._lock:
+                self._shutdown_ids.remove(provider_id)
+            raise
+        with self._lock:
+            self._shutdown_ids.remove(provider_id)
+            self._providers = [
+                candidate for candidate in self._providers if candidate is not provider
+            ]
+
+    def shutdown_all(self) -> None:
+        with self._lock:
+            providers = tuple(self._providers)
+        for provider in providers:
+            self.shutdown(provider)
+
+
+def _shutdown_provider_cleanup(cleanup: _ProviderCleanup) -> None:
+    cleanup.shutdown_all()
 
 
 def _is_empty_failed_reply(body: dict[str, Any]) -> bool:
@@ -239,7 +276,10 @@ class Filter:
         self._lock = threading.Lock()
         self._provider: Any = None
         self._provider_key: str | None = None
-        self._provider_finalizer: weakref.finalize | None = None
+        self._provider_cleanup = _ProviderCleanup()
+        self._provider_finalizer = weakref.finalize(
+            self, _shutdown_provider_cleanup, self._provider_cleanup
+        )
 
     def inlet(
         self,
@@ -332,17 +372,20 @@ class Filter:
                 resource=Resource(
                     {"project_name": valves.project, "project_type": "observe"}
                 ),
+                shutdown_on_exit=False,
             )
             provider.add_span_processor(
                 BatchSpanProcessor(exporter, max_queue_size=2048)
             )
+            self._provider_cleanup.add(provider)
             old = self._provider
             self._provider, self._provider_key = provider, key
-            self._provider_finalizer = weakref.finalize(
-                provider, _shutdown_provider, weakref.ref(provider)
-            )
         if old is not None:
-            threading.Thread(target=old.shutdown, daemon=True).start()
+            threading.Thread(
+                target=self._provider_cleanup.shutdown,
+                args=(old,),
+                daemon=True,
+            ).start()
         return provider
 
     def _make_exporter(self, valves: "Filter.Valves") -> Any:
