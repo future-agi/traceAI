@@ -9,6 +9,7 @@ export {
   mapSpanEvents,
   reconcileOperationUsage,
   copyOperationOutput,
+  providerFromAiSdk,
   resolveSpanKind,
   isContentKey,
   isPromotedUsageKey,
@@ -18,3 +19,4 @@ export {
   type SpanEventLike,
 } from "./mapping";
 export { VoltAgentAttributes, FIAttributes, VoltAgentFIAttributes } from "./attributes";
+export { providerForAgentModel } from "./agentModels";

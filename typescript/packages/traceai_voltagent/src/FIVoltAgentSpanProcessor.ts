@@ -8,6 +8,8 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
+import { providerForAgentModel } from "./agentModels";
+import { FIAttributes, VoltAgentAttributes as VA } from "./attributes";
 import { copyOperationOutput, mapSpanEvents, mapVoltAgentAttributes, reconcileOperationUsage } from "./mapping";
 
 type Resource = ReadableSpan["resource"];
@@ -113,6 +115,9 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
       const source = span.attributes ?? {};
       const options = { captureContent: this.captureContent };
       const mapped = mapVoltAgentAttributes(source, options);
+      if (mapped.isModelCall || mapped.isOperationRoot) {
+        setProviderFromModelObject(source, mapped.attributes, mapped.isModelCall);
+      }
       // Event attributes carry content too (guardrail stream chunks, workflow suspend/resume data).
       const events = mapSpanEvents(span.events, options);
 
@@ -213,6 +218,20 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
     } catch (error) {
       diag.error("@traceai/voltagent: exporter rejected a span", error);
     }
+  }
+}
+
+/** Fill gen_ai.provider.name from the agent's AI SDK model object when VoltAgent set none. */
+function setProviderFromModelObject(source: Attributes, attributes: Attributes, isModelCall: boolean): void {
+  if (attributes[FIAttributes.GEN_AI_PROVIDER_NAME] !== undefined) return;
+  const agentId = source[VA.ENTITY_ID];
+  if (typeof agentId !== "string" || agentId.length === 0) return;
+  const modelKey = isModelCall ? source[VA.LLM_MODEL] : source[VA.AI_MODEL_NAME];
+  try {
+    const provider = providerForAgentModel(agentId, typeof modelKey === "string" ? modelKey : undefined);
+    if (provider !== undefined) attributes[FIAttributes.GEN_AI_PROVIDER_NAME] = provider;
+  } catch (error) {
+    diag.debug("@traceai/voltagent: provider lookup failed", error);
   }
 }
 

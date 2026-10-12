@@ -157,6 +157,40 @@ export function mapSpanEvents<T extends SpanEventLike>(events: readonly T[] | un
   });
 }
 
+/**
+ * The first segment of an AI SDK model's `provider` id ("openai.chat", "anthropic.messages",
+ * "google.generative-ai", "amazon-bedrock", ...) -> gen_ai.provider.name. Ids read from the
+ * published @ai-sdk/* providers; values are the fi-semantic-conventions LLMProvider values, plus
+ * "vertexai" (the Future AGI backend's Vertex AI value). Any other id, including an
+ * OpenAI-compatible provider's own name, is left unset.
+ */
+const AI_SDK_PROVIDER_PREFIXES: Readonly<Record<string, string>> = {
+  openai: "openai",
+  anthropic: "anthropic",
+  google: "google",
+  vertex: "vertexai",
+  azure: "azure",
+  "amazon-bedrock": "aws",
+  bedrock: "aws",
+  mistral: "mistralai",
+  groq: "groq",
+  xai: "xai",
+  deepseek: "deepseek",
+  cohere: "cohere",
+  cerebras: "cerebras",
+  togetherai: "together",
+  fireworks: "fireworks",
+  ollama: "ollama",
+  huggingface: "huggingface",
+};
+
+export function providerFromAiSdk(providerId: string): string | undefined {
+  const id = providerId.trim().toLowerCase();
+  // @ai-sdk/google-vertex models report "google.vertex.<type>".
+  if (id.startsWith("google.vertex")) return "vertexai";
+  return AI_SDK_PROVIDER_PREFIXES[id.split(".")[0]];
+}
+
 const asString = (value: AttributeValue | undefined): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 const asNumber = (value: AttributeValue | undefined): number | undefined =>

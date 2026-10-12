@@ -41,7 +41,7 @@ export type Step =
  * An AI SDK V3 mock model that plays `steps` in order (generate or stream) and records the
  * usage it reported. VoltAgent subagents call streamText, so both paths are scripted.
  */
-export function scriptedModel(modelId: string, steps: Step[]) {
+export function scriptedModel(modelId: string, steps: Step[], provider = "mock-provider") {
   const reported: Array<{ input: number; output: number }> = [];
   let index = 0;
   const next = () => {
@@ -56,7 +56,7 @@ export function scriptedModel(modelId: string, steps: Step[]) {
     return { step, usage };
   };
   const model = new MockLanguageModelV3({
-    provider: "mock-provider",
+    provider,
     modelId,
     doStream: async () => {
       const { step, usage } = next();

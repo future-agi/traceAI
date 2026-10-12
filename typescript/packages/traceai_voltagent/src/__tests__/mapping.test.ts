@@ -1,3 +1,4 @@
+import { providerFromAiSdk } from "../mapping";
 import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import {
   isContentKey,
@@ -457,4 +458,33 @@ describe("reconcileOperationUsage", () => {
     expect(reconcileOperationUsage(rootSpanAttributes(), [main, title])).toBe(main.attributes);
     expect(title.attributes["gen_ai.usage.input_tokens"]).toBe(4);
   });
+});
+
+describe("provider from an AI SDK model object's provider id", () => {
+  it.each([
+    ["openai.chat", "openai"],
+    ["openai.responses", "openai"],
+    ["anthropic.messages", "anthropic"],
+    ["google.generative-ai", "google"],
+    ["google.vertex.chat", "vertexai"],
+    ["vertex.anthropic.messages", "vertexai"],
+    ["azure.chat", "azure"],
+    ["amazon-bedrock", "aws"],
+    ["mistral.chat", "mistralai"],
+    ["groq.chat", "groq"],
+    ["xai.chat", "xai"],
+    ["deepseek.chat", "deepseek"],
+    ["cohere.chat", "cohere"],
+    ["cerebras.chat", "cerebras"],
+    ["togetherai.chat", "together"],
+  ])("%s -> %s", (id, provider) => {
+    expect(providerFromAiSdk(id)).toBe(provider);
+  });
+
+  it.each(["cliproxy.chat", "openai-compatible", "gateway", "mock-provider", "", "  "])(
+    "leaves %j unset rather than guessing",
+    (id) => {
+      expect(providerFromAiSdk(id)).toBeUndefined();
+    },
+  );
 });

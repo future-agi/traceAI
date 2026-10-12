@@ -160,6 +160,41 @@ describe("FIVoltAgentSpanProcessor with a real VoltAgent agent (AC-01)", () => {
   });
 });
 
+describe("provider from the agent's AI SDK model object", () => {
+  async function runWith(modelId: string, providerId: string) {
+    const { exporter, provider } = fiProvider();
+    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider });
+    const { model } = scriptedModel(modelId, [{ kind: "text", text: "ok", input: 4, output: 2 }], providerId);
+    const agent = new Agent({ name: "priced", instructions: "x", model });
+    observability = voltagent({ priced: agent }, [processor]);
+    await agent.generateText("hi", { conversationId: "conv-provider" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await processor.forceFlush();
+    const spans = exporter.getFinishedSpans();
+    return { llm: attrs(one(spans, "llm:generateText")), root: attrs(one(spans, "priced")) };
+  }
+
+  it("sets gen_ai.provider.name from model.provider when the model id names no provider", async () => {
+    // VoltAgent records only modelId for a model object, so llm.provider is never set for it.
+    const { llm, root } = await runWith("gpt-4o-mini", "openai.chat");
+    expect(llm["llm.provider"]).toBeUndefined();
+    expect(llm["gen_ai.provider.name"]).toBe("openai");
+    expect(llm["gen_ai.request.model"]).toBe("gpt-4o-mini");
+    expect(root["gen_ai.provider.name"]).toBe("openai");
+  });
+
+  it("leaves the provider unset for an unknown AI SDK provider id", async () => {
+    const { llm, root } = await runWith("claude-haiku-5-5", "cliproxy.chat");
+    expect(llm["gen_ai.provider.name"]).toBeUndefined();
+    expect(root["gen_ai.provider.name"]).toBeUndefined();
+  });
+
+  it("keeps VoltAgent's own llm.provider when the model id carries one", async () => {
+    const { llm } = await runWith("mockai/mock-model-1", "openai.chat");
+    expect(llm["gen_ai.provider.name"]).toBe("mockai");
+  });
+});
+
 describe("streamText", () => {
   it("maps the streaming path and reconciles its multi-step usage", async () => {
     const { exporter, provider } = fiProvider();
