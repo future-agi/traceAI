@@ -84,7 +84,7 @@ The fixtures produce one `ChatCompletion` span per call with `gen_ai.span.kind=L
 
 Current `traceai-openai` behavior:
 
-- For a successful non-streamed call, `gen_ai.request.model` is the model name the server returns. The fixture requests `bonsai` and returns the synthetic loaded-model name `Ternary-Bonsai-2-27B-Q4_K_M.gguf`; the latter is recorded. The requested `bonsai` remains in the `gen_ai.request.parameters` JSON.
+- For a successful non-streamed call, `gen_ai.request.model` is the model name the server returns. The fixture requests `bonsai` and returns the synthetic loaded-model name `Ternary-Bonsai-2-27B-Q4_K_M.gguf`; the latter is recorded. The requested `bonsai` remains in the `gen_ai.request.parameters` JSON. A real `llama-server` started by the demo scripts returns the loaded file's absolute path, such as `/Users/you/Bonsai-demo/models/gguf/1.7B/Bonsai-1.7B-Q1_0.gguf`, and that path is what gets recorded. Start the server with `./scripts/start_llama_server.sh --alias bonsai` to record `bonsai` instead; the script passes extra arguments to `llama-server`.
 - Streamed and failed calls omit `gen_ai.request.model`. The requested model remains in `gen_ai.request.parameters`, unless invocation parameters are hidden.
 - Non-streamed token usage is recorded as `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens` when the response supplies it. Missing usage is omitted, never replaced with zero.
 - A stream accumulates answer text in `output.value`. Default fixture streams omit usage. With `stream_options={"include_usage": True}` and a final usage chunk, the same three token attributes are recorded. This verifies the instrumentor, not the real server's streaming usage support.
@@ -110,7 +110,7 @@ The [server docs](https://docs.prismml.com/run/server) warn:
 
 > The scripts bind to `127.0.0.1`, so the server is reachable only from the same machine and there is no authentication. Setting `BONSAI_HOST` to any non-loopback address (for example `0.0.0.0`) exposes an unauthenticated server to your network.
 
-For llama-server, any model string works because it serves the loaded model; `GET /v1/models` returns the real name. The documented Python example requests `bonsai` with streaming ([server docs](https://docs.prismml.com/run/server)). `traceai-openai` records the `model` field of the server's non-streamed response, pinned by the tests; the loaded-model name used in tests is synthetic, not a promised filename.
+For llama-server, any model string works because it serves the loaded model; `GET /v1/models` returns the real name: the loaded file's absolute path by default, or the name set with `--alias`. The documented Python example requests `bonsai` with streaming ([server docs](https://docs.prismml.com/run/server)). `traceai-openai` records the `model` field of the server's non-streamed response, pinned by the tests; the loaded-model name used in tests is synthetic, not a promised filename.
 
 Thinking is controlled per request with `thinking_budget_tokens`; zero disables it ([server docs](https://docs.prismml.com/run/server)). Send it through the SDK's `extra_body`:
 
@@ -128,6 +128,8 @@ The 27B model supports native OpenAI-style `tool_calls` ([server docs](https://d
 ## Privacy
 
 Prompt and answer text normally leave the machine in the Future AGI trace export. Set `FI_HIDE_INPUTS=true` to mask input attributes and `FI_HIDE_OUTPUTS=true` to mask output attributes. The tests verify each flag against visible controls for both chat and streaming.
+
+The server's returned model name is exported too, and these flags do not mask it. Without `--alias`, `llama-server` returns the model file's absolute path, which can include your user name or directory layout. Start the server with `--alias bonsai` to keep local paths out of the export.
 
 `FI_HIDE_INPUTS` masks only inputs. If the server echoes the prompt in its answer, that text remains in output attributes unless outputs are also hidden. Non-streamed output is assistant content, and streamed output is accumulated text, including an empty string when no text arrives. This recipe does not export a raw Chat Completions response in `output.value`.
 

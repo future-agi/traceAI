@@ -688,7 +688,10 @@ def test_readme_and_requirements_contract():
     for phrase in ("http://localhost:8080/v1", "http://localhost:8081/v1",
                    "provider field says `openai`", "gen_ai.request.model", "verbose=False",
                    "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS",
-                   "thinking_budget_tokens", "tool_calls", "not-needed", "cost"):
+                   "thinking_budget_tokens", "tool_calls", "not-needed", "cost",
+                   # A real llama-server reports the loaded file's absolute path as `model`
+                   # unless started with --alias; the README must say so.
+                   "absolute path", "--alias bonsai"):
         assert phrase in readme
     source = (ROOT / "src" / "app.py").read_text()
     for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV):
