@@ -307,7 +307,9 @@ def test_tool_flow_reaches_collector_path_with_kinds_parenting_model_and_tokens(
     assert usage == [(11, 3, 14), (21, 4, 25)]
     for model in models:
         a = _attrs(model)
-        assert a["gen_ai.request.model"] == "contract/tool-model"
+        assert a["gen_ai.request.model"] == "tool-model"
+        assert "gen_ai.provider.name" not in a  # "contract" is not a known model plugin
+        assert a["genkit:name"] == "contract/tool-model"
         assert a["gen_ai.response.finish_reasons"] == ["stop"]
         for key in UNAVAILABLE_ON_FIXTURE:
             assert key not in a

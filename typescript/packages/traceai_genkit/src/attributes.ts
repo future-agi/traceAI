@@ -6,7 +6,7 @@
  * contract/inventory.mjs (Genkit's own `mockModel` from `genkit/testing`).
  * Nothing here is a guessed path.
  */
-import { FISpanKind, SemanticConventions } from "@traceai/fi-semantic-conventions";
+import { FISpanKind, LLMProvider, SemanticConventions } from "@traceai/fi-semantic-conventions";
 
 /**
  * Attribute keys Genkit 1.42.0 writes on its spans.
@@ -162,6 +162,43 @@ export const GENKIT_USAGE_NOT_MAPPED: readonly string[] = [
   "outputAudioFiles",
   "custom",
 ];
+
+/**
+ * Model plugin namespace (the part of a model action name before the first
+ * "/") -> `gen_ai.provider.name`. Only namespaces read from the published
+ * plugins are listed: googleai / vertexai (@genkit-ai/google-genai), openai /
+ * deepseek / xai (@genkit-ai/compat-oai), anthropic (genkitx-anthropic),
+ * ollama (genkitx-ollama), mistral (genkitx-mistral), groq (genkitx-groq),
+ * aws-bedrock (genkitx-aws-bedrock), azure-openai (genkitx-azure-openai). Any
+ * other namespace leaves the provider unset. Values are the fi-semantic-conventions
+ * LLMProvider values; "vertexai" is the Future AGI backend's provider value
+ * for Vertex AI (FiLLMProviderValues.VERTEXAI), which LLMProvider lacks.
+ */
+export const MODEL_NAMESPACE_TO_PROVIDER: Readonly<Record<string, string>> = {
+  googleai: LLMProvider.GOOGLE,
+  vertexai: "vertexai",
+  openai: LLMProvider.OPENAI,
+  deepseek: LLMProvider.DEEPSEEK,
+  xai: LLMProvider.XAI,
+  anthropic: LLMProvider.ANTHROPIC,
+  ollama: LLMProvider.OLLAMA,
+  mistral: LLMProvider.MISTRALAI,
+  groq: LLMProvider.GROQ,
+  "aws-bedrock": LLMProvider.AWS,
+  "azure-openai": LLMProvider.AZURE,
+};
+
+/**
+ * Split a registered model action name ("googleai/gemini-3.5-flash") into the
+ * plugin namespace and the vendor model id. fi-collector prices a span by an
+ * exact model-name lookup in its litellm table, which has "gemini-3.5-flash"
+ * and not "googleai/gemini-3.5-flash". A name with no "/" has no namespace.
+ */
+export function splitModelName(name: string): { namespace?: string; model: string } {
+  const at = name.indexOf("/");
+  if (at <= 0 || at === name.length - 1) return { model: name };
+  return { namespace: name.slice(0, at), model: name.slice(at + 1) };
+}
 
 /** The Future AGI span-kind keys. fi-collector reads `fi.span.kind`, then `gen_ai.span.kind`. */
 export const FI_SPAN_KIND = SemanticConventions.FI_SPAN_KIND;

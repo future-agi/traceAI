@@ -9,10 +9,12 @@ import {
   GENKIT_USAGE_PREFIX,
   GenkitAttributes,
   GenkitSpanType,
+  MODEL_NAMESPACE_TO_PROVIDER,
   SUBTYPE_TO_KIND,
   TYPE_TO_KIND,
   USAGE_TO_ATTRIBUTE,
   isPromotedUsageKey,
+  splitModelName,
 } from "./attributes";
 
 export interface MapOptions {
@@ -67,8 +69,14 @@ function modelCallAttributes(source: Attributes): Attributes {
   const out: Attributes = {};
   const name = source[GenkitAttributes.NAME];
   if (typeof name === "string" && name.length > 0) {
-    // The registered model action name, e.g. "googleai/gemini-2.5-flash" (action.ts:535, 572).
-    out[SemanticConventions.LLM_MODEL_NAME] = name;
+    // The registered model action name, e.g. "googleai/gemini-3.5-flash" (action.ts:535, 572).
+    // The model keys get the vendor id without the plugin namespace, so fi-collector can price
+    // the call; the full name stays on genkit:name. Genkit reports no resolved model version.
+    const { namespace, model } = splitModelName(name);
+    out[SemanticConventions.LLM_MODEL_NAME] = model;
+    out[SemanticConventions.GEN_AI_RESPONSE_MODEL] = model;
+    const provider = namespace === undefined ? undefined : MODEL_NAMESPACE_TO_PROVIDER[namespace];
+    if (provider !== undefined) out[SemanticConventions.LLM_PROVIDER] = provider;
   }
   const response = parseJson(source[GenkitAttributes.OUTPUT]);
   if (!isRecord(response)) {

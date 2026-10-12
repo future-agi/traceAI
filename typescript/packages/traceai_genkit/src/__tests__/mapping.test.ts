@@ -92,7 +92,7 @@ describe("genkitSpanKind: kind map from the 1.42.0 type-string inventory", () =>
 describe("model call spans", () => {
   it("copies model name, usage and finish reason from the model action span", () => {
     const out = mapGenkitAttributes(modelAttributes());
-    expect(out["gen_ai.request.model"]).toBe("fixture/mock");
+    expect(out["gen_ai.request.model"]).toBe("mock");
     expect(out["gen_ai.usage.input_tokens"]).toBe(11);
     expect(out["gen_ai.usage.output_tokens"]).toBe(3);
     expect(out["gen_ai.usage.total_tokens"]).toBe(14);
@@ -147,12 +147,52 @@ describe("model call spans", () => {
     expect(GENKIT_USAGE_NOT_MAPPED).not.toContain("cachedContentTokens");
   });
 
+  it.each([
+    ["googleai/gemini-3.5-flash", "gemini-3.5-flash", "google"],
+    ["vertexai/gemini-3.5-flash", "gemini-3.5-flash", "vertexai"],
+    ["vertexai/claude-sonnet-5", "claude-sonnet-5", "vertexai"],
+    ["openai/gpt-4o-mini", "gpt-4o-mini", "openai"],
+    ["anthropic/claude-haiku-4-5", "claude-haiku-4-5", "anthropic"],
+    ["deepseek/deepseek-chat", "deepseek-chat", "deepseek"],
+    ["xai/grok-4.5", "grok-4.5", "xai"],
+    ["ollama/llama3.2", "llama3.2", "ollama"],
+    ["mistral/mistral-large-latest", "mistral-large-latest", "mistralai"],
+    ["groq/llama-3.3-70b-versatile", "llama-3.3-70b-versatile", "groq"],
+    ["aws-bedrock/amazon.nova-pro-v1:0", "amazon.nova-pro-v1:0", "aws"],
+    ["azure-openai/gpt-4o", "gpt-4o", "azure"],
+  ])("%s: model %s, provider %s (the collector prices by the bare model name)", (genkitName, model, provider) => {
+    const out = mapGenkitAttributes({ ...modelAttributes(), "genkit:name": genkitName });
+    expect(out["gen_ai.request.model"]).toBe(model);
+    expect(out["gen_ai.response.model"]).toBe(model);
+    expect(out["gen_ai.provider.name"]).toBe(provider);
+    // The full registered name stays on the passed-through Genkit key.
+    expect(out["genkit:name"]).toBe(genkitName);
+  });
+
+  it("strips an unknown plugin namespace but leaves the provider unset", () => {
+    const out = mapGenkitAttributes({ ...modelAttributes(), "genkit:name": "together/meta-llama/Llama-3-70b" });
+    expect(out["gen_ai.request.model"]).toBe("meta-llama/Llama-3-70b");
+    expect(out["gen_ai.provider.name"]).toBeUndefined();
+  });
+
+  it("keeps a model name with no namespace as is, with no provider", () => {
+    const out = mapGenkitAttributes({ ...modelAttributes(), "genkit:name": "my-model" });
+    expect(out["gen_ai.request.model"]).toBe("my-model");
+    expect(out["gen_ai.provider.name"]).toBeUndefined();
+  });
+
+  it("sets no model or provider on non-model spans", () => {
+    const out = mapGenkitAttributes({ ...toolAttributes(), "genkit:name": "googleai/gemini-3.5-flash" });
+    expect(out["gen_ai.request.model"]).toBeUndefined();
+    expect(out["gen_ai.provider.name"]).toBeUndefined();
+  });
+
   it("records usage as unavailable (absent) when the model reported none", () => {
     const out = mapGenkitAttributes(modelAttributes(null));
     for (const key of Object.keys(out)) {
       expect(isPromotedUsageKey(key)).toBe(false);
     }
-    expect(out["gen_ai.request.model"]).toBe("fixture/mock");
+    expect(out["gen_ai.request.model"]).toBe("mock");
   });
 
   it("does not throw on a truncated or non-JSON genkit:output", () => {

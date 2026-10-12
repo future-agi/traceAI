@@ -20,9 +20,11 @@ export {
   GENKIT_USAGE_PREFIX,
   GenkitAttributes,
   GenkitSpanType,
+  MODEL_NAMESPACE_TO_PROVIDER,
   SUBTYPE_TO_KIND,
   TYPE_TO_KIND,
   USAGE_TO_ATTRIBUTE,
   isPromotedUsageKey,
+  splitModelName,
 } from "./attributes";
 export { flushOnSignals, type FlushOnSignalsOptions, type SignalTarget } from "./signals";
