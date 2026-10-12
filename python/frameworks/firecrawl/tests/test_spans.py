@@ -248,7 +248,7 @@ def test_unparseable_url_does_not_break_the_call(fake: FakeFirecrawl, tracing: T
     assert document.markdown and async_document.markdown
     finished = spans(exporter)
     assert [span.name for span in finished] == ["firecrawl.scrape"] * 2
-    assert all(attrs(span)["fi.span.kind"] == "TOOL" for span in finished)
+    assert all(attrs(span)["gen_ai.span.kind"] == "TOOL" for span in finished)
 
 
 class _ExplodingResult:
@@ -540,7 +540,7 @@ def test_api_key_is_redacted_from_query_and_job_id(
     ]
     for span in finished:
         assert all(API_KEY not in str(value) for value in attrs(span).values()), span.name
-    assert attrs(finished[0])["fi.retrieval.query"] == "find [redacted]"
+    assert attrs(finished[0])["gen_ai.retrieval.query"] == "find [redacted]"
     assert attrs(finished[1])["firecrawl.job_id"] == "job-[redacted]"
 
 
@@ -573,7 +573,7 @@ def test_map_emits_one_tool_span_without_links(fake: FakeFirecrawl, tracing: Tra
     assert [span.name for span in finished] == ["firecrawl.map"] * 2
     for span in finished:
         assert span.status.status_code is StatusCode.OK
-        assert attrs(span) == {"fi.span.kind": "TOOL", "server.address": "example.com"}
+        assert attrs(span) == {"gen_ai.span.kind": "TOOL", "server.address": "example.com"}
         assert "/private" not in str(attrs(span)) and RESULT_TITLE not in str(attrs(span))
 
 
@@ -641,8 +641,8 @@ def test_uninstrument_restores_methods_and_stops_new_spans(fake: FakeFirecrawl) 
 def test_facade_methods_bind_at_construction(fake: FakeFirecrawl) -> None:
     """R4, documented in the README: Firecrawl/AsyncFirecrawl copy the v2 client's
     bound methods in __init__. Build the client after instrument(); a client built
-    before is not traced, and one built while instrumented keeps tracing after
-    uninstrument()."""
+    before is not traced. One built while instrumented stops tracing at
+    uninstrument(), like every other client."""
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -661,5 +661,4 @@ def test_facade_methods_bind_at_construction(fake: FakeFirecrawl) -> None:
 
     assert [attrs(span)["server.address"] for span in spans(exporter)] == [
         "during.example.com",
-        "during-after-uninstrument.example.com",
     ]

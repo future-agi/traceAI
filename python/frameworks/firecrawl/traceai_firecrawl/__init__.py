@@ -9,7 +9,7 @@ from wrapt import wrap_function_wrapper
 from fi_instrumentation import FITracer
 from fi_instrumentation.instrumentation import TraceConfig
 
-from traceai_firecrawl._wrappers import AsyncOperationWrapper, OperationWrapper
+from traceai_firecrawl._wrappers import AsyncOperationWrapper, OperationWrapper, _State
 from traceai_firecrawl.package import _instruments
 from traceai_firecrawl.version import __version__
 
@@ -54,6 +54,7 @@ class FirecrawlInstrumentor(BaseInstrumentor):
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = FITracer(trace_api.get_tracer(__name__, __version__, tracer_provider), config=config)
         self._original_methods: Dict[Tuple[str, str, str], Any] = {}
+        self._state = _State()
 
         for module_name, class_name, is_async in (
             (_SYNC_MODULE, _SYNC_CLASS, False),
@@ -61,9 +62,9 @@ class FirecrawlInstrumentor(BaseInstrumentor):
         ):
             for method_name, span_name in _OPERATIONS.items():
                 wrapper = (
-                    AsyncOperationWrapper(tracer, span_name, method_name, config)
+                    AsyncOperationWrapper(tracer, span_name, method_name, config, self._state)
                     if is_async
-                    else OperationWrapper(tracer, span_name, method_name, config)
+                    else OperationWrapper(tracer, span_name, method_name, config, self._state)
                 )
                 self._wrap(module_name, class_name, method_name, wrapper)
 
@@ -74,18 +75,23 @@ class FirecrawlInstrumentor(BaseInstrumentor):
 
         module = import_module(module_name)
         client = getattr(module, class_name)
-        if not hasattr(client, method_name):
+        # Only a method defined on this class itself, so an inherited one is
+        # never wrapped twice and uninstrument() restores exactly.
+        original = vars(client).get(method_name)
+        if original is None:
             return
 
-        self._original_methods[(module_name, class_name, method_name)] = getattr(
-            client, method_name
-        )
+        self._original_methods[(module_name, class_name, method_name)] = original
         # wrapt 2.5.0 rejects keyword arguments, so these are positional.
         wrap_function_wrapper(module, "{0}.{1}".format(class_name, method_name), wrapper)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         from importlib import import_module
 
+        state = getattr(self, "_state", None)
+        if state is not None:
+            # A facade built while instrumented holds bound wrappers; stop them.
+            state.enabled = False
         for (module_name, class_name, method_name), original in self._original_methods.items():
             setattr(getattr(import_module(module_name), class_name), method_name, original)
         self._original_methods.clear()

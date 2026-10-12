@@ -36,13 +36,13 @@ client.scrape("https://example.com")
 
 ## What it records
 
-Each call to `scrape`, `search`, `map`, `crawl`, `start_crawl`, `get_crawl_status` or `cancel_crawl`, sync or async, emits one span named `firecrawl.<method>` with `fi.span.kind=TOOL`. A blocking `crawl()` is one span for the whole call: not one per page and not one per status poll. When the async `crawl()` calls `start_crawl()` internally, that inner call adds no span. The span is current while the SDK runs, so HTTP client spans nest under it.
+Each call to `scrape`, `search`, `map`, `crawl`, `start_crawl`, `get_crawl_status` or `cancel_crawl`, sync or async, emits one span named `firecrawl.<method>`. `gen_ai.span.kind` is `RETRIEVER` for `search` and `TOOL` for the others, which fetch the pages they are given. A blocking `crawl()` is one span for the whole call: not one per page and not one per status poll. When the async `crawl()` calls `start_crawl()` internally, that inner call adds no span. The span is current while the SDK runs, so HTTP client spans nest under it.
 
 | Attribute | Methods | Value |
 |---|---|---|
 | `server.address` | `scrape`, `map`, `crawl`, `start_crawl` | Host of the target URL. Never the path or query. |
-| `fi.retrieval.query`, `input.value` | `search` | The query, with the API key redacted, capped at 1024 characters. Omitted with `hide_inputs` or `hide_input_text`; shared PII redaction applies when enabled. |
-| `fi.retrieval.document_count` | `search` | Total returned records across SDK `web`, `news`, `images` and `tools` groups. Known empty groups count as zero; unknown or malformed shapes omit the attribute. |
+| `gen_ai.retrieval.query`, `input.value` | `search` | The query, with the API key redacted, capped at 1024 characters. Omitted with `hide_inputs` or `hide_input_text`; shared PII redaction applies when enabled. |
+| `firecrawl.result_count` | `search` | Total returned records across SDK `web`, `news`, `images` and `tools` groups. Known empty groups count as zero; unknown or malformed shapes omit the attribute. |
 | `firecrawl.formats` | `scrape`, `search`, `crawl`, `start_crawl` | Bounded, deduplicated canonical SDK format names from `formats=` or `scrape_options.formats`. Unknown names, prompts and schemas are omitted. Snake-case aliases use the SDK's API spelling. |
 | `firecrawl.job_id` | `crawl`, `start_crawl`, `get_crawl_status`, `cancel_crawl` | The crawl job id, positional or keyword. The start, status and cancel spans of one job share it. |
 | `firecrawl.limit` | `crawl`, `start_crawl` | The `limit` argument, when passed. |
@@ -78,7 +78,7 @@ Pass `config=TraceConfig(...)` from `fi_instrumentation.instrumentation` to `ins
 `Firecrawl` and `AsyncFirecrawl` copy the v2 client's methods when they are constructed. Call `instrument()` before you construct them:
 
 - A client constructed before `instrument()` is not traced.
-- A client constructed while instrumented keeps tracing after `uninstrument()`. Construct a new client to stop.
+- A client constructed while instrumented stops tracing at `uninstrument()`.
 
 `FirecrawlClient` and `AsyncFirecrawlClient` used directly look the methods up on every call, so they follow `instrument()` and `uninstrument()` immediately.
 

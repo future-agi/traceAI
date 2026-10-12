@@ -177,7 +177,10 @@ def test_real_client_calls_reach_the_collector_contract(fake_firecrawl, monkeypa
         by_name.setdefault(span["name"], []).append(span)
 
     for span in spans:
-        assert _flatten_attributes(span["attributes"])["fi.span.kind"] == "TOOL"
+        # search is a retrieval; scrape, map and crawl fetch pages they are given.
+        expected = "RETRIEVER" if span["name"] == "firecrawl.search" else "TOOL"
+        assert _flatten_attributes(span["attributes"])["gen_ai.span.kind"] == expected
+        assert "fi.span.kind" not in _flatten_attributes(span["attributes"])
 
     crawl = _flatten_attributes(by_name["firecrawl.crawl"][0]["attributes"])
     assert int(crawl["firecrawl.page_count"]) == 3
@@ -186,9 +189,9 @@ def test_real_client_calls_reach_the_collector_contract(fake_firecrawl, monkeypa
     assert crawl["server.address"] == "example.com"
 
     search = _flatten_attributes(by_name["firecrawl.search"][0]["attributes"])
-    assert search["fi.retrieval.query"] == "open telemetry"
+    assert search["gen_ai.retrieval.query"] == "open telemetry"
     assert search["input.value"] == "open telemetry"
-    assert int(search["fi.retrieval.document_count"]) == 2
+    assert int(search["firecrawl.result_count"]) == 2
 
     ok_scrape, failed_scrape = by_name["firecrawl.scrape"]
     assert _flatten_attributes(ok_scrape["attributes"])["server.address"] == "example.com"

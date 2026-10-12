@@ -16,11 +16,12 @@ from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_strin
 
 logger = logging.getLogger(__name__)
 
-_FI_SPAN_KIND = "fi.span.kind"
+_SPAN_KIND = "gen_ai.span.kind"
 _TOOL = "TOOL"
+_RETRIEVER = "RETRIEVER"
 _INPUT_VALUE = "input.value"
-_RETRIEVAL_QUERY = "fi.retrieval.query"
-_RETRIEVAL_DOCUMENT_COUNT = "fi.retrieval.document_count"
+_RETRIEVAL_QUERY = "gen_ai.retrieval.query"
+_RESULT_COUNT = "firecrawl.result_count"
 _JOB_ID = "firecrawl.job_id"
 _LIMIT = "firecrawl.limit"
 _PAGE_COUNT = "firecrawl.page_count"
@@ -73,6 +74,23 @@ _SAFE_ERROR_CODES = frozenset({
 # the nested call runs untraced so one user call yields one span. A context
 # variable follows asyncio tasks, so concurrent calls do not suppress each other.
 _ACTIVE: ContextVar[bool] = ContextVar("traceai_firecrawl_active", default=False)
+
+
+class _State:
+    """Shared by every wrapper of one instrument() call; uninstrument() disables it.
+
+    The Firecrawl facade copies the v2 client's bound methods when it is
+    built; a facade built while instrumented must stop tracing once the
+    instrumentor is removed.
+    """
+
+    def __init__(self) -> None:
+        self.enabled = True
+
+
+def _span_kind(method_name: str) -> str:
+    """search is a retrieval; scrape, map and the crawl calls fetch pages they are given."""
+    return _RETRIEVER if method_name == "search" else _TOOL
 
 
 def _api_keys(instance: Any) -> list[str]:
@@ -238,16 +256,27 @@ class _BaseWrapper:
     that starts is ended exactly once.
     """
 
-    def __init__(self, tracer: Tracer, span_name: str, method_name: str, config: TraceConfig) -> None:
+    def __init__(
+        self,
+        tracer: Tracer,
+        span_name: str,
+        method_name: str,
+        config: TraceConfig,
+        state: Optional[_State] = None,
+    ) -> None:
         self._tracer = tracer
         self._span_name = span_name
         self._method_name = method_name
         self._config = config
+        self._state = state or _State()
+
+    def _untraced(self) -> bool:
+        return not self._state.enabled or _ACTIVE.get()
 
     def _attributes(
         self, instance: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
     ) -> dict[str, Any]:
-        attributes = {_FI_SPAN_KIND: _TOOL}
+        attributes = {_SPAN_KIND: _span_kind(self._method_name)}
         if self._method_name == "search":
             if not (self._config.hide_inputs or self._config.hide_input_text):
                 query = kwargs.get("query", args[0] if args else "")
@@ -283,7 +312,7 @@ class _BaseWrapper:
             attributes = self._attributes(instance, args, kwargs)
         except Exception:
             logger.debug("Could not read %s arguments", self._span_name, exc_info=True)
-            attributes = {_FI_SPAN_KIND: _TOOL}
+            attributes = {_SPAN_KIND: _span_kind(self._method_name)}
         try:
             return self._tracer.start_span(self._span_name, attributes=attributes)
         except Exception:
@@ -296,7 +325,7 @@ class _BaseWrapper:
         if self._method_name == "search":
             count = _document_count(result)
             if count is not None:
-                span.set_attribute(_RETRIEVAL_DOCUMENT_COUNT, count)
+                span.set_attribute(_RESULT_COUNT, count)
         if self._method_name in _CRAWL_METHODS:
             job_id = _job_id(result, kwargs)
             if job_id:
@@ -395,7 +424,7 @@ class OperationWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if _ACTIVE.get():
+        if self._untraced():
             return wrapped(*args, **kwargs)
         span = self._start(instance, args, kwargs)
         if span is None:
@@ -423,7 +452,7 @@ class AsyncOperationWrapper(_BaseWrapper):
         args: tuple,
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if _ACTIVE.get():
+        if self._untraced():
             return await wrapped(*args, **kwargs)
         span = self._start(instance, args, kwargs)
         if span is None:

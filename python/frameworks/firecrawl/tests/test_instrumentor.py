@@ -51,7 +51,7 @@ def test_crawl_emits_one_span_for_three_pages(monkeypatch: pytest.MonkeyPatch) -
     span = spans[0]
     attrs = dict(span.attributes or {})
     assert span.name == "firecrawl.crawl"
-    assert attrs["fi.span.kind"] == "TOOL"
+    assert attrs["gen_ai.span.kind"] == "TOOL"
     assert attrs["firecrawl.page_count"] == 3
     assert attrs["firecrawl.limit"] == 10
     assert attrs["firecrawl.job_id"] == "job-1"
@@ -94,8 +94,9 @@ def test_search_records_query_and_count(monkeypatch: pytest.MonkeyPatch) -> None
     assert len(spans) == 1
     attrs = dict(spans[0].attributes or {})
     assert spans[0].name == "firecrawl.search"
-    assert attrs["fi.retrieval.query"] == "retrieval query"
+    assert attrs["gen_ai.span.kind"] == "RETRIEVER"
+    assert attrs["gen_ai.retrieval.query"] == "retrieval query"
     # The Observe input panel reads input.value; the query must reach it too.
     assert attrs["input.value"] == "retrieval query"
-    assert attrs["fi.retrieval.document_count"] == 2
+    assert attrs["firecrawl.result_count"] == 2
     assert all(_API_KEY not in str(value) for value in attrs.values())

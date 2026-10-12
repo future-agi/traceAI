@@ -319,7 +319,7 @@ def test_f3_default_query_uses_shared_session_context(fake, telemetry, monkeypat
     spans, _ = exported(telemetry)
     assert len(spans) == 1
     attributes = _flatten_attributes(spans[0]["attributes"])
-    assert attributes["fi.retrieval.query"] == query
+    assert attributes["gen_ai.retrieval.query"] == query
     assert attributes[SpanAttributes.GEN_AI_CONVERSATION_ID] == "review-session"
 
 
@@ -345,7 +345,7 @@ def test_f3_query_pii_redaction_precedes_cap(fake, telemetry, monkeypatch, use_a
     assert len(spans) == 1
     expected = redact_pii_in_string(query)[:1024]
     attributes = _flatten_attributes(spans[0]["attributes"])
-    assert attributes["fi.retrieval.query"] == expected
+    assert attributes["gen_ai.retrieval.query"] == expected
     assert attributes["input.value"] == expected
     for secret in ("person@example.test", "boundary.person", "415-555"):
         assert secret not in wire
@@ -368,7 +368,7 @@ def test_f3_hidden_inputs_omit_search_query(fake, telemetry, monkeypatch, use_as
     spans, wire = exported(telemetry)
     assert len(spans) == 1
     attributes = _flatten_attributes(spans[0]["attributes"])
-    assert "fi.retrieval.query" not in attributes
+    assert "gen_ai.retrieval.query" not in attributes
     assert attributes.get("input.value", "__REDACTED__") == "__REDACTED__"
     assert "QUERY-TO-HIDE-REVIEW" not in wire
 
@@ -429,8 +429,8 @@ def test_f3_key_discovery_failure_keeps_only_safe_metadata(fake, telemetry, use_
     assert len(result.web) == 2
     spans, wire = exported(telemetry)
     attributes = _flatten_attributes(spans[0]["attributes"])
-    assert "fi.retrieval.query" not in attributes
-    assert int(attributes["fi.retrieval.document_count"]) == 2
+    assert "gen_ai.retrieval.query" not in attributes
+    assert int(attributes["firecrawl.result_count"]) == 2
     assert format_names(spans[0]) == ["html"]
     assert KEY not in wire and HTML not in wire
 
@@ -461,7 +461,7 @@ def test_f4_counts_all_sdk_search_groups(fake, telemetry, monkeypatch, use_async
         assert all(isinstance(item, DiscoveredTool) for item in result.tools)
     spans, wire = exported(telemetry)
     assert len(spans) == 1
-    assert int(_flatten_attributes(spans[0]["attributes"])["fi.retrieval.document_count"]) == expected
+    assert int(_flatten_attributes(spans[0]["attributes"])["firecrawl.result_count"]) == expected
     assert HTML not in wire and PRIVATE_URL not in wire
 
 
@@ -493,9 +493,9 @@ def test_f4_unknown_counts_are_omitted_and_legacy_lists_survive(fake, telemetry,
     spans, wire = exported(telemetry)
     attributes = _flatten_attributes(spans[0]["attributes"])
     if expected is None:
-        assert "fi.retrieval.document_count" not in attributes
+        assert "firecrawl.result_count" not in attributes
     else:
-        assert int(attributes["fi.retrieval.document_count"]) == expected
+        assert int(attributes["firecrawl.result_count"]) == expected
     assert HTML not in wire
 
 
