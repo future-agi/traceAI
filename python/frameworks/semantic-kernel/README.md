@@ -101,7 +101,7 @@ invoke_agent Assistant                    AGENT
 | Tool arguments / result | `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` → `input.value`, `output.value` | `sensitive=True` only (`kernel_function.py` 268-269, 283-288). |
 | Agent | `gen_ai.agent.id`, `gen_ai.agent.name`, `gen_ai.agent.description`, `gen_ai.tool.definitions` | Semantic Kernel, passed through. |
 | Agent messages | `gen_ai.input.messages`, `gen_ai.output.messages` → `input.value`, `output.value` | `sensitive=True` only (`agent_diagnostics/decorators.py` 208-227). Input is captured only when the messages are passed positionally (`decorators.py` 75). |
-| Model-call messages | `gen_ai.input.messages`, `gen_ai.output.messages` → `input.value`, `output.value` on `chat` / `text_completions` spans | `sensitive=True` only. Recorded from Semantic Kernel's model-diagnostics log records (see "Sensitive content"); streaming included. |
+| Model-call messages | `gen_ai.input.messages`, `gen_ai.output.messages` → `input.value`, `output.value` on `chat` / `text_completions` spans | `sensitive=True` only. Recorded from Semantic Kernel's model-diagnostics log records (see "Sensitive content"); streaming included. A single completion is put on `output.value` as its message object (not a one-item list), which Observe's chat view shows as the assistant reply. |
 | Errors | `error.type`, span status | Semantic Kernel sets `ERROR` status on model, agent and tool failures. The processor sets `ERROR` only if `error.type` is present and the status is unset; it never clears a status. |
 | Other | `server.address`, `gen_ai.response.id`, `gen_ai.response.finish_reason` (singular), `gen_ai.request.*` sampling keys, `sk.available_functions` | Semantic Kernel, passed through. |
 

@@ -312,7 +312,7 @@ def test_semantic_kernel_contract_sensitive_on_control():
     assert llms
     for llm in llms:
         assert json.loads(llm["input.value"]) == json.loads(llm["gen_ai.input.messages"])
-        assert json.loads(llm["output.value"]) == json.loads(llm["gen_ai.output.messages"])
+        assert [json.loads(llm["output.value"])] == json.loads(llm["gen_ai.output.messages"])
     assert all(SECRET_PROMPT in llm["input.value"] for llm in llms)
     assert any("The tool says it is sunny." in llm["output.value"] for llm in llms)
 

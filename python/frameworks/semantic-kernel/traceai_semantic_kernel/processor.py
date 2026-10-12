@@ -203,6 +203,22 @@ def _set_io(mapped: Dict[str, Any], value_key: str, mime_key: str, value: Any) -
     mapped[mime_key] = _mime(text)
 
 
+def _completion(output_messages: Any) -> Any:
+    """A single completion as its message object, else the messages unchanged.
+
+    Observe's chat view shows an output object ``{role, content}`` as the
+    assistant reply, and nothing for a list.
+    """
+    if isinstance(output_messages, str):
+        try:
+            parsed = json.loads(output_messages)
+        except ValueError:
+            return output_messages
+        if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+            return json.dumps(parsed[0], ensure_ascii=False)
+    return output_messages
+
+
 def map_sk_attributes(
     attributes: Mapping[str, Any],
     *,
@@ -244,9 +260,14 @@ def map_sk_attributes(
                 mapped.setdefault(USAGE_NAMESPACE + suffix, mapped.pop(key))
 
     if sensitive:
-        if kind in (FiSpanKindValues.AGENT.value, FiSpanKindValues.LLM.value):
+        if kind == FiSpanKindValues.AGENT.value:
             _set_io(mapped, SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE, mapped.get(INPUT_MESSAGES))
             _set_io(mapped, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, mapped.get(OUTPUT_MESSAGES))
+        elif kind == FiSpanKindValues.LLM.value:
+            _set_io(mapped, SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE, mapped.get(INPUT_MESSAGES))
+            _set_io(
+                mapped, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, _completion(mapped.get(OUTPUT_MESSAGES))
+            )
         elif mapped.get(OPERATION) == "execute_tool":
             _set_io(mapped, SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE, mapped.get(TOOL_CALL_ARGUMENTS))
             _set_io(mapped, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, mapped.get(TOOL_CALL_RESULT))

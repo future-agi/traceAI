@@ -86,7 +86,10 @@ def test_sensitive_chat_span_carries_prompt_and_completion(instrumentor, provide
     assert outputs[0]["role"] == "assistant"
     assert REPLY in json.dumps(outputs)
     assert attrs["input.value"] == attrs["gen_ai.input.messages"]
-    assert attrs["output.value"] == attrs["gen_ai.output.messages"]
+    # One completion: output.value is that message object, not a one-item list.
+    # Observe's chat view renders an object {role, content} as the assistant
+    # reply and shows nothing for a list (ChatMessageView outputMessage).
+    assert json.loads(attrs["output.value"]) == outputs[0]
     assert attrs["input.mime_type"] == attrs["output.mime_type"] == "application/json"
 
 
