@@ -24,6 +24,15 @@ Span kinds. Cognee sets no span-kind attribute, so Future AGI would store
 search and LLM spans as ``unknown``. The filter sets ``fi.span.kind`` by span
 name (``span_kind``), only where none of ``SPAN_KIND_KEYS`` is set.
 
+Missing collections. In every search Cognee probes vector collections that
+do not exist yet, and each probe's ``cognee.db.vector.search`` span ends in
+ERROR with ``CollectionNotFoundError``, so every successful trace would show
+dozens of errors. By default the filter exports a vector-search span whose
+only error is that one as OK, without its exception event, and with
+``cognee.vector_search.collection_missing=true``. Every other error stays
+ERROR. Pass ``collection_missing_as_error=True``, or set
+``COGNEE_FI_COLLECTION_MISSING_AS_ERROR=true``, to keep them as ERROR.
+
 If the filter fails on a span, it exports that span without content
 attributes, events or status description; if even that fails, it drops the
 span. It never raises into the export path.
@@ -38,7 +47,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from opentelemetry.sdk.trace import Event, ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-from opentelemetry.trace import Status
+from opentelemetry.trace import Status, StatusCode
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +84,12 @@ LLM_SPANS = frozenset({"cognee.observe.acreate_structured_output"})
 # What replaces error text by default.
 DETAIL_REMOVED = "__REDACTED__ (content capture off)"
 TYPE_ONLY = "{0} (detail removed: content capture off)"
+# A probe of a vector collection that does not exist yet (see the module docstring).
+VECTOR_SEARCH_SPAN = "cognee.db.vector.search"
+COLLECTION_MISSING = (
+    "cognee.infrastructure.databases.vector.exceptions.exceptions.CollectionNotFoundError"
+)
+COLLECTION_MISSING_KEY = "cognee.vector_search.collection_missing"
 # The only event keys whose string values are kept: the exception's class name
 # and "True"/"False". Cognee 1.6.2 adds no events other than OpenTelemetry's
 # "exception" events; any other event gets the same allowlist.
@@ -94,11 +109,21 @@ def span_kind(name: str) -> Optional[str]:
 class CogneeExportFilter(SpanExporter):
     """Wrap a span exporter; see the module docstring."""
 
-    def __init__(self, exporter: SpanExporter, capture_content: Optional[bool] = None) -> None:
+    def __init__(
+        self,
+        exporter: SpanExporter,
+        capture_content: Optional[bool] = None,
+        collection_missing_as_error: Optional[bool] = None,
+    ) -> None:
         if capture_content is None:
             capture_content = os.environ.get("COGNEE_FI_CAPTURE_CONTENT", "").lower() == "true"
+        if collection_missing_as_error is None:
+            collection_missing_as_error = (
+                os.environ.get("COGNEE_FI_COLLECTION_MISSING_AS_ERROR", "").lower() == "true"
+            )
         self._exporter = exporter
         self._capture_content = capture_content
+        self._collection_missing_as_error = collection_missing_as_error
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         out = []
@@ -129,6 +154,14 @@ class CogneeExportFilter(SpanExporter):
         kind = span_kind(span.name)
         if kind and not any(key in attributes for key in SPAN_KIND_KEYS):
             attributes["fi.span.kind"] = kind
+        if not self._collection_missing_as_error and _only_collection_missing(span):
+            attributes[COLLECTION_MISSING_KEY] = True
+            if self._capture_content:
+                _add_input_output(attributes)
+            else:
+                for key in CONTENT_KEYS:
+                    attributes.pop(key, None)
+            return _copy(span, attributes, (), Status(StatusCode.OK))
         if self._capture_content:
             _add_input_output(attributes)
             return _copy(span, attributes, span.events, span.status)
@@ -172,6 +205,17 @@ def _is_json(value: str) -> bool:
         return isinstance(json.loads(value), (dict, list))
     except ValueError:
         return False
+
+
+def _only_collection_missing(span: ReadableSpan) -> bool:
+    """True for a vector-search span whose only error is a missing collection."""
+    if span.name != VECTOR_SEARCH_SPAN or span.status.status_code != StatusCode.ERROR:
+        return False
+    return bool(span.events) and all(
+        event.name == "exception"
+        and (event.attributes or {}).get("exception.type") == COLLECTION_MISSING
+        for event in span.events
+    )
 
 
 def _without_detail(attributes: Optional[Mapping[str, Any]]) -> dict:

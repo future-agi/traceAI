@@ -13,9 +13,12 @@ Pinned: `cognee==1.6.2` (Python >=3.10,<3.15). Its wheel METADATA declares
 `License-Expression: Apache-2.0` (license files `LICENSE` and `NOTICE.md`);
 it is a dependency of this example only, not of any traceAI package.
 Option A also needs `fi-instrumentation-otel>=1.1.0,<1.2`, which declares
-Python <3.14. Tested on Python 3.10, 3.11 and 3.13 against loopback fakes
-only: no LLM key, no live Future AGI project (see [Tests](#tests)). Traces
-only: metrics and logs are not ingested by this recipe. Statements marked
+Python <3.14. The tests (see [Tests](#tests)) run on Python 3.10, 3.11 and
+3.13 against loopback fakes, with no LLM key and no Future AGI project. The
+recipe was also checked live, on Python 3.12, against a local Future AGI
+stack with a real OpenAI-compatible LLM endpoint and real embeddings: options
+A and B, content off and on, and a failing model call. Traces only: metrics
+and logs are not ingested by this recipe. Statements marked
 "source reading" come from the cognee 1.6.2 code and are not exercised by the
 tests.
 
@@ -155,6 +158,19 @@ or exporter still see the original spans.
   `cognee.search.authorize` and `cognee.search.dataset`), `LLM` on
   `cognee.observe.acreate_structured_output` (every LLM call in Cognee 1.6.2). Embedding spans are left as they are:
   fi-collector already types them from `gen_ai.operation.name=embeddings`.
+- **Missing-collection probes are not errors.** In every search Cognee
+  probes vector collections that do not exist yet, and each probe's
+  `cognee.db.vector.search` span ends in `ERROR` with
+  `CollectionNotFoundError` (60 of the 66 vector searches in the recorded
+  run). Without the filter every successful trace shows dozens of errors and
+  inflates error rates. By default the filter exports a
+  `cognee.db.vector.search` span whose only error is
+  `CollectionNotFoundError` as `OK`, without its `exception` event, and with
+  `cognee.vector_search.collection_missing=true`; `cognee.vector.collection`
+  still names the collection. Any other error, a second exception on the
+  same span, or the same error on another span stays `ERROR`. To keep the
+  probes as errors, pass `collection_missing_as_error=True` or set
+  `COGNEE_FI_COLLECTION_MISSING_AS_ERROR=true`.
 - **It fails closed.** If the filter raises on a span, that span is exported
   without the content attributes, events or status description; if even that
   fails, the span is dropped. The filter logs a warning and never raises into
@@ -240,7 +256,7 @@ the export filter sets `fi.span.kind` on the spans marked below.
 | `cognee.observe.acreate_structured_output` (every LLM call) | CLIENT | llm / unknown | `gen_ai.request.model`, `gen_ai.system=litellm-native`, `langfuse.observation.input`, `langfuse.observation.output`; `cognee.llm.model` on schema-bound calls only |
 | `cognee.observe.embed_text` (every embedding call) | CLIENT | embedding | `gen_ai.operation.name=embeddings`, `gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.embeddings.dimension.count` |
 | `cognee.llm.completion` | INTERNAL | unknown | prompt file name and lengths only |
-| `cognee.db.graph.query`, `cognee.db.vector.search` | INTERNAL | unknown | `cognee.db.system`, `cognee.db.query`, `cognee.vector.collection` |
+| `cognee.db.graph.query`, `cognee.db.vector.search` | INTERNAL | unknown | `cognee.db.system`, `cognee.db.query`, `cognee.vector.collection`; with option A, `cognee.vector_search.collection_missing` on a probe of a missing collection |
 | `cognee.search.authorize`, `cognee.search.dataset` | INTERNAL | retriever / unknown | `cognee.search.query`, `cognee.search.type`, dataset name and id |
 | `cognee.retrieval.get_objects`, `cognee.retrieval.triplet_search`, `cognee.retrieval.vector_search`, `cognee.retrieval.embed_query`, `cognee.retrieval.get_context`, `cognee.retrieval.get_completion` | INTERNAL | unknown | retriever name, counts and lengths |
 | `cognee.session.get_session`, `cognee.session.add_qa` | INTERNAL | unknown | `cognee.session.id` |
@@ -275,11 +291,15 @@ What that means in Future AGI:
   export filter sets `fi.span.kind`. With option B they stay `unknown`: no
   span-kind key arrives and only embedding spans carry
   `gen_ai.operation.name`.
-- **Most `cognee.db.vector.search` spans end in `ERROR`**, each with an
-  `exception` event: 60 of 66 in the recorded run (60 of its 117 spans).
-  Cognee probes collections that do not exist yet. That is Cognee's own
-  behaviour, not an export failure, but these spans count in Future AGI's
-  error filters and error rates. With option A's defaults their status reads
+- **No errors in a successful run (option A).** Cognee's own spans put
+  most `cognee.db.vector.search` spans in `ERROR`, each with an `exception`
+  event: 60 of 66 in the recorded run (60 of its 117 spans), because Cognee
+  probes collections that do not exist yet. The export filter sends those as
+  `OK` with `cognee.vector_search.collection_missing=true` (see
+  [The export filter](#the-export-filter)), so they do not count in Future
+  AGI's error filters and error rates. With option B, or with
+  `COGNEE_FI_COLLECTION_MISSING_AS_ERROR=true`, they arrive as errors; with
+  option A's other defaults their status then reads
   `cognee.infrastructure.databases.vector.exceptions.exceptions.CollectionNotFoundError
   (detail removed: content capture off)`, without the collection name.
 
@@ -321,6 +341,10 @@ product telemetry, not OpenTelemetry tracing.
 
 ## Troubleshooting
 
+- **Dozens of `cognee.db.vector.search` errors in every trace.** The
+  exporter is not wrapped in `CogneeExportFilter` (or you use option B), or
+  `COGNEE_FI_COLLECTION_MISSING_AS_ERROR=true` is set. They are Cognee's
+  probes of collections that do not exist yet.
 - **No traces at all with option A.** The `add_span_processor(BatchSpanProcessor(exporter))`
   line is missing, or `register()` ran after Cognee's first traced call.
 - **Option A traces stop part-way.** Something called
@@ -346,7 +370,7 @@ product telemetry, not OpenTelemetry tracing.
 
 ## Tests
 
-`tests/test_cognee_recipe.py` runs, side by side, five subprocesses with the
+`tests/test_cognee_recipe.py` runs, side by side, six subprocesses with the
 real `cognee==1.6.2`. Each loads `tests/loopback_guard/sitecustomize.py`
 through `PYTHONPATH`, and so do the worker processes Cognee spawns for
 LanceDB and Ladybug: in all of them, Python-level connections and DNS lookups
@@ -361,6 +385,7 @@ anything:
 
 - `recipe`: `src/app.py` as written (option A, content off).
 - `capture`: the same, with `COGNEE_FI_CAPTURE_CONTENT=true`.
+- `probes_as_errors`: the same, with `COGNEE_FI_COLLECTION_MISSING_AS_ERROR=true`.
 - `tracing_off`: the same, with `COGNEE_TRACING_ENABLED` unset.
 - `no_readd`: `register()` without the re-add line, then one `cognee.add`.
 - `otlp_env`: option B's environment variables, then one `cognee.add`.

@@ -97,6 +97,16 @@ CAPTURE_IO_KEYS = {
 }
 # Every key the filter adds in capture mode (none of them is Cognee's own).
 IO_KEYS = ("input.value", "input.mime_type", "output.value", "output.mime_type")
+# Cognee probes vector collections that do not exist yet; each probe span
+# ends in ERROR with this exception in every successful run. By default the
+# filter exports such a span as OK with MISSING_KEY (README.md, "The export
+# filter"); COGNEE_FI_COLLECTION_MISSING_AS_ERROR=true keeps it ERROR.
+VECTOR_SEARCH = "cognee.db.vector.search"
+COLLECTION_MISSING = (
+    "cognee.infrastructure.databases.vector.exceptions.exceptions.CollectionNotFoundError"
+)
+MISSING_KEY = "cognee.vector_search.collection_missing"
+MISSING_SWITCH = "COGNEE_FI_COLLECTION_MISSING_AS_ERROR"
 # What the filter puts in place of error text by default.
 DETAIL_REMOVED = "__REDACTED__ (content capture off)"
 TYPE_ONLY = " (detail removed: content capture off)"
@@ -396,12 +406,34 @@ def filtered(
     )
 
 
+def error_names(spans: Any) -> list[str]:
+    return [s["name"] for s in spans if s.get("status", {}).get("code") == "STATUS_CODE_ERROR"]
+
+
+def is_missing_collection_probe(span: dict[str, Any]) -> bool:
+    """A recorded vector search whose only error is CollectionNotFoundError."""
+    if span["name"] != VECTOR_SEARCH:
+        return False
+    if span.get("status", {}).get("code") != "STATUS_CODE_ERROR":
+        return False
+    events = span.get("events", [])
+    return bool(events) and all(
+        event["name"] == "exception"
+        and attributes(event).get("exception.type") == COLLECTION_MISSING
+        for event in events
+    )
+
+
 def without_error_detail(span: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """A recorded span's events and status as the filter should export them by default.
+
+    A missing-collection probe is exported as OK, without its exception event.
 
     Default content-off mode keeps the fixed marker, exception type and
     exception.escaped, but omits serialized exception stack traces entirely.
     """
+    if is_missing_collection_probe(span):
+        return [], {"code": "STATUS_CODE_OK"}
     events = copy.deepcopy(span.get("events", []))
     for event in events:
         event["attributes"] = [
@@ -429,6 +461,8 @@ def filtered_attributes(span: dict[str, Any], capture_content: bool) -> dict[str
         expected["fi.span.kind"] = FILTER_KINDS[span["name"]]
     if capture_content:
         expected.update(expected_io(attributes(span)))
+    if is_missing_collection_probe(span):
+        expected[MISSING_KEY] = True
     return expected
 
 
@@ -511,6 +545,8 @@ class Scenario:
             env["COGNEE_TRACING_ENABLED"] = "true"
         if self.name == "capture":
             env["COGNEE_FI_CAPTURE_CONTENT"] = "true"
+        if self.name == "probes_as_errors":
+            env[MISSING_SWITCH] = "true"
         if self.name == "otlp_env":
             # The no-register() option: Cognee's own exporter, configured
             # exactly as README.md says (with the Receiver's origin).
@@ -591,6 +627,9 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Scenario]:
     scenarios = [
         Scenario("recipe", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("recipe")),
         Scenario("capture", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("capture")),
+        Scenario(
+            "probes_as_errors", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("probes")
+        ),
         Scenario("tracing_off", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("off")),
         Scenario("no_readd", ADD_SCRIPT, ["no-readd"], tmp_path_factory.mktemp("noreadd")),
         Scenario(
@@ -680,32 +719,43 @@ def test_recipe_exports_no_content_by_default(runs: dict[str, Scenario]) -> None
     assert_no_content(runs["recipe"].spans)
 
 
-def test_recipe_exports_error_type_without_stacktrace_by_default(
-    runs: dict[str, Scenario],
+def test_recipe_exports_missing_collection_probes_as_ok(runs: dict[str, Scenario]) -> None:
+    # Cognee's vector-search probes of collections that do not exist yet fail
+    # in every run. By default they arrive as OK, flagged, and nothing in a
+    # successful run is an error.
+    for name in ("recipe", "capture"):
+        spans = runs[name].spans
+        assert error_names(spans) == [], name
+        flagged = [s for s in spans if attributes(s).get(MISSING_KEY) is True]
+        assert flagged, name
+        for span in flagged:
+            assert span["name"] == VECTOR_SEARCH
+            assert span["status"] == {"code": "STATUS_CODE_OK"}
+            assert span.get("events", []) == []
+
+
+def test_switch_keeps_probes_as_errors_without_detail(
+    runs: dict[str, Scenario], recorded: list[dict[str, Any]], cognee_filter: Any
 ) -> None:
-    # Cognee's vector-search probes fail in every run (CollectionNotFoundError,
-    # naming the collection). With capture off, only fixed error markers and
-    # the exception type arrive; with capture on, the error is unchanged.
-    for name, detail_kept in (("recipe", False), ("capture", True)):
-        errors = [
-            span
-            for span in runs[name].spans
-            if span.get("status", {}).get("code") == "STATUS_CODE_ERROR"
-        ]
-        assert errors, name
-        for span in errors:
-            assert span["events"], span["name"]
-            for event in span["events"]:
-                event_attrs = attributes(event)
-                exception_type = event_attrs["exception.type"]
-                if detail_kept:
-                    assert "not found" in event_attrs["exception.message"]
-                    assert "not found" in span["status"]["message"]
-                    assert "not found" in event_attrs["exception.stacktrace"].splitlines()[-1]
-                    continue
-                assert event_attrs["exception.message"] == DETAIL_REMOVED
-                assert span["status"]["message"] == exception_type + TYPE_ONLY
-                assert "exception.stacktrace" not in event_attrs
+    # With COGNEE_FI_COLLECTION_MISSING_AS_ERROR=true the probes stay ERROR;
+    # with capture off only fixed markers and the exception type arrive.
+    run = runs["probes_as_errors"]
+    run.assert_ran_offline()
+    errors = [s for s in run.spans if s.get("status", {}).get("code") == "STATUS_CODE_ERROR"]
+    assert errors
+    for span in errors:
+        assert span["name"] == VECTOR_SEARCH
+        assert MISSING_KEY not in attributes(span)
+        assert span["events"], span["name"]
+        for event in span["events"]:
+            event_attrs = attributes(event)
+            assert event_attrs["exception.type"] == COLLECTION_MISSING
+            assert event_attrs["exception.message"] == DETAIL_REMOVED
+            assert span["status"]["message"] == COLLECTION_MISSING + TYPE_ONLY
+            assert "exception.stacktrace" not in event_attrs
+    assert shape(run.spans) == shape(
+        filtered(cognee_filter, recorded, collection_missing_as_error=True)
+    )
 
 
 def test_recipe_exports_no_secrets(runs: dict[str, Scenario]) -> None:
@@ -834,8 +884,9 @@ def test_recorded_fixture_matches_documented_mapping(recorded: list[dict[str, An
 
 def test_recorded_error_spans_are_vector_search_probes(recorded: list[dict[str, Any]]) -> None:
     errors = [s for s in recorded if s.get("status", {}).get("code") == "STATUS_CODE_ERROR"]
-    searches = spans_named(recorded, "cognee.db.vector.search")
-    assert {span["name"] for span in errors} == {"cognee.db.vector.search"}
+    searches = spans_named(recorded, VECTOR_SEARCH)
+    assert {span["name"] for span in errors} == {VECTOR_SEARCH}
+    assert all(is_missing_collection_probe(span) for span in errors)
     for span in errors:
         assert [event["name"] for event in span["events"]] == ["exception"]
     assert "{0} of {1}".format(len(errors), len(searches)) in README.read_text(encoding="utf-8")
@@ -888,6 +939,89 @@ def test_filter_keeps_content_off_the_wire_by_default(
         events, status = without_error_detail(before)
         assert after.get("events", []) == events
         assert after.get("status") == status
+
+
+@pytest.mark.parametrize("capture_content", [False, True])
+def test_filter_exports_missing_collection_probes_as_ok(
+    cognee_filter: Any, recorded: list[dict[str, Any]], capture_content: bool
+) -> None:
+    probes = [span for span in recorded if is_missing_collection_probe(span)]
+    assert len(probes) == 60
+    wire = {
+        span["spanId"]: span
+        for span in filtered(cognee_filter, recorded, capture_content=capture_content)
+    }
+    assert error_names(wire.values()) == []
+    for probe in probes:
+        after = wire[probe["spanId"]]
+        assert after["status"] == {"code": "STATUS_CODE_OK"}
+        assert after.get("events", []) == []
+        assert attributes(after)[MISSING_KEY] is True
+        # Which collection was missing is still there.
+        collection = attributes(probe)["cognee.vector.collection"]
+        assert attributes(after)["cognee.vector.collection"] == collection
+    for span in recorded:
+        if not is_missing_collection_probe(span):
+            assert MISSING_KEY not in attributes(wire[span["spanId"]]), span["name"]
+
+
+@pytest.mark.parametrize(
+    ("env_value", "argument", "kept_as_error"),
+    [
+        (None, None, False),
+        ("true", None, True),
+        ("TRUE", None, True),
+        ("false", None, False),
+        ("true", False, False),
+        (None, True, True),
+    ],
+)
+def test_filter_collection_missing_switch(
+    cognee_filter: Any,
+    recorded: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: Any,
+    argument: Any,
+    kept_as_error: bool,
+) -> None:
+    if env_value is None:
+        monkeypatch.delenv(MISSING_SWITCH, raising=False)
+    else:
+        monkeypatch.setenv(MISSING_SWITCH, env_value)
+    options = {} if argument is None else {"collection_missing_as_error": argument}
+    probe = next(span for span in recorded if is_missing_collection_probe(span))
+    (after,) = filtered(cognee_filter, [probe], **options)
+    if kept_as_error:
+        assert after["status"] == {
+            "code": "STATUS_CODE_ERROR",
+            "message": COLLECTION_MISSING + TYPE_ONLY,
+        }
+        assert MISSING_KEY not in attributes(after)
+        assert [event["name"] for event in after["events"]] == ["exception"]
+    else:
+        assert after["status"] == {"code": "STATUS_CODE_OK"}
+        assert attributes(after)[MISSING_KEY] is True
+
+
+def test_filter_keeps_every_other_error(cognee_filter: Any, recorded: list[dict[str, Any]]) -> None:
+    probe = next(span for span in recorded if is_missing_collection_probe(span))
+    when = probe["endTimeUnixNano"]
+    other_error = copy.deepcopy(probe)
+    other_error["status"] = {"code": "STATUS_CODE_ERROR", "message": "ValueError: bad vector"}
+    other_error["events"] = [exception_event("ValueError", "bad vector", "trace", when)]
+    mixed = copy.deepcopy(probe)
+    mixed["events"].append(exception_event("RuntimeError", "lost connection", "trace", when))
+    elsewhere = copy.deepcopy(probe)
+    elsewhere["name"] = "cognee.retrieval.vector_search"
+    no_event = copy.deepcopy(probe)
+    no_event["events"] = []
+    for capture_content in (False, True):
+        spans = [other_error, mixed, elsewhere, no_event]
+        wire = filtered(cognee_filter, spans, capture_content=capture_content)
+        assert len(wire) == 4
+        for span in wire:
+            assert span["status"]["code"] == "STATUS_CODE_ERROR", span["name"]
+            assert MISSING_KEY not in attributes(span)
 
 
 def test_filter_sets_span_kinds_only_where_none_is_set(
@@ -1457,6 +1591,8 @@ def test_readme_states_what_the_tests_check() -> None:
         "project_type=observe",
         "https://api.futureagi.com:443/tracer/v1/traces",
         "COGNEE_FI_CAPTURE_CONTENT=true",
+        MISSING_SWITCH + "=true",
+        MISSING_KEY,
         "capture_content=True",
         "fi.span.kind",
         DETAIL_REMOVED,
