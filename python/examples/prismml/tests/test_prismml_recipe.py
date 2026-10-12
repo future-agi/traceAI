@@ -25,6 +25,10 @@ from _fake_openai import (
     FakeOpenAI, chat_response, stream_body,
 )
 
+# traceai-openai 0.1.10 and earlier omit gen_ai.request.model on streamed and failed
+# calls; later versions (future-agi/traceAI#249) record the requested model there.
+# Accept both so this recipe passes on either version.
+
 ROOT = Path(__file__).resolve().parents[1]
 FI_API_KEY = "placeholder-fi-api-key"
 FI_SECRET_KEY = "placeholder-fi-secret-key"
@@ -237,7 +241,7 @@ def test_stream_accumulation_and_usage(traced, include_usage):
     assert attrs["output.value"] == ANSWER
     # traceai-openai records the model only from a non-streamed response; flip
     # this when the instrumentor records the request model.
-    assert "gen_ai.request.model" not in attrs
+    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
     assert_usage(attrs, USAGE_ATTRIBUTES if include_usage else {})
     assert any(event["name"] == "First Token Stream Event" for event in span["events"])
@@ -253,7 +257,7 @@ def test_textless_stream_has_no_raw_response_fallback(traced):
     assert len(seen) == 1
     _, attrs = one_span(traced)
     assert attrs["output.value"] == ""
-    assert "gen_ai.request.model" not in attrs
+    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
     assert_usage(attrs, {})
 
@@ -274,7 +278,7 @@ def test_synthetic_401_records_error_without_key(traced):
     assert LOCAL_KEY not in json.dumps(span)
     # traceai-openai records the model only from a non-streamed response; flip
     # this when the instrumentor records the request model.
-    assert "gen_ai.request.model" not in attrs
+    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
     assert_usage(attrs, {})
     assert_export_separation(traced[0], traced[2])
@@ -653,7 +657,7 @@ def test_app_subprocess_chat_and_stream(tmp_path, stream):
         assert attrs["output.value"] == ANSWER
         assert json.loads(attrs["gen_ai.request.parameters"])["model"] == REQUEST_MODEL
         if stream:
-            assert "gen_ai.request.model" not in attrs
+            assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
         else:
             assert attrs["gen_ai.request.model"] == RESPONSE_MODEL
         assert_usage(attrs, {} if stream else USAGE_ATTRIBUTES)
