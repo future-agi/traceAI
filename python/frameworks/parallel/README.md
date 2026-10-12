@@ -45,7 +45,8 @@ required for `search` and `urls` for `extract`. See
 | `Parallel.search`, `AsyncParallel.search` | `parallel.search` |
 | `Parallel.extract`, `AsyncParallel.extract` | `parallel.extract` |
 
-Each call produces one span with `fi.span.kind` = `RETRIEVER`, including
+Each call produces one span, `gen_ai.span.kind` = `RETRIEVER` for `search` and
+`TOOL` for `extract` (it fetches the pages you name rather than searching), including
 calls through `with_raw_response`, `with_streaming_response`, `copy()` and
 `with_options()`. Retries made by `parallel-web` inside one call stay in that
 one span. The span is a child of the active span when there is one, and a
@@ -56,7 +57,7 @@ a span from an HTTP client instrumentation nests under it.
 
 | Attribute | Calls | Value |
 |---|---|---|
-| `fi.span.kind` | all | `RETRIEVER` |
+| `gen_ai.span.kind` | all | `RETRIEVER` for `search`, `TOOL` for `extract`. |
 | `parallel.mode` | `search` with `mode` | The mode passed by the caller. Absent when not passed; the server default is not assumed. |
 | `parallel.query_count` | `search`, `extract` with `search_queries` | Number of `search_queries` passed. |
 | `gen_ai.retrieval.query`, `input.value` | `search`, `extract` with `search_queries` | The queries joined with a newline, Parallel API key replaced by `[redacted]`, cut to about 1 KB of UTF-8 on a character boundary (see [Limits](#limits)). |

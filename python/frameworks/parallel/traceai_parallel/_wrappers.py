@@ -20,8 +20,9 @@ from opentelemetry.trace import Span, Status, StatusCode, Tracer
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-FI_SPAN_KIND = "fi.span.kind"
+SPAN_KIND = "gen_ai.span.kind"
 RETRIEVER = "RETRIEVER"
+TOOL = "TOOL"
 INPUT_VALUE = "input.value"
 RETRIEVAL_QUERY = "gen_ai.retrieval.query"
 MODE = "parallel.mode"
@@ -78,6 +79,11 @@ class _State:
 
     def __init__(self) -> None:
         self.enabled = True
+
+
+def _span_kind(operation: str) -> str:
+    """search is a retrieval; extract fetches the pages it is given, so it is a tool."""
+    return RETRIEVER if operation == SEARCH else TOOL
 
 
 def _cap(value: str, limit: int = MAX_VALUE_BYTES) -> str:
@@ -185,7 +191,7 @@ def _request_attributes(
     options: Options,
 ) -> Dict[str, Any]:
     pii = options.pii_redaction
-    attributes: Dict[str, Any] = {FI_SPAN_KIND: RETRIEVER}
+    attributes: Dict[str, Any] = {SPAN_KIND: _span_kind(operation)}
     if operation == SEARCH:
         mode = kwargs.get("mode")
         if isinstance(mode, str):
@@ -475,7 +481,7 @@ class _BaseWrapper:
             )
         except Exception:  # an attribute must never break the user's call
             logger.debug("Could not read the Parallel request", exc_info=True)
-            attributes = {FI_SPAN_KIND: RETRIEVER}
+            attributes = {SPAN_KIND: _span_kind(self._operation)}
         hidden: Hidden = ()
         try:
             hidden = _hidden_inputs(self._operation, kwargs, keys, self._options)

@@ -43,7 +43,7 @@ def test_extract_records_the_url_count_not_the_urls_or_page_text(fake):
     assert span.name == "parallel.extract"
     assert span.status.status_code is StatusCode.OK
     assert attrs(span) == {
-        "fi.span.kind": "RETRIEVER",
+        "gen_ai.span.kind": "TOOL",
         "parallel.url_count": 3,
         "parallel.result_count": 2,
         "parallel.failed_url_count": 1,

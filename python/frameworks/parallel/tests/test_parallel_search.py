@@ -49,7 +49,7 @@ def test_search_emits_one_retriever_span_with_the_documented_attributes(fake):
     assert span.parent is None
     assert span.status.status_code is StatusCode.OK
     assert attrs(span) == {
-        "fi.span.kind": "RETRIEVER",
+        "gen_ai.span.kind": "RETRIEVER",
         "parallel.mode": "turbo",
         "parallel.query_count": 2,
         "gen_ai.retrieval.query": "open telemetry\nretrieval tracing",

@@ -112,7 +112,7 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
     ok_search, failed_search, async_search = by_name["parallel.search"]
 
     search = _flatten_attributes(ok_search["attributes"])
-    assert search["fi.span.kind"] == "RETRIEVER"
+    assert search["gen_ai.span.kind"] == "RETRIEVER"
     assert search["parallel.mode"] == "turbo"
     assert int(search["parallel.query_count"]) == 2
     assert int(search["parallel.result_count"]) == 2
@@ -126,7 +126,8 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
     assert not any("model" in key or "token" in key or "cost" in key for key in search)
 
     extract = _flatten_attributes(by_name["parallel.extract"][0]["attributes"])
-    assert extract["fi.span.kind"] == "RETRIEVER"
+    # extract fetches the pages it is given: a tool, not a search.
+    assert extract["gen_ai.span.kind"] == "TOOL"
     assert int(extract["parallel.url_count"]) == 2
     assert int(extract["parallel.result_count"]) == 1
     assert int(extract["parallel.failed_url_count"]) == 1

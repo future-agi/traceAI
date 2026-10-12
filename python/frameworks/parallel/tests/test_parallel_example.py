@@ -61,7 +61,8 @@ def test_example_exports_one_search_and_one_extract_span():
 
     assert [span["name"] for span in spans] == ["parallel.search", "parallel.extract"]
     search, extract = (_flatten_attributes(span["attributes"]) for span in spans)
-    assert search["fi.span.kind"] == extract["fi.span.kind"] == "RETRIEVER"
+    assert search["gen_ai.span.kind"] == "RETRIEVER"
+    assert extract["gen_ai.span.kind"] == "TOOL"
     assert search["input.value"] == "traceAI Parallel example"
     assert search["parallel.mode"] == "turbo"
     assert int(search["parallel.result_count"]) == 2

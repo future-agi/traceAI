@@ -39,7 +39,7 @@ def test_a_failing_request_attribute_builder_still_returns_the_result(fake, monk
 
     assert len(result.results) == 2
     span = traced.one()
-    assert attrs(span)["fi.span.kind"] == "RETRIEVER"
+    assert attrs(span)["gen_ai.span.kind"] == "RETRIEVER"
     assert span.status.status_code is StatusCode.OK
 
 
@@ -143,3 +143,11 @@ def test_suppress_tracing_skips_the_span(fake):
 
     assert len(fake.calls) == 2
     assert [span.name for span in traced.spans()] == ["parallel.search"]
+
+
+def test_a_failing_request_attribute_builder_keeps_extract_a_tool(fake, monkeypatch):
+    monkeypatch.setattr(_wrappers, "_request_attributes", _boom)
+    with instrumented() as traced:
+        sync_client(fake).extract(urls=["https://example.com/a"])
+
+    assert attrs(traced.one())["gen_ai.span.kind"] == "TOOL"
