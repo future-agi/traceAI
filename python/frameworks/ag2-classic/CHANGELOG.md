@@ -6,8 +6,9 @@
   second provider or exporter.
 - `AG2ClassicSpanProcessor` maps `ag2.span.type` to `gen_ai.span.kind`, copies
   the outermost `gen_ai.conversation.id` to `session.id`, adds
-  `gen_ai.cost.total` and `gen_ai.usage.total_tokens` on LLM spans, and sets
-  ERROR status from upstream `error.type`.
+  `gen_ai.cost.total` (only when upstream's cost is above 0; AG2 reports 0
+  for models it cannot price) and `gen_ai.usage.total_tokens` on LLM spans,
+  and sets ERROR status from upstream `error.type`.
 - Content off by default: upstream message, tool, human-input and code-output
   keys are removed unless `capture_content=True`.
 - Version guard: rejects non-0.14 `autogen`, Microsoft AutoGen, `ag2` 1.x and

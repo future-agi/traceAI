@@ -82,6 +82,25 @@ def test_llm_span_gets_total_tokens_cost_and_parameters():
     assert json.loads(mapped["gen_ai.request.parameters"]) == {"temperature": 0.2, "max_tokens": 64}
 
 
+def test_zero_upstream_cost_is_not_reported_as_the_cost():
+    # AG2 reports cost 0 for any model missing from its price table ("Model
+    # ... is not found. The cost will be 0."). gen_ai.cost.total=0 would stop
+    # Future AGI from pricing the call from its own tokens and model table.
+    mapped = map_ag2_attributes(
+        {
+            "ag2.span.type": "llm",
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": "claude-sonnet-5",
+            "gen_ai.usage.input_tokens": 477,
+            "gen_ai.usage.output_tokens": 78,
+            "gen_ai.usage.cost": 0,
+        }
+    )
+    assert "gen_ai.cost.total" not in mapped
+    assert mapped["gen_ai.usage.cost"] == 0  # upstream key kept
+    assert mapped["gen_ai.usage.total_tokens"] == 555
+
+
 def test_llm_span_without_usage_records_no_tokens():
     mapped = map_ag2_attributes({"ag2.span.type": "llm", "gen_ai.operation.name": "chat"})
     assert "gen_ai.usage.total_tokens" not in mapped

@@ -19,8 +19,10 @@ What it does, per span on the ``opentelemetry.instrumentation.ag2`` scope:
   ``using_attributes``: ``session.id``, ``user.id``, ``metadata``, ...) copied
   onto AG2 spans when they start; a context ``session.id`` wins over the
   conversation id.
-* ``gen_ai.cost.total`` from upstream ``gen_ai.usage.cost`` on LLM spans, and
-  ``gen_ai.usage.total_tokens`` = input + output on LLM spans.
+* ``gen_ai.cost.total`` from upstream ``gen_ai.usage.cost`` on LLM spans when
+  it is above 0, and ``gen_ai.usage.total_tokens`` = input + output on LLM
+  spans. Upstream reports 0 for any model missing from its price table, and a
+  ``gen_ai.cost.total`` of 0 would stop Future AGI from pricing the call itself.
 * ``gen_ai.request.parameters`` JSON from upstream ``gen_ai.request.*``
   sampling keys.
 * Status ``ERROR`` when upstream set ``error.type`` but left the status unset
@@ -208,7 +210,9 @@ def map_ag2_attributes(
 
     if kind == FiSpanKindValues.LLM.value:
         cost = mapped.get(UPSTREAM_COST)
-        if isinstance(cost, (int, float)) and SpanAttributes.GEN_AI_COST_TOTAL not in mapped:
+        # 0 means "not in AG2's price table" (oai/client.py logs "The cost will
+        # be 0"); leave the cost to Future AGI's own pricing then.
+        if isinstance(cost, (int, float)) and cost > 0 and SpanAttributes.GEN_AI_COST_TOTAL not in mapped:
             mapped[SpanAttributes.GEN_AI_COST_TOTAL] = cost
         inp = mapped.get(INPUT_TOKENS)
         out = mapped.get(OUTPUT_TOKENS)
