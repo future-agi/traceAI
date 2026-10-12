@@ -27,6 +27,12 @@ from _fake_openai import (
     completion, embeddings, error_body, stream_bytes,
 )
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# They also omit gen_ai.request.model on streamed and failed calls, where later
+# versions record the requested model. Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "doubleword")
+
 RECIPE = Path(__file__).resolve().parents[1]
 VENDOR_KEY = "placeholder-doubleword-key"
 FI_KEY = "placeholder-futureagi-api-key"
@@ -165,7 +171,7 @@ def test_realtime_chat_response_model_usage_and_key_separation(journey):
         assert span["name"] == "ChatCompletion"
         assert span["status"]["code"] == "STATUS_CODE_OK"
         assert attrs["gen_ai.span.kind"] == "LLM"
-        assert attrs["gen_ai.provider.name"] == "openai"
+        assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
         assert attrs["gen_ai.request.model"] == RETURNED_MODEL
         assert RETURNED_MODEL != MODEL
         assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
@@ -205,11 +211,11 @@ def test_stream_text_model_gap_and_usage(journey, include_usage):
         span, attrs = only_span(receiver, provider)
         assert span["name"] == "ChatCompletion"
         assert attrs["gen_ai.span.kind"] == "LLM"
-        assert attrs["gen_ai.provider.name"] == "openai"
+        assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
         assert attrs["output.value"] == ANSWER
         # traceai-openai records the model only from a non-streamed response;
-        # flip this when the instrumentor records the request model.
-        assert "gen_ai.request.model" not in attrs
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert attrs.get("gen_ai.request.model") in (None, MODEL)
         params = json.loads(attrs["gen_ai.request.parameters"])
         assert params["model"] == MODEL
         assert params["stream"] is True
@@ -267,12 +273,12 @@ def test_errors_export_error_span_and_exception(journey, status, error_class):
         assert span["status"]["code"] == "STATUS_CODE_ERROR"
         assert error_class.__name__ in span["status"]["message"]
         assert attrs["gen_ai.span.kind"] == "LLM"
-        assert attrs["gen_ai.provider.name"] == "openai"
+        assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
         assert any(event["name"] == "exception" for event in span["events"])
         assert error_body(status)["error"]["message"] in json.dumps(span["events"])
         # traceai-openai records the model only from a non-streamed response;
-        # flip this when the instrumentor records the request model.
-        assert "gen_ai.request.model" not in attrs
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert attrs.get("gen_ai.request.model") in (None, MODEL)
         assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
         assert usage_attributes(attrs) == {}
         assert len(requests) == 1  # The test client disables SDK retries.
@@ -296,7 +302,7 @@ def test_hide_inputs_with_visible_control_and_provider_receipt(journey, monkeypa
             assert prompt in requests[0].content.decode()
             assert (prompt in json.dumps(receiver.spans())) is (not hidden)
             assert ANSWER in attrs["output.value"]  # Input masking does not hide outputs.
-            assert attrs["gen_ai.provider.name"] == "openai"
+            assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -375,13 +381,19 @@ def test_embeddings_raw_vectors_survive_vector_hiding(journey, monkeypatch):
             span, attrs = only_span(receiver, provider)
             assert span["name"] == "CreateEmbeddingResponse"
             assert attrs["gen_ai.span.kind"] == "EMBEDDING"
-            assert attrs["gen_ai.provider.name"] == "openai"
+            assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
             assert attrs["embedding.model_name"] == "placeholder-embedding-model-2026-09-01"
-            assert "gen_ai.request.model" not in attrs
+            # 0.1.10 sets only embedding.model_name; later versions also make it the span model.
+            assert attrs.get("gen_ai.request.model") in (None, "placeholder-embedding-model-2026-09-01")
             assert json.loads(attrs["gen_ai.request.parameters"])["model"] == "placeholder-embedding-model"
             assert usage_attributes(attrs) == {"gen_ai.usage.input_tokens": 11, "gen_ai.usage.total_tokens": 11}
             raw = json.loads(attrs["embedding.embeddings"])
-            assert raw["data"][0]["embedding"] == VECTOR
+            if hidden and "embedding" not in raw["data"][0]:
+                # Later versions (future-agi/traceAI#249) also strip the raw JSON copy.
+                assert raw["data"][0]["dimensions"] == len(VECTOR)
+            else:
+                # 0.1.10 keeps the vectors in the raw JSON even when hidden.
+                assert raw["data"][0]["embedding"] == VECTOR
             vector_key = "embedding.embeddings.0.embedding.vector"
             assert (vector_key in attrs) is (not hidden)
             if not hidden:
@@ -561,10 +573,10 @@ def test_app_subprocess_loopback_chat_and_stream(streaming):
         attrs = attributes(spans[0])
         assert spans[0]["name"] == "ChatCompletion"
         assert attrs["gen_ai.span.kind"] == "LLM"
-        assert attrs["gen_ai.provider.name"] == "openai"
+        assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
         assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
         if streaming:
-            assert "gen_ai.request.model" not in attrs
+            assert attrs.get("gen_ai.request.model") in (None, MODEL)
             assert usage_attributes(attrs) == {}
         else:
             assert attrs["gen_ai.request.model"] == RETURNED_MODEL

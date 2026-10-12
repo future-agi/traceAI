@@ -70,12 +70,12 @@ provider.force_flush()
 
 ## What you see in Future AGI
 
-The fixtures export one `ChatCompletion` span with `gen_ai.span.kind=LLM` per completed chat call. The provider field says `openai`: `gen_ai.provider.name` is the shared instrumentor's label, including when the client uses Doubleword's host.
+The fixtures export one `ChatCompletion` span with `gen_ai.span.kind=LLM` per completed chat call. Up to `traceai-openai` 0.1.10, the provider field says `openai`: `gen_ai.provider.name` is the shared instrumentor's label (later versions, future-agi/traceAI#249, say `doubleword` for `api.doubleword.ai`), including when the client uses Doubleword's host.
 
 Current `traceai-openai` behavior:
 
 - Non-streamed `gen_ai.request.model` is the model id the provider returns in its response. `gen_ai.request.parameters` contains the model id sent in the request. The fixtures deliberately return a different, synthetic dated id so this distinction is tested.
-- Streamed and failed calls omit `gen_ai.request.model`. The requested model remains in the `gen_ai.request.parameters` JSON unless invocation parameters are hidden.
+- Up to 0.1.10, streamed and failed calls omit `gen_ai.request.model`; later versions record the requested model there. The requested model remains in the `gen_ai.request.parameters` JSON unless invocation parameters are hidden.
 - Chat `output.value` contains the assistant content. Streams accumulate that content into one span. A stream with no output text exports an empty string, with no raw-response fallback. A non-streamed response with empty content exports no `output.value`. Extra response metadata is not copied into chat `output.value`.
 - The tests pin `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens`. Missing usage is omitted, never set to zero. Default stream fixtures omit usage; `stream_options={"include_usage": True}` with a final usage chunk exports all three counts.
 - The 401 and 429 fixtures produce ERROR spans with exception events. The recipe keeps the SDK's default retry policy; the error tests disable retries so each fixture sees one request.
@@ -94,7 +94,7 @@ Doubleword documents the following tiers in its [API reference](https://doublewo
 
 Both tested SDK versions (the 1.69.0 floor and 3.24.0) accept the native `service_tier` parameter and send `flex` unchanged; the test checks the transmitted value and the recorded parameter. Older SDK type annotations may not list `flex`; that does not change the request.
 
-The same [API reference](https://doubleword.ai/llms.txt) lists embeddings. An OpenAI-shaped embedding fixture at `/v1/embeddings` produces a `CreateEmbeddingResponse` span with `gen_ai.span.kind=EMBEDDING` and provider `openai`. The model id from the response appears in `embedding.model_name`; `gen_ai.request.model` is absent. Requested model parameters and input/total token counts are recorded.
+The same [API reference](https://doubleword.ai/llms.txt) lists embeddings. An OpenAI-shaped embedding fixture at `/v1/embeddings` produces a `CreateEmbeddingResponse` span with `gen_ai.span.kind=EMBEDDING` and provider `openai` (`doubleword` in later versions). The model id from the response appears in `embedding.model_name`; up to 0.1.10 `gen_ai.request.model` is absent, and later versions set it too. Requested model parameters and input/total token counts are recorded.
 
 ## Privacy
 
@@ -102,7 +102,7 @@ Set `FI_HIDE_INPUTS=true` to mask input attributes, or `FI_HIDE_OUTPUTS=true` to
 
 For chat, `output.value` is assistant content, including when extra response metadata is supplied. Input masking alone leaves assistant output visible; output masking leaves input visible.
 
-Embedding spans also export raw response JSON under `embedding.embeddings`, vectors included. `FI_HIDE_EMBEDDING_VECTORS=true` removes the indexed `embedding.embeddings.0.embedding.vector` attribute but does **not** mask the vectors in `embedding.embeddings`. The fixtures pin both the visible control and this limitation. Input/output masking is not a blanket scrubber for embedding attributes.
+Embedding spans also export raw response JSON under `embedding.embeddings`, vectors included. `FI_HIDE_EMBEDDING_VECTORS=true` removes the indexed `embedding.embeddings.0.embedding.vector` attribute but, up to `traceai-openai` 0.1.10, does **not** mask the vectors in `embedding.embeddings`; later versions strip them there too. The tests check the visible control and accept either version's handling of the raw JSON. Input/output masking is not a blanket scrubber for embedding attributes.
 
 ## Limits / not covered
 
