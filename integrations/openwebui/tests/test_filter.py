@@ -17,6 +17,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
@@ -51,7 +52,7 @@ def metadata():
 def inlet_body():
     return {
         "stream": True,
-        "model": "claude-haiku-5-5",
+        "model": "acme-chat-model",
         "messages": [{"role": "user", "content": QUESTION}],
         "metadata": metadata(),
     }
@@ -74,7 +75,7 @@ def outlet_body(usage=True):
             "output_tokens": 3,
         }
     return {
-        "model": "claude-haiku-5-5",
+        "model": "acme-chat-model",
         "messages": [
             {
                 "id": USER_MESSAGE_ID,
@@ -157,7 +158,8 @@ def test_valves_are_a_filter_attribute_with_defaults():
     assert hasattr(filt, "Valves") and hasattr(filt, "valves")
     defaults = filt.Valves()
     assert defaults.endpoint == "https://api.futureagi.com"
-    assert defaults.redact is False
+    # Content off by default: Open WebUI serves many users.
+    assert defaults.redact is True
     assert defaults.include_email_hash is False
 
 
@@ -201,11 +203,11 @@ def test_turn_is_a_root_span_with_an_llm_child():
 
 def test_llm_span_has_model_usage_and_content():
     exporter = InMemorySpanExporter()
-    run_turn(make_filter(exporter))
+    run_turn(make_filter(exporter, redact=False))
     spans = spans_by_name(exporter)
     llm = spans["openwebui.llm"].attributes
-    assert llm["gen_ai.request.model"] == "claude-haiku-5-5"
-    assert llm["llm.model_name"] == "claude-haiku-5-5"
+    assert llm["gen_ai.request.model"] == "acme-chat-model"
+    assert llm["llm.model_name"] == "acme-chat-model"
     assert llm["gen_ai.usage.input_tokens"] == 12
     assert llm["gen_ai.usage.output_tokens"] == 3
     assert llm["llm.token_count.total"] == 15
@@ -236,14 +238,21 @@ def test_email_hash_is_opt_in_and_never_raw():
         assert USER["email"] not in json.dumps(dict(span.attributes))
 
 
-def test_redact_keeps_content_out_of_every_span():
+@pytest.mark.parametrize("valves", [{}, {"redact": True}], ids=["default", "redact"])
+def test_content_stays_out_of_every_span(valves):
     exporter = InMemorySpanExporter()
-    run_turn(make_filter(exporter, redact=True))
-    wire = json.dumps([dict(span.attributes) for span in exporter.get_finished_spans()])
+    run_turn(make_filter(exporter, **valves))
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 2
+    wire = json.dumps([dict(span.attributes) for span in spans])
     assert "QMARK-owui" not in wire and "AMARK-owui" not in wire
-    for span in exporter.get_finished_spans():
+    for span in spans:
         assert "input.value" not in span.attributes
         assert "output.value" not in span.attributes
+    # Ids, model and usage still arrive.
+    llm = spans_by_name(exporter)["openwebui.llm"].attributes
+    assert llm["gen_ai.request.model"] == "acme-chat-model"
+    assert llm["gen_ai.usage.input_tokens"] == 12
 
 
 def test_total_tokens_are_prompt_plus_completion():

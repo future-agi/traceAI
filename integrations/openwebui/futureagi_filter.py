@@ -153,8 +153,11 @@ class Filter:
         project: str = Field(
             default="open-webui", description="Future AGI project name."
         )
+        # On by default: Open WebUI serves many users, and their messages
+        # leave the instance only when an admin turns this off.
         redact: bool = Field(
-            default=False, description="Leave prompts and replies out of the spans."
+            default=True,
+            description="Leave prompts and replies out of the spans. Set to false to see them in Future AGI.",
         )
         include_email_hash: bool = Field(
             default=False,

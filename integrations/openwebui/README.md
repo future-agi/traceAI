@@ -29,7 +29,7 @@ in the valves.
 | `api_key`, `secret_key` | empty | Future AGI keys, sent as the `X-Api-Key` and `X-Secret-Key` headers. Shown as password fields. With either one empty, nothing is exported. |
 | `endpoint` | `https://api.futureagi.com` | Future AGI origin. The filter posts OTLP/HTTP to `{endpoint}/tracer/v1/traces`; a value that already ends in that path is used as is. For a self-hosted collector use its origin. |
 | `project` | `open-webui` | Future AGI project; sent as the resource attributes `project_name` and `project_type=observe`. |
-| `redact` | `false` | `true` leaves prompts and replies out of every span. |
+| `redact` | `true` | Leaves prompts and replies out of every span. **Set `redact=false` to see prompts and replies in Observe.** |
 | `include_email_hash` | `false` | `true` adds `user.email_hash`, a SHA-256 of the user's email. The email itself is never sent. |
 
 Open WebUI stores the valves in its database (encrypted when
@@ -42,8 +42,8 @@ after the reply. Each turn becomes one trace of two spans:
 
 | Span | Type | Attributes |
 |---|---|---|
-| `openwebui.chat` | chain (`fi.span.kind=CHAIN`) | `session.id` and `gen_ai.conversation.id` (the Open WebUI chat id, so a chat is one Future AGI session), `user.id` (the Open WebUI user id), `user.email_hash` (opt-in), `input.value` (the user's message) and `output.value` (the reply) |
-| `openwebui.llm`, its child | llm (`fi.span.kind=LLM`) | the same ids, `gen_ai.request.model` / `llm.model_name` (the Open WebUI model id), `gen_ai.usage.input_tokens` / `output_tokens` and `llm.token_count.*` when the reply carries usage, otherwise `gen_ai.usage.unavailable=true`, `input.value` (the conversation sent, as JSON) and `output.value` (the reply) |
+| `openwebui.chat` | chain (`fi.span.kind=CHAIN`) | `session.id` and `gen_ai.conversation.id` (the Open WebUI chat id, so a chat is one Future AGI session), `user.id` (the Open WebUI user id), `user.email_hash` (opt-in), and with `redact=false` `input.value` (the user's message) and `output.value` (the reply) |
+| `openwebui.llm`, its child | llm (`fi.span.kind=LLM`) | the same ids, `gen_ai.request.model` / `llm.model_name` (the Open WebUI model id), `gen_ai.usage.input_tokens` / `output_tokens` and `llm.token_count.*` when the reply carries usage, otherwise `gen_ai.usage.unavailable=true`, and with `redact=false` `input.value` (the conversation sent, as JSON) and `output.value` (the reply) |
 
 - Both spans start when `inlet` ran and end when `outlet` ran, so their
   duration is the turn as Open WebUI saw it, including the model call.
@@ -59,10 +59,13 @@ after the reply. Each turn becomes one trace of two spans:
 
 ## Privacy
 
-- With the default `redact=false`, the spans carry the conversation sent to
-  the model and the reply, for every user of the Open WebUI instance. Set
-  `redact=true` to keep message text out of Future AGI; ids, model and token
-  counts are still sent.
+- Content is off by default (`redact=true`): no message text leaves Open
+  WebUI. Each turn still carries the chat and user ids, the model and the
+  token counts, so Observe shows the trace tree, sessions, models and usage,
+  with Input and Output empty.
+- Set `redact=false` to see prompts and replies in Observe. The spans then
+  carry the conversation sent to the model and the reply, for every user of
+  the Open WebUI instance.
 - The user's email is never sent; `include_email_hash` adds only its SHA-256.
 - The Future AGI keys travel only as request headers, never as span
   attributes.
