@@ -8,6 +8,7 @@ export {
   mapVoltAgentAttributes,
   mapSpanEvents,
   reconcileOperationUsage,
+  copyOperationOutput,
   resolveSpanKind,
   isContentKey,
   isPromotedUsageKey,

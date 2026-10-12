@@ -10,8 +10,9 @@ It plugs into VoltAgent's own `ObservabilityConfig.spanProcessors`. It does not 
 it does not change the span VoltAgent hands to its other processors (VoltOps, local storage,
 websocket): it exports a mapped copy.
 
-Status: alpha. Fixture-validated against `@voltagent/core` 2.11.0 with the AI SDK mock model; no
-live model provider was called.
+Status: alpha. Fixture-validated against `@voltagent/core` 2.11.0 with the AI SDK mock model, and
+run end to end with a live model (an OpenAI-compatible endpoint through
+`@ai-sdk/openai-compatible`) into a local Future AGI collector.
 
 ## Install
 
@@ -92,7 +93,7 @@ promoted token keys on spans that are not model calls (moved under `voltagent.`)
 | `voltagent.usage.input_tokens`, `.output_tokens`, `.total_tokens`, `.cache_read_tokens`, `.reasoning_tokens` | `usage.prompt_tokens`, ... on the agent span | the operation total; namespaced so it is not counted twice |
 | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.description` | `tool.name`, `tool.call.id`, `tool.description` | |
 | status, `exception` events, `error.*` | passed through | a failing tool is an `ERROR` span; `exception` events keep `exception.type`, `.message` and `.stacktrace`. Other event attributes are filtered like span attributes (see Content) |
-| `input.value`, `output.value` | `input`, `output` (`vector.query` / `embedding.query` as retriever input) | **only with `captureContent: true`** |
+| `input.value`, `output.value` | `input`, `output` (`vector.query` / `embedding.query` as retriever input). llm spans: `llm.messages` (the last 10 messages VoltAgent sent) as input; as output, the agent span's `output` when the operation has exactly one successful `llm:generateText` / `llm:streamText` span (VoltAgent records no response text on llm spans) | **only with `captureContent: true`** |
 | cost | not mapped | VoltAgent sets `usage.cost` only from OpenRouter provider metadata; it is passed through unchanged and not promoted |
 
 ### Tokens

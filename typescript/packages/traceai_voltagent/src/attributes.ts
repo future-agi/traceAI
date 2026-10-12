@@ -39,6 +39,8 @@ export const VoltAgentAttributes = {
   LLM_MAX_OUTPUT_TOKENS: "llm.max_output_tokens",
   LLM_TOP_P: "llm.top_p",
   LLM_FINISH_REASON: "llm.finish_reason",
+  /** The last 10 messages sent to the model, JSON (role + content). The llm span's only prompt key. */
+  LLM_MESSAGES: "llm.messages",
   LLM_MODEL_RESOLUTION_FAILED: "llm.model_resolution_failed",
   LLM_USAGE_PROMPT_TOKENS: "llm.usage.prompt_tokens",
   LLM_USAGE_COMPLETION_TOKENS: "llm.usage.completion_tokens",

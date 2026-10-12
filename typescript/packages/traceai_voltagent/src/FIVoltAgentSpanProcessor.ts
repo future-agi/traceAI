@@ -8,7 +8,7 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { mapSpanEvents, mapVoltAgentAttributes, reconcileOperationUsage } from "./mapping";
+import { copyOperationOutput, mapSpanEvents, mapVoltAgentAttributes, reconcileOperationUsage } from "./mapping";
 
 type Resource = ReadableSpan["resource"];
 type SpanEvents = ReadableSpan["events"];
@@ -134,6 +134,13 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
             reconcileOperationUsage(source, operation.spans);
           } catch (error) {
             diag.warn("@traceai/voltagent: usage reconciliation failed", error);
+          }
+          if (this.captureContent) {
+            try {
+              copyOperationOutput(source, operation.spans);
+            } catch (error) {
+              diag.warn("@traceai/voltagent: copying the operation output failed", error);
+            }
           }
           for (const held of operation.spans) this.forward(held.original, held.attributes, held.events);
         }

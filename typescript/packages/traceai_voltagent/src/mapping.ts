@@ -353,10 +353,13 @@ export function mapVoltAgentAttributes(source: Attributes, options: MapOptions):
 
   // Content, only after opt-in.
   if (options.captureContent) {
+    // VoltAgent writes no `input` on llm spans; their prompt is only in `llm.messages`, and
+    // fi-collector fills a span's input column from input.value only.
     const input =
       asString(source[VA.INPUT]) ??
       asString(source[VA.VECTOR_QUERY]) ??
-      asString(source[VA.EMBEDDING_QUERY]);
+      asString(source[VA.EMBEDDING_QUERY]) ??
+      (isModelCall ? asString(source[VA.LLM_MESSAGES]) : undefined);
     if (input !== undefined && out[FIAttributes.INPUT_VALUE] === undefined) {
       out[FIAttributes.INPUT_VALUE] = input;
       setIfAbsent(out, FIAttributes.INPUT_MIME_TYPE, looksLikeJson(input) ? "application/json" : "text/plain");
@@ -386,6 +389,37 @@ function looksLikeJson(value: string): boolean {
  */
 const ROOT_ROLLED_UP_OPERATIONS = new Set(["generateText", "streamText"]);
 
+/** The one successful main-call llm span of an operation, or undefined when there are none or several. */
+function soleMainCall<T extends { source: Attributes; isError: boolean }>(llmSpans: T[]): T | undefined {
+  const candidates = llmSpans.filter(
+    (span) =>
+      !span.isError &&
+      span.source[VA.LLM_MODEL_RESOLUTION_FAILED] !== true &&
+      ROOT_ROLLED_UP_OPERATIONS.has(String(span.source[VA.LLM_OPERATION])),
+  );
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/**
+ * VoltAgent 2.11.0 records no response text on llm spans (agent.ts createLLMSpanFinalizer sets
+ * usage, finish reason and status only). With exactly one successful main-call llm span, that
+ * span's final answer is the operation's `output` on the root span, so the exported copy of the
+ * llm span gets it as output.value. Call only when content capture is on. Returns the updated
+ * span attributes, if any.
+ */
+export function copyOperationOutput(
+  rootSource: Attributes,
+  llmSpans: Array<{ source: Attributes; attributes: Attributes; isError: boolean }>,
+): Attributes | undefined {
+  const output = asString(rootSource[VA.OUTPUT]);
+  if (output === undefined) return undefined;
+  const target = soleMainCall(llmSpans);
+  if (!target || target.attributes[FIAttributes.OUTPUT_VALUE] !== undefined) return undefined;
+  target.attributes[FIAttributes.OUTPUT_VALUE] = output;
+  target.attributes[FIAttributes.OUTPUT_MIME_TYPE] = looksLikeJson(output) ? "application/json" : "text/plain";
+  return target.attributes;
+}
+
 /**
  * VoltAgent 2.11.0 wraps a whole multi-step AI SDK call in one `llm:<operation>` span and records
  * `response.usage` on it, which is the LAST step only (agent.ts finalizeLLMSpan), while the
@@ -403,15 +437,8 @@ export function reconcileOperationUsage(
   const rootUsage = readRootUsage(rootSource);
   if (rootUsage.input === undefined && rootUsage.output === undefined) return undefined;
 
-  const candidates = llmSpans.filter(
-    (span) =>
-      !span.isError &&
-      span.source[VA.LLM_MODEL_RESOLUTION_FAILED] !== true &&
-      ROOT_ROLLED_UP_OPERATIONS.has(String(span.source[VA.LLM_OPERATION])),
-  );
-  if (candidates.length !== 1) return undefined;
-
-  const target = candidates[0];
+  const target = soleMainCall(llmSpans);
+  if (!target) return undefined;
   const stepUsage = readLLMSpanUsage(target.source);
   const grows = (total?: number, step?: number) => total !== undefined && (step === undefined || total > step);
   if (!grows(rootUsage.input, stepUsage.input) && !grows(rootUsage.output, stepUsage.output)) {

@@ -145,6 +145,18 @@ describe("FIVoltAgentSpanProcessor with a real VoltAgent agent (AC-01)", () => {
     const weather = attrs(one(exported, "tool.execution:get_weather"));
     expect(String(weather["input.value"])).toContain(MARKERS.toolArg);
     expect(String(weather["output.value"])).toContain(MARKERS.toolResult);
+    // The llm span: its prompt (llm.messages) and, with one main model call, the operation's answer.
+    const llm = attrs(one(exported, "llm:generateText"));
+    expect(String(llm["input.value"])).toContain(MARKERS.prompt);
+    expect(llm["input.mime_type"]).toBe("application/json");
+    expect(llm["output.value"]).toBe(MARKERS.answer);
+  });
+
+  it("leaves the llm span's output empty when content is off", async () => {
+    const { exported } = await runToolCallingAgent();
+    const llm = attrs(one(exported, "llm:generateText"));
+    expect(llm["input.value"]).toBeUndefined();
+    expect(llm["output.value"]).toBeUndefined();
   });
 });
 

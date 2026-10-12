@@ -319,6 +319,26 @@ describe("content (AC-07)", () => {
     expect(attributes["agent.instructions"]).toBe("SECRET_INSTRUCTIONS");
   });
 
+  it("uses llm.messages as the llm span's input only after opt-in", () => {
+    // VoltAgent 2.11.0 writes the prompt on llm spans only as llm.messages (agent.ts
+    // buildLLMSpanAttributes), and fi-collector fills a span's input column only from input.value.
+    const llm = {
+      "span.type": "llm",
+      "llm.model": "m",
+      "llm.messages": '[{"role":"user","content":"SECRET_PROMPT"}]',
+      "llm.messages.count": 1,
+    };
+    const off = mapVoltAgentAttributes(llm, OFF).attributes;
+    expect(off["input.value"]).toBeUndefined();
+    expect(off["llm.messages"]).toBeUndefined();
+    const on = mapVoltAgentAttributes(llm, ON).attributes;
+    expect(on["input.value"]).toBe(llm["llm.messages"]);
+    expect(on["input.mime_type"]).toBe("application/json");
+    // Not on other span kinds.
+    const agent = mapVoltAgentAttributes({ "entity.type": "agent", "llm.messages": "[]" }, ON).attributes;
+    expect(agent["input.value"]).toBeUndefined();
+  });
+
   it("uses the vector/embedding query as retriever input only after opt-in", () => {
     const off = mapVoltAgentAttributes({ "span.type": "vector", "vector.query": "find cats" }, OFF);
     expect(off.attributes["input.value"]).toBeUndefined();
