@@ -95,7 +95,10 @@ def main(argv=None) -> int:
             raise ValueError(f"Set {MODEL_ENV} or pass --model.")
         if not api_key:
             raise ValueError(f"Set {API_KEY_ENV}.")
-    except (KeyError, ValueError) as error:
+    except KeyError as error:
+        print(f"Set {error.args[0]} before running this example.", file=sys.stderr)
+        return 2
+    except ValueError as error:
         print(str(error), file=sys.stderr)
         return 2
 

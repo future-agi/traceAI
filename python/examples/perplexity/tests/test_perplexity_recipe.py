@@ -544,7 +544,8 @@ def test_main_requires_configuration_before_tracing(monkeypatch, capsys, variabl
         monkeypatch.setattr(app, "setup_tracing", lambda *args, **kwargs: pytest.fail("Tracing started"))
         assert app.main([]) == 2
         captured = capsys.readouterr()
-        assert variable in captured.err
+        # A readable instruction, not a bare KeyError repr such as 'PERPLEXITY_MODEL'.
+        assert f"Set {variable}" in captured.err
         assert captured.out == ""
         assert server.requests() == []
         assert receiver.spans() == []
