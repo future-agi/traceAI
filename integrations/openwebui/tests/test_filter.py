@@ -5,8 +5,10 @@ The hook arguments mirror what Open WebUI 0.11.4 passes a Function filter
 the instance is cached between calls, its ``valves`` are set from the
 database before every hook, ``inlet``/``outlet`` get ``body``, ``__user__``
 and ``__metadata__``, and the outlet body carries the stored messages with
-the reply's ``usage`` on the last one. Spans go to an in-memory exporter or
-to a loopback OTLP/HTTP server in this file; nothing leaves the machine.
+the reply's ``usage`` on the last one. The stream contract also accepts a raw
+plain-JSON error line for hosts that adapt Open WebUI's non-SSE branch. Spans
+go to an in-memory exporter or to a loopback OTLP/HTTP server in this file;
+nothing leaves the machine.
 """
 
 import gc
@@ -119,6 +121,18 @@ def run_turn(filt, body=None, user=USER):
     result = filt.outlet(body or outlet_body(), __user__=user, __metadata__=meta)
     filt.flush()
     return result
+
+
+def forward_host_plain_json_error_line(filt, line, meta):
+    """Mirror middleware's non-SSE branch plus the explicit filter adapter."""
+    data = line
+    if not data.startswith("data:"):
+        raw_obj = json.loads(data)
+        raw_error = raw_obj.get("error") if isinstance(raw_obj, dict) else None
+        if raw_error:
+            filt.stream(data, __metadata__=meta)
+        return raw_error
+    return None
 
 
 def spans_by_name(exporter):
@@ -252,16 +266,20 @@ def test_empty_reply_without_usage_is_error():
         assert span.status.status_code == StatusCode.ERROR
 
 
-def test_partial_stream_error_marks_real_outlet_as_error_and_keeps_content():
-    # Open WebUI 0.11.4 sends this ordinary provider error chunk through the
-    # stream hook, then calls outlet with the accumulated partial reply.
+def test_plain_json_stream_error_marks_real_outlet_as_error_and_keeps_content():
+    # This is the line shape from Open WebUI 0.11.4's non-SSE branch: it is
+    # plain JSON, not a synthetic response.failed body. A host adapter that
+    # forwards that line to the stream contract preserves the marker until
+    # outlet receives the accumulated partial reply.
     body = outlet_body(usage=False)
     exporter = InMemorySpanExporter()
     filt = make_filter(exporter, redact=False)
     meta = metadata()
     filt.inlet(inlet_body(), __user__=USER, __metadata__=meta)
-    error_chunk = {"error": {"message": "provider disconnected"}}
-    assert filt.stream(error_chunk, __metadata__=meta) is error_chunk
+    error_line = '{"error":{"message":"provider disconnected"}}'
+    assert forward_host_plain_json_error_line(filt, error_line, meta) == {
+        "message": "provider disconnected"
+    }
     filt.outlet(body, __user__=USER, __metadata__=meta)
     filt.flush()
 
@@ -310,6 +328,22 @@ def test_provider_ignores_otel_sampler_and_resource_env(monkeypatch):
     assert len(exporter.get_finished_spans()) == 2
     resource = exporter.get_finished_spans()[0].resource.attributes
     assert dict(resource) == {"project_name": "owui-test", "project_type": "observe"}
+
+
+def test_provider_ignores_hostile_native_bsp_env(monkeypatch):
+    # Open WebUI's native telemetry shares the process environment. Invalid
+    # values must not prevent this standalone filter from creating its provider.
+    for key in (
+        "OTEL_BSP_MAX_QUEUE_SIZE",
+        "OTEL_BSP_SCHEDULE_DELAY",
+        "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+        "OTEL_BSP_EXPORT_TIMEOUT",
+    ):
+        monkeypatch.setenv(key, "not-an-integer")
+    exporter = InMemorySpanExporter()
+    filt = make_filter(exporter)
+    run_turn(filt)
+    assert len(exporter.get_finished_spans()) == 2
 
 
 def test_exporter_has_explicit_system_ca(monkeypatch):

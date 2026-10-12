@@ -39,6 +39,15 @@ _STREAM_FAILURE_KEY = "_futureagi_stream_failure"
 _TEMPORARY_PREFIXES = ("temporary:", "local:")
 _DEFAULT_EMAIL_HMAC_KEY = b"future-agi-openwebui-email-hash-v1"
 
+# Open WebUI enables native OTel telemetry in the same process. Keep this
+# filter's queue independent from that process-wide configuration: the
+# explicit values below prevent malformed or pathological OTEL_BSP_* values
+# from changing provider creation or making the filter fail closed.
+_BSP_MAX_QUEUE_SIZE = 2048
+_BSP_SCHEDULE_DELAY_MILLIS = 5000
+_BSP_MAX_EXPORT_BATCH_SIZE = 512
+_BSP_EXPORT_TIMEOUT_MILLIS = 30000
+
 
 def collector_endpoint(endpoint: str) -> str:
     trimmed = endpoint.rstrip("/")
@@ -233,8 +242,30 @@ def _is_failure_status(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() in _FAILURE_STATUSES
 
 
+def _decode_stream_event(value: Any) -> Any:
+    """Decode a host stream line without changing the value returned to Open WebUI."""
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8", "replace")
+        except UnicodeError:
+            return value
+    if not isinstance(value, str):
+        return value
+    payload = value.strip()
+    if payload.startswith("data:"):
+        payload = payload[5:].strip()
+    if not payload or payload == "[DONE]":
+        return value
+    try:
+        decoded = json.loads(payload)
+    except (TypeError, ValueError):
+        return value
+    return decoded if isinstance(decoded, dict) else value
+
+
 def _has_provider_failure_signal(value: Any) -> bool:
     """Recognise explicit host/provider failure markers without guessing from content."""
+    value = _decode_stream_event(value)
     if not isinstance(value, dict):
         return False
     if value.get("type") == "response.failed":
@@ -278,6 +309,12 @@ def _is_empty_failed_reply(body: dict[str, Any]) -> bool:
         and not _usage(reply)
         and not reply.get("output")
     )
+
+
+def _remember_stream_failure(event: Any, metadata: dict[str, Any] | None) -> None:
+    """Persist a failure marker on the request object shared with outlet."""
+    if isinstance(metadata, dict) and _has_provider_failure_signal(event):
+        metadata[_STREAM_FAILURE_KEY] = True
 
 
 class Filter:
@@ -340,13 +377,18 @@ class Filter:
 
     def stream(
         self,
-        event: dict[str, Any],
+        event: Any,
         __metadata__: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Remember provider errors seen in Open WebUI's real stream hook."""
+    ) -> Any:
+        """Remember provider errors from decoded events or raw host stream lines.
+
+        Open WebUI normally passes a decoded dict here. A small host adapter may
+        also forward a non-SSE JSON line (or bytes) from its plain-JSON error
+        branch; those values are inspected without changing the value returned
+        to Open WebUI.
+        """
         try:
-            if isinstance(__metadata__, dict) and _has_provider_failure_signal(event):
-                __metadata__[_STREAM_FAILURE_KEY] = True
+            _remember_stream_failure(event, __metadata__)
         except Exception as error:  # noqa: BLE001
             _log_hook_error("stream", error)
         return event
@@ -440,7 +482,13 @@ class Filter:
                 shutdown_on_exit=False,
             )
             provider.add_span_processor(
-                BatchSpanProcessor(exporter, max_queue_size=2048)
+                BatchSpanProcessor(
+                    exporter,
+                    max_queue_size=_BSP_MAX_QUEUE_SIZE,
+                    schedule_delay_millis=_BSP_SCHEDULE_DELAY_MILLIS,
+                    max_export_batch_size=_BSP_MAX_EXPORT_BATCH_SIZE,
+                    export_timeout_millis=_BSP_EXPORT_TIMEOUT_MILLIS,
+                )
             )
             self._provider_cleanup.add(provider)
             old = self._provider

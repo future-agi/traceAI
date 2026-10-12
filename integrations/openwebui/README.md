@@ -65,20 +65,28 @@ retrieval, tools, database work and response publishing between `inlet` and
 `outlet`.
 
 - The exporter is cached per valve configuration and uses a bounded batch
-  queue. The chat does not wait for Future AGI, and a collector outage does
-  not break the chat. A process killed before its queue flushes can lose spans.
+  queue with explicit delay, batch-size, and timeout values. Open WebUI's
+  process-wide `OTEL_BSP_*` environment variables cannot change or invalidate
+  this filter's processor. The chat does not wait for Future AGI, and a
+  collector outage does not break the chat. A process killed before its queue
+  flushes can lose spans.
 - For ordinary replies, usage reads `prompt_tokens`/`completion_tokens`.
   For a reply containing function-call output items, it reads cumulative
   `input_tokens`/`output_tokens` from Open WebUI's native tool loop. Total is
   computed as input plus output because Open WebUI can double-count its stored
   `total_tokens` when providers repeat usage chunks.
-- An ordinary in-stream provider error chunk passes through the filter's
-  `stream` hook before Open WebUI calls `outlet`. The filter marks that turn
-  `ERROR` even when the real outlet body contains partial content/output and no
-  usage, while retaining the partial content. Empty replies with no usage are
-  also marked `ERROR`. HTTP-level failures, non-streaming errors and user
-  cancellation do not provide an observable stream chunk to this hook and may
-  bypass `outlet` entirely, so they can produce no application span.
+- A provider error observed by the filter's `stream` hook is copied to the
+  request `__metadata__` and survives until `outlet`. The hook accepts the
+  decoded event Open WebUI normally supplies and also a raw JSON/bytes line,
+  which lets a host adapter cover Open WebUI's plain-JSON error branch. The
+  marker makes a partial-content outlet `ERROR` without discarding that
+  content. Stock Open WebUI 0.11.4 skips filter processing for non-SSE lines;
+  deployments that need those failures marked must forward the decoded
+  `{"error": ...}` object (or raw line) to this same `stream` hook before
+  emitting it. There is no reliable outlet-only inference for a successful
+  no-usage response versus an unobserved partial stream error. Empty replies
+  with no usage are still marked `ERROR`; failures that bypass both the stream
+  hook and outlet can produce no application span.
 - An outlet call without a matching inlet is skipped. This avoids duplicate
   zero-duration traces from the legacy `/api/chat/completed` endpoint.
 
@@ -97,11 +105,12 @@ retrieval, tools, database work and response publishing between `inlet` and
   an admin who explicitly turns content capture on should treat prompt text
   as capable of containing any user field.
 - The Future AGI keys travel only as request headers, never as span
-  attributes. `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME`, sampler and
-  certificate environment variables are not inherited by this filter's
-  provider: it supplies an explicit resource, `ALWAYS_ON` sampler and the
-  system CA bundle. `OTEL_SDK_DISABLED=true` still disables the OpenTelemetry
-  SDK globally, including this filter; unset it when the filter should run.
+  attributes. `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME`, sampler,
+  `OTEL_BSP_*`, and certificate environment variables are not inherited by
+  this filter's provider: it supplies an explicit resource, `ALWAYS_ON`
+  sampler, safe batch settings, and the system CA bundle.
+  `OTEL_SDK_DISABLED=true` still disables the OpenTelemetry SDK globally,
+  including this filter; unset it when the filter should run.
 
 ## Native Open WebUI tracing
 
