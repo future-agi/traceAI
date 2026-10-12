@@ -843,11 +843,17 @@ def _model_name(extra: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, str]]
 
 @stop_on_exception
 def _token_counts(outputs: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, int]]:
-    """Yields token count information if present."""
+    """Yields token count information if present.
+
+    The message's ``usage_metadata`` (LangChain's normalized usage) comes
+    first. The provider's raw ``llm_output`` usage is the fallback: Anthropic's
+    raw ``input_tokens`` leaves out cached prompt tokens, which
+    ``usage_metadata`` counts, so a cached prompt was reported as a few tokens.
+    """
     if not (
         token_usage := (
-            _parse_token_usage_for_non_streaming_outputs(outputs)
-            or _parse_token_usage_for_streaming_outputs(outputs)
+            _parse_token_usage_for_streaming_outputs(outputs)
+            or _parse_token_usage_for_non_streaming_outputs(outputs)
         )
     ):
         return
