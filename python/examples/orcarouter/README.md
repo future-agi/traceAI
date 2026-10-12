@@ -74,9 +74,9 @@ provider.force_flush()
 
 ## What you see in Future AGI
 
-The fixtures produce one `ChatCompletion` span with `gen_ai.span.kind=LLM` per call. The provider field says `openai`: `gen_ai.provider.name` is the shared instrumentor's label.
+The fixtures produce one `ChatCompletion` span with `gen_ai.span.kind=LLM` per call. Up to `traceai-openai` 0.1.10, the provider field says `openai`: `gen_ai.provider.name` is the shared instrumentor's label. Later versions (future-agi/traceAI#249) say `orcarouter` for `api.orcarouter.ai`; other base URLs keep `openai`.
 
-For a successful non-streamed call, `gen_ai.request.model` is the model id the provider returns in its response. The requested model stays in the JSON attribute `gen_ai.request.parameters`. For streamed and failed calls, current `traceai-openai` leaves `gen_ai.request.model` absent; the requested model is still in `gen_ai.request.parameters`. Hiding invocation parameters with `FI_HIDE_LLM_INVOCATION_PARAMETERS=true` removes that JSON attribute, so streamed and failed spans record no model at all (pinned by a test).
+For a successful non-streamed call, `gen_ai.request.model` is the model id the provider returns in its response. The requested model stays in the JSON attribute `gen_ai.request.parameters`. For streamed and failed calls, `traceai-openai` 0.1.10 and earlier leave `gen_ai.request.model` absent; the requested model is still in `gen_ai.request.parameters`. Hiding invocation parameters with `FI_HIDE_LLM_INVOCATION_PARAMETERS=true` removes that JSON attribute, so those versions record no model at all on streamed and failed spans. Later versions record the requested model in `gen_ai.request.model` either way; the tests accept both.
 
 The tests pin `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens` when the response includes usage. Missing usage is omitted, never replaced with zero. The default stream fixture exports none of these attributes. A stream with `stream_options={"include_usage": True}` and a final usage chunk exports all three. The same instrumentor accumulates streamed output text in `output.value`. These are fixture observations, not a guarantee that the hosted gateway supplies stream usage.
 

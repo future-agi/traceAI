@@ -24,6 +24,12 @@ from _fake_openai import (
     FakeOpenAI, completion, error_body, stream_bytes,
 )
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# They also omit gen_ai.request.model on streamed and failed calls, where later
+# versions record the requested model. Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "orcarouter")
+
 RECIPE = Path(__file__).resolve().parents[1]
 VENDOR_KEY = "placeholder-orcarouter-key"
 FI_KEY = "placeholder-futureagi-api-key"
@@ -115,7 +121,7 @@ def exported_span(receiver, provider, project):
     values = attributes(span)
     assert span["name"] == "ChatCompletion"
     assert values["gen_ai.span.kind"] == "LLM"
-    assert values["gen_ai.provider.name"] == "openai"
+    assert values["gen_ai.provider.name"] in PROVIDER_NAMES
     exports = receiver.requests()
     assert len(exports) == 1
     assert exports[0]["path"] == "/tracer/v1/traces"
@@ -221,8 +227,8 @@ def test_stream_text_model_gap_and_usage(monkeypatch, include_usage):
         assert len(requests) == 1
         assert span["status"]["code"] == "STATUS_CODE_OK"
         assert values["output.value"] == ANSWER
-        # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-        assert MODEL_ATTRIBUTE not in values
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         actual_usage = {key: value for key, value in values.items() if key.startswith("gen_ai.usage.")}
         assert actual_usage == (USAGE_ATTRIBUTES if include_usage else {})
@@ -251,8 +257,8 @@ def test_stream_without_text_has_no_raw_response_fallback(monkeypatch):
         assert values["output.value"] == ""
         assert marker not in json.dumps(span)
         assert "fixture_metadata" not in json.dumps(span)
-        # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-        assert MODEL_ATTRIBUTE not in values
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
 
 
@@ -307,8 +313,8 @@ def test_errors_record_exception_and_requested_model(monkeypatch, status, error_
         assert len(exception_events) == 1
         assert error_class.__name__ in json.dumps(exception_events)
         assert error_body(status)["error"]["message"] in json.dumps(exception_events)
-        # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-        assert MODEL_ATTRIBUTE not in values
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         assert VENDOR_KEY not in json.dumps(span)
 
@@ -335,10 +341,12 @@ def test_hidden_invocation_parameters_leave_no_requested_model(monkeypatch, call
                     for _ in client.chat.completions.create(model=REQUESTED_MODEL, messages=MESSAGES, stream=True):
                         pass
             _, values = exported_span(receiver, provider, project)
-            assert MODEL_ATTRIBUTE not in values
+            assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
             if hidden:
                 assert PARAMETERS_ATTRIBUTE not in values
-                assert REQUESTED_MODEL not in json.dumps(values)
+                # 0.1.10 leaves no model at all; later versions keep it only as the model attribute.
+                others = {key: value for key, value in values.items() if key != MODEL_ATTRIBUTE}
+                assert REQUESTED_MODEL not in json.dumps(others)
             else:
                 assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         OpenAIInstrumentor().uninstrument()
@@ -473,12 +481,12 @@ def test_app_subprocess_with_installed_guard(monkeypatch, tmp_path, stream):
         values = attributes(spans[0])
         assert spans[0]["name"] == "ChatCompletion"
         assert values["gen_ai.span.kind"] == "LLM"
-        assert values["gen_ai.provider.name"] == "openai"
+        assert values["gen_ai.provider.name"] in PROVIDER_NAMES
         assert ANSWER in values["output.value"]
         assert json.loads(values[PARAMETERS_ATTRIBUTE])["model"] == REQUESTED_MODEL
         if stream:
-            # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-            assert MODEL_ATTRIBUTE not in values
+            # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+            assert values.get(MODEL_ATTRIBUTE) in (None, REQUESTED_MODEL)
             assert not any(key.startswith("gen_ai.usage.") for key in values)
         else:
             assert values[MODEL_ATTRIBUTE] == RESOLVED_MODEL
@@ -669,7 +677,7 @@ def test_readme_contract_and_no_real_keys():
     assert "https://docs.orcarouter.ai/introduction" in readme
     assert "no trace export" in readme and "https://docs.orcarouter.ai/operations/observability" in readme
     assert "not Future AGI ingest failures" in readme and "funded OrcaRouter wallet" in readme
-    assert "streamed and failed spans record no model at all" in readme
+    assert "record no model at all on streamed and failed spans" in readme
     assert "verbose=False" in readme
     assert "TBD" not in readme
     source_command = """env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \\
