@@ -432,9 +432,12 @@ streamed call and a failed call. Stored:
 So with the switch off, an autolog trace reaches Future AGI as a tree of
 `unknown` spans with no model, tokens or cost, and the content only in
 `mlflow.spanInputs` and `mlflow.spanOutputs`. If you use autolog, set
-`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`. Autolog set no
-`mlflow.llm.provider` in that run, so the provider column stayed empty with
-the switch on as well.
+`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`. Know what it costs: the renamed
+spans keep no trace of the function names. The `execute_tool` span had no
+`gen_ai.tool.name` and the `invoke_agent` span no `gen_ai.agent.name`, so
+`days_left` and `refund_agent` appeared nowhere in Future AGI. Autolog set
+no `mlflow.llm.provider` in that run, so the provider column stayed empty
+with the switch on as well.
 
 ### Gaps for the shared processor (SF-1)
 
