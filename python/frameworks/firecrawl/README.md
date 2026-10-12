@@ -35,7 +35,7 @@ Each call to `scrape`, `search`, `map`, `crawl`, `start_crawl`, `get_crawl_statu
 | Attribute | Methods | Value |
 |---|---|---|
 | `server.address` | `scrape`, `map`, `crawl`, `start_crawl` | Host of the target URL. Never the path or query. |
-| `fi.retrieval.query` | `search` | The query, with the API key redacted, capped at 1024 characters. Omitted with `hide_inputs` or `hide_input_text`; shared PII redaction applies when enabled. |
+| `fi.retrieval.query`, `input.value` | `search` | The query, with the API key redacted, capped at 1024 characters. Omitted with `hide_inputs` or `hide_input_text`; shared PII redaction applies when enabled. |
 | `fi.retrieval.document_count` | `search` | Total returned records across SDK `web`, `news`, `images` and `tools` groups. Known empty groups count as zero; unknown or malformed shapes omit the attribute. |
 | `firecrawl.formats` | `scrape`, `search`, `crawl`, `start_crawl` | Bounded, deduplicated canonical SDK format names from `formats=` or `scrape_options.formats`. Unknown names, prompts and schemas are omitted. Snake-case aliases use the SDK's API spelling. |
 | `firecrawl.job_id` | `crawl`, `start_crawl`, `get_crawl_status`, `cancel_crawl` | The crawl job id, positional or keyword. The start, status and cancel spans of one job share it. |

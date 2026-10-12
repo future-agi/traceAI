@@ -344,7 +344,9 @@ def test_f3_query_pii_redaction_precedes_cap(fake, telemetry, monkeypatch, use_a
     spans, wire = exported(telemetry)
     assert len(spans) == 1
     expected = redact_pii_in_string(query)[:1024]
-    assert _flatten_attributes(spans[0]["attributes"])["fi.retrieval.query"] == expected
+    attributes = _flatten_attributes(spans[0]["attributes"])
+    assert attributes["fi.retrieval.query"] == expected
+    assert attributes["input.value"] == expected
     for secret in ("person@example.test", "boundary.person", "415-555"):
         assert secret not in wire
 
@@ -365,7 +367,9 @@ def test_f3_hidden_inputs_omit_search_query(fake, telemetry, monkeypatch, use_as
     assert len(result.web) == 2
     spans, wire = exported(telemetry)
     assert len(spans) == 1
-    assert "fi.retrieval.query" not in _flatten_attributes(spans[0]["attributes"])
+    attributes = _flatten_attributes(spans[0]["attributes"])
+    assert "fi.retrieval.query" not in attributes
+    assert attributes.get("input.value", "__REDACTED__") == "__REDACTED__"
     assert "QUERY-TO-HIDE-REVIEW" not in wire
 
 

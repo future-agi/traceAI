@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _FI_SPAN_KIND = "fi.span.kind"
 _TOOL = "TOOL"
+_INPUT_VALUE = "input.value"
 _RETRIEVAL_QUERY = "fi.retrieval.query"
 _RETRIEVAL_DOCUMENT_COUNT = "fi.retrieval.document_count"
 _JOB_ID = "firecrawl.job_id"
@@ -253,6 +254,8 @@ class _BaseWrapper:
                 query_text = _redact(str(query or ""), instance, self._config)
                 if query_text is not None:
                     attributes[_RETRIEVAL_QUERY] = query_text
+                    # The Observe input panel reads input.value; keep both keys.
+                    attributes[_INPUT_VALUE] = query_text
         elif self._method_name in ("scrape", "map", "crawl", "start_crawl"):
             url = kwargs.get("url", args[0] if args else "")
             host = _url_host(url, instance)

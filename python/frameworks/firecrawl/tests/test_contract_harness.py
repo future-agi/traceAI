@@ -187,6 +187,7 @@ def test_real_client_calls_reach_the_collector_contract(fake_firecrawl, monkeypa
 
     search = _flatten_attributes(by_name["firecrawl.search"][0]["attributes"])
     assert search["fi.retrieval.query"] == "open telemetry"
+    assert search["input.value"] == "open telemetry"
     assert int(search["fi.retrieval.document_count"]) == 2
 
     ok_scrape, failed_scrape = by_name["firecrawl.scrape"]

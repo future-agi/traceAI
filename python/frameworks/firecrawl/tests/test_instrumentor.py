@@ -95,5 +95,7 @@ def test_search_records_query_and_count(monkeypatch: pytest.MonkeyPatch) -> None
     attrs = dict(spans[0].attributes or {})
     assert spans[0].name == "firecrawl.search"
     assert attrs["fi.retrieval.query"] == "retrieval query"
+    # The Observe input panel reads input.value; the query must reach it too.
+    assert attrs["input.value"] == "retrieval query"
     assert attrs["fi.retrieval.document_count"] == 2
     assert all(_API_KEY not in str(value) for value in attrs.values())
