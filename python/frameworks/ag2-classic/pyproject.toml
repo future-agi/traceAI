@@ -29,7 +29,7 @@ python = ">=3.10,<3.14"
 # AG2 Classic: the `autogen` distribution only. Never vendored or bundled.
 # No dependency on `ag2` 1.x, `pyautogen` or `autogen-agentchat`.
 autogen = ">=0.14.0,<0.15"
-fi-instrumentation-otel = ">=1.0.0"
+fi-instrumentation-otel = ">=1.1.0"
 opentelemetry-api = ">=1.29.0"
 opentelemetry-sdk = ">=1.29.0"
 
