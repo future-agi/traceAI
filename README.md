@@ -275,7 +275,6 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-mcp`](https://pypi.org/project/traceAI-mcp/) | Model Context Protocol | [![PyPI](https://img.shields.io/pypi/v/traceAI-mcp)](https://pypi.org/project/traceAI-mcp/) |
 | [`traceAI-pipecat`](https://pypi.org/project/traceAI-pipecat/) | Pipecat (Voice AI) | [![PyPI](https://img.shields.io/pypi/v/traceAI-pipecat)](https://pypi.org/project/traceAI-pipecat/) |
 | [`traceAI-livekit`](https://pypi.org/project/traceAI-livekit/) | LiveKit (Real-time) | [![PyPI](https://img.shields.io/pypi/v/traceAI-livekit)](https://pypi.org/project/traceAI-livekit/) |
-| [`traceAI-discoveryengine`](https://pypi.org/project/traceAI-discoveryengine/) | Google Discovery Engine (Vertex AI Search) | [![PyPI](https://img.shields.io/pypi/v/traceAI-discoveryengine)](https://pypi.org/project/traceAI-discoveryengine/) |
 
 #### Vector Databases
 
@@ -475,7 +474,6 @@ Available on [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel).
 | | MCP | ✅ | ✅ | | |
 | | Pipecat | ✅ | ✅ | | |
 | | LiveKit | ✅ | ✅ | | |
-| | Google Discovery Engine | ✅ | | | |
 | **Vector Databases** | Pinecone | ✅ | ✅ | ✅ | |
 | | ChromaDB | ✅ | ✅ | ✅ | |
 | | Qdrant | ✅ | ✅ | ✅ | |
