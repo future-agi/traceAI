@@ -117,9 +117,10 @@ retrieval, tools, database work and response publishing between `inlet` and
   as capable of containing any user field.
 - The Future AGI keys travel only as request headers, never as span
   attributes. `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME`, sampler,
-  `OTEL_BSP_*`, and certificate environment variables are not inherited by
-  this filter's provider: it supplies an explicit resource, `ALWAYS_ON`
-  sampler, safe batch settings, and the system CA bundle.
+  `OTEL_BSP_*`, certificate, client-key, timeout, and compression environment
+  variables are not inherited by this filter's provider: it supplies an
+  explicit resource, `ALWAYS_ON` sampler, safe batch settings, a 30-second
+  request timeout, no request compression, and the system CA bundle.
   `OTEL_SDK_DISABLED=true` still disables the OpenTelemetry SDK globally,
   including this filter; unset it when the filter should run.
 

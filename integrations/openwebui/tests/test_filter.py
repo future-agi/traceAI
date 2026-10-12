@@ -15,6 +15,7 @@ leaves the machine.
 import gc
 import importlib.util
 import json
+import os
 import re
 import threading
 import time
@@ -342,6 +343,73 @@ def test_exporter_has_explicit_system_ca(monkeypatch):
     filt = make_filter()
     filt._make_exporter(filt.valves)
     assert captured["certificate_file"] == _FILTER.certifi.where()
+    assert captured["client_certificate_file"] is None
+    assert captured["client_key_file"] is None
+    assert captured["timeout"] == _FILTER._EXPORT_TIMEOUT_SECONDS
+    assert captured["compression"] is _FILTER.Compression.NoCompression
+
+
+def test_exporter_masks_native_tls_and_transport_env_during_construction(monkeypatch):
+    hostile = {
+        "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE": "native-cert.pem",
+        "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE": "native-cert.pem",
+        "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY": "native-key.pem",
+        "OTEL_EXPORTER_OTLP_CLIENT_KEY": "native-key.pem",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "1",
+        "OTEL_EXPORTER_OTLP_TIMEOUT": "1",
+        "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION": "gzip",
+        "OTEL_EXPORTER_OTLP_COMPRESSION": "gzip",
+    }
+    for key, value in hostile.items():
+        monkeypatch.setenv(key, value)
+    captured = {}
+
+    class FakeExporter:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+            captured["env"] = {key: os.environ.get(key) for key in hostile}
+
+    monkeypatch.setattr(_FILTER, "OTLPSpanExporter", FakeExporter)
+    filt = make_filter()
+    filt._make_exporter(filt.valves)
+
+    assert all(value is None for value in captured["env"].values())
+    assert {key: os.environ[key] for key in hostile} == hostile
+    assert captured["kwargs"]["client_certificate_file"] is None
+    assert captured["kwargs"]["client_key_file"] is None
+    assert captured["kwargs"]["timeout"] == _FILTER._EXPORT_TIMEOUT_SECONDS
+    assert captured["kwargs"]["compression"] is _FILTER.Compression.NoCompression
+
+
+def test_exporter_request_session_has_no_native_client_tls(monkeypatch):
+    hostile = {
+        "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE": "native-cert.pem",
+        "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE": "native-cert.pem",
+        "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY": "native-key.pem",
+        "OTEL_EXPORTER_OTLP_CLIENT_KEY": "native-key.pem",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT": "1",
+        "OTEL_EXPORTER_OTLP_TIMEOUT": "1",
+        "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION": "gzip",
+        "OTEL_EXPORTER_OTLP_COMPRESSION": "gzip",
+    }
+    for key, value in hostile.items():
+        monkeypatch.setenv(key, value)
+
+    filt = make_filter()
+    exporter = filt._make_exporter(filt.valves)
+    if hasattr(exporter, "_session"):
+        session = exporter._session
+        timeout = exporter._timeout
+        client_cert = exporter._client_cert
+    else:
+        session = exporter._client._transport._session
+        timeout = exporter._client._timeout
+        client_cert = session.cert
+
+    assert client_cert is None
+    assert session.cert is None
+    assert timeout == _FILTER._EXPORT_TIMEOUT_SECONDS
+    assert exporter._compression.value == _FILTER.Compression.NoCompression.value
 
 
 def test_provider_has_a_shutdown_finalizer():

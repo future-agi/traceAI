@@ -16,14 +16,20 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import threading
 import time
 import weakref
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import certifi
 from opentelemetry import context, trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+    Compression,
+    OTLPSpanExporter,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -47,6 +53,32 @@ _BSP_MAX_QUEUE_SIZE = 2048
 _BSP_SCHEDULE_DELAY_MILLIS = 5000
 _BSP_MAX_EXPORT_BATCH_SIZE = 512
 _BSP_EXPORT_TIMEOUT_MILLIS = 30000
+_EXPORT_TIMEOUT_SECONDS = _BSP_EXPORT_TIMEOUT_MILLIS / 1000
+_OTLP_EXPORTER_ENV_VARS_TO_MASK = (
+    "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
+    "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
+    "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
+    "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+    "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+    "OTEL_EXPORTER_OTLP_TIMEOUT",
+    "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION",
+    "OTEL_EXPORTER_OTLP_COMPRESSION",
+)
+_OTLP_EXPORTER_ENV_LOCK = threading.Lock()
+
+
+@contextmanager
+def _without_native_otlp_exporter_env() -> Iterator[None]:
+    with _OTLP_EXPORTER_ENV_LOCK:
+        original = {
+            key: os.environ.pop(key)
+            for key in _OTLP_EXPORTER_ENV_VARS_TO_MASK
+            if key in os.environ
+        }
+        try:
+            yield
+        finally:
+            os.environ.update(original)
 
 
 def collector_endpoint(endpoint: str) -> str:
@@ -502,14 +534,22 @@ class Filter:
         return provider
 
     def _make_exporter(self, valves: "Filter.Valves") -> Any:
-        return OTLPSpanExporter(
-            endpoint=collector_endpoint(valves.endpoint),
-            certificate_file=certifi.where(),
-            headers={
-                "X-Api-Key": valves.api_key.get_secret_value(),
-                "X-Secret-Key": valves.secret_key.get_secret_value(),
-            },
-        )
+        # Open WebUI's native OTLP exporter shares this process environment. The
+        # OTLP exporter reads client TLS, timeout, and compression settings from
+        # that environment even when this filter supplies other constructor args.
+        with _without_native_otlp_exporter_env():
+            return OTLPSpanExporter(
+                endpoint=collector_endpoint(valves.endpoint),
+                certificate_file=certifi.where(),
+                client_certificate_file=None,
+                client_key_file=None,
+                timeout=_EXPORT_TIMEOUT_SECONDS,
+                compression=Compression.NoCompression,
+                headers={
+                    "X-Api-Key": valves.api_key.get_secret_value(),
+                    "X-Secret-Key": valves.secret_key.get_secret_value(),
+                },
+            )
 
 
 def _log_hook_error(hook: str, error: Exception) -> None:
