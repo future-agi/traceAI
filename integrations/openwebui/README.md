@@ -76,17 +76,28 @@ retrieval, tools, database work and response publishing between `inlet` and
   computed as input plus output because Open WebUI can double-count its stored
   `total_tokens` when providers repeat usage chunks.
 - A provider error observed by the filter's `stream` hook is copied to the
-  request `__metadata__` and survives until `outlet`. The hook accepts the
-  decoded event Open WebUI normally supplies and also a raw JSON/bytes line,
-  which lets a host adapter cover Open WebUI's plain-JSON error branch. The
-  marker makes a partial-content outlet `ERROR` without discarding that
-  content. Stock Open WebUI 0.11.4 skips filter processing for non-SSE lines;
-  deployments that need those failures marked must forward the decoded
-  `{"error": ...}` object (or raw line) to this same `stream` hook before
-  emitting it. There is no reliable outlet-only inference for a successful
-  no-usage response versus an unobserved partial stream error. Empty replies
-  with no usage are still marked `ERROR`; failures that bypass both the stream
-  hook and outlet can produce no application span.
+  request `__metadata__` and survives until `outlet`. On the stock SSE path,
+  Open WebUI parses a `data:` line and invokes `process_filter_functions` with
+  the decoded event before it emits that event, so the filter can mark a
+  partial-content outlet `ERROR` without discarding the partial content. The
+  filter also accepts a raw JSON/bytes line for deployments that explicitly
+  adapt the host stream branch, but that is not stock Open WebUI behavior.
+- **Stock Open WebUI 0.11.4 limitation:** in `open_webui/utils/middleware.py`
+  lines 5071-5093, a plain JSON provider error line such as
+  `{"error": ...}` is parsed, persisted/emitted, and then `continue`s before
+  `process_filter_functions(..., filter_type='stream', ...)` at lines
+  5101-5109. The Function therefore receives no `stream` call and no failure
+  marker is added to request `__metadata__`. Later, `outlet_filter_handler`
+  builds the outlet body from selected message fields at lines 4123-4143;
+  the error is not included there either. A filter-only implementation cannot
+  distinguish a successful no-usage reply from a prior plain-JSON error after
+  this branch, so this path cannot be marked reliably as `ERROR` without an
+  Open WebUI change. Empty replies with no usage are still marked `ERROR`;
+  failures that bypass both the stream hook and outlet can produce no
+  application span.
+- Upstream change needed: invoke stream filters for the plain JSON error
+  object before the branch's `continue`, or expose that error in the metadata
+  or outlet payload passed to Function filters.
 - An outlet call without a matching inlet is skipped. This avoids duplicate
   zero-duration traces from the legacy `/api/chat/completed` endpoint.
 

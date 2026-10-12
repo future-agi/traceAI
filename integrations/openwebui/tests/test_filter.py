@@ -5,10 +5,11 @@ The hook arguments mirror what Open WebUI 0.11.4 passes a Function filter
 the instance is cached between calls, its ``valves`` are set from the
 database before every hook, ``inlet``/``outlet`` get ``body``, ``__user__``
 and ``__metadata__``, and the outlet body carries the stored messages with
-the reply's ``usage`` on the last one. The stream contract also accepts a raw
-plain-JSON error line for hosts that adapt Open WebUI's non-SSE branch. Spans
-go to an in-memory exporter or to a loopback OTLP/HTTP server in this file;
-nothing leaves the machine.
+the reply's ``usage`` on the last one. The stream contract accepts decoded
+SSE events from stock Open WebUI; it also accepts raw lines for an explicit
+host adapter, which stock Open WebUI 0.11.4 does not provide. Spans go to an
+in-memory exporter or to a loopback OTLP/HTTP server in this file; nothing
+leaves the machine.
 """
 
 import gc
@@ -121,18 +122,6 @@ def run_turn(filt, body=None, user=USER):
     result = filt.outlet(body or outlet_body(), __user__=user, __metadata__=meta)
     filt.flush()
     return result
-
-
-def forward_host_plain_json_error_line(filt, line, meta):
-    """Mirror middleware's non-SSE branch plus the explicit filter adapter."""
-    data = line
-    if not data.startswith("data:"):
-        raw_obj = json.loads(data)
-        raw_error = raw_obj.get("error") if isinstance(raw_obj, dict) else None
-        if raw_error:
-            filt.stream(data, __metadata__=meta)
-        return raw_error
-    return None
 
 
 def spans_by_name(exporter):
@@ -266,20 +255,16 @@ def test_empty_reply_without_usage_is_error():
         assert span.status.status_code == StatusCode.ERROR
 
 
-def test_plain_json_stream_error_marks_real_outlet_as_error_and_keeps_content():
-    # This is the line shape from Open WebUI 0.11.4's non-SSE branch: it is
-    # plain JSON, not a synthetic response.failed body. A host adapter that
-    # forwards that line to the stream contract preserves the marker until
-    # outlet receives the accumulated partial reply.
+def test_decoded_sse_stream_error_marks_outlet_as_error_and_keeps_content():
+    # This is the observable stock path: middleware strips ``data:`` and
+    # invokes process_filter_functions before emitting the decoded event.
     body = outlet_body(usage=False)
     exporter = InMemorySpanExporter()
     filt = make_filter(exporter, redact=False)
     meta = metadata()
     filt.inlet(inlet_body(), __user__=USER, __metadata__=meta)
-    error_line = '{"error":{"message":"provider disconnected"}}'
-    assert forward_host_plain_json_error_line(filt, error_line, meta) == {
-        "message": "provider disconnected"
-    }
+    error_event = {"error": {"message": "provider disconnected"}}
+    assert filt.stream(error_event, __metadata__=meta) is error_event
     filt.outlet(body, __user__=USER, __metadata__=meta)
     filt.flush()
 
