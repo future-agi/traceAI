@@ -217,7 +217,7 @@ def test_async_streamed_and_failed_chat_record_the_requested_model(make_tracer):
     ("https://api.doubleword.ai/v1", "doubleword"),
     ("https://API.Perplexity.ai./v1", "perplexity"),
     # Unknown hosts are not guessed: proxies, loopback servers and look-alikes stay "openai".
-    ("http://127.0.0.1:8317/v1", "openai"),
+    ("http://127.0.0.1:8000/v1", "openai"),
     ("http://localhost:8080/v1", "openai"),
     ("https://llm-proxy.customer.example/v1", "openai"),
     ("https://inference.baseten.co.customer.example/v1", "openai"),
