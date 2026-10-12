@@ -41,7 +41,7 @@ def test_one_retriever_span_with_serving_config_and_result_count(fake, method):
     assert span.name == "discoveryengine.{0}".format(method)
     values = attrs(span)
     assert values == {
-        "fi.span.kind": "RETRIEVER",
+        "gen_ai.span.kind": "RETRIEVER",
         "discoveryengine.serving_config": SERVING_CONFIG,
         "discoveryengine.result_count": SEARCH_RESULTS,
     }
@@ -91,7 +91,7 @@ def test_a_request_without_serving_config_or_query_records_neither(fake):
         search_client(fake).search()
 
     values = attrs(traced.one())
-    assert values == {"fi.span.kind": "RETRIEVER", "discoveryengine.result_count": SEARCH_RESULTS}
+    assert values == {"gen_ai.span.kind": "RETRIEVER", "discoveryengine.result_count": SEARCH_RESULTS}
 
 
 def test_iterating_a_paged_result_keeps_one_span_per_search_call(fake):

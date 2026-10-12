@@ -45,7 +45,7 @@ def test_a_failing_request_reader_still_returns_the_result(fake, monkeypatch):
 
     assert len(pager.results) == SEARCH_RESULTS
     span = traced.one()
-    assert attrs(span)["fi.span.kind"] == "RETRIEVER"
+    assert attrs(span)["gen_ai.span.kind"] == "RETRIEVER"
     assert span.status.status_code is StatusCode.OK
 
 

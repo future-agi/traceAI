@@ -137,7 +137,7 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
 
     for span in (ok_search, lite, async_search):
         values = _flatten_attributes(span["attributes"])
-        assert values["fi.span.kind"] == "RETRIEVER"
+        assert values["gen_ai.span.kind"] == "RETRIEVER"
         assert values["discoveryengine.serving_config"] == SERVING_CONFIG
         assert int(values["discoveryengine.result_count"]) == SEARCH_RESULTS
         assert "input.value" not in values
@@ -147,7 +147,7 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
         assert span["status"]["code"] == "STATUS_CODE_OK"
 
     values = _flatten_attributes(answer["attributes"])
-    assert values["fi.span.kind"] == "RETRIEVER"
+    assert values["gen_ai.span.kind"] == "RETRIEVER"
     assert int(values["discoveryengine.result_count"]) == ANSWER_REFERENCES
     assert int(values["discoveryengine.answer.length"]) == len(ANSWER_TEXT)
     assert values["discoveryengine.answer.state"] == "SUCCEEDED"

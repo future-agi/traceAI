@@ -7,7 +7,7 @@ First release.
 - Trace `google-cloud-discoveryengine` v1 `SearchServiceClient.search`,
   `SearchServiceClient.search_lite` and
   `ConversationalSearchServiceClient.answer_query`, and their async twins:
-  one `RETRIEVER` span per call with `discoveryengine.serving_config` and
+  one span per call with `gen_ai.span.kind` = `RETRIEVER`, `discoveryengine.serving_config` and
   `discoveryengine.result_count`; for answers also
   `discoveryengine.answer.length`, `discoveryengine.answer.state` and
   `discoveryengine.session`. No model name, tokens or cost.

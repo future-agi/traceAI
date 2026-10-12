@@ -39,7 +39,7 @@ def test_answer_query_is_one_retriever_span_with_counts_not_the_answer(fake):
     span = traced.one()
     assert span.name == "discoveryengine.answer_query"
     assert attrs(span) == {
-        "fi.span.kind": "RETRIEVER",
+        "gen_ai.span.kind": "RETRIEVER",
         "discoveryengine.serving_config": SERVING_CONFIG,
         "discoveryengine.result_count": ANSWER_REFERENCES,
         "discoveryengine.answer.length": len(ANSWER_TEXT),

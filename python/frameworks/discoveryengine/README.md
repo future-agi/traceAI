@@ -92,7 +92,7 @@ client = discoveryengine.SearchServiceClient(
 | `SearchServiceClient.search_lite`, `SearchServiceAsyncClient.search_lite` | `discoveryengine.search_lite` |
 | `ConversationalSearchServiceClient.answer_query`, `ConversationalSearchServiceAsyncClient.answer_query` | `discoveryengine.answer_query` |
 
-Each call produces one span with `fi.span.kind` = `RETRIEVER`. Retries made
+Each call produces one span with `gen_ai.span.kind` = `RETRIEVER`. Retries made
 by `google-api-core` inside one call (when you pass `retry=`; at 0.20.5 these
 methods have no default retry) stay in that one span. The span is a child of the active span
 when there is one, and a root span otherwise. It is current while the
@@ -109,7 +109,7 @@ no span: the span covers the call that created the pager, and
 
 | Attribute | Calls | Value |
 |---|---|---|
-| `fi.span.kind` | all | `RETRIEVER` |
+| `gen_ai.span.kind` | all | `RETRIEVER` |
 | `discoveryengine.serving_config` | requests with `serving_config` | The serving config resource name from the request, cut to 1 KB. |
 | `discoveryengine.result_count` | successful calls | `search`, `search_lite`: number of results in the returned (first) page. `answer_query`: number of `references` on the answer (the grounding sources). Omitted when the response has no answer. |
 | `discoveryengine.answer.length` | successful `answer_query` with an answer | Length of `answer_text` in characters. The text itself is never recorded. |

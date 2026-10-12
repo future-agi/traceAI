@@ -21,7 +21,7 @@ from opentelemetry.trace import Span, Status, StatusCode, Tracer
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-FI_SPAN_KIND = "fi.span.kind"
+SPAN_KIND = "gen_ai.span.kind"
 RETRIEVER = "RETRIEVER"
 INPUT_VALUE = "input.value"
 RETRIEVAL_QUERY = "gen_ai.retrieval.query"
@@ -287,7 +287,7 @@ def _request_attributes(
     operation: str, request: Any, secrets: Optional[Sequence[str]], options: Options
 ) -> Dict[str, Any]:
     pii = options.pii_redaction
-    attributes: Dict[str, Any] = {FI_SPAN_KIND: RETRIEVER}
+    attributes: Dict[str, Any] = {SPAN_KIND: RETRIEVER}
     serving_config = _resource_name(_field(request, "serving_config"), secrets or (), pii)
     if serving_config is not None:
         attributes[SERVING_CONFIG] = serving_config
@@ -656,7 +656,7 @@ class _BaseWrapper:
             attributes = _request_attributes(self._operation, request, secrets, self._options)
         except Exception:  # an attribute must never break the user's call
             logger.debug("Could not read the Discovery Engine request", exc_info=True)
-            attributes = {FI_SPAN_KIND: RETRIEVER}
+            attributes = {SPAN_KIND: RETRIEVER}
         hidden: Hidden = ()
         try:
             hidden = _hidden_inputs(self._operation, request, secrets, self._options)
