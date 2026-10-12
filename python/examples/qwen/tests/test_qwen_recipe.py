@@ -27,6 +27,12 @@ from traceai_openai import OpenAIInstrumentor
 
 import app
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# They also omit gen_ai.request.model on streamed and failed calls, where later
+# versions record the requested model. Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "dashscope")
+
 RECIPE = Path(__file__).resolve().parents[1]
 _fake_spec = importlib.util.spec_from_file_location(
     "qwen_recipe_fake", RECIPE / "tests" / "_fake_openai.py"
@@ -172,11 +178,11 @@ def assert_llm(receiver, project, model=MODEL):
     assert span["name"] == "ChatCompletion"
     assert attrs["gen_ai.span.kind"] == "LLM"
     if model is None:
-        # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-        assert "gen_ai.request.model" not in attrs
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert attrs.get("gen_ai.request.model") in (None, MODEL)
     else:
         assert attrs["gen_ai.request.model"] == model
-    assert attrs["gen_ai.provider.name"] == "openai"
+    assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     for request in receiver.requests():
         assert request["path"] == "/tracer/v1/traces"
         assert request["headers"]["x-api-key"] == FI_KEY
