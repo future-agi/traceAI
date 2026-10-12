@@ -19,6 +19,12 @@ import traceai_openai
 from harness import Receiver
 from traceai_openai import OpenAIInstrumentor
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# They also omit gen_ai.request.model on streamed and failed calls, where later
+# versions record the requested model. Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "lepton")
+
 TEST_DIR = Path(__file__).resolve().parent
 RECIPE_DIR = TEST_DIR.parent
 
@@ -175,7 +181,7 @@ def one_span(receiver, provider):
     assert spans[0]["name"] == "ChatCompletion"
     values = attributes(spans[0])
     assert values["gen_ai.span.kind"] == "LLM"
-    assert values["gen_ai.provider.name"] == "openai"
+    assert values["gen_ai.provider.name"] in PROVIDER_NAMES
     return spans[0], values
 
 
@@ -394,8 +400,8 @@ def test_stream_accumulates_text_and_pins_usage(monkeypatch, include_usage):
         assert text == fake.ANSWER
         _, values = one_span(receiver, provider)
         assert values["output.value"] == fake.ANSWER
-        # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-        assert "gen_ai.request.model" not in values
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert values.get("gen_ai.request.model") in (None, MODEL)
         assert json.loads(values["gen_ai.request.parameters"])["model"] == MODEL
         usage = {key: int(value) for key, value in values.items() if key.startswith("gen_ai.usage.")}
         assert usage == ({"gen_ai.usage.input_tokens": 11, "gen_ai.usage.output_tokens": 13, "gen_ai.usage.total_tokens": 24} if include_usage else {})
@@ -421,8 +427,8 @@ def test_authentication_error_is_recorded_without_vendor_key(monkeypatch):
         assert len(exceptions) == 1
         assert "Unauthorized" in json.dumps(exceptions)
         assert VENDOR_KEY not in str(caught.value)
-        # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-        assert "gen_ai.request.model" not in values
+        # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+        assert values.get("gen_ai.request.model") in (None, MODEL)
         assert json.loads(values["gen_ai.request.parameters"])["model"] == MODEL
         assert not any(key.startswith("gen_ai.usage.") for key in values)
         assert len(requests) == 1
@@ -524,11 +530,11 @@ def test_app_subprocess_is_loopback_only(monkeypatch, tmp_path, stream):
         assert spans[0]["name"] == "ChatCompletion"
         values = attributes(spans[0])
         assert values["gen_ai.span.kind"] == "LLM"
-        assert values["gen_ai.provider.name"] == "openai"
+        assert values["gen_ai.provider.name"] in PROVIDER_NAMES
         assert fake.ANSWER in values["output.value"]
         if stream:
-            # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-            assert "gen_ai.request.model" not in values
+            # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+            assert values.get("gen_ai.request.model") in (None, MODEL)
             assert json.loads(values["gen_ai.request.parameters"])["model"] == MODEL
         else:
             assert values["gen_ai.request.model"] == MODEL

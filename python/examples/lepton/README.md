@@ -76,11 +76,11 @@ The app validates the URL, model and non-empty token before registering tracing.
 
 - One `ChatCompletion` span with `gen_ai.span.kind=LLM` per tested call.
 - For a non-streamed response, `gen_ai.request.model` is the model id the provider returns in its response.
-- Current `traceai-openai` leaves `gen_ai.request.model` absent on streamed and failed calls. The requested model remains in the `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
+- `traceai-openai` 0.1.10 and earlier leave `gen_ai.request.model` absent on streamed and failed calls; later versions (future-agi/traceAI#249) record the requested model there. The requested model remains in the `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
 - Token usage is present only when the response includes usage. Missing usage is omitted, never filled with zero.
 - Streaming text is accumulated by the same instrumentor. The default fixture exports no usage attributes. With `stream_options={"include_usage": True}` and a final usage chunk, the fixture exports input, output and total token counts. Your endpoint must support this option to use it.
 - Request errors are recorded as span errors with an exception event.
-- The provider field says `openai`. This is the shared instrumentor's label, including for a Lepton endpoint.
+- Up to 0.1.10, the provider field says `openai`. This is the shared instrumentor's label, including for a Lepton endpoint. Later versions say `lepton` for `*.xenon.lepton.run` hosts; other base URLs keep `openai`.
 
 The span resource uses the project name passed to `register()`.
 
