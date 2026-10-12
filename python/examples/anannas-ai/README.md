@@ -74,12 +74,12 @@ The app validates configuration, supports streaming, closes the client, and flus
 
 ## What you see in Future AGI
 
-The fixtures export one `ChatCompletion` span per completed test call, with `gen_ai.span.kind=LLM` in the registered Observe project. The provider field says `openai`; `gen_ai.provider.name` is the shared instrumentor's label.
+The fixtures export one `ChatCompletion` span per completed test call, with `gen_ai.span.kind=LLM` in the registered Observe project. Up to `traceai-openai` 0.1.10, the provider field says `openai`; `gen_ai.provider.name` is the shared instrumentor's label. Later versions (future-agi/traceAI#249) say `anannas` for `api.anannas.ai` and `anannas.ai`; other base URLs keep `openai`.
 
 Current `traceAI-openai` behavior is:
 
 - For a successful non-streamed call, `gen_ai.request.model` is the model ID the provider returns. The test requests `openai/gpt-5-mini` and returns the synthetic fixture ID `openai/gpt-5-mini-2026-09-01`; the dated ID lands in `gen_ai.request.model`. The response example in the [Anannas quickstart](https://docs.anannas.ai/) echoes the requested `openai/gpt-5-mini`, so on a real call the two are usually the same; the fixture differs on purpose so the tests can tell them apart.
-- With invocation parameters enabled, `gen_ai.request.parameters` keeps the requested ID, including its provider prefix. Streaming and failed calls currently omit `gen_ai.request.model`, while retaining that requested ID in parameters.
+- With invocation parameters enabled, `gen_ai.request.parameters` keeps the requested ID, including its provider prefix. Up to `traceai-openai` 0.1.10, streaming and failed calls omit `gen_ai.request.model`, while retaining that requested ID in parameters; later versions also record it as the span model.
 - `output.value` is assistant content. Streaming accumulates the text through the same instrumentor. A stream with no text records `''`, with no raw-response fallback.
 - When usage is supplied, tests pin `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens`. Missing usage omits all three; it is unknown, never zero. The default stream fixture has no usage. A final usage chunk with `stream_options={"include_usage": True}` supplies the same three attributes in the fixture test.
 - A 401 raises `AuthenticationError`; a 402 raises `APIStatusError`. Both export an ERROR span with an exception event.

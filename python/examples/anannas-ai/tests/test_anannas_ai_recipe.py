@@ -35,6 +35,12 @@ from _fake_openai import (
     stream_body,
 )
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# They also omit gen_ai.request.model on streamed and failed calls, where later
+# versions record the requested model. Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "anannas")
+
 RECIPE = Path(__file__).resolve().parents[1]
 VENDOR_KEY = "placeholder-anannas-key"
 FI_KEY = "placeholder-fi-api-key"
@@ -125,7 +131,7 @@ def assert_export(receiver, project):
     attrs = attributes(span)
     assert span["name"] == "ChatCompletion"
     assert attrs["gen_ai.span.kind"] == "LLM"
-    assert attrs["gen_ai.provider.name"] == "openai"
+    assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     [request] = receiver.requests()
     assert request["path"] == "/tracer/v1/traces"
     assert request["headers"]["x-api-key"] == FI_KEY
@@ -282,8 +288,8 @@ def test_stream_pins_text_model_gap_and_usage(receiver, include_usage):
     assert len(seen) == 1
     assert span["status"]["code"] == "STATUS_CODE_OK"
     assert attrs["output.value"] == ANSWER
-    # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-    assert "gen_ai.request.model" not in attrs
+    # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
     assert_parameters(attrs, stream=True)
     if include_usage:
         assert_usage(attrs, STREAM_USAGE)
@@ -314,8 +320,8 @@ def test_errors_pin_sdk_class_exception_and_model_gap(receiver, status, error_cl
     assert error_class.__name__ in span["status"]["message"]
     [exception] = [event for event in span["events"] if event["name"] == "exception"]
     assert error_body(status)["error"]["message"] in json.dumps(exception)
-    # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-    assert "gen_ai.request.model" not in attrs
+    # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
     assert_parameters(attrs)
     assert not any(key.startswith("gen_ai.usage.") for key in attrs)
 
@@ -351,7 +357,7 @@ def test_no_text_stream_exports_empty_output_without_raw_fallback(receiver):
     assert attrs["output.value"] == ""
     assert RAW_MARKER not in json.dumps(span)
     assert "No text stream control." in json.dumps(span)
-    assert "gen_ai.request.model" not in attrs
+    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
     assert_parameters(attrs, stream=True)
 
 
@@ -557,7 +563,7 @@ def test_app_subprocess_chat_and_stream(receiver, monkeypatch, tmp_path, mode):
     assert attrs["output.value"] == ANSWER
     assert_parameters(attrs, stream=mode == "stream")
     if mode == "stream":
-        assert "gen_ai.request.model" not in attrs
+        assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
         assert not any(key.startswith("gen_ai.usage.") for key in attrs)
     else:
         assert attrs["gen_ai.request.model"] == RESPONSE_MODEL
@@ -580,7 +586,7 @@ def test_app_subprocess_error_flushes_span(receiver, monkeypatch, tmp_path, stat
     span, attrs = assert_export(receiver, project)
     assert span["status"]["code"] == "STATUS_CODE_ERROR"
     assert any(event["name"] == "exception" for event in span["events"])
-    assert "gen_ai.request.model" not in attrs
+    assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
     assert_parameters(attrs)
 
 
@@ -621,7 +627,7 @@ def test_readme_requirements_and_customer_facing_pins():
         "use `https://api.anannas.ai/v1`, the default here. The recipe also accepts `https://anannas.ai/v1` with the same URL rules.",
         "uninstrumented", "checked 2026-10-06", "](../../frameworks/openai/)",
         "use its punycode (`xn--`) form",
-        "The provider field says `openai`",
+        "the provider field says `openai`",
         "Model IDs use the form `provider/model-name`",
         "gen_ai.request.model", "gen_ai.request.parameters",
         "openai/gpt-5-mini-2026-09-01", "assistant content", "no raw-response fallback",
