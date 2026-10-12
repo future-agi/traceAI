@@ -148,7 +148,8 @@ the processor drops whole attributes:
 | `hide_input_images`, `hide_embedding_vectors` | Nothing: AG2 records only text parts (binary inputs are omitted) and no embeddings |
 
 The text flags cannot redact just the text inside the JSON, so they remove the
-whole message attribute, which is the privacy-safe choice.
+whole message attribute, which is the privacy-safe choice. A removed key is
+not copied to `input.value` / `output.value` either.
 
 ## Conformance
 
@@ -161,6 +162,7 @@ whole message attribute, which is the privacy-safe choice.
 | Session | Not emitted by AG2. `session.id` from traceAI's `using_session` / `using_attributes` context, which wins over a static value; or set it yourself: `setup(..., span_attributes={"session.id": "..."})` | When neither is set |
 | User, metadata, tags | `user.id`, `metadata`, `tag.tags` (and the other traceAI context keys) from `using_user` / `using_metadata` / `using_tags` / `using_attributes`; a key AG2 or `span_attributes` already set is not overridden | When the context does not set them |
 | Tools | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`; arguments/result only with `capture_content=True` | |
+| Input / output | `input.value` / `output.value` (what Observe shows as a span's input and output), copied from the captured chat messages, tool arguments and result, or human input | Without `capture_content=True`, when a `TraceConfig` flag hides the source, and always on `invoke_agent` and `record_usage` spans (AG2 records no content there) |
 | Errors | OTel status `ERROR` on failing tool / model / agent spans | |
 
 Notes:

@@ -429,6 +429,110 @@ def test_trace_config_reads_env(monkeypatch):
     assert "gen_ai.input.messages" not in attrs(span)
 
 
+# --- input.value / output.value --------------------------------------------
+# Future AGI fills a span's input and output only from input.value /
+# output.value, so captured AG2 content is copied there.
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        (
+            {
+                "gen_ai.operation.name": "chat",
+                "gen_ai.input.messages": '[{"content": "hi", "role": "user"}]',
+                "gen_ai.output.messages": '[{"content": "yo", "role": "assistant"}]',
+            },
+            {
+                "input.value": '[{"content": "hi", "role": "user"}]',
+                "input.mime_type": "application/json",
+                "output.value": '[{"content": "yo", "role": "assistant"}]',
+                "output.mime_type": "application/json",
+            },
+        ),
+        (
+            {
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.call.arguments": '{"city": "Paris"}',
+                "gen_ai.tool.call.result": "sunny",
+            },
+            {
+                "input.value": '{"city": "Paris"}',
+                "input.mime_type": "application/json",
+                "output.value": "sunny",
+                "output.mime_type": "text/plain",
+            },
+        ),
+        (
+            {
+                "gen_ai.operation.name": "await_human_input",
+                "ag2.human_input.prompt": "ok?",
+                "ag2.human_input.response": "yes",
+            },
+            {
+                "input.value": "ok?",
+                "input.mime_type": "text/plain",
+                "output.value": "yes",
+                "output.mime_type": "text/plain",
+            },
+        ),
+    ],
+    ids=["chat", "execute_tool", "await_human_input"],
+)
+def test_captured_content_becomes_span_input_and_output(pipeline, source, expected):
+    provider, exporter = pipeline
+    _emit(provider, source)
+    (span,) = exporter.get_finished_spans()
+    got = attrs(span)
+    assert {k: got.get(k) for k in expected} == expected
+    for key, value in source.items():
+        assert got[key] == value
+
+
+def test_no_input_or_output_without_captured_content(pipeline):
+    provider, exporter = pipeline
+    _emit(provider, {"gen_ai.operation.name": "chat", "gen_ai.request.model": "m"})
+    (span,) = exporter.get_finished_spans()
+    assert not {"input.value", "output.value", "input.mime_type", "output.mime_type"} & set(attrs(span))
+
+
+@pytest.mark.parametrize(
+    "flags, gone",
+    [
+        ({"hide_inputs": True}, {"input.value", "input.mime_type"}),
+        ({"hide_input_text": True}, {"input.value", "input.mime_type"}),
+        ({"hide_input_messages": True}, {"input.value", "input.mime_type"}),
+        ({"hide_outputs": True}, {"output.value", "output.mime_type"}),
+        ({"hide_output_text": True}, {"output.value", "output.mime_type"}),
+        ({"hide_output_messages": True}, {"output.value", "output.mime_type"}),
+    ],
+    ids=lambda v: "+".join(sorted(v)) if isinstance(v, dict) else None,
+)
+def test_hidden_content_is_not_copied_to_input_or_output(flags, gone):
+    chat = {k: v for k, v in _AG2_CONTENT.items() if not k.startswith(("gen_ai.tool", "ag2.human"))}
+    got = normalize_attributes(chat, TraceConfig(**flags))
+    assert not gone & set(got), sorted(gone & set(got))
+    kept = {"input.value", "output.value"} - gone
+    assert kept <= set(got), "the side that is not hidden is still copied"
+
+
+def test_existing_input_and_output_values_are_kept(pipeline):
+    provider, exporter = pipeline
+    _emit(
+        provider,
+        {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.input.messages": "[]",
+            "input.value": "mine",
+            "output.value": "also mine",
+            "gen_ai.output.messages": "[]",
+        },
+    )
+    (span,) = exporter.get_finished_spans()
+    got = attrs(span)
+    assert (got["input.value"], got["output.value"]) == ("mine", "also mine")
+
+
 # --- installation ----------------------------------------------------------
 
 

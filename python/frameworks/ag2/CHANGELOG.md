@@ -8,6 +8,10 @@
   `gen_ai.operation.name` and aliases AG2's cache/thinking usage keys onto the
   GenAI semconv names (originals kept). Does not wrap `Agent` and never
   imports `autogen`. Refs: TH-8236.
+- With `capture_content=True`, the captured chat messages, tool arguments and
+  result, and human input are also copied to `input.value` / `output.value`,
+  the only keys Future AGI fills a span's input and output from. Content a
+  `TraceConfig` flag hides is not copied.
 - Token totals: Future AGI sums the promoted `gen_ai.usage.input_tokens` /
   `output_tokens` / `total_tokens` over every span of a trace. The processor
   moves those keys to `ag2.usage.*` (values kept) on `record_usage model_call`

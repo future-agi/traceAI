@@ -26,6 +26,9 @@ does not create spans. On every span from AG2's instrumentation scope it only:
   and neither do ``hide_llm_invocation_parameters`` (AG2 sets no
   ``gen_ai.request.parameters``) and ``base64_image_max_length``;
   ``TraceConfig.mask`` still runs on every key;
+* copies captured content to ``input.value`` / ``output.value`` (chat
+  messages, tool arguments and result, human input), which is where Future
+  AGI reads a span's input and output; content the config hides is not copied;
 * in ``on_start``, copies traceAI context attributes (``using_session``,
   ``using_user``, ``using_metadata``, ``using_attributes``, ...) onto the span
   without overriding keys AG2 sets, except ``session.id``, where the context
@@ -36,6 +39,7 @@ Spans from any other instrumentation scope pass through untouched.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections import OrderedDict
@@ -99,6 +103,15 @@ _OUTPUT_MESSAGE_KEYS = (_OUTPUT_MESSAGES,)
 _INPUT_CONTENT_KEYS = _INPUT_MESSAGE_KEYS + (_TOOL_ARGUMENTS, _HUMAN_INPUT_PROMPT)
 _OUTPUT_CONTENT_KEYS = _OUTPUT_MESSAGE_KEYS + (_TOOL_RESULT, _HUMAN_INPUT_RESPONSE)
 
+# Future AGI fills a span's input and output only from ``input.value`` /
+# ``output.value``; AG2 sets neither. Per operation, the content keys that
+# become them. AG2 records no content on ``invoke_agent`` spans.
+_IO_SOURCES: Mapping[str, Tuple[str, str]] = {
+    "chat": (_INPUT_MESSAGES, _OUTPUT_MESSAGES),
+    "execute_tool": (_TOOL_ARGUMENTS, _TOOL_RESULT),
+    "await_human_input": (_HUMAN_INPUT_PROMPT, _HUMAN_INPUT_RESPONSE),
+}
+
 
 def span_kind_for(attributes: Mapping[str, Any]) -> Optional[str]:
     """Return the Future AGI span kind for an AG2 span, or ``None``."""
@@ -135,9 +148,43 @@ def normalize_attributes(
 
     _demote_duplicate_usage(mapped, instrumented_agents)
 
+    hidden = _hidden_content_keys(config) if config is not None else set()
+    _copy_content_to_io(mapped, hidden)
+
     if config is not None:
-        mapped = _apply_trace_config(mapped, config)
+        mapped = _apply_trace_config(mapped, config, hidden)
     return mapped
+
+
+def _mime_type(value: Any) -> str:
+    if isinstance(value, str):
+        try:
+            if isinstance(json.loads(value), (dict, list)):
+                return "application/json"
+        except ValueError:
+            pass
+    return "text/plain"
+
+
+def _copy_content_to_io(mapped: Dict[str, Any], hidden: AbstractSet[str]) -> None:
+    """Copy captured content to ``input.value`` / ``output.value``.
+
+    Only content AG2 captured and ``hidden`` does not remove is copied, so a
+    hide flag also keeps the copy off the span. Existing values are kept.
+    """
+    sources = _IO_SOURCES.get(mapped.get(SpanAttributes.GEN_AI_OPERATION_NAME))  # type: ignore[arg-type]
+    if sources is None:
+        return
+    targets = (
+        (SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE),
+        (SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE),
+    )
+    for source, (value_key, mime_key) in zip(sources, targets):
+        value = mapped.get(source)
+        if value is None or source in hidden or value_key in mapped:
+            continue
+        mapped[value_key] = value
+        mapped.setdefault(mime_key, _mime_type(value))
 
 
 # fi-collector promotes these keys into the token columns on any span
@@ -223,8 +270,11 @@ def _hidden_content_keys(config: TraceConfig) -> Set[str]:
     return hidden
 
 
-def _apply_trace_config(attributes: Dict[str, Any], config: TraceConfig) -> Dict[str, Any]:
-    hidden = _hidden_content_keys(config)
+def _apply_trace_config(
+    attributes: Dict[str, Any], config: TraceConfig, hidden: Optional[AbstractSet[str]] = None
+) -> Dict[str, Any]:
+    if hidden is None:
+        hidden = _hidden_content_keys(config)
 
     masked: Dict[str, Any] = {}
     for key, value in attributes.items():
