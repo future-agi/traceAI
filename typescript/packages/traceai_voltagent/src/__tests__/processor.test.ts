@@ -184,7 +184,7 @@ describe("provider from the agent's AI SDK model object", () => {
   });
 
   it("leaves the provider unset for an unknown AI SDK provider id", async () => {
-    const { llm, root } = await runWith("claude-haiku-5-5", "cliproxy.chat");
+    const { llm, root } = await runWith("claude-haiku-5-5", "acme-proxy.chat");
     expect(llm["gen_ai.provider.name"]).toBeUndefined();
     expect(root["gen_ai.provider.name"]).toBeUndefined();
   });

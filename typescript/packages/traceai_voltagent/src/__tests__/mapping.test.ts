@@ -481,7 +481,7 @@ describe("provider from an AI SDK model object's provider id", () => {
     expect(providerFromAiSdk(id)).toBe(provider);
   });
 
-  it.each(["cliproxy.chat", "openai-compatible", "gateway", "mock-provider", "", "  "])(
+  it.each(["acme-proxy.chat", "openai-compatible", "gateway", "mock-provider", "", "  "])(
     "leaves %j unset rather than guessing",
     (id) => {
       expect(providerFromAiSdk(id)).toBeUndefined();
