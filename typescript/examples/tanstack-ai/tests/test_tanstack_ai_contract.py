@@ -6,7 +6,7 @@ decodes the Node exporter's chunked bodies and records headers and resource
 attributes per export. No vendor
 API is called. Every key is a placeholder.
 
-Install the example first: ``npm install`` in typescript/examples/tanstack-ai.
+Install the example first: ``npm ci`` in typescript/examples/tanstack-ai.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ pytestmark = [
     pytest.mark.skipif(NODE is None, reason="node is not on PATH"),
     pytest.mark.skipif(
         not (EXAMPLE / "node_modules" / "@tanstack" / "ai").is_dir(),
-        reason="run `npm install` in typescript/examples/tanstack-ai first",
+        reason="run `npm ci` in typescript/examples/tanstack-ai first",
     ),
 ]
 

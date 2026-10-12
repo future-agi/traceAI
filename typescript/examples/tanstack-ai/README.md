@@ -10,7 +10,8 @@ Pinned: `@tanstack/ai` 0.64.0, `@tanstack/ai-openai` 0.26.0,
 `@tanstack/openai-base` 0.12.2: `@tanstack/ai-openai` 0.26.0 asks for
 `^0.12.2`, and every later 0.12.x needs a newer `@tanstack/ai` than 0.64.0
 (0.12.6 needs `^0.66.0` and `openai` 7), so an unpinned install mixes
-versions this example was not tested with. Node `>=20.6.0`, the
+versions this example was not tested with. `package-lock.json` (generated on
+Node 22 against this set) pins every transitive version; `npm ci` installs it. Node `>=20.6.0`, the
 floor of the pinned OpenTelemetry SDK 2.11.0 on the Node 20 line. The
 contract test and `node --test` suite (see "Contract test") pass on Node
 20.20.2, 22.23.3 and 26.8.1.
@@ -26,7 +27,7 @@ vendored and not a dependency of any traceAI package.
 
 ```bash
 cd typescript/examples/tanstack-ai
-npm install
+npm ci   # installs the exact tested set from package-lock.json
 
 export FI_API_KEY="YOUR_API_KEY"        # sent as X-Api-Key
 export FI_SECRET_KEY="YOUR_SECRET_KEY"  # sent as X-Secret-Key
