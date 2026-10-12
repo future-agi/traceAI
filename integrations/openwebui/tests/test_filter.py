@@ -252,16 +252,16 @@ def test_empty_reply_without_usage_is_error():
         assert span.status.status_code == StatusCode.ERROR
 
 
-def test_partial_reply_with_provider_failure_is_error_and_keeps_content():
+def test_partial_stream_error_marks_real_outlet_as_error_and_keeps_content():
+    # Open WebUI 0.11.4 sends this ordinary provider error chunk through the
+    # stream hook, then calls outlet with the accumulated partial reply.
     body = outlet_body(usage=False)
-    body["response"] = {
-        "status": "failed",
-        "error": {"message": "provider disconnected"},
-    }
     exporter = InMemorySpanExporter()
     filt = make_filter(exporter, redact=False)
     meta = metadata()
     filt.inlet(inlet_body(), __user__=USER, __metadata__=meta)
+    error_chunk = {"error": {"message": "provider disconnected"}}
+    assert filt.stream(error_chunk, __metadata__=meta) is error_chunk
     filt.outlet(body, __user__=USER, __metadata__=meta)
     filt.flush()
 
@@ -270,6 +270,23 @@ def test_partial_reply_with_provider_failure_is_error_and_keeps_content():
     assert spans["openwebui.llm"].status.status_code == StatusCode.ERROR
     assert spans["openwebui.chat"].attributes["output.value"] == ANSWER
     assert spans["openwebui.llm"].attributes["output.value"] == ANSWER
+    assert _FILTER._STREAM_FAILURE_KEY not in meta
+
+
+def test_successful_no_usage_stream_does_not_mark_outlet_as_error():
+    body = outlet_body(usage=False)
+    exporter = InMemorySpanExporter()
+    filt = make_filter(exporter)
+    meta = metadata()
+    filt.inlet(inlet_body(), __user__=USER, __metadata__=meta)
+    chunk = {"choices": [{"delta": {"content": "partial"}}]}
+    assert filt.stream(chunk, __metadata__=meta) is chunk
+    filt.outlet(body, __user__=USER, __metadata__=meta)
+    filt.flush()
+
+    spans = spans_by_name(exporter)
+    assert spans["openwebui.chat"].status.status_code != StatusCode.ERROR
+    assert spans["openwebui.llm"].status.status_code != StatusCode.ERROR
 
 
 def test_temporary_chat_forces_redaction():

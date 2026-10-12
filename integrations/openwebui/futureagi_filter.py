@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _COLLECTOR_PATH = "/tracer/v1/traces"
 _STARTED_KEY = "_futureagi_turn_started_ns"
+_STREAM_FAILURE_KEY = "_futureagi_stream_failure"
 _TEMPORARY_PREFIXES = ("temporary:", "local:")
 _DEFAULT_EMAIL_HMAC_KEY = b"future-agi-openwebui-email-hash-v1"
 
@@ -337,6 +338,19 @@ class Filter:
             _log_hook_error("inlet", error)
         return body
 
+    def stream(
+        self,
+        event: dict[str, Any],
+        __metadata__: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Remember provider errors seen in Open WebUI's real stream hook."""
+        try:
+            if isinstance(__metadata__, dict) and _has_provider_failure_signal(event):
+                __metadata__[_STREAM_FAILURE_KEY] = True
+        except Exception as error:  # noqa: BLE001
+            _log_hook_error("stream", error)
+        return event
+
     def outlet(
         self,
         body: dict[str, Any],
@@ -355,6 +369,9 @@ class Filter:
 
     def _start_turn(self, metadata: dict[str, Any] | None) -> None:
         if isinstance(metadata, dict):
+            # Metadata is owned by Open WebUI and can be reused by a retry. Clear
+            # any marker left by an earlier turn before starting this one.
+            metadata.pop(_STREAM_FAILURE_KEY, None)
             metadata[_STARTED_KEY] = time.time_ns()
 
     def _record_turn(
@@ -364,6 +381,7 @@ class Filter:
         metadata: dict[str, Any],
     ) -> None:
         started = metadata.pop(_STARTED_KEY, None)
+        stream_failed = metadata.pop(_STREAM_FAILURE_KEY, False)
         if started is None:
             return
         valves = self.valves
@@ -388,9 +406,12 @@ class Filter:
             start_time=started,
             attributes=llm_attributes,
         )
-        if _has_provider_failure_signal(body) or _has_provider_failure_signal(
-            metadata
-        ) or _is_empty_failed_reply(body):
+        if (
+            stream_failed
+            or _has_provider_failure_signal(body)
+            or _has_provider_failure_signal(metadata)
+            or _is_empty_failed_reply(body)
+        ):
             status = Status(StatusCode.ERROR, "provider returned a failed response")
             llm.set_status(status)
             root.set_status(status)

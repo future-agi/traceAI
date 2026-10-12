@@ -35,7 +35,7 @@ on both streaming and non-streaming paths.
 | `endpoint` | `https://api.futureagi.com` | Future AGI origin. The filter posts OTLP/HTTP to `{endpoint}/tracer/v1/traces`; a value already ending in that path is used as is. |
 | `project` | `open-webui` | Future AGI project, sent as `project_name` and `project_type=observe`. |
 | `redact` | `true` | Leaves prompts and replies out of every span. **Set `redact=false` to see prompts and replies in Observe.** |
-| `include_email_hash` | `false` | Adds a pseudonymous HMAC of the normalised email. The email itself is never sent. |
+| `include_email_hash` | `false` | Adds a pseudonymous HMAC of the normalised email. `redact=true` prevents content capture; with `redact=false`, the email can appear inside captured prompt/history content even though it is not emitted as a standalone user attribute. |
 | `email_hash_salt` | empty | Optional admin-controlled HMAC salt. Use a secret value if email joins must be resistant to offline candidate testing. |
 | `max_chars` | `32000` | Maximum characters copied into each input/output value. `0` means unlimited. |
 | `priority` | `0` | Open WebUI filter priority; lower values run first. Put a PII-scrubbing filter before this one when `redact=false`. |
@@ -46,10 +46,11 @@ keys.
 
 ## What a turn looks like
 
-Open WebUI calls the filter's `inlet` before the model call and its `outlet`
-after the reply. The filter stores the start time on Open WebUI's request
-`__metadata__`; it keeps no per-turn message dictionary. Each completed turn
-becomes one trace of two spans:
+Open WebUI calls the filter's `inlet` before the model call, its `stream`
+hook for decoded streaming events, and its `outlet` after the reply. The
+filter stores turn state on Open WebUI's request `__metadata__`; it keeps no
+per-turn message dictionary. Each completed turn becomes one trace of two
+spans:
 
 | Span | Type | Attributes |
 |---|---|---|
@@ -71,12 +72,13 @@ retrieval, tools, database work and response publishing between `inlet` and
   `input_tokens`/`output_tokens` from Open WebUI's native tool loop. Total is
   computed as input plus output because Open WebUI can double-count its stored
   `total_tokens` when providers repeat usage chunks.
-- An in-stream provider error can reach `outlet` with partial content/output
-  and no usage, together with a `response.failed`/failed-status signal. That
-  turn is marked `ERROR` while retaining the partial content. Empty replies
-  with no usage are also marked `ERROR`. HTTP-level failures, non-streaming
-  errors and user cancellation can bypass `outlet` entirely and therefore
-  produce no application span.
+- An ordinary in-stream provider error chunk passes through the filter's
+  `stream` hook before Open WebUI calls `outlet`. The filter marks that turn
+  `ERROR` even when the real outlet body contains partial content/output and no
+  usage, while retaining the partial content. Empty replies with no usage are
+  also marked `ERROR`. HTTP-level failures, non-streaming errors and user
+  cancellation do not provide an observable stream chunk to this hook and may
+  bypass `outlet` entirely, so they can produce no application span.
 - An outlet call without a matching inlet is skipped. This avoids duplicate
   zero-duration traces from the legacy `/api/chat/completed` endpoint.
 
