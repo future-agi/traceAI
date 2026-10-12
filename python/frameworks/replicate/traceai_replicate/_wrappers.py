@@ -39,6 +39,7 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 
 import wrapt
 from fi_instrumentation import REDACTED_VALUE, TraceConfig
+from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Status, StatusCode
 
@@ -285,13 +286,22 @@ class _Call:
         else:
             self.span.set_status(Status(StatusCode.OK))
 
+    def _clean(self, text: str, tokens: Any) -> str:
+        """The API token removed, then PII when ``pii_redaction`` is on.
+
+        FiSpan masks attributes only; the status and the exception event are
+        written here.
+        """
+        text = redact(text, tokens)
+        return redact_pii_in_string(text) if self.config.pii_redaction else text
+
     def _failure_text(self, prediction: Any, tokens: Any) -> str:
         # The error field can carry model output; it follows the output rule:
         # redacted (not dropped) when outputs are hidden (PRD J3.2, AC-05).
         if self.config.hide_outputs:
             return REDACTED_VALUE
         message = getattr(prediction, "error", None)
-        return redact(message, tokens) if isinstance(message, str) and message else "failed"
+        return self._clean(message, tokens) if isinstance(message, str) and message else "failed"
 
     def _record_error(self, error: BaseException, prediction: Any, tokens: Any) -> None:
         content = _is_model_error(error) or (self.stream and type(error) is RuntimeError)
@@ -302,12 +312,12 @@ class _Call:
         elif hide:
             description = REDACTED_VALUE
         else:
-            description = redact("{0}: {1}".format(type(error).__name__, _text(error)), tokens)
+            description = self._clean("{0}: {1}".format(type(error).__name__, _text(error)), tokens)
         self.span.record_exception(
             error,
             attributes={
-                "exception.message": REDACTED_VALUE if hide else redact(_text(error), tokens),
-                "exception.stacktrace": redact(_stacktrace(error, hide), tokens),
+                "exception.message": REDACTED_VALUE if hide else self._clean(_text(error), tokens),
+                "exception.stacktrace": self._clean(_stacktrace(error, hide), tokens),
             },
         )
         self.span.set_status(Status(StatusCode.ERROR, description))

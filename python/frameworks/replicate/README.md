@@ -133,6 +133,7 @@ an object a traced `create` returned while it was not yet finished.
 | `replicate.prediction.id` | The prediction id. `run` and `stream` record the id of the prediction the client created for them. Absent when the client never got one (for example an invalid ref). |
 | `replicate.prediction.status` | The status string the client returns (`starting`, `processing`, `succeeded`, `failed`, `canceled`), never normalised. Stream spans have none: the event stream does not report one. A `replicate.run` span can show `processing` on an OK span with output: with `Prefer: wait` (the default `wait=True` in replicate 1.0.7, an explicit `wait=` in 1.0.0) the client's `run()` returns without polling once the create response is no longer `starting`, and the server can answer `processing` for a prediction that has finished (the client's `run.py` behaviour). |
 | `replicate.metrics.predict_time` | `metrics.predict_time` in seconds, when present. A duration, not a price. |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens` | `metrics.input_token_count` and `metrics.output_token_count`, and their sum, when the prediction reports them (Replicate's language models do). Never estimated. |
 | `replicate.output.type` | `text`, `url` (one file URL), `list`, `object` or `other`. |
 | `replicate.stream.file_count` | File outputs seen in a stream, when there were any. |
 | `gen_ai.span.kind` | `LLM` when the output is text, `CHAIN` otherwise (files, no output yet, errors). |
@@ -141,8 +142,8 @@ an object a traced `create` returned while it was not yet finished.
 | `gen_ai.request.parameters` | JSON of the call options that were passed: `wait`, `stream`, `use_file_output`, `file_encoding_strategy`, `webhook_events_filter`; `webhook` / `webhook_completed` only as `true`. |
 | `replicate.cancelled` | `true` when the caller abandoned the call (closed/dropped an iterator, cancelled a task); an explicit `cancel()` is recorded as status `canceled`. See [errors and cancellation](#errors-and-cancellation). |
 
-No token usage and no cost are recorded, whatever the prediction's metrics
-contain.
+Token counts are recorded only as the prediction reports them; no cost is
+recorded.
 
 ## Privacy
 
@@ -152,6 +153,9 @@ contain.
   / `FI_HIDE_OUTPUTS=true`: `input.value` / `output.value` become
   `__REDACTED__`, and with outputs hidden a failed prediction's error string
   (span status, exception message and stack trace) is `__REDACTED__` too.
+  With `pii_redaction` / `FI_PII_REDACTION=true`, PII is replaced by tokens
+  such as `<EMAIL_ADDRESS>` in every attribute and, after the token is
+  removed, in the error status and the exception event.
   Replicate still receives the input either way.
 - **The API token is never recorded.** Wherever the client stored it (the
   `api_token` argument, an `Authorization` header passed to `Client`, or the

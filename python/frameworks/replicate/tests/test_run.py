@@ -28,6 +28,8 @@ from _support import (  # noqa: E402
     TEXT_MODEL,
     TEXT_OUTPUT,
     TEXT_TOKENS,
+    INPUT_TOKENS,
+    OUTPUT_TOKENS,
     FakeReplicate,
     RecordingTransport,
     attrs,
@@ -59,8 +61,11 @@ def test_run_text_model_is_one_llm_span():
     assert json.loads(values["input.value"]) == {"prompt": PROMPT, "max_tokens": 8}
     assert values["input.mime_type"] == "application/json"
     assert span.status.status_code is StatusCode.OK
-    # R-08: no token usage and no cost, ever.
-    assert not [key for key in values if "usage" in key or "cost" in key or "token" in key]
+    # The token counts the prediction reports; never a cost.
+    assert values["gen_ai.usage.input_tokens"] == INPUT_TOKENS
+    assert values["gen_ai.usage.output_tokens"] == OUTPUT_TOKENS
+    assert values["gen_ai.usage.total_tokens"] == INPUT_TOKENS + OUTPUT_TOKENS
+    assert not [key for key in values if "cost" in key]
 
 
 def test_polling_inside_run_is_one_span_and_http_spans_nest_under_it():

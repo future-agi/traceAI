@@ -30,6 +30,9 @@ DEPLOYMENT = "replicate.deployment"
 OUTPUT_TYPE = "replicate.output.type"
 STREAM_FILE_COUNT = "replicate.stream.file_count"
 CANCELLED = "replicate.cancelled"
+INPUT_TOKENS = "gen_ai.usage.input_tokens"
+OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+TOTAL_TOKENS = "gen_ai.usage.total_tokens"
 
 REPLICATE = "replicate"
 LLM = "LLM"
@@ -274,8 +277,15 @@ def request_attributes(
 # -- prediction ------------------------------------------------------------------
 
 
+def _token_count(metrics: Mapping, name: str) -> Optional[int]:
+    value = metrics.get(name)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
 def prediction_attributes(prediction: Any) -> Dict[str, Any]:
-    """Identity, status and timing of a prediction, as the client returned it."""
+    """Identity, status, timing and reported token usage of a prediction, as the client returned it."""
     attributes: Dict[str, Any] = {}
     for key, name in ((PREDICTION_ID, "id"), (PREDICTION_STATUS, "status"), (PREDICTION_VERSION, "version")):
         value = getattr(prediction, name, None)
@@ -289,6 +299,15 @@ def prediction_attributes(prediction: Any) -> Dict[str, Any]:
         predict_time = metrics.get("predict_time")
         if isinstance(predict_time, (int, float)) and not isinstance(predict_time, bool):
             attributes[PREDICT_TIME] = float(predict_time)
+        # Language models report their token counts here; nothing is estimated.
+        input_tokens = _token_count(metrics, "input_token_count")
+        output_tokens = _token_count(metrics, "output_token_count")
+        if input_tokens is not None:
+            attributes[INPUT_TOKENS] = input_tokens
+        if output_tokens is not None:
+            attributes[OUTPUT_TOKENS] = output_tokens
+        if input_tokens is not None and output_tokens is not None:
+            attributes[TOTAL_TOKENS] = input_tokens + output_tokens
     return attributes
 
 

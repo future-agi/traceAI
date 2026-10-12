@@ -51,13 +51,16 @@ TEXT_TOKENS = ["OUTPUT-", "TEXT-", "MARKER"]
 TEXT_OUTPUT = "".join(TEXT_TOKENS)
 FILE_URL = "https://files.example.invalid/OUTPUT-FILE-MARKER.png"
 FILE_URLS = [FILE_URL, "https://files.example.invalid/OUTPUT-FILE-MARKER-2.png"]
-MODEL_ERROR = "MODEL-ERROR-MARKER: CUDA out of memory"
+MODEL_ERROR = "MODEL-ERROR-MARKER: CUDA out of memory; contact ops@example.com"
 STREAM_CHUNKS = ["STREAM-", "TEXT-", "MARKER"]
 STREAM_TEXT = "".join(STREAM_CHUNKS)
 STREAM_ERROR = "STREAM-ERROR-MARKER"
 DATA_PAYLOAD = base64.b64encode(b"DATA-URI-BYTES-MARKER" * 8).decode("ascii")
 DATA_URI = "data:image/png;base64," + DATA_PAYLOAD
 PREDICT_TIME = 1.25
+# Token counts a language model's prediction reports in metrics.
+INPUT_TOKENS = 12
+OUTPUT_TOKENS = 3
 CONTENT_MARKERS = (PROMPT, TEXT_OUTPUT, "OUTPUT-FILE-MARKER", MODEL_ERROR, STREAM_TEXT)
 
 TERMINAL = ("succeeded", "failed", "canceled")
@@ -232,6 +235,16 @@ class FakeReplicate:
             return None
         return list(TEXT_TOKENS) if done else TEXT_TOKENS[:1]
 
+    @staticmethod
+    def _metrics(prediction: _Prediction) -> Dict[str, Any]:
+        if prediction.status != "succeeded":
+            return {}
+        metrics: Dict[str, Any] = {"predict_time": PREDICT_TIME}
+        if prediction.model in (TEXT_MODEL, ECHO_MODEL):
+            # Replicate's language models report token counts here.
+            metrics.update(input_token_count=INPUT_TOKENS, output_token_count=OUTPUT_TOKENS)
+        return metrics
+
     def _json_for(self, prediction: _Prediction) -> Dict[str, Any]:
         failed = prediction.status == "failed"
         terminal = prediction.status in TERMINAL
@@ -250,7 +263,7 @@ class FakeReplicate:
             "output": self._output(prediction),
             "logs": "",
             "error": MODEL_ERROR if failed else None,
-            "metrics": {"predict_time": PREDICT_TIME} if prediction.status == "succeeded" else {},
+            "metrics": self._metrics(prediction),
             "created_at": "2026-10-05T00:00:00.000Z",
             "started_at": None,
             "completed_at": "2026-10-05T00:00:02.000Z" if terminal else None,
