@@ -165,6 +165,8 @@ trace_provider = register(
 | `traceai-bedrock` | AWS Bedrock |
 | `traceai-litellm` | LiteLLM |
 | `traceai-portkey` | Portkey |
+| `traceai-replicate` | Replicate |
+| `traceai-voyage` | Voyage AI (embeddings, rerank) |
 
 ### Agent Frameworks
 
@@ -174,6 +176,11 @@ trace_provider = register(
 | `traceai-llamaindex` | LlamaIndex |
 | `traceai-crewai` | CrewAI |
 | `traceai-autogen` | AutoGen |
+| `traceai-agent-framework` | Microsoft Agent Framework |
+| `traceai-ag2` | AG2 (`ag2` 1.x) |
+| `traceai-ag2-classic` | AG2 Classic (`autogen` 0.14.x) |
+| `traceai-semantic-kernel` | Semantic Kernel |
+| `traceai-mcp-use` | mcp-use |
 | `traceai-openai-agents` | OpenAI Agents |
 | `traceai-smolagents` | Smol Agents |
 | `traceai-dspy` | DSPy |
@@ -188,6 +195,11 @@ trace_provider = register(
 | `traceai-mcp` | Model Context Protocol |
 | `traceai-pipecat` | Pipecat |
 | `traceai-livekit` | LiveKit |
+| `traceai-exa` | Exa |
+| `traceai-firecrawl` | Firecrawl |
+| `traceai-parallel` | Parallel |
+| `traceai-tavily` | Tavily |
+| `traceai-discoveryengine` | Google Discovery Engine |
 
 ### Vector Databases
 
