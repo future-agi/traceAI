@@ -225,6 +225,48 @@ def _shutdown_provider_cleanup(cleanup: _ProviderCleanup) -> None:
     cleanup.shutdown_all()
 
 
+_FAILURE_STATUSES = frozenset({"error", "failed", "failure"})
+
+
+def _is_failure_status(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower() in _FAILURE_STATUSES
+
+
+def _has_provider_failure_signal(value: Any) -> bool:
+    """Recognise explicit host/provider failure markers without guessing from content."""
+    if not isinstance(value, dict):
+        return False
+    if value.get("type") == "response.failed":
+        return True
+    if value.get("failed") is True or value.get("response_failed") is True:
+        return True
+    if _is_failure_status(value.get("status")):
+        return True
+    if value.get("error"):
+        return True
+
+    response = value.get("response")
+    if isinstance(response, dict):
+        if response.get("type") == "response.failed":
+            return True
+        if _is_failure_status(response.get("status")) or response.get("error"):
+            return True
+
+    for key in ("data", "event", "metadata"):
+        nested = value.get(key)
+        if isinstance(nested, str) and nested.strip() == "response.failed":
+            return True
+        if _has_provider_failure_signal(nested):
+            return True
+
+    messages = value.get("messages")
+    if isinstance(messages, list) and messages:
+        reply = messages[-1]
+        if isinstance(reply, dict) and reply.get("role") == "assistant":
+            return _has_provider_failure_signal(reply)
+    return False
+
+
 def _is_empty_failed_reply(body: dict[str, Any]) -> bool:
     messages = body.get("messages") or []
     if not messages or not isinstance(messages[-1], dict):
@@ -346,8 +388,10 @@ class Filter:
             start_time=started,
             attributes=llm_attributes,
         )
-        if _is_empty_failed_reply(body):
-            status = Status(StatusCode.ERROR, "provider returned no output or usage")
+        if _has_provider_failure_signal(body) or _has_provider_failure_signal(
+            metadata
+        ) or _is_empty_failed_reply(body):
+            status = Status(StatusCode.ERROR, "provider returned a failed response")
             llm.set_status(status)
             root.set_status(status)
         llm.end(end_time=ended)

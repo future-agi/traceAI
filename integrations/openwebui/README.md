@@ -71,10 +71,12 @@ retrieval, tools, database work and response publishing between `inlet` and
   `input_tokens`/`output_tokens` from Open WebUI's native tool loop. Total is
   computed as input plus output because Open WebUI can double-count its stored
   `total_tokens` when providers repeat usage chunks.
-- An in-stream provider error can reach `outlet` as an empty reply with no
-  usage. That turn is marked `ERROR` with no fabricated output. HTTP-level
-  failures, non-streaming errors and user cancellation can bypass `outlet`
-  entirely and therefore produce no application span.
+- An in-stream provider error can reach `outlet` with partial content/output
+  and no usage, together with a `response.failed`/failed-status signal. That
+  turn is marked `ERROR` while retaining the partial content. Empty replies
+  with no usage are also marked `ERROR`. HTTP-level failures, non-streaming
+  errors and user cancellation can bypass `outlet` entirely and therefore
+  produce no application span.
 - An outlet call without a matching inlet is skipped. This avoids duplicate
   zero-duration traces from the legacy `/api/chat/completed` endpoint.
 

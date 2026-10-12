@@ -252,6 +252,26 @@ def test_empty_reply_without_usage_is_error():
         assert span.status.status_code == StatusCode.ERROR
 
 
+def test_partial_reply_with_provider_failure_is_error_and_keeps_content():
+    body = outlet_body(usage=False)
+    body["response"] = {
+        "status": "failed",
+        "error": {"message": "provider disconnected"},
+    }
+    exporter = InMemorySpanExporter()
+    filt = make_filter(exporter, redact=False)
+    meta = metadata()
+    filt.inlet(inlet_body(), __user__=USER, __metadata__=meta)
+    filt.outlet(body, __user__=USER, __metadata__=meta)
+    filt.flush()
+
+    spans = spans_by_name(exporter)
+    assert spans["openwebui.chat"].status.status_code == StatusCode.ERROR
+    assert spans["openwebui.llm"].status.status_code == StatusCode.ERROR
+    assert spans["openwebui.chat"].attributes["output.value"] == ANSWER
+    assert spans["openwebui.llm"].attributes["output.value"] == ANSWER
+
+
 def test_temporary_chat_forces_redaction():
     body = outlet_body()
     body["chat_id"] = "temporary:abc"
@@ -445,12 +465,15 @@ def test_total_tokens_are_prompt_plus_completion():
     assert llm["llm.token_count.total"] == 8845
 
 
-def test_missing_usage_is_flagged():
+def test_missing_usage_is_flagged_without_marking_success_as_error():
     exporter = InMemorySpanExporter()
     run_turn(make_filter(exporter), body=outlet_body(usage=False))
-    llm = spans_by_name(exporter)["openwebui.llm"].attributes
+    spans = spans_by_name(exporter)
+    llm = spans["openwebui.llm"].attributes
     assert llm["gen_ai.usage.unavailable"] is True
     assert "gen_ai.usage.input_tokens" not in llm
+    for span in spans.values():
+        assert span.status.status_code != StatusCode.ERROR
 
 
 def test_turn_starts_at_inlet():
