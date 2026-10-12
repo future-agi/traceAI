@@ -16,7 +16,9 @@ By default the filter removes those attributes (``CONTENT_KEYS``) and, on
 every span, all free-text error detail: exception messages and status
 descriptions are replaced, exception stack traces are omitted, and other event
 values are kept only if they are not text. Pass ``capture_content=True``, or set
-``COGNEE_FI_CAPTURE_CONTENT=true``, to export everything.
+``COGNEE_FI_CAPTURE_CONTENT=true``, to export everything. With capture on, the
+filter also copies that content to ``input.value`` and ``output.value``
+(``IO_SOURCES``), the keys Future AGI shows as a span's Input and Output.
 
 Span kinds. Cognee sets no span-kind attribute, so Future AGI would store
 search and LLM spans as ``unknown``. The filter sets ``fi.span.kind`` by span
@@ -29,6 +31,7 @@ span. It never raises into the export path.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Mapping, Optional, Sequence
@@ -51,6 +54,13 @@ CONTENT_KEYS = frozenset(
         # Graph query text: databases/graph/ladybug/adapter.py, neo4j_driver/adapter.py
         "cognee.db.query",
     }
+)
+# With content capture on, where a span's Input and Output come from: fi-collector
+# fills them from input.value and output.value only. The first source key that
+# is set wins; a span that already has the target key keeps it.
+IO_SOURCES = (
+    ("input", ("langfuse.observation.input", "memory.query.text", "cognee.search.query")),
+    ("output", ("langfuse.observation.output",)),
 )
 # fi-collector takes the span type from the first of these keys that is set.
 SPAN_KIND_KEYS = (
@@ -120,6 +130,7 @@ class CogneeExportFilter(SpanExporter):
         if kind and not any(key in attributes for key in SPAN_KIND_KEYS):
             attributes["fi.span.kind"] = kind
         if self._capture_content:
+            _add_input_output(attributes)
             return _copy(span, attributes, span.events, span.status)
         for key in CONTENT_KEYS:
             attributes.pop(key, None)
@@ -139,6 +150,28 @@ class CogneeExportFilter(SpanExporter):
         """The fail-closed copy: no content attributes, no events, no status description."""
         attributes = {k: v for k, v in (span.attributes or {}).items() if k not in CONTENT_KEYS}
         return _copy(span, attributes, (), Status(span.status.status_code))
+
+
+def _add_input_output(attributes: dict) -> None:
+    """Copy captured content to the keys Future AGI shows as Input and Output."""
+    for prefix, sources in IO_SOURCES:
+        if prefix + ".value" in attributes:
+            continue
+        value = next((attributes[k] for k in sources if isinstance(attributes.get(k), str)), None)
+        if value is None:
+            continue
+        attributes[prefix + ".value"] = value
+        attributes.setdefault(
+            prefix + ".mime_type", "application/json" if _is_json(value) else "text/plain"
+        )
+
+
+def _is_json(value: str) -> bool:
+    """True for a JSON object or array (Cognee's serialized LLM arguments)."""
+    try:
+        return isinstance(json.loads(value), (dict, list))
+    except ValueError:
+        return False
 
 
 def _without_detail(attributes: Optional[Mapping[str, Any]]) -> dict:

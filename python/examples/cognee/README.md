@@ -138,7 +138,15 @@ or exporter still see the original spans.
   `CogneeExportFilter(exporter, capture_content=True)`, or
   `COGNEE_FI_CAPTURE_CONTENT=true` in the environment, exports everything,
   error detail included, as Cognee recorded it. There is no separate switch
-  for error detail.
+  for error detail. It also copies that content to `input.value` and
+  `output.value` (with `input.mime_type` and `output.mime_type`), the only
+  keys fi-collector fills a span's Input and Output from: the LLM call's
+  arguments (`langfuse.observation.input`), or on search spans the question
+  (`memory.query.text`, else `cognee.search.query`), as Input, and the
+  response (`langfuse.observation.output`) as Output. Without these copies,
+  Future AGI would show captured content only as raw attributes, with Input
+  and Output empty. A span that already has `input.value` or `output.value`
+  keeps it.
 - **Search and LLM spans get a type.** Cognee sets no span-kind attribute,
   so the filter sets `fi.span.kind` by span name, only where none of
   `fi.span.kind`, `gen_ai.span.kind`, `llm.request.type` and
@@ -257,6 +265,12 @@ What that means in Future AGI:
   processor that copies `cognee.llm.model` is needed, so none is written.
 - **Token and cost columns: empty.** Cognee 1.6.2 records no token usage on
   any span.
+- **Input and Output: empty by default.** Content capture is off, so no span
+  carries content. With content capture on (option A), LLM spans show the
+  call's arguments and response and search spans show the question; see
+  [The export filter](#the-export-filter). With option B they stay empty: the
+  content arrives only as raw `langfuse.*`, `memory.*` and `cognee.*`
+  attributes.
 - **Search is shown as a retriever, LLM calls as LLM (option A).** The
   export filter sets `fi.span.kind`. With option B they stay `unknown`: no
   span-kind key arrives and only embedding spans carry
@@ -287,7 +301,8 @@ is on; option B exports them:
 The test plants markers in the document and the question and asserts that,
 with option A's defaults, none of them arrives anywhere (attributes, status,
 events). With content capture on, it asserts that among span attributes they
-arrive under exactly the attribute keys above and no others; error text
+arrive under exactly the attribute keys above plus the filter's `input.value`
+and `output.value` copies, and no others; error text
 (exception events and status descriptions) is then exported as Cognee
 recorded it, so it also carries content whenever an error quotes it.
 Embedding spans carry metadata only, not the embedded text.

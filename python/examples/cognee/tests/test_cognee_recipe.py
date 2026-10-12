@@ -86,6 +86,17 @@ CONTENT_KEYS = {
 # What the filter removes by default: every key above, plus the graph query
 # text (cognee.db.query, which held no marker in the recorded run).
 FILTERED_KEYS = set().union(*CONTENT_KEYS.values()) | {"cognee.db.query"}
+# With capture_content=True the filter also copies that content to the keys
+# fi-collector shows as a span's Input and Output (README.md, "The export
+# filter"): the prompt or the question to input.value, the response to
+# output.value.
+CAPTURE_IO_KEYS = {
+    DOC_MARKER: {"input.value"},
+    QUERY_MARKER: {"input.value"},
+    ANSWER_MARKER: {"output.value"},
+}
+# Every key the filter adds in capture mode (none of them is Cognee's own).
+IO_KEYS = ("input.value", "input.mime_type", "output.value", "output.mime_type")
 # What the filter puts in place of error text by default.
 DETAIL_REMOVED = "__REDACTED__ (content capture off)"
 TYPE_ONLY = " (detail removed: content capture off)"
@@ -210,10 +221,11 @@ def scrub(spans: list[dict[str, Any]], tmp_base: Path) -> list[dict[str, Any]]:
 
 
 def without_filter_kinds(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop the fi.span.kind the filter adds, leaving Cognee's own spans."""
+    """Drop the keys the filter adds (fi.span.kind, capture-mode I/O), leaving Cognee's spans."""
+    added = {"fi.span.kind", *IO_KEYS}
     spans = copy.deepcopy(spans)
     for span in spans:
-        span["attributes"] = [a for a in span.get("attributes", []) if a["key"] != "fi.span.kind"]
+        span["attributes"] = [a for a in span.get("attributes", []) if a["key"] not in added]
     return spans
 
 
@@ -259,11 +271,13 @@ def assert_collector_mapping_inputs(spans: list[dict[str, Any]], kinds: dict[str
     assert search_attrs["memory.operation"] == "retrieve"
 
 
-def assert_default_content(spans: list[dict[str, Any]]) -> None:
-    """Among span attributes, Cognee's content is under exactly the documented keys.
+def assert_default_content(spans: list[dict[str, Any]], io_copies: bool = True) -> None:
+    """Among span attributes, captured content is under exactly the documented keys.
 
-    Error text (exception events, status) is not checked here: with content
-    capture on it is exported as Cognee recorded it (README.md, "Content").
+    Those are Cognee's own keys plus, after the filter in capture mode
+    (``io_copies``), its input.value/output.value copies. Error text
+    (exception events, status) is not checked here: with content capture on
+    it is exported as Cognee recorded it (README.md, "Content").
     """
     for marker, expected_keys in CONTENT_KEYS.items():
         found = {
@@ -272,7 +286,7 @@ def assert_default_content(spans: list[dict[str, Any]]) -> None:
             for key, value in attributes(span).items()
             if marker in str(value)
         }
-        assert found == expected_keys, marker
+        assert found == expected_keys | (CAPTURE_IO_KEYS[marker] if io_copies else set()), marker
     for span in spans_named(spans, EMBEDDING_SPAN):
         assert DOC_MARKER not in json.dumps(span)
 
@@ -413,7 +427,33 @@ def filtered_attributes(span: dict[str, Any], capture_content: bool) -> dict[str
     }
     if span["name"] in FILTER_KINDS:
         expected["fi.span.kind"] = FILTER_KINDS[span["name"]]
+    if capture_content:
+        expected.update(expected_io(attributes(span)))
     return expected
+
+
+def expected_io(attrs: dict[str, Any]) -> dict[str, Any]:
+    """The Input/Output keys capture mode adds for a span with Cognee's ``attrs``."""
+    def mime(value: str) -> str:
+        # Cognee serializes an LLM call's arguments as a JSON object, but cuts
+        # it at 8000 characters, so a long prompt is no longer valid JSON.
+        try:
+            is_json = isinstance(json.loads(value), (dict, list))
+        except ValueError:
+            is_json = False
+        return "application/json" if is_json else "text/plain"
+
+    io: dict[str, Any] = {}
+    prompt = attrs.get("langfuse.observation.input")
+    question = attrs.get("memory.query.text", attrs.get("cognee.search.query"))
+    response = attrs.get("langfuse.observation.output")
+    if prompt is not None:
+        io.update({"input.value": prompt, "input.mime_type": mime(prompt)})
+    elif question is not None:
+        io.update({"input.value": question, "input.mime_type": mime(question)})
+    if response is not None:
+        io.update({"output.value": response, "output.mime_type": mime(response)})
+    return io
 
 
 @pytest.fixture(scope="module")
@@ -787,7 +827,7 @@ def test_recorded_fixture_matches_documented_mapping(recorded: list[dict[str, An
     assert_span_names_and_kinds(recorded)
     assert_one_trace_under_app_span(recorded)
     assert_collector_mapping_inputs(recorded, {})
-    assert_default_content(recorded)
+    assert_default_content(recorded, io_copies=False)
     assert_no_secrets(recorded)
     assert found_in(recorded, host_paths()) == []
 
@@ -1269,6 +1309,53 @@ def test_filter_capture_content_keeps_cognees_content(
     assert_collector_mapping_inputs(wire, FILTER_KINDS)
     for before, after in zip(recorded, wire):
         assert attributes(after) == filtered_attributes(before, capture_content=True)
+
+
+def test_filter_capture_content_shows_content_as_span_input_and_output(
+    cognee_filter: Any, recorded: list[dict[str, Any]]
+) -> None:
+    # fi-collector fills a span's Input and Output from input.value and
+    # output.value only; without these copies, captured prompts, questions and
+    # answers show up in Future AGI as raw attributes, not as Input/Output.
+    captured = filtered(cognee_filter, recorded, capture_content=True)
+    wire = {span["spanId"]: attributes(span) for span in captured}
+    generations = [span for span in recorded if span["name"] == GENERATION_SPAN]
+    assert generations
+    for span in generations:
+        attrs = wire[span["spanId"]]
+        assert attrs["input.value"] == attributes(span)["langfuse.observation.input"]
+        assert attrs["input.mime_type"] == "application/json"
+        assert attrs["output.value"] == attributes(span)["langfuse.observation.output"]
+        assert attrs["output.mime_type"] in ("application/json", "text/plain")
+    (search,) = spans_named(recorded, "memory.retrieve")
+    assert wire[search["spanId"]]["input.value"] == QUESTION
+    assert wire[search["spanId"]]["input.mime_type"] == "text/plain"
+    # Spans that carry no content get no Input/Output.
+    for span in spans_named(recorded, "cognee.db.vector.search"):
+        assert not set(IO_KEYS) & set(wire[span["spanId"]])
+    # Default mode adds none of them.
+    for span in filtered(cognee_filter, recorded):
+        assert not set(IO_KEYS) & set(attributes(span)), span["name"]
+
+
+def test_filter_capture_content_keeps_an_existing_span_input_and_output(
+    cognee_filter: Any,
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        SimpleSpanProcessor(cognee_filter.CogneeExportFilter(exporter, capture_content=True))
+    )
+    with provider.get_tracer("test").start_as_current_span(GENERATION_SPAN) as span:
+        span.set_attribute("langfuse.observation.input", '{"text_input": "cognee prompt"}')
+        span.set_attribute("langfuse.observation.output", "cognee answer")
+        span.set_attribute("input.value", "set by another instrumentor")
+        span.set_attribute("input.mime_type", "text/plain")
+    (exported,) = exporter.get_finished_spans()
+    assert exported.attributes["input.value"] == "set by another instrumentor"
+    assert exported.attributes["input.mime_type"] == "text/plain"
+    assert exported.attributes["output.value"] == "cognee answer"
+    assert exported.attributes["output.mime_type"] == "text/plain"
 
 
 @pytest.mark.parametrize(
