@@ -6,7 +6,11 @@ creates the spans. This example registers a Future AGI tracer provider with
 capture off.
 
 Pinned: `@tanstack/ai` 0.64.0, `@tanstack/ai-openai` 0.26.0,
-`@traceai/fi-core` 1.0.0, `@opentelemetry/api` 1.9.1. Node `>=20.6.0`, the
+`@traceai/fi-core` 1.0.0, `@opentelemetry/api` 1.9.1, and through `overrides`
+`@tanstack/openai-base` 0.12.2: `@tanstack/ai-openai` 0.26.0 asks for
+`^0.12.2`, and every later 0.12.x needs a newer `@tanstack/ai` than 0.64.0
+(0.12.6 needs `^0.66.0` and `openai` 7), so an unpinned install mixes
+versions this example was not tested with. Node `>=20.6.0`, the
 floor of the pinned OpenTelemetry SDK 2.11.0 on the Node 20 line. The
 contract test and `node --test` suite (see "Contract test") pass on Node
 20.20.2, 22.23.3 and 26.8.1.
