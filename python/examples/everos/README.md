@@ -177,9 +177,10 @@ open no span (`nested_only`, `component/embedding/openai_provider.py:117-123`).
   from `fi.span.kind`, `gen_ai.span.kind`, `llm.request.type` or
   `openinference.span.kind`, then falls back to `gen_ai.operation.name`
   (`fi-collector/exporter/clickhouse25exporter/converter.go:79-131`). EverOS
-  sets none of them (tested), so fi-collector stores `unknown` (source
-  reading of the collector). The architecture's kind table is therefore an
-  open SF-1 gap, not something this recipe delivers.
+  sets none of them (tested), so fi-collector stores `unknown` (checked
+  against a local Future AGI stack, see [Notes](#notes)). The architecture's
+  kind table is therefore an open SF-1 gap, not something this recipe
+  delivers.
 - **No processor here.** The PRD (r2, section 0) records SF-1 as decided:
   span-kind mapping lives in shared traceAI processors and no child copies
   it, so the architecture's condition for a per-child processor ("only if
@@ -193,19 +194,24 @@ open no span (`nested_only`, `component/embedding/openai_provider.py:117-123`).
   `embedding` to EMBEDDING, `agent` to AGENT. fi-collector's converter does
   not read it. Under that map every architecture row would come out as
   specified except `everos.search.rank`, which EverOS types `span` (CHAIN),
-  not RETRIEVER. Source reading; whether that adapter runs on
-  fi-collector-ingested spans was not established. Recorded here for SF-1.
+  not RETRIEVER. That adapter does not run on fi-collector-ingested spans:
+  in the live check every EverOS span was stored as `unknown`. Recorded here
+  for SF-1.
 - **Model: populated.** `gen_ai.request.model` is on whichever span is
   current when EverOS's LLM client or embedding provider records a call,
   whatever its type. In the recorded scenario that is the generation spans,
   the embedding spans and the agent-typed `everos.ome.extract_atomic_facts`
   (table above). fi-collector reads it
   (`fi-collector/pkg/adapter/adapter.go:279-284`). EverOS sets no provider
-  key, so the provider column stays empty (`adapter.go:289-295`).
+  key, so the provider column stays empty (`adapter.go:289-295`). Only a
+  call that succeeds records them: in the live check, the span of a chat
+  call the provider rejected carried neither model nor tokens.
 - **Tokens: on the same spans.** `gen_ai.usage.input_tokens` and
   `gen_ai.usage.output_tokens` (`adapter.go:296-305`) on the generation
   spans and on `everos.ome.extract_atomic_facts`; embedding spans carry
-  input tokens only. The atomic-fact strategy calls the model directly
+  input tokens only, and only when the embedding API reports usage (Gemini's
+  OpenAI-compatible endpoint does not, so in the live check those spans
+  carried none). The atomic-fact strategy calls the model directly
   (`memory/strategies/extract_atomic_facts.py:38-50`) inside its agent span
   (`infra/ome/_dispatch/runner.py:229-251`), and the LLM client records
   usage on the current span (`component/llm/_usage_client.py:44-57`), so
@@ -219,7 +225,19 @@ open no span (`nested_only`, `component/embedding/openai_provider.py:117-123`).
   (`converter.go:285-294`). Whether a stored EverOS span shows a cost
   therefore depends on that table and the model name you configure
   (EverOS's default is the OpenRouter-style `openai/gpt-4.1-mini`). Source
-  reading; not tested.
+  reading; in the live check, with a model the table does not know, every
+  span was stored with cost 0.
+- **Input and Output: empty, in both capture settings.** fi-collector fills
+  a span's Input and Output only from `input.value` and `output.value`
+  (`converter.go:343-344`). EverOS writes captured content only to
+  `langfuse.observation.input` and `langfuse.observation.output`, so with
+  capture on it shows up as raw span attributes, not as Input or Output
+  (checked live). Another SF-1 input.
+- **Sessions and users: not grouped.** EverOS writes `langfuse.session.id`
+  and `langfuse.user.id`; fi-collector reads `session.id` and `user.id`
+  (`converter.go:40-44`), so Future AGI's Sessions and Users views do not
+  pick up EverOS's ids (checked live). They remain visible as span
+  attributes.
 
 ## Privacy
 
@@ -307,9 +325,14 @@ status descriptions. This recipe adds no such filter.
   `openaipublic.blob.core.windows.net` unless it is cached. An offline host
   needs that file in tiktoken's cache. The tests register an offline
   stand-in instead.
-- No call to Future AGI, a model provider or Langfuse was made. Auth
+- The tests make no call to Future AGI, a model provider or Langfuse. Auth
   rejection (401 without keys), project stamping and storage are
-  fi-collector behaviour the harness receiver does not reproduce.
+  fi-collector behaviour the harness receiver does not reproduce. They were
+  checked separately against a local Future AGI stack (fi-collector built
+  from future-agi `dev`, 2026-10-11) with `everos server start` set up as in
+  [Set up](#set-up), a real model and real embeddings: the spans were stored
+  in the named project; a batch without `project_name` was rejected with
+  400, wrong keys with 401, and an endpoint without its path with 404.
 
 ## Tests
 
