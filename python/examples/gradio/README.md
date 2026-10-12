@@ -101,7 +101,8 @@ if __name__ == "__main__":
   whose resource has no `project_name` (source reading). Spans are batched;
   `register()` flushes the batch on normal exit (tested: with a 10-minute
   batch delay every span still arrived) and on SIGINT/SIGTERM, so Ctrl+C on
-  `python src/app.py` flushes too (source reading).
+  `python src/app.py` flushes too (checked in a live run: every turn was
+  exported after SIGINT).
 - **Content off.** traceAI records prompts and answers by default
   (`TraceConfig`'s `hide_inputs` and `hide_outputs` default to `False`). The
   recipe passes `hide_inputs=True, hide_outputs=True`. See [Privacy](#privacy).
@@ -153,8 +154,11 @@ One span per chat turn, from `traceai_openai`:
 - fi-collector reads the span kind from `gen_ai.span.kind` and stores this
   span as `llm`. It promotes `gen_ai.request.model`, `gen_ai.provider.name`
   and the `gen_ai.usage.*` token counts, and reads `session.id` for the
-  session. (Source reading of fi-collector; the tests use the harness
-  receiver, not fi-collector.)
+  session. The tests use the harness receiver, not fi-collector; a live run
+  against a local Future AGI stack (see [Out of scope](#out-of-scope))
+  stored each turn as one `llm` trace with model and token counts, and
+  Observe's Sessions view showed the two turns of one browser session as
+  one session and a second browser session as another.
 - `gen_ai.request.model` holds the model the response names
   (`gpt-4o-mini-2024-07-18` from the test fake), not the requested
   `gpt-4o-mini`; the requested one is in `gen_ai.request.parameters`.
@@ -165,7 +169,9 @@ One span per chat turn, from `traceai_openai`:
   `input.value` `__REDACTED__` and no message text, and `predict` raises the
   OpenAI error (`openai.InternalServerError` for a 500). Tested with the
   model host answering HTTP 500 and the client's retries turned off
-  (`max_retries=0`); with the default retries it is not tested.
+  (`max_retries=0`). With the default retries, a 400 for an unknown model,
+  which the client does not retry, also gave one `ERROR` span in the live
+  run; a retried 5xx is not tested.
 
 ## Privacy
 
@@ -297,10 +303,14 @@ the tests open no server port.
 
 ## Out of scope
 
-`gradio[mcp]`, Gradio's queue metrics and Spaces hosting. Not tested here:
-Gradio's HTTP and queue layer (the tests call its event dispatch directly),
-streaming, model errors with the client's default retries, and a real
-fi-collector (authentication, project stamping and storage).
+`gradio[mcp]`, Gradio's queue metrics and Spaces hosting. The tests do not
+exercise Gradio's HTTP and queue layer (they call its event dispatch
+directly), streaming, model errors with the client's default retries, or a
+real fi-collector (authentication, project stamping and storage). A separate
+live run on 2026-10-11 covered the HTTP and queue layer and fi-collector:
+`python src/app.py` as in [Run](#run), chatted with from a headless
+browser, a real model behind an OpenAI-compatible host, and a local Future
+AGI stack built from future-agi `dev`. Streaming stays untested.
 
 ## Tests
 
