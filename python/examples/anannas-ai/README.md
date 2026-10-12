@@ -87,7 +87,7 @@ Cost lookup keyed on the requested model name may miss a different returned name
 
 ## Provider specifics
 
-The [Anannas quickstart](https://docs.anannas.ai/) and the [Langfuse integration](https://langfuse.com/integrations/gateways/anannas) use `https://api.anannas.ai/v1`, the default here. The recipe also accepts `https://anannas.ai/v1` with the same URL rules.
+The [Anannas quickstart](https://docs.anannas.ai/) examples use `https://api.anannas.ai/v1`, the default here. The recipe also accepts `https://anannas.ai/v1` with the same URL rules.
 
 Model IDs use the form `provider/model-name`, such as `openai/gpt-5-mini` or `anthropic/claude-3-sonnet`. Anannas documents `POST /v1/chat/completions`, `GET /v1/models`, bearer authentication, and SSE streaming with `stream: true` ([Anannas quickstart](https://docs.anannas.ai/)). This recipe uses only Chat Completions and preserves model IDs.
 

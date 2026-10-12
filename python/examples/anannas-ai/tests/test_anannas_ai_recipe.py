@@ -606,7 +606,7 @@ def test_readme_requirements_and_customer_facing_pins():
         "openai/gpt-5-mini-2026-09-01", "assistant content", "no raw-response fallback",
         "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS",
         app.API_KEY_ENV, app.MODEL_ENV, app.BASE_URL_ENV,
-        "https://docs.anannas.ai/", "https://langfuse.com/integrations/gateways/anannas",
+        "https://docs.anannas.ai/",
         "pip install -r requirements.txt",
         "pip install traceAI-openai fi-instrumentation-otel openai",
         "python src/app.py", "python src/app.py --stream",
