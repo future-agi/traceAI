@@ -81,15 +81,17 @@ On normal calls, `gen_ai.request.model` is the model id the provider returns
 in its response. Token usage appears only when the response has `usage`;
 missing usage is omitted, never reported as zero.
 
-Streamed calls record accumulated output text but have no `gen_ai.request.model` attribute.
+With `traceai-openai` 0.1.10 and earlier, streamed calls record accumulated output text but have no `gen_ai.request.model` attribute.
 The default stream tested here returns no usage, so it exports
 no `gen_ai.usage.*` attributes. Failed calls produce an error span with an
 exception event and no `gen_ai.request.model` attribute. On both, the model you
 requested is still visible inside the `gen_ai.request.parameters` JSON. These are
-current `traceai-openai` behaviour.
+current `traceai-openai` behaviour up to 0.1.10; later versions (future-agi/traceAI#249)
+record the requested model on streamed and failed calls.
 
-The provider field says `openai`: `gen_ai.provider.name` is `openai`. This is
-the shared instrumentor's label, including when the client calls Baseten.
+Up to `traceai-openai` 0.1.10, the provider field says `openai`: `gen_ai.provider.name` is `openai`. This is
+the shared instrumentor's label, including when the client calls Baseten. Later versions
+(future-agi/traceAI#249) say `baseten` for `inference.baseten.co`; other base URLs keep `openai`.
 
 ## Provider specifics
 
@@ -135,8 +137,8 @@ change Baseten's own logging.
 
 ## Tests
 
-The tests pin the current absence of `gen_ai.request.model` on streaming and
-error spans. They also pin the absence of usage attributes on the default stream.
+The tests accept both `traceai-openai` behaviours for the provider label and for
+`gen_ai.request.model` on streaming and error spans (absent up to 0.1.10, the requested model later). They also pin the absence of usage attributes on the default stream.
 
 From the repository root:
 
