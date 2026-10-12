@@ -306,13 +306,15 @@ def test_semantic_kernel_contract_sensitive_on_control():
         assert json.loads(tool["input.value"]) == {"city": TOOL_SECRET_CITY}
         assert tool["output.value"] == "sunny in {0}".format(TOOL_SECRET_CITY)
 
-    # Gap, documented: Semantic Kernel writes model-call message bodies to Python
-    # logging (model_diagnostics/decorators.py), not to the span, so LLM spans
-    # carry no input/output even when sensitive is on.
-    for span in names["chat gpt-4o-mini"]:
-        llm = _flatten(span)
-        assert "input.value" not in llm and "output.value" not in llm
-        assert SECRET_PROMPT not in json.dumps(llm)
+    # Semantic Kernel only logs model-call messages (model_diagnostics/decorators.py);
+    # with sensitive on, instrument() records them on the chat spans as well.
+    llms = [_flatten(span) for span in names["chat gpt-4o-mini"]]
+    assert llms
+    for llm in llms:
+        assert json.loads(llm["input.value"]) == json.loads(llm["gen_ai.input.messages"])
+        assert json.loads(llm["output.value"]) == json.loads(llm["gen_ai.output.messages"])
+    assert all(SECRET_PROMPT in llm["input.value"] for llm in llms)
+    assert any("The tool says it is sunny." in llm["output.value"] for llm in llms)
 
 
 def _closed_port() -> int:

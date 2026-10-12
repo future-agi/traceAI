@@ -244,7 +244,7 @@ def map_sk_attributes(
                 mapped.setdefault(USAGE_NAMESPACE + suffix, mapped.pop(key))
 
     if sensitive:
-        if kind == FiSpanKindValues.AGENT.value:
+        if kind in (FiSpanKindValues.AGENT.value, FiSpanKindValues.LLM.value):
             _set_io(mapped, SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE, mapped.get(INPUT_MESSAGES))
             _set_io(mapped, SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE, mapped.get(OUTPUT_MESSAGES))
         elif mapped.get(OPERATION) == "execute_tool":

@@ -23,6 +23,7 @@ from opentelemetry import trace as trace_api
 
 from fi_instrumentation import TraceConfig
 
+from ._model_content import MODEL_DIAGNOSTICS_MODULE, ModelContentLogger
 from .processor import (
     CONTENT_KEYS,
     FI_SPAN_KIND,
@@ -121,6 +122,7 @@ class _State:
         self.sensitive = False
         self.settings: List[Tuple[Any, bool, bool]] = []
         self.tracers: List[Tuple[Any, Any]] = []
+        self.loggers: List[Tuple[Any, Any]] = []
 
 
 class SemanticKernelInstrumentor:
@@ -162,9 +164,11 @@ class SemanticKernelInstrumentor:
             sensitive: Also turn on Semantic Kernel's *sensitive* diagnostics.
                 Off by default. **Warning:** when True, Semantic Kernel puts
                 agent input/output messages, tool-call arguments and tool
-                results on spans, and this package copies them to
-                ``input.value`` / ``output.value``. Leave it False unless you
-                want that text stored in Future AGI.
+                results on spans, this package adds model-call prompts and
+                completions (which Semantic Kernel only logs) to the chat
+                spans, and all of it is copied to ``input.value`` /
+                ``output.value``. Leave it False unless you want that text
+                stored in Future AGI.
             config: A ``fi_instrumentation.TraceConfig``. When omitted, one is
                 built from the environment. With ``sensitive=True``, its
                 ``hide_inputs`` (``FI_HIDE_INPUTS``) drops tool arguments,
@@ -293,7 +297,20 @@ class SemanticKernelInstrumentor:
             settings.enable_otel_diagnostics = True
             settings.enable_otel_diagnostics_sensitive = bool(sensitive)
 
-        # 3. Route Semantic Kernel's module-level tracers to this provider.
+        # 3. sensitive=True: Semantic Kernel logs model-call messages instead of
+        # putting them on the chat span; a proxy in front of that module's
+        # logger records them on the span too. Not installed otherwise.
+        if sensitive:
+            for module in settings_modules:
+                if module.__name__ != MODEL_DIAGNOSTICS_MODULE:
+                    continue
+                original = getattr(module, "logger", None)
+                if original is None or isinstance(original, ModelContentLogger):
+                    continue
+                new_state.loggers.append((module, original))
+                module.logger = ModelContentLogger(original)
+
+        # 4. Route Semantic Kernel's module-level tracers to this provider.
         if tracer_provider is not None:
             version = _sk_version()
             for module in tracer_modules:
@@ -317,6 +334,8 @@ class SemanticKernelInstrumentor:
                 settings.enable_otel_diagnostics_sensitive = was_sensitive
             for module, original in state.tracers:
                 module.tracer = original
+            for module, original in state.loggers:
+                module.logger = original
             active = getattr(state.provider, "_active_span_processor", None)
             if active is not None and hasattr(active, "_span_processors"):
                 with getattr(active, "_lock", _NullLock()):

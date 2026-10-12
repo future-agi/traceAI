@@ -8,3 +8,4 @@
 - `instrument()` logs a WARNING and skips a Semantic Kernel module it cannot import, and logs a WARNING and changes nothing for a non-SDK tracer provider, instead of raising.
 - `instrument()` installs and owns its own processor; a `SemanticKernelSpanProcessor` you installed is left in place by both `instrument()` and `uninstrument()`.
 - `instrument(config=TraceConfig(...))`, `FI_HIDE_INPUTS` and `FI_HIDE_OUTPUTS` drop the input / output content keys that `sensitive=True` would keep.
+- With `sensitive=True`, model-call (`chat`) spans carry the prompt and completion. Semantic Kernel only logs those; a proxy in front of its model-diagnostics logger also records them on the span and passes every call on to the real logger. Not installed with `sensitive=False`; `uninstrument()` removes it. Tested on semantic-kernel 1.38.0 and 1.45.0.
