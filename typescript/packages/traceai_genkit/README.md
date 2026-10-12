@@ -2,7 +2,7 @@
 
 Send [Firebase Genkit](https://genkit.dev) (JavaScript) spans to Future AGI. Genkit already creates OpenTelemetry spans for flows, models, tools and steps. `FIGenkitSpanProcessor` is a span processor you pass to Genkit's `enableTelemetry({ spanProcessors })`. It maps Genkit's `genkit:*` attributes to Future AGI span kinds, model and token keys, and exports the mapped copy through `@traceai/fi-core`.
 
-Alpha. Validated with real `genkit` 1.42.0 flows on Genkit's own test model (`mockModel` from `genkit/testing`), exported to a loopback OTLP receiver. No model vendor and no GCP were called.
+Alpha. Validated with real `genkit` 1.42.0 flows on Genkit's own test model (`mockModel` from `genkit/testing`), exported to a loopback OTLP receiver, and end to end with the Google AI plugin (`@genkit-ai/google-genai` 1.42.0, `gemini-3.8-flash`: tool call, streaming, model and tool errors) exported to a local Future AGI collector. GCP telemetry was not called.
 
 JavaScript only. Genkit Python and Genkit Go are not covered. This package does not use the Firebase / Google Cloud plugin, cannot run next to it in one process in this release (see [Firebase / Google Cloud telemetry plugin](#firebase--google-cloud-telemetry-plugin)), and does not wrap `ai.generate()`.
 
@@ -98,6 +98,7 @@ Cost: the Future AGI export adds no Google Cloud cost. The Firebase / Google Clo
 | `fi.span.kind`, `gen_ai.span.kind` | table above | every Genkit span |
 | `gen_ai.request.model` | `genkit:name` of the model action span (the registered name, e.g. `googleai/gemini-2.5-flash`; not parsed) | model spans |
 | `gen_ai.usage.input_tokens` / `output_tokens` / `total_tokens` | `usage.inputTokens` / `outputTokens` / `totalTokens` in the model span's `genkit:output` | model spans only |
+| `gen_ai.usage.output_tokens.reasoning` / `gen_ai.usage.cache_read_tokens` | `usage.thoughtsTokens` / `cachedContentTokens`, when the model plugin reports them (the Google AI / Vertex AI plugin does; Gemini's `outputTokens` excludes thinking tokens, which are in `totalTokens`) | model spans only |
 | `gen_ai.response.finish_reasons` | `finishReason` in the model span's `genkit:output` | model spans |
 | `tool.name`, `gen_ai.tool.name` | `genkit:name` of the tool action span | tool spans |
 | `session.id` | `genkit:metadata:agent:sessionId` (`ai/src/agent.ts:1061-1063`) | the beta agent span only |
@@ -105,7 +106,7 @@ Cost: the Future AGI export adds no Google Cloud cost. The Firebase / Google Clo
 | `input.value` / `output.value` (+ `application/json` mime types) | `genkit:input` / `genkit:output` | only with `captureContent: true` |
 | `genkit:*` | passed through, except the content keys below | every Genkit span |
 
-Unavailable at 1.42.0, and not set: provider, cost, user id (unless the app sets it), retriever documents, and every `GenerationUsage` field the inventory did not see on a span (`thoughtsTokens`, `cachedContentTokens`, the character / image / video / audio counters, `custom`). Those stay inside `genkit:output`.
+Unavailable at 1.42.0, and not set: provider, cost, user id (unless the app sets it), retriever documents, and the other `GenerationUsage` fields (the character / image / video / audio counters, `custom`). Those stay inside `genkit:output`.
 
 Tokens are written only on model call spans. The `generate` span's `genkit:output` repeats the last turn's usage; it stays inside that JSON and is not promoted. If any non-model span carries a key the collector promotes (`gen_ai.usage.*`, `llm.token_count.*`, `llm.usage.*`, `gen_ai.cost.*`, `llm.cost.*`; the cost prefixes cover the parts such as `gen_ai.cost.input` and `llm.cost.completion` as well as the totals), the processor moves it to `genkit.usage.<key>`, so the trace-wide token and cost sums equal the model calls.
 

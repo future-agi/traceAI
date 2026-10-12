@@ -129,24 +129,29 @@ export const GENKIT_NEVER_EXPORTED_KEYS: readonly string[] = [GenkitAttributes.M
  * GenerationUsage fields (ai/src/model-types.ts:260-275) copied from a model
  * span's `genkit:output.usage`, and the Future AGI key each one goes to.
  *
- * Only the fields the inventory saw on a dumped model span are mapped
- * (contract/inventory.mjs, Genkit's own `mockModel`): inputTokens,
- * outputTokens, totalTokens.
+ * inputTokens, outputTokens and totalTokens are on every inventoried model span
+ * (contract/inventory.mjs, Genkit's own `mockModel`). thoughtsTokens and
+ * cachedContentTokens are set by the Google AI / Vertex AI plugin
+ * (@genkit-ai/google-genai 1.42.0 lib/googleai/gemini.js:642-646, from
+ * usageMetadata.thoughtsTokenCount / cachedContentTokenCount) and were seen on
+ * real gemini-3.8-flash spans. Gemini's outputTokens excludes the thinking
+ * tokens, which only show up in totalTokens and thoughtsTokens.
  */
 export const USAGE_TO_ATTRIBUTE: Readonly<Record<string, string>> = {
   inputTokens: SemanticConventions.LLM_TOKEN_COUNT_PROMPT,
   outputTokens: SemanticConventions.LLM_TOKEN_COUNT_COMPLETION,
   totalTokens: SemanticConventions.LLM_TOKEN_COUNT_TOTAL,
+  thoughtsTokens: SemanticConventions.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+  cachedContentTokens: SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
 };
 
 /**
- * GenerationUsageSchema fields at 1.42.0 that no inventoried span carried.
- * They are unavailable: not copied to any Future AGI key (they stay inside
- * `genkit:output`, which is exported only with `captureContent: true`).
+ * GenerationUsageSchema fields at 1.42.0 that neither the inventory nor the
+ * google-genai plugin sets. They are unavailable: not copied to any Future AGI
+ * key (they stay inside `genkit:output`, which is exported only with
+ * `captureContent: true`).
  */
 export const GENKIT_USAGE_NOT_MAPPED: readonly string[] = [
-  "thoughtsTokens",
-  "cachedContentTokens",
   "inputCharacters",
   "outputCharacters",
   "inputImages",

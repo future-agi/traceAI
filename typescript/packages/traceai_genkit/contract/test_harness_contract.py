@@ -68,10 +68,9 @@ PROMOTED_EXACT = {
 }
 PROMOTED_PREFIXES = ("gen_ai.usage.", "llm.token_count.", "llm.usage.", "gen_ai.cost.", "llm.cost.")
 # Inventory at genkit 1.42.0 (contract/inventory.mjs): mockModel spans carry
-# usage.inputTokens/outputTokens/totalTokens in genkit:output; only those are
-# mapped. thoughtsTokens and cachedContentTokens exist in GenerationUsageSchema
-# (@genkit-ai/ai src/model-types.ts:260-275) but no inventoried span carried
-# them, so they are unavailable: the keys they would map to must be absent.
+# usage.inputTokens/outputTokens/totalTokens in genkit:output. thoughtsTokens and
+# cachedContentTokens are mapped too (the google-genai plugin sets them), but the
+# mock model never reports them, so the keys they map to must be absent here.
 UNAVAILABLE_ON_FIXTURE = ("gen_ai.usage.output_tokens.reasoning", "gen_ai.usage.cache_read_tokens")
 
 

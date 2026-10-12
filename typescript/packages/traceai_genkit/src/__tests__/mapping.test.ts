@@ -99,25 +99,39 @@ describe("model call spans", () => {
     expect(out["gen_ai.response.finish_reasons"]).toEqual(["stop"]);
   });
 
-  it("copies only the usage fields the inventory observed (input/output/total tokens)", () => {
+  it("copies input/output/total tokens, plus the reasoning and cached-prompt counts real Gemini reports", () => {
     expect(USAGE_TO_ATTRIBUTE).toEqual({
       inputTokens: "gen_ai.usage.input_tokens",
       outputTokens: "gen_ai.usage.output_tokens",
       totalTokens: "gen_ai.usage.total_tokens",
+      thoughtsTokens: "gen_ai.usage.output_tokens.reasoning",
+      cachedContentTokens: "gen_ai.usage.cache_read_tokens",
     });
   });
 
-  it("leaves GenerationUsage fields the inventory did not observe unavailable (not copied)", () => {
-    // thoughtsTokens, cachedContentTokens and the character/media counters are in
-    // GenerationUsageSchema (ai/src/model-types.ts:260-275) but no span the inventory
-    // dumped carried them, so they are not mapped.
+  it("maps thoughtsTokens and cachedContentTokens (set by @genkit-ai/google-genai) on model spans", () => {
+    // @genkit-ai/google-genai 1.42.0 lib/googleai/gemini.js:642-646 copies
+    // usageMetadata.thoughtsTokenCount / cachedContentTokenCount. A real
+    // gemini-3.8-flash call reported inputTokens 66, outputTokens 15,
+    // totalTokens 133: the 52 thinking tokens are only in thoughtsTokens.
+    const out = mapGenkitAttributes(
+      modelAttributes({ inputTokens: 66, outputTokens: 15, totalTokens: 133, thoughtsTokens: 52, cachedContentTokens: 8 }),
+    );
+    expect(out["gen_ai.usage.output_tokens.reasoning"]).toBe(52);
+    expect(out["gen_ai.usage.cache_read_tokens"]).toBe(8);
+    expect(out["gen_ai.usage.output_tokens"]).toBe(15);
+    expect(out["gen_ai.usage.total_tokens"]).toBe(133);
+  });
+
+  it("leaves the other GenerationUsage fields unavailable (not copied)", () => {
+    // The character/media counters and `custom` are in GenerationUsageSchema
+    // (ai/src/model-types.ts:260-275) but neither the inventory nor the
+    // google-genai plugin sets them, so they are not mapped.
     const out = mapGenkitAttributes(
       modelAttributes({
         inputTokens: 5,
         outputTokens: 6,
         totalTokens: 11,
-        thoughtsTokens: 2,
-        cachedContentTokens: 4,
         inputCharacters: 99,
         outputImages: 1,
       }),
@@ -128,9 +142,9 @@ describe("model call spans", () => {
     expect(out["gen_ai.usage.output_tokens.reasoning"]).toBeUndefined();
     expect(out["gen_ai.usage.cache_read_tokens"]).toBeUndefined();
     expect(Object.keys(out).some((k) => /character|image/i.test(k))).toBe(false);
-    expect(GENKIT_USAGE_NOT_MAPPED).toEqual(
-      expect.arrayContaining(["thoughtsTokens", "cachedContentTokens", "inputCharacters", "outputImages", "custom"]),
-    );
+    expect(GENKIT_USAGE_NOT_MAPPED).toEqual(expect.arrayContaining(["inputCharacters", "outputImages", "custom"]));
+    expect(GENKIT_USAGE_NOT_MAPPED).not.toContain("thoughtsTokens");
+    expect(GENKIT_USAGE_NOT_MAPPED).not.toContain("cachedContentTokens");
   });
 
   it("records usage as unavailable (absent) when the model reported none", () => {
