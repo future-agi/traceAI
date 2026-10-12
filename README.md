@@ -245,6 +245,8 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-huggingface`](https://pypi.org/project/traceAI-huggingface/) | HuggingFace | [![PyPI](https://img.shields.io/pypi/v/traceAI-huggingface)](https://pypi.org/project/traceAI-huggingface/) |
 | [`traceAI-xai`](https://pypi.org/project/traceAI-xai/) | xAI (Grok) | [![PyPI](https://img.shields.io/pypi/v/traceAI-xai)](https://pypi.org/project/traceAI-xai/) |
 | [`traceAI-vllm`](https://pypi.org/project/traceAI-vllm/) | vLLM | [![PyPI](https://img.shields.io/pypi/v/traceAI-vllm)](https://pypi.org/project/traceAI-vllm/) |
+| [`traceAI-replicate`](https://pypi.org/project/traceAI-replicate/) | Replicate (Python client) | [![PyPI](https://img.shields.io/pypi/v/traceAI-replicate)](https://pypi.org/project/traceAI-replicate/) |
+| [`traceAI-voyage`](https://pypi.org/project/traceAI-voyage/) | Voyage AI (embeddings, rerank) | [![PyPI](https://img.shields.io/pypi/v/traceAI-voyage)](https://pypi.org/project/traceAI-voyage/) |
 
 #### Agent Frameworks
 
@@ -258,6 +260,11 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-autogen`](https://pypi.org/project/traceAI-autogen/) | AutoGen | [![PyPI](https://img.shields.io/pypi/v/traceAI-autogen)](https://pypi.org/project/traceAI-autogen/) |
 | [`traceAI-google-adk`](https://pypi.org/project/traceAI-google-adk/) | Google ADK | [![PyPI](https://img.shields.io/pypi/v/traceAI-google-adk)](https://pypi.org/project/traceAI-google-adk/) |
 | [`traceAI-agno`](https://pypi.org/project/traceAI-agno/) | Agno | [![PyPI](https://img.shields.io/pypi/v/traceAI-agno)](https://pypi.org/project/traceAI-agno/) |
+| [`traceAI-agent-framework`](https://pypi.org/project/traceAI-agent-framework/) | Microsoft Agent Framework | [![PyPI](https://img.shields.io/pypi/v/traceAI-agent-framework)](https://pypi.org/project/traceAI-agent-framework/) |
+| [`traceAI-ag2`](https://pypi.org/project/traceAI-ag2/) | AG2 (`ag2` 1.x) | [![PyPI](https://img.shields.io/pypi/v/traceAI-ag2)](https://pypi.org/project/traceAI-ag2/) |
+| [`traceAI-ag2-classic`](https://pypi.org/project/traceAI-ag2-classic/) | AG2 Classic (`autogen` 0.14.x) | [![PyPI](https://img.shields.io/pypi/v/traceAI-ag2-classic)](https://pypi.org/project/traceAI-ag2-classic/) |
+| [`traceAI-semantic-kernel`](https://pypi.org/project/traceAI-semantic-kernel/) | Semantic Kernel (Python) | [![PyPI](https://img.shields.io/pypi/v/traceAI-semantic-kernel)](https://pypi.org/project/traceAI-semantic-kernel/) |
+| [`traceAI-mcp-use`](https://pypi.org/project/traceAI-mcp-use/) | mcp-use | [![PyPI](https://img.shields.io/pypi/v/traceAI-mcp-use)](https://pypi.org/project/traceAI-mcp-use/) |
 | [`traceAI-pydantic-ai`](https://pypi.org/project/traceAI-pydantic-ai/) | Pydantic AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-pydantic-ai)](https://pypi.org/project/traceAI-pydantic-ai/) |
 | [`traceAI-claude-agent-sdk`](https://pypi.org/project/traceAI-claude-agent-sdk/) | Claude Agent SDK | [![PyPI](https://img.shields.io/pypi/v/traceAI-claude-agent-sdk)](https://pypi.org/project/traceAI-claude-agent-sdk/) |
 | [`traceAI-strands`](https://pypi.org/project/traceAI-strands/) | AWS Strands Agents | [![PyPI](https://img.shields.io/pypi/v/traceAI-strands)](https://pypi.org/project/traceAI-strands/) |
@@ -275,6 +282,11 @@ var tracer = TraceAI.Register(opts =>
 | [`traceAI-mcp`](https://pypi.org/project/traceAI-mcp/) | Model Context Protocol | [![PyPI](https://img.shields.io/pypi/v/traceAI-mcp)](https://pypi.org/project/traceAI-mcp/) |
 | [`traceAI-pipecat`](https://pypi.org/project/traceAI-pipecat/) | Pipecat (Voice AI) | [![PyPI](https://img.shields.io/pypi/v/traceAI-pipecat)](https://pypi.org/project/traceAI-pipecat/) |
 | [`traceAI-livekit`](https://pypi.org/project/traceAI-livekit/) | LiveKit (Real-time) | [![PyPI](https://img.shields.io/pypi/v/traceAI-livekit)](https://pypi.org/project/traceAI-livekit/) |
+| [`traceAI-exa`](https://pypi.org/project/traceAI-exa/) | Exa (search client) | [![PyPI](https://img.shields.io/pypi/v/traceAI-exa)](https://pypi.org/project/traceAI-exa/) |
+| [`traceAI-firecrawl`](https://pypi.org/project/traceAI-firecrawl/) | Firecrawl (v2 client) | [![PyPI](https://img.shields.io/pypi/v/traceAI-firecrawl)](https://pypi.org/project/traceAI-firecrawl/) |
+| [`traceAI-parallel`](https://pypi.org/project/traceAI-parallel/) | Parallel (Search and Extract) | [![PyPI](https://img.shields.io/pypi/v/traceAI-parallel)](https://pypi.org/project/traceAI-parallel/) |
+| [`traceAI-tavily`](https://pypi.org/project/traceAI-tavily/) | Tavily (search client) | [![PyPI](https://img.shields.io/pypi/v/traceAI-tavily)](https://pypi.org/project/traceAI-tavily/) |
+| [`traceAI-discoveryengine`](https://pypi.org/project/traceAI-discoveryengine/) | Google Discovery Engine (Vertex AI Search) | [![PyPI](https://img.shields.io/pypi/v/traceAI-discoveryengine)](https://pypi.org/project/traceAI-discoveryengine/) |
 
 #### Vector Databases
 
@@ -329,8 +341,11 @@ var tracer = TraceAI.Register(opts =>
 | [`@traceai/openai-agents`](https://www.npmjs.com/package/@traceai/openai-agents) | OpenAI Agents | [![npm](https://img.shields.io/npm/v/@traceai/openai-agents)](https://www.npmjs.com/package/@traceai/openai-agents) |
 | [`@traceai/fi-instrumentation-google-adk`](https://www.npmjs.com/package/@traceai/fi-instrumentation-google-adk) | Google ADK | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-google-adk)](https://www.npmjs.com/package/@traceai/fi-instrumentation-google-adk) |
 | [`@traceai/mastra`](https://www.npmjs.com/package/@traceai/mastra) | Mastra | [![npm](https://img.shields.io/npm/v/@traceai/mastra)](https://www.npmjs.com/package/@traceai/mastra) |
+| [`@traceai/voltagent`](https://www.npmjs.com/package/@traceai/voltagent) | VoltAgent | [![npm](https://img.shields.io/npm/v/@traceai/voltagent)](https://www.npmjs.com/package/@traceai/voltagent) |
 | [`@traceai/beeai`](https://www.npmjs.com/package/@traceai/beeai) | IBM BeeAI | [![npm](https://img.shields.io/npm/v/@traceai/beeai)](https://www.npmjs.com/package/@traceai/beeai) |
 | [`@traceai/strands`](https://www.npmjs.com/package/@traceai/strands) | AWS Strands Agents | [![npm](https://img.shields.io/npm/v/@traceai/strands)](https://www.npmjs.com/package/@traceai/strands) |
+| [`@traceai/claude-agent-sdk`](https://www.npmjs.com/package/@traceai/claude-agent-sdk) | Claude Agent SDK (`query()`) | [![npm](https://img.shields.io/npm/v/@traceai/claude-agent-sdk)](https://www.npmjs.com/package/@traceai/claude-agent-sdk) |
+| [`@traceai/genkit`](https://www.npmjs.com/package/@traceai/genkit) | Firebase Genkit (JavaScript, span processor) | [![npm](https://img.shields.io/npm/v/@traceai/genkit)](https://www.npmjs.com/package/@traceai/genkit) |
 
 #### Tools and Libraries
 
@@ -453,18 +468,23 @@ Available on [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel).
 | | LlamaIndex | ✅ | ✅ | | |
 | | CrewAI | ✅ | | | |
 | | AutoGen | ✅ | | | |
+| | AG2 | ✅ | | | |
+| | AG2 Classic | ✅ | | | |
+| | Microsoft Agent Framework | ✅ | | | |
 | | OpenAI Agents | ✅ | ✅ | | |
 | | SmolAgents | ✅ | | | |
 | | Google ADK | ✅ | ✅ | | |
 | | Agno | ✅ | | | |
 | | Pydantic AI | ✅ | | | |
-| | Claude Agent SDK | ✅ | | | |
+| | Claude Agent SDK | ✅ | ✅ | | |
 | | AWS Strands Agents | ✅ | ✅ | | |
 | | IBM BeeAI | ✅ | ✅ | | |
 | | Mastra | | ✅ | | |
+| | Firebase Genkit | | ✅ | | |
+| | VoltAgent | | ✅ | | |
 | | LangChain4j | | | ✅ | |
 | | Spring AI | | | ✅ | |
-| | Semantic Kernel | | | ✅ | |
+| | Semantic Kernel | ✅ | | ✅ | |
 | **Tools & Libraries** | Haystack | ✅ | | | |
 | | DSPy | ✅ | | | |
 | | Guardrails AI | ✅ | ✅ | | |
@@ -472,8 +492,16 @@ Available on [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel).
 | | Portkey | ✅ | ✅ | | |
 | | Vercel AI SDK | | ✅ | | |
 | | MCP | ✅ | ✅ | | |
+| | mcp-use | ✅ | | | |
 | | Pipecat | ✅ | ✅ | | |
 | | LiveKit | ✅ | ✅ | | |
+| | Exa | ✅ | | | |
+| | Firecrawl | ✅ | | | |
+| | Tavily | ✅ | | | |
+| | Replicate | ✅ | | | |
+| | Voyage AI | ✅ | | | |
+| | Parallel | ✅ | | | |
+| | Google Discovery Engine | ✅ | | | |
 | **Vector Databases** | Pinecone | ✅ | ✅ | ✅ | |
 | | ChromaDB | ✅ | ✅ | ✅ | |
 | | Qdrant | ✅ | ✅ | ✅ | |
