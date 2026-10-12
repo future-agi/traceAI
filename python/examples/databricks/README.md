@@ -80,13 +80,13 @@ provider.force_flush()
 
 A Chat Completions call produces one `ChatCompletion` span with `gen_ai.span.kind=LLM`. On a successful non-streamed response, `gen_ai.request.model` is the model id the provider returns in its response. The fixtures return the model service or endpoint name sent in the request.
 
-The provider field says `openai` (`gen_ai.provider.name`). This is the shared instrumentor's label for this recipe.
+Up to `traceai-openai` 0.1.10, the provider field says `openai` (`gen_ai.provider.name`), the shared instrumentor's label for this recipe. Later versions (future-agi/traceAI#249) say `databricks` for workspace hosts (`*.cloud.databricks.com`, `*.azuredatabricks.net`, `*.gcp.databricks.com`); other base URLs keep `openai`.
 
 Token usage appears in `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens` when the response has usage. Missing usage is omitted, never filled with zero.
 
 Streaming accumulates the answer in `output.value` through the same instrumentor. A default stream without usage exports no usage attributes. With `stream_options={"include_usage": True}` and a final usage chunk, all three usage attributes are exported. Your endpoint must support that option to use it.
 
-Current `traceai-openai` behavior omits `gen_ai.request.model` on streamed and failed calls. The requested model remains in the `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`. Errors have span status ERROR and an exception event.
+`traceai-openai` 0.1.10 and earlier omit `gen_ai.request.model` on streamed and failed calls; later versions record the requested model there. The requested model remains in the `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`. Errors have span status ERROR and an exception event.
 
 ## Provider specifics
 
@@ -106,7 +106,7 @@ The app refuses workspace roots, `/api/2.0/serving-endpoints`, and `/serving-end
 
 Use `client.embeddings.create(model="system.ai.gte-large-en", input="A short example.")` only when your selected endpoint task is embeddings. Use your own embedding service name. A chat endpoint can reject this call; that is an endpoint task mismatch.
 
-The gateway fixture produces one `CreateEmbeddingResponse` span with `gen_ai.span.kind=EMBEDDING` and provider `openai`. It records the response model in `embedding.model_name`, not `gen_ai.request.model`. It exports input and total token usage, with no output token usage. Input text is exported in `input.value` and `embedding.embeddings.0.embedding.text` by default. The recipe's CLI runs Chat Completions.
+The gateway fixture produces one `CreateEmbeddingResponse` span with `gen_ai.span.kind=EMBEDDING` and provider `openai` (`databricks` in later versions). Up to 0.1.10 it records the response model in `embedding.model_name`, not `gen_ai.request.model`; later versions record it in both and replace the vectors in `output.value` with a short JSON summary. It exports input and total token usage, with no output token usage. Input text is exported in `input.value` and `embedding.embeddings.0.embedding.text` by default. The recipe's CLI runs Chat Completions.
 
 ### Inside the workspace
 

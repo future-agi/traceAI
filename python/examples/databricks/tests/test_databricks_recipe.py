@@ -23,6 +23,12 @@ from _fake_openai import (
     ANSWER, AUTH_ERROR, FakeOpenAI, chat_response, embedding_response, stream_response,
 )
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# They also omit gen_ai.request.model on streamed and failed calls, where later
+# versions record the requested model. Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "databricks")
+
 RECIPE = Path(__file__).resolve().parents[1]
 GUARD = RECIPE / "tests" / "loopback_guard"
 # Syntactic test hosts, not real ones. MockTransport never resolves these hosts.
@@ -54,7 +60,7 @@ def only_span(receiver, provider=None, kind="LLM", name="ChatCompletion"):
     span = spans[0]
     assert span["name"] == name
     assert attributes(span)["gen_ai.span.kind"] == kind
-    assert attributes(span)["gen_ai.provider.name"] == "openai"
+    assert attributes(span)["gen_ai.provider.name"] in PROVIDER_NAMES
     return span
 
 
@@ -288,8 +294,8 @@ def test_stream_accumulation_and_usage(include_usage, tracing):
     span = only_span(receiver, provider)
     attrs = attributes(span)
     assert attrs["output.value"] == ANSWER
-    # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-    assert "gen_ai.request.model" not in attrs
+    # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+    assert attrs.get("gen_ai.request.model") in (None, GATEWAY_MODEL)
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == GATEWAY_MODEL
     if include_usage:
         assert_usage(span)
@@ -318,8 +324,8 @@ def test_authentication_error_span(tracing):
     assert events
     assert "AuthenticationError" in json.dumps(events)
     assert "Invalid access token." in json.dumps(span["status"])
-    # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-    assert "gen_ai.request.model" not in attributes(span)
+    # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+    assert attributes(span).get("gen_ai.request.model") in (None, GATEWAY_MODEL)
     assert json.loads(attributes(span)["gen_ai.request.parameters"])["model"] == GATEWAY_MODEL
     assert VENDOR_KEY not in str(error.value)
     assert_export(receiver, project)
@@ -370,10 +376,12 @@ def test_embeddings_gateway_span(tracing):
     span = only_span(receiver, provider, kind="EMBEDDING", name="CreateEmbeddingResponse")
     attrs = attributes(span)
     assert attrs["embedding.model_name"] == model
-    assert "gen_ai.request.model" not in attrs
+    # 0.1.10 sets only embedding.model_name; later versions also make it the span model.
+    assert attrs.get("gen_ai.request.model") in (None, model)
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == model
     assert usage_attributes(span) == {"gen_ai.usage.input_tokens": 7, "gen_ai.usage.total_tokens": 7}
-    assert json.loads(attrs["input.value"]) == marker
+    # 0.1.10 JSON-quotes a plain-string input; later versions record the text itself.
+    assert attrs["input.value"] in (json.dumps(marker), marker)
     assert attrs["embedding.embeddings.0.embedding.text"] == marker
     assert marker in json.dumps(span)
     assert_export(receiver, project)
@@ -534,8 +542,8 @@ def test_app_subprocess_loopback(stream, tmp_path):
         span = only_span(receiver)
         assert attributes(span)["output.value"] == ANSWER
         if stream:
-            # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-            assert "gen_ai.request.model" not in attributes(span)
+            # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+            assert attributes(span).get("gen_ai.request.model") in (None, GATEWAY_MODEL)
             assert json.loads(attributes(span)["gen_ai.request.parameters"])["model"] == GATEWAY_MODEL
             assert usage_attributes(span) == {}
         else:
@@ -599,7 +607,7 @@ def test_readme_and_requirement_pins():
         assert form in readme
     for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert name in readme
-    assert "The provider field says `openai`" in readme
+    assert "the provider field says `openai`" in readme
     assert "Databricks workspace hosts must use `https://`" in readme
     assert "example.staging.cloud.databricks.com is a placeholder, not a real host." in readme
     assert "`databricks_openai.DatabricksOpenAI` 0.17.1 subclasses `openai.OpenAI` without overriding its request method, so `traceai-openai` wraps it the same way; this recipe does not test it." in readme
