@@ -54,7 +54,8 @@ PACKAGE_DIR = HERE.parent
 PYTHON_DIR = PACKAGE_DIR.parent.parent
 COOKBOOK = PACKAGE_DIR / "examples" / "deep_agents.py"
 
-PINNED_DEEPAGENTS = "0.7.21"
+# Oldest deepagents the suite ran on; 0.7.23 passes too.
+MIN_DEEPAGENTS = "0.7.21"
 # Tools create_deep_agent binds at 0.7.21 with StateBackend, read from the
 # installed package (deepagents/middleware/filesystem.py _FS_TOOL_ORDER plus
 # SubAgentMiddleware's `task`). `execute` is withheld because StateBackend is
@@ -160,7 +161,9 @@ def test_tested_versions(capsys):
     }
     with capsys.disabled():
         print("\nDEEPAGENTS_TESTED_VERSIONS " + json.dumps(versions, sort_keys=True))
-    assert versions["deepagents"] == PINNED_DEEPAGENTS
+    from packaging.version import Version
+
+    assert Version(versions["deepagents"]) >= Version(MIN_DEEPAGENTS)
 
 
 def test_bound_tools_match_the_pin_and_exclude_write_todos(traced):
