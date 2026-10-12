@@ -866,6 +866,42 @@ describe("wrapQuery", () => {
     });
   });
 
+  describe("synthetic API-error turn", () => {
+    // On an API error (e.g. an unknown model) the CLI yields an assistant message it wrote itself:
+    // message.model "<synthetic>", error "unknown", the API error as text (seen live with 0.3.289).
+    function syntheticErrorJourney(initModel: string): SDKMessage[] {
+      const turn = assistant("msg_synthetic", [text("API Error: 400 unknown provider for model x")], null, {
+        error: "unknown",
+      } as Partial<ReturnType<typeof assistant>>);
+      (turn.message as { model: string }).model = "<synthetic>";
+      return [init({ model: initModel }), turn, resultSuccess("API Error: 400 unknown provider for model x", { is_error: true } as never)];
+    }
+
+    it("records the requested model on the turn and keeps <synthetic> in claude_agent.message.model", async () => {
+      const { spans } = await run(syntheticErrorJourney("no-such-model"), { model: "no-such-model" });
+      const turn = one(spans, "claude_agent.assistant_turn");
+      expect(turn.attributes["gen_ai.request.model"]).toBe("no-such-model");
+      expect(turn.attributes["claude_agent.model"]).toBe("no-such-model");
+      expect(turn.attributes["claude_agent.message.model"]).toBe("<synthetic>");
+      expect(turn.status.code).toBe(SpanStatusCode.ERROR);
+    });
+
+    it("falls back to the init message's model when options.model is not set", async () => {
+      const { spans } = await run(syntheticErrorJourney("claude-from-init"));
+      const turn = one(spans, "claude_agent.assistant_turn");
+      expect(turn.attributes["gen_ai.request.model"]).toBe("claude-from-init");
+      expect(turn.attributes["claude_agent.message.model"]).toBe("<synthetic>");
+    });
+
+    it("leaves a real model reply unchanged", async () => {
+      const { spans } = await run(simpleToolJourney(), { model: "requested-alias" });
+      for (const turn of byName(spans, "claude_agent.assistant_turn")) {
+        expect(turn.attributes["gen_ai.request.model"]).toBe(MODEL);
+        expect(turn.attributes["claude_agent.message.model"]).toBeUndefined();
+      }
+    });
+  });
+
   it("never copies FI_API_KEY / FI_SECRET_KEY onto spans", async () => {
     process.env.FI_API_KEY = "fi-api-key-PLACEHOLDER-123";
     process.env.FI_SECRET_KEY = "fi-secret-key-PLACEHOLDER-456";

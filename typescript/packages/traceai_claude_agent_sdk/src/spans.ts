@@ -60,6 +60,8 @@ export type FinishOutcome =
   | { kind: "error"; error: unknown }
   | { kind: "aborted"; reason?: unknown };
 
+/** `message.model` on an assistant message the CLI synthesized itself (API errors). */
+const SYNTHETIC_MODEL = "<synthetic>";
 const PROMPT_MAX = 2000;
 const SYSTEM_PROMPT_MAX = 1000;
 const CONTENT_MAX = 5000;
@@ -290,6 +292,8 @@ export class QueryTracer {
   /** A result arrived and the main loop has not started another turn since (see trackIdleAfterResult). */
   private idleAfterResult = false;
   private sessionId?: string;
+  /** The model the CLI's init message reports for the main loop. */
+  private initModel?: string;
   private finished = false;
   private abortListener?: () => void;
 
@@ -650,6 +654,7 @@ export class QueryTracer {
           this.setSessionId(message.session_id);
         }
         if (typeof message.model === "string" && message.model) {
+          this.initModel = message.model;
           conversation.setAttribute(A.AGENT_MODEL, message.model);
           conversation.setAttribute(T.GEN_AI_REQUEST_MODEL, message.model);
         }
@@ -754,8 +759,15 @@ export class QueryTracer {
     span.setAttribute(T.GEN_AI_PROVIDER_NAME, this.providerName);
     const model = message.message?.model;
     if (typeof model === "string" && model) {
-      span.setAttribute(A.AGENT_MODEL, model);
-      span.setAttribute(T.GEN_AI_REQUEST_MODEL, model);
+      // The CLI writes its own assistant message for an API error, with model "<synthetic>".
+      // Record the model that was asked for instead; keep the CLI's value on its own key.
+      const synthetic = model === SYNTHETIC_MODEL;
+      if (synthetic) span.setAttribute(T.MESSAGE_MODEL, model);
+      const recorded = synthetic ? this.requestedModel() : model;
+      if (recorded) {
+        span.setAttribute(A.AGENT_MODEL, recorded);
+        span.setAttribute(T.GEN_AI_REQUEST_MODEL, recorded);
+      }
     }
     if (scope !== null) {
       span.setAttribute(A.PARENT_TOOL_USE_ID, scope);
@@ -1109,6 +1121,12 @@ export class QueryTracer {
         // The parent is "the most recent session in cwd": not identifiable here.
         return null;
     }
+  }
+
+  /** The model this query asked for: options.model, else the init message's model. */
+  private requestedModel(): string | undefined {
+    const model = this.options?.model;
+    return typeof model === "string" && model ? model : this.initModel;
   }
 
   private conversationStartAttributes(): Attributes {

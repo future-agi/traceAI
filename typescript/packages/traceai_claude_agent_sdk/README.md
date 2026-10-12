@@ -73,7 +73,7 @@ A foreground subagent span ends with its `tool.Agent` / `tool.Task` result. A su
 
 | Field | Attributes | Source |
 |---|---|---|
-| Model | `gen_ai.request.model`, `claude_agent.model` | `options.model`, the init message, each assistant message |
+| Model | `gen_ai.request.model`, `claude_agent.model` | `options.model`, the init message, each assistant message. On an API error the CLI yields an assistant message it wrote itself, with model `<synthetic>`: that turn carries the requested model (`options.model`, else the init message's) and `claude_agent.message.model` = `<synthetic>` |
 | Provider | `gen_ai.provider.name` = `anthropic`, or `custom` when `ANTHROPIC_BASE_URL` (from `options.env`, else `process.env`) is not an `anthropic.com` host | |
 | Tokens | `gen_ai.usage.input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cache_creation_tokens` | result `modelUsage` summed over every model, on the conversation span only. See "Usage and cost" |
 | Cost | `claude_agent.cost.total_usd` and `gen_ai.cost.total` | result `total_cost_usd`; never computed here. See "Usage and cost" |

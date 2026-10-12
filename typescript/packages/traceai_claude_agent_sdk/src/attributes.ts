@@ -156,6 +156,11 @@ export const TraceAIAttributes = {
    * known in this process, so no promoted usage or cost key was written.
    */
   USAGE_BASELINE_UNKNOWN: "claude_agent.usage.baseline_unknown",
+  /**
+   * The model the CLI put on an assistant message it synthesized itself ("<synthetic>", on an
+   * API error). The turn's model keys then carry the requested model instead.
+   */
+  MESSAGE_MODEL: "claude_agent.message.model",
 } as const;
 
 /**
