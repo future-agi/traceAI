@@ -165,11 +165,11 @@ not copied to `input.value` / `output.value` either.
 | Span kind | `AGENT`, `LLM`, `TOOL` from `gen_ai.operation.name` | `await_human_input` and `record_usage` spans get no kind (see below) |
 | Model | `gen_ai.request.model`, `gen_ai.response.model` pass through | When AG2 did not set them |
 | Provider | `gen_ai.provider.name` from `provider_name` or the model response | When neither is known |
-| Tokens | `gen_ai.usage.input_tokens` / `output_tokens` pass through; cache tokens are aliased to `gen_ai.usage.cache_read_tokens` / `cache_write_tokens` and thinking tokens to `gen_ai.usage.reasoning.output_tokens`, originals kept | When the usage field is zero/absent. Cost is not emitted |
+| Tokens | `gen_ai.usage.input_tokens` / `output_tokens` pass through, except on `anthropic` spans, where cache read and write tokens are added to `input_tokens` (and `total_tokens` recomputed when present; see the note below). Cache tokens are aliased to `gen_ai.usage.cache_read_tokens` / `cache_write_tokens` and thinking tokens to `gen_ai.usage.reasoning.output_tokens`, originals kept | When the usage field is zero/absent. Cost is not emitted |
 | Session | Not emitted by AG2. `session.id` from traceAI's `using_session` / `using_attributes` context, which wins over a static value; or set it yourself: `setup(..., span_attributes={"session.id": "..."})` | When neither is set |
 | User, metadata, tags | `user.id`, `metadata`, `tag.tags` (and the other traceAI context keys) from `using_user` / `using_metadata` / `using_tags` / `using_attributes`; a key AG2 or `span_attributes` already set is not overridden | When the context does not set them |
 | Tools | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`; arguments/result only with `capture_content=True` | |
-| Input / output | `input.value` / `output.value` (what Observe shows as a span's input and output), copied from the captured chat messages, tool arguments and result, or human input | Without `capture_content=True`, when a `TraceConfig` flag hides the source, and always on `invoke_agent` and `record_usage` spans (AG2 records no content there) |
+| Input / output | `input.value` / `output.value` (what Observe shows as a span's input and output), copied from the captured chat messages, tool arguments and result, or human input. A single chat completion goes on `output.value` as its message object, which Observe's chat view shows as the assistant reply. `invoke_agent` gets the first chat input and the last chat output of its turn, so the trace list shows the question and the answer | Without `capture_content=True`, when a `TraceConfig` flag hides the source, and always on `record_usage` spans (AG2 records no content there) |
 | Errors | OTel status `ERROR` on failing tool / model / agent spans | |
 
 Notes:
@@ -193,7 +193,15 @@ Notes:
   | `subtask` | Only if the sub-agent named in `ag2.usage.label` is itself instrumented and its `invoke_agent` span ended earlier in the same trace | Moved when it is, kept otherwise |
 
   With that, the trace total equals AG2's own `UsageReport` total; the tests
-  check this with real AG2 for every kind above. For the `subtask` match, the
+  check this with real AG2 for every kind above. Exception: with an
+  Anthropic model and prompt caching (`AnthropicConfig` caches by default),
+  AG2's Anthropic mapper reports `prompt_tokens` without the cached tokens,
+  while its OpenAI mapper and the GenAI conventions count them as input. The
+  processor adds `cache_read_input_tokens` and `cache_creation_input_tokens`
+  to `gen_ai.usage.input_tokens` on `anthropic` spans whose tokens count, so
+  the trace total is the real prompt size and exceeds `UsageReport` by the
+  cached tokens. A `record_usage` span that repeats a chat span keeps AG2's
+  own numbers under `ag2.usage.*`. For the `subtask` match, the
   sub-agent's `TelemetryMiddleware` must use the agent's own name (`setup`
   does; `create_telemetry_middleware(agent_name=...)` must pass `agent.name`).
   On ag2 1.0.0 to 1.0.2 there are no `record_usage` spans, so aggregation,

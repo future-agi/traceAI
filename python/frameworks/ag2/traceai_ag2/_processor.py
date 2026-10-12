@@ -29,7 +29,12 @@ does not create spans. On every span from AG2's instrumentation scope it only:
   ``TraceConfig.mask`` still runs on every key;
 * copies captured content to ``input.value`` / ``output.value`` (chat
   messages, tool arguments and result, human input), which is where Future
-  AGI reads a span's input and output; content the config hides is not copied;
+  AGI reads a span's input and output; content the config hides is not copied.
+  A single chat completion goes on ``output.value`` as its message object, and
+  ``invoke_agent`` gets its turn's first chat input and last chat output;
+* on ``anthropic`` spans whose tokens count, adds the cache read and write
+  tokens to ``gen_ai.usage.input_tokens`` (AG2's Anthropic mapper leaves them
+  out; its OpenAI mapper and the GenAI conventions include them);
 * in ``on_start``, copies traceAI context attributes (``using_session``,
   ``using_user``, ``using_metadata``, ``using_attributes``, ...) onto the span
   without overriding keys AG2 sets, except ``session.id``, where the context
@@ -154,6 +159,7 @@ def normalize_attributes(
             mapped[target] = mapped[source]
 
     _demote_duplicate_usage(mapped, instrumented_agents)
+    _count_cached_input(mapped)
 
     hidden = _hidden_content_keys(config) if config is not None else set()
     _copy_content_to_io(mapped, hidden)
@@ -173,13 +179,31 @@ def _mime_type(value: Any) -> str:
     return "text/plain"
 
 
+def _single_completion(value: Any) -> Any:
+    """A one-message output list as that message object, else ``value`` unchanged.
+
+    Observe's chat view shows an output object ``{role, content}`` as the
+    assistant reply, and nothing for a list.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return value
+    if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+        return json.dumps(parsed[0], ensure_ascii=False)
+    return value
+
+
 def _copy_content_to_io(mapped: Dict[str, Any], hidden: AbstractSet[str]) -> None:
     """Copy captured content to ``input.value`` / ``output.value``.
 
     Only content AG2 captured and ``hidden`` does not remove is copied, so a
     hide flag also keeps the copy off the span. Existing values are kept.
     """
-    sources = _IO_SOURCES.get(mapped.get(SpanAttributes.GEN_AI_OPERATION_NAME))  # type: ignore[arg-type]
+    operation = mapped.get(SpanAttributes.GEN_AI_OPERATION_NAME)
+    sources = _IO_SOURCES.get(operation)  # type: ignore[arg-type]
     if sources is None:
         return
     targets = (
@@ -190,8 +214,47 @@ def _copy_content_to_io(mapped: Dict[str, Any], hidden: AbstractSet[str]) -> Non
         value = mapped.get(source)
         if value is None or source in hidden or value_key in mapped:
             continue
+        if operation == "chat" and value_key == SpanAttributes.OUTPUT_VALUE:
+            value = _single_completion(value)
         mapped[value_key] = value
         mapped.setdefault(mime_key, _mime_type(value))
+
+
+# AG2's Anthropic mapper (ag2/config/anthropic/mappers.py normalize_usage at
+# 1.1.2) reports prompt_tokens as Anthropic's raw input_tokens, which leaves
+# out cache reads and writes; its OpenAI mapper counts cached tokens inside
+# prompt_tokens, and so do the GenAI conventions for gen_ai.usage.input_tokens.
+_ANTHROPIC = "anthropic"
+_CACHED_INPUT_KEYS = ("gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_creation_input_tokens")
+
+
+def _token_count(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def _count_cached_input(mapped: Dict[str, Any]) -> None:
+    """Add cached tokens to an ``anthropic`` span's counted input tokens.
+
+    Only spans that still carry ``gen_ai.usage.input_tokens`` (chat spans and
+    usage spans that are the only copy) change; a duplicate usage span's
+    ``ag2.usage.*`` keeps AG2's own numbers. The total is recomputed when the
+    span has one. The trace total then exceeds AG2's ``UsageReport`` by the
+    cached tokens, which that report leaves out for Anthropic.
+    """
+    if mapped.get(SpanAttributes.GEN_AI_PROVIDER_NAME) != _ANTHROPIC:
+        return
+    uncached = _token_count(mapped.get("gen_ai.usage.input_tokens"))
+    if uncached is None:
+        return
+    cached = sum(_token_count(mapped.get(key)) or 0 for key in _CACHED_INPUT_KEYS)
+    if not cached:
+        return
+    mapped["gen_ai.usage.input_tokens"] = uncached + cached
+    output = _token_count(mapped.get("gen_ai.usage.output_tokens"))
+    if "gen_ai.usage.total_tokens" in mapped and output is not None:
+        mapped["gen_ai.usage.total_tokens"] = uncached + cached + output
 
 
 # fi-collector promotes these keys into the token columns on any span
@@ -354,6 +417,10 @@ class AG2SpanProcessor(SpanProcessor):
         # Context session ids of AG2 spans that started but have not ended.
         self._max_pending_spans = 16 * self._max_tracked_traces
         self._session_by_span: "OrderedDict[Tuple[int, int], Any]" = OrderedDict()
+        # Per invoke_agent span (keyed by its trace and span id): the first
+        # chat input and the last chat output of its turn, as
+        # {"input": (start, value, mime), "output": (end, value, mime)}.
+        self._agent_io: "OrderedDict[Tuple[int, int], Dict[str, Tuple[int, Any, Any]]]" = OrderedDict()
         self._lock = threading.Lock()
 
     def _note_agent(self, trace_id: int, attributes: Mapping[str, Any]) -> None:
@@ -424,6 +491,11 @@ class AG2SpanProcessor(SpanProcessor):
             self._note_agent(trace_id, current)
             agents = self._agents_in(trace_id) if current.get("ag2.usage.kind") == _SUBTASK_USAGE_KIND else frozenset()
             mapped = normalize_attributes(current, self._config, instrumented_agents=agents)
+            operation = mapped.get(SpanAttributes.GEN_AI_OPERATION_NAME)
+            if operation == "chat":
+                self._note_chat_io(span, mapped)
+            elif operation == "invoke_agent":
+                self._apply_agent_io(span, mapped)
             if session is not None:
                 mapped[_SESSION_ID] = session
             _move_context_keys_last(mapped)
@@ -434,6 +506,53 @@ class AG2SpanProcessor(SpanProcessor):
                 span._attributes = _bounded_like(span._attributes, mapped)  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover - defensive
             logger.debug("traceai-ag2: could not normalize span %r", getattr(span, "name", None), exc_info=True)
+
+    def _note_chat_io(self, span: ReadableSpan, mapped: Mapping[str, Any]) -> None:
+        """Remember a chat span's input / output for its parent ``invoke_agent``.
+
+        AG2 records no content on ``invoke_agent``. The turn's first chat
+        input and last chat output make it show the question and the answer.
+        Only content that is on the chat span (captured, not hidden) is used.
+        """
+        parent = span.parent
+        if parent is None or parent.is_remote:
+            return
+        found_input = mapped.get(SpanAttributes.INPUT_VALUE)
+        found_output = mapped.get(SpanAttributes.OUTPUT_VALUE)
+        if found_input is None and found_output is None:
+            return
+        key = (parent.trace_id, parent.span_id)
+        with self._lock:
+            entry = self._agent_io.get(key)
+            if entry is None:
+                entry = self._agent_io[key] = {}
+                while len(self._agent_io) > self._max_pending_spans:
+                    self._agent_io.popitem(last=False)
+            if found_input is not None and span.start_time is not None:
+                first = entry.get("input")
+                if first is None or span.start_time < first[0]:
+                    entry["input"] = (span.start_time, found_input, mapped.get(SpanAttributes.INPUT_MIME_TYPE))
+            if found_output is not None and span.end_time is not None:
+                last = entry.get("output")
+                if last is None or span.end_time >= last[0]:
+                    entry["output"] = (span.end_time, found_output, mapped.get(SpanAttributes.OUTPUT_MIME_TYPE))
+
+    def _apply_agent_io(self, span: ReadableSpan, mapped: Dict[str, Any]) -> None:
+        with self._lock:
+            entry = self._agent_io.pop(_span_key(span), None)
+        if not entry:
+            return
+        for side, value_key, mime_key in (
+            ("input", SpanAttributes.INPUT_VALUE, SpanAttributes.INPUT_MIME_TYPE),
+            ("output", SpanAttributes.OUTPUT_VALUE, SpanAttributes.OUTPUT_MIME_TYPE),
+        ):
+            found = entry.get(side)
+            if found is None or value_key in mapped:
+                continue
+            _, value, mime = found
+            mapped[value_key] = value
+            if mime is not None:
+                mapped.setdefault(mime_key, mime)
 
     def shutdown(self) -> None:
         self._shutdown = True

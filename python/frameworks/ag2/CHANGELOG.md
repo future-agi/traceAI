@@ -24,7 +24,22 @@
   rollups whose sub-agent (`ag2.usage.label`) is itself instrumented in the
   same trace. `aggregation` and `compaction` usage keeps its promoted tokens:
   AG2 calls the model outside the middleware for those, so the usage span is
-  the only copy. The trace total now equals AG2's `UsageReport` total.
+  the only copy. The trace total now equals AG2's `UsageReport` total, except
+  for Anthropic with prompt caching (next entry).
+- Anthropic input tokens include cached tokens. AG2's Anthropic mapper reports
+  `prompt_tokens` without cache reads and writes (its OpenAI mapper includes
+  them), so with `AnthropicConfig`'s default prompt caching a chat span showed
+  4 input tokens for a 9,750-token prompt. On `anthropic` spans whose tokens
+  count, `cache_read_input_tokens` + `cache_creation_input_tokens` are added
+  to `gen_ai.usage.input_tokens` (and `total_tokens` recomputed when present).
+  The trace total then exceeds AG2's `UsageReport` by the cached tokens, which
+  that report leaves out for Anthropic; a duplicate `record_usage` span keeps
+  AG2's numbers under `ag2.usage.*`.
+- With `capture_content=True`, a single chat completion goes on `output.value`
+  as its message object (Observe's chat view shows it as the assistant reply;
+  it shows nothing for a one-item list), and `invoke_agent` spans get the first
+  chat input and last chat output of their turn, so the trace list shows the
+  question and the answer. Content a `TraceConfig` flag hides is not copied.
 - Requires `fi-instrumentation-otel>=1.1.0` (was `>=1.0.0`): published 1.0.0
   crashes in `register()` with `opentelemetry-exporter-otlp-proto-http` 1.45.0
   (`AttributeError: 'HTTPSpanExporter' object has no attribute '_headers'`).

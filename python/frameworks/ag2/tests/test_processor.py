@@ -484,7 +484,9 @@ def test_trace_config_reads_env(monkeypatch):
             {
                 "input.value": '[{"content": "hi", "role": "user"}]',
                 "input.mime_type": "application/json",
-                "output.value": '[{"content": "yo", "role": "assistant"}]',
+                # One completion: the message object, which Observe's chat view
+                # shows as the assistant reply (it shows nothing for a list).
+                "output.value": '{"content": "yo", "role": "assistant"}',
                 "output.mime_type": "application/json",
             },
         ),
@@ -569,6 +571,160 @@ def test_existing_input_and_output_values_are_kept(pipeline):
     (span,) = exporter.get_finished_spans()
     got = attrs(span)
     assert (got["input.value"], got["output.value"]) == ("mine", "also mine")
+
+
+def test_chat_with_several_completions_keeps_the_list():
+    messages = '[{"content": "a", "role": "assistant"}, {"content": "b", "role": "assistant"}]'
+    got = normalize_attributes({"gen_ai.operation.name": "chat", "gen_ai.output.messages": messages})
+    assert got["output.value"] == messages
+
+
+# --- invoke_agent input / output -------------------------------------------
+# AG2 records no content on invoke_agent; the first chat input and the last
+# chat output of the agent's turn are copied there so Observe's trace list
+# shows the question and the answer.
+
+
+def _agent_turn(provider, chats, agent_attrs=None):
+    tracer = provider.get_tracer(AG2_INSTRUMENTATION_SCOPE)
+    with tracer.start_as_current_span(
+        "invoke_agent a", attributes={"gen_ai.operation.name": "invoke_agent", **(agent_attrs or {})}
+    ):
+        for chat in chats:
+            with tracer.start_as_current_span("chat m", attributes={"gen_ai.operation.name": "chat", **chat}):
+                pass
+
+
+_TURN = [
+    {
+        "gen_ai.input.messages": '[{"content": "Q?", "role": "user"}]',
+        "gen_ai.output.messages": '[{"content": null, "role": "assistant", "tool_calls": []}]',
+    },
+    {
+        "gen_ai.input.messages": '[{"content": "Q?", "role": "user"}, {"content": "tool says", "role": "tool"}]',
+        "gen_ai.output.messages": '[{"content": "A.", "role": "assistant"}]',
+    },
+]
+
+
+def _agent(exporter):
+    (agent,) = [s for s in exporter.get_finished_spans() if s.name == "invoke_agent a"]
+    return attrs(agent)
+
+
+def test_agent_span_gets_first_chat_input_and_last_chat_output(pipeline):
+    provider, exporter = pipeline
+    _agent_turn(provider, _TURN)
+    got = _agent(exporter)
+    assert got["input.value"] == '[{"content": "Q?", "role": "user"}]'
+    assert got["output.value"] == '{"content": "A.", "role": "assistant"}'
+    assert got["input.mime_type"] == got["output.mime_type"] == "application/json"
+
+
+def test_agent_span_has_no_io_without_captured_content(pipeline):
+    provider, exporter = pipeline
+    _agent_turn(provider, [{"gen_ai.request.model": "m"}, {"gen_ai.request.model": "m"}])
+    got = _agent(exporter)
+    assert not {"input.value", "output.value", "input.mime_type", "output.mime_type"} & set(got)
+
+
+def test_agent_span_io_follows_hide_flags():
+    provider, exporter = memory_provider()
+    install_span_processor(provider, config=TraceConfig(hide_inputs=True))
+    _agent_turn(provider, _TURN)
+    got = _agent(exporter)
+    assert "input.value" not in got and "Q?" not in str(got)
+    assert got["output.value"] == '{"content": "A.", "role": "assistant"}'
+
+
+def test_agent_span_keeps_its_own_io(pipeline):
+    provider, exporter = pipeline
+    _agent_turn(provider, _TURN, agent_attrs={"input.value": "mine", "output.value": "also mine"})
+    got = _agent(exporter)
+    assert (got["input.value"], got["output.value"]) == ("mine", "also mine")
+
+
+def test_agent_io_state_is_released(pipeline):
+    provider, exporter = pipeline
+    _agent_turn(provider, _TURN)
+    (processor,) = [p for p in provider._active_span_processor._span_processors if isinstance(p, AG2SpanProcessor)]
+    assert not processor._agent_io
+
+
+# --- Anthropic input tokens --------------------------------------------------
+# AG2's Anthropic mapper reports prompt_tokens without cached tokens (its OpenAI
+# mapper includes them). gen_ai.usage.input_tokens means total input, so on an
+# anthropic span that counts, the cache read and write tokens are added.
+
+
+def test_anthropic_input_tokens_include_cached_tokens():
+    got = normalize_attributes(
+        {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.usage.input_tokens": 4,
+            "gen_ai.usage.output_tokens": 97,
+            "gen_ai.usage.total_tokens": 101,
+            "gen_ai.usage.cache_read_input_tokens": 9747,
+            "gen_ai.usage.cache_creation_input_tokens": 2,
+        }
+    )
+    assert got["gen_ai.usage.input_tokens"] == 9753
+    assert got["gen_ai.usage.total_tokens"] == 9850
+    assert (got["gen_ai.usage.cache_read_tokens"], got["gen_ai.usage.cache_write_tokens"]) == (9747, 2)
+
+
+def test_anthropic_without_total_gets_no_total_invented():
+    got = normalize_attributes(
+        {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.usage.input_tokens": 4,
+            "gen_ai.usage.output_tokens": 97,
+            "gen_ai.usage.cache_read_input_tokens": 9747,
+        }
+    )
+    assert got["gen_ai.usage.input_tokens"] == 9751
+    assert "gen_ai.usage.total_tokens" not in got
+
+
+@pytest.mark.parametrize("provider_name", ["openai", None])
+def test_other_providers_input_tokens_unchanged(provider_name):
+    source = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.usage.input_tokens": 11,
+        "gen_ai.usage.cache_read_input_tokens": 3,
+    }
+    if provider_name:
+        source["gen_ai.provider.name"] = provider_name
+    assert normalize_attributes(source)["gen_ai.usage.input_tokens"] == 11
+
+
+def test_anthropic_duplicate_usage_span_stays_off_the_counted_keys():
+    got = normalize_attributes(
+        {
+            "ag2.span.type": "usage",
+            "ag2.usage.kind": "model_call",
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.usage.input_tokens": 4,
+            "gen_ai.usage.cache_read_input_tokens": 9747,
+        }
+    )
+    assert "gen_ai.usage.input_tokens" not in got
+    assert got["ag2.usage.input_tokens"] == 4  # AG2's own number, kept as reported
+
+
+def test_anthropic_counted_usage_span_includes_cached_tokens():
+    got = normalize_attributes(
+        {
+            "ag2.span.type": "usage",
+            "ag2.usage.kind": "aggregation",
+            "gen_ai.provider.name": "anthropic",
+            "gen_ai.usage.input_tokens": 4,
+            "gen_ai.usage.cache_read_input_tokens": 100,
+        }
+    )
+    assert got["gen_ai.usage.input_tokens"] == 104
 
 
 # --- installation ----------------------------------------------------------
