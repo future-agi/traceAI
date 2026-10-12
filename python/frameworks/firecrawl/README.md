@@ -8,6 +8,12 @@ OpenTelemetry instrumentation for the Firecrawl v2 client.
 
 This package wraps the v2 client only. It does not wrap `FirecrawlApp`, and it does not import or disable OpenLIT. OpenLIT's `FireCrawlInstrumentor` wraps `FirecrawlApp.scrape_url` on the v1 client. A user who constructs both clients and enables both instrumentors gets two spans. Pick one.
 
+## Installation
+
+```bash
+pip install traceAI-firecrawl
+```
+
 ## Supported versions
 
 `firecrawl-py >=4.46.2,<5` on Python 3.10, 3.11, 3.12 and 3.13. The tests run on `firecrawl-py==4.46.2`. Outside that range `instrument()` logs an error and wraps nothing.
