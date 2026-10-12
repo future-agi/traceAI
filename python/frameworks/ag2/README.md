@@ -31,13 +31,20 @@ This package does not wrap `Agent`. It:
    `opentelemetry.instrumentation.ag2` scope only:
    - sets `gen_ai.span.kind` from `gen_ai.operation.name`
      (`chat` -> `LLM`, `execute_tool` -> `TOOL`, `invoke_agent` -> `AGENT`),
-   - copies AG2's usage keys onto the GenAI semconv names and keeps the originals:
+   - copies AG2's cache and thinking usage keys onto the keys Future AGI reads
+     and keeps the originals:
 
      | AG2 key | Alias |
      |---|---|
-     | `gen_ai.usage.cache_creation_input_tokens` | `gen_ai.usage.cache_creation.input_tokens` |
-     | `gen_ai.usage.cache_read_input_tokens` | `gen_ai.usage.cache_read.input_tokens` |
+     | `gen_ai.usage.cache_creation_input_tokens` | `gen_ai.usage.cache_write_tokens` |
+     | `gen_ai.usage.cache_read_input_tokens` | `gen_ai.usage.cache_read_tokens` |
      | `gen_ai.usage.thinking_tokens` | `gen_ai.usage.reasoning.output_tokens` |
+
+     Future AGI reads the cache counts from `gen_ai.usage.cache_read_tokens` /
+     `gen_ai.usage.cache_write_tokens`, not from the dotted OpenTelemetry
+     spellings (`gen_ai.usage.cache_read.input_tokens`). On a `record_usage`
+     span that repeats a chat span's usage (see below), they move to
+     `ag2.usage.*` with the token counts.
 
    - applies `TraceConfig` (`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, ...) as a
      second content gate.
@@ -158,7 +165,7 @@ not copied to `input.value` / `output.value` either.
 | Span kind | `AGENT`, `LLM`, `TOOL` from `gen_ai.operation.name` | `await_human_input` and `record_usage` spans get no kind (see below) |
 | Model | `gen_ai.request.model`, `gen_ai.response.model` pass through | When AG2 did not set them |
 | Provider | `gen_ai.provider.name` from `provider_name` or the model response | When neither is known |
-| Tokens | `gen_ai.usage.input_tokens` / `output_tokens` pass through; cache and thinking tokens are aliased and kept | When the usage field is zero/absent. Cost is not emitted |
+| Tokens | `gen_ai.usage.input_tokens` / `output_tokens` pass through; cache tokens are aliased to `gen_ai.usage.cache_read_tokens` / `cache_write_tokens` and thinking tokens to `gen_ai.usage.reasoning.output_tokens`, originals kept | When the usage field is zero/absent. Cost is not emitted |
 | Session | Not emitted by AG2. `session.id` from traceAI's `using_session` / `using_attributes` context, which wins over a static value; or set it yourself: `setup(..., span_attributes={"session.id": "..."})` | When neither is set |
 | User, metadata, tags | `user.id`, `metadata`, `tag.tags` (and the other traceAI context keys) from `using_user` / `using_metadata` / `using_tags` / `using_attributes`; a key AG2 or `span_attributes` already set is not overridden | When the context does not set them |
 | Tools | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`; arguments/result only with `capture_content=True` | |

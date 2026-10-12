@@ -7,8 +7,9 @@ does not create spans. On every span from AG2's instrumentation scope it only:
 * sets ``gen_ai.span.kind`` from ``gen_ai.operation.name`` for the operation
   strings AG2 emits that the Microsoft Agent Framework table also maps
   (``chat``, ``execute_tool``, ``invoke_agent``);
-* copies three non-semconv usage keys onto their dotted GenAI names, keeping
-  the originals;
+* copies AG2's cache usage keys onto the keys Future AGI reads
+  (``gen_ai.usage.cache_read_tokens`` / ``cache_write_tokens``) and its thinking
+  tokens onto ``gen_ai.usage.reasoning.output_tokens``, keeping the originals;
 * on ``record_usage`` spans whose tokens a chat span in the same trace already
   carries (every ``model_call``; a ``subtask`` rollup whose sub-agent is itself
   instrumented in that trace), moves ``gen_ai.usage.input_tokens`` /
@@ -73,12 +74,18 @@ OPERATION_TO_SPAN_KIND: Mapping[str, str] = {
     "invoke_agent": FiSpanKindValues.AGENT.value,
 }
 
-# AG2 spelling -> GenAI semconv spelling. AG2 sets the left-hand keys at
+# AG2 spelling -> the spelling Future AGI reads. AG2 sets the left-hand keys at
 # telemetry.py lines 441-446 (record_usage span) and 505-510 (chat span) at
-# 1.1.2, only when the usage field is non-zero. Originals are kept.
+# 1.1.2, only when the usage field is non-zero. Originals are kept. The cache
+# targets are the keys Future AGI's attribute registry reads
+# (tracer/utils/semantic_conventions.py CACHE_READ_TOKENS / CACHE_WRITE_TOKENS,
+# also fi_instrumentation SpanAttributes.GEN_AI_USAGE_CACHE_*_TOKENS); it does
+# not read the dotted semconv spellings (gen_ai.usage.cache_read.input_tokens).
+_CACHE_READ_TOKENS = SpanAttributes.GEN_AI_USAGE_CACHE_READ_TOKENS  # gen_ai.usage.cache_read_tokens
+_CACHE_WRITE_TOKENS = SpanAttributes.GEN_AI_USAGE_CACHE_WRITE_TOKENS  # gen_ai.usage.cache_write_tokens
 USAGE_KEY_ALIASES: Mapping[str, str] = {
-    "gen_ai.usage.cache_creation_input_tokens": "gen_ai.usage.cache_creation.input_tokens",
-    "gen_ai.usage.cache_read_input_tokens": "gen_ai.usage.cache_read.input_tokens",
+    "gen_ai.usage.cache_creation_input_tokens": _CACHE_WRITE_TOKENS,
+    "gen_ai.usage.cache_read_input_tokens": _CACHE_READ_TOKENS,
     "gen_ai.usage.thinking_tokens": "gen_ai.usage.reasoning.output_tokens",
 }
 
@@ -194,6 +201,10 @@ _PROMOTED_TOKEN_KEYS = (
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.output_tokens",
     "gen_ai.usage.total_tokens",
+    # Not summed today, but a duplicate usage span repeats the chat span's
+    # cache counts too; keep Future AGI's cache keys on one span per call.
+    _CACHE_READ_TOKENS,
+    _CACHE_WRITE_TOKENS,
 )
 # Usage kinds AG2 emits (``ag2/_telemetry_consts.py`` ATTR_USAGE_KIND at
 # 1.1.2) and whether a chat span in the same trace already carries the tokens:

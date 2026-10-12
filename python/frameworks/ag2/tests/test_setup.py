@@ -239,9 +239,9 @@ def test_one_tool_run_span_shape():
     assert a["gen_ai.usage.input_tokens"] == 11
     assert a["gen_ai.usage.output_tokens"] == 7
     assert a["gen_ai.usage.cache_creation_input_tokens"] == 2
-    assert a["gen_ai.usage.cache_creation.input_tokens"] == 2
+    assert a["gen_ai.usage.cache_write_tokens"] == 2
     assert a["gen_ai.usage.cache_read_input_tokens"] == 3
-    assert a["gen_ai.usage.cache_read.input_tokens"] == 3
+    assert a["gen_ai.usage.cache_read_tokens"] == 3
     assert a["gen_ai.usage.thinking_tokens"] == 5
     assert a["gen_ai.usage.reasoning.output_tokens"] == 5
 

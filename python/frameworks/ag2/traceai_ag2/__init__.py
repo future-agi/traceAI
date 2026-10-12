@@ -8,7 +8,7 @@ AG2 1.x already emits OpenTelemetry GenAI spans from its own
 * registers the Future AGI exporter through ``fi_instrumentation.register()``
   when you do not pass a provider,
 * installs :class:`AG2SpanProcessor`, which sets ``gen_ai.span.kind`` and
-  aliases AG2's usage keys onto the GenAI semconv names.
+  aliases AG2's cache and thinking usage keys onto the keys Future AGI reads.
 
 This is not Microsoft AutoGen (``autogen-agentchat``, see ``traceai-autogen``)
 and not AG2 Classic (``autogen`` 0.14.x). It never imports ``autogen``.

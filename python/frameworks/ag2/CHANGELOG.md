@@ -5,9 +5,14 @@
 - New package for AG2 1.x (PyPI `ag2`, import `ag2`). `setup()` attaches AG2's
   own `TelemetryMiddleware` with `capture_content=False` and registers the
   Future AGI exporter; `AG2SpanProcessor` sets `gen_ai.span.kind` from
-  `gen_ai.operation.name` and aliases AG2's cache/thinking usage keys onto the
-  GenAI semconv names (originals kept). Does not wrap `Agent` and never
-  imports `autogen`. Refs: TH-8236.
+  `gen_ai.operation.name` and aliases AG2's cache/thinking usage keys
+  (originals kept). Does not wrap `Agent` and never imports `autogen`.
+  Refs: TH-8236.
+- Cache tokens are aliased to `gen_ai.usage.cache_read_tokens` /
+  `gen_ai.usage.cache_write_tokens`, the keys Future AGI reads (were the dotted
+  `gen_ai.usage.cache_read.input_tokens` / `cache_creation.input_tokens`, which
+  it does not read). A `record_usage` span that repeats a chat span's usage
+  moves them to `ag2.usage.*` with the token counts.
 - With `capture_content=True`, the captured chat messages, tool arguments and
   result, and human input are also copied to `input.value` / `output.value`,
   the only keys Future AGI fills a span's input and output from. Content a

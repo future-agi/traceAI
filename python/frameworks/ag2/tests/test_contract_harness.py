@@ -94,9 +94,9 @@ def test_one_tool_run_reaches_collector_path_with_normalized_gen_ai_spans(fi_env
         "gen_ai.usage.input_tokens": 11,
         "gen_ai.usage.output_tokens": 7,
         "gen_ai.usage.cache_creation_input_tokens": 2,
-        "gen_ai.usage.cache_creation.input_tokens": 2,
+        "gen_ai.usage.cache_write_tokens": 2,
         "gen_ai.usage.cache_read_input_tokens": 3,
-        "gen_ai.usage.cache_read.input_tokens": 3,
+        "gen_ai.usage.cache_read_tokens": 3,
         "gen_ai.usage.thinking_tokens": 5,
         "gen_ai.usage.reasoning.output_tokens": 5,
     }
@@ -155,6 +155,6 @@ def test_short_script_flushes_spans_before_exit():
     assert by_name["invoke_agent weather_bot"]["gen_ai.span.kind"] == "AGENT"
     assert by_name["execute_tool get_weather"]["gen_ai.span.kind"] == "TOOL"
     assert by_name["chat fake-model"]["gen_ai.span.kind"] == "LLM"
-    assert by_name["chat fake-model"]["gen_ai.usage.cache_read.input_tokens"] == 3
+    assert by_name["chat fake-model"]["gen_ai.usage.cache_read_tokens"] == 3
     for name, attributes in by_name.items():
         assert_no_content(attributes, name)

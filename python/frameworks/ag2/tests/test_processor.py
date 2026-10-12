@@ -105,21 +105,21 @@ def test_usage_aliases_copy_and_keep_originals(pipeline):
     got = attrs(span)
     for key, value in source.items():
         assert got[key] == value, key  # originals kept, input/output unchanged
-    assert got["gen_ai.usage.cache_creation.input_tokens"] == 2
-    assert got["gen_ai.usage.cache_read.input_tokens"] == 3
+    assert got["gen_ai.usage.cache_write_tokens"] == 2
+    assert got["gen_ai.usage.cache_read_tokens"] == 3
     assert got["gen_ai.usage.reasoning.output_tokens"] == 5
     assert set(got) == set(source) | {
         "gen_ai.span.kind",
-        "gen_ai.usage.cache_creation.input_tokens",
-        "gen_ai.usage.cache_read.input_tokens",
+        "gen_ai.usage.cache_write_tokens",
+        "gen_ai.usage.cache_read_tokens",
         "gen_ai.usage.reasoning.output_tokens",
     }
 
 
 def test_alias_table_matches_spec():
     assert dict(USAGE_KEY_ALIASES) == {
-        "gen_ai.usage.cache_creation_input_tokens": "gen_ai.usage.cache_creation.input_tokens",
-        "gen_ai.usage.cache_read_input_tokens": "gen_ai.usage.cache_read.input_tokens",
+        "gen_ai.usage.cache_creation_input_tokens": "gen_ai.usage.cache_write_tokens",
+        "gen_ai.usage.cache_read_input_tokens": "gen_ai.usage.cache_read_tokens",
         "gen_ai.usage.thinking_tokens": "gen_ai.usage.reasoning.output_tokens",
     }
 
@@ -153,8 +153,46 @@ def test_aliases_apply_to_record_usage_spans(pipeline):
     )
     (span,) = exporter.get_finished_spans()
     got = attrs(span)
-    assert got["gen_ai.usage.cache_read.input_tokens"] == 3
+    assert got["gen_ai.usage.cache_read_tokens"] == 3
     assert "gen_ai.span.kind" not in got
+
+
+def test_cache_tokens_use_the_keys_future_agi_reads():
+    # Future AGI's attribute registry reads gen_ai.usage.cache_read_tokens /
+    # cache_write_tokens (tracer/utils/semantic_conventions.py CACHE_READ_TOKENS,
+    # CACHE_WRITE_TOKENS); the dotted semconv spellings are not read.
+    got = normalize_attributes(
+        {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.usage.cache_creation_input_tokens": 2,
+            "gen_ai.usage.cache_read_input_tokens": 3,
+        }
+    )
+    assert (got["gen_ai.usage.cache_write_tokens"], got["gen_ai.usage.cache_read_tokens"]) == (2, 3)
+    assert "gen_ai.usage.cache_read.input_tokens" not in got
+    assert "gen_ai.usage.cache_creation.input_tokens" not in got
+
+
+def test_duplicate_usage_span_does_not_repeat_cache_tokens():
+    # record_usage model_call repeats the chat span's cache counts too.
+    got = normalize_attributes(
+        {
+            "ag2.span.type": "usage",
+            "ag2.usage.kind": "model_call",
+            "gen_ai.usage.cache_creation_input_tokens": 2,
+            "gen_ai.usage.cache_read_input_tokens": 3,
+        }
+    )
+    assert "gen_ai.usage.cache_read_tokens" not in got
+    assert "gen_ai.usage.cache_write_tokens" not in got
+    assert (got["ag2.usage.cache_write_tokens"], got["ag2.usage.cache_read_tokens"]) == (2, 3)
+
+
+def test_out_of_band_usage_span_keeps_cache_tokens():
+    got = normalize_attributes(
+        {"ag2.span.type": "usage", "ag2.usage.kind": "aggregation", "gen_ai.usage.cache_read_input_tokens": 3}
+    )
+    assert got["gen_ai.usage.cache_read_tokens"] == 3
 
 
 def test_model_call_usage_span_does_not_double_count_trace_tokens(pipeline):
