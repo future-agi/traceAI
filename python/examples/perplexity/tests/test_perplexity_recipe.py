@@ -19,6 +19,11 @@ import pytest
 import traceai_openai
 from traceai_openai import OpenAIInstrumentor
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "perplexity")
+
 TEST_DIR = Path(__file__).resolve().parent
 RECIPE_DIR = TEST_DIR.parent
 VENDOR_KEY = "placeholder-perplexity-key"
@@ -90,7 +95,7 @@ def _assert_export(receiver, provider, project, error=False, requested_model=fak
     attrs = _attributes(span)
     assert span["name"] == "Response"
     assert attrs["gen_ai.span.kind"] == "LLM"
-    assert attrs["gen_ai.provider.name"] == "openai"
+    assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     # A successful response overrides the request model, including on streams.
     assert attrs["gen_ai.request.model"] == (requested_model if error else fake.RESPONSE_MODEL)
     parameters = json.loads(attrs["gen_ai.request.parameters"])
@@ -196,6 +201,15 @@ def test_make_client_overrides_and_missing_key(monkeypatch):
         app.make_client()
 
 
+def _raw_output(value):
+    # traceai-openai 0.1.10 writes the raw response as Python repr text; later versions
+    # (future-agi/traceAI#249) write JSON and drop None-valued fields.
+    try:
+        return json.loads(value)
+    except ValueError:
+        return ast.literal_eval(value)
+
+
 def test_responses_at_documented_host(tracing):
     assert fake.REQUEST_MODEL != fake.RESPONSE_MODEL
     with tracing() as (receiver, provider, project):
@@ -203,12 +217,12 @@ def test_responses_at_documented_host(tracing):
             assert _call(_handler) == fake.ANSWER
         _, attrs = _assert_export(receiver, provider, project)
         _assert_usage(attrs)
-        raw = ast.literal_eval(attrs["output.value"])
+        raw = _raw_output(attrs["output.value"])
         assert raw["output"][0]["type"] == "search_results"
         assert raw["output"][0]["results"][0]["url"] == fake.SEARCH_URL
         assert raw["output"][0]["results"][0]["snippet"] == fake.SEARCH_SNIPPET
         assert raw["output"][0]["results"][0]["last_updated"] == "2026-10-02"
-        assert raw["output"][0]["results"][1]["date"] is None
+        assert raw["output"][0]["results"][1].get("date") is None
         assert fake.QUERY_MARKER in json.dumps(raw["output"][0]["queries"])
         assert raw["output"][1]["id"] == "msg_placeholder"
         assert raw["output"][1]["content"][0]["text"] == fake.ANSWER
@@ -386,7 +400,7 @@ def test_subprocess_app(tmp_path, stream, cli_model):
         attrs = _attributes(span)
         assert span["name"] == "Response"
         assert attrs["gen_ai.span.kind"] == "LLM"
-        assert attrs["gen_ai.provider.name"] == "openai"
+        assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
         assert attrs["gen_ai.request.model"] == fake.RESPONSE_MODEL
         assert json.loads(attrs["gen_ai.request.parameters"])["model"] == fake.REQUEST_MODEL
         _assert_usage(attrs)
