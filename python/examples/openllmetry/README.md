@@ -3,8 +3,9 @@
 There is no traceAI package for OpenLLMetry. The Traceloop SDK already
 exports OTLP/HTTP. This example points it at fi-collector with environment
 variables, adds the Future AGI project as a resource attribute, and turns
-content capture and metrics off. The backend already maps
-`traceloop.span.kind`; this recipe adds no second mapping.
+content capture and metrics off. It adds no kind mapping of its own. Today
+fi-collector stores the model call as an LLM span with model and tokens, and
+the Traceloop decorator spans as `unknown` (see "What Future AGI stores").
 
 Pinned: `traceloop-sdk` 0.62.4 (`Requires-Python: <4,>=3.10`). Its wheel
 METADATA declares `License-Expression: Apache-2.0`; it has no Trove
@@ -129,9 +130,38 @@ With content off, `python src/app.py` exports five spans in one trace:
 `llm.request.model` or `llm.usage.prompt_tokens`. fi-collector's alias list
 reads the `gen_ai.*` keys first.
 
-The backend's OpenLLMetry adapter
-(`futureagi/tracer/utils/adapters/openllmetry.py`) maps
-`traceloop.span.kind`. Its map, quoted so this page adds no second one:
+### What Future AGI stores
+
+fi-collector writes spans to ClickHouse itself. It reads a span's kind from
+`fi.span.kind`, `gen_ai.span.kind`, `llm.request.type` or
+`openinference.span.kind`, and falls back to `gen_ai.operation.name`
+(`fi-collector/exporter/clickhouse25exporter/converter.go:79-131` at
+future-agi `dev` ea12cc3). It does not read `traceloop.span.kind`. Running
+this recipe against that collector (2026-10-11, `traceloop-sdk` 0.62.4)
+stored:
+
+| Span | Stored `observation_type` | Model and tokens | `input` / `output` columns |
+|---|---|---|---|
+| `support_request.workflow`, `normalize_question.task` | `unknown` | none | empty |
+| `support_agent.agent`, `lookup_policy.tool` | `unknown` | none | empty |
+| `openai.chat` | `llm` (from `gen_ai.operation.name=chat`) | `model`, `prompt_tokens`, `completion_tokens` | empty |
+
+The tree (workflow > task, workflow > agent > tool and model call) and error
+status are kept, and every `traceloop.*` key is kept as a span attribute.
+A streamed call (`stream_options={"include_usage": True}`) is stored the same
+way, with tokens. The `input` and `output` columns stay empty with content on
+too: fi-collector fills them only from `input.value` and `output.value`
+(`converter.go:343-344`), and 0.62.4 sets neither, so the text stays in
+the span attributes listed under "Privacy". A model call made outside any
+Traceloop decorator is stored as `llm` with its model and tokens as well.
+
+Showing the decorator spans as chain, agent and tool needs fi-collector to
+read `traceloop.span.kind`. That is backend work (SF-1), not this recipe.
+
+The backend's Python OpenLLMetry adapter
+(`futureagi/tracer/utils/adapters/openllmetry.py`) has that map, but it runs
+only on the Django ingestion path, not on fi-collector's. Its map, quoted so
+this page adds no second one:
 
 | `traceloop.span.kind` | Future AGI kind |
 |---|---|
@@ -141,22 +171,17 @@ The backend's OpenLLMetry adapter
 | `tool` | TOOL |
 | `unknown` | UNKNOWN |
 
-A span without `traceloop.span.kind` takes its kind from
+In that adapter a span without `traceloop.span.kind` takes its kind from
 `gen_ai.operation.name`: `chat` and `completion` are LLM, `embedding` and
 `embeddings` EMBEDDING, `rerank` RERANKER, `execute_tool` TOOL. The opt-in
 tests under "Tests" read both maps from that file, check the table above
 against the first, and check the emitted span kinds and operation names
-against both.
-
-The adapter recognises a span as OpenLLMetry only when it has a
-`traceloop.*` key. A model call made inside a decorated function carries
-`traceloop.workflow.name`. A model call made outside any Traceloop decorator
-has no `traceloop.*` key (tested), so call the model from inside a
-`@workflow`.
+against both. The adapter recognises a span as OpenLLMetry only when it has
+a `traceloop.*` key; a model call made outside any Traceloop decorator has
+none (tested).
 
 The agent, tool and model-call spans carry both `gen_ai.*` and
-`traceloop.*` keys (tested). That each of them is stored with one kind is
-the shared processor's (SF-1) assertion, not this recipe's.
+`traceloop.*` keys (tested).
 
 ## Privacy
 
@@ -192,18 +217,17 @@ resource, or in the app's output (tested).
 - Traceloop uses a `BatchSpanProcessor` and registers an `atexit` flush, so
   a short script exports on exit and a server exports in batches.
 - With content on, 0.62.4 writes messages as `gen_ai.input.messages` and
-  `gen_ai.output.messages`. The backend adapter (future-agi `main` 4af5338,
-  `futureagi/tracer/utils/adapters/openllmetry.py`) builds the span's input
-  and output only from indexed `gen_ai.prompt.<i>.*` and
-  `gen_ai.completion.<i>.*` keys (`:114`, `:214-215`), then deletes every
-  `gen_ai.*` key (`:231`). Nothing in it reads `gen_ai.input.messages`, and
-  the model-call span carries no `traceloop.entity.input`, so with 0.62.4 the
-  model call's input and output are dropped by that adapter, not shown. This
-  is read from the backend source, not run against a backend; it is a backend
-  item (SF-1), and the recipe keeps content off.
-- No call to fi-collector, Traceloop or OpenAI was made. Auth rejection
-  (401 without keys), project stamping and storage are fi-collector
-  behaviour the harness receiver does not reproduce.
+  `gen_ai.output.messages`. fi-collector keeps them as span attributes and
+  leaves the `input` and `output` columns empty (see "What Future AGI
+  stores"). The Django-path adapter (`openllmetry.py:114`, `:214-215`,
+  `:231`) builds input and output only from indexed `gen_ai.prompt.<i>.*` and
+  `gen_ai.completion.<i>.*` keys and then deletes every `gen_ai.*` key, so it
+  would drop them. Both are backend items (SF-1); the recipe keeps content
+  off.
+- The contract test makes no call to fi-collector, Traceloop or OpenAI. Auth
+  rejection (401 without keys), project stamping and storage are
+  fi-collector behaviour the harness receiver does not reproduce; "What
+  Future AGI stores" comes from one manual run against a local fi-collector.
 
 ## Tests
 

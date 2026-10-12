@@ -81,8 +81,8 @@ def normalize_question(question: str) -> str:
 
 @workflow(name="support_request")
 def support_request(question: str) -> str:
-    # Model calls made inside a @workflow carry traceloop.workflow.name, the
-    # traceloop.* marker Future AGI uses to recognise OpenLLMetry spans.
+    # Model calls made inside a @workflow carry traceloop.workflow.name and
+    # nest under the workflow span in one trace.
     return support_agent(normalize_question(question))
 
 
