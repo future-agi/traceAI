@@ -66,7 +66,8 @@ def test_example_exports_one_tavily_search_span():
 
     assert [span["name"] for span in spans] == ["tavily.search"]
     values = _flatten_attributes(spans[0]["attributes"])
-    assert values["gen_ai.span.kind"] == "TOOL"
+    assert values["gen_ai.span.kind"] == "RETRIEVER"
+    assert values["gen_ai.retrieval.query"] == "What is OpenTelemetry?"
     assert values["input.value"] == "What is OpenTelemetry?"
     assert int(values["tavily.result_count"]) == 2
     assert spans[0]["status"]["code"] == "STATUS_CODE_OK"

@@ -109,7 +109,9 @@ def test_real_client_calls_reach_the_collector_contract(journey):
     for name in ("tavily.search", "tavily.extract"):
         for span in by_name[name]:
             values = _flatten_attributes(span["attributes"])
-            assert values["gen_ai.span.kind"] == "TOOL"
+            # search is a retrieval; extract fetches the pages it is given.
+            expected = "RETRIEVER" if name == "tavily.search" else "TOOL"
+            assert values["gen_ai.span.kind"] == expected
             assert values["gen_ai.tool.name"] == name
             assert span["parentSpanId"] == parent["spanId"]
             assert span["traceId"] == parent["traceId"]

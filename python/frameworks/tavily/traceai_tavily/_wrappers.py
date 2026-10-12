@@ -15,6 +15,7 @@ import logging
 import traceback
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
+from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, Status, StatusCode
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 _SPAN_KIND = "gen_ai.span.kind"
 _TOOL = "TOOL"
+_RETRIEVER = "RETRIEVER"
+_RETRIEVAL_QUERY = "gen_ai.retrieval.query"
 _TOOL_NAME = "gen_ai.tool.name"
 _INPUT_VALUE = "input.value"
 _URL_COUNT = "tavily.url_count"
@@ -91,13 +94,19 @@ def _scrub(text: str, keys: Sequence[str], hidden: Optional[str] = None) -> str:
 
 
 def _safe_text(
-    text: str, keys: Optional[Sequence[str]], hidden: Optional[str] = None
+    text: str, keys: Optional[Sequence[str]], hidden: Optional[str] = None, pii: bool = False
 ) -> Optional[str]:
-    """``text`` scrubbed (see ``_scrub``), then capped; None when keys are unknown."""
+    """``text`` scrubbed (see ``_scrub``), PII-redacted when asked, then capped.
+
+    None when keys are unknown.
+    """
     if keys is None:
         return None
-    # Redact first, then cap, so a key cut at the limit leaves no prefix.
-    return _cap(_scrub(text, keys, hidden))
+    # Redact first, then cap, so a key or an email cut at the limit leaves no prefix.
+    text = _scrub(text, keys, hidden)
+    if pii:
+        text = redact_pii_in_string(text)
+    return _cap(text)
 
 
 def _cap(text: str, limit: int = _MAX_TEXT_BYTES) -> str:
@@ -137,11 +146,17 @@ def _count(result: Any, key: str) -> Optional[int]:
 class _Operation:
     """Span bookkeeping shared by the sync and async wrappers."""
 
-    def __init__(self, tracer: Any, method: str, hide_inputs: bool = False) -> None:
+    def __init__(
+        self, tracer: Any, method: str, hide_inputs: bool = False, pii: bool = False
+    ) -> None:
         self._tracer = tracer
         self._method = method
         # TraceConfig.hide_inputs: also keep the query out of error text.
         self._hide_inputs = hide_inputs
+        # TraceConfig.pii_redaction: FITracer covers attributes; error text is done here.
+        self._pii = pii
+        # search is a retrieval; extract fetches the pages it is given.
+        self._kind = _RETRIEVER if method == "search" else _TOOL
         self._span_name = "tavily.{0}".format(method)
         # Signature of each wrapped function, read once.
         self._signatures: Dict[Any, inspect.Signature] = {}
@@ -177,11 +192,14 @@ class _Operation:
         args: Sequence[Any],
         kwargs: Mapping[str, Any],
     ) -> Dict[str, Any]:
-        attributes: Dict[str, Any] = {_SPAN_KIND: _TOOL, _TOOL_NAME: self._span_name}
+        attributes: Dict[str, Any] = {_SPAN_KIND: self._kind, _TOOL_NAME: self._span_name}
         if query is not None:
             value = _safe_text(query, keys)
             if value is not None:
                 attributes[_INPUT_VALUE] = value
+                # FITracer masks input.value when inputs are hidden, but not this key.
+                if self._method == "search" and not self._hide_inputs:
+                    attributes[_RETRIEVAL_QUERY] = value
         if self._method == "extract":
             urls = _url_count(args, kwargs)
             if urls is not None:
@@ -199,7 +217,7 @@ class _Operation:
             attributes = self._attributes(keys, query, args, kwargs)
         except Exception:
             logger.debug("Could not read %s arguments", self._span_name, exc_info=True)
-            attributes = {_SPAN_KIND: _TOOL, _TOOL_NAME: self._span_name}
+            attributes = {_SPAN_KIND: self._kind, _TOOL_NAME: self._span_name}
         try:
             return self._tracer.start_span(self._span_name, attributes=attributes)
         except Exception:
@@ -263,7 +281,7 @@ class _Operation:
         name = type(error).__name__
         try:
             hidden = self._hidden_query(query, keys)
-            message = _safe_text(str(error), keys, hidden)
+            message = _safe_text(str(error), keys, hidden, self._pii)
         except Exception:
             hidden, message = None, None
         description = name if message is None else _cap("{0}: {1}".format(name, message))
@@ -277,13 +295,15 @@ class _Operation:
         event: Optional[Dict[str, Any]] = None
         if keys is None or message is None:
             event = {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
-        elif keys or hidden:
+        elif keys or hidden or self._pii:
             try:
                 stacktrace = _scrub(
                     "".join(traceback.format_exception(type(error), error, error.__traceback__)),
                     keys,
                     hidden,
                 )
+                if self._pii:
+                    stacktrace = redact_pii_in_string(stacktrace)
             except Exception:
                 stacktrace = _REDACTED
             event = {"exception.message": message, "exception.stacktrace": stacktrace}

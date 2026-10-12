@@ -73,7 +73,9 @@ class TavilyInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                 wrap_function_wrapper(
                     module_name,
                     "{0}.{1}".format(class_name, method),
-                    wrapper_type(tracer, method, bool(config.hide_inputs)),
+                    wrapper_type(
+                        tracer, method, bool(config.hide_inputs), bool(config.pii_redaction)
+                    ),
                 )
                 self._originals[(module_name, class_name, method)] = original
 

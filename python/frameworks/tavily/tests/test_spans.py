@@ -63,7 +63,7 @@ def _assert_no_content(traced: Any) -> None:
 # --- search -------------------------------------------------------------------
 
 
-def test_sync_search_emits_one_tool_span(fake):
+def test_sync_search_emits_one_retriever_span(fake):
     with instrumented() as traced:
         result = _sync_client(fake).search(QUERY, max_results=3)
 
@@ -72,8 +72,9 @@ def test_sync_search_emits_one_tool_span(fake):
     span = traced.one()
     assert span.name == "tavily.search"
     assert attrs(span) == {
-        "gen_ai.span.kind": "TOOL",
+        "gen_ai.span.kind": "RETRIEVER",
         "gen_ai.tool.name": "tavily.search",
+        "gen_ai.retrieval.query": QUERY,
         "input.value": QUERY,
         "tavily.result_count": 3,
     }
@@ -90,8 +91,9 @@ def test_async_search_matches_sync(fake):
     span = traced.one()
     assert span.name == "tavily.search"
     assert attrs(span) == {
-        "gen_ai.span.kind": "TOOL",
+        "gen_ai.span.kind": "RETRIEVER",
         "gen_ai.tool.name": "tavily.search",
+        "gen_ai.retrieval.query": QUERY,
         "input.value": QUERY,
         "tavily.result_count": 3,
     }

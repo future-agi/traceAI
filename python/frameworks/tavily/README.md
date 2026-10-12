@@ -96,9 +96,9 @@ langchain-community 0.4.2, langchain-core 1.5.2, langgraph 1.2.2):
 
 | Path | Without traceAI-tavily | With traceAI-tavily |
 | --- | --- | --- |
-| `TavilyClient` / `AsyncTavilyClient` `search` + `extract`, `register()` only (also as the global provider), with or without `traceAI-langchain` | 0 spans for 4 calls | 1 TOOL span per call |
+| `TavilyClient` / `AsyncTavilyClient` `search` + `extract`, `register()` only (also as the global provider), with or without `traceAI-langchain` | 0 spans for 4 calls | 1 span per call (`search` RETRIEVER, `extract` TOOL) |
 | LangGraph `ToolNode` running `TavilySearchResults`, `traceAI-langchain` on | 1 TOOL span | 1 TOOL span (unchanged) |
-| Your LangChain tool calling `TavilyClient.search` | 1 TOOL span | 2 spans (see above) |
+| Your LangChain tool calling `TavilyClient.search` | 1 TOOL span | 2 spans: the TOOL span and a RETRIEVER `tavily.search` (see above) |
 
 tavily-python 0.8.4 contains no OpenTelemetry code.
 
@@ -121,9 +121,10 @@ instrumentation nests under it.
 
 | Attribute | Calls | Value |
 | --- | --- | --- |
-| `gen_ai.span.kind` | all | `TOOL` |
+| `gen_ai.span.kind` | all | `RETRIEVER` for `search`; `TOOL` for `extract`, which fetches the pages it is given. |
 | `gen_ai.tool.name` | all | `tavily.search` or `tavily.extract` |
 | `input.value` | `search`; `extract` when `query` is given | The query, with the client's Tavily key replaced by `[redacted]`, then cut to 1024 bytes of UTF-8 on a character boundary. |
+| `gen_ai.retrieval.query` | `search` | The same text as `input.value`. Not recorded when inputs are hidden. |
 | `tavily.url_count` | `extract` | Number of requested URLs (a single URL string counts as 1). |
 | `tavily.result_count` | successful calls | Length of the response's `results`. |
 | `tavily.failed_result_count` | successful `extract` | Length of the response's `failed_results`. |
@@ -159,11 +160,15 @@ Context attributes from `fi_instrumentation` (`using_session`, `using_user`,
   description, and `[redacted]` as the exception message.
 - **Hiding queries**: `FI_HIDE_INPUTS=true`, or
   `instrument(config=TraceConfig(hide_inputs=True))`, records `input.value` as
-  `__REDACTED__`. It also removes the query text from error messages: after the
+  `__REDACTED__` and drops `gen_ai.retrieval.query`. It also removes the query text from error messages: after the
   key is redacted, each verbatim occurrence of the query in the error status
   description and the exception event's message and stacktrace becomes
   `__REDACTED__`. Other error text is recorded as thrown, with the key
-  redacted. `config` must be a `fi_instrumentation.TraceConfig`; anything else
+  redacted.
+- **PII**: `FI_PII_REDACTION=true`, or `TraceConfig(pii_redaction=True)`,
+  replaces emails, phone numbers and similar with tokens such as
+  `<EMAIL_ADDRESS>` in every attribute and, after the key (and a hidden query)
+  is removed, in the error status and the exception event. `config` must be a `fi_instrumentation.TraceConfig`; anything else
   raises `TypeError`.
 
 ## Errors and cancellation

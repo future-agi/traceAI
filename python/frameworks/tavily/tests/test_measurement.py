@@ -70,6 +70,9 @@ FI_API_KEY = "placeholder-fi-api-key"
 FI_SECRET_KEY = "placeholder-fi-secret-key"
 BARE_CLIENT_CALLS = ["/search", "/extract", "/search", "/extract"]
 
+# The LangChain tool span is TOOL; tavily.search is RETRIEVER.
+TRACED_KINDS = ("TOOL", "RETRIEVER")
+
 # Attribute keys traceAI-langchain puts on the Tavily TOOL span (measured).
 LANGCHAIN_TOOL_KEYS = [
     "checkpoint_ns",
@@ -283,7 +286,7 @@ def test_bare_client_with_the_wrapper_emits_one_span_per_call():
         "tavily.extract",
     ]
     for span in traced:
-        assert kind(span) == "TOOL"
+        assert kind(span) == ("RETRIEVER" if span["name"] == "tavily.search" else "TOOL")
         assert span["parentSpanId"] == control["spanId"]
 
 
@@ -331,14 +334,14 @@ def test_a_langchain_tool_over_the_bare_client_adds_one_tavily_span():
 
     # With it, exactly one more span: tavily.search, a root in its own trace.
     assert len(spans) == len(plain) + 1
-    tools = {span["name"]: span for span in spans if kind(span) == "TOOL"}
+    tools = {span["name"]: span for span in spans if kind(span) in TRACED_KINDS}
     assert sorted(tools) == ["tavily.search", "tavily_web_search"]
     assert "parentSpanId" not in tools["tavily.search"]
     assert tools["tavily.search"]["traceId"] != tools["tavily_web_search"]["traceId"]
 
     # Made current with traceai_langchain.get_current_span(), it nests.
     assert len(nested) == len(plain) + 1
-    tools = {span["name"]: span for span in nested if kind(span) == "TOOL"}
+    tools = {span["name"]: span for span in nested if kind(span) in TRACED_KINDS}
     assert tools["tavily.search"]["parentSpanId"] == tools["tavily_web_search"]["spanId"]
     assert tools["tavily.search"]["traceId"] == tools["tavily_web_search"]["traceId"]
 
@@ -370,7 +373,7 @@ def test_a_failing_langchain_tool_over_the_bare_client_records_the_error_once():
 
     assert paths == ["/search"]
     assert summary["tool_status"] == ["error"]
-    tools = {span["name"]: span for span in spans if kind(span) == "TOOL"}
+    tools = {span["name"]: span for span in spans if kind(span) in TRACED_KINDS}
     assert sorted(tools) == ["tavily.search", "tavily_web_search"]
     tool, search = tools["tavily_web_search"], tools["tavily.search"]
     assert search["parentSpanId"] == tool["spanId"]
