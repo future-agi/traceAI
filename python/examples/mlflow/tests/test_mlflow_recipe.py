@@ -1,6 +1,8 @@
 """Contract test for the MLflow OTLP recipe.
 
-Runs ``src/app.py`` as written with the real ``mlflow`` 3.16.1, in a
+Runs ``src/app.py`` as written with the real ``mlflow`` 3.16.1 and the Run
+block's environment (``MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`` included; the
+switch-off export is checked too), in a
 subprocess whose network is limited to 127.0.0.1 (``_guarded_run.py``) and
 whose working directory and HOME are a fresh temporary directory, so every
 file MLflow writes is visible to the test. Spans go to the shared harness
@@ -15,6 +17,7 @@ workspace and MLflow's model catalog at a loopback recorder.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import importlib.util
 import json
@@ -61,8 +64,15 @@ CONTENT_MARKERS = ("QMARK7c1e", POLICY, ANSWER)
 ROOT = "answer_question"
 LLM = "chat_model"
 MODEL = "gpt-4o-mini"
-# The keys MLflow 3.16.1 puts on each span of src/app.py by default.
-DEFAULT_KEYS = {
+# Span names on the export with MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true, as the
+# Run block sets it: the model span is "<operation> <model>", and a span with
+# a type but no model is named after its type. ROOT and LLM are the names
+# MLflow keeps in its own store and exports with the switch off.
+CHAT = "chat " + MODEL
+CHAIN = "CHAIN"
+EXPORTED = {CHAIN, CHAT}
+# The keys MLflow 3.16.1 puts on each span of src/app.py with the switch off.
+SWITCH_OFF_KEYS = {
     ROOT: {
         "mlflow.traceRequestId",
         "mlflow.spanType",
@@ -168,6 +178,7 @@ def _child_env(work: Path, guard_log: Path, endpoint: str, **overrides: Optional
         "OTEL_RESOURCE_ATTRIBUTES": resource_attributes(PROJECT),
         "OTEL_SERVICE_NAME": SERVICE_NAME,
         "MLFLOW_DISABLE_TELEMETRY": "true",
+        "MLFLOW_ENABLE_OTEL_GENAI_SEMCONV": "true",
     }
     for key, value in overrides.items():
         if value is None:
@@ -289,7 +300,12 @@ def _store(path: Path) -> dict[str, Any]:
 
 
 def _trace_request_id(record: dict[str, Any]) -> str:
-    ids = {json.loads(_attrs(span)["mlflow.traceRequestId"]) for span in record["spans"]}
+    """MLflow's id for the exported trace: "tr-" and the OTel trace id in hex.
+
+    Read from the OTLP trace id (base64 in the Receiver's decoded protobuf),
+    because the GenAI switch drops mlflow.traceRequestId from the export.
+    """
+    ids = {"tr-" + base64.b64decode(span["traceId"]).hex() for span in record["spans"]}
     assert len(ids) == 1, ids
     return ids.pop()
 
@@ -376,19 +392,45 @@ def test_resource_carries_the_project(recipe_run: dict[str, Any]) -> None:
 
 def test_span_tree(recipe_run: dict[str, Any]) -> None:
     spans = _by_name(recipe_run["spans"])
-    assert set(spans) == {ROOT, LLM}
+    assert set(spans) == EXPORTED
     assert len({span["traceId"] for span in spans.values()}) == 1
-    assert not spans[ROOT].get("parentSpanId")
-    assert spans[LLM]["parentSpanId"] == spans[ROOT]["spanId"]
+    assert not spans[CHAIN].get("parentSpanId")
+    assert spans[CHAT]["parentSpanId"] == spans[CHAIN]["spanId"]
+    assert spans[CHAIN]["kind"] == "SPAN_KIND_INTERNAL"
+    assert spans[CHAT]["kind"] == "SPAN_KIND_CLIENT"
     for span in spans.values():
-        assert span["kind"] == "SPAN_KIND_INTERNAL"
         assert span["status"] == {"code": "STATUS_CODE_OK"}
         assert not span.get("events")
 
 
-def test_mlflow_json_encodes_every_attribute_value(recipe_run: dict[str, Any]) -> None:
-    spans = _by_name(recipe_run["spans"])
-    assert {name: set(_raw(span)) for name, span in spans.items()} == DEFAULT_KEYS
+# --------------------------------------------------------------------------
+# MLFLOW_ENABLE_OTEL_GENAI_SEMCONV unset: MLflow's own keys, JSON-encoded.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def switch_off_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    record = _run_script(
+        tmp_path_factory.mktemp("switch-off"),
+        APP,
+        [QUESTION],
+        MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=None,
+    )
+    _assert_ran(record)
+    return record
+
+
+def test_switch_off_keeps_the_function_names(switch_off_run: dict[str, Any]) -> None:
+    spans = _by_name(switch_off_run["spans"])
+    assert set(spans) == {ROOT, LLM}
+    assert spans[LLM]["parentSpanId"] == spans[ROOT]["spanId"]
+    for span in spans.values():
+        assert span["kind"] == "SPAN_KIND_INTERNAL"
+
+
+def test_mlflow_json_encodes_every_attribute_value(switch_off_run: dict[str, Any]) -> None:
+    spans = _by_name(switch_off_run["spans"])
+    assert {name: set(_raw(span)) for name, span in spans.items()} == SWITCH_OFF_KEYS
     for span in spans.values():
         for key, value in _raw(span).items():
             assert set(value) == {"stringValue"}, (key, value)
@@ -406,13 +448,14 @@ def test_mlflow_json_encodes_every_attribute_value(recipe_run: dict[str, Any]) -
         "total_tokens": 19,
     }
     assert _raw(spans[ROOT])["mlflow.spanType"] == {"stringValue": '"CHAIN"'}
-    assert _trace_request_id(recipe_run).startswith("tr-")
+    request_ids = {json.loads(_attrs(span)["mlflow.traceRequestId"]) for span in spans.values()}
+    assert request_ids == {_trace_request_id(switch_off_run)}
 
 
-def test_readme_lists_every_exported_key(recipe_run: dict[str, Any]) -> None:
+def test_readme_lists_every_switch_off_key(switch_off_run: dict[str, Any]) -> None:
     text = README.read_text(encoding="utf-8")
-    keys = set().union(*DEFAULT_KEYS.values())
-    for request in recipe_run["requests"]:
+    keys = set().union(*SWITCH_OFF_KEYS.values())
+    for request in switch_off_run["requests"]:
         for resource in request["resource_attributes"]:
             keys |= set(resource)
     missing = sorted(key for key in keys if "`{0}`".format(key) not in text)
@@ -429,8 +472,8 @@ def test_no_experiment_or_session_on_the_export(recipe_run: dict[str, Any]) -> N
             assert not [key for key in resource if "experiment" in key.lower()]
 
 
-def test_content_is_exported_by_default(recipe_run: dict[str, Any]) -> None:
-    spans = {name: _attrs(span) for name, span in _by_name(recipe_run["spans"]).items()}
+def test_switch_off_puts_content_in_span_inputs_and_outputs(switch_off_run: dict[str, Any]) -> None:
+    spans = {name: _attrs(span) for name, span in _by_name(switch_off_run["spans"]).items()}
     assert "QMARK7c1e" in spans[ROOT]["mlflow.spanInputs"]
     assert ANSWER in spans[ROOT]["mlflow.spanOutputs"]
     assert POLICY in spans[LLM]["mlflow.spanInputs"]  # the system prompt
@@ -493,7 +536,7 @@ def test_v1_traces_is_accepted_too(tmp_path: Path) -> None:
     record = _run_script(tmp_path, APP, [QUESTION], lambda receiver: receiver.endpoint)
     _assert_ran(record)
     assert {request["path"] for request in record["requests"]} == {"/v1/traces"}
-    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert {span["name"] for span in record["spans"]} == EXPORTED
 
 
 @pytest.mark.parametrize(
@@ -707,7 +750,7 @@ def test_general_otlp_protocol_is_accepted(tmp_path: Path) -> None:
     )
     _assert_ran(record)
     assert {request["path"] for request in record["requests"]} == {"/tracer/v1/traces"}
-    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert {span["name"] for span in record["spans"]} == EXPORTED
     assert record["files"] == []
 
 
@@ -825,7 +868,7 @@ def test_dual_export_false_is_otlp_only(tmp_path: Path) -> None:
         tmp_path, APP, [QUESTION], MLFLOW_TRACE_ENABLE_OTLP_DUAL_EXPORT="false"
     )
     _assert_ran(record)
-    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert {span["name"] for span in record["spans"]} == EXPORTED
     assert record["files"] == []
 
 
@@ -838,7 +881,7 @@ def test_dual_export_without_a_tracking_uri_writes_a_local_mlflow_db(tmp_path: P
         MLFLOW_MODEL_CATALOG_URI="",
     )
     _assert_ran(record)
-    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert {span["name"] for span in record["spans"]} == EXPORTED
     # MLflow's default store, SQLite in the working directory.
     assert record["files"] == ["mlflow.db"]
     store = _store(record["work"] / "mlflow.db")
@@ -856,7 +899,7 @@ def test_dual_export_with_a_tracking_uri_writes_there(tmp_path: Path) -> None:
         MLFLOW_MODEL_CATALOG_URI="",
     )
     _assert_ran(record)
-    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert {span["name"] for span in record["spans"]} == EXPORTED
     assert record["files"] == ["traces.db"]
     assert _store(database) == {"traces": [_trace_request_id(record)], "spans": [ROOT, LLM]}
 
@@ -879,7 +922,7 @@ def test_dual_export_fetches_the_model_catalog_unless_disabled(tmp_path: Path) -
         spans = receiver.spans()
         catalog_calls = list(catalog.calls)
     _assert_exited_cleanly(record)
-    assert {span["name"] for span in spans} == {ROOT, LLM}
+    assert {span["name"] for span in spans} == EXPORTED
     assert catalog_calls
     assert set(catalog_calls) == {("GET", "/catalog/openai.json")}
 
@@ -912,7 +955,7 @@ def test_set_destination_with_dual_export_sends_both(tmp_path: Path) -> None:
         MLFLOW_MODEL_CATALOG_URI="",
     )
     _assert_ran(record)
-    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert {span["name"] for span in record["spans"]} == EXPORTED
     assert record["files"] == ["mlflow.db"]
     assert _store(record["work"] / "mlflow.db") == {
         "traces": [_trace_request_id(record)],
@@ -949,7 +992,7 @@ def test_tracing_destination_with_dual_export_is_accepted_and_sends_both(tmp_pat
         MLFLOW_MODEL_CATALOG_URI="",
     )
     _assert_ran(record)
-    assert {span["name"] for span in record["spans"]} == {ROOT, LLM}
+    assert {span["name"] for span in record["spans"]} == EXPORTED
     assert record["files"] == ["mlflow.db"]
     assert _store(record["work"] / "mlflow.db") == {
         "traces": [_trace_request_id(record)],
@@ -1009,7 +1052,7 @@ def _emit_line(path: Path, names: tuple[str, ...]) -> str:
 def test_readme_run_block_replaces_a_stale_environment(tmp_path: Path) -> None:
     """The Run block's own lines, run by bash over settings left from another setup.
 
-    The shell inherits PATH, HOME, the guard log and three stale values, and
+    The shell inherits PATH, HOME, the guard log and four stale values, and
     no recipe variable, so deleting a line from the README fails this test.
     The stale model catalog URI is a loopback recorder, so a fetch would be
     recorded, not only blocked.
@@ -1018,7 +1061,12 @@ def test_readme_run_block_replaces_a_stale_environment(tmp_path: Path) -> None:
     work.mkdir()
     guard_log = tmp_path / "guard.jsonl"
     emitted = tmp_path / "emitted.json"
-    stale_names = ("MLFLOW_MODEL_CATALOG_URI", "MLFLOW_TRACING_DESTINATION", "OTEL_EXPORTER_OTLP_HEADERS")
+    stale_names = (
+        "MLFLOW_MODEL_CATALOG_URI",
+        "MLFLOW_TRACING_DESTINATION",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "MLFLOW_ENABLE_OTEL_GENAI_SEMCONV",
+    )
     with Receiver() as receiver, _Recorder() as catalog:
         env = {
             "PATH": os.environ.get("PATH", ""),
@@ -1027,6 +1075,7 @@ def test_readme_run_block_replaces_a_stale_environment(tmp_path: Path) -> None:
             "MLFLOW_TRACING_DESTINATION": "0",
             "OTEL_EXPORTER_OTLP_HEADERS": "x-api-key=other-vendor-placeholder",
             "MLFLOW_MODEL_CATALOG_URI": catalog.origin + "/catalog",
+            "MLFLOW_ENABLE_OTEL_GENAI_SEMCONV": "false",
         }
         app = " ".join(shlex.quote(part) for part in (sys.executable, str(GUARD), str(APP), QUESTION))
         script = "\n".join(
@@ -1047,7 +1096,7 @@ def test_readme_run_block_replaces_a_stale_environment(tmp_path: Path) -> None:
     assert result.returncode == 0, stderr
     assert ANSWER in result.stdout.decode("utf-8", "replace")
     assert requests, "no export reached the intended receiver"
-    assert {span["name"] for span in spans} == {ROOT, LLM}
+    assert {span["name"] for span in spans} == EXPORTED
     for request in requests:
         assert request["path"] == "/tracer/v1/traces"
         assert request["headers"].get("x-api-key") == FI_API_KEY
@@ -1060,6 +1109,7 @@ def test_readme_run_block_replaces_a_stale_environment(tmp_path: Path) -> None:
         "MLFLOW_MODEL_CATALOG_URI": "",
         "MLFLOW_TRACING_DESTINATION": None,
         "OTEL_EXPORTER_OTLP_HEADERS": None,
+        "MLFLOW_ENABLE_OTEL_GENAI_SEMCONV": "true",
     }
     assert not guard_log.exists(), guard_log.read_text()
     # No ./mlflow.db (destination) and no telemetry file under HOME.
@@ -1108,29 +1158,15 @@ def test_readme_header_line_stops_when_a_key_is_missing(
 
 
 # --------------------------------------------------------------------------
-# MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true: MLflow's own GenAI translation.
+# MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true (the Run block): MLflow's own GenAI
+# translation.
 # --------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def semconv_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    record = _run_script(
-        tmp_path_factory.mktemp("semconv"),
-        APP,
-        [QUESTION],
-        MLFLOW_ENABLE_OTEL_GENAI_SEMCONV="true",
-    )
-    _assert_ran(record)
-    return record
-
-
-def test_semconv_exports_plain_gen_ai_values(semconv_run: dict[str, Any]) -> None:
-    spans = _by_name(semconv_run["spans"])
-    chat_name = "chat " + MODEL
-    # The model span is renamed "<operation> <model>"; a span with a type but
-    # no model is renamed to its type.
-    assert set(spans) == {chat_name, "CHAIN"}
-    chat, chain = spans[chat_name], spans["CHAIN"]
+def test_recipe_exports_plain_gen_ai_values(recipe_run: dict[str, Any]) -> None:
+    spans = _by_name(recipe_run["spans"])
+    assert set(spans) == EXPORTED
+    chat, chain = spans[CHAT], spans[CHAIN]
     assert chat["parentSpanId"] == chain["spanId"]
     assert chat["kind"] == "SPAN_KIND_CLIENT"
     assert chain["kind"] == "SPAN_KIND_INTERNAL"
@@ -1154,20 +1190,23 @@ def test_semconv_exports_plain_gen_ai_values(semconv_run: dict[str, Any]) -> Non
     assert _raw(chain) == {"gen_ai.operation.name": {"stringValue": "CHAIN"}}
 
 
-def test_semconv_moves_chat_content_to_gen_ai_messages(semconv_run: dict[str, Any]) -> None:
-    attrs = _attrs(_by_name(semconv_run["spans"])["chat " + MODEL])
+def test_recipe_puts_chat_content_in_gen_ai_messages(recipe_run: dict[str, Any]) -> None:
+    attrs = _attrs(_by_name(recipe_run["spans"])[CHAT])
     assert "QMARK7c1e" in attrs["gen_ai.input.messages"]
     assert POLICY in attrs["gen_ai.system_instructions"]  # the system message
     assert POLICY not in attrs["gen_ai.input.messages"]
     assert ANSWER in attrs["gen_ai.output.messages"]
-    dump = json.dumps(semconv_run["spans"])
+    dump = json.dumps(recipe_run["spans"])
     for marker in CONTENT_MARKERS:
         assert dump.count(marker) == 1, marker
 
 
-def test_readme_lists_every_semconv_key(semconv_run: dict[str, Any]) -> None:
+def test_readme_lists_every_exported_key(recipe_run: dict[str, Any]) -> None:
     text = README.read_text(encoding="utf-8")
-    keys = set().union(*(set(_raw(span)) for span in semconv_run["spans"]))
+    keys = set().union(*(set(_raw(span)) for span in recipe_run["spans"]))
+    for request in recipe_run["requests"]:
+        for resource in request["resource_attributes"]:
+            keys |= set(resource)
     assert sorted(key for key in keys if "`{0}`".format(key) not in text) == []
 
 
@@ -1206,13 +1245,13 @@ def test_hand_built_gen_ai_span_arrives_with_keys_intact() -> None:
 
 
 def test_fixture_spans_are_what_mlflow_sends(
-    recipe_run: dict[str, Any], semconv_run: dict[str, Any]
+    recipe_run: dict[str, Any], switch_off_run: dict[str, Any]
 ) -> None:
     """The fixture is hand-built, but each span's keys and values are MLflow's own."""
     fixture = _fixture_spans()
     live = {
-        "chat " + MODEL: _raw(_by_name(semconv_run["spans"])["chat " + MODEL]),
-        LLM: _raw(_by_name(recipe_run["spans"])[LLM]),
+        CHAT: _raw(_by_name(recipe_run["spans"])[CHAT]),
+        LLM: _raw(_by_name(switch_off_run["spans"])[LLM]),
     }
     for name, span in fixture.items():
         for key, value in _raw(span).items():

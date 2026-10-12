@@ -2,9 +2,10 @@
 
 There is no traceAI package for MLflow. MLflow already exports its own
 traces over OTLP; this example points that export at fi-collector with
-environment variables and adds the Future AGI project as a resource
-attribute. It adds no instrumentor: a wrapper around `mlflow.start_span`
-would double every span.
+environment variables, adds the Future AGI project as a resource
+attribute, and turns on MLflow's OpenTelemetry GenAI keys so Future AGI can
+type the spans and read the model and token counts. It adds no
+instrumentor: a wrapper around `mlflow.start_span` would double every span.
 
 This is live export only. Historical import is not this integration: there
 is no tracking-server client and no import command, and traces that are
@@ -51,6 +52,8 @@ export OTEL_RESOURCE_ATTRIBUTES="project_name=my-mlflow-app,project_type=observe
 export OTEL_SERVICE_NAME="my-mlflow-app"   # optional: service.name
 export MLFLOW_DISABLE_TELEMETRY=true
 export MLFLOW_MODEL_CATALOG_URI=""   # no model-catalog fetch from github.com
+# OTel GenAI keys: typed spans, plain model name, tokens and cost in Future AGI (see "What is exported").
+export MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true
 unset OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
 # The exporter falls back to these when the TRACES headers are empty, which could send another vendor's key to Future AGI.
 unset OTEL_EXPORTER_OTLP_HEADERS
@@ -77,13 +80,15 @@ keys elsewhere, or call Databricks.
 | `OTEL_SERVICE_NAME` | optional | Otherwise `service.name` is OpenTelemetry's `unknown_service` default. |
 | `MLFLOW_DISABLE_TELEMETRY` | `true` | See [Telemetry](#telemetry). |
 | `MLFLOW_MODEL_CATALOG_URI` | empty | No model-catalog fetch from github.com; see [Dual export](#dual-export-and-set_destination). |
+| `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV` | `true` | MLflow exports OpenTelemetry GenAI keys that fi-collector reads; see [What is exported](#what-is-exported). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | unset | They turn on metrics export; see [Endpoint](#endpoint). |
 | `OTEL_EXPORTER_OTLP_HEADERS` | unset | Sent instead of empty TRACES headers; see [Auth headers](#auth-headers). |
 | `MLFLOW_TRACING_DESTINATION` | unset | It replaces the OTLP export; see [Dual export](#dual-export-and-set_destination). |
 | `MLFLOW_TRACKING_URI` | unset, or a non-Databricks URI | See [Databricks tracking URI](#databricks-tracking-uri). |
 
 `src/app.py` checks each of these except `OTEL_SERVICE_NAME`,
-`MLFLOW_DISABLE_TELEMETRY` and `MLFLOW_MODEL_CATALOG_URI`, and exits with a
+`MLFLOW_DISABLE_TELEMETRY`, `MLFLOW_MODEL_CATALOG_URI` and
+`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV`, and exits with a
 message on a value that would lose or misroute the export or make MLflow
 call Databricks. For the headers
 it checks the two names, not the values. It refuses
@@ -298,61 +303,24 @@ OTLP export.
 
 ## What is exported
 
-`src/app.py` exports one trace with two spans: `answer_question`
+`src/app.py` makes one trace with two spans: `answer_question`
 (`span_type=CHAIN`, the root) and its child `chat_model`
-(`span_type=CHAT_MODEL`). Both have OTel kind `INTERNAL` and status `OK`.
-MLflow's OTLP processor is an OpenTelemetry `BatchSpanProcessor`
-(`mlflow/tracing/processor/otel.py:20`), and the OpenTelemetry SDK flushes it
-at exit (`opentelemetry/sdk/trace/__init__.py:1283-1284`), so a short script
-exports when it ends.
+(`span_type=CHAT_MODEL`), both with status `OK`. MLflow's OTLP processor is
+an OpenTelemetry `BatchSpanProcessor` (`mlflow/tracing/processor/otel.py:20`),
+and the OpenTelemetry SDK flushes it at exit
+(`opentelemetry/sdk/trace/__init__.py:1283-1284`), so a short script exports
+when it ends.
 
-MLflow JSON-encodes every attribute value before it sets it on the span
-(`mlflow/entities/span.py:1456-1490`, `mlflow/tracing/utils/__init__.py:125-142`).
-Every value arrives as an OTLP string (tested): a string arrives with its
-quotes, a number as its digits. That applies to keys your code sets too:
-MLflow lets the app set `gen_ai.*` keys, but `gen_ai.request.model` arrives
-as the 13-character string `"gpt-4o-mini"`, quotes included.
+### `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true` (the Run block)
 
-Keys on the default export (tested), and whether fi-collector reads them
+The Run block sets `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`. MLflow then
+translates its own keys to OpenTelemetry GenAI keys before OTLP export
+(`mlflow/environment_variables.py:1092-1097`,
+`mlflow/tracing/processor/otel.py:81-82`,
+`mlflow/tracing/export/genai_semconv/translator.py`). MLflow's default is
+off. Keys on the export (tested), and whether fi-collector reads them
 (source reading, `pkg/adapter/adapter.go` and
 `exporter/clickhouse25exporter/converter.go` at 4af5338):
-
-| Key | Spans | Value as exported | fi-collector |
-|---|---|---|---|
-| `mlflow.traceRequestId` | both | `"tr-<32 hex>"`, JSON-encoded | no |
-| `mlflow.spanType` | both | `"CHAIN"`, `"CHAT_MODEL"`, JSON-encoded | no: kind is read only from `fi.span.kind`, `gen_ai.span.kind`, `llm.request.type`, `openinference.span.kind`, then `gen_ai.operation.name` (`converter.go:79-131`) |
-| `mlflow.spanLogLevel` | both | `10` (CHAIN), `20` (CHAT_MODEL), as strings | no |
-| `mlflow.spanInputs` | both | what the code passed to `set_inputs`, as JSON | no: the input column reads only `input.value` (`converter.go:343`) |
-| `mlflow.spanOutputs` | both | what the code passed to `set_outputs`, as JSON | no: the output column reads only `output.value` (`converter.go:344`) |
-| `mlflow.llm.model` | `chat_model` | `"gpt-4o-mini"`, JSON-encoded | no |
-| `mlflow.llm.provider` | `chat_model` | `"openai"`, JSON-encoded | no |
-| `mlflow.chat.tokenUsage` | `chat_model` | `{"input_tokens": 12, "output_tokens": 7, "total_tokens": 19}` | no |
-| `gen_ai.request.model` | `chat_model` | `"gpt-4o-mini"`, JSON-encoded | model, copied as is, quotes included (`adapter.go:281`, `:317-323`) |
-| `gen_ai.provider.name` | `chat_model` | `"openai"`, JSON-encoded | provider, copied as is, quotes included (`adapter.go:290`) |
-| `gen_ai.usage.input_tokens` | `chat_model` | `12`, as a string | prompt tokens, parsed from the string (`adapter.go:298`, `:339-342`) |
-| `gen_ai.usage.output_tokens` | `chat_model` | `7`, as a string | completion tokens, parsed from the string (`adapter.go:303`) |
-
-The `mlflow.llm.*` and `mlflow.chat.tokenUsage` keys are what MLflow's
-autolog integrations set on a model call; `src/app.py` sets them by hand,
-next to the `gen_ai.*` keys. With these keys, fi-collector stores the
-model and provider with their quotes, fills the token columns (total derived
-as 19, `adapter.go:232-234`), and stores both spans as kind `unknown`
-(source reading, and seen once against a local fi-collector; see
-[Autolog in Future AGI](#autolog-in-future-agi)). It does not price the tokens:
-it looks the price up by exact model name (`converter.go:288-292`,
-`pkg/pricing/table.go:99-102`), and `"gpt-4o-mini"` with its quotes matches
-no entry, so the cost is 0. The quoted name also keeps these spans apart
-from other integrations' `gpt-4o-mini` in model filters. Without a model the
-cost would be 0 as well, so the keys are still worth setting for the token
-columns.
-
-### `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`
-
-MLflow can translate its own keys to OpenTelemetry GenAI keys before OTLP
-export (`mlflow/environment_variables.py:1092-1097`,
-`mlflow/tracing/processor/otel.py:81-82`,
-`mlflow/tracing/export/genai_semconv/translator.py`). It is off by default
-and optional here. Tested with it on:
 
 | Key | Spans | Value as exported | fi-collector |
 |---|---|---|---|
@@ -365,26 +333,24 @@ and optional here. Tested with it on:
 | `gen_ai.input.messages` | chat span | the other input messages, as JSON | no: the input column reads only `input.value` |
 | `gen_ai.output.messages` | chat span | the output messages, as JSON | no: the output column reads only `output.value` |
 
-What else changes (tested):
+What else the switch changes (tested):
 
+- Spans are renamed. The model span becomes `chat gpt-4o-mini`, with OTel
+  kind `CLIENT`; a span with a type but no model is renamed to its type, so
+  `answer_question` becomes `CHAIN` (`translator.py:164-175`).
 - Every `mlflow.*` key is dropped, including `mlflow.spanInputs` and
   `mlflow.spanOutputs`. Chat-shaped inputs and outputs become the three
   message keys above (`genai_semconv/converter.py:62-80`); the root span's
   `{"question": ...}` and `{"answer": ...}` are dropped.
-- Spans are renamed. The model span becomes `chat gpt-4o-mini`; a span with
-  a type but no model is renamed to its type, so `answer_question` becomes
-  `CHAIN` (`translator.py:164-175`).
-- The model span's OTel kind becomes `CLIENT`.
 - The `gen_ai.*` keys the app set itself are overwritten by the translated
   values, which come from `mlflow.llm.model`, `mlflow.llm.provider` and
   `mlflow.chat.tokenUsage`. A manual span that sets only `gen_ai.*` keys
   keeps their JSON-encoded values.
 
-How MLflow's span types would be typed in Future AGI with the switch on
-(source reading: the operation name from `translator.py:26-32`, then
-fi-collector lower-cases it and applies `spanKindSynonyms` and
-`knownObservationTypes`, `converter.go:62-131`). With the switch off every
-MLflow span is `unknown`.
+How MLflow's span types are typed in Future AGI with the switch on (source
+reading: the operation name from `translator.py:26-32`, then fi-collector
+lower-cases it and applies `spanKindSynonyms` and `knownObservationTypes`,
+`converter.go:62-131`):
 
 | MLflow span type | `gen_ai.operation.name` | Future AGI kind |
 |---|---|---|
@@ -404,40 +370,89 @@ MLflow span is `unknown`.
 | `TASK` | `TASK` | unknown |
 | `UNKNOWN` | `UNKNOWN` | unknown |
 
-The switch is the only way found to get a model name without quotes and
-typed spans out of MLflow 3.16.1 without code. Its cost is the renamed
-spans and the dropped non-chat inputs and outputs. That trade-off is yours;
-the recipe leaves it off. If you use autolog, read the next section first.
+Seen against a local fi-collector (future-agi `dev` ea12cc3, 2026-10-11),
+with the Run block's lines run as written (only the origin, keys and
+project name substituted): `src/app.py` was stored as `CHAIN` (chain) over
+`chat gpt-4o-mini` (llm; model `gpt-4o-mini`, provider `openai`, tokens
+12/7/19, priced). For `mlflow.openai.autolog()` under the same variables,
+see [Autolog in Future AGI](#autolog-in-future-agi). Neither run filled the
+`input` and `output` columns: fi-collector does not lift the
+`gen_ai.*.messages` keys (see the SF-1 list below).
+
+### Turning the switch off
+
+`unset MLFLOW_ENABLE_OTEL_GENAI_SEMCONV` (or set it to `false`) exports
+MLflow's own keys instead. You get back the function names
+(`answer_question`, `chat_model`, your `@mlflow.trace` names) and every
+span's `mlflow.spanInputs` and `mlflow.spanOutputs`, chain and tool spans
+included. You lose what Future AGI shows: fi-collector reads none of the
+`mlflow.*` keys, so every span is kind `unknown`, and a model call has a
+model, tokens and cost only if your code sets the `gen_ai.*` keys itself, as
+`src/app.py` does. Autolog does not, so its model calls then have none of
+them.
+
+With the switch off, MLflow JSON-encodes every attribute value before it
+sets it on the span (`mlflow/entities/span.py:1456-1490`,
+`mlflow/tracing/utils/__init__.py:125-142`). Every value arrives as an OTLP
+string (tested): a string arrives with its quotes, a number as its digits.
+That applies to keys your code sets too: MLflow lets the app set `gen_ai.*`
+keys, but `gen_ai.request.model` arrives as the 13-character string
+`"gpt-4o-mini"`, quotes included. Both spans have OTel kind `INTERNAL`.
+
+Keys on the export with the switch off (tested), and whether fi-collector
+reads them (source reading, as above):
+
+| Key | Spans | Value as exported | fi-collector |
+|---|---|---|---|
+| `mlflow.traceRequestId` | both | `"tr-<32 hex>"`, JSON-encoded | no |
+| `mlflow.spanType` | both | `"CHAIN"`, `"CHAT_MODEL"`, JSON-encoded | no: kind is read only from `fi.span.kind`, `gen_ai.span.kind`, `llm.request.type`, `openinference.span.kind`, then `gen_ai.operation.name` (`converter.go:79-131`) |
+| `mlflow.spanLogLevel` | both | `10` (CHAIN), `20` (CHAT_MODEL), as strings | no |
+| `mlflow.spanInputs` | both | what the code passed to `set_inputs`, as JSON | no: the input column reads only `input.value` (`converter.go:343`) |
+| `mlflow.spanOutputs` | both | what the code passed to `set_outputs`, as JSON | no: the output column reads only `output.value` (`converter.go:344`) |
+| `mlflow.llm.model` | `chat_model` | `"gpt-4o-mini"`, JSON-encoded | no |
+| `mlflow.llm.provider` | `chat_model` | `"openai"`, JSON-encoded | no |
+| `mlflow.chat.tokenUsage` | `chat_model` | `{"input_tokens": 12, "output_tokens": 7, "total_tokens": 19}` | no |
+| `gen_ai.request.model` | `chat_model` | `"gpt-4o-mini"`, JSON-encoded | model, copied as is, quotes included (`adapter.go:281`, `:317-323`) |
+| `gen_ai.provider.name` | `chat_model` | `"openai"`, JSON-encoded | provider, copied as is, quotes included (`adapter.go:290`) |
+| `gen_ai.usage.input_tokens` | `chat_model` | `12`, as a string | prompt tokens, parsed from the string (`adapter.go:298`, `:339-342`) |
+| `gen_ai.usage.output_tokens` | `chat_model` | `7`, as a string | completion tokens, parsed from the string (`adapter.go:303`) |
+
+The `mlflow.llm.*` and `mlflow.chat.tokenUsage` keys are what MLflow's
+autolog integrations set on a model call; `src/app.py` sets them by hand,
+next to the `gen_ai.*` keys. With the switch off, fi-collector stores the
+model and provider with their quotes, fills the token columns (total derived
+as 19, `adapter.go:232-234`), and stores both spans as kind `unknown`
+(source reading, and seen against a local fi-collector). It does not price
+the tokens: it looks the price up by exact model name (`converter.go:288-292`,
+`pkg/pricing/table.go:99-102`), and `"gpt-4o-mini"` with its quotes matches
+no entry, so the cost is 0. The quoted name also keeps these spans apart
+from other integrations' `gpt-4o-mini` in model filters.
 
 ### Autolog in Future AGI
 
-Autolog does not set the `gen_ai.*` keys that `src/app.py` sets by hand. It
-writes the model to `mlflow.llm.model` (JSON-encoded) and the token counts to
-`mlflow.chat.tokenUsage`, which fi-collector does not read. One run, not part
-of the tests: `mlflow.openai.autolog()` on the real `openai` 2.54.0 client,
-under the Run block's variables, against a local fi-collector (future-agi
-`dev` ea12cc3, 2026-10-11). An `AGENT` function called a chat model with a
-tool, a `TOOL` function ran the tool, and two `CHAIN` functions made a
-streamed call and a failed call. Stored:
+Autolog writes the model to `mlflow.llm.model` and the token counts to
+`mlflow.chat.tokenUsage`, and sets no `gen_ai.*` key itself; the switch is
+what turns those into keys fi-collector reads. Two runs, not part of the
+tests: `mlflow.openai.autolog()` on the real `openai` 2.54.0 client against
+a local fi-collector (future-agi `dev` ea12cc3, 2026-10-11). An `AGENT`
+function called a chat model with a tool, a `TOOL` function ran the tool,
+and two `CHAIN` functions made a streamed call and a failed call. Stored:
 
-| Span | Switch off (the Run block) | `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true` |
+| Span | Run block (switch on) | Switch off |
 |---|---|---|
-| Model call | named `Completions`; kind `unknown`; no model, no tokens, cost 0 | named `chat <model>`; kind `llm`; model without quotes, prompt and completion tokens (streamed call too); priced when fi-collector's price table has the model |
-| Tool function | kind `unknown` | renamed `execute_tool`; kind `tool` |
-| Agent function | kind `unknown` | renamed `invoke_agent`; kind `unknown` |
-| Chain function | kind `unknown` | renamed `CHAIN`; kind `chain` |
+| Model call | named `chat <model>`; kind `llm`; model without quotes, prompt and completion tokens (streamed call too); priced when fi-collector's price table has the model | named `Completions`; kind `unknown`; no model, no tokens, cost 0 |
+| Tool function | renamed `execute_tool`; kind `tool` | kind `unknown` |
+| Agent function | renamed `invoke_agent`; kind `unknown` | kind `unknown` |
+| Chain function | renamed `CHAIN`; kind `chain` | kind `unknown` |
 | Failed call | status `ERROR` on the model span and its parent | the same |
 | `input` / `output` columns | empty | empty |
 
-So with the switch off, an autolog trace reaches Future AGI as a tree of
-`unknown` spans with no model, tokens or cost, and the content only in
-`mlflow.spanInputs` and `mlflow.spanOutputs`. If you use autolog, set
-`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`. Know what it costs: the renamed
-spans keep no trace of the function names. The `execute_tool` span had no
-`gen_ai.tool.name` and the `invoke_agent` span no `gen_ai.agent.name`, so
-`days_left` and `refund_agent` appeared nowhere in Future AGI. Autolog set
-no `mlflow.llm.provider` in that run, so the provider column stayed empty
-with the switch on as well.
+What the switch costs with autolog: the renamed spans keep no trace of the
+function names. The `execute_tool` span had no `gen_ai.tool.name` and the
+`invoke_agent` span no `gen_ai.agent.name`, so `days_left` and
+`refund_agent` appeared nowhere in Future AGI, and every chain-rooted trace
+is listed as `CHAIN`. Autolog set no `mlflow.llm.provider` in these runs,
+so the provider column stayed empty.
 
 ### Gaps for the shared processor (SF-1)
 
@@ -472,12 +487,12 @@ harness receiver decodes and records, it does not run fi-collector.
 
 MLflow has no setting that keeps tracing on and content off. For
 `mlflow.start_span`, MLflow records what your code passes to `set_inputs`,
-`set_outputs` and `set_attribute(s)`. In the test, the question, the system
-prompt (which holds the policy text) and the answer are in
-`mlflow.spanInputs` and `mlflow.spanOutputs`, and in no other key. With
-`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true` they are in
+`set_outputs` and `set_attribute(s)`. In the test, with the Run block's
+`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`, the system prompt (which holds the
+policy text), the question and the answer are in
 `gen_ai.system_instructions`, `gen_ai.input.messages` and
-`gen_ai.output.messages` instead (tested). `@mlflow.trace` and MLflow's
+`gen_ai.output.messages`, and in no other key. With the switch off they are
+in `mlflow.spanInputs` and `mlflow.spanOutputs` instead (tested). `@mlflow.trace` and MLflow's
 autolog integrations record function arguments, return values and model
 messages without being asked (seen in the autolog run above, not in the
 tests). Whatever MLflow captures lands in Future AGI.
@@ -531,16 +546,20 @@ the app's output (tested); they travel only as request headers.
 - **An `mlflow.db` file appeared.** `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is
   unset, or dual export, `set_destination` or `MLFLOW_TRACING_DESTINATION` is
   writing to MLflow's default local store.
-- **Model name shown with quotes.** That is MLflow's JSON encoding; see
-  [What is exported](#what-is-exported).
+- **Every span `unknown`, no model or tokens, or a model name with
+  quotes.** `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true` is missing, so MLflow
+  exports its own JSON-encoded keys; see
+  [Turning the switch off](#turning-the-switch-off).
 - **Old traces never arrived.** Expected: this is live export, not a
   backfill.
 
 ## Tests
 
 `tests/test_mlflow_recipe.py` runs `src/app.py` as written, in a subprocess,
-with the real `mlflow` 3.16.1. Each run gets a fresh temporary directory as
-its working directory and `HOME`, so every file MLflow writes is checked.
+with the real `mlflow` 3.16.1 and the Run block's variables, the GenAI
+switch included; separate runs check the export with the switch off. Each
+run gets a fresh temporary directory as its working directory and `HOME`,
+so every file MLflow writes is checked.
 Spans go to the shared harness `Receiver` (`python/tests/harness`), which
 serves `/v1/traces` and `/tracer/v1/traces` on 127.0.0.1 like fi-collector
 but does not authenticate, stamp projects or store anything. Tests that need
@@ -556,8 +575,10 @@ Two tests run the Run block above with `bash --noprofile --norc`: only its
 substituted, and they check that all of those lines come before the line
 that runs the app. One runs them over a stale environment
 (`MLFLOW_TRACING_DESTINATION=0`, another vendor's
-`OTEL_EXPORTER_OTLP_HEADERS`, a catalog URI on a loopback recorder) with no
-recipe variable set beforehand, then the app. The other leaves a key unset
+`OTEL_EXPORTER_OTLP_HEADERS`, a catalog URI on a loopback recorder,
+`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=false`) with no recipe variable set
+beforehand, then the app, and checks that the spans arrive translated. The
+other leaves a key unset
 or empty and checks that the header line stops, as a script and in an
 interactive shell.
 
@@ -565,7 +586,8 @@ interactive shell.
 `tests/set_destination_app.py` (the app after a `set_destination` call) are
 fixtures, not part of the recipe. `tests/fixtures/gen_ai_span.otlp.json` is
 a hand-built OTLP request with two `gen_ai.*` spans, one in the shape MLflow
-sends with the GenAI switch on and one in the default JSON-encoded shape.
+sends with the GenAI switch on (the Run block) and one in the JSON-encoded
+shape it sends with the switch off.
 The test posts it with the harness `post_otlp()` and checks that it arrives
 with `gen_ai.request.model` and `gen_ai.usage.input_tokens` intact, and
 checks each fixture value against a live MLflow run.

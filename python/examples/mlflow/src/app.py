@@ -4,7 +4,9 @@ Recipe example, not a package. MLflow already exports its own spans over
 OTLP when ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` is set before the first
 span; this file only checks that environment and creates two nested spans
 with ``mlflow.start_span``. The endpoint, protocol, Future AGI keys and
-project come from the environment variables listed in README.md. With those
+project come from the environment variables listed in README.md, as does
+``MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true``, which makes MLflow export
+OpenTelemetry GenAI keys that Future AGI reads. With those
 variables (OTLP only, no Databricks tracking URI, ``MLFLOW_MODEL_CATALOG_URI``
 empty) MLflow sends the spans to the OTLP endpoint and contacts nothing else
 (tested); ``check_environment()`` refuses the settings that would make it
@@ -137,10 +139,12 @@ def answer(question: str) -> str:
             llm.set_inputs({"model": MODEL, "messages": messages})
             reply, usage = call_model(messages)
             llm.set_outputs({"choices": [{"message": {"role": "assistant", "content": reply}}]})
-            # The OTel GenAI keys fi-collector reads. MLflow JSON-encodes every
-            # attribute value: the token counts still parse, but the model
-            # arrives with its quotes, so fi-collector prices nothing (cost 0;
-            # see README.md).
+            # The OTel GenAI keys fi-collector reads, for an export with
+            # MLFLOW_ENABLE_OTEL_GENAI_SEMCONV off. MLflow then JSON-encodes
+            # every attribute value: the token counts still parse, but the
+            # model arrives with its quotes, so fi-collector prices nothing
+            # (cost 0; see README.md). With the switch on, as in the Run
+            # block, MLflow replaces them with the translated keys below.
             llm.set_attributes(
                 {
                     "gen_ai.request.model": MODEL,
@@ -150,8 +154,8 @@ def answer(question: str) -> str:
                 }
             )
             # The keys MLflow's own autolog sets on a model call. With
-            # MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true, MLflow exports them as
-            # plain gen_ai.* values instead.
+            # MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true (the Run block), MLflow
+            # exports them as plain gen_ai.* model, provider and token keys.
             llm.set_attributes(
                 {
                     "mlflow.llm.model": MODEL,
