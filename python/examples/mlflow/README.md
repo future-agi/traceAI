@@ -334,10 +334,11 @@ Keys on the default export (tested), and whether fi-collector reads them
 
 The `mlflow.llm.*` and `mlflow.chat.tokenUsage` keys are what MLflow's
 autolog integrations set on a model call; `src/app.py` sets them by hand,
-next to the `gen_ai.*` keys. With these keys, fi-collector would store the
-model and provider with their quotes, fill the token columns (total derived
-as 19, `adapter.go:232-234`), and store both spans as kind `unknown`
-(source reading; no fi-collector was run). It would not price the tokens:
+next to the `gen_ai.*` keys. With these keys, fi-collector stores the
+model and provider with their quotes, fills the token columns (total derived
+as 19, `adapter.go:232-234`), and stores both spans as kind `unknown`
+(source reading, and seen once against a local fi-collector; see
+[Autolog in Future AGI](#autolog-in-future-agi)). It does not price the tokens:
 it looks the price up by exact model name (`converter.go:288-292`,
 `pkg/pricing/table.go:99-102`), and `"gpt-4o-mini"` with its quotes matches
 no entry, so the cost is 0. The quoted name also keeps these spans apart
@@ -406,7 +407,34 @@ MLflow span is `unknown`.
 The switch is the only way found to get a model name without quotes and
 typed spans out of MLflow 3.16.1 without code. Its cost is the renamed
 spans and the dropped non-chat inputs and outputs. That trade-off is yours;
-the recipe leaves it off.
+the recipe leaves it off. If you use autolog, read the next section first.
+
+### Autolog in Future AGI
+
+Autolog does not set the `gen_ai.*` keys that `src/app.py` sets by hand. It
+writes the model to `mlflow.llm.model` (JSON-encoded) and the token counts to
+`mlflow.chat.tokenUsage`, which fi-collector does not read. One run, not part
+of the tests: `mlflow.openai.autolog()` on the real `openai` 2.54.0 client,
+under the Run block's variables, against a local fi-collector (future-agi
+`dev` ea12cc3, 2026-10-11). An `AGENT` function called a chat model with a
+tool, a `TOOL` function ran the tool, and two `CHAIN` functions made a
+streamed call and a failed call. Stored:
+
+| Span | Switch off (the Run block) | `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true` |
+|---|---|---|
+| Model call | named `Completions`; kind `unknown`; no model, no tokens, cost 0 | named `chat <model>`; kind `llm`; model without quotes, prompt and completion tokens (streamed call too); priced when fi-collector's price table has the model |
+| Tool function | kind `unknown` | renamed `execute_tool`; kind `tool` |
+| Agent function | kind `unknown` | renamed `invoke_agent`; kind `unknown` |
+| Chain function | kind `unknown` | renamed `CHAIN`; kind `chain` |
+| Failed call | status `ERROR` on the model span and its parent | the same |
+| `input` / `output` columns | empty | empty |
+
+So with the switch off, an autolog trace reaches Future AGI as a tree of
+`unknown` spans with no model, tokens or cost, and the content only in
+`mlflow.spanInputs` and `mlflow.spanOutputs`. If you use autolog, set
+`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=true`. Autolog set no
+`mlflow.llm.provider` in that run, so the provider column stayed empty with
+the switch on as well.
 
 ### Gaps for the shared processor (SF-1)
 
@@ -448,8 +476,8 @@ prompt (which holds the policy text) and the answer are in
 `gen_ai.system_instructions`, `gen_ai.input.messages` and
 `gen_ai.output.messages` instead (tested). `@mlflow.trace` and MLflow's
 autolog integrations record function arguments, return values and model
-messages without being asked (source reading; not tested here). Whatever
-MLflow captures lands in Future AGI.
+messages without being asked (seen in the autolog run above, not in the
+tests). Whatever MLflow captures lands in Future AGI.
 
 MLflow's own hook for removing it is a span processor:
 
