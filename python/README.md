@@ -188,7 +188,6 @@ trace_provider = register(
 | `traceai-mcp` | Model Context Protocol |
 | `traceai-pipecat` | Pipecat |
 | `traceai-livekit` | LiveKit |
-| `traceai-exa` | Exa |
 
 ### Vector Databases
 
