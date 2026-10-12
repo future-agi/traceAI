@@ -14,10 +14,12 @@ import json
 import re
 import threading
 import time
+import weakref
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
@@ -96,11 +98,11 @@ def outlet_body(usage=True):
 def make_filter(exporter=None, **valves):
     """A filter as Open WebUI builds it: Filter(), then valves from the database."""
     filt = _FILTER.Filter()
-    values = dict(
-        api_key="fi-key-placeholder",
-        secret_key="fi-secret-placeholder",
-        project="owui-test",
-    )
+    values = {
+        "api_key": "fi-key-placeholder",
+        "secret_key": "fi-secret-placeholder",
+        "project": "owui-test",
+    }
     values.update(valves)
     filt.valves = filt.Valves(**values)
     if exporter is not None:
@@ -127,8 +129,16 @@ def spans_by_name(exporter):
 # --------------------------------------------------------------------------
 
 
-def extract_frontmatter(content):
-    """Open WebUI 0.11.4 ``utils/plugin.py`` extract_frontmatter, reproduced."""
+try:
+    from open_webui.utils.plugin import extract_frontmatter as _REAL_EXTRACT_FRONTMATTER
+except Exception:  # noqa: BLE001 - Open WebUI is optional for the unit-test environment.
+    _REAL_EXTRACT_FRONTMATTER = None
+
+
+def _pinned_extract_frontmatter(content):
+    """Open WebUI 0.11.4 parser, or its pinned rules when Open WebUI is absent."""
+    if _REAL_EXTRACT_FRONTMATTER is not None:
+        return _REAL_EXTRACT_FRONTMATTER(content)
     lines = content.splitlines()
     if not lines or lines[0].strip() != '"""':
         return {}
@@ -143,7 +153,7 @@ def extract_frontmatter(content):
 
 
 def test_frontmatter_is_parsed_by_open_webui():
-    frontmatter = extract_frontmatter(FILTER_PATH.read_text(encoding="utf-8"))
+    frontmatter = _pinned_extract_frontmatter(FILTER_PATH.read_text(encoding="utf-8"))
     assert frontmatter["title"] == "Future AGI"
     requirements = [r.strip() for r in frontmatter["requirements"].split(",")]
     # Open WebUI 0.11.4 ships the OTel SDK but not the OTLP/HTTP exporter.
@@ -179,6 +189,7 @@ def test_secret_valves_are_masked_but_stored_by_value():
 def test_secret_valves_render_as_password_inputs():
     schema = _FILTER.Filter.Valves.model_json_schema()
     for key in ("api_key", "secret_key"):
+        assert schema["properties"][key]["type"] == "string"
         assert schema["properties"][key]["input"] == {"type": "password"}
 
 
@@ -199,6 +210,108 @@ def test_turn_is_a_root_span_with_an_llm_child():
     assert root.attributes["fi.span.kind"] == "CHAIN"
     assert llm.attributes["fi.span.kind"] == "LLM"
     assert root.status.status_code != StatusCode.ERROR
+
+
+def test_root_ignores_an_ambient_open_webui_server_span():
+    host = TracerProvider()
+    exporter = InMemorySpanExporter()
+    filt = make_filter(exporter, redact=False)
+    with host.get_tracer("openwebui-native").start_as_current_span(
+        "POST /api/chat/completions"
+    ):
+        run_turn(filt)
+    root = spans_by_name(exporter)["openwebui.chat"]
+    assert root.parent is None
+
+
+def test_tool_loop_uses_cumulative_input_output_tokens():
+    body = outlet_body()
+    body["messages"][-1]["output"] = [{"type": "function_call", "name": "lookup"}]
+    body["messages"][-1]["usage"] = {
+        "prompt_tokens": 1200,
+        "completion_tokens": 70,
+        "input_tokens": 2460,
+        "output_tokens": 160,
+        "total_tokens": 2620,
+    }
+    exporter = InMemorySpanExporter()
+    run_turn(make_filter(exporter, redact=False), body=body)
+    llm = spans_by_name(exporter)["openwebui.llm"].attributes
+    assert llm["gen_ai.usage.input_tokens"] == 2460
+    assert llm["gen_ai.usage.output_tokens"] == 160
+    assert llm["llm.token_count.total"] == 2620
+
+
+def test_empty_reply_without_usage_is_error():
+    body = outlet_body(usage=False)
+    body["messages"][-1]["content"] = ""
+    exporter = InMemorySpanExporter()
+    run_turn(make_filter(exporter), body=body)
+    for span in exporter.get_finished_spans():
+        assert span.status.status_code == StatusCode.ERROR
+
+
+def test_temporary_chat_forces_redaction():
+    body = outlet_body()
+    body["chat_id"] = "temporary:abc"
+    exporter = InMemorySpanExporter()
+    run_turn(make_filter(exporter, redact=False), body=body)
+    for span in exporter.get_finished_spans():
+        assert "input.value" not in span.attributes
+        assert "output.value" not in span.attributes
+
+
+def test_provider_ignores_otel_sampler_and_resource_env(monkeypatch):
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER", "always_off")
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "internal.host=secret-host")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "native-openwebui")
+    exporter = InMemorySpanExporter()
+    filt = make_filter(exporter)
+    run_turn(filt)
+    assert len(exporter.get_finished_spans()) == 2
+    resource = exporter.get_finished_spans()[0].resource.attributes
+    assert dict(resource) == {"project_name": "owui-test", "project_type": "observe"}
+
+
+def test_exporter_has_explicit_system_ca(monkeypatch):
+    captured = {}
+
+    class FakeExporter:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(_FILTER, "OTLPSpanExporter", FakeExporter)
+    filt = make_filter()
+    filt._make_exporter(filt.valves)
+    assert captured["certificate_file"] == _FILTER.certifi.where()
+
+
+def test_provider_has_a_shutdown_finalizer():
+    filt = make_filter()
+    provider = filt._provider_for(filt.valves)
+    assert isinstance(filt._provider_finalizer, weakref.finalize)
+    assert filt._provider_finalizer.alive
+    provider.shutdown()
+
+
+def test_priority_and_max_chars_are_configurable():
+    valves = _FILTER.Filter.Valves(priority=9, max_chars=17)
+    assert valves.priority == 9
+    assert valves.max_chars == 17
+    exporter = InMemorySpanExporter()
+    run_turn(make_filter(exporter, redact=False, max_chars=17))
+    root = spans_by_name(exporter)["openwebui.chat"]
+    llm = spans_by_name(exporter)["openwebui.llm"]
+    assert len(root.attributes["input.value"]) <= 17
+    assert len(llm.attributes["input.value"]) <= 17
+
+
+def test_sdk_disabled_documents_global_disable(monkeypatch):
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
+    exporter = InMemorySpanExporter()
+    run_turn(make_filter(exporter))
+    assert exporter.get_finished_spans() == ()
 
 
 def test_llm_span_has_model_usage_and_content():
@@ -234,6 +347,15 @@ def test_email_hash_is_opt_in_and_never_raw():
     run_turn(make_filter(exporter, include_email_hash=True))
     root = spans_by_name(exporter)["openwebui.chat"]
     assert root.attributes["user.email_hash"] == _FILTER.email_hash(USER["email"])
+    salted_exporter = InMemorySpanExporter()
+    salted = make_filter(
+        salted_exporter, include_email_hash=True, email_hash_salt="salt"
+    )
+    run_turn(salted)
+    salted_root = spans_by_name(salted_exporter)["openwebui.chat"]
+    assert salted_root.attributes["user.email_hash"] == _FILTER.email_hash(
+        USER["email"], "salt"
+    )
     for span in exporter.get_finished_spans():
         assert USER["email"] not in json.dumps(dict(span.attributes))
 
@@ -299,21 +421,30 @@ def test_turn_starts_at_inlet():
     assert not any(key.startswith("_futureagi") for key in meta)
 
 
-def test_outlet_without_inlet_still_exports():
+def test_outlet_without_inlet_skips_duplicate_trace():
     exporter = InMemorySpanExporter()
     filt = make_filter(exporter)
     filt.outlet(outlet_body(), __user__=USER, __metadata__=metadata())
     filt.flush()
-    assert set(spans_by_name(exporter)) == {"openwebui.chat", "openwebui.llm"}
+    assert exporter.get_finished_spans() == ()
 
 
-def test_inlets_without_outlets_leave_nothing_on_the_filter():
-    # Open WebUI runs no outlet when the model call fails.
+def test_inlets_without_outlets_leave_no_growing_state():
+    # Open WebUI runs no outlet when the model call fails. Metadata is owned by
+    # Open WebUI, so the filter must not retain messages or per-turn objects.
     filt = make_filter(InMemorySpanExporter())
-    before = dict(vars(filt))
+    before = {
+        key: (len(value) if isinstance(value, (dict, list, set)) else value)
+        for key, value in vars(filt).items()
+    }
     for _ in range(100):
-        filt.inlet(inlet_body(), __user__=USER, __metadata__=metadata())
-    assert vars(filt) == before
+        meta = metadata()
+        filt.inlet(inlet_body(), __user__=USER, __metadata__=meta)
+    after = {
+        key: (len(value) if isinstance(value, (dict, list, set)) else value)
+        for key, value in vars(filt).items()
+    }
+    assert after == before
 
 
 def test_no_keys_means_no_export_and_no_error():
@@ -353,6 +484,7 @@ def test_outlet_does_not_wait_for_the_export():
     body = outlet_body()
     assert filt.outlet(body, __user__=USER, __metadata__=meta) is body
     assert time.monotonic() - started < 0.5
+    filt._provider.shutdown()
 
 
 def test_hooks_return_the_body_when_tracing_fails(monkeypatch):
@@ -368,14 +500,21 @@ def test_hooks_return_the_body_when_tracing_fails(monkeypatch):
     assert filt.inlet(first, __user__=USER, __metadata__=metadata()) is first
 
 
-def test_new_valves_rebuild_the_exporter():
+def test_new_valves_with_same_values_reuse_the_provider():
     filt = make_filter()
     first = filt._provider_for(filt.valves)
-    assert filt._provider_for(filt.valves) is first
-    filt.valves = filt.Valves(
+    same_values = filt.Valves(
+        api_key="fi-key-placeholder",
+        secret_key="fi-secret-placeholder",
+        project="owui-test",
+    )
+    assert filt._provider_for(same_values) is first
+    changed = filt.Valves(
         api_key="other", secret_key="fi-secret-placeholder", project="owui-test"
     )
-    assert filt._provider_for(filt.valves) is not first
+    assert filt._provider_for(changed) is not first
+    first.shutdown()
+    filt._provider.shutdown()
 
 
 # --------------------------------------------------------------------------

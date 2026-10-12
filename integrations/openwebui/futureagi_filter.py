@@ -1,33 +1,42 @@
 """
 title: Future AGI
 author: Future AGI
-version: 0.2.0
+version: 0.3.0
 license: Apache-2.0
 description: Send Open WebUI chat turns to Future AGI.
-requirements: opentelemetry-api,opentelemetry-sdk,opentelemetry-exporter-otlp-proto-http
+requirements: opentelemetry-exporter-otlp-proto-http,certifi
 """
 
 # Standalone on purpose. Open WebUI installs the frontmatter requirements
-# into its own environment, and importing traceAI there would pull in
-# instrumentors this filter does not use. Open WebUI reads that frontmatter
-# only when the file's first line is the opening triple quote by itself.
+# into its own environment. The OTel imports are deliberately top-level: when
+# Open WebUI cannot install the requirements, saving the function fails rather
+# than silently making every hook a no-op.
 
 import hashlib
+import hmac
 import json
 import logging
 import threading
 import time
+import weakref
 from typing import Any
 
+import certifi
+from opentelemetry import context, trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field, SecretStr, field_serializer
 
 logger = logging.getLogger(__name__)
 
 _COLLECTOR_PATH = "/tracer/v1/traces"
-# Open WebUI passes the same __metadata__ dict to inlet and outlet of one
-# request; the turn's start time rides on it, so the filter keeps no
-# per-turn state (and nothing piles up when a failed turn gets no outlet).
 _STARTED_KEY = "_futureagi_turn_started_ns"
+_TEMPORARY_PREFIXES = ("temporary:", "local:")
+_DEFAULT_EMAIL_HMAC_KEY = b"future-agi-openwebui-email-hash-v1"
 
 
 def collector_endpoint(endpoint: str) -> str:
@@ -37,13 +46,14 @@ def collector_endpoint(endpoint: str) -> str:
     return f"{trimmed}{_COLLECTOR_PATH}"
 
 
-def email_hash(email: str) -> str:
-    return hashlib.sha256(email.encode()).hexdigest()
+def email_hash(email: str, salt: str = "") -> str:
+    """Return a stable pseudonymous HMAC of a normalised email address."""
+    normalised = email.strip().lower().encode("utf-8")
+    key = salt.encode("utf-8") if salt else _DEFAULT_EMAIL_HMAC_KEY
+    return hmac.new(key, normalised, hashlib.sha256).hexdigest()
 
 
 def _secret(description: str) -> Any:
-    # "input": {"type": "password"} is what Open WebUI's valves form reads to
-    # mask a field.
     return Field(
         default=SecretStr(""),
         description=description,
@@ -67,45 +77,64 @@ def _usage(message: dict[str, Any]) -> dict[str, int]:
     usage = message.get("usage") or (message.get("info") or {}).get("usage") or {}
     if not isinstance(usage, dict):
         return {}
-    prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
-    completion = usage.get("completion_tokens", usage.get("output_tokens"))
-    out = {}
+    output = message.get("output") or []
+    tool_loop = isinstance(output, list) and any(
+        isinstance(item, dict)
+        and (
+            item.get("type") in {"function_call", "function_call_output"}
+            or "function_call" in item
+        )
+        for item in output
+    )
+    if tool_loop:
+        prompt = usage.get("input_tokens")
+        completion = usage.get("output_tokens")
+    else:
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+        completion = usage.get("completion_tokens", usage.get("output_tokens"))
+    result: dict[str, int] = {}
     if isinstance(prompt, int):
-        out["prompt"] = prompt
+        result["prompt"] = prompt
     if isinstance(completion, int):
-        out["completion"] = completion
-    # Not total_tokens: Open WebUI 0.11.4 adds total_tokens, input_tokens and
-    # output_tokens up over the stream's chunks, so a provider that repeats
-    # usage in its last two chunks doubles them. prompt_tokens and
-    # completion_tokens keep the provider's values, so they are read first.
-    if "prompt" in out and "completion" in out:
-        out["total"] = out["prompt"] + out["completion"]
-    return out
+        result["completion"] = completion
+    if "prompt" in result and "completion" in result:
+        result["total"] = result["prompt"] + result["completion"]
+    return result
+
+
+def _truncate(value: str, max_chars: int) -> str:
+    return value if max_chars <= 0 else value[:max_chars]
 
 
 def turn_attributes(
     body: dict[str, Any], user: dict[str, Any] | None, valves: "Filter.Valves"
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Attributes of the turn's root span and LLM span, from an Open WebUI outlet body.
-
-    Never includes a raw email or a credential; no message text when ``redact`` is on.
-    """
+    """Build root and child attributes from Open WebUI's outlet payload."""
     user = user or {}
     messages = body.get("messages") or []
-    reply = messages[-1] if messages and messages[-1].get("role") == "assistant" else {}
+    reply = (
+        messages[-1]
+        if messages
+        and isinstance(messages[-1], dict)
+        and messages[-1].get("role") == "assistant"
+        else {}
+    )
     prompt_messages = messages[:-1] if reply else messages
+    chat_id = body.get("chat_id") or ""
+    redact = valves.redact or chat_id.startswith(_TEMPORARY_PREFIXES)
 
     common: dict[str, Any] = {}
     if user.get("id"):
         common["user.id"] = user["id"]
-    chat_id = body.get("chat_id")
     if chat_id:
         common["session.id"] = chat_id
         common["gen_ai.conversation.id"] = chat_id
 
     root = dict(common, **{"fi.span.kind": "CHAIN"})
     if valves.include_email_hash and user.get("email"):
-        root["user.email_hash"] = email_hash(user["email"])
+        root["user.email_hash"] = email_hash(
+            user["email"], valves.email_hash_salt.get_secret_value()
+        )
 
     llm = dict(common, **{"fi.span.kind": "LLM", "gen_ai.operation.name": "chat"})
     model = body.get("model")
@@ -124,22 +153,51 @@ def turn_attributes(
     if "total" in usage:
         llm["llm.token_count.total"] = usage["total"]
 
-    if not valves.redact:
+    if not redact:
         last_user = next(
-            (m for m in reversed(prompt_messages) if m.get("role") == "user"), None
+            (
+                m
+                for m in reversed(prompt_messages)
+                if isinstance(m, dict) and m.get("role") == "user"
+            ),
+            None,
         )
         if last_user is not None:
-            root["input.value"] = _text(last_user.get("content"))
-        llm["input.value"] = json.dumps(
+            root["input.value"] = _truncate(
+                _text(last_user.get("content")), valves.max_chars
+            )
+        prompt_json = json.dumps(
             [
                 {"role": m.get("role"), "content": _text(m.get("content"))}
                 for m in prompt_messages
-            ]
+                if isinstance(m, dict)
+            ],
+            ensure_ascii=False,
         )
+        llm["input.value"] = _truncate(prompt_json, valves.max_chars)
         llm["input.mime_type"] = "application/json"
         if reply:
-            root["output.value"] = llm["output.value"] = _text(reply.get("content"))
+            output = _truncate(_text(reply.get("content")), valves.max_chars)
+            root["output.value"] = llm["output.value"] = output
     return root, llm
+
+
+def _shutdown_provider(reference: weakref.ReferenceType[Any]) -> None:
+    provider = reference()
+    if provider is not None:
+        provider.shutdown()
+
+
+def _is_empty_failed_reply(body: dict[str, Any]) -> bool:
+    messages = body.get("messages") or []
+    if not messages or not isinstance(messages[-1], dict):
+        return True
+    reply = messages[-1]
+    return (
+        not _text(reply.get("content"))
+        and not _usage(reply)
+        and not reply.get("output")
+    )
 
 
 class Filter:
@@ -153,20 +211,26 @@ class Filter:
         project: str = Field(
             default="open-webui", description="Future AGI project name."
         )
-        # On by default: Open WebUI serves many users, and their messages
-        # leave the instance only when an admin turns this off.
         redact: bool = Field(
             default=True,
-            description="Leave prompts and replies out of the spans. Set to false to see them in Future AGI.",
+            description="Leave prompts and replies out. Set false to see them in Observe.",
         )
         include_email_hash: bool = Field(
-            default=False,
-            description="Add a SHA-256 of the user's email. The email itself is never sent.",
+            default=False, description="Add a pseudonymous HMAC of the user's email."
+        )
+        email_hash_salt: SecretStr = _secret(
+            "Optional HMAC salt for the pseudonymous email hash."
+        )
+        max_chars: int = Field(
+            default=32000,
+            ge=0,
+            description="Maximum input or output characters per span; 0 means unlimited.",
+        )
+        priority: int = Field(
+            default=0, description="Open WebUI filter priority; lower runs first."
         )
 
-        # Open WebUI stores valves with model_dump(); a SecretStr would be
-        # dumped as "**********" and the key lost.
-        @field_serializer("api_key", "secret_key")
+        @field_serializer("api_key", "secret_key", "email_hash_salt")
         def _stored_value(self, value: SecretStr) -> str:
             return value.get_secret_value()
 
@@ -174,7 +238,8 @@ class Filter:
         self.valves = self.Valves()
         self._lock = threading.Lock()
         self._provider: Any = None
-        self._provider_key: tuple | None = None
+        self._provider_key: str | None = None
+        self._provider_finalizer: weakref.finalize | None = None
 
     def inlet(
         self,
@@ -186,8 +251,8 @@ class Filter:
             self._start_turn(
                 __metadata__ if __metadata__ is not None else body.get("metadata")
             )
-        except Exception:
-            logger.warning("Future AGI inlet failed", exc_info=True)
+        except Exception as error:  # noqa: BLE001
+            _log_hook_error("inlet", error)
         return body
 
     def outlet(
@@ -198,8 +263,8 @@ class Filter:
     ) -> dict[str, Any]:
         try:
             self._record_turn(body, __user__, __metadata__ or {})
-        except Exception:
-            logger.warning("Future AGI outlet failed", exc_info=True)
+        except Exception as error:  # noqa: BLE001
+            _log_hook_error("outlet", error)
         return body
 
     def flush(self, timeout_millis: int = 10000) -> None:
@@ -217,22 +282,23 @@ class Filter:
         metadata: dict[str, Any],
     ) -> None:
         started = metadata.pop(_STARTED_KEY, None)
+        if started is None:
+            return
         valves = self.valves
         if (
             not valves.api_key.get_secret_value()
             or not valves.secret_key.get_secret_value()
         ):
             return
-        from opentelemetry import trace
-
         ended = time.time_ns()
-        started = started or ended
         root_attributes, llm_attributes = turn_attributes(body, user, valves)
-        tracer = self._provider_for(valves).get_tracer("openwebui-futureagi")
-        # Spans only end here; the batch processor exports them on its own
-        # thread, so the chat never waits for Future AGI.
+        provider = self._provider_for(valves)
+        tracer = provider.get_tracer("openwebui-futureagi")
         root = tracer.start_span(
-            "openwebui.chat", start_time=started, attributes=root_attributes
+            "openwebui.chat",
+            context=context.Context(),
+            start_time=started,
+            attributes=root_attributes,
         )
         llm = tracer.start_span(
             "openwebui.llm",
@@ -240,47 +306,60 @@ class Filter:
             start_time=started,
             attributes=llm_attributes,
         )
+        if _is_empty_failed_reply(body):
+            status = Status(StatusCode.ERROR, "provider returned no output or usage")
+            llm.set_status(status)
+            root.set_status(status)
         llm.end(end_time=ended)
         root.end(end_time=ended)
 
     def _provider_for(self, valves: "Filter.Valves") -> Any:
-        key = (
-            collector_endpoint(valves.endpoint),
-            valves.project,
-            valves.api_key.get_secret_value(),
-            valves.secret_key.get_secret_value(),
+        key_material = "\0".join(
+            (
+                collector_endpoint(valves.endpoint),
+                valves.project,
+                valves.api_key.get_secret_value(),
+                valves.secret_key.get_secret_value(),
+            )
         )
+        key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()
         with self._lock:
             if self._provider is not None and self._provider_key == key:
                 return self._provider
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-            old = self._provider
+            exporter = self._make_exporter(valves)
             provider = TracerProvider(
-                resource=Resource.create(
+                sampler=ALWAYS_ON,
+                resource=Resource(
                     {"project_name": valves.project, "project_type": "observe"}
-                )
+                ),
             )
-            # Bounded queue: when Future AGI is unreachable, spans beyond it are dropped.
             provider.add_span_processor(
-                BatchSpanProcessor(self._make_exporter(valves), max_queue_size=2048)
+                BatchSpanProcessor(exporter, max_queue_size=2048)
             )
+            old = self._provider
             self._provider, self._provider_key = provider, key
+            self._provider_finalizer = weakref.finalize(
+                provider, _shutdown_provider, weakref.ref(provider)
+            )
         if old is not None:
             threading.Thread(target=old.shutdown, daemon=True).start()
         return provider
 
     def _make_exporter(self, valves: "Filter.Valves") -> Any:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter,
-        )
-
         return OTLPSpanExporter(
             endpoint=collector_endpoint(valves.endpoint),
+            certificate_file=certifi.where(),
             headers={
                 "X-Api-Key": valves.api_key.get_secret_value(),
                 "X-Secret-Key": valves.secret_key.get_secret_value(),
             },
         )
+
+
+def _log_hook_error(hook: str, error: Exception) -> None:
+    logger.warning("Future AGI %s failed: %s", hook, type(error).__name__)
+    logger.debug(
+        "Future AGI %s failure details",
+        hook,
+        exc_info=(type(error), error, error.__traceback__),
+    )
