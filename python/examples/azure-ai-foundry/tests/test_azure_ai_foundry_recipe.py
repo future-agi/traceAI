@@ -23,6 +23,12 @@ from _fake_openai import (
     ANSWER, ERROR, FakeOpenAI, chat_response, chat_stream, responses_response,
 )
 
+# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
+# (future-agi/traceAI#249) use the vendor's name for its documented API host.
+# They also omit gen_ai.request.model on streamed and failed calls, where later
+# versions record the requested model. Accept both so this recipe passes on either version.
+PROVIDER_NAMES = ("openai", "azure")
+
 RECIPE = Path(__file__).resolve().parents[1]
 # Syntactic test hosts, not real Azure resources; MockTransport never resolves them.
 TEST_BASE_URLS = (
@@ -130,7 +136,7 @@ def assert_export(receiver, project, name="ChatCompletion"):
     attrs = attributes(span)
     assert span["name"] == name
     assert attrs["gen_ai.span.kind"] == "LLM"
-    assert attrs["gen_ai.provider.name"] == "openai"
+    assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     export = exports[0]
     assert export["path"] == "/tracer/v1/traces"
     assert "x-api-key" in export["headers"] and "x-secret-key" in export["headers"]
@@ -253,8 +259,8 @@ def test_stream_output_model_gap_and_usage(include_usage, receiver, tracing):
     params = json.loads(attrs["gen_ai.request.parameters"])
     assert params["model"] == MODEL and params["stream"] is True
     assert json.loads(requests[0].content).get("stream_options") == ({"include_usage": True} if include_usage else None)
-    # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-    assert "gen_ai.request.model" not in attrs
+    # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+    assert attrs.get("gen_ai.request.model") in (None, MODEL)
     assert attrs["output.value"] == ANSWER
     assert span["status"]["code"] == "STATUS_CODE_OK"
     assert_usage(attrs, USAGE if include_usage else {})
@@ -275,8 +281,8 @@ def test_authentication_error_records_exception_and_model_gap(receiver, tracing)
     assert any(event["name"] == "exception" for event in span["events"])
     assert "AuthenticationError" in json.dumps(span["events"])
     assert "invalid subscription key" in json.dumps(span)
-    # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-    assert "gen_ai.request.model" not in attrs
+    # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+    assert attrs.get("gen_ai.request.model") in (None, MODEL)
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     assert_usage(attrs, {})
     assert VENDOR_KEY not in str(error.value)
@@ -319,7 +325,12 @@ def test_responses_api_span_and_exact_url(receiver, tracing):
     assert attrs["gen_ai.request.model"] == RETURNED_MODEL
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     # Non-streamed Responses records the full parsed response's Python dict text.
-    assert attrs["output.value"] == str(response.model_dump())
+    # traceai-openai 0.1.10: Python repr of the response; later versions: JSON led by output_text.
+    if attrs["output.value"] != str(response.model_dump()):
+        body = json.loads(attrs["output.value"])
+        assert body["output_text"] == ANSWER
+        assert body["output"][0]["content"][0]["text"] == ANSWER
+        assert attrs["output.mime_type"] == "application/json"
     assert response.model_dump()["output"][0]["content"][0]["text"] == ANSWER
     assert span["status"]["code"] == "STATUS_CODE_OK"
     assert_usage(attrs, {**USAGE, "gen_ai.usage.output_tokens.reasoning": 0, "gen_ai.usage.input_tokens.cache_read": 0})
@@ -486,8 +497,8 @@ def test_loopback_subprocess_journeys(mode, tmp_path, receiver):
         assert requests[0]["body"]["model"] == model
         assert ANSWER in attrs["output.value"]
         if mode == "stream":
-            # traceai-openai records the model only from a non-streamed response; flip this when the instrumentor records the request model
-            assert "gen_ai.request.model" not in attrs
+            # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
+            assert attrs.get("gen_ai.request.model") in (None, MODEL)
             assert json.loads(attrs["gen_ai.request.parameters"])["model"] == model
             assert_usage(attrs, {})
         else:

@@ -80,9 +80,10 @@ provider.force_flush()
 ## What you see in Future AGI
 
 The fixture tests produce one LLM span per call: `ChatCompletion` for Chat
-Completions and `Response` for the Responses API. The provider field is `openai`
+Completions and `Response` for the Responses API. Up to `traceai-openai` 0.1.10, the provider field is `openai`
 (`gen_ai.provider.name`). This is the shared instrumentor's label for both Azure
-host forms. The span does not say `azure`.
+host forms; the span does not say `azure`. Later versions (future-agi/traceAI#249)
+say `azure` for both host forms; proxy and loopback base URLs keep `openai`.
 
 For a successful non-streamed response, `gen_ai.request.model` is the model id
 the provider returns in its response. The fixtures return the deployment name
@@ -97,14 +98,15 @@ accumulated by the same instrumentor. Its default test stream has no usage
 attributes. With `stream_options={"include_usage": True}` and a final usage
 chunk, the instrumentor records input, output and total token counts.
 
-In the current `traceai-openai` version, streamed and failed Chat Completions calls omit `gen_ai.request.model`.
+Up to `traceai-openai` 0.1.10, streamed and failed Chat Completions calls omit `gen_ai.request.model`; later versions record the requested deployment there.
 On the Responses API, a failed call records the requested deployment, and a successful Responses call records the model the response returns.
 The requested deployment remains in the
 `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
 Errors set the span status to ERROR and record an exception event.
 
-The non-streamed Responses fixture records the full parsed response as Python
-dictionary text in `output.value`, including its output text. It also records
+Up to 0.1.10, the non-streamed Responses fixture records the full parsed response as Python
+dictionary text in `output.value`, including its output text; later versions write it as
+JSON (`output.mime_type=application/json`) led by `output_text`. It also records
 the model the response returns (the fixture returns a different model from the
 deployment requested) and usage, including the supplied reasoning and cache
 token counts. Responses streaming is not tested here.
