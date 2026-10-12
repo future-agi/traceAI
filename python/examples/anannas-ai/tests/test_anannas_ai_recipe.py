@@ -157,6 +157,27 @@ def mock_client(handler):
     return app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "anannas-ai"),
+    ("anannas-from-env", None, "anannas-from-env"),
+    ("anannas-from-env", "anannas-explicit", "anannas-explicit"),
+], ids=["default", "env", "explicit"])
+def test_setup_tracing_project_name(receiver, monkeypatch, env_project, explicit, expected):
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+    provider = app.setup_tracing(explicit)
+    try:
+        with mock_client(lambda _: httpx.Response(200, json=completion())) as client:
+            client.chat.completions.create(model=REQUEST_MODEL, messages=[{"role": "user", "content": "hi"}])
+    finally:
+        OpenAIInstrumentor().uninstrument()
+        provider.force_flush()
+        provider.shutdown()
+    [request] = receiver.requests()
+    assert request["resource_attributes"][0]["project_name"] == expected
+
+
 def test_documented_default_and_sdk_trailing_slash():
     assert app.DEFAULT_BASE_URL == "https://api.anannas.ai/v1"
     assert app.API_KEY_ENV == "ANANNAS_API_KEY"

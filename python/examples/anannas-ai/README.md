@@ -26,7 +26,7 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `ANANNAS_MODEL` | Yes, unless `--model` is given | Model ID, for example `openai/gpt-5-mini`. |
 | `ANANNAS_BASE_URL` | No | Overrides `https://api.anannas.ai/v1`; customer proxies and loopback servers are accepted. |
 | `FI_BASE_URL` | No | Future AGI collector origin. `register()` uses its default when unset. |
-| `FI_PROJECT_NAME` | No | Observe project name. `register()` defaults to `DEFAULT_PROJECT_NAME`. |
+| `FI_PROJECT_NAME` | No | Observe project name. Defaults to `anannas-ai`. |
 | `FI_HIDE_INPUTS` | No | Set to `true` to mask input attributes. |
 | `FI_HIDE_OUTPUTS` | No | Set to `true` to mask output attributes. |
 
@@ -58,7 +58,8 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_openai import OpenAIInstrumentor
 from openai import OpenAI
-provider = register(  # project name from FI_PROJECT_NAME, as in src/app.py
+provider = register(  # FI_PROJECT_NAME overrides, as in src/app.py
+    project_name=os.environ.get("FI_PROJECT_NAME") or "anannas-ai",
     project_type=ProjectType.OBSERVE, set_global_tracer_provider=False, verbose=False,
 )
 OpenAIInstrumentor().instrument(tracer_provider=provider)
