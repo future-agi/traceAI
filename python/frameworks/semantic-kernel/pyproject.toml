@@ -31,7 +31,7 @@ python = ">=3.10,<3.14"
 # operation strings, agent attribute keys, module-level tracers) is identical
 # to 1.44.1. Tested on 1.38.0 and 1.44.1.
 semantic-kernel = ">=1.38.0,<2"
-fi-instrumentation-otel = ">=1.0.0"
+fi-instrumentation-otel = ">=1.1.0"
 # Floor tested: the full suite passes with opentelemetry-api/-sdk/-exporter-otlp-proto-http
 # 1.29.0 as well as 1.45.0. Python 3.10-3.13 tested on semantic-kernel 1.38.0 and 1.44.1.
 opentelemetry-api = ">=1.29.0"
