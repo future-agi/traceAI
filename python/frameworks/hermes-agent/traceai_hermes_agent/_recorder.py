@@ -4,7 +4,7 @@ One trace per Hermes turn:
 
     hermes.turn                 AGENT   pre_llm_call ... on_session_end
       chat <model>              LLM     pre_api_request ... post_api_request / api_request_error
-      <tool name>               TOOL    pre_tool_call ... post_tool_call
+      <tool name>               TOOL    post_tool_call (start = end - duration_ms)
 
 Every turn carries ``session.id`` (the Hermes session id), so the turns of one
 ``hermes chat`` session group under one Future AGI session.
@@ -13,9 +13,13 @@ Hooks can fire on Hermes worker threads, so spans are tracked by the ids the
 hooks carry (turn_id, api_request_id, tool_call_id) and parented explicitly,
 never through the ambient OpenTelemetry context.
 
-Prompt, response, tool-argument and tool-result text is only read when
-``capture_content`` is true. With it off, the only things exported are ids,
-model and provider names, token counts, sizes, durations and outcomes.
+Prompt, response, tool-argument, tool-result and error text is only read
+when ``capture_content`` is true. With it off, the only things exported are
+ids, model and provider names, token counts, sizes, durations, outcomes and
+Hermes' error categories (never the error messages).
+
+The plugin observes only: it does not register on ``pre_tool_call``, which
+Hermes treats as a fail-closed policy hook.
 """
 
 from __future__ import annotations
@@ -119,7 +123,10 @@ class HermesSpanRecorder:
         self._session_turn: Dict[str, str] = {}
         # child session id -> parent turn key (from subagent_start)
         self._subagent_parent: Dict[str, str] = {}
-        self._anon = 0
+        # api_request_ids whose earlier attempt already ended (retries)
+        self._attempted: Dict[str, int] = {}
+        # LLM span key -> start time in epoch seconds (time to first chunk)
+        self._llm_start: Dict[str, float] = {}
 
     @property
     def capture_content(self) -> bool:
@@ -227,6 +234,10 @@ class HermesSpanRecorder:
             if self._session_turn.get(turn.session_id) == key:
                 del self._session_turn[turn.session_id]
             orphans = [self._children.pop(k)[0] for k in turn.children if k in self._children]
+            for child in turn.children:
+                if child.startswith("llm:"):
+                    self._attempted.pop(child[4:], None)
+                    self._llm_start.pop(child, None)
         for span in orphans:
             span.set_attribute("hermes.unfinished", True)
             span.end()
@@ -263,18 +274,30 @@ class HermesSpanRecorder:
     def on_session_end(self, **kw: Any) -> None:
         return self._guard("on_session_end", self._session_end, kw)
 
+    def _exit_reason(self, raw: Any) -> str:
+        """Hermes' exit reason, or only its category unless content capture is on.
+
+        Hermes embeds exception text in some reasons, e.g.
+        ``repeated_outer_errors(Error during API call #3: <str(e)>)``.
+        """
+        reason = _str(raw).strip()
+        if self._capture or not reason:
+            return self._text(reason) or ""
+        return reason.split("(", 1)[0].strip()
+
     def _session_end(self, kw: Mapping[str, Any]) -> None:
         failed = kw.get("failed") is True
         interrupted = kw.get("interrupted") is True
+        reason = self._exit_reason(kw.get("turn_exit_reason") or kw.get("reason"))
         attributes = {
             "hermes.completed": kw.get("completed") if isinstance(kw.get("completed"), bool) else None,
             "hermes.failed": failed,
             "hermes.interrupted": interrupted,
-            "hermes.turn_exit_reason": _str(kw.get("turn_exit_reason") or kw.get("reason")),
+            "hermes.turn_exit_reason": reason,
         }
         status = None
         if failed:
-            status = Status(StatusCode.ERROR, _str(kw.get("turn_exit_reason")) or "turn failed")
+            status = Status(StatusCode.ERROR, reason or "turn failed")
         if _str(kw.get("turn_id")):
             self._end_turn(self._turn_key(kw), attributes=attributes, status=status)
             return
@@ -328,10 +351,29 @@ class HermesSpanRecorder:
     def on_pre_api_request(self, **kw: Any) -> None:
         return self._guard("pre_api_request", self._pre_api_request, kw)
 
+    def _attempt_start(self, kw: Mapping[str, Any]) -> float:
+        """Start of this provider attempt, in epoch seconds.
+
+        Hermes sets ``started_at`` once per logical call, before its retry
+        loop, so every retry carries the first attempt's start. Only the first
+        attempt uses it; a retry starts when its own hook fires.
+        """
+        started = kw.get("started_at")
+        retry = _int(kw.get("retry_count")) or 0
+        with self._lock:
+            earlier = self._attempted.get(_str(kw.get("api_request_id")), 0)
+        if retry == 0 and not earlier and isinstance(started, (int, float)) and started > 0:
+            return float(started)
+        return time.time()
+
     def _pre_api_request(self, kw: Mapping[str, Any]) -> None:
         model = _str(kw.get("model"))
-        span = self._start_child(self._llm_key(kw), "chat {0}".format(model) if model else "chat",
-                                 kw, start_time=_ns(kw.get("started_at")))
+        key = self._llm_key(kw)
+        start = self._attempt_start(kw)
+        span = self._start_child(key, "chat {0}".format(model) if model else "chat",
+                                 kw, start_time=_ns(start))
+        with self._lock:
+            self._llm_start[key] = start
         _set(span, {
             SPAN_KIND: "LLM",
             OPERATION: "chat",
@@ -349,11 +391,44 @@ class HermesSpanRecorder:
             "gen_ai.request.max_tokens": _int(kw.get("max_tokens")),
         })
         if self._capture:
-            # `request` is Hermes' sanitized request payload; the raw message
-            # list is only a fallback for older releases.
-            request = kw.get("request")
-            self._content(span, INPUT_VALUE, INPUT_MIME,
-                          request if request else kw.get("request_messages"))
+            self._content(span, INPUT_VALUE, INPUT_MIME, self._llm_input(kw))
+
+    def _llm_input(self, kw: Mapping[str, Any]) -> Any:
+        """The latest messages of the request, newest kept when over the cap.
+
+        The head of the request body is the system prompt, which alone fills
+        the cap; it is reported by size only.
+        """
+        request = kw.get("request")
+        body = request.get("body") if isinstance(request, Mapping) else None
+        messages = None
+        if isinstance(body, Mapping):
+            messages = body.get("messages") or body.get("input")
+        elif isinstance(request, Mapping):
+            messages = request.get("messages")
+        if not isinstance(messages, list):
+            messages = kw.get("request_messages")
+        if not isinstance(messages, list):
+            return None
+        system_chars = 0
+        rest = []
+        for message in messages:
+            if isinstance(message, Mapping) and message.get("role") in ("system", "developer"):
+                system_chars += len(_str(message.get("content")))
+            else:
+                rest.append(message)
+        if isinstance(body, Mapping) and isinstance(body.get("system"), (str, list)):
+            system_chars += len(_str(body.get("system")))
+        tail: List[Any] = []
+        budget = self._max_chars - 200
+        for message in reversed(rest):
+            size = len(json.dumps(message, ensure_ascii=False, default=str))
+            if tail and size > budget:
+                break
+            tail.insert(0, message)
+            budget -= size
+        return {"system_prompt_chars": system_chars, "message_count": len(messages),
+                "messages": tail}
 
     def on_post_api_request(self, **kw: Any) -> None:
         return self._guard("post_api_request", self._post_api_request, kw)
@@ -365,9 +440,12 @@ class HermesSpanRecorder:
         if span is not None:
             return span
         model = _str(kw.get("model"))
+        start = self._attempt_start(kw)
         span = self._start_child(key, "chat {0}".format(model) if model else "chat", kw,
-                                 start_time=_ns(kw.get("started_at")))
+                                 start_time=_ns(start))
         self._pop_child(key)
+        with self._lock:
+            self._llm_start[key] = start
         _set(span, {SPAN_KIND: "LLM", OPERATION: "chat", "gen_ai.request.model": model,
                     "gen_ai.provider.name": _str(kw.get("provider"))})
         return span
@@ -389,14 +467,32 @@ class HermesSpanRecorder:
             "hermes.assistant_tool_call_count": _int(kw.get("assistant_tool_call_count")),
             "hermes.assistant_content_chars": _int(kw.get("assistant_content_chars")),
         })
-        first_chunk, started = kw.get("first_chunk_at"), kw.get("started_at")
-        if isinstance(first_chunk, (int, float)) and isinstance(started, (int, float)):
+        start = self._finish_attempt(kw)
+        first_chunk = kw.get("first_chunk_at")
+        if isinstance(first_chunk, (int, float)) and start is not None:
             span.set_attribute("hermes.time_to_first_chunk_ms",
-                               round(max(0.0, first_chunk - started) * 1000))
+                               round(max(0.0, first_chunk - start) * 1000))
         if self._capture:
             self._content(span, OUTPUT_VALUE, OUTPUT_MIME, _assistant_output(kw.get("assistant_message")))
         span.set_status(Status(StatusCode.OK))
-        span.end(end_time=_ns(kw.get("ended_at")))
+        span.end(end_time=self._end_time(kw, start))
+
+    def _finish_attempt(self, kw: Mapping[str, Any]) -> Optional[float]:
+        """Record that this request id had an attempt; return that attempt's start."""
+        key = self._llm_key(kw)
+        with self._lock:
+            request_id = _str(kw.get("api_request_id"))
+            self._attempted[request_id] = self._attempted.get(request_id, 0) + 1
+            return self._llm_start.pop(key, None)
+
+    @staticmethod
+    def _end_time(kw: Mapping[str, Any], start: Optional[float]) -> Optional[int]:
+        ended = kw.get("ended_at")
+        if isinstance(ended, (int, float)) and start is not None and ended >= start:
+            return _ns(ended)
+        # ended_at is measured from the logical call's start; for a retry that
+        # can be earlier than the attempt's own start. Use "now".
+        return None if not isinstance(ended, (int, float)) else time.time_ns()
 
     def on_api_request_error(self, **kw: Any) -> None:
         return self._guard("api_request_error", self._api_request_error, kw)
@@ -405,19 +501,25 @@ class HermesSpanRecorder:
         span = self._llm_span_to_end(kw)
         reason = _str(kw.get("reason"))
         error = kw.get("error")
+        # Hermes sends error={"type": <class or category>, "message": <text>}.
+        error_type = _str(error.get("type")) if isinstance(error, Mapping) else (
+            type(error).__name__ if isinstance(error, BaseException) else "")
+        error_message = error.get("message") if isinstance(error, Mapping) else error
         _set(span, {
-            "error.type": reason or (type(error).__name__ if isinstance(error, BaseException) else None),
+            "error.type": reason or error_type,
+            "hermes.error_class": error_type if reason else None,
             "http.response.status_code": _int(kw.get("status_code")),
             "hermes.retry_count": _int(kw.get("retry_count")),
             "hermes.max_retries": _int(kw.get("max_retries")),
             "hermes.retryable": kw.get("retryable") if isinstance(kw.get("retryable"), bool) else None,
         })
-        # Provider error text can echo the prompt: it is content.
-        description = reason or "provider request failed"
-        if self._capture and error is not None:
-            description = self._text(str(error)) or description
+        # Provider error text can echo the prompt or local paths: it is content.
+        description = reason or error_type or "provider request failed"
+        if self._capture and error_message:
+            description = self._text(str(error_message)) or description
         span.set_status(Status(StatusCode.ERROR, description))
-        span.end(end_time=_ns(kw.get("ended_at")))
+        start = self._finish_attempt(kw)
+        span.end(end_time=self._end_time(kw, start))
 
     # --------------------------------------------------------------- tool calls
 
@@ -427,12 +529,17 @@ class HermesSpanRecorder:
             return "tool:" + call_id
         return "tool:{0}:{1}".format(self._turn_key(kw), _str(kw.get("tool_name")))
 
-    def on_pre_tool_call(self, **kw: Any) -> None:
-        return self._guard("pre_tool_call", self._pre_tool_call, kw)
+    def on_post_tool_call(self, **kw: Any) -> None:
+        return self._guard("post_tool_call", self._post_tool_call, kw)
 
-    def _pre_tool_call(self, kw: Mapping[str, Any]) -> None:
+    def _post_tool_call(self, kw: Mapping[str, Any]) -> None:
+        # Built from post_tool_call alone, timed by Hermes' duration_ms.
+        key = self._tool_key(kw)
+        duration = max(0, _int(kw.get("duration_ms")) or 0)
         name = _str(kw.get("tool_name")) or "tool"
-        span = self._start_child(self._tool_key(kw), name, kw)
+        end = time.time_ns()
+        span = self._start_child(key, name, kw, start_time=end - duration * 1_000_000)
+        self._pop_child(key)
         _set(span, {
             SPAN_KIND: "TOOL",
             OPERATION: "execute_tool",
@@ -441,21 +548,6 @@ class HermesSpanRecorder:
             "hermes.api_request_id": _str(kw.get("api_request_id")),
         })
         self._content(span, INPUT_VALUE, INPUT_MIME, kw.get("args"))
-
-    def on_post_tool_call(self, **kw: Any) -> None:
-        return self._guard("post_tool_call", self._post_tool_call, kw)
-
-    def _post_tool_call(self, kw: Mapping[str, Any]) -> None:
-        key = self._tool_key(kw)
-        span = self._pop_child(key)
-        if span is None:
-            duration = _int(kw.get("duration_ms")) or 0
-            name = _str(kw.get("tool_name")) or "tool"
-            span = self._start_child(key, name, kw, start_time=time.time_ns() - duration * 1_000_000)
-            self._pop_child(key)
-            _set(span, {SPAN_KIND: "TOOL", OPERATION: "execute_tool", "gen_ai.tool.name": name,
-                        "gen_ai.tool.call.id": _str(kw.get("tool_call_id"))})
-            self._content(span, INPUT_VALUE, INPUT_MIME, kw.get("args"))
         status = _str(kw.get("status"))
         error_type = _str(kw.get("error_type"))
         _set(span, {
@@ -471,7 +563,7 @@ class HermesSpanRecorder:
             span.set_status(Status(StatusCode.ERROR, description))
         else:
             span.set_status(Status(StatusCode.OK))
-        span.end()
+        span.end(end_time=end)
 
     # ----------------------------------------------------------------- shutdown
 
@@ -509,6 +601,6 @@ def _assistant_output(message: Any) -> Any:
 
 HOOKS: Iterable[str] = (
     "pre_llm_call", "post_llm_call", "pre_api_request", "post_api_request",
-    "api_request_error", "pre_tool_call", "post_tool_call", "on_session_end",
+    "api_request_error", "post_tool_call", "on_session_end",
     "on_session_finalize", "subagent_start", "subagent_stop",
 )

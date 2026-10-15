@@ -1,5 +1,7 @@
 """Span tree, attributes and timing for one Hermes turn."""
 
+import time
+
 from opentelemetry.trace import StatusCode
 
 from conftest import by_name, run_tool_turn
@@ -31,7 +33,7 @@ def test_turn_attributes(make_hermes, exporter):
     assert a["hermes.platform"] == "cli"
     assert a["hermes.model"] == "gpt-6-luna"
     assert a["hermes.completed"] is True
-    assert a["hermes.turn_exit_reason"] == "final_response"
+    assert a["hermes.turn_exit_reason"] == "text_response"
     # The turn span carries no model/token fields, so cost is not double counted.
     assert "gen_ai.request.model" not in a
     assert turn.status.status_code == StatusCode.UNSET
@@ -98,19 +100,18 @@ def test_cli_exit_without_turn_id_closes_open_turn(make_hermes, exporter):
     ctx = make_hermes()
     base = dict(session_id="s1", task_id="t", turn_id="turn-1", platform="cli")
     ctx.fire("pre_llm_call", **base, model="m")
-    ctx.fire("pre_tool_call", **base, tool_name="terminal", args={}, tool_call_id="c1")
+    ctx.fire("pre_api_request", **base, api_request_id="r1", model="m")
     # hermes_cli/cli_shutdown.py shape on Ctrl+C: no turn_id.
     ctx.fire("on_session_end", session_id="s1", completed=False, interrupted=True)
     spans = by_name(exporter.get_finished_spans())
     assert spans["hermes.turn"].attributes["hermes.interrupted"] is True
-    assert spans["terminal"].attributes["hermes.unfinished"] is True
+    assert spans["chat m"].attributes["hermes.unfinished"] is True
 
 
 def test_subagent_turn_nests_under_parent_turn(make_hermes, exporter):
     ctx = make_hermes()
     parent = dict(session_id="parent", task_id="t", turn_id="p-turn", platform="cli")
     ctx.fire("pre_llm_call", **parent, model="m")
-    ctx.fire("pre_tool_call", **parent, tool_name="delegate_task", args={}, tool_call_id="d1")
     ctx.fire("subagent_start", parent_session_id="parent", parent_turn_id="p-turn",
              child_session_id="child", child_role="worker", child_goal="x")
     child = dict(session_id="child", task_id="t2", turn_id="c-turn", platform="cli")
@@ -124,3 +125,37 @@ def test_subagent_turn_nests_under_parent_turn(make_hermes, exporter):
              if s.name == "hermes.turn"}
     assert turns["c-turn"].parent.span_id == turns["p-turn"].context.span_id
     assert turns["c-turn"].context.trace_id == turns["p-turn"].context.trace_id
+
+
+def test_retry_attempt_starts_after_the_failed_attempt(make_hermes, exporter):
+    # Hermes passes the logical call's started_at to every attempt
+    # (agent/conversation_loop.py sets it once, before the retry loop).
+    ctx = make_hermes()
+    base = dict(session_id="s", task_id="t", turn_id="u", platform="cli")
+    started = time.time() - 2.0
+    ctx.fire("pre_api_request", **base, api_request_id="r", model="m", retry_count=0,
+             started_at=started)
+    ctx.fire("api_request_error", **base, api_request_id="r", model="m", reason="overloaded",
+             started_at=started, ended_at=started + 1.0, error={"type": "APIStatusError"})
+    ctx.fire("pre_api_request", **base, api_request_id="r", model="m", retry_count=1,
+             started_at=started)
+    ctx.fire("post_api_request", **base, api_request_id="r", model="m", started_at=started,
+             ended_at=time.time() + 0.5, first_chunk_at=time.time() + 0.2)
+    ctx.fire("on_session_end", **base, completed=True)
+    failed, ok = [s for s in exporter.get_finished_spans() if s.name == "chat m"]
+    assert failed.start_time == int(started * 1e9)
+    assert ok.start_time >= failed.end_time
+    # Time to first chunk is measured from the retry's own start.
+    assert 100 <= ok.attributes["hermes.time_to_first_chunk_ms"] <= 1000
+
+
+def test_tool_span_is_timed_by_duration(make_hermes, exporter):
+    ctx = make_hermes()
+    base = dict(session_id="s", task_id="t", turn_id="u", platform="cli")
+    ctx.fire("pre_llm_call", **base, model="m")
+    ctx.fire("post_tool_call", **base, tool_name="terminal", tool_call_id="c", duration_ms=250,
+             status="ok", result="x")
+    ctx.fire("on_session_end", **base, completed=True)
+    tool = by_name(exporter.get_finished_spans())["terminal"]
+    assert tool.end_time - tool.start_time == 250_000_000
+    assert tool.parent.span_id == by_name(exporter.get_finished_spans())["hermes.turn"].context.span_id

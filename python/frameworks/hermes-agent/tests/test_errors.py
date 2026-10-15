@@ -13,6 +13,7 @@ def test_failed_tool_is_error(make_hermes, exporter):
     assert tool.status.status_code == StatusCode.ERROR
     assert tool.status.description == "FileNotFoundError"
     assert tool.attributes["error.type"] == "FileNotFoundError"
+    assert (tool.end_time - tool.start_time) == 12_000_000
 
 
 def test_blocked_tool_is_error(make_hermes, exporter):
@@ -31,6 +32,7 @@ def test_provider_error_marks_llm_span(make_hermes, exporter):
     assert llm.attributes["http.response.status_code"] == 429
     assert llm.attributes["hermes.retryable"] is True
     assert llm.attributes["error.type"] == "rate_limit"
+    assert llm.attributes["hermes.error_class"] == "RateLimitError"
 
 
 def test_failed_turn_is_error(make_hermes, exporter):
@@ -38,7 +40,9 @@ def test_failed_turn_is_error(make_hermes, exporter):
     run_tool_turn(ctx, turn_failed=True)
     turn = by_name(exporter.get_finished_spans())["hermes.turn"]
     assert turn.status.status_code == StatusCode.ERROR
+    assert turn.status.description == "repeated_outer_errors"
     assert turn.attributes["hermes.failed"] is True
+    assert turn.attributes["hermes.turn_exit_reason"] == "repeated_outer_errors"
 
 
 def test_retry_reuses_request_id_without_leaking_spans(make_hermes, exporter):
@@ -61,10 +65,13 @@ def test_malformed_payloads_never_raise(make_hermes, exporter):
                         args=object(), result=object(), assistant_message=42) == [None]
 
 
-def test_pre_tool_call_never_returns_a_directive(make_hermes):
+def test_no_policy_hooks_are_registered(make_hermes):
+    # pre_tool_call is a fail-closed directive hook in Hermes: a slow or failing
+    # callback there blocks the tool. Tool spans come from post_tool_call.
     ctx = make_hermes()
-    assert ctx.fire("pre_tool_call", tool_name="terminal", args={"command": "rm -rf /"},
-                    session_id="s", turn_id="t", tool_call_id="c") == [None]
+    assert "pre_tool_call" not in ctx.hooks
+    assert "pre_gateway_dispatch" not in ctx.hooks
+    assert "pre_verify" not in ctx.hooks
 
 
 def test_missing_keys_make_the_plugin_a_noop(monkeypatch):
@@ -80,11 +87,11 @@ def test_missing_keys_make_the_plugin_a_noop(monkeypatch):
 def test_process_exit_closes_open_spans(make_hermes, exporter, provider):
     plugin = FutureAGIHermesPlugin(provider)
     ctx = FakeContext()
-    for hook in ("pre_llm_call", "pre_tool_call"):
+    for hook in ("pre_llm_call", "pre_api_request"):
         ctx.register_hook(hook, plugin.callback(hook))
     ctx.fire("pre_llm_call", session_id="s", turn_id="u", model="m")
-    ctx.fire("pre_tool_call", session_id="s", turn_id="u", tool_name="terminal", tool_call_id="c")
+    ctx.fire("pre_api_request", session_id="s", turn_id="u", api_request_id="r", model="m")
     plugin.shutdown()
     spans = by_name(exporter.get_finished_spans())
     assert spans["hermes.turn"].attributes["hermes.unfinished"] is True
-    assert spans["terminal"].attributes["hermes.unfinished"] is True
+    assert spans["chat m"].attributes["hermes.unfinished"] is True

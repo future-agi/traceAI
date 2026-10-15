@@ -20,6 +20,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from traceai_hermes_agent import register
 
 SECRET = "FI-HERMES-TEST-MARKER-7f3a"
+# A local path with a user name, as it appears in real exception text.
+LOCAL_PATH = "/Users/alice/projects/acme/.env"
 
 
 class FakeContext:
@@ -82,12 +84,15 @@ def run_tool_turn(ctx: FakeContext, *, session_id: str = "20261014_120000_abc123
              started_at=now, middleware_trace=[],
              request={"messages": [{"role": "user", "content": SECRET}]})
     if fail_api:
+        # agent/api_request_hooks.py sends error={"type", "message"}.
         ctx.fire("api_request_error", **base, api_request_id="req-1", model="gpt-6-luna",
                  provider="custom", base_url="http://127.0.0.1:8317/v1",
                  api_mode="chat_completions", api_call_count=1, api_duration=0.2,
                  started_at=now, ended_at=now + 0.2, status_code=429, retry_count=0,
                  max_retries=3, retryable=True, reason="rate_limit",
-                 error=RuntimeError("429 for prompt " + SECRET), request={})
+                 error={"type": "RateLimitError",
+                        "message": "429 for prompt " + SECRET + " reading " + LOCAL_PATH},
+                 request={})
     else:
         ctx.fire("post_api_request", **base, api_request_id="req-1", model="gpt-6-luna",
                  provider="custom", base_url="http://127.0.0.1:8317/v1",
@@ -101,18 +106,20 @@ def run_tool_turn(ctx: FakeContext, *, session_id: str = "20261014_120000_abc123
                  assistant_message={"content": "", "tool_calls": [
                      {"function": {"name": "read_file", "arguments": '{"path": "' + SECRET + '"}'}}]},
                  assistant_content_chars=0, assistant_tool_call_count=1)
-        ctx.fire("pre_tool_call", **base, tool_name="read_file", args={"path": SECRET},
-                 tool_call_id="call-1", api_request_id="req-1", middleware_trace=[])
         error = {} if tool_status == "ok" else {"error_type": "FileNotFoundError",
-                                                 "error_message": "missing " + SECRET}
+                                                 "error_message": "missing " + SECRET + " " + LOCAL_PATH}
         ctx.fire("post_tool_call", **base, tool_name="read_file", args={"path": SECRET},
                  result="# Title " + SECRET, tool_call_id="call-1", api_request_id="req-1",
                  duration_ms=12, status=tool_status, middleware_trace=[],
                  **{"error_type": None, "error_message": None, **error})
     ctx.fire("post_llm_call", **base, user_message=SECRET, assistant_response="Title " + SECRET,
              conversation_history=[], model="gpt-6-luna")
+    # agent/turn_loop_errors.py builds failed-turn reasons from str(e).
+    failed_reason = ("repeated_outer_errors(Error during API call #3: [Errno 2] No such file "
+                     "or directory: '" + LOCAL_PATH + "' " + SECRET + ")")
     ctx.fire("on_session_end", **base, completed=not turn_failed, failed=turn_failed,
-             interrupted=False, turn_exit_reason="error" if turn_failed else "final_response",
+             interrupted=False,
+             turn_exit_reason=failed_reason if turn_failed else "text_response(finish_reason=stop)",
              model="gpt-6-luna")
 
 
