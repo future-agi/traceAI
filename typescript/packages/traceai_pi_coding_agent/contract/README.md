@@ -15,7 +15,8 @@ cp <this dir>/sdk_types.ts . && npx tsc --noEmit --strict --skipLibCheck \
   --module NodeNext --moduleResolution NodeNext --target ES2022 sdk_types.ts
 
 # models.json in $PI_CODING_AGENT_DIR defines <provider>/<model>
-FI_API_KEY=... FI_SECRET_KEY=... FI_BASE_URL=http://localhost:14338 FI_PROJECT_NAME=pi-sdk-contract \
+# FI_BASE_URL only for a self-hosted Future AGI (default: https://api.futureagi.com)
+FI_API_KEY=... FI_SECRET_KEY=... FI_BASE_URL=http://localhost:4318 FI_PROJECT_NAME=pi-sdk-contract \
 PI_CODING_AGENT_DIR=/tmp/pi-agent PI_E2E_CWD=/tmp/pi-project \
   node <this dir>/real_sdk_session.mjs <provider> <model> "List the files here and read README.md"
 ```

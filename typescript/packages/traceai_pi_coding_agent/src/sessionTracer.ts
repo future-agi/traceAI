@@ -18,9 +18,10 @@
  * Run end: Pi 0.80.5 and later emit `agent_settled` once Pi will not continue
  * on its own; the run ends there. Older Pi has no `agent_settled`, so until
  * the session is known to settle, the run ends at an `agent_end` that does not
- * announce a retry (`willRetry !== true`). Pi added `AgentSession.waitForIdle()`
- * in the same release as `agent_settled`, so a session that has it is treated
- * as settling from the start.
+ * announce a retry (`willRetry !== true`), or at an `auto_retry_end` with
+ * `success: false` (a retry cancelled during its backoff). Pi added
+ * `AgentSession.waitForIdle()` in the same release as `agent_settled`, so a
+ * session that has it is treated as settling from the start.
  *
  * Every span carries `session.id` = `session.sessionId`, so all runs of one
  * session group into one Future AGI session. Listeners must never throw into
@@ -99,9 +100,12 @@ const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
  * Pi's `errorMessage` is the provider's raw error text. Gateways and
  * providers echo request fragments, account details and local paths in it,
  * so it is content: it is the status message only when outputs are shown.
- * Otherwise the message is built from the stop reason, the HTTP status at the
- * start of the text and the provider's error `type` (an identifier such as
- * `invalid_request_error`), for example `error: HTTP 400 invalid_request_error`.
+ * Otherwise the message is built from the stop reason, the HTTP status the
+ * text names (a leading `4xx`/`5xx`, or `status code NNN`) and the provider's
+ * error `type` (an identifier such as `invalid_request_error`) or, without
+ * one, the thrown error's class name from `diagnostics` (such as `TypeError`),
+ * for example `error: HTTP 400 invalid_request_error`. All are numbers or
+ * identifiers of at most 64 characters.
  */
 export function errorDetails(
   message: PiMessage | undefined,
@@ -248,6 +252,12 @@ export class PiSessionTracer {
           "pi.attempt": num(event.attempt),
           "pi.success": event.success === true,
         });
+        // Older Pi: abort() or abortRetry() during the retry backoff ends the
+        // retry with success:false and no further agent_start, after an
+        // agent_end that announced the retry. End the run here, or the next
+        // prompt would join it. (When retries run out, the run already ended
+        // at the agent_end without willRetry, so this is a no-op.)
+        if (!this.settles && event.success === false) this.endRun(false);
         break;
       case "compaction_start":
         this.onCompactionStart(event);

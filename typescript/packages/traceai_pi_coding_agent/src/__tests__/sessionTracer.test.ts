@@ -19,11 +19,13 @@ import {
   TOOL_ERROR_SECRET,
   TOOL_PATH_ERROR,
   aborted,
+  cancelledRetry,
   compactionInRun,
   continuedRun,
   happyPath,
   interrupted,
   legacyPrompt,
+  legacyRetriesExhausted,
   legacyRetry,
   manualCompaction,
   nestedTool,
@@ -53,9 +55,9 @@ describe("span tree", () => {
     expect(spans.map((s) => s.name).sort()).toEqual(
       [
         SpanNames.AGENT_RUN,
-        "chat gpt-6-luna",
-        "chat gpt-6-luna",
-        "chat gpt-6-luna",
+        "chat example-model",
+        "chat example-model",
+        "chat example-model",
         "execute_tool ls",
         "execute_tool read",
         "pi.turn",
@@ -74,7 +76,7 @@ describe("span tree", () => {
     const ls = one(spans, "execute_tool ls");
     const firstTurn = turns.find((t) => t.attributes[Attr.PI_TURN_INDEX] === 0)!;
     expect(parentId(ls)).toBe(firstTurn.spanContext().spanId);
-    for (const llm of byName(spans, "chat gpt-6-luna")) {
+    for (const llm of byName(spans, "chat example-model")) {
       expect(turns.map((t) => t.spanContext().spanId)).toContain(parentId(llm));
     }
   });
@@ -84,7 +86,7 @@ describe("span tree", () => {
     const kind = (name: string) => byName(spans, name).map((s) => [s.attributes[Attr.FI_SPAN_KIND], s.attributes[Attr.GEN_AI_SPAN_KIND]]);
     expect(kind(SpanNames.AGENT_RUN)).toEqual([["AGENT", "AGENT"]]);
     expect(new Set(kind("pi.turn").flat())).toEqual(new Set(["CHAIN"]));
-    expect(new Set(kind("chat gpt-6-luna").flat())).toEqual(new Set(["LLM"]));
+    expect(new Set(kind("chat example-model").flat())).toEqual(new Set(["LLM"]));
     expect(kind("execute_tool ls")).toEqual([["TOOL", "TOOL"]]);
     for (const span of spans) {
       expect(span.attributes[Attr.SESSION_ID]).toBe(SESSION_ID);
@@ -101,13 +103,13 @@ describe("span tree", () => {
 
   it("records model, provider, tokens, cost and timing on LLM spans", () => {
     const { spans } = run(happyPath());
-    const llms = byName(spans, "chat gpt-6-luna").sort((a, b) => hrToMs(a.startTime) - hrToMs(b.startTime));
+    const llms = byName(spans, "chat example-model").sort((a, b) => hrToMs(a.startTime) - hrToMs(b.startTime));
     const [first, second, last] = llms;
     expect(first.attributes).toMatchObject({
       [Attr.GEN_AI_OPERATION_NAME]: "chat",
-      [Attr.REQUEST_MODEL]: "gpt-6-luna",
-      [Attr.RESPONSE_MODEL]: "gpt-6-luna",
-      [Attr.PROVIDER_NAME]: "cliproxy",
+      [Attr.REQUEST_MODEL]: "example-model",
+      [Attr.RESPONSE_MODEL]: "example-model",
+      [Attr.PROVIDER_NAME]: "my-gateway",
       [Attr.PI_API]: "openai-completions",
       [Attr.INPUT_TOKENS]: 1182,
       [Attr.OUTPUT_TOKENS]: 75,
@@ -213,7 +215,7 @@ describe("errors", () => {
     // The run recovered, so the run itself is OK.
     expect(agent.status.code).toBe(SpanStatusCode.OK);
 
-    const failedLlm = byName(spans, "chat gpt-6-luna").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
+    const failedLlm = byName(spans, "chat example-model").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
     // The provider's error text is content: by default only the HTTP status leaves the process.
     expect(failedLlm.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 429" });
     expect(failedLlm.attributes[Attr.ERROR_TYPE]).toBe("429");
@@ -231,7 +233,7 @@ describe("errors", () => {
   it("puts the tool and provider error text in the status only when outputs are on", () => {
     const { spans } = run(retryAndToolError(), CONTENT_ON);
     expect(one(spans, "execute_tool read").status.message).toBe(TOOL_ERROR_SECRET);
-    const failedLlm = byName(spans, "chat gpt-6-luna").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
+    const failedLlm = byName(spans, "chat example-model").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
     expect(failedLlm.status.message).toBe("429 Too Many Requests: rate limited");
   });
 
@@ -243,7 +245,7 @@ describe("errors", () => {
     expect(text).not.toContain("PROVIDER_ERROR_SECRET");
     expect(text).not.toContain("TOOL_PATH_SECRET");
     // Status: stop reason, HTTP status and the provider's error type only.
-    const llm = byName(spans, "chat gpt-6-luna").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
+    const llm = byName(spans, "chat example-model").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
     expect(llm.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 400 invalid_request_error" });
     expect(llm.attributes[Attr.ERROR_TYPE]).toBe("invalid_request_error");
     const turn = byName(spans, "pi.turn").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
@@ -268,7 +270,7 @@ describe("errors", () => {
     const agent = one(spans, SpanNames.AGENT_RUN);
     expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
     expect(agent.attributes[Attr.PI_ABORTED]).toBe(true);
-    const llm = one(spans, "chat gpt-6-luna");
+    const llm = one(spans, "chat example-model");
     expect(llm.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
     expect(llm.attributes[Attr.PI_ABORTED]).toBe(true);
     expect(llm.attributes[Attr.ERROR_TYPE]).toBe("aborted");
@@ -350,6 +352,48 @@ describe("Pi versions without agent_settled (before 0.80.5)", () => {
     expect(new Set(spans.map((s) => s.spanContext().traceId)).size).toBe(1);
   });
 
+  it("ends the run when an automatic retry is cancelled during its backoff, so the next prompt is its own trace", () => {
+    const { provider, exporter } = memoryProvider();
+    const session = new LegacySession();
+    new PiCodingAgentInstrumentation({ tracerProvider: provider }).instrumentSession(session);
+    session.emit(cancelledRetry()); // session.abort() / abortRetry() during the retry sleep
+    // Ended before the next prompt and without dispose: complete, ERROR with the failed call's status.
+    const failed = one(exporter.getFinishedSpans(), SpanNames.AGENT_RUN);
+    expect(failed.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 503 overloaded_error" });
+    expect(failed.attributes[Attr.ERROR_TYPE]).toBe("overloaded_error");
+    expect(failed.attributes[Attr.PI_INCOMPLETE]).toBeUndefined();
+    expect(failed.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(1);
+    expect(failed.attributes[Attr.PI_RUN_RETRY_COUNT]).toBe(1);
+    expect(failed.events.map((e) => e.name)).toEqual(["pi.auto_retry.start", "pi.auto_retry.end"]);
+    expect(failed.events[1].attributes).toMatchObject({ "pi.attempt": 1, "pi.success": false });
+
+    session.emit(legacyPrompt());
+    const spans = exporter.getFinishedSpans();
+    const agents = byName(spans, SpanNames.AGENT_RUN);
+    expect(agents).toHaveLength(2);
+    const [first, second] = agents.map((a) => a.spanContext().traceId);
+    expect(second).not.toBe(first);
+    expect(agents[1].status.code).toBe(SpanStatusCode.OK);
+    expect(agents[1].attributes[Attr.PI_RUN_ATTEMPTS]).toBe(1);
+    expect(agents[1].attributes[Attr.PI_RUN_RETRY_COUNT]).toBe(0);
+    expect(agents[1].attributes[Attr.PI_RUN_LLM_CALL_COUNT]).toBe(3);
+    // The failed run's trace holds only its own run, turn and model call.
+    expect(spans.filter((s) => s.spanContext().traceId === first).map((s) => s.name).sort()).toEqual(
+      [SpanNames.AGENT_RUN, "chat example-model", "pi.turn"].sort(),
+    );
+    expect(spans.filter((s) => s.spanContext().traceId === second)).toHaveLength(9);
+  });
+
+  it("ends a run whose retries all fail at its last agent_end; the final auto_retry_end changes nothing", () => {
+    const { spans } = run(legacyRetriesExhausted(), {}, new LegacySession());
+    const agent = one(spans, SpanNames.AGENT_RUN);
+    expect(agent.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(2);
+    expect(agent.attributes[Attr.PI_RUN_RETRY_COUNT]).toBe(1);
+    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 503 overloaded_error" });
+    expect(spans).toHaveLength(5); // run, 2 turns, 2 model calls
+    expect(new Set(spans.map((s) => s.spanContext().traceId)).size).toBe(1);
+  });
+
   it("switches to agent_settled once a session without waitForIdle() is seen to settle", () => {
     const { provider, exporter } = memoryProvider();
     const session = new LegacySession();
@@ -368,6 +412,18 @@ describe("Pi versions without agent_settled (before 0.80.5)", () => {
     expect(agent.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(2);
     expect(agent.attributes[Attr.PI_RUN_TURN_COUNT]).toBe(4);
     expect(new Set(spans.map((s) => s.spanContext().traceId)).size).toBe(1);
+  });
+
+  it("leaves a cancelled retry to agent_settled when the session has waitForIdle() (Pi 0.80.5+)", () => {
+    const { provider, exporter } = memoryProvider();
+    const session = new FakeSession();
+    new PiCodingAgentInstrumentation({ tracerProvider: provider }).instrumentSession(session);
+    session.emit(cancelledRetry());
+    expect(byName(exporter.getFinishedSpans(), SpanNames.AGENT_RUN)).toHaveLength(0);
+    session.emit([{ type: "agent_settled", aborted: true }]);
+    const agent = one(exporter.getFinishedSpans(), SpanNames.AGENT_RUN);
+    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
+    expect(agent.events.map((e) => e.name)).toEqual(["pi.auto_retry.start", "pi.auto_retry.end"]);
   });
 });
 
@@ -462,7 +518,7 @@ describe("content policy", () => {
     const ls = one(spans, "execute_tool ls");
     expect(JSON.parse(ls.attributes[Attr.INPUT_VALUE] as string)).toEqual({ path: ARG_SECRET });
     expect(ls.attributes[Attr.OUTPUT_VALUE]).toBe(RESULT_SECRET);
-    const firstLlm = byName(spans, "chat gpt-6-luna").find((s) => s.attributes[Attr.PI_TOOL_CALL_COUNT] === 1)!;
+    const firstLlm = byName(spans, "chat example-model").find((s) => s.attributes[Attr.PI_TOOL_CALL_COUNT] === 1)!;
     expect(firstLlm.attributes[Attr.OUTPUT_VALUE]).toContain("call_ls_1");
     // The system prompt is never exported, even with content on.
     expect(exportedText(spans)).not.toContain(SYSTEM_SECRET);

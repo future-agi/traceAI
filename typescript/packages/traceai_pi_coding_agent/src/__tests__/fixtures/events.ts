@@ -2,7 +2,7 @@
  * Event sequences in the order `@earendil-works/pi-coding-agent` 1.2.0
  * emits them from `AgentSession.subscribe()`.
  *
- * `happyPath` mirrors a recorded real run (gpt-6-luna through an
+ * `happyPath` mirrors a recorded real run (a model behind an
  * OpenAI-compatible endpoint, prompt "list the files, read README.md"): same
  * event types, order, roles, message keys, stop reasons and usage shape. Text,
  * ids and token numbers are fixtures; the *_SECRET strings let tests prove
@@ -48,8 +48,8 @@ function assistant(
     role: "assistant",
     content,
     api: "openai-completions",
-    provider: "cliproxy",
-    model: "gpt-6-luna",
+    provider: "my-gateway",
+    model: "example-model",
     responseId: `chatcmpl-${timestamp}`,
     timestamp,
     usage: usage(0, 0),
@@ -195,6 +195,55 @@ export function legacyPrompt(): PiSessionEvent[] {
 /** A legacy run that Pi retries: agent_end announces the retry with willRetry. */
 export function legacyRetry(): PiSessionEvent[] {
   return retryAndToolError().filter((event) => event.type !== "agent_settled");
+}
+
+/**
+ * A provider error whose automatic retry is cancelled during the backoff
+ * (`session.abort()` or `session.abortRetry()`), in the order Pi 0.75.4 to
+ * 0.80.3 emit it: agent_end announces the retry, then `auto_retry_end` with
+ * `success: false` and no further `agent_start`. Pi 0.80.5+ then also emits
+ * `agent_settled`.
+ */
+export function cancelledRetry(): PiSessionEvent[] {
+  const failedStreaming = assistant(T0 + 100, [], "pending");
+  const failed = assistant(T0 + 100, [], "error", {
+    usage: usage(0, 0),
+    durationMs: 300,
+    errorMessage: '503 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+  });
+  return [
+    { type: "agent_start" },
+    { type: "turn_start" },
+    ...promptMessages(),
+    { type: "message_start", message: failedStreaming },
+    { type: "message_end", message: failed },
+    { type: "turn_end", message: failed, toolResults: [] },
+    { type: "agent_end", messages: [], willRetry: true },
+    { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 3000, errorMessage: "503 overloaded" },
+    { type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+  ];
+}
+
+/**
+ * Legacy Pi when every retry fails: the last agent_end has `willRetry: false`,
+ * then `auto_retry_end` with `success: false` reports the final failure.
+ */
+export function legacyRetriesExhausted(): PiSessionEvent[] {
+  const events = cancelledRetry();
+  const finalEnd = events.pop()!;
+  const failed = events.find(
+    (event) => event.type === "message_end" && (event.message as { role?: string }).role === "assistant",
+  )!.message;
+  return [
+    ...events,
+    { type: "agent_start" },
+    { type: "turn_start" },
+    { type: "message_start", message: failed },
+    { type: "message_end", message: failed },
+    { type: "turn_end", message: failed, toolResults: [] },
+    { type: "agent_end", messages: [], willRetry: false },
+    { ...finalEnd, finalError: "503 overloaded" },
+  ];
 }
 
 /**

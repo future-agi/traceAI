@@ -9,7 +9,7 @@ This is the in-process SDK integration. It is not the Pi command-line app (`pi`,
 | Item | Value |
 |---|---|
 | Tested SDK | `@earendil-works/pi-coding-agent` 1.2.0 (Node 22.19+) |
-| Supported Pi versions | **0.80.5 and later (including 1.x):** a run ends at `agent_settled`, after Pi's retries, compaction and continuations. 0.80.5 is the first published version with `agent_settled`. **0.75.4 to 0.80.3:** Pi had no `agent_settled`, so a run ends at the first `agent_end` whose `willRetry` is not `true`. Automatic retries stay in the run; if Pi continues after that `agent_end` (overflow-compaction recovery, messages queued by `agent_end` handlers), the continuation becomes a second trace, and a compaction Pi runs after that `agent_end` is its own one-span trace. **Before 0.75.4 (including every `@mariozechner/pi-coding-agent` release):** `agent_end` has no `willRetry`, so each automatic retry also becomes its own trace. |
+| Supported Pi versions | **0.80.5 and later (including 1.x):** a run ends at `agent_settled`, after Pi's retries, compaction and continuations. 0.80.5 is the first published version with `agent_settled`. **0.75.4 to 0.80.3:** Pi had no `agent_settled`, so a run ends at the first `agent_end` whose `willRetry` is not `true`, or when an automatic retry is cancelled during its backoff (`auto_retry_end` with `success: false`, after `session.abort()` or `abortRetry()`). Automatic retries stay in the run; if Pi continues after that `agent_end` (overflow-compaction recovery, messages queued by `agent_end` handlers), the continuation becomes a second trace, and a compaction Pi runs after that `agent_end` is its own one-span trace. **Before 0.75.4 (including every `@mariozechner/pi-coding-agent` release):** `agent_end` has no `willRetry`, so each automatic retry also becomes its own trace. |
 | Package scope | Pi moved from `@mariozechner/*` to `@earendil-works/*` at 0.74.0. The package reads the session object structurally and has no dependency on the SDK. |
 | SDK surface used | `AgentSession.sessionId`, `AgentSession.sessionName` (only with `hideInputs: false`), `AgentSession.subscribe()`, `AgentSession.dispose()`, and whether `AgentSession.waitForIdle` exists (never called: Pi added it together with `agent_settled`, so its presence means runs end at `agent_settled`) |
 
@@ -57,7 +57,7 @@ One trace per agent run (one `session.prompt()`, including Pi's automatic retrie
 
 | Span name | `fi.span.kind` / `gen_ai.span.kind` | From | Parent |
 |---|---|---|---|
-| `invoke_agent pi` | `AGENT` | `agent_start` .. `agent_settled` (Pi before 0.80.5: .. the first `agent_end` without `willRetry: true`) | the active span at `agent_start` when the app registered a context manager (for example `AsyncLocalStorageContextManager`), else none (a new trace) |
+| `invoke_agent pi` | `AGENT` | `agent_start` .. `agent_settled` (Pi before 0.80.5: .. the first `agent_end` without `willRetry: true`, or a cancelled retry's `auto_retry_end`) | the active span at `agent_start` when the app registered a context manager (for example `AsyncLocalStorageContextManager`), else none (a new trace) |
 | `pi.turn` | `CHAIN` | `turn_start` .. `turn_end` | run |
 | `chat <model>` | `LLM` | assistant `message_start` .. `message_end` (start/end from the message's `timestamp` + `durationMs`) | turn |
 | `execute_tool <tool>` | `TOOL` | `tool_execution_start` .. `tool_execution_end` | turn, or the calling tool when the event has `parentToolCallId` |
@@ -74,23 +74,23 @@ One trace per agent run (one `session.prompt()`, including Pi's automatic retrie
 | Run totals | `pi.agent.attempts` (agent loops in the run: the first, each automatic retry, and each continuation such as overflow-compaction recovery or queued messages), `pi.agent.retry_count` (automatic retries), `pi.agent.turn_count`, `llm_call_count`, `tool_call_count`, `pi.agent.usage.*`, `pi.agent.cost.total` | summed over the run's LLM and compaction spans. Not the promoted `gen_ai.usage.*` keys, so tokens are not counted twice |
 | Compaction | `pi.compaction.reason` (`manual`, `threshold`, `overflow`), `pi.compaction.tokens_before`, `pi.compaction.estimated_tokens_after`, `pi.compaction.will_retry`, and the summarization call's `gen_ai.usage.*` / `gen_ai.cost.total` | `compaction_end.result` |
 | Retries | span events `pi.auto_retry.start` / `.end` on the run span | session events |
-| Errors | `error.type` on ERROR spans: the provider's error type (for example `invalid_request_error`), else the HTTP status, else `error`; `aborted`, `tool_error`, `compaction_error` | see below |
+| Errors | `error.type` on ERROR spans: the provider's error type (for example `invalid_request_error`), else the thrown error's class name (for example `TypeError`), else the HTTP status, else `error`; `aborted`, `tool_error`, `compaction_error` | see below |
 
 Errors:
 
-- An assistant message with `stopReason` `error` or `aborted` makes its LLM span and turn ERROR. By default the status message is built only from the stop reason, an HTTP status at the start of Pi's `errorMessage`, and the provider's error `type`, for example `error: HTTP 400 invalid_request_error` or `aborted`. The provider's raw error text (truncated to 1000 characters) is the status message only with `hideOutputs: false`: gateways and providers echo request fragments, account details and local paths in it. `aborted` also sets `pi.aborted=true`.
-- The run span is ERROR when the run ends aborted (`agent_settled.aborted`) or its last model call failed, with the same status message as that call. A failed call that Pi retried successfully leaves the run OK; the failed call's own span stays ERROR.
+- An assistant message with `stopReason` `error` or `aborted` makes its LLM span and turn ERROR. By default the status message is built only from the stop reason, the HTTP status Pi's `errorMessage` names (a leading `4xx`/`5xx`, or `status code NNN`), and the provider's error `type` or, when there is none, the thrown error's class name (for example `TypeError`): for example `error: HTTP 400 invalid_request_error`, `error: TypeError` or `aborted`. Each part is a number or an identifier of at most 64 characters. The provider's raw error text (truncated to 1000 characters) is the status message only with `hideOutputs: false`: gateways and providers echo request fragments, account details and local paths in it. `aborted` also sets `pi.aborted=true`.
+- The run span is ERROR when the run ends aborted (`agent_settled.aborted`) or its last model call failed, with the same status message as that call (on Pi before 0.80.5, a run whose retry was cancelled ends with the failed call's status). A failed call that Pi retried successfully leaves the run OK; the failed call's own span stays ERROR.
 - A tool result with `isError: true` makes the tool span ERROR. The status message is the tool's error text only with `hideOutputs: false`; otherwise "tool reported an error (result hidden)".
 - A compaction that fails is ERROR with "compaction failed" (Pi's error text only with `hideOutputs: false`); an aborted one is ERROR with "aborted".
 - `session.dispose()` or the stop function during a run ends every open span with `pi.incomplete=true`, children before their parents.
 
-Not available from the SDK's session events, so not recorded: the provider request payload (the full transcript sent on each model call), streaming deltas and time to first token, a separate per-request HTTP status attribute (only what Pi's error text starts with), the model that wrote a compaction summary, and the system prompt.
+Not available from the SDK's session events, so not recorded: the provider request payload (the full transcript sent on each model call), streaming deltas and time to first token, a separate per-request HTTP status attribute (only the status Pi's error text names, in the status message), the model that wrote a compaction summary, and the system prompt.
 
 ## Privacy: content is off by default
 
 Prompts, tool arguments, tool results and assistant text of a coding agent contain source code, file contents and command output. They are **not** recorded unless you opt in.
 
-Always exported: session id, model, provider and API, token counts and cost, stop and finish reasons, tool names and call ids, durations, turn/call counts, compaction reason and token counts, and error statuses built from the stop reason, HTTP status and provider error type. The Pi working directory is never added as an attribute.
+Always exported: session id, model, provider and API, token counts and cost, stop and finish reasons, tool names and call ids, durations, turn/call counts, compaction reason and token counts, and error statuses built from the stop reason, HTTP status and provider error type or error class name. The Pi working directory is never added as an attribute.
 
 To opt in:
 
