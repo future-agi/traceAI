@@ -23,3 +23,5 @@
   `fi_instrumentation`'s OK default); turns closed at teardown or exit stay unset.
 - Opt-in model input is the latest messages of the request, not the head of the body (the system prompt).
 - `api_request_error` reads Hermes' `{"type", "message"}` error payload.
+- Python 3.14 allowed (`>=3.11,<3.15`) in the package and the directory plugin: Hermes v0.22 runs on 3.14
+  and refuses a directory plugin whose `requires-python` excludes it.

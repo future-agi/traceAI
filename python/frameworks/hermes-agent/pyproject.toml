@@ -17,13 +17,17 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Monitoring",
 ]
 
 [tool.poetry.dependencies]
-# Hermes Agent itself requires >=3.11,<3.14.
-python = ">=3.11,<3.14"
+# Hermes Agent v2026.9.24 requires >=3.11,<3.14; later Hermes requires
+# >=3.11,<3.15 and moves installs to 3.14. Keep in step with
+# hermes-plugin/futureagi/pyproject.toml: Hermes refuses a directory plugin
+# whose requires-python excludes the Python it runs on.
+python = ">=3.11,<3.15"
 # 1.35 is the first OTLP/HTTP exporter whose retries stay within its timeout,
 # which bounds how long Hermes waits at exit when Future AGI is unreachable.
 opentelemetry-api = ">=1.35.0"

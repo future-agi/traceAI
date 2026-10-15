@@ -18,7 +18,8 @@ session. A subagent's turn sits inside its parent turn's trace and carries the
 subagent's own session id.
 
 Alpha. Tested with Hermes Agent v2026.9.24 (0.21.5) on Python 3.12, in CLI
-sessions against an OpenAI-compatible provider.
+sessions against an OpenAI-compatible provider. Supports Python 3.11 to 3.14;
+the test suite also passes on Python 3.14 against Hermes v0.22.0, which runs on 3.14.
 
 ## Install
 
