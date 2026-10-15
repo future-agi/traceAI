@@ -8,6 +8,8 @@
  *     (no message, no stack trace, no local path); full text only on opt-in;
  *   - `Agent.prompt()` is traced through the patched `Agent.create()`.
  *
+ * Unknown agent id: `Agent.resume()` fails; same checks, one ERROR span.
+ *
  * Missing key (no apiKey, no CURSOR_API_KEY, no stored login): `Agent.create()`
  * succeeds and the REAL local runtime runs `send()` / `stream()` / `wait()`
  * until the backend rejects the run. With the documented setup (provider not
@@ -130,6 +132,30 @@ await check("wrong key, Agent.prompt goes through the patched Agent.create", asy
   assert.equal(spans[0].name, "Cursor Agent create");
   assertCreateErrorSpan(spans[0], error);
   assertPrivateByDefault(spans, error);
+});
+
+await check("Agent.resume of a missing local agent: same error to the caller, one ERROR span, no message/stack/path by default", async () => {
+  const missing = "agent-00000000-0000-4000-8000-000000000000";
+  instrumentation.disable();
+  const baseline = describe(await capture(() => CursorSDK.Agent.resume(missing, options)));
+  instrumentation.enable();
+  exporter.reset();
+  const error = describe(await capture(() => CursorSDK.Agent.resume(missing, options)));
+  assert.deepEqual(error, baseline);
+  const spans = exporter.getFinishedSpans();
+  assert.equal(spans.length, 1, `spans: ${spans.map((s) => s.name)}`);
+  assert.equal(spans[0].name, "Cursor Agent resume");
+  assert.equal(spans[0].status.code, 2);
+  assert.equal(spans[0].attributes["cursor.agent.id"], missing);
+  assert.equal(spans[0].attributes["session.id"], missing);
+  const detail = error.status ?? error.code;
+  const summary = detail !== undefined && detail !== "" ? `${spans[0].attributes["cursor.error.name"]} (${detail})` : spans[0].attributes["cursor.error.name"];
+  assert.equal(spans[0].status.message, summary);
+  assert.equal(spans[0].attributes["cursor.error.message"], summary);
+  const exception = spans[0].events.find((e) => e.name === "exception");
+  assert.deepEqual(exception?.attributes, { "exception.type": spans[0].attributes["cursor.error.name"] });
+  assertPrivateByDefault(spans, error);
+  console.log("resume error:", JSON.stringify(error), "| span status:", JSON.stringify(spans[0].status));
 });
 
 await check("wrong key with content opted in: full message and the stack trace (which carries the local path)", async () => {
