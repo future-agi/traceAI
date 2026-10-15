@@ -1,4 +1,5 @@
 import { SpanStatusCode, context, trace } from "@opentelemetry/api";
+import { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { TraceConfigOptions, setSession } from "@traceai/fi-core";
 import { CodexSDKInstrumentation, instrumentCodexSDK, isPatched } from "../index";
 import { usageBaselines } from "../spans";
@@ -127,12 +128,20 @@ describe("run()", () => {
     await expect(thread.run(PROMPT)).rejects.toThrow("stream disconnected before completion");
     const spans = exporter.getFinishedSpans();
     const turn = one(spans, "codex.turn");
-    expect(turn.status).toEqual({ code: SpanStatusCode.ERROR, message: "stream disconnected before completion" });
-    expect(turn.attributes["codex.error.message"]).toBe("stream disconnected before completion");
+    // turn.failed text can be a provider error body: a fixed label unless outputs are visible.
+    expect(turn.status).toEqual({ code: SpanStatusCode.ERROR, message: "turn failed" });
+    expect(turn.attributes["codex.error.message"]).toBe("turn failed");
     expect(turn.attributes["codex.cancelled"]).toBeUndefined();
     const tool = one(spans, "codex.command_execution");
     expect(tool.status.code).toBe(SpanStatusCode.ERROR);
     expect(tool.attributes["codex.cancelled"]).toBeUndefined();
+  });
+
+  it("records the turn.failed text only with outputs visible", async () => {
+    const { mod, exporter } = setup({ hideOutputs: false });
+    await expect(new mod.Codex([scripted(failedTurn())]).startThread().run(PROMPT)).rejects.toThrow();
+    const turn = one(exporter.getFinishedSpans(), "codex.turn");
+    expect(turn.status).toEqual({ code: SpanStatusCode.ERROR, message: "stream disconnected before completion" });
   });
 });
 
@@ -241,6 +250,31 @@ describe("token usage across turns", () => {
     expect(second.attributes["gen_ai.usage.input_tokens"]).toBe(59000 - 49397);
   });
 
+  it("counts a failed first turn's spend on the next completed turn of a new thread", async () => {
+    const { mod, exporter } = setup();
+    const thread = new mod.Codex([
+      scripted(failedTurn()),
+      scripted(toolTurn({ usage: usage(30000, 300) })),
+    ]).startThread();
+    await expect(thread.run("one")).rejects.toThrow();
+    await thread.run("two");
+    const [, second] = byName(exporter.getFinishedSpans(), "codex.turn");
+    expect(second.attributes["codex.thread.resumed"]).toBe(true);
+    expect(second.attributes["codex.usage.baseline_unknown"]).toBeUndefined();
+    expect(second.attributes["gen_ai.usage.input_tokens"]).toBe(30000);
+  });
+
+  it("counts a cancelled first turn's spend on the next completed turn of a new thread", async () => {
+    const { mod, exporter } = setup();
+    const thread = new mod.Codex([scripted(toolTurn()), scripted(toolTurn({ usage: usage(41000, 400) }))]).startThread();
+    for await (const event of (await thread.runStreamed("one")).events) {
+      if (event.type === "item.started") break;
+    }
+    await thread.run("two");
+    const [, second] = byName(exporter.getFinishedSpans(), "codex.turn");
+    expect(second.attributes["gen_ai.usage.input_tokens"]).toBe(41000);
+  });
+
   it("uses a total that went down as reported", async () => {
     const { mod, exporter } = setup();
     const thread = new mod.Codex([
@@ -253,6 +287,21 @@ describe("token usage across turns", () => {
     expect(second.attributes["gen_ai.usage.input_tokens"]).toBe(120);
     expect(second.attributes["codex.usage.non_monotonic"]).toBe(true);
   });
+
+  it("keeps the larger baseline after a total went down", async () => {
+    const { mod, exporter } = setup();
+    const thread = new mod.Codex([
+      scripted(toolTurn({ usage: usage(500, 50) })),
+      scripted(toolTurn({ usage: usage(120, 12) })),
+      scripted(toolTurn({ usage: usage(600, 60) })),
+    ]).startThread();
+    await thread.run("one");
+    await thread.run("two");
+    await thread.run("three");
+    const [, , third] = byName(exporter.getFinishedSpans(), "codex.turn");
+    expect(third.attributes["gen_ai.usage.input_tokens"]).toBe(100);
+    expect(third.attributes["gen_ai.usage.output_tokens"]).toBe(10);
+  });
 });
 
 describe("errors and cancellation", () => {
@@ -264,10 +313,65 @@ describe("errors and cancellation", () => {
     await expect(drain(events)).rejects.toBe(crash);
     const spans = exporter.getFinishedSpans();
     const turn = one(spans, "codex.turn");
-    expect(turn.status).toEqual({ code: SpanStatusCode.ERROR, message: crash.message });
-    expect(turn.events.some((e) => e.name === "exception")).toBe(true);
+    expect(turn.status).toEqual({ code: SpanStatusCode.ERROR, message: "Codex Exec exited with code 1" });
+    expect(turn.attributes["codex.error.type"]).toBe("Error");
+    const exception = turn.events.find((e) => e.name === "exception");
+    expect(exception?.attributes).toEqual({ "exception.type": "Error", "exception.message": "Codex Exec exited with code 1" });
     const tool = one(spans, "codex.command_execution");
     expect(tool.status.code).toBe(SpanStatusCode.ERROR);
+  });
+
+  // The SDK throws `Codex Exec exited with code N: <stderr>` and `Failed to parse item: <raw line>`.
+  const LEAKY = [
+    {
+      name: "binary exit with stderr",
+      error: new Error(
+        `Codex Exec exited with code 1: Error loading config.toml:\n/Users/probeuser/proj/.codex/config.toml:2:9 ${PROMPT_MARKER} at file:///Users/probeuser/app/node_modules/@openai/codex-sdk/dist/index.js:309:15`,
+      ),
+      summary: "Codex Exec exited with code 1",
+    },
+    {
+      name: "binary killed by a signal",
+      error: new Error(`Codex Exec exited with signal SIGKILL: /Users/probeuser ${PROMPT_MARKER}`),
+      summary: "Codex Exec exited with signal SIGKILL",
+    },
+    {
+      name: "unparseable stdout line",
+      error: new Error(`Failed to parse item: {"aggregated_output":"AWS_SECRET=abc /Users/probeuser ${PROMPT_MARKER}"`),
+      summary: "Failed to parse item",
+    },
+    { name: "other thrown error", error: new TypeError(`bad /Users/probeuser ${PROMPT_MARKER}`), summary: "TypeError" },
+  ];
+
+  function everythingExported(spans: ReadableSpan[]): string {
+    return JSON.stringify(
+      spans.map((span) => ({ attributes: span.attributes, status: span.status, events: span.events.map((e) => ({ name: e.name, attributes: e.attributes })) })),
+    );
+  }
+
+  it.each(LEAKY)("exports only a fixed summary of a thrown error by default: $name", async ({ error, summary }) => {
+    error.stack = `${error.name}: ${error.message}\n    at CodexExec.run (file:///Users/probeuser/app/node_modules/@openai/codex-sdk/dist/index.js:309:15)`;
+    const { mod, exporter } = setup();
+    const thread = new mod.Codex([scripted(toolTurn().slice(0, 3), { throwAfter: error })]).startThread();
+    await expect(thread.run(PROMPT)).rejects.toBe(error);
+    const spans = exporter.getFinishedSpans();
+    const turn = one(spans, "codex.turn");
+    expect(turn.status).toEqual({ code: SpanStatusCode.ERROR, message: summary });
+    expect(turn.attributes["codex.error.message"]).toBe(summary);
+    const text = everythingExported(spans);
+    for (const leak of [PROMPT_MARKER, "/Users/", "node_modules", "AWS_SECRET", "config.toml", "stacktrace"]) {
+      expect(text).not.toContain(leak);
+    }
+  });
+
+  it("records the full error and stack trace only with outputs visible", async () => {
+    const { mod, exporter } = setup({ hideOutputs: false });
+    const error = new Error(`Codex Exec exited with code 1: failed at /Users/probeuser ${PROMPT_MARKER}`);
+    await expect(new mod.Codex([scripted(toolTurn().slice(0, 3), { throwAfter: error })]).startThread().run("x")).rejects.toBe(error);
+    const turn = one(exporter.getFinishedSpans(), "codex.turn");
+    expect(turn.status.message).toContain(PROMPT_MARKER);
+    const exception = turn.events.find((e) => e.name === "exception");
+    expect(exception?.attributes?.["exception.stacktrace"]).toBeDefined();
   });
 
   it("marks the turn and open items cancelled when the caller stops reading early", async () => {
@@ -315,16 +419,45 @@ describe("errors and cancellation", () => {
     expect(one(exporter.getFinishedSpans(), "codex.turn").status.code).toBe(SpanStatusCode.OK);
   });
 
-  it("records an error event as a failed turn", async () => {
+  it("records an error event with no turn.completed as a failed turn", async () => {
     const { mod, exporter } = setup();
     const thread = new mod.Codex([
-      scripted([{ type: "thread.started", thread_id: THREAD_ID }, { type: "error", message: "unauthorized" }]),
+      scripted([{ type: "thread.started", thread_id: THREAD_ID }, { type: "error", message: `unauthorized ${PROMPT_MARKER}` }]),
     ]).startThread();
     await drain((await thread.runStreamed(PROMPT)).events);
-    expect(one(exporter.getFinishedSpans(), "codex.turn").status).toEqual({
-      code: SpanStatusCode.ERROR,
-      message: "unauthorized",
-    });
+    const turn = one(exporter.getFinishedSpans(), "codex.turn");
+    expect(turn.status).toEqual({ code: SpanStatusCode.ERROR, message: "stream error" });
+    expect(turn.attributes["codex.stream_error.count"]).toBe(1);
+    expect(everythingExported(exporter.getFinishedSpans())).not.toContain(PROMPT_MARKER);
+  });
+
+  it("ends a turn OK when a retried stream error is followed by turn.completed", async () => {
+    const events = toolTurn();
+    events.splice(2, 0, { type: "error", message: `Reconnecting... 1/5 (stream disconnected) ${PROMPT_MARKER}` });
+    events.splice(3, 0, { type: "error", message: "Reconnecting... 2/5" });
+    const { mod, exporter } = setup();
+    const thread = new mod.Codex([scripted(events)]).startThread();
+    const result = await thread.run(PROMPT);
+    expect(result.finalResponse).toContain(ANSWER_MARKER);
+    const spans = exporter.getFinishedSpans();
+    const turn = one(spans, "codex.turn");
+    expect(turn.status.code).toBe(SpanStatusCode.OK);
+    expect(turn.attributes["codex.stream_error.count"]).toBe(2);
+    expect(turn.attributes["codex.error.message"]).toBeUndefined();
+    expect(turn.events.filter((e) => e.name === "codex.stream_error")).toHaveLength(2);
+    expect(turn.attributes["gen_ai.usage.input_tokens"]).toBe(19378);
+    for (const child of spans.filter((s) => s !== turn)) expect(child.status.code).toBe(SpanStatusCode.OK);
+    expect(everythingExported(spans)).not.toContain(PROMPT_MARKER);
+  });
+
+  it("keeps the stream error text on its span event only with outputs visible", async () => {
+    const events = toolTurn();
+    events.splice(2, 0, { type: "error", message: "Reconnecting... 1/5" });
+    const { mod, exporter } = setup({ hideOutputs: false });
+    await new mod.Codex([scripted(events)]).startThread().run(PROMPT);
+    const turn = one(exporter.getFinishedSpans(), "codex.turn");
+    expect(turn.status.code).toBe(SpanStatusCode.OK);
+    expect(turn.events.find((e) => e.name === "codex.stream_error")?.attributes).toEqual({ message: "Reconnecting... 1/5" });
   });
 });
 
@@ -345,7 +478,7 @@ describe("item types", () => {
       },
       { type: "item.completed", item: { id: "w", type: "web_search", query: "secret-query" } },
       { type: "item.updated", item: { id: "t", type: "todo_list", items: [{ text: "secret step", completed: true }] } },
-      { type: "item.completed", item: { id: "e", type: "error", message: "model fell back to a smaller context" } },
+      { type: "item.completed", item: { id: "e", type: "error", message: "secret-warning: deprecated key in /Users/probeuser/.codex/config.toml" } },
       { type: "item.completed", item: { id: "x", type: "brand_new_item" } },
       { type: "item.completed", item: { id: "c", type: "command_execution", command: "false", aggregated_output: "", exit_code: 1, status: "failed" } },
       { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } },
@@ -371,8 +504,11 @@ describe("item types", () => {
     expect(todo.attributes["codex.todo.completed"]).toBe(1);
     expect(todo.attributes["codex.item.incomplete"]).toBeUndefined();
 
+    // Error items are non-fatal (warnings, deprecations, model reroutes): no ERROR status.
     const error = one(spans, "codex.error");
-    expect(error.status).toEqual({ code: SpanStatusCode.ERROR, message: "model fell back to a smaller context" });
+    expect(error.status.code).toBe(SpanStatusCode.UNSET);
+    expect(error.attributes["codex.warning"]).toBe(true);
+    expect(error.attributes["codex.error.message"]).toBeUndefined();
 
     expect(one(spans, "codex.brand_new_item").attributes["fi.span.kind"]).toBe("CHAIN");
 
@@ -381,7 +517,7 @@ describe("item types", () => {
 
     expect(one(spans, "codex.turn").status.code).toBe(SpanStatusCode.OK);
     const text = allAttributeText(spans) + JSON.stringify(spans.map((s) => s.status));
-    for (const secret of ["/private/a.ts", "secret-arg", "secret-error", "secret-query", "secret step"]) {
+    for (const secret of ["/private/a.ts", "secret-arg", "secret-error", "secret-query", "secret step", "secret-warning", "/Users/"]) {
       expect(text).not.toContain(secret);
     }
   });
@@ -391,12 +527,14 @@ describe("item types", () => {
       { type: "thread.started", thread_id: THREAD_ID },
       { type: "item.completed", item: { id: "f", type: "file_change", status: "completed", changes: [{ path: "/private/a.ts", kind: "update" }] } },
       { type: "item.completed", item: { id: "m", type: "mcp_tool_call", server: "docs", tool: "search", arguments: {}, status: "failed", error: { message: "secret-error" } } },
+      { type: "item.completed", item: { id: "e", type: "error", message: "secret-warning" } },
       { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } },
     ];
     const { mod, exporter } = setup({ hideInputs: false, hideOutputs: false });
     await drain((await new mod.Codex([scripted(events)]).startThread().runStreamed("go")).events);
     const spans = exporter.getFinishedSpans();
     expect(one(spans, "codex.mcp_tool_call").status.message).toBe("secret-error");
+    expect(one(spans, "codex.error").attributes["codex.error.message"]).toBe("secret-warning");
     expect(one(spans, "codex.file_change").attributes["input.value"]).toContain("/private/a.ts");
   });
 });
@@ -438,6 +576,27 @@ describe("patching", () => {
     instrumentation.unpatch();
     await codex.startThread().run("four").catch(() => undefined);
     expect(byName(exporter.getFinishedSpans(), "codex.turn")).toHaveLength(2);
+  });
+
+  it("wrapCodex() keeps no reference per thread it starts", async () => {
+    const { provider } = memoryProvider();
+    const mod = fakeModule();
+    const instrumentation = new CodexSDKInstrumentation({ tracerProvider: provider });
+    const codex = instrumentation.wrapCodex(new mod.Codex([]));
+    for (let i = 0; i < 5000; i += 1) codex.startThread();
+    expect((instrumentation as unknown as { undo: unknown[] }).undo).toHaveLength(2);
+  });
+
+  it("a wrapThread() thread passes events through untraced after unpatch()", async () => {
+    const { provider, exporter } = memoryProvider();
+    const mod = fakeModule();
+    const instrumentation = new CodexSDKInstrumentation({ tracerProvider: provider });
+    const thread = instrumentation.wrapThread(new mod.Codex([scripted(toolTurn()), scripted(toolTurn())]).startThread());
+    await thread.run("one");
+    instrumentation.unpatch();
+    const result = await thread.run("two");
+    expect(result.finalResponse).toContain(ANSWER_MARKER);
+    expect(byName(exporter.getFinishedSpans(), "codex.turn")).toHaveLength(1);
   });
 
   it("instrumentCodexSDK() patches in one call and warns on a module without Thread", () => {

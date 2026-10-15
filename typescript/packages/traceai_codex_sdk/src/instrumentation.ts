@@ -59,11 +59,18 @@ export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentP
  * The SDK is ESM-only, so its module namespace cannot be patched; its `Thread`
  * class prototype can. `wrapCodex()` / `wrapThread()` patch single instances
  * instead, for apps that prefer not to touch the shared class.
+ *
+ * This is not an OpenTelemetry `InstrumentationBase`: there is no module to
+ * hook on `require`/`import`, so it cannot be passed to
+ * `registerInstrumentations()`. Call `manuallyInstrument()` or the wrap methods.
  */
 export class CodexSDKInstrumentation {
   private tracerProvider?: TracerProvider;
   private readonly traceConfig?: TraceConfigOptions;
+  /** Undo functions for the class patch and wrapCodex() factories (never one per thread). */
   private readonly undo: Array<() => void> = [];
+  /** False after unpatch(): instance patches stay in place but pass events through untraced. */
+  private enabled = true;
 
   constructor(config: CodexSDKInstrumentationConfig = {}) {
     this.traceConfig = config.traceConfig;
@@ -90,22 +97,30 @@ export class CodexSDKInstrumentation {
       diag.warn(`${INSTRUMENTATION_NAME}: manuallyInstrument() expects the @openai/codex-sdk module (no Thread export found)`);
       return false;
     }
+    this.enabled = true;
     const undo = patchThread(proto, () => this.tracingContext());
     if (undo) this.undo.push(undo);
     return !!undo;
   }
 
-  /** Patch one Thread instance. Returns the same instance. */
+  /**
+   * Patch one Thread instance. Returns the same instance. No reference to the
+   * thread is kept: after `unpatch()` the patched method passes events through
+   * untraced instead of being removed.
+   */
   wrapThread<T extends object>(thread: T): T {
-    const undo = patchThread(thread as ThreadLike, () => this.tracingContext());
-    if (undo) this.undo.push(undo);
+    this.enabled = true;
+    patchThread(thread as ThreadLike, () => this.tracingContext());
     return thread;
   }
 
   /** Patch one Codex instance so every thread it starts or resumes is traced. Returns the same instance. */
   wrapCodex<T extends object>(codex: T): T {
     if (!codex || typeof codex !== "object") return codex;
+    this.enabled = true;
     const target = codex as Record<string, unknown>;
+    // Held weakly: a wrapped client the app drops can be collected before unpatch().
+    const ref = new WeakRef(target);
     for (const method of ["startThread", "resumeThread"] as const) {
       const original = target[method] as ((...args: unknown[]) => object) | undefined;
       if (typeof original !== "function") continue;
@@ -119,8 +134,10 @@ export class CodexSDKInstrumentation {
         configurable: true,
       });
       this.undo.push(() => {
-        if (hadOwn) Object.defineProperty(codex, method, { value: original, writable: true, configurable: true });
-        else delete target[method];
+        const live = ref.deref();
+        if (!live) return;
+        if (hadOwn) Object.defineProperty(live, method, { value: original, writable: true, configurable: true });
+        else delete live[method];
       });
     }
     return codex;
@@ -128,6 +145,7 @@ export class CodexSDKInstrumentation {
 
   /** Remove every patch this instrumentation applied. */
   unpatch(): void {
+    this.enabled = false;
     while (this.undo.length) {
       const fn = this.undo.pop();
       try {
@@ -143,7 +161,8 @@ export class CodexSDKInstrumentation {
     await flushProvider(this.tracerProvider ?? trace.getTracerProvider());
   }
 
-  private tracingContext(): TurnTracingContext {
+  private tracingContext(): TurnTracingContext | undefined {
+    if (!this.enabled) return undefined;
     const policy = this.contentPolicy;
     const provider = this.tracerProvider ?? trace.getTracerProvider();
     const tracer = new FITracer({

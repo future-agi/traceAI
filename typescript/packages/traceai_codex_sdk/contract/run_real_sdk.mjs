@@ -20,6 +20,16 @@ function codex(scenario) {
   return new CodexSDK.Codex({ codexPathOverride: FAKE, env: { PATH: process.env.PATH ?? "", FAKE_CODEX_SCENARIO: scenario } });
 }
 const turns = () => exporter.getFinishedSpans().filter((s) => s.name === "codex.turn");
+const exported = () =>
+  JSON.stringify(
+    exporter.getFinishedSpans().map((s) => ({ attributes: s.attributes, status: s.status, events: s.events.map((e) => ({ name: e.name, attributes: e.attributes })) })),
+  );
+function assertNoLeak(marker) {
+  const text = exported();
+  for (const leak of [marker, "/Users/", "node_modules", "AWS_SECRET", "config.toml"]) {
+    assert.equal(text.includes(leak), false, `exported spans contain ${leak}`);
+  }
+}
 const childrenOf = (turn) =>
   exporter.getFinishedSpans().filter((s) => (s.parentSpanContext?.spanId ?? s.parentSpanId) === turn.spanContext().spanId);
 const results = [];
@@ -75,20 +85,43 @@ await check("runStreamed(): break before completion is cancelled", async () => {
   assert.equal(turn.attributes["codex.cancelled"], true);
 });
 
-await check("turn.failed: run() rejects, turn ERROR", async () => {
+await check("turn.failed: run() rejects, turn ERROR with a fixed label", async () => {
   const thread = codex("failed").startThread({ skipGitRepoCheck: true });
   await assert.rejects(thread.run("go"), /model provider returned 500/);
   const [turn] = turns();
   assert.equal(turn.status.code, 2);
-  assert.equal(turn.status.message, "model provider returned 500");
+  assert.equal(turn.status.message, "turn failed");
 });
 
-await check("binary exits non-zero: SDK error reaches the caller, turn ERROR", async () => {
+await check("binary exits non-zero with a path and the prompt on stderr: summary only, no leak", async () => {
   const thread = codex("crash").startThread({ skipGitRepoCheck: true });
-  await assert.rejects(thread.run("go"), /Codex Exec exited with code 1/);
+  await assert.rejects(thread.run(`go ${MARKER}`), (error) => error.message.includes("/Users/probeuser") && error.message.includes(MARKER));
   const [turn] = turns();
   assert.equal(turn.status.code, 2);
-  assert.match(turn.status.message, /exited with code 1/);
+  assert.equal(turn.status.message, "Codex Exec exited with code 1");
+  const exception = turn.events.find((e) => e.name === "exception");
+  assert.deepEqual(exception.attributes, { "exception.type": "Error", "exception.message": "Codex Exec exited with code 1" });
+  assertNoLeak(MARKER);
+});
+
+await check("unparseable stdout line: summary only, no leak", async () => {
+  const thread = codex("badline").startThread({ skipGitRepoCheck: true });
+  await assert.rejects(thread.run(`go ${MARKER}`), /Failed to parse item/);
+  const [turn] = turns();
+  assert.equal(turn.status.code, 2);
+  assert.equal(turn.status.message, "Failed to parse item");
+  assertNoLeak(MARKER);
+});
+
+await check("retried stream error then turn.completed: turn OK, retry counted, text hidden", async () => {
+  const thread = codex("retry").startThread({ skipGitRepoCheck: true });
+  const result = await thread.run(`go ${MARKER}`);
+  assert.equal(result.items.length, 3);
+  const [turn] = turns();
+  assert.equal(turn.status.code, 1, "OK");
+  assert.equal(turn.attributes["codex.stream_error.count"], 1);
+  assert.equal(childrenOf(turn).every((s) => s.status.code === 1), true);
+  assertNoLeak(MARKER);
 });
 
 hidden.unpatch();

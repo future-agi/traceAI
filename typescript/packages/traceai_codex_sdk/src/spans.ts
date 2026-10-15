@@ -11,7 +11,7 @@
  *   ├─ codex.web_search            (TOOL)
  *   ├─ codex.todo_list             (CHAIN)
  *   ├─ codex.agent_message         (LLM)
- *   └─ codex.error                 (CHAIN, status ERROR)   non-fatal error item
+ *   └─ codex.error                 (CHAIN, codex.warning=true)   non-fatal error item
  *
  * Every public method swallows its own errors: tracing never fails the agent.
  */
@@ -115,6 +115,26 @@ function errorMessage(error: unknown): string {
   return typeof error === "string" ? error : safeJson(error, ERROR_MESSAGE_MAX);
 }
 
+function errorName(error: unknown): string {
+  const name = (error as { name?: unknown } | null)?.name;
+  return typeof name === "string" && name ? name : "Error";
+}
+
+/**
+ * The SDK builds its thrown messages from raw data: `Codex Exec exited with
+ * code 1: <the binary's stderr>` and `Failed to parse item: <the raw line>`
+ * (dist/index.js of 0.162.1). Stderr can hold config lines, local paths and
+ * the user name; the raw line can hold the prompt or command output. With
+ * outputs hidden only this fixed summary is exported.
+ */
+export function errorSummary(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const exited = /^Codex Exec exited with (code -?\d+|signal [A-Z0-9]+)/.exec(message);
+  if (exited) return `Codex Exec exited with ${exited[1]}`;
+  if (message.startsWith("Failed to parse item")) return "Failed to parse item";
+  return errorName(error);
+}
+
 function finite(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -142,6 +162,15 @@ function usageTotals(usage: UsageLike): UsageTotals {
     if (value !== undefined) totals[key] = value;
   }
   return totals;
+}
+
+function maxUsage(a: UsageTotals, b: UsageTotals): UsageTotals {
+  const out: UsageTotals = {};
+  for (const key of USAGE_KEYS) {
+    const value = Math.max(a[key] ?? 0, b[key] ?? 0);
+    if (a[key] !== undefined || b[key] !== undefined) out[key] = value;
+  }
+  return out;
 }
 
 /** `current - previous` per key, or `undefined` when any key went down. */
@@ -216,7 +245,11 @@ export class TurnTracer {
   private lastEventMs: number;
   private finalResponse?: string;
   private completed = false;
+  /** `turn.failed` text; the turn failed. */
   private failedMessage?: string;
+  /** Last `error` event text. Fatal only if the turn ends without `turn.completed`. */
+  private streamErrorMessage?: string;
+  private streamErrorCount = 0;
   private readonly items = new Map<string, ItemState>();
   private anonymousItems = 0;
 
@@ -285,7 +318,14 @@ export class TurnTracer {
           this.failedMessage = typeof e.error?.message === "string" ? e.error.message : "turn failed";
           break;
         case "error":
-          this.failedMessage = typeof e.message === "string" ? e.message : "stream error";
+          // Codex also sends `error` for errors it retries ("Reconnecting... 1/5"),
+          // and the turn can still complete.
+          this.streamErrorCount += 1;
+          this.streamErrorMessage = typeof e.message === "string" ? e.message : "stream error";
+          this.turn.addEvent(
+            "codex.stream_error",
+            this.policy.hideOutputs ? {} : { message: truncate(this.streamErrorMessage, ERROR_MESSAGE_MAX) },
+          );
           break;
         case "item.started":
           this.onItemStarted(e.item, nowMs);
@@ -313,17 +353,22 @@ export class TurnTracer {
     if (!turn) return;
     try {
       const endMs = clockMs();
+      // A stream error the turn recovered from (turn.completed followed) is not a failure.
+      const failedText =
+        this.failedMessage ?? (!this.completed && this.streamErrorMessage !== undefined ? this.streamErrorMessage : undefined);
+      const failedLabel = this.failedMessage !== undefined ? "turn failed" : "stream error";
       const cancelled =
-        (outcome.kind === "returned" && !this.completed && this.failedMessage === undefined) ||
+        (outcome.kind === "returned" && !this.completed && failedText === undefined) ||
         (outcome.kind === "error" && isAbortLike(outcome.error, this.turnOptions?.signal));
       const errored = outcome.kind === "error" && !cancelled;
+      if (this.streamErrorCount > 0) turn.setAttribute(C.STREAM_ERROR_COUNT, this.streamErrorCount);
 
       for (const [id, state] of this.items) {
         this.items.delete(id);
         if (cancelled) {
           state.span.setAttribute(C.CANCELLED, true);
           state.span.setStatus({ code: SpanStatusCode.ERROR, message: "cancelled" });
-        } else if (errored || this.failedMessage !== undefined) {
+        } else if (errored || failedText !== undefined) {
           state.span.setStatus({ code: SpanStatusCode.ERROR, message: "item not completed (turn failed)" });
         } else {
           // todo_list completes with the turn; anything else still open is incomplete, not failed.
@@ -342,13 +387,23 @@ export class TurnTracer {
         turn.setAttribute(C.CANCELLED, true);
         turn.setStatus({ code: SpanStatusCode.ERROR, message: "cancelled" });
       } else if (errored) {
-        const message = truncate(errorMessage((outcome as { error: unknown }).error), ERROR_MESSAGE_MAX);
-        turn.setAttribute(C.ERROR_MESSAGE, message);
         const error = (outcome as { error: unknown }).error;
-        if (error instanceof Error) turn.recordException(error);
-        turn.setStatus({ code: SpanStatusCode.ERROR, message });
-      } else if (this.failedMessage !== undefined) {
-        const message = truncate(this.failedMessage, ERROR_MESSAGE_MAX);
+        turn.setAttribute(C.ERROR_TYPE, errorName(error));
+        if (this.policy.hideOutputs) {
+          // Error text is content (stderr, raw lines, paths): a fixed summary, no stack trace.
+          const summary = errorSummary(error);
+          turn.setAttribute(C.ERROR_MESSAGE, summary);
+          turn.recordException({ name: errorName(error), message: summary });
+          turn.setStatus({ code: SpanStatusCode.ERROR, message: summary });
+        } else {
+          const message = truncate(errorMessage(error), ERROR_MESSAGE_MAX);
+          turn.setAttribute(C.ERROR_MESSAGE, message);
+          if (error instanceof Error) turn.recordException(error);
+          turn.setStatus({ code: SpanStatusCode.ERROR, message });
+        }
+      } else if (failedText !== undefined) {
+        // Provider error bodies and Codex messages can carry content: text only with outputs visible.
+        const message = this.policy.hideOutputs ? failedLabel : truncate(failedText, ERROR_MESSAGE_MAX);
         turn.setAttribute(C.ERROR_MESSAGE, message);
         turn.setStatus({ code: SpanStatusCode.ERROR, message });
       } else {
@@ -396,6 +451,9 @@ export class TurnTracer {
   private setThreadId(threadId: string): void {
     this.threadId = threadId;
     this.turn?.setAttributes(this.sessionAttributes(threadId));
+    // A new thread starts at zero, even if this first turn fails or is cancelled:
+    // the next turn then promotes its delta (which includes this turn's spend).
+    if (!this.resumed && !usageBaselines.get(threadId)) usageBaselines.set(threadId, {});
   }
 
   /**
@@ -406,7 +464,9 @@ export class TurnTracer {
    * the last total this process saw for the thread. A new thread starts at
    * zero. A resumed thread with no total seen in this process promotes nothing
    * (`codex.usage.baseline_unknown`); later turns promote their delta.
-   * Running totals are always on `codex.cumulative.*`.
+   * A failed or cancelled turn reports no usage, so its spend lands on the
+   * thread's next completed turn. Running totals are always on
+   * `codex.cumulative.*`.
    */
   private setUsage(usage: UsageLike | undefined): void {
     if (!usage || !this.turn) return;
@@ -417,17 +477,21 @@ export class TurnTracer {
     }
     let baseline = this.threadId ? usageBaselines.get(this.threadId) : undefined;
     if (!baseline && !this.resumed) baseline = {};
-    if (this.threadId) usageBaselines.set(this.threadId, cumulative);
     if (!baseline) {
+      if (this.threadId) usageBaselines.set(this.threadId, cumulative);
       attributes[C.USAGE_BASELINE_UNKNOWN] = true;
       this.turn.setAttributes(attributes);
       return;
     }
     let turnUsage = subtractUsage(cumulative, baseline);
-    if (!turnUsage) {
-      // The total went down (a reset, or an SDK that reports per-turn usage): use it as reported.
+    if (turnUsage) {
+      if (this.threadId) usageBaselines.set(this.threadId, cumulative);
+    } else {
+      // The total went down (a reset, or an SDK that reports per-turn usage): use it as
+      // reported, and keep the larger baseline so a later turn is not counted twice.
       turnUsage = cumulative;
       attributes[C.USAGE_NON_MONOTONIC] = true;
+      if (this.threadId) usageBaselines.set(this.threadId, maxUsage(baseline, cumulative));
     }
     const { input_tokens: input, output_tokens: output } = turnUsage;
     // OpenAI accounting: input_tokens includes cached tokens, output_tokens includes reasoning.
@@ -575,8 +639,13 @@ export class TurnTracer {
         break;
       }
       case "error":
-        // Codex's own diagnostic text, not user content.
-        if (typeof item.message === "string") attributes[C.ERROR_MESSAGE] = truncate(item.message, ERROR_MESSAGE_MAX);
+        // A non-fatal error item: Codex sends warnings, deprecation notices and model
+        // reroutes this way. Its text can quote config lines or paths: outputs only.
+        attributes[C.WARNING] = true;
+        if (typeof item.message === "string") {
+          attributes[C.TEXT_LENGTH] = item.message.length;
+          if (!this.policy.hideOutputs) attributes[C.ERROR_MESSAGE] = truncate(item.message, ERROR_MESSAGE_MAX);
+        }
         break;
       default:
         break;
@@ -586,8 +655,7 @@ export class TurnTracer {
 
   private applyItemStatus(span: Span, type: string, item: ThreadItemLike): void {
     if (type === "error") {
-      const message = typeof item.message === "string" ? truncate(item.message, ERROR_MESSAGE_MAX) : "error item";
-      span.setStatus({ code: SpanStatusCode.ERROR, message });
+      // Non-fatal (`codex.warning=true`): status stays UNSET. Turn failures are on the turn span.
       return;
     }
     if (item.status === "failed") {

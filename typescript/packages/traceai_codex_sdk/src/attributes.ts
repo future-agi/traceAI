@@ -28,6 +28,7 @@ export const ITEM_SPANS: Record<string, { name: string; kind: FISpanKind; tool: 
   mcp_tool_call: { name: SpanNames.MCP_TOOL_CALL, kind: FISpanKind.TOOL, tool: true },
   web_search: { name: SpanNames.WEB_SEARCH, kind: FISpanKind.TOOL, tool: true },
   todo_list: { name: SpanNames.TODO_LIST, kind: FISpanKind.CHAIN, tool: false },
+  // Non-fatal: status UNSET with codex.warning=true.
   error: { name: SpanNames.ERROR, kind: FISpanKind.CHAIN, tool: false },
 };
 
@@ -71,7 +72,14 @@ export const CodexAttributes = {
   /** Prefix for the thread's running totals, e.g. `codex.cumulative.input_tokens`. */
   CUMULATIVE_PREFIX: "codex.cumulative.",
 
+  /** Fixed summary unless outputs are visible; see README "Privacy". */
   ERROR_MESSAGE: "codex.error.message",
+  /** Error class name of a thrown error, e.g. `Error`, `TypeError`. */
+  ERROR_TYPE: "codex.error.type",
+  /** `error` events in the turn. Codex sends them for errors it retries; the turn can still complete. */
+  STREAM_ERROR_COUNT: "codex.stream_error.count",
+  /** On `codex.error` spans: a non-fatal error item (warning, deprecation, model reroute). */
+  WARNING: "codex.warning",
   CANCELLED: "codex.cancelled",
 } as const;
 

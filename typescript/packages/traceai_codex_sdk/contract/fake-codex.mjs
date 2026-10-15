@@ -20,8 +20,17 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 emit({ type: "thread.started", thread_id: threadId });
 emit({ type: "turn.started" });
 if (scenario === "crash") {
-  process.stderr.write("fatal: provider rejected the request\n");
+  // Real codex prints config errors with the absolute path; the SDK puts stderr in its thrown message.
+  process.stderr.write(`Error loading config.toml:\n/Users/probeuser/.codex/config.toml:2:9: unclosed table; prompt was: ${prompt.trim()}\n`);
   process.exit(1);
+}
+if (scenario === "badline") {
+  process.stdout.write(`{"type":"item.completed","item":{"aggregated_output":"AWS_SECRET=abc /Users/probeuser ${prompt.trim()}"\n`);
+  await pause(1000);
+  process.exit(0);
+}
+if (scenario === "retry") {
+  emit({ type: "error", message: `Reconnecting... 1/5 (stream disconnected before completion) ${prompt.trim()}` });
 }
 await pause(20);
 emit({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "Looking at the folder." } });
