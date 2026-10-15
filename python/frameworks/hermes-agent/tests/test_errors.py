@@ -95,3 +95,5 @@ def test_process_exit_closes_open_spans(make_hermes, exporter, provider):
     spans = by_name(exporter.get_finished_spans())
     assert spans["hermes.turn"].attributes["hermes.unfinished"] is True
     assert spans["chat m"].attributes["hermes.unfinished"] is True
+    # No outcome was reported, so neither span claims OK or ERROR.
+    assert spans["hermes.turn"].status.status_code == StatusCode.UNSET

@@ -81,7 +81,7 @@ Restart Hermes (and its gateway, if you run one) after enabling the plugin.
 | `post_api_request` | `chat <model>` end | `gen_ai.response.model`, finish reason, `gen_ai.usage.input_tokens` (includes cache), `output_tokens`, `total_tokens`, cache read/write tokens, reasoning tokens, time to first chunk |
 | `api_request_error` | `chat <model>`, status `ERROR` | Hermes' error category (`rate_limit`, `overloaded`, `timeout`, ...) as `error.type` and status, the error class as `hermes.error_class`, HTTP status, retryable flag |
 | `post_tool_call` | span named after the tool | `gen_ai.tool.name`, `gen_ai.tool.call.id`, status, duration (the span is timed by Hermes' `duration_ms`); `ERROR` with Hermes' error type when the tool reports `error`, `blocked`, `timeout` or `cancelled` |
-| `on_session_end` | `hermes.turn` end | completed / failed / interrupted, exit reason category; `ERROR` when the turn failed |
+| `on_session_end` | `hermes.turn` end | completed / failed / interrupted, exit reason category; `ERROR` when the turn failed, otherwise `OK` |
 | `subagent_start` | | parents the child session's turn under the parent turn |
 | `on_session_finalize`, process exit | | closes spans that are still open (marked `hermes.unfinished`) and flushes |
 
@@ -90,8 +90,10 @@ Each provider attempt is its own span. The first attempt starts at the
 fires, so a failed attempt and its retry do not overlap.
 
 The plugin does not register on `pre_tool_call`: Hermes treats that hook as a
-fail-closed policy hook (a slow or failing callback blocks the tool). A tool
-that is still running when a turn is interrupted therefore has no span.
+fail-closed policy hook (a slow or failing callback blocks the tool), and its
+callbacks never return a directive. A tool still running when Hermes exits
+therefore has no span; a tool cancelled with Ctrl+C is reported, with status
+`cancelled`.
 
 ## What is not captured
 
@@ -129,7 +131,9 @@ The plugin never reads Hermes' files: no session transcripts, `config.yaml`,
 memory or skills. It installs no signal handlers, does not set the global
 OpenTelemetry provider, and sends uncompressed OTLP/HTTP (the Future AGI
 collector does not read `Content-Encoding`). When Future AGI is unreachable,
-Hermes' exit and session teardown wait at most about 3 seconds for the export.
+Hermes' exit and session teardown wait a few seconds for the export, then drop
+those spans: about 3 seconds with current OpenTelemetry releases, at most about
+6 with the oldest supported one (1.35).
 
 ## Not this plugin
 

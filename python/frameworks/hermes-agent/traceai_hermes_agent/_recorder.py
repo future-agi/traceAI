@@ -106,8 +106,8 @@ class HermesSpanRecorder:
     """Maps the documented Hermes plugin hooks to spans on one tracer.
 
     Each ``on_*`` method takes the hook's keyword arguments. Methods never raise
-    and always return None, so a recorder bug cannot change what Hermes does
-    (``pre_tool_call`` in particular is a directive hook).
+    and always return None (never a directive), so a recorder bug cannot change
+    what Hermes does.
     """
 
     def __init__(self, tracer: trace_api.Tracer, *, capture_content: bool = False,
@@ -295,9 +295,8 @@ class HermesSpanRecorder:
             "hermes.interrupted": interrupted,
             "hermes.turn_exit_reason": reason,
         }
-        status = None
-        if failed:
-            status = Status(StatusCode.ERROR, reason or "turn failed")
+        # Turns closed without this hook (session teardown, exit) stay UNSET.
+        status = Status(StatusCode.ERROR, reason or "turn failed") if failed else Status(StatusCode.OK)
         if _str(kw.get("turn_id")):
             self._end_turn(self._turn_key(kw), attributes=attributes, status=status)
             return

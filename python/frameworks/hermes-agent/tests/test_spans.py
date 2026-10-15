@@ -36,7 +36,8 @@ def test_turn_attributes(make_hermes, exporter):
     assert a["hermes.turn_exit_reason"] == "text_response"
     # The turn span carries no model/token fields, so cost is not double counted.
     assert "gen_ai.request.model" not in a
-    assert turn.status.status_code == StatusCode.UNSET
+    # Hermes reported the turn as not failed.
+    assert turn.status.status_code == StatusCode.OK
 
 
 def test_llm_span_model_usage_and_timing(make_hermes, exporter):
