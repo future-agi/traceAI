@@ -40,7 +40,13 @@ export interface TracingContext {
    * waits for `wait()` / a terminal status before its span is closed.
    */
   graceMs: number;
-  /** Runs whose span is still open, so `forceFlush()` can close the ones in their grace period. */
+  /**
+   * How long a run whose end is already known (wait() resolved, terminal
+   * status) keeps its span open for a stream that is still being read. Stops
+   * a partly read, never-closed stream from holding the span open forever.
+   */
+  drainMs: number;
+  /** Runs whose span is still open, so `forceFlush()` / `shutdown()` can close them. */
   registry: Set<RunWatcher>;
 }
 
@@ -155,6 +161,7 @@ function factoryFailed(
     const runtime = options && typeof options === "object" && options.cloud ? "cloud" : options?.local ? "local" : runtimeOf(agentId);
     recordFactoryError({
       tracer: ctx.tracer,
+      policy: ctx.policy,
       name: spanName,
       parentContext,
       startTimeMs,
@@ -230,7 +237,9 @@ export class RunWatcher {
   private pendingResult?: RunResultLike;
   private pendingError?: { error: unknown };
   private terminalSeen = false;
+  private streamEnded = false;
   private graceTimer?: ReturnType<typeof setTimeout>;
+  private drainTimer?: ReturnType<typeof setTimeout>;
   private unsubscribe?: () => void;
 
   constructor(
@@ -252,16 +261,41 @@ export class RunWatcher {
     return this.graceTimer !== undefined;
   }
 
-  /** Close now with what is known (used by `forceFlush()` / `shutdown()`). */
+  /** True once the run's end is known: wait() settled, a terminal status, or the stream ended cleanly. */
+  get outcomeKnown(): boolean {
+    return (
+      !!this.pendingResult ||
+      !!this.pendingError ||
+      this.terminalSeen ||
+      this.streamEnded ||
+      !!this.tracer.statusFromStream ||
+      this.handleTerminal()
+    );
+  }
+
+  /**
+   * Close now with what is known. Used by `forceFlush()` (runs whose end is
+   * known) and `shutdown()` (every open run). A stream still being read is
+   * detached first: its open tool spans end as incomplete.
+   */
   flush(): void {
     if (this.finished) return;
-    this.finish(this.pendingError ? { kind: "error", error: this.pendingError.error } : this.pendingResult ? { kind: "result", result: this.pendingResult } : { kind: "status" });
+    if (this.activeStreams > 0) {
+      this.activeStreams = 0;
+      this.tracer.detach();
+    }
+    if (this.pendingError) this.finish({ kind: "error", error: this.pendingError.error });
+    else if (this.pendingResult) this.finish({ kind: "result", result: this.pendingResult });
+    else if (this.outcomeKnown) this.finish({ kind: "status" });
+    else this.finish({ kind: "detached" });
   }
 
   onStreamStart(): void {
     this.activeStreams += 1;
     this.streamed = true;
     this.clearGrace();
+    // Started after the run ended (within the grace period): bound how long it may stay open.
+    if (this.terminalSeen || this.pendingResult || this.pendingError) this.startDrain();
   }
 
   onStreamEvent(event: SDKMessageLike): void {
@@ -271,6 +305,7 @@ export class RunWatcher {
   /** The stream ended cleanly: the run ended. */
   onStreamDone(): void {
     this.activeStreams = Math.max(0, this.activeStreams - 1);
+    this.streamEnded = true;
     if (this.activeStreams > 0) return;
     if (this.pendingError || this.pendingResult || this.handleTerminal() || this.tracer.statusFromStream) {
       this.terminalSeen = true;
@@ -311,6 +346,20 @@ export class RunWatcher {
     this.tryFinish();
   }
 
+  /**
+   * The run's end is known but a stream is still open (read partly and never
+   * closed, or still draining). Close the span after `drainMs` anyway.
+   */
+  private startDrain(): void {
+    if (this.drainTimer || this.finished || this.activeStreams === 0) return;
+    const timer = setTimeout(() => {
+      this.drainTimer = undefined;
+      if (!this.finished) this.flush();
+    }, this.ctx.drainMs);
+    (timer as { unref?: () => void }).unref?.();
+    this.drainTimer = timer;
+  }
+
   private subscribe(): void {
     const subscribe = this.run.onDidChangeStatus;
     if (typeof subscribe !== "function") return;
@@ -319,7 +368,10 @@ export class RunWatcher {
         safe(() => {
           if (!isTerminalStatus(status) || this.finished) return;
           this.terminalSeen = true;
-          if (this.activeStreams > 0) return;
+          if (this.activeStreams > 0) {
+            this.startDrain();
+            return;
+          }
           if (!this.streamed && !this.pendingResult && !this.pendingError) {
             // Finished before anyone read the stream: give the app a moment to start reading it or call wait().
             this.startGrace();
@@ -344,7 +396,11 @@ export class RunWatcher {
   }
 
   private tryFinish(): void {
-    if (this.finished || this.activeStreams > 0) return;
+    if (this.finished) return;
+    if (this.activeStreams > 0) {
+      if (this.pendingError || this.pendingResult || this.terminalSeen) this.startDrain();
+      return;
+    }
     if (this.pendingError) this.finish({ kind: "error", error: this.pendingError.error });
     else if (this.pendingResult) this.finish({ kind: "result", result: this.pendingResult });
     else if (this.terminalSeen || this.handleTerminal()) this.finish({ kind: "status" });
@@ -354,7 +410,11 @@ export class RunWatcher {
     if (this.graceTimer || this.finished) return;
     const timer = setTimeout(() => {
       this.graceTimer = undefined;
-      if (this.finished || this.activeStreams > 0) return;
+      if (this.finished) return;
+      if (this.activeStreams > 0) {
+        this.startDrain();
+        return;
+      }
       this.finish(this.pendingResult ? { kind: "result", result: this.pendingResult } : { kind: "status" });
     }, this.ctx.graceMs);
     (timer as { unref?: () => void }).unref?.();
@@ -368,6 +428,8 @@ export class RunWatcher {
 
   private finish(outcome: Parameters<RunTracer["finish"]>[0]): void {
     this.clearGrace();
+    if (this.drainTimer) clearTimeout(this.drainTimer);
+    this.drainTimer = undefined;
     this.tracer.finish(outcome, this.run);
     this.ctx.registry.delete(this);
     const unsubscribe = this.unsubscribe;

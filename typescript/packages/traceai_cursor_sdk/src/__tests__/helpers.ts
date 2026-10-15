@@ -42,6 +42,18 @@ export function allAttributeText(spans: ReadableSpan[]): string {
   return JSON.stringify(spans.map((span) => span.attributes));
 }
 
+/** Everything a span exports: attributes, events (exception events included) and status. */
+export function exportedText(spans: ReadableSpan[]): string {
+  return JSON.stringify(
+    spans.map((span) => ({
+      name: span.name,
+      attributes: span.attributes,
+      events: span.events.map((e) => ({ name: e.name, attributes: e.attributes })),
+      status: span.status,
+    })),
+  );
+}
+
 /** Minimal synchronous context manager, so `context.with()` works in tests without extra deps. */
 export class StackContextManager implements ContextManager {
   private stack: Context[] = [ROOT_CONTEXT];

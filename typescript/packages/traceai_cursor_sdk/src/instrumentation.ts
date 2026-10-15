@@ -20,6 +20,7 @@ export const INSTRUMENTATION_NAME = "@traceai/cursor-sdk";
 const MODULE_NAME = "@cursor/sdk";
 const SUPPORTED_VERSIONS = [">=1.0.0 <2"];
 const DEFAULT_GRACE_MS = 2000;
+const DEFAULT_DRAIN_MS = 30_000;
 
 /**
  * fi-core env keys. Read fail-closed, unlike fi-core (`value.toLowerCase() ===
@@ -47,6 +48,16 @@ export interface CursorSDKInstrumentationConfig {
    * Default 2000. `forceFlush()` / `shutdown()` close waiting runs at once.
    */
   runEndGraceMs?: number;
+  /**
+   * Milliseconds a run span stays open, after the run's end is known, for a
+   * `run.stream()` that is still being read (or was read partly and never
+   * closed). Default 30000. Open tool spans then end as incomplete.
+   */
+  streamDrainTimeoutMs?: number;
+}
+
+function nonNegative(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 /** `false` only for an explicit `false`; any other value (or none) keeps content hidden. */
@@ -73,7 +84,7 @@ const instances = new Set<WeakRef<CursorSDKInstrumentation>>();
  * import * as CursorSDK from "@cursor/sdk";
  * const instrumentation = new CursorSDKInstrumentation({ tracerProvider });
  * instrumentation.manuallyInstrument(CursorSDK);
- * const agent = await CursorSDK.Agent.create({ model: { id: "auto" }, local: { cwd } });
+ * const agent = await CursorSDK.Agent.create({ model: { id: "composer-2.5" }, local: { cwd } });
  * const run = await agent.send("...");          // one "Cursor Agent run" span
  * for await (const event of run.stream()) {}    // tool / thinking / assistant child spans
  * ```
@@ -85,6 +96,9 @@ const instances = new Set<WeakRef<CursorSDKInstrumentation>>();
 export class CursorSDKInstrumentation extends InstrumentationBase {
   private readonly traceConfig?: TraceConfigOptions;
   private readonly graceMs: number;
+  private readonly drainMs: number;
+  /** Set by `unpatch()`: agents created earlier pass through untraced. */
+  private stopped = false;
   private readonly registry = new Set<RunWatcher>();
   private readonly undo = new Map<object, () => void>();
   private providerForFlush?: TracerProvider;
@@ -92,7 +106,8 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
   constructor(config: CursorSDKInstrumentationConfig = {}) {
     super(INSTRUMENTATION_NAME, VERSION, Object.assign({}, config.instrumentationConfig));
     this.traceConfig = config.traceConfig;
-    this.graceMs = typeof config.runEndGraceMs === "number" && config.runEndGraceMs >= 0 ? config.runEndGraceMs : DEFAULT_GRACE_MS;
+    this.graceMs = nonNegative(config.runEndGraceMs, DEFAULT_GRACE_MS);
+    this.drainMs = nonNegative(config.streamDrainTimeoutMs, DEFAULT_DRAIN_MS);
     if (config.tracerProvider) this.setTracerProvider(config.tracerProvider);
     instances.add(new WeakRef(this));
   }
@@ -132,11 +147,17 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
 
   /** Trace one existing `SDKAgent` (from any source). Returns the same instance. */
   wrapAgent<T extends object>(agent: T): T {
+    this.stopped = false;
     return wrapAgent(agent, () => this.tracingContext());
   }
 
-  /** Remove the class patches this instrumentation applied. Agents already created stop tracing too. */
+  /**
+   * Remove the class patches this instrumentation applied. Agents created
+   * before this call stop tracing too (their wrapped `send()` passes straight
+   * through) until `manuallyInstrument()` or `wrapAgent()` is called again.
+   */
   unpatch(): void {
+    this.stopped = true;
     for (const [target, undo] of this.undo) {
       this.undo.delete(target);
       try {
@@ -149,24 +170,26 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
 
   override disable(): void {
     super.disable();
-    this.closeWaitingRuns();
+    this.closeRuns(false);
   }
 
   /**
-   * Close runs whose end is known but whose span is still waiting for
-   * `wait()` or a terminal status, then flush the provider's span processors.
-   * Does not shut the provider down.
+   * Close runs whose end is already known but whose span is still open
+   * (waiting for `wait()` / a terminal status, or for a stream that is still
+   * being read), then flush the provider's span processors. Does not shut
+   * the provider down.
    */
   async forceFlush(): Promise<void> {
-    this.closeWaitingRuns();
+    this.closeRuns(false);
     await flushProvider(this.providerForFlush ?? trace.getTracerProvider());
   }
 
-  private closeWaitingRuns(): void {
+  /** `all`: also close runs still in progress (process exit). */
+  private closeRuns(all: boolean): void {
     // disable() can run inside the base constructor, before fields exist.
     if (!this.registry) return;
     for (const watcher of [...this.registry]) {
-      if (watcher.inGrace) watcher.flush();
+      if (all || watcher.inGrace || watcher.outcomeKnown) watcher.flush();
     }
   }
 
@@ -176,6 +199,7 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
       diag.warn(`${INSTRUMENTATION_NAME}: expected the @cursor/sdk module (no Agent.create found); nothing patched`);
       return false;
     }
+    this.stopped = false;
     if (isPatched(AgentClass)) return true;
     const undo = patchAgentClass(AgentClass, () => this.tracingContext());
     if (undo) this.undo.set(AgentClass, undo);
@@ -191,13 +215,13 @@ export class CursorSDKInstrumentation extends InstrumentationBase {
   }
 
   private tracingContext(): TracingContext | undefined {
-    if (!this.isEnabled()) return undefined;
+    if (!this.isEnabled() || this.stopped) return undefined;
     const policy = this.contentPolicy;
     const tracer = new FITracer({
       tracer: this.tracer,
       traceConfig: { ...this.traceConfig, hideInputs: policy.hideInputs, hideOutputs: policy.hideOutputs },
     });
-    return { tracer, policy, graceMs: this.graceMs, registry: this.registry };
+    return { tracer, policy, graceMs: this.graceMs, drainMs: this.drainMs, registry: this.registry };
   }
 }
 
@@ -212,9 +236,10 @@ export function instrumentCursorSDK(
 }
 
 /**
- * Close waiting run spans of every instrumentation in this process and flush
- * the provider before a short script exits. Export errors are logged, never
- * thrown: export failure does not fail the agent.
+ * Before a short script exits: close every open run span of every
+ * instrumentation in this process (a run still in progress closes with
+ * `cursor.run.status=running` and no status), then flush the provider.
+ * Export errors are logged, never thrown: export failure does not fail the agent.
  */
 export async function shutdown(tracerProvider?: TracerProvider): Promise<void> {
   for (const ref of [...instances]) {
@@ -223,7 +248,7 @@ export async function shutdown(tracerProvider?: TracerProvider): Promise<void> {
       instances.delete(ref);
       continue;
     }
-    (instrumentation as unknown as { closeWaitingRuns(): void }).closeWaitingRuns();
+    (instrumentation as unknown as { closeRuns(all: boolean): void }).closeRuns(true);
   }
   await flushProvider(tracerProvider ?? trace.getTracerProvider());
 }

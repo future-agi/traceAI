@@ -17,20 +17,21 @@ import {
   slowRun,
 } from "./fixtures/events";
 import { FakeAuthenticationError, FakeRun, Step, makeFakeSdk } from "./fixtures/fakeSdk";
-import { StackContextManager, allAttributeText, attr, byName, drain, memoryProvider, one, parentId, sleep, until } from "./helpers";
+import { StackContextManager, allAttributeText, attr, byName, drain, exportedText, memoryProvider, one, parentId, sleep, until } from "./helpers";
 
 const { provider, exporter } = memoryProvider();
 const instrumentations: CursorSDKInstrumentation[] = [];
 
 function instrument(
   script: Parameters<typeof makeFakeSdk>[0],
-  options: { createError?: Error; traceConfig?: { hideInputs?: boolean; hideOutputs?: boolean }; graceMs?: number } = {},
+  options: { createError?: Error; traceConfig?: { hideInputs?: boolean; hideOutputs?: boolean }; graceMs?: number; drainMs?: number } = {},
 ) {
   const sdk = makeFakeSdk(script, options.createError);
   const instrumentation = new CursorSDKInstrumentation({
     tracerProvider: provider,
     traceConfig: options.traceConfig,
     runEndGraceMs: options.graceMs ?? 30,
+    streamDrainTimeoutMs: options.drainMs,
   });
   instrumentations.push(instrumentation);
   expect(instrumentation.manuallyInstrument(sdk)).toBe(true);
@@ -231,7 +232,10 @@ describe("run outcomes", () => {
     await until(() => runSpans().length === 1);
     const span = one(spans(), SpanNames.RUN);
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
-    expect(span.status.message).toBe("Model provider returned 500");
+    // Cursor's run-error text is content: a fixed summary by default.
+    expect(span.status.message).toBe("RunError (provider_error)");
+    expect(attr(span, C.ERROR_MESSAGE)).toBe("RunError (provider_error)");
+    expect(exportedText(spans())).not.toContain("Model provider returned 500");
     expect(attr(span, C.RUN_ERROR_CODE)).toBe("provider_error");
     expect(attr(span, C.RUN_STATUS)).toBe("error");
     const ls = one(spans(), `${SpanNames.TOOL_PREFIX}ls`);
@@ -257,8 +261,8 @@ describe("run outcomes", () => {
     const run = await agent.send("hi");
     await expect(drain(run.stream())).rejects.toBe(boom);
     const span = one(spans(), SpanNames.RUN);
-    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "connection reset" });
-    expect(span.events.some((e) => e.name === "exception")).toBe(true);
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "Error" });
+    expect(span.events.find((e) => e.name === "exception")?.attributes).toEqual({ "exception.type": "Error" });
     const ls = one(spans(), `${SpanNames.TOOL_PREFIX}ls`);
     expect(ls.status.code).toBe(SpanStatusCode.ERROR);
     expect(attr(ls, C.TOOL_INCOMPLETE)).toBe(true);
@@ -270,12 +274,15 @@ describe("run outcomes", () => {
     const agent = await sdk.Agent.create({ model: { id: "composer-2" } });
     await expect(agent.send("hi")).rejects.toBe(auth);
     const span = one(spans(), SpanNames.RUN);
-    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "Invalid User API Key" });
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "AuthenticationError (401)" });
+    expect(attr(span, C.ERROR_MESSAGE)).toBe("AuthenticationError (401)");
     expect(attr(span, C.ERROR_NAME)).toBe("AuthenticationError");
+    expect(attr(span, C.ERROR_CODE)).toBe("error");
     expect(attr(span, C.ERROR_STATUS)).toBe(401);
+    expect(attr(span, C.ERROR_RETRYABLE)).toBe(false);
     expect(attr(span, C.ERROR_OPERATION)).toBe("agent.send");
     const exception = span.events.find((e) => e.name === "exception");
-    expect(exception?.attributes?.["exception.message"]).toBe("Invalid User API Key");
+    expect(exception?.attributes).toEqual({ "exception.type": "AuthenticationError" });
   });
 
   it("records Agent.create() rejecting as one ERROR 'Cursor Agent create' span, error unchanged", async () => {
@@ -314,8 +321,81 @@ describe("run outcomes", () => {
     }
     await expect(run.wait()).rejects.toBe(err);
     const span = one(spans(), SpanNames.RUN);
-    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "wait unsupported" });
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "Error" });
     expect(span.events.some((e) => e.name === "exception")).toBe(true);
+  });
+});
+
+describe("error text is content", () => {
+  const PATH = "/Users/alice/secret-proj/.env";
+  const MARKER = "ERRMARKER-5521";
+
+  function pathError(): FakeAuthenticationError {
+    const error = new FakeAuthenticationError(`ENOENT: open '${PATH}' while handling ${MARKER}`, "agent.send");
+    error.stack = `AuthenticationError: ENOENT\n    at send (file://${PATH}/../node_modules/@cursor/sdk/dist/esm/index.js:1:1)`;
+    return error;
+  }
+
+  async function failEverywhere(traceConfig?: { hideInputs?: boolean; hideOutputs?: boolean }) {
+    // 1) Agent.create throws an error carrying a path.
+    const create = instrument({ runs: [] }, { createError: pathError(), traceConfig });
+    await expect(create.sdk.Agent.create({ model: { id: "auto" } })).rejects.toThrow(MARKER);
+    // 2) send() throws one.
+    const send = instrument({ runs: [], sendError: pathError() }, { traceConfig });
+    const agent = await send.sdk.Agent.create({ model: { id: "auto" } });
+    await expect(agent.send("hi")).rejects.toThrow(MARKER);
+    // 3) A run fails with a path in Cursor's run error and in the status event.
+    const e = events();
+    const runFail = instrument(
+      {
+        runs: [
+          [
+            { event: e.running },
+            { event: { ...e.errored, message: `tool crashed reading ${PATH} ${MARKER}` }, delayMs: 2 },
+            { finish: "error", error: { message: `[unknown] ${PATH} ${MARKER}`, code: "internal" } },
+          ],
+        ],
+      },
+      { traceConfig },
+    );
+    const agent2 = await runFail.sdk.Agent.create({ model: { id: "auto" } });
+    const run = await agent2.send("hi");
+    await drain(run.stream());
+    await run.wait();
+    await until(() => runSpans().length === 2);
+    return exportedText(spans());
+  }
+
+  it("default: no message, no stack, no path in events, status or attributes; fixed summaries instead", async () => {
+    const text = await failEverywhere();
+    expect(text).not.toContain(PATH);
+    expect(text).not.toContain("/Users/");
+    expect(text).not.toContain(MARKER);
+    expect(text).not.toContain("exception.message");
+    expect(text).not.toContain("exception.stacktrace");
+    const create = one(spans(), SpanNames.CREATE);
+    expect(create.status.message).toBe("AuthenticationError (401)");
+    expect(create.events[0].attributes).toEqual({ "exception.type": "AuthenticationError" });
+    const [sendSpan, failedRun] = runSpans();
+    expect(sendSpan.status.message).toBe("AuthenticationError (401)");
+    expect(failedRun.status.message).toBe("RunError (internal)");
+    expect(attr(failedRun, C.RUN_ERROR_CODE)).toBe("internal");
+  });
+
+  it("only hiding one side still redacts error text", async () => {
+    const text = await failEverywhere({ hideInputs: false, hideOutputs: true });
+    expect(text).not.toContain(PATH);
+    expect(text).not.toContain("exception.stacktrace");
+  });
+
+  it("opt-in (inputs and outputs visible): full message, stack trace and Cursor's run-error text", async () => {
+    const text = await failEverywhere({ hideInputs: false, hideOutputs: false });
+    expect(text).toContain(PATH);
+    expect(text).toContain("exception.stacktrace");
+    expect(text).toContain("exception.message");
+    const create = one(spans(), SpanNames.CREATE);
+    expect(create.status.message).toContain(MARKER);
+    expect(runSpans()[1].status.message).toBe(`[unknown] ${PATH} ${MARKER}`);
   });
 });
 
@@ -456,6 +536,52 @@ describe("consumption patterns", () => {
   });
 });
 
+describe("streams that are never finished", () => {
+  it("a partly read stream that is never closed: the span closes after wait() plus the drain timeout", async () => {
+    const { sdk } = instrument({ runs: [fullRun()] }, { drainMs: 40 });
+    const agent = await sdk.Agent.create({ model: { id: "composer-2" } });
+    const run = await agent.send("hi");
+    const iterator = run.stream();
+    await iterator.next();
+    await iterator.next();
+    const result = await run.wait();
+    expect(result.status).toBe("finished");
+    expect(runSpans()).toHaveLength(0);
+    await until(() => runSpans().length === 1);
+    const span = runSpans()[0];
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+    expect(attr(span, C.RUN_STREAM_DETACHED)).toBe(true);
+    expect(attr(span, S.TOTAL_TOKENS)).toBe(USAGE.totalTokens);
+  });
+
+  it("forceFlush() closes a partly read stream's run once its end is known", async () => {
+    const { sdk, instrumentation } = instrument({ runs: [fullRun()] }, { drainMs: 60_000 });
+    const agent = await sdk.Agent.create({ model: { id: "composer-2" } });
+    const run = await agent.send("hi");
+    const iterator = run.stream();
+    await iterator.next();
+    await run.wait();
+    await sleep(20);
+    expect(runSpans()).toHaveLength(0);
+    await instrumentation.forceFlush();
+    expect(runSpans()).toHaveLength(1);
+    expect(runSpans()[0].status.code).toBe(SpanStatusCode.OK);
+  });
+
+  it("shutdown() closes a run that is still in progress (status UNSET, cursor.run.status=running)", async () => {
+    const { sdk } = instrument({ runs: [slowRun()] }, { drainMs: 60_000 });
+    const agent = await sdk.Agent.create({ model: { id: "composer-2" } });
+    const run = await agent.send("hi");
+    const iterator = run.stream();
+    await iterator.next();
+    await shutdown(provider);
+    const span = one(spans(), SpanNames.RUN);
+    expect(attr(span, C.RUN_STATUS)).toBe("running");
+    expect(span.status.code).toBe(SpanStatusCode.UNSET);
+    await run.wait();
+  });
+});
+
 describe("sessions", () => {
   it("two sends on one agent: two traces, one session (the agent id)", async () => {
     const { sdk } = instrument({ runs: [fullRun(AGENT_ID, "run-1"), fullRun(AGENT_ID, "run-2")] });
@@ -521,6 +647,22 @@ describe("patching", () => {
     expect(Object.prototype.hasOwnProperty.call(sdk.Agent, "create")).toBe(true);
     const plain = await sdk.Agent.create({ model: { id: "composer-2" } });
     expect(isPatched(plain)).toBe(false);
+  });
+
+  it("unpatch() also stops agents created before it, without disable()", async () => {
+    const { sdk, instrumentation } = instrument({ runs: [fullRun(), fullRun()] });
+    const agent = await sdk.Agent.create({ model: { id: "composer-2" } });
+    instrumentation.unpatch();
+    const run = await agent.send("hi");
+    await drain(run.stream());
+    await run.wait();
+    await sleep(20);
+    expect(spans()).toHaveLength(0);
+    // Instrumenting again resumes tracing for that agent.
+    expect(instrumentation.manuallyInstrument(sdk)).toBe(true);
+    const again = await agent.send("again");
+    await again.wait();
+    await until(() => runSpans().length === 1);
   });
 
   it("wrapAgent() traces an agent obtained elsewhere", async () => {

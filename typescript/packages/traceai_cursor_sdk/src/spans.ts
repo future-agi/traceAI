@@ -44,6 +44,16 @@ export interface ContentPolicy {
   hideOutputs: boolean;
 }
 
+/**
+ * Error text is content: messages, stack traces and Cursor's run-error text
+ * can carry local paths, usernames and prompt fragments. Unless both inputs
+ * and outputs are opted in, errors are exported as their class name and
+ * structural fields only.
+ */
+export function redactsErrors(policy: ContentPolicy): boolean {
+  return policy.hideInputs || policy.hideOutputs;
+}
+
 /** How a run ended, as far as the wrapper could observe it. */
 export type FinishOutcome =
   /** `run.wait()` (or `Agent.prompt()`) resolved with a `RunResult`. */
@@ -150,7 +160,7 @@ export function sdkErrorAttributes(error: unknown): Attributes {
   const attributes: Attributes = {};
   if (!error || typeof error !== "object") return attributes;
   const e = error as { name?: unknown; code?: unknown; status?: unknown; isRetryable?: unknown; operation?: unknown };
-  if (typeof e.name === "string" && e.name) attributes[C.ERROR_NAME] = e.name;
+  attributes[C.ERROR_NAME] = errorName(error);
   if (typeof e.code === "string" && e.code) attributes[C.ERROR_CODE] = e.code;
   if (finite(e.status) !== undefined) attributes[C.ERROR_STATUS] = e.status as number;
   if (typeof e.isRetryable === "boolean") attributes[C.ERROR_RETRYABLE] = e.isRetryable;
@@ -172,11 +182,42 @@ export function runtimeOf(agentId: string | undefined): "cloud" | "local" | unde
   return agentId.startsWith("bc-") ? "cloud" : "local";
 }
 
-function recordError(span: Span, error: unknown): void {
-  if (error instanceof Error) {
+/** The error's class name (`error.name`, else the constructor's name). */
+export function errorName(error: unknown): string {
+  if (error && typeof error === "object") {
+    const name = (error as { name?: unknown }).name;
+    if (typeof name === "string" && name && name !== "Error") return name;
+    const ctor = (error as { constructor?: { name?: unknown } }).constructor?.name;
+    if (typeof ctor === "string" && ctor.length > 1 && ctor !== "Object") return ctor;
+    if (typeof name === "string" && name) return name;
+  }
+  return "Error";
+}
+
+/** Fixed, content-free summary: `<ErrorName> (<http status or code>)`, e.g. `AuthenticationError (401)`. */
+export function errorSummary(error: unknown): string {
+  const name = errorName(error);
+  const e = (error && typeof error === "object" ? error : {}) as { status?: unknown; code?: unknown };
+  const detail = finite(e.status) !== undefined ? String(e.status) : typeof e.code === "string" && e.code ? e.code : undefined;
+  return detail ? `${name} (${detail})` : name;
+}
+
+/** Status / `cursor.error.message` text for a thrown error under the policy. */
+function thrownErrorMessage(error: unknown, policy: ContentPolicy): string {
+  return redactsErrors(policy) ? errorSummary(error) : truncate(errorMessage(error), ERROR_MESSAGE_MAX);
+}
+
+/**
+ * Record the exception event. Redacted: only `exception.type` (the class
+ * name), no message and no stack trace. Opted in: the full error.
+ */
+function recordError(span: Span, error: unknown, policy: ContentPolicy): void {
+  if (redactsErrors(policy)) {
+    span.recordException({ name: errorName(error) });
+  } else if (error instanceof Error) {
     span.recordException(error);
   } else {
-    span.recordException({ name: "Error", message: errorMessage(error) });
+    span.recordException({ name: errorName(error), message: errorMessage(error) });
   }
 }
 
@@ -320,7 +361,7 @@ export class RunTracer {
           if (typeof e.status === "string") {
             this.lastStatusEvent = e.status;
             this.span.addEvent("cursor.status", { [C.LAST_STATUS_EVENT]: e.status }, toHrTime(nowMs));
-            // Cursor's own diagnostic text for ERROR (the SDK error message), not user content.
+            // Cursor's run-error text: exported only when error text is opted in (see finish()).
             if (typeof e.message === "string" && e.message) {
               this.lastStatusMessage = truncate(e.message, ERROR_MESSAGE_MAX);
             }
@@ -434,9 +475,9 @@ export class RunTracer {
 
       span.setAttributes(attributes);
       if (outcome.kind === "error") {
-        const message = truncate(errorMessage(outcome.error), ERROR_MESSAGE_MAX);
+        const message = thrownErrorMessage(outcome.error, this.policy);
         span.setAttributes({ ...sdkErrorAttributes(outcome.error), [C.ERROR_MESSAGE]: message });
-        recordError(span, outcome.error);
+        recordError(span, outcome.error, this.policy);
         span.setStatus({ code: SpanStatusCode.ERROR, message });
       } else if (cancelled) {
         span.setAttribute(C.RUN_CANCELLED, true);
@@ -446,7 +487,12 @@ export class RunTracer {
         const code = runError && typeof runError.code === "string" ? runError.code : undefined;
         if (code) span.setAttribute(C.RUN_ERROR_CODE, code);
         const raw = runError && typeof runError.message === "string" && runError.message ? runError.message : this.lastStatusMessage;
-        const message = truncate(raw ?? "run failed", ERROR_MESSAGE_MAX);
+        // Cursor's run-error text can quote paths or prompt text: a fixed summary unless opted in.
+        const message = redactsErrors(this.policy)
+          ? code
+            ? `RunError (${code})`
+            : "RunError"
+          : truncate(raw ?? "run failed", ERROR_MESSAGE_MAX);
         span.setAttribute(C.ERROR_MESSAGE, message);
         span.setStatus({ code: SpanStatusCode.ERROR, message });
       } else if (status === "finished") {
@@ -757,6 +803,7 @@ export class RunTracer {
  */
 export function recordFactoryError(args: {
   tracer: Tracer;
+  policy: ContentPolicy;
   name: string;
   parentContext: Context;
   startTimeMs: number;
@@ -781,14 +828,14 @@ export function recordFactoryError(args: {
       attributes[C.AGENT_ID] = args.agentId;
       if (contextAttributes[S.SESSION_ID] == null) attributes[S.SESSION_ID] = args.agentId;
     }
-    const message = truncate(errorMessage(args.error), ERROR_MESSAGE_MAX);
+    const message = thrownErrorMessage(args.error, args.policy);
     Object.assign(attributes, sdkErrorAttributes(args.error), { [C.ERROR_MESSAGE]: message });
     const span = args.tracer.startSpan(
       args.name,
       { kind: SpanKind.INTERNAL, startTime: toHrTime(args.startTimeMs), attributes },
       args.parentContext,
     );
-    recordError(span, args.error);
+    recordError(span, args.error, args.policy);
     span.setStatus({ code: SpanStatusCode.ERROR, message });
     span.end(toHrTime(Math.max(clockMs(), args.startTimeMs)));
   } catch (error) {
