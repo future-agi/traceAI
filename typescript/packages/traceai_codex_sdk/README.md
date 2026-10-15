@@ -101,7 +101,7 @@ A fi-core `session.id` the app set (fi-core context helpers) is kept; the thread
 - If the total goes down, the reported value is promoted as is and `codex.usage.non_monotonic=true` is set.
 - The running totals are always on `codex.cumulative.input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`.
 
-`input_tokens` includes cached tokens and `output_tokens` includes reasoning tokens (OpenAI accounting); `total_tokens` is their sum. No cost is computed here.
+`input_tokens` includes cached tokens and `output_tokens` includes reasoning tokens (OpenAI accounting); `total_tokens` is their sum. No cost is computed here; Future AGI estimates one from the model and tokens when `model` is set and it knows the model's price.
 
 ## Privacy: content is off by default
 
