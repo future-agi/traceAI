@@ -12,12 +12,13 @@ const cwd = process.argv[2] ?? process.cwd();
 const tracerProvider = register({ projectName: process.env.FI_PROJECT_NAME ?? "cursor-sdk-example", projectType: ProjectType.OBSERVE });
 new CursorSDKInstrumentation({ tracerProvider }).manuallyInstrument(CursorSDK);
 
-const agent = await CursorSDK.Agent.create({
-  apiKey: process.env.CURSOR_API_KEY,
-  model: { id: process.env.CURSOR_MODEL ?? "auto" },
-  local: { cwd },
-});
+let agent;
 try {
+  agent = await CursorSDK.Agent.create({
+    apiKey: process.env.CURSOR_API_KEY,
+    model: { id: process.env.CURSOR_MODEL ?? "auto" },
+    local: { cwd },
+  });
   const run = await agent.send("List the files in this folder and read README.md, then tell me its first line.");
   for await (const event of run.stream()) {
     if (event.type === "tool_call") console.log(`tool ${event.name}: ${event.status}`);
@@ -28,6 +29,7 @@ try {
   const second = await (await agent.send("Now say which file is the largest.")).wait();
   console.log("run 2:", second.status, second.usage, "\nagent (session id):", agent.agentId);
 } finally {
-  await agent[Symbol.asyncDispose]();
+  await agent?.[Symbol.asyncDispose]();
+  // Export the spans, including a failed Agent.create (e.g. a bad CURSOR_API_KEY).
   await shutdown(tracerProvider);
 }
