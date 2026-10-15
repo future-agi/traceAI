@@ -17,6 +17,13 @@ export const ARG_SECRET = "ARG_SECRET_/tmp/project";
 export const RESULT_SECRET = "RESULT_SECRET_README.md_hello.js";
 export const OUTPUT_SECRET = "OUTPUT_SECRET_the_title_is_Throwaway";
 export const TOOL_ERROR_SECRET = "TOOL_ERROR_SECRET_ENOENT_missing.txt";
+/** A local path with a username, as provider and tool errors carry them. */
+export const LOCAL_USER = "jdoe-secret-user";
+export const LOCAL_PATH = `/Users/${LOCAL_USER}/work/project/PROVIDER_ERROR_SECRET.md`;
+export const PROVIDER_ERROR_TEXT = `400 {"type":"error","error":{"type":"invalid_request_error","message":"cannot read ${LOCAL_PATH} for ${LOCAL_USER}"}}`;
+export const TOOL_PATH_ERROR = `ENOENT: no such file or directory, access '/Users/${LOCAL_USER}/work/project/TOOL_PATH_SECRET.txt'`;
+export const SESSION_NAME_SECRET = "SESSION_NAME_SECRET_fix-billing-bug";
+export const SUMMARY_SECRET = "SUMMARY_SECRET_the_user_asked_about_billing";
 
 const T0 = 1_760_000_000_000;
 
@@ -136,6 +143,10 @@ export function retryAndToolError(): PiSessionEvent[] {
     durationMs: 300,
     errorMessage: "429 Too Many Requests: rate limited",
   });
+  // Pi 1.2.0 emits auto_retry_end right after the first successful message_end.
+  const retried = toolTurn(T0 + 3_000, "call_read_9", "read", { path: ARG_SECRET }, TOOL_ERROR_SECRET, usage(900, 30), true);
+  const firstEnd = retried.findIndex((event) => event.type === "message_end");
+  retried.splice(firstEnd + 1, 0, { type: "auto_retry_end", success: true, attempt: 1 });
   return [
     { type: "agent_start" },
     { type: "turn_start" },
@@ -146,11 +157,98 @@ export function retryAndToolError(): PiSessionEvent[] {
     { type: "agent_end", messages: [], willRetry: true },
     { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: "429 Too Many Requests: rate limited" },
     { type: "agent_start" },
-    ...toolTurn(T0 + 3_000, "call_read_9", "read", { path: ARG_SECRET }, TOOL_ERROR_SECRET, usage(900, 30), true),
+    ...retried,
     ...finalTurn(T0 + 5_000, OUTPUT_SECRET, usage(950, 20)),
     { type: "agent_end", messages: [], willRetry: false },
-    { type: "auto_retry_end", success: true, attempt: 1 },
     { type: "agent_settled", aborted: false },
+  ];
+}
+
+/**
+ * A provider error whose text carries a local path and username, and a tool
+ * error that does too. Pi gives up (no retry).
+ */
+export function providerAndToolPathErrors(): PiSessionEvent[] {
+  const toolEvents = toolTurn(T0 + 100, "call_read_p", "read", { path: "missing.txt" }, TOOL_PATH_ERROR, usage(400, 10), true);
+  const failedStreaming = assistant(T0 + 2_000, [], "pending");
+  const failed = assistant(T0 + 2_000, [], "error", { usage: usage(0, 0), durationMs: 120, errorMessage: PROVIDER_ERROR_TEXT });
+  return [
+    { type: "agent_start" },
+    ...toolEvents,
+    { type: "turn_start" },
+    { type: "message_start", message: failedStreaming },
+    { type: "message_end", message: failed },
+    { type: "turn_end", message: failed, toolResults: [] },
+    { type: "agent_end", messages: [], willRetry: false },
+    { type: "agent_settled", aborted: false },
+  ];
+}
+
+/**
+ * One prompt as Pi before 0.80.5 emits it: the same events as `happyPath`
+ * but no `agent_settled` (it did not exist yet).
+ */
+export function legacyPrompt(): PiSessionEvent[] {
+  return happyPath().filter((event) => event.type !== "agent_settled");
+}
+
+/** A legacy run that Pi retries: agent_end announces the retry with willRetry. */
+export function legacyRetry(): PiSessionEvent[] {
+  return retryAndToolError().filter((event) => event.type !== "agent_settled");
+}
+
+/**
+ * Pi 0.80.5+: after agent_end, a message queued by an agent_end handler makes
+ * Pi continue the same run (a second agent_start) before agent_settled.
+ */
+export function continuedRun(): PiSessionEvent[] {
+  const events = happyPath();
+  const settled = events.pop()!;
+  return [
+    ...events,
+    { type: "agent_start" },
+    ...finalTurn(T0 + 20_000, OUTPUT_SECRET, usage(1400, 12)),
+    { type: "agent_end", messages: [], willRetry: false },
+    settled,
+  ];
+}
+
+/** Threshold compaction after the run's last model call, inside the run (Pi 1.2.0 order). */
+export function compactionInRun(): PiSessionEvent[] {
+  const events = happyPath();
+  const settled = events.pop()!;
+  return [
+    ...events,
+    { type: "compaction_start", reason: "threshold" },
+    {
+      type: "compaction_end",
+      reason: "threshold",
+      result: {
+        summary: SUMMARY_SECRET,
+        firstKeptEntryId: "e1",
+        tokensBefore: 180_000,
+        estimatedTokensAfter: 12_000,
+        usage: usage(5000, 700, 1000, 0, 0.02),
+      },
+      aborted: false,
+      willRetry: false,
+    },
+    settled,
+  ];
+}
+
+/** `session.compact()` between prompts: no run is open. */
+export function manualCompaction(errorMessage?: string): PiSessionEvent[] {
+  return [
+    { type: "compaction_start", reason: "manual" },
+    {
+      type: "compaction_end",
+      reason: "manual",
+      result: errorMessage ? undefined : { summary: SUMMARY_SECRET, tokensBefore: 9_000, usage: usage(800, 90) },
+      aborted: false,
+      willRetry: false,
+      ...(errorMessage ? { errorMessage } : {}),
+    },
   ];
 }
 
@@ -194,8 +292,11 @@ export function interrupted(): PiSessionEvent[] {
   return happyPath().slice(0, 10);
 }
 
-/** Minimal stand-in for `AgentSession`: `sessionId`, `subscribe()`, `dispose()`. */
-export class FakeSession implements PiSessionLike {
+/**
+ * Pi < 0.80.5 stand-in: `sessionId`, `subscribe()`, `dispose()`, no
+ * `waitForIdle()` and no `agent_settled`.
+ */
+export class LegacySession implements PiSessionLike {
   readonly sessionId: string;
   sessionName?: string;
   private listeners: PiSessionEventListener[] = [];
@@ -226,4 +327,9 @@ export class FakeSession implements PiSessionLike {
     this.disposed = true;
     this.listeners = [];
   }
+}
+
+/** Pi 1.2.0 stand-in: adds `waitForIdle()`, which came with `agent_settled` in 0.80.5. */
+export class FakeSession extends LegacySession {
+  async waitForIdle(): Promise<void> {}
 }

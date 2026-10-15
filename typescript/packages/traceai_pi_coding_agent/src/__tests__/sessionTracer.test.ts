@@ -1,20 +1,33 @@
 import { SpanStatusCode, context, trace } from "@opentelemetry/api";
-import { ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import { BasicTracerProvider, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { Attr, PiCodingAgentInstrumentation, SpanNames, wrapCreateAgentSession } from "../index";
-import { promptTokens } from "../sessionTracer";
+import { TOOL_ERROR_HIDDEN, errorDetails, finishReason, promptTokens } from "../sessionTracer";
 import {
   ARG_SECRET,
   FakeSession,
+  LOCAL_PATH,
+  LOCAL_USER,
+  LegacySession,
   OUTPUT_SECRET,
   PROMPT_SECRET,
+  PROVIDER_ERROR_TEXT,
   RESULT_SECRET,
   SESSION_ID,
+  SESSION_NAME_SECRET,
+  SUMMARY_SECRET,
   SYSTEM_SECRET,
   TOOL_ERROR_SECRET,
+  TOOL_PATH_ERROR,
   aborted,
+  compactionInRun,
+  continuedRun,
   happyPath,
   interrupted,
+  legacyPrompt,
+  legacyRetry,
+  manualCompaction,
   nestedTool,
+  providerAndToolPathErrors,
   retryAndToolError,
 } from "./fixtures/events";
 import { StackContextManager, byName, exportedText, hrToMs, memoryProvider, one, parentId } from "./helpers";
@@ -24,9 +37,9 @@ const SECRETS = [PROMPT_SECRET, SYSTEM_SECRET, ARG_SECRET, RESULT_SECRET, OUTPUT
 function run(
   events: ReturnType<typeof happyPath>,
   config: ConstructorParameters<typeof PiCodingAgentInstrumentation>[0] = {},
-): { spans: ReadableSpan[]; session: FakeSession } {
+  session: LegacySession = new FakeSession(),
+): { spans: ReadableSpan[]; session: LegacySession } {
   const { provider, exporter } = memoryProvider();
-  const session = new FakeSession();
   new PiCodingAgentInstrumentation({ tracerProvider: provider, ...config }).instrumentSession(session);
   session.emit(events);
   return { spans: exporter.getFinishedSpans(), session };
@@ -103,7 +116,8 @@ describe("span tree", () => {
       [Attr.PI_TOOL_CALL_COUNT]: 1,
     });
     expect(first.attributes[Attr.PI_TOOL_CALL_NAMES]).toEqual(["ls"]);
-    expect(first.attributes[Attr.FINISH_REASONS]).toEqual(["toolUse"]);
+    // Pi's toolUse is the OTel tool_calls finish reason; pi.stop_reason keeps Pi's value.
+    expect(first.attributes[Attr.FINISH_REASONS]).toEqual(["tool_calls"]);
     expect(first.attributes[Attr.COST_TOTAL]).toBeUndefined();
     // Pi's usage.input excludes cache reads; the prompt-token count adds them back.
     expect(second.attributes[Attr.INPUT_TOKENS]).toBe(1244);
@@ -111,6 +125,7 @@ describe("span tree", () => {
     expect(second.attributes[Attr.PI_UNCACHED_INPUT_TOKENS]).toBe(1000);
     expect(second.attributes[Attr.COST_TOTAL]).toBe(0.0125);
     expect(last.attributes[Attr.PI_STOP_REASON]).toBe("stop");
+    expect(last.attributes[Attr.FINISH_REASONS]).toEqual(["stop"]);
     // The LLM span spans the provider request: message.timestamp .. + durationMs.
     expect(hrToMs(first.startTime)).toBe(1_760_000_000_258);
     expect(hrToMs(first.endTime)).toBe(1_760_000_000_258 + 900);
@@ -192,13 +207,16 @@ describe("errors", () => {
     expect(agents).toHaveLength(1);
     const agent = agents[0];
     expect(agent.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(2);
+    expect(agent.attributes[Attr.PI_RUN_RETRY_COUNT]).toBe(1);
     expect(agent.events.map((e) => e.name)).toEqual(["pi.auto_retry.start", "pi.auto_retry.end"]);
     expect(agent.events[0].attributes).toMatchObject({ "pi.attempt": 1, "pi.max_attempts": 3 });
     // The run recovered, so the run itself is OK.
     expect(agent.status.code).toBe(SpanStatusCode.OK);
 
     const failedLlm = byName(spans, "chat gpt-6-luna").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
-    expect(failedLlm.status).toEqual({ code: SpanStatusCode.ERROR, message: "429 Too Many Requests: rate limited" });
+    // The provider's error text is content: by default only the HTTP status leaves the process.
+    expect(failedLlm.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 429" });
+    expect(failedLlm.attributes[Attr.ERROR_TYPE]).toBe("429");
     const failedTurn = byName(spans, "pi.turn").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
     expect(failedTurn.status.code).toBe(SpanStatusCode.ERROR);
 
@@ -206,12 +224,43 @@ describe("errors", () => {
     expect(tool.status.code).toBe(SpanStatusCode.ERROR);
     expect(tool.attributes[Attr.PI_TOOL_IS_ERROR]).toBe(true);
     // Tool error text is tool output: hidden by default.
-    expect(tool.status.message).toBe("tool reported an error (result hidden)");
+    expect(tool.status.message).toBe(TOOL_ERROR_HIDDEN);
+    expect(tool.attributes[Attr.ERROR_TYPE]).toBe("tool_error");
   });
 
-  it("puts the tool error text in the status only when outputs are on", () => {
+  it("puts the tool and provider error text in the status only when outputs are on", () => {
     const { spans } = run(retryAndToolError(), CONTENT_ON);
     expect(one(spans, "execute_tool read").status.message).toBe(TOOL_ERROR_SECRET);
+    const failedLlm = byName(spans, "chat gpt-6-luna").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
+    expect(failedLlm.status.message).toBe("429 Too Many Requests: rate limited");
+  });
+
+  it("keeps local paths and usernames in provider and tool errors out of spans by default", () => {
+    const { spans } = run(providerAndToolPathErrors());
+    const text = exportedText(spans);
+    expect(text).not.toContain(LOCAL_USER);
+    expect(text).not.toContain("/Users/");
+    expect(text).not.toContain("PROVIDER_ERROR_SECRET");
+    expect(text).not.toContain("TOOL_PATH_SECRET");
+    // Status: stop reason, HTTP status and the provider's error type only.
+    const llm = byName(spans, "chat gpt-6-luna").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
+    expect(llm.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 400 invalid_request_error" });
+    expect(llm.attributes[Attr.ERROR_TYPE]).toBe("invalid_request_error");
+    const turn = byName(spans, "pi.turn").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
+    expect(turn.status.message).toBe("error: HTTP 400 invalid_request_error");
+    const agent = one(spans, SpanNames.AGENT_RUN);
+    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 400 invalid_request_error" });
+    expect(one(spans, "execute_tool read").status).toEqual({ code: SpanStatusCode.ERROR, message: TOOL_ERROR_HIDDEN });
+  });
+
+  it("exports the raw provider and tool error text, paths included, only with outputs on", () => {
+    const text = exportedText(run(providerAndToolPathErrors(), { traceConfig: { hideOutputs: false } }).spans);
+    expect(text).toContain(JSON.stringify(PROVIDER_ERROR_TEXT).slice(1, -1));
+    expect(text).toContain(JSON.stringify(TOOL_PATH_ERROR).slice(1, -1));
+    // Inputs alone do not reveal error text.
+    const inputsOnly = exportedText(run(providerAndToolPathErrors(), { traceConfig: { hideInputs: false } }).spans);
+    expect(inputsOnly).not.toContain(LOCAL_PATH);
+    expect(inputsOnly).not.toContain(LOCAL_USER);
   });
 
   it("marks an aborted run and its model call ERROR", () => {
@@ -220,8 +269,152 @@ describe("errors", () => {
     expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
     expect(agent.attributes[Attr.PI_ABORTED]).toBe(true);
     const llm = one(spans, "chat gpt-6-luna");
-    expect(llm.status).toEqual({ code: SpanStatusCode.ERROR, message: "Request was aborted" });
+    expect(llm.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
     expect(llm.attributes[Attr.PI_ABORTED]).toBe(true);
+    expect(llm.attributes[Attr.ERROR_TYPE]).toBe("aborted");
+  });
+});
+
+describe("errorDetails", () => {
+  it("builds the default status from the stop reason, HTTP status and provider error type", () => {
+    expect(errorDetails({ stopReason: "error", errorMessage: PROVIDER_ERROR_TEXT }, false)).toEqual({
+      type: "invalid_request_error",
+      message: "error: HTTP 400 invalid_request_error",
+    });
+    expect(errorDetails({ stopReason: "error", errorMessage: `Connection refused at ${LOCAL_PATH}` }, false)).toEqual({
+      type: "error",
+      message: "error",
+    });
+    expect(
+      errorDetails({ stopReason: "error", errorMessage: "fetch failed", diagnostics: [{ type: "x", error: { name: "TypeError" } }] }, false),
+    ).toEqual({ type: "TypeError", message: "error: TypeError" });
+    expect(errorDetails({ stopReason: "error", errorMessage: "Request failed with status code 503" }, false)).toEqual({
+      type: "503",
+      message: "error: HTTP 503",
+    });
+    // An echoed request part's "type" is not an error class.
+    expect(
+      errorDetails({ stopReason: "error", errorMessage: `502 {"echo":{"type":"text","text":"${LOCAL_PATH}"}}` }, false),
+    ).toEqual({ type: "502", message: "error: HTTP 502" });
+    expect(
+      errorDetails({ stopReason: "error", errorMessage: `429 {"error":{"message":"slow down","type":"tokens"}}` }, false),
+    ).toEqual({ type: "tokens", message: "error: HTTP 429 tokens" });
+    expect(errorDetails({ stopReason: "aborted", errorMessage: "Request was aborted" }, false)).toEqual({
+      type: "aborted",
+      message: "aborted",
+    });
+    expect(errorDetails(undefined, false)).toEqual({ type: "error", message: "error" });
+  });
+
+  it("uses the raw text, truncated, when outputs are shown", () => {
+    expect(errorDetails({ stopReason: "error", errorMessage: PROVIDER_ERROR_TEXT }, true).message).toBe(PROVIDER_ERROR_TEXT);
+    const long = errorDetails({ stopReason: "error", errorMessage: "x".repeat(5000) }, true).message;
+    expect(long.startsWith("x".repeat(1000))).toBe(true);
+    expect(long).toContain("[truncated 4000 chars]");
+  });
+});
+
+describe("Pi versions without agent_settled (before 0.80.5)", () => {
+  it("ends each run at agent_end: two prompts make two complete traces before dispose", () => {
+    const { provider, exporter } = memoryProvider();
+    const session = new LegacySession();
+    new PiCodingAgentInstrumentation({ tracerProvider: provider }).instrumentSession(session);
+    session.emit(legacyPrompt());
+    session.emit(legacyPrompt());
+    // No dispose: both runs are already exported, complete and OK.
+    const spans = exporter.getFinishedSpans();
+    const agents = byName(spans, SpanNames.AGENT_RUN);
+    expect(agents).toHaveLength(2);
+    expect(agents[0].spanContext().traceId).not.toBe(agents[1].spanContext().traceId);
+    for (const agent of agents) {
+      expect(agent.status.code).toBe(SpanStatusCode.OK);
+      expect(agent.attributes[Attr.PI_INCOMPLETE]).toBeUndefined();
+      expect(agent.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(1);
+      expect(agent.attributes[Attr.PI_RUN_LLM_CALL_COUNT]).toBe(3);
+      expect(agent.attributes[Attr.SESSION_ID]).toBe(SESSION_ID);
+    }
+    // Every child is in its own run's trace.
+    for (const span of spans) {
+      expect(agents.map((a) => a.spanContext().traceId)).toContain(span.spanContext().traceId);
+    }
+    expect(spans.filter((s) => s.spanContext().traceId === agents[0].spanContext().traceId)).toHaveLength(9);
+    expect(spans.filter((s) => s.spanContext().traceId === agents[1].spanContext().traceId)).toHaveLength(9);
+  });
+
+  it("keeps a run open across an agent_end that announces a retry", () => {
+    const { spans } = run(legacyRetry(), {}, new LegacySession());
+    const agent = one(spans, SpanNames.AGENT_RUN);
+    expect(agent.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(2);
+    expect(agent.attributes[Attr.PI_RUN_RETRY_COUNT]).toBe(1);
+    expect(agent.status.code).toBe(SpanStatusCode.OK);
+    expect(new Set(spans.map((s) => s.spanContext().traceId)).size).toBe(1);
+  });
+
+  it("switches to agent_settled once a session without waitForIdle() is seen to settle", () => {
+    const { provider, exporter } = memoryProvider();
+    const session = new LegacySession();
+    new PiCodingAgentInstrumentation({ tracerProvider: provider }).instrumentSession(session);
+    session.emit(happyPath()); // ends at agent_end; agent_settled then marks the session as settling
+    session.emit(continuedRun()); // the continuation after agent_end stays in the same run
+    const agents = byName(exporter.getFinishedSpans(), SpanNames.AGENT_RUN);
+    expect(agents).toHaveLength(2);
+    expect(agents[1].attributes[Attr.PI_RUN_ATTEMPTS]).toBe(2);
+    expect(agents[1].attributes[Attr.PI_RUN_LLM_CALL_COUNT]).toBe(4);
+  });
+
+  it("keeps a continuation after agent_end in the run when the session has waitForIdle() (Pi 0.80.5+)", () => {
+    const { spans } = run(continuedRun());
+    const agent = one(spans, SpanNames.AGENT_RUN);
+    expect(agent.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(2);
+    expect(agent.attributes[Attr.PI_RUN_TURN_COUNT]).toBe(4);
+    expect(new Set(spans.map((s) => s.spanContext().traceId)).size).toBe(1);
+  });
+});
+
+describe("compaction", () => {
+  it("records compaction inside a run as a CHAIN child with its own token usage", () => {
+    const { spans } = run(compactionInRun());
+    const agent = one(spans, SpanNames.AGENT_RUN);
+    const compaction = one(spans, SpanNames.COMPACTION);
+    expect(parentId(compaction)).toBe(agent.spanContext().spanId);
+    expect(compaction.attributes).toMatchObject({
+      [Attr.FI_SPAN_KIND]: "CHAIN",
+      [Attr.GEN_AI_SPAN_KIND]: "CHAIN",
+      [Attr.SESSION_ID]: SESSION_ID,
+      [Attr.PI_COMPACTION_REASON]: "threshold",
+      [Attr.PI_COMPACTION_TOKENS_BEFORE]: 180_000,
+      [Attr.PI_COMPACTION_TOKENS_AFTER]: 12_000,
+      [Attr.PI_COMPACTION_WILL_RETRY]: false,
+      [Attr.INPUT_TOKENS]: 6000,
+      [Attr.OUTPUT_TOKENS]: 700,
+      [Attr.CACHE_READ_TOKENS]: 1000,
+      [Attr.COST_TOTAL]: 0.02,
+    });
+    expect(compaction.attributes[Attr.REQUEST_MODEL]).toBeUndefined();
+    expect(compaction.status.code).toBe(SpanStatusCode.OK);
+    // Run totals include the compaction model call.
+    expect(agent.attributes[Attr.PI_RUN_INPUT_TOKENS]).toBe(1182 + 1244 + 1325 + 6000);
+    expect(agent.attributes[Attr.PI_RUN_COST_TOTAL]).toBeCloseTo(0.0325);
+    // The summary is model-written text about the conversation: hidden by default.
+    expect(exportedText(spans)).not.toContain(SUMMARY_SECRET);
+    expect(one(run(compactionInRun(), CONTENT_ON).spans, SpanNames.COMPACTION).attributes[Attr.OUTPUT_VALUE]).toBe(SUMMARY_SECRET);
+  });
+
+  it("records a compaction outside a run (session.compact(), before a prompt) as its own trace", () => {
+    const { spans } = run(manualCompaction());
+    expect(spans.map((s) => s.name)).toEqual([SpanNames.COMPACTION]);
+    const [compaction] = spans;
+    expect(parentId(compaction)).toBeUndefined();
+    expect(compaction.attributes).toMatchObject({ [Attr.PI_COMPACTION_REASON]: "manual", [Attr.SESSION_ID]: SESSION_ID, [Attr.INPUT_TOKENS]: 800 });
+  });
+
+  it("marks a failed compaction ERROR without its error text by default", () => {
+    const failure = `summarization failed reading ${LOCAL_PATH}`;
+    const hidden = one(run(manualCompaction(failure)).spans, SpanNames.COMPACTION);
+    expect(hidden.status).toEqual({ code: SpanStatusCode.ERROR, message: "compaction failed" });
+    expect(exportedText([hidden])).not.toContain(LOCAL_USER);
+    const shown = one(run(manualCompaction(failure), CONTENT_ON).spans, SpanNames.COMPACTION);
+    expect(shown.status.message).toBe(failure);
   });
 });
 
@@ -246,6 +439,19 @@ describe("content policy", () => {
     for (const secret of SECRETS) expect(text).not.toContain(secret);
     expect(text).not.toContain(Attr.INPUT_VALUE);
     expect(text).not.toContain(Attr.OUTPUT_VALUE);
+  });
+
+  it("exports the session name (user-authored) only when inputs are shown", () => {
+    const named = () => {
+      const session = new FakeSession();
+      session.sessionName = SESSION_NAME_SECRET;
+      return session;
+    };
+    const hidden = run(happyPath(), {}, named()).spans;
+    expect(exportedText(hidden)).not.toContain(SESSION_NAME_SECRET);
+    expect(one(hidden, SpanNames.AGENT_RUN).attributes[Attr.PI_SESSION_NAME]).toBeUndefined();
+    const shown = run(happyPath(), { traceConfig: { hideInputs: false } }, named()).spans;
+    expect(one(shown, SpanNames.AGENT_RUN).attributes[Attr.PI_SESSION_NAME]).toBe(SESSION_NAME_SECRET);
   });
 
   it("exports prompt, tool arguments, tool results and answers when both are opted in", () => {
@@ -318,6 +524,76 @@ describe("lifecycle", () => {
     expect(one(spans, "pi.turn").attributes[Attr.PI_INCOMPLETE]).toBe(true);
   });
 
+  it("ends children before their parents and drops a streaming finish reason when disposed mid-call", () => {
+    const { provider, exporter } = memoryProvider();
+    const session = new FakeSession();
+    new PiCodingAgentInstrumentation({ tracerProvider: provider }).instrumentSession(session);
+    // Stop while the nested tool runs and while a model call streams in the same turn.
+    const events = nestedTool().slice(0, 4);
+    events.push({ type: "message_start", message: { role: "assistant", model: "m", stopReason: "pending", content: [] } });
+    session.emit(events);
+    session.dispose();
+    const order = exporter.getFinishedSpans().map((s) => s.name);
+    expect(order).toEqual(["execute_tool read", "execute_tool codemode", "chat m", "pi.turn", SpanNames.AGENT_RUN]);
+    const llm = one(exporter.getFinishedSpans(), "chat m");
+    expect(llm.attributes[Attr.FINISH_REASONS]).toBeUndefined();
+    expect(llm.attributes[Attr.PI_STOP_REASON]).toBeUndefined();
+    expect(llm.attributes[Attr.PI_INCOMPLETE]).toBe(true);
+  });
+
+  it("ends a tool span without a toolCallId at its end event, with the end event's status", () => {
+    const { provider, exporter } = memoryProvider();
+    const session = new FakeSession();
+    new PiCodingAgentInstrumentation({ tracerProvider: provider }).instrumentSession(session);
+    session.emit([
+      { type: "agent_start" },
+      { type: "turn_start" },
+      { type: "tool_execution_start", toolName: "bash", args: {} },
+      { type: "tool_execution_end", toolName: "bash", result: { content: [] }, isError: true, durationMs: 7 },
+    ]);
+    const tools = byName(exporter.getFinishedSpans(), "execute_tool bash");
+    expect(tools).toHaveLength(1);
+    expect(tools[0].status.code).toBe(SpanStatusCode.ERROR);
+    expect(tools[0].attributes[Attr.PI_TOOL_IS_ERROR]).toBe(true);
+    expect(tools[0].attributes[Attr.PI_TOOL_DURATION_MS]).toBe(7);
+    session.dispose();
+    expect(byName(exporter.getFinishedSpans(), "execute_tool bash")).toHaveLength(1);
+  });
+
+  it("traces the session again after the stop function, and restores dispose()", () => {
+    const { provider, exporter } = memoryProvider();
+    const session = new FakeSession();
+    const instrumentation = new PiCodingAgentInstrumentation({ tracerProvider: provider });
+    const originalDispose = session.dispose;
+    const stop = instrumentation.instrumentSession(session);
+    expect(session.dispose).not.toBe(originalDispose);
+    stop();
+    expect(session.dispose).toBe(originalDispose);
+    expect(Object.prototype.hasOwnProperty.call(session, "dispose")).toBe(false);
+    const again = instrumentation.instrumentSession(session);
+    expect(again).not.toBe(stop);
+    expect(session.listenerCount).toBe(1);
+    session.emit(happyPath());
+    expect(byName(exporter.getFinishedSpans(), SpanNames.AGENT_RUN)).toHaveLength(1);
+  });
+
+  it("still runs Pi's dispose() when ending the spans throws", () => {
+    const throwing = {
+      onStart: () => {},
+      onEnd: () => {
+        throw new Error("span processor failed");
+      },
+      forceFlush: async () => {},
+      shutdown: async () => {},
+    };
+    const badProvider = new BasicTracerProvider({ spanProcessors: [throwing] });
+    const session = new FakeSession();
+    new PiCodingAgentInstrumentation({ tracerProvider: badProvider }).instrumentSession(session);
+    session.emit(interrupted());
+    expect(() => session.dispose()).not.toThrow();
+    expect(session.disposed).toBe(true);
+  });
+
   it("the stop function unsubscribes and is idempotent per session", () => {
     const { provider, exporter } = memoryProvider();
     const session = new FakeSession();
@@ -357,6 +633,16 @@ describe("lifecycle", () => {
     expect(result.session).toBe(session);
     session.emit(happyPath());
     expect(one(exporter.getFinishedSpans(), SpanNames.AGENT_RUN).attributes[Attr.SESSION_ID]).toBe("wrapped-session");
+  });
+});
+
+describe("finishReason", () => {
+  it("maps Pi stop reasons to OTel finish reasons", () => {
+    expect(finishReason("toolUse")).toBe("tool_calls");
+    expect(finishReason("stop")).toBe("stop");
+    expect(finishReason("length")).toBe("length");
+    expect(finishReason("pending")).toBeUndefined();
+    expect(finishReason(undefined)).toBeUndefined();
   });
 });
 

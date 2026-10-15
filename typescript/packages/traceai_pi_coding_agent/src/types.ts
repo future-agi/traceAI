@@ -20,9 +20,16 @@ export type PiSessionEventListener = (event: PiSessionEvent) => void;
 /** The `AgentSession` surface this package uses. */
 export interface PiSessionLike {
   readonly sessionId: string;
+  /** User-chosen display name. Exported only when inputs are shown. */
   readonly sessionName?: string;
   subscribe(listener: PiSessionEventListener): () => void;
   dispose?: () => void;
+  /**
+   * Present from Pi 0.80.5, the release that added `agent_settled`. Only its
+   * presence is checked (never called): it tells the tracer that runs end at
+   * `agent_settled`.
+   */
+  waitForIdle?: () => Promise<void>;
 }
 
 /** The `createAgentSession()` result surface this package uses. */
@@ -66,9 +73,20 @@ export interface PiMessage {
   usage?: PiUsage;
   stopReason?: string;
   errorMessage?: string;
+  rawStopReason?: string;
+  /** Errors Pi recorded while producing the message; only `error.name` is read. */
+  diagnostics?: Array<{ type?: string; error?: { name?: string } }>;
   durationMs?: number;
   // toolResult
   toolCallId?: string;
   toolName?: string;
   isError?: boolean;
+}
+
+/** `compaction_end.result` (`CompactionResult`). `summary` is model-written text: content. */
+export interface PiCompactionResult {
+  summary?: string;
+  tokensBefore?: number;
+  estimatedTokensAfter?: number;
+  usage?: PiUsage;
 }

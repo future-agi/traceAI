@@ -10,7 +10,11 @@ import { FISpanKind, SemanticConventions } from "@traceai/fi-semantic-convention
 export const PI_AGENT_NAME = "pi";
 
 export const SpanNames = {
-  /** One agent run: from `agent_start` until `agent_settled` (OTel GenAI `invoke_agent {agent}`). */
+  /**
+   * One agent run: from `agent_start` until `agent_settled` (OTel GenAI
+   * `invoke_agent {agent}`). Pi before 0.80.5 has no `agent_settled`; the run
+   * then ends at an `agent_end` without `willRetry`.
+   */
   AGENT_RUN: `invoke_agent ${PI_AGENT_NAME}`,
   /** One `turn_start` .. `turn_end`: one model response plus the tools it called. */
   TURN: "pi.turn",
@@ -18,6 +22,8 @@ export const SpanNames = {
   llm: (model: string | undefined) => (model ? `chat ${model}` : "chat"),
   /** One tool execution (OTel GenAI `execute_tool {tool}`). */
   tool: (toolName: string) => `execute_tool ${toolName}`,
+  /** One context compaction: `compaction_start` .. `compaction_end`. */
+  COMPACTION: "pi.compaction",
 } as const;
 
 export const Attr = {
@@ -32,6 +38,8 @@ export const Attr = {
   INPUT_MIME_TYPE: SemanticConventions.INPUT_MIME_TYPE,
   OUTPUT_VALUE: SemanticConventions.OUTPUT_VALUE,
   OUTPUT_MIME_TYPE: SemanticConventions.OUTPUT_MIME_TYPE,
+  /** OTel `error.type`: the error class on ERROR spans (provider error type, HTTP status, `aborted`, `tool_error`). */
+  ERROR_TYPE: "error.type",
 
   // LLM
   REQUEST_MODEL: SemanticConventions.LLM_MODEL_NAME,
@@ -70,19 +78,29 @@ export const Attr = {
   PI_TOOL_DURATION_MS: "pi.tool.duration_ms",
   PI_TOOL_PARENT_CALL_ID: "pi.tool.parent_call_id",
   PI_TOOL_IS_ERROR: "pi.tool.is_error",
+  /**
+   * Agent loops (`agent_start` events) in the run: the first, each automatic
+   * retry, and each continuation (overflow-compaction recovery, queued messages).
+   */
   PI_RUN_ATTEMPTS: "pi.agent.attempts",
+  /** Automatic retries in the run (`auto_retry_start` events). */
+  PI_RUN_RETRY_COUNT: "pi.agent.retry_count",
   PI_RUN_TURN_COUNT: "pi.agent.turn_count",
   PI_RUN_LLM_CALL_COUNT: "pi.agent.llm_call_count",
   PI_RUN_TOOL_CALL_COUNT: "pi.agent.tool_call_count",
   /**
-   * Token totals for the whole run. Not the promoted `gen_ai.usage.*` keys, so
-   * the collector does not count the run's tokens twice (once per LLM span and
-   * once on the run).
+   * Token totals for the whole run (its LLM and compaction spans). Not the
+   * promoted `gen_ai.usage.*` keys, so the collector does not count the run's
+   * tokens twice (once per child span and once on the run).
    */
   PI_RUN_INPUT_TOKENS: "pi.agent.usage.input_tokens",
   PI_RUN_OUTPUT_TOKENS: "pi.agent.usage.output_tokens",
   PI_RUN_TOTAL_TOKENS: "pi.agent.usage.total_tokens",
   PI_RUN_COST_TOTAL: "pi.agent.cost.total",
+  PI_COMPACTION_REASON: "pi.compaction.reason",
+  PI_COMPACTION_TOKENS_BEFORE: "pi.compaction.tokens_before",
+  PI_COMPACTION_TOKENS_AFTER: "pi.compaction.estimated_tokens_after",
+  PI_COMPACTION_WILL_RETRY: "pi.compaction.will_retry",
   /** Set when the span was closed by `dispose()` / `unsubscribe()` before Pi finished it. */
   PI_INCOMPLETE: "pi.incomplete",
 } as const;
@@ -98,6 +116,4 @@ export const SpanKind = {
 export const EventNames = {
   AUTO_RETRY_START: "pi.auto_retry.start",
   AUTO_RETRY_END: "pi.auto_retry.end",
-  COMPACTION_START: "pi.compaction.start",
-  COMPACTION_END: "pi.compaction.end",
 } as const;

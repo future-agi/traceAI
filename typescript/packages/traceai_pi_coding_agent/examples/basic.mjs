@@ -21,7 +21,7 @@ const { session } = await instrumentation.wrapCreateAgentSession(createAgentSess
 
 try {
   await session.prompt("List the files in this folder and read README.md");
-  console.log(session.getLastAssistantText());
+  console.log(session.getLastAssistantText() ?? "");
 } finally {
   session.dispose();
   await tracerProvider.shutdown();

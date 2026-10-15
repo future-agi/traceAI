@@ -80,7 +80,7 @@ function trackProvider(provider: TracerProvider): void {
   }
 }
 
-/** Sessions already traced, so a second `instrumentSession()` call is a no-op. */
+/** Sessions being traced, so a second `instrumentSession()` call is a no-op until the first is stopped. */
 const tracedSessions = new WeakMap<object, () => void>();
 
 /**
@@ -119,9 +119,13 @@ export class PiCodingAgentInstrumentation {
   /**
    * Trace one `AgentSession`. Subscribe before calling `prompt()`. Returns a
    * function that stops tracing and ends any open spans. `session.dispose()`
-   * also ends them. Calling it twice for one session returns the first stop
-   * function. After an `AgentSessionRuntime` replaces its session (new, resume,
-   * fork), call this again with the new session.
+   * also ends them.
+   *
+   * One instrumentation per session: while a session is traced, calling this
+   * again (from any instrumentation) returns the first stop function and does
+   * not subscribe twice. After the stop function (or `dispose()`), calling it
+   * again subscribes again. After an `AgentSessionRuntime` replaces its
+   * session (new, resume, fork), call this with the new session.
    */
   instrumentSession(session: PiSessionLike): () => void {
     const existing = tracedSessions.get(session);
@@ -133,9 +137,15 @@ export class PiCodingAgentInstrumentation {
       traceConfig: { ...this.traceConfig, hideInputs: policy.hideInputs, hideOutputs: policy.hideOutputs },
     });
     const sessionTracer = new PiSessionTracer(session, tracer, policy);
-    const stop = sessionTracer.attach();
+    sessionTracer.attach();
+    let unwrapDispose = (): void => {};
+    const stop = (): void => {
+      if (tracedSessions.get(session) === stop) tracedSessions.delete(session);
+      unwrapDispose();
+      sessionTracer.detach();
+    };
     tracedSessions.set(session, stop);
-    wrapDispose(session, stop);
+    unwrapDispose = wrapDispose(session, stop);
     return stop;
   }
 
@@ -165,22 +175,38 @@ export class PiCodingAgentInstrumentation {
   }
 }
 
-/** End open spans when the app disposes the session; Pi drops listeners on dispose. */
-function wrapDispose(session: PiSessionLike, stop: () => void): void {
+/**
+ * End open spans when the app disposes the session; Pi drops listeners on
+ * dispose. Returns a function that puts the original `dispose` back. Pi's own
+ * `dispose()` always runs, even if ending the spans throws.
+ */
+function wrapDispose(session: PiSessionLike, stop: () => void): () => void {
   const original = session.dispose;
-  if (typeof original !== "function") return;
+  if (typeof original !== "function") return () => {};
+  const ownDescriptor = Object.getOwnPropertyDescriptor(session, "dispose");
+  const tracedDispose = function tracedDispose(this: unknown, ...args: unknown[]) {
+    try {
+      stop();
+    } catch (error) {
+      diag.warn(`${INSTRUMENTATION_NAME}: failed to end spans on dispose(): ${error}`);
+    }
+    return original.apply(this ?? session, args as []);
+  };
   try {
-    Object.defineProperty(session, "dispose", {
-      configurable: true,
-      writable: true,
-      value: function tracedDispose(this: unknown, ...args: unknown[]) {
-        stop();
-        return original.apply(this ?? session, args as []);
-      },
-    });
+    Object.defineProperty(session, "dispose", { configurable: true, writable: true, value: tracedDispose });
   } catch (error) {
     diag.debug(`${INSTRUMENTATION_NAME}: could not wrap dispose(): ${error}`);
+    return () => {};
   }
+  return () => {
+    if (session.dispose !== tracedDispose) return;
+    try {
+      if (ownDescriptor) Object.defineProperty(session, "dispose", ownDescriptor);
+      else delete (session as { dispose?: unknown }).dispose;
+    } catch (error) {
+      diag.debug(`${INSTRUMENTATION_NAME}: could not restore dispose(): ${error}`);
+    }
+  };
 }
 
 /** Python-style convenience constructor. */

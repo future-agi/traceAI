@@ -28,7 +28,7 @@ const { session } = await tracedCreateAgentSession({
   thinkingLevel: "off",
   sessionManager: SessionManager.inMemory(cwd),
   settingsManager: SettingsManager.inMemory({}),
-  tools: ["read", "bash", "ls"],
+  tools: ["read", "ls"],
 });
 try {
   await session.prompt(prompt);
