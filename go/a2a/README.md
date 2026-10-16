@@ -8,15 +8,15 @@ It is an `a2aclient.CallInterceptor`, the SDK's own extension point: you pass it
 `a2aclient.WithCallInterceptors` when you create the client. Each call to a remote agent becomes
 one client span with `gen_ai.span.kind=AGENT` and the A2A attribute names that the Python
 `traceai-a2a` package uses (`gen_ai.a2a.task.id`, `gen_ai.a2a.task.state`, `gen_ai.a2a.agent.url`,
-...). The interceptor also sends the W3C `traceparent`, so a remote agent that reads it continues
-the same trace.
+...). The interceptor also sends the W3C `traceparent` (as an HTTP header on JSON-RPC and REST, as call
+metadata on gRPC), so a remote agent that reads it continues the same trace.
 
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/a2a` (package `traceaia2a`) |
 | A2A SDK | `github.com/a2aproject/a2a-go/v2` v2.5.0 or later (the `go.mod` minimum); tested on v2.6.0, the latest on 2026-10-16, and v2.5.0 |
 | Go | 1.26 or later (OpenTelemetry Go v1.47.0 and a2a-go v2.6.0 require it); tested on 1.26.9 and 1.27.2 |
-| Transports | JSON-RPC and HTTP+JSON (REST), tested. gRPC is not tested. |
+| Transports | JSON-RPC, HTTP+JSON (REST) and gRPC (`a2agrpc/v1`), each tested against a2a-go's own server |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and a2a-go. No exporter is built in. |
 
 This is not the Python `traceai-a2a` package, which is unchanged. The Go module writes the same
@@ -156,7 +156,6 @@ recorded, values are cut at 32 000 bytes, and the module adds no resource attrib
 - Server-side tracing (`a2asrv`). The server interceptor is a different interface and is not part
   of this module; a remote agent joins the trace only if it reads `traceparent` itself (the
   example's demo agent shows how).
-- gRPC is not tested. On gRPC, a2a-go sends service parameters as metadata rather than HTTP headers.
 - Push notifications and the a2a CLI.
 
 ## Test
@@ -165,6 +164,6 @@ recorded, values are cut at 32 000 bytes, and the module adds no resource attrib
 go test -race ./...
 ```
 
-The tests run a real a2a-go server (`a2asrv`, JSON-RPC and REST) on `httptest` and the in-memory
-span recorder; no network and no key. The example test checks the export request a fake Future AGI
+The tests run a real a2a-go server (`a2asrv` behind its JSON-RPC, REST and gRPC handlers) on
+127.0.0.1 and the in-memory span recorder; no external network and no key. The example test checks the export request a fake Future AGI
 collector receives (path, both headers, `project_name`, no gzip, one stitched trace).

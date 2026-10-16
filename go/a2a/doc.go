@@ -10,8 +10,8 @@
 // a2a-go reports that fact. A stream is one span: every event is a span event
 // on it, and the span ends at the reply message or at a terminal or
 // interrupted task state. The W3C traceparent is written into the request's
-// service parameters (HTTP headers on the JSON-RPC and REST transports), so a
-// remote agent that reads it continues the same trace.
+// service parameters (HTTP headers on the JSON-RPC and REST transports, call
+// metadata on gRPC), so a remote agent that reads it continues the same trace.
 //
 // The span is not an LLM span: the model call, if any, happens inside the
 // remote agent and is not observed here.

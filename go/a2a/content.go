@@ -71,20 +71,18 @@ func truncate(s string) string {
 	return s[:cut] + truncatedSuffix
 }
 
-// sanitizeURL returns the agent URL without user info, query or fragment, or
-// "" when it cannot be parsed. Credentials in the URL never reach a span.
+// sanitizeURL returns the agent URL without user info, query or fragment.
+// Credentials in the URL never reach a span.
 func sanitizeURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
 	}
 	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	if u.Host == "" {
-		// Not scheme://host (for example a gRPC "user:pass@host:port"
-		// target, which url.Parse reads as an opaque URL). Cut by hand.
+	if err != nil || u.Host == "" {
+		// Not scheme://host: a gRPC target such as "host:port" (which
+		// url.Parse rejects) or "user:pass@host:port" (which it reads as an
+		// opaque URL). Cut by hand.
 		s := raw
 		if i := strings.IndexAny(s, "?#"); i >= 0 {
 			s = s[:i]

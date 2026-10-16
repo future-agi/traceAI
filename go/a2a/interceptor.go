@@ -66,7 +66,7 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 // each become one span; other methods pass through untouched. The interceptor
 // never changes a request payload, a response or an error. It adds only the
 // traceparent (and tracestate) service parameters, which the JSON-RPC and REST
-// transports send as HTTP headers.
+// transports send as HTTP headers and the gRPC transport as call metadata.
 type Interceptor struct {
 	tracer trace.Tracer
 	tc     TraceConfig

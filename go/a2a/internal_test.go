@@ -23,7 +23,7 @@ func TestSanitizeURL(t *testing.T) {
 		"bob:s3cret@agent.example:50051":           "agent.example:50051",
 		"agent.example:50051?token=s3cret":         "agent.example:50051",
 		"https://[::1]:8443/x?y=s3cret":            "https://[::1]:8443/x",
-		"://bad":                                   "",
+		"127.0.0.1:50051":                          "127.0.0.1:50051",
 	} {
 		if got := sanitizeURL(in); got != want {
 			t.Errorf("sanitizeURL(%q) = %q, want %q", in, got, want)
