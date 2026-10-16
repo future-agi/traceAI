@@ -19,6 +19,6 @@ EX="$HERE/voice_tool.py"
 MARK="FI-MARKER-$RANDOM$RANDOM"
 echo "1. typed question + tool";        "$PY" "$EX"
 echo "2. drop + resume (one trace)";    "$PY" "$EX" --resume
-echo "3. metadata only ($MARK)";        "$PY" "$EX" --metadata-only --marker "$MARK"
+echo "3. content hidden ($MARK)";      FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true "$PY" "$EX" --marker "$MARK"
 echo "4. setup rejected (expect error)"; "$PY" "$EX" --model gemini-not-a-model-live || true
 echo "Done. In Future AGI open project $PROJECT: 4 traces; search for $MARK must return nothing."

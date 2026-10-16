@@ -105,7 +105,8 @@ def provider(exporter: InMemorySpanExporter) -> TracerProvider:
 
 @pytest.fixture
 def instrument(provider: TracerProvider, monkeypatch: pytest.MonkeyPatch):
-    for name in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+    for name in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES",
+                 "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT"):
         monkeypatch.delenv(name, raising=False)
     created = []
 

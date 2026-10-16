@@ -4,9 +4,9 @@
     export GEMINI_API_KEY=... FI_API_KEY=... FI_SECRET_KEY=...
     python voice_tool.py                      # typed question, spoken answer
     python voice_tool.py --pcm question.pcm   # spoken question (16 kHz, 16-bit mono PCM)
+    FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true python voice_tool.py   # metadata only, no content
 
 Options used by the package's end-to-end run:
-    --metadata-only     keep model, timings, tool names and token counts; drop all content
     --marker TEXT       put TEXT in the system instruction, the question and the tool result
     --resume            drop the socket after the first answer and resume with the stored handle
     --model NAME        Live model (default gemini-3.8-live; the list is preview, re-read it)
@@ -29,16 +29,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--project", default=os.getenv("FI_PROJECT_NAME", "gemini-live-demo"))
 parser.add_argument("--model", default="gemini-3.8-live")
 parser.add_argument("--pcm")
-parser.add_argument("--metadata-only", action="store_true")
 parser.add_argument("--marker", default="")
 parser.add_argument("--resume", action="store_true")
 parser.add_argument("--modality", default="AUDIO")
 parser.add_argument("--user-id")
 args = parser.parse_args()
 
-# 1. Future AGI first, then the instrumentor.
+# 1. Future AGI first, then the instrumentor. Content capture follows the standard
+#    FI_HIDE_INPUTS / FI_HIDE_OUTPUTS environment variables (or pass config=TraceConfig(...)).
 trace_provider = register(project_type=ProjectType.OBSERVE, project_name=args.project)
-instrument(tracer_provider=trace_provider, metadata_only=args.metadata_only)
+instrument(tracer_provider=trace_provider)
 
 WEATHER = {
     "name": "get_weather",

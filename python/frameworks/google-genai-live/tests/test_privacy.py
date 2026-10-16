@@ -44,8 +44,17 @@ async def test_default_captures_text_but_never_audio_key_or_handle(server, instr
     assert_voice_tab(exporter.get_finished_spans(), forbidden_substrings=(API_KEY, HANDLE_1, AUDIO_MARKER))
 
 
-async def test_ac18_metadata_only_omits_all_content(server, instrument, client, exporter):
-    instrument(metadata_only=True)
+HIDE_BOTH = {"FI_HIDE_INPUTS": "true", "FI_HIDE_OUTPUTS": "true"}
+
+
+def _hide(monkeypatch, env=HIDE_BOTH):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+
+async def test_ac18_hide_flags_omit_all_content(server, instrument, client, exporter, monkeypatch):
+    _hide(monkeypatch)
+    instrument()
     await _run(client, server)
     text = all_text(exporter)
     assert MARK not in text
@@ -102,8 +111,46 @@ async def test_env_hide_inputs_is_honoured(server, instrument, client, exporter,
     assert "input.value" not in spans_by_name(exporter)["gemini.live.setup"][0].attributes
 
 
-async def test_error_text_is_content(server, instrument, client, exporter):
-    instrument(metadata_only=True)
+async def test_trace_config_both_sides_equals_env(server, instrument, client, exporter):
+    instrument(config=TraceConfig(hide_inputs=True, hide_outputs=True))
+    await _run(client, server)
+    assert MARK not in all_text(exporter)
+
+
+@pytest.mark.parametrize("env", [
+    {"FI_HIDE_INPUT_MESSAGES": "true", "FI_HIDE_OUTPUT_MESSAGES": "true"},
+    {"FI_HIDE_INPUT_TEXT": "true", "FI_HIDE_OUTPUT_TEXT": "true"},
+])
+async def test_message_and_text_switches_drop_live_content(server, instrument, client, exporter,
+                                                           monkeypatch, env):
+    # Live content is all message text, so the narrower standard switches drop it too.
+    _hide(monkeypatch, env)
+    instrument()
+    await _run(client, server)
+    assert MARK not in all_text(exporter)
+    assert spans_by_name(exporter)["gemini.live.tool"][0].attributes["tool.name"] == "get_weather"
+
+
+async def test_one_narrow_switch_drops_only_its_side(server, instrument, client, exporter, monkeypatch):
+    _hide(monkeypatch, {"FI_HIDE_OUTPUT_TEXT": "true"})
+    instrument()
+    await _run(client, server)
+    tool = spans_by_name(exporter)["gemini.live.tool"][0]
+    assert "output.value" not in tool.attributes and "input.value" in tool.attributes
+    assert MARK in spans_by_name(exporter)["gemini.live.setup"][0].attributes["input.value"]
+
+
+def test_no_package_specific_privacy_switch():
+    import inspect
+
+    from traceai_google_genai_live import instrument as shorthand
+
+    assert "metadata_only" not in inspect.signature(shorthand).parameters
+
+
+async def test_error_text_is_content(server, instrument, client, exporter, monkeypatch):
+    _hide(monkeypatch)
+    instrument()
     server.scripts.append([["close", 1008, "models/" + MARK + " is not found"]])
     with pytest.raises(errors.APIError):
         async with client.aio.live.connect(model=MARK, config=AUDIO_CONFIG):

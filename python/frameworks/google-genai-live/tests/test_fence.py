@@ -17,7 +17,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, Spa
 
 from traceai_google_genai_live import PATCHED, GoogleGenAILiveInstrumentor
 
-from .conftest import AUDIO_CONFIG, load, run_turn
+from .conftest import AUDIO_CONFIG
 
 MODEL = "gemini-3.8-live"
 
@@ -140,7 +140,9 @@ async def test_ac17_full_queue_drops_and_never_blocks_the_reader(server, client)
                     await session.send_tool_response(function_responses=[
                         types.FunctionResponse(id=fc.id, name=fc.name, response={})
                         for fc in msg.tool_call.function_calls])
-        assert worst < 0.05, f"receive blocked for {worst:.3f}s"
+        # One export takes 0.5 s, so a reader that waited on the exporter would stall that long.
+        # Half of it leaves room for a loaded CI machine without hiding a real block.
+        assert worst < 0.25, f"receive blocked for {worst:.3f}s"
     finally:
         inst.uninstrument()
         tp.shutdown()

@@ -10,7 +10,7 @@ export GEMINI_API_KEY=... FI_API_KEY=... FI_SECRET_KEY=...
 # export FI_BASE_URL=...   # only for a self-hosted Future AGI collector
 python voice_tool.py --project gemini-live-demo
 python voice_tool.py --pcm question.pcm          # spoken question
-python voice_tool.py --metadata-only --marker X  # no content leaves the process
+FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true python voice_tool.py --marker X  # no content leaves the process
 python voice_tool.py --resume                    # drop the socket, resume with the handle: still one trace
 python voice_tool.py --model not-a-model         # setup rejected: one ERROR root
 ```

@@ -29,13 +29,18 @@ class ContentPolicy:
         return self.capture_inputs and self.capture_outputs
 
 
-def policy_from(config: Optional[TraceConfig], metadata_only: bool) -> ContentPolicy:
-    if metadata_only:
-        return ContentPolicy(False, False)
+# The standard traceAI switches (TraceConfig fields, or the FI_HIDE_* environment variables).
+# Everything a Live session carries in either direction is message text, so any one of them
+# drops that whole direction here.
+_INPUT_SWITCHES = ("hide_inputs", "hide_input_messages", "hide_input_text")
+_OUTPUT_SWITCHES = ("hide_outputs", "hide_output_messages", "hide_output_text")
+
+
+def policy_from(config: Optional[TraceConfig]) -> ContentPolicy:
     config = config or TraceConfig()
     return ContentPolicy(
-        capture_inputs=not bool(getattr(config, "hide_inputs", False)),
-        capture_outputs=not bool(getattr(config, "hide_outputs", False)),
+        capture_inputs=not any(bool(getattr(config, n, False)) for n in _INPUT_SWITCHES),
+        capture_outputs=not any(bool(getattr(config, n, False)) for n in _OUTPUT_SWITCHES),
     )
 
 

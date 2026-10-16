@@ -13,7 +13,8 @@
 - Audio sessions carry `fi.span.kind=CONVERSATION` on a parentless root plus `call.*` and
   `conversation.transcript*`, so Future AGI lists them as calls. Text-only sessions are `CHAIN`.
 - Privacy: audio bytes, API keys and resumption handles never land on a span. Text content is
-  on by default; `metadata_only=True` (or `TraceConfig` / `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS`)
-  drops it. Raw error text is content; stack traces are never exported.
+  on by default, as in every traceAI instrumentor; the standard `FI_HIDE_INPUTS` /
+  `FI_HIDE_OUTPUTS` (and `*_MESSAGES` / `*_TEXT`) variables or `TraceConfig(...)` drop it.
+  No package-specific privacy switch. Raw error text is content; stack traces are never exported.
 - Not supported: Vertex AI Live, ephemeral tokens, the deprecated `send` / `start_stream`,
   LiveKit / Pipecat sessions, Node.

@@ -50,8 +50,7 @@ Options:
 
 | Option | Default | Effect |
 |---|---|---|
-| `metadata_only` | `False` | Drop all content: system instruction, user text, transcriptions, tool arguments and results, model text, raw error text. Model, voice name, timings, tool names, flags, close codes and token counts stay. |
-| `config=TraceConfig(hide_inputs=..., hide_outputs=...)` or `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` | off | Drop one direction. The conversation transcript needs both. |
+| `config=TraceConfig(...)` or the standard `FI_HIDE_*` environment variables | content on | `hide_inputs` / `FI_HIDE_INPUTS` drops the input side (system instruction, user text and transcription, tool arguments); `hide_outputs` / `FI_HIDE_OUTPUTS` drops the output side (model text and transcription, tool results). `*_input_messages` / `*_input_text` (and the output pair) do the same, because all Live content is message text. Both sides off leaves metadata only: model, voice name, timings, tool names, flags, close codes and token counts. The conversation transcript and raw error text need both sides on. |
 | `session_id`, `user_id` | none | Defaults for every session. `fi_instrumentation.using_session(...)` / `using_user(...)` around `connect` override them per call. |
 | `resume_window_seconds` | `30` | How long a session whose connection ended after `goAway`, or died, waits for a reconnect with its stored handle before the root span closes. |
 
@@ -113,8 +112,10 @@ How server events map:
 
 ## Privacy
 
-- Default: text on, audio off. Audio bytes (`realtimeInput` and `modelTurn` inline data) never
-  land on a span.
+- Default: text on, audio off, as in every traceAI instrumentor. Audio bytes (`realtimeInput`
+  and `modelTurn` inline data) never land on a span.
+- Metadata only: `FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true` (or
+  `TraceConfig(hide_inputs=True, hide_outputs=True)`). There is no package-specific switch.
 - The API key is never copied. The connection URL is recorded as its path only.
 - The session resumption handle stays in memory and is never a span attribute or a log line.
 - Raw error text is content: it is recorded only when both content directions are on. Stack

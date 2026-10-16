@@ -51,11 +51,13 @@ class GoogleGenAILiveInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     Keyword arguments to ``instrument()``:
 
     - ``tracer_provider``: the provider from ``fi_instrumentation.register()``.
-    - ``config``: a ``TraceConfig``. ``hide_inputs`` / ``FI_HIDE_INPUTS`` and
-      ``hide_outputs`` / ``FI_HIDE_OUTPUTS`` drop the matching content.
-    - ``metadata_only``: drop all content (system instruction, transcriptions, user text,
-      tool arguments and results, model text, error text). Model, voice name, timings,
-      tool names, flags and token counts stay.
+    - ``config``: a ``TraceConfig``; without one the standard ``FI_HIDE_*`` environment
+      variables apply. ``hide_inputs`` / ``hide_input_messages`` / ``hide_input_text``
+      drop the input side (system instruction, user text and transcription, tool
+      arguments); ``hide_outputs`` / ``hide_output_messages`` / ``hide_output_text`` drop
+      the output side (model text and transcription, tool results). Both sides off leaves
+      metadata only: model, voice name, timings, tool names, flags and token counts. Raw
+      error text and the conversation transcript need both sides on.
     - ``session_id`` / ``user_id``: defaults for every session. ``fi_instrumentation``'s
       ``using_session`` / ``using_user`` context managers override them per connect.
     - ``resume_window_seconds``: how long a session whose connection ended after
@@ -76,7 +78,7 @@ class GoogleGenAILiveInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         self._inst = _Instrumentation(
             tracer=tracer,
             tracer_provider=tracer_provider,
-            policy=policy_from(config, bool(kwargs.get("metadata_only", False))),
+            policy=policy_from(config),
             session_id=kwargs.get("session_id"),
             user_id=kwargs.get("user_id"),
             resume_window_seconds=float(kwargs.get("resume_window_seconds", 30.0)),
@@ -120,7 +122,6 @@ def instrument(
     tracer_provider: Any = None,
     *,
     config: Optional[TraceConfig] = None,
-    metadata_only: bool = False,
     session_id: Optional[str] = None,
     user_id: Optional[str] = None,
     resume_window_seconds: float = 30.0,
@@ -130,7 +131,6 @@ def instrument(
     instrumentor.instrument(
         tracer_provider=tracer_provider,
         config=config,
-        metadata_only=metadata_only,
         session_id=session_id,
         user_id=user_id,
         resume_window_seconds=resume_window_seconds,

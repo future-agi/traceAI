@@ -259,7 +259,12 @@ async def test_ac15_ac16_socket_death_reraises_and_flushes_once(server, instrume
     events = [e.name for e in root.events]
     assert "gemini.receive_error" in events
     assert server.connects == 1  # no reconnect from the instrumentor
-    await asyncio.sleep(0.05)
+    # The flush runs on its own thread; give a loaded machine time to start it.
+    for _ in range(200):
+        if flushes:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)  # and room for a second flush to show up if there were one
     assert inst._inst.flush_count == 1
     assert len(flushes) == 1
 
