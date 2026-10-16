@@ -13,8 +13,8 @@ same attribute names `traceai-openai` writes in Python (`gen_ai.span.kind=LLM`,
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/openai` (package `traceaiopenai`) |
-| OpenAI SDK | `github.com/openai/openai-go/v3`, tested on v3.78.0 and v3.71.1 |
-| Go | 1.26 or later (openai-go v3.78.0 and OpenTelemetry Go v1.47.0 require it); tested on 1.26.9 and 1.27.2 |
+| OpenAI SDK | `github.com/openai/openai-go/v3` v3.71.1 or later (the `go.mod` minimum); tested on v3.78.0, the latest on 2026-10-16, and v3.71.1 |
+| Go | 1.26 or later (OpenTelemetry Go v1.47.0 and openai-go v3.78.0 require it); tested on 1.26.9 and 1.27.2 |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and openai-go. No exporter is built in. |
 
 This is not `openinference-instrumentation-openai-go` from Arize. That module targets
