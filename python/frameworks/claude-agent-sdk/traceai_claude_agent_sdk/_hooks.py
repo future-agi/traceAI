@@ -33,11 +33,9 @@ SUBAGENT_TOOLS = ("Task", "Agent")
 # Key: tool_use_id (subagent launch), Value: span
 _subagent_spans: Dict[str, Span] = {}
 
-# Launches not yet bound to a running subagent, in launch order: (tool_use_id, subagent_type)
+# Current SDKs attribute a subagent's tool hooks by agent_id, announced in SubagentStart in launch
+# order: launches waiting for their agent, and each agent_id's launch.
 _pending_launches: List[Tuple[str, str]] = []
-
-# Current SDKs attribute a subagent's tool hooks by agent_id rather than parent_tool_use_id
-# Key: agent_id, Value: tool_use_id of the launch that started it
 _agent_launches: Dict[str, str] = {}
 
 # Parent span context for tool tracing
@@ -75,22 +73,14 @@ def get_subagent_span(parent_tool_use_id: str) -> Optional[Span]:
     return _subagent_spans.get(parent_tool_use_id)
 
 
-def _launch_for_agent(agent_id: Optional[str], agent_type: str = "", tool_use_id: Optional[str] = None) -> Optional[str]:
-    """The launch a running subagent belongs to, binding it the first time it is seen.
-
-    A launch's own tool_use_id wins when the SDK supplies it; otherwise the oldest pending
-    launch of the same subagent type, then the oldest pending launch of any type.
-    """
+def _launch_for_agent(agent_id: Optional[str], agent_type: str = "") -> Optional[str]:
+    """The launch a subagent belongs to: bound once, to the oldest pending launch of its type."""
     if not agent_id:
         return None
     if agent_id in _agent_launches:
         return _agent_launches[agent_id]
-    pending = [launch for launch, _ in _pending_launches]
-    if tool_use_id in pending:
-        chosen = tool_use_id
-    else:
-        typed = [launch for launch, kind in _pending_launches if agent_type and kind == agent_type]
-        chosen = (typed or pending or [None])[0]
+    typed = [launch for launch, kind in _pending_launches if kind == agent_type]
+    chosen = (typed or [launch for launch, _ in _pending_launches] or [None])[0]
     if chosen is None:
         return None
     _pending_launches[:] = [item for item in _pending_launches if item[0] != chosen]
@@ -107,9 +97,7 @@ def create_subagent_start_hook(tracer: trace_api.Tracer) -> Callable:
         context: Any,
     ) -> Dict[str, Any]:
         try:
-            _launch_for_agent(
-                input_data.get("agent_id"), str(input_data.get("agent_type") or ""), tool_use_id
-            )
+            _launch_for_agent(input_data.get("agent_id"), str(input_data.get("agent_type") or ""))
         except Exception as e:
             logger.warning(f"Error in SubagentStart hook: {e}")
         return {}

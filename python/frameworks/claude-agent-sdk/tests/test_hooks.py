@@ -315,18 +315,6 @@ class TestSubagentNesting:
         assert parents["r1"] == "t1"
         assert parents["r2"] == "t2"
 
-    def test_a_subagent_is_bound_on_its_first_tool_call_without_a_start_hook(self):
-        parents = self._run([
-            ("pre", {"tool_name": "Agent", "tool_input": {"subagent_type": "reader"}}, "t1"),
-            ("pre", {"tool_name": "Grep", "tool_input": {"pattern": "x"}, "agent_id": "a1"}, "g1"),
-            ("pre", {"tool_name": "Read", "tool_input": {}}, "main"),
-            ("post", {"tool_name": "Grep"}, "g1"),
-            ("post", {"tool_name": "Read"}, "main"),
-            ("post", {"tool_name": "Agent"}, "t1"),
-        ])
-        assert parents["g1"] == "t1"
-        assert parents["main"] is None
-
     def test_the_older_task_launch_with_parent_tool_use_id_still_nests(self):
         parents = self._run([
             ("pre", {"tool_name": "Task", "tool_input": {}}, "t1"),
