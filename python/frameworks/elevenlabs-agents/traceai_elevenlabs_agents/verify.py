@@ -74,7 +74,7 @@ def verify_signature(
 ) -> int:
     """Check one delivery. Returns the signed timestamp, raises :class:`SignatureError`.
 
-    The body is never parsed here, so a forged delivery is never read.
+    The body is only hashed here, never parsed: a forged delivery is never decoded.
     A timestamp older than ``tolerance_secs`` fails, as in the SDK. A timestamp
     more than ``tolerance_secs`` in the future also fails (the SDK does not check
     that side; a real delivery is never that far ahead).

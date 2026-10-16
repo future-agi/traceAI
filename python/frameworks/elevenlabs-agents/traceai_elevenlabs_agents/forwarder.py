@@ -3,7 +3,7 @@
 | Delivery | Response | Exported |
 |---|---|---|
 | forwarder paused (``FI_ELEVENLABS_PAUSED``) | 503 | nothing |
-| signature missing, malformed, stale or wrong | 401 | nothing, body not parsed |
+| signature missing, malformed, stale or wrong | 401 | nothing; the body is not parsed |
 | body not JSON | 400 ``invalid_json`` | nothing |
 | ``type`` other than ``post_call_transcription_otel`` | 200 ``ignored`` | nothing |
 | no conversation id / no ``resourceSpans`` / malformed span ids | 400 + stable code | nothing |
@@ -78,10 +78,12 @@ class Forwarder:
         data = event.get("data")
         if not isinstance(data, Mapping):
             return 400, {"error": "missing_data"}
+        user_id = data.get("user_id")
         return self.forward(
             conversation_id=data.get("conversation_id"),
             agent_id=data.get("agent_id"),
             otlp_traces=data.get("otlp_traces"),
+            user_id=user_id if isinstance(user_id, str) and user_id else None,
             source="post_call_webhook",
         )
 
@@ -106,7 +108,7 @@ class Forwarder:
                 agent_id=agent_id,
                 user_id=user_id,
                 project_name=self.config.project_name,
-                capture_content=self.config.capture_content,
+                trace_config=self.config.trace_config,
             )
         except MappingInputError as error:
             logger.warning("delivery rejected: conversation_id=%s error=%s", conversation_id or "?", error.code)

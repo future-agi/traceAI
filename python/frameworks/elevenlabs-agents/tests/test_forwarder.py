@@ -3,7 +3,17 @@ import time
 
 import pytest
 
-from conftest import FI_API_KEY, FI_SECRET_KEY, MARKER, WEBHOOK_SECRET, RecordingExporter, load_fixture, raw
+from conftest import (
+    FI_API_KEY,
+    FI_SECRET_KEY,
+    MARKER,
+    NEVER_NEEDLES,
+    WEBHOOK_SECRET,
+    RecordingExporter,
+    hide_all,
+    load_fixture,
+    raw,
+)
 from traceai_elevenlabs_agents import map as map_mod
 from traceai_elevenlabs_agents.exporter import ExportError
 from traceai_elevenlabs_agents.store import ForwardedStore
@@ -181,21 +191,37 @@ def test_logs_and_responses_carry_no_secret_signature_or_content(make_forwarder,
         forwarder.handle_webhook(raw(load_fixture("other_webhook_types.json")["post_call_audio"]),
                                  sign(WEBHOOK_SECRET, raw(load_fixture("other_webhook_types.json")["post_call_audio"]))),
     ]
-    text = log_capture.text + json.dumps(responses) + json.dumps(forwarder.exporter.batches)
+    # Logs and HTTP responses never carry content, in any mode.
+    text = log_capture.text + json.dumps(responses)
     for needle in (WEBHOOK_SECRET, FI_API_KEY, FI_SECRET_KEY, header.split("v0=")[1], MARKER, "UklGRg"):
         assert needle not in text
+    # Spans never carry a credential or the signature.
+    exported = json.dumps(forwarder.exporter.batches)
+    for needle in (WEBHOOK_SECRET, FI_API_KEY, FI_SECRET_KEY, header.split("v0=")[1], "UklGRg"):
+        assert needle not in exported
     assert "conv_9001k1zph3fkeh5s8xg9z90swaqa" in log_capture.text
 
 
-def test_content_on_is_opt_in(make_forwarder):
-    off = make_forwarder()
-    on = make_forwarder(capture_content=True)
-    deliver(off)
-    deliver(on)
-    assert MARKER not in json.dumps(off.exporter.batches)
-    assert MARKER in json.dumps(on.exporter.batches)
-    for secret in (WEBHOOK_SECRET, FI_API_KEY, FI_SECRET_KEY):
-        assert secret not in json.dumps(on.exporter.batches)
+def test_content_by_default_and_the_standard_hide_flags_remove_it(make_forwarder):
+    default = make_forwarder()
+    hidden = make_forwarder(trace_config=hide_all())
+    deliver(default)
+    deliver(hidden)
+    assert MARKER in json.dumps(default.exporter.batches)
+    assert MARKER not in json.dumps(hidden.exporter.batches)
+    for forwarder in (default, hidden):
+        blob = json.dumps(forwarder.exporter.batches)
+        for needle in (WEBHOOK_SECRET, FI_API_KEY, FI_SECRET_KEY) + NEVER_NEEDLES:
+            assert needle not in blob
+
+
+def test_webhook_user_id_is_written_when_present(make_forwarder):
+    body = load_fixture("post_call_transcription_otel.json")
+    body["data"]["user_id"] = "caller-17"
+    forwarder = make_forwarder()
+    assert deliver(forwarder, raw(body))[0] == 200
+    root = [s for s in forwarder.exporter.spans() if "parentSpanId" not in s][0]
+    assert map_mod.attributes_to_dict(root["attributes"])["user.id"] == "caller-17"
 
 
 def test_two_forwarders_bind_two_projects(make_forwarder):

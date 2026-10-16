@@ -25,14 +25,14 @@ def get_server():
 def test_backfill_forwards_a_conversation(make_forwarder, get_server):
     delivery = standin.build_delivery("post_call_transcription_otel.json", MARKER)
     conv = get_server.add_from_delivery(delivery, user_id="user-7")
-    forwarder = make_forwarder(elevenlabs_api_key=API_KEY, elevenlabs_base_url=get_server.base_url, capture_content=True)
+    forwarder = make_forwarder(elevenlabs_api_key=API_KEY, elevenlabs_base_url=get_server.base_url)
     status, payload = backfill(forwarder, conv)
     assert (status, payload["status"]) == (200, "forwarded")
     assert get_server.requests[0]["query"]["format"] == ["opentelemetry"]
     assert get_server.requests[0]["path"] == "/v1/convai/conversations/" + conv
     root = [s for s in forwarder.exporter.spans() if "parentSpanId" not in s][0]
     attrs = {a["key"]: a["value"] for a in root["attributes"]}
-    assert attrs["user.id"] == {"stringValue": "user-7"}  # GET carries user_id; content capture is on
+    assert attrs["user.id"] == {"stringValue": "user-7"}  # GET carries user_id; inputs are captured by default
 
 
 def test_backfill_after_webhook_converges(make_forwarder, get_server):

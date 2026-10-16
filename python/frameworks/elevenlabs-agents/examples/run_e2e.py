@@ -5,14 +5,17 @@ docs-shaped fixtures and signed locally with a throwaway secret.
 
 What runs:
   1. ``traceai-elevenlabs-agents serve`` as a subprocess, configured only through the
-     environment variables the docs page lists (content capture OFF), pointed at FI_BASE_URL.
+     environment variables the docs page lists (traceAI defaults: content captured),
+     pointed at FI_BASE_URL.
   2. Deliveries: a good conversation, a duplicate (ElevenLabs retry), an abnormal-disconnect
      conversation (root ERROR, failing tool), bad / stale / missing / mutated signatures,
      other webhook types, a payload without resourceSpans.
   3. ``traceai-elevenlabs-agents backfill`` for the delivered conversation (must be a
      duplicate) and for a conversation that only exists on the GET stand-in.
   4. Collector failure: a second forwarder pointed at a closed port returns 502.
-  5. SIGTERM, then the same run with FI_ELEVENLABS_CAPTURE_CONTENT=true into a second project.
+  5. SIGTERM, then the same run with the standard traceAI switches FI_HIDE_INPUTS,
+     FI_HIDE_OUTPUTS, FI_HIDE_INPUT_MESSAGES and FI_HIDE_OUTPUT_MESSAGES set to true, into a
+     second project. Each phase writes its own unique marker into every content field.
 
 Writes a JSON report (statuses, conversation ids, trace ids, markers) to --out.
 
@@ -101,8 +104,12 @@ def signed(body: Dict[str, Any], secret: str, phase: Dict[str, Any]):
     return raw, header
 
 
-def run_phase(args, *, project: str, capture: bool, report: Dict[str, Any], out_dir: Path) -> None:
-    phase: Dict[str, Any] = {"project": project, "capture_content": capture, "steps": []}
+HIDE_ENV = ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES")
+
+
+def run_phase(args, *, project: str, hidden: bool, report: Dict[str, Any], out_dir: Path) -> None:
+    label = "hidden" if hidden else "default"
+    phase: Dict[str, Any] = {"project": project, "mode": label, "hide_env": list(HIDE_ENV) if hidden else [], "steps": []}
     marker = standin.unique_marker()
     phase["marker"] = marker
     secret = "whsec_standin_" + secrets.token_hex(16)
@@ -116,11 +123,11 @@ def run_phase(args, *, project: str, capture: bool, report: Dict[str, Any], out_
         "FI_SECRET_KEY": os.environ["FI_SECRET_KEY"],
         "FI_PROJECT_NAME": project,
         "FI_BASE_URL": os.environ.get("FI_BASE_URL", "https://api.futureagi.com"),
-        "FI_ELEVENLABS_STATE_PATH": str(out_dir / ("state-%s.sqlite3" % ("on" if capture else "off"))),
+        "FI_ELEVENLABS_STATE_PATH": str(out_dir / ("state-%s.sqlite3" % label)),
     }
-    if capture:
-        env["FI_ELEVENLABS_CAPTURE_CONTENT"] = "true"
-    log_path = out_dir / ("forwarder-%s.log" % ("on" if capture else "off"))
+    if hidden:
+        env.update({name: "true" for name in HIDE_ENV})
+    log_path = out_dir / ("forwarder-%s.log" % label)
     log_path.write_bytes(b"")
     url = "http://127.0.0.1:%d%s" % (port, PATH)
 
@@ -192,8 +199,8 @@ def run_phase(args, *, project: str, capture: bool, report: Dict[str, Any], out_
 
         # Collector failure: same delivery through a forwarder whose collector is down.
         dead_port, dead_env = free_port(), dict(env, FI_BASE_URL="http://127.0.0.1:%d" % free_port())
-        dead_env["FI_ELEVENLABS_STATE_PATH"] = str(out_dir / "state-dead.sqlite3")
-        dead_log = out_dir / "forwarder-dead.log"
+        dead_env["FI_ELEVENLABS_STATE_PATH"] = str(out_dir / ("state-dead-%s.sqlite3" % label))
+        dead_log = out_dir / ("forwarder-dead-%s.log" % label)
         dead_log.write_bytes(b"")
         dead = start_forwarder(dead_env, dead_port, dead_log)
         try:
@@ -215,8 +222,8 @@ def run_phase(args, *, project: str, capture: bool, report: Dict[str, Any], out_
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project", required=True, help="content-off project")
-    parser.add_argument("--optin-project", help="content-on project (default: <project>-optin)")
+    parser.add_argument("--project", required=True, help="project for the run with traceAI defaults (content on)")
+    parser.add_argument("--hidden-project", help="project for the FI_HIDE_* run (default: <project>-hidden)")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     for name in ("FI_API_KEY", "FI_SECRET_KEY"):
@@ -226,8 +233,8 @@ def main() -> int:
     out_dir = out.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     report: Dict[str, Any] = {"started": int(time.time()), "standin": "ElevenLabs sender and GET endpoint", "phases": []}
-    run_phase(args, project=args.project, capture=False, report=report, out_dir=out_dir)
-    run_phase(args, project=args.optin_project or args.project + "-optin", capture=True, report=report, out_dir=out_dir)
+    run_phase(args, project=args.project, hidden=False, report=report, out_dir=out_dir)
+    run_phase(args, project=args.hidden_project or args.project + "-hidden", hidden=True, report=report, out_dir=out_dir)
     report["ok"] = all(p["ok"] for p in report["phases"])
     out.write_text(json.dumps(report, indent=2))
     print("report: %s  ok=%s" % (out, report["ok"]))

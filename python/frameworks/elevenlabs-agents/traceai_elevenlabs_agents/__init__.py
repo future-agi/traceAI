@@ -3,6 +3,10 @@
 ElevenLabs runs the agent; this package runs in your environment. It verifies the
 ``post_call_transcription_otel`` webhook signature, maps the conversation onto the
 Future AGI Voice-tab attributes and exports it as OTLP/HTTP JSON with your keys.
+
+Content is captured by default and follows the standard traceAI switch,
+``fi_instrumentation.TraceConfig`` / ``FI_HIDE_*``; see :mod:`.privacy` for what is
+never exported in any mode.
 """
 
 from .backfill import backfill, fetch_conversation

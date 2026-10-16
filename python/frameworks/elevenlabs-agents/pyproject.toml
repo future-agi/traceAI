@@ -22,9 +22,12 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-# Standard library only at runtime: HMAC, HTTP server, OTLP/HTTP JSON export,
-# SQLite idempotency record. The ElevenLabs SDK is a test oracle, not a dependency.
 python = ">=3.10,<3.14"
+# For fi_instrumentation.TraceConfig only: the same FI_HIDE_* privacy switch every
+# traceAI instrumentor uses. HMAC, the HTTP server, the OTLP/HTTP JSON export and the
+# SQLite idempotency record are standard library. The ElevenLabs SDK is a test
+# oracle, not a dependency.
+fi-instrumentation-otel = ">=0.1.11"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"

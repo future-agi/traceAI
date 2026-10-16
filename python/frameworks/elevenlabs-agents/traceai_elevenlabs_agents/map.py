@@ -18,14 +18,13 @@ What is added:
 * tool spans get ``fi.span.kind=TOOL`` and ``tool.name``; agent turns ElevenLabs
   marks with ``elevenlabs.producing_llm`` get ``fi.span.kind=LLM``, the model and the
   token counts from ``elevenlabs.llm_usage.*``; other turns get ``CHAIN``;
-* with content capture on: the transcript (``conversation.transcript``,
-  ``fi.conversation.transcript``, flattened rows) and ``input.value`` /
-  ``output.value`` on turn and tool spans.
+* the conversation content: the transcript (``conversation.transcript``,
+  ``fi.conversation.transcript``, flattened rows), ``input.value`` / ``output.value`` on
+  the root, turn and tool spans, and ``user.id`` when ElevenLabs supplied one.
 
-Content capture is off by default. Off means an allowlist: ids, timings, counts,
-status codes, model names and token numbers survive; transcript text, tool
-arguments and results, reasoning, analysis, dynamic variables, user ids, status
-messages and event attributes do not.
+Content is captured by default and follows the standard traceAI ``TraceConfig``
+switches (``FI_HIDE_INPUTS``, ``FI_HIDE_OUTPUTS``, ...); what is never exported in any
+mode is listed in :mod:`traceai_elevenlabs_agents.privacy`.
 
 Signed media URLs are always dropped (they expire in about 15 minutes and this
 forwarder stores no recordings).
@@ -39,6 +38,11 @@ import json
 import math
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+
+from fi_instrumentation import TraceConfig
+
+from . import privacy
+from .privacy import INPUT, OUTPUT, Capture
 
 ROOT_SPAN_NAME = "elevenlabs.conversation"
 USER_TURN_SPAN_NAME = "elevenlabs.recv.user_transcript"
@@ -56,40 +60,12 @@ ATTR_LLM_USAGE_PREFIX = "elevenlabs.llm_usage."
 ATTR_TURN_INDEX = "elevenlabs.turn.index"
 ATTR_TIME_IN_CALL = "time_in_call_secs"
 
-# Strings that are identifiers or configuration, never conversation content.
-_SAFE_STRING_KEYS = frozenset(
-    {
-        "service.name",
-        ATTR_CONVERSATION_ID,
-        ATTR_AGENT_ID,
-        "elevenlabs.source",
-        "elevenlabs.environment",
-        "elevenlabs.cost_fiat",
-        ATTR_PRODUCING_LLM,
-        "elevenlabs.rag.embedding_model",
-    }
-)
-# Numbers under these prefixes can still be content (a collected age, an account
-# number in a dynamic variable), so they are dropped when content capture is off.
-_CONTENT_PREFIXES = (
-    "elevenlabs.dynamic_variable",
-    "elevenlabs.analysis",
-    "elevenlabs.data_collection",
-    "elevenlabs.event.data",
-    "elevenlabs.user",
-    "elevenlabs.agent.text",
-    "elevenlabs.tool.params",
-    "elevenlabs.tool.result",
-    "elevenlabs.reasoning",
-    "elevenlabs.rag.retrieval_query",
-)
 # Set by this module or by the platform, never accepted from the payload.
 _RESERVED_RESOURCE_KEYS = frozenset({"project_name", "project_type", "project_version_name", "project_version_id"})
 _RESERVED_RESOURCE_PREFIXES = ("fi.",)
 
 _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 _HEX16 = re.compile(r"^[0-9a-fA-F]{16}$")
-_SIGNED_URL = re.compile(r"^https?://\S+\?\S*$", re.IGNORECASE)
 
 
 class MappingInputError(ValueError):
@@ -156,14 +132,12 @@ def _set_attr(attributes: List[Dict[str, Any]], key: str, value: Any) -> None:
     attributes.append({"key": key, "value": python_to_any_value(value)})
 
 
-def _contains_signed_url(value: Any) -> bool:
-    if isinstance(value, str):
-        return bool(_SIGNED_URL.match(value.strip()))
-    if isinstance(value, list):
-        return any(_contains_signed_url(v) for v in value)
-    if isinstance(value, dict):
-        return any(_contains_signed_url(v) for v in value.values())
-    return False
+def _set_masked(attributes: List[Dict[str, Any]], capture: Capture, key: str, value: Any) -> None:
+    """Set an attribute through ``TraceConfig.mask``, as ``FITracer`` does."""
+    value = capture.mask(key, value)
+    if value is None or value == "":
+        return
+    _set_attr(attributes, key, value)
 
 
 def _parse_llm_usage(raw: Any) -> Optional[Dict[str, float]]:
@@ -189,31 +163,60 @@ def _parse_llm_usage(raw: Any) -> Optional[Dict[str, float]]:
     return out
 
 
-def _is_safe_metadata(key: str, value: Any) -> bool:
-    """True when an attribute is allowed through with content capture off."""
-    if key in _SAFE_STRING_KEYS:
-        return isinstance(value, (str, int, float, bool))
-    if key.startswith(ATTR_LLM_USAGE_PREFIX):
-        return _parse_llm_usage(value) is not None
-    if key == ATTR_TIME_IN_CALL:
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if key.startswith("elevenlabs.") and not key.startswith(_CONTENT_PREFIXES):
-        return isinstance(value, (int, float, bool))
-    return False
+def _keep_attribute(key: str, value_in: Mapping[str, Any], capture: Capture) -> Optional[Dict[str, Any]]:
+    """One payload attribute after both privacy layers, or ``None`` when it is dropped."""
+    value = any_value_to_python(value_in)
+    if privacy.contains_signed_url(value):
+        return None
+    kind = privacy.classify(key, value, parse_llm_usage=_parse_llm_usage)
+    if not capture.allows(kind):
+        return None
+    if kind == privacy.SAFE:
+        cleaned = copy.deepcopy(dict(value_in))
+        if isinstance(value, str):
+            cleaned = {"stringValue": privacy.scrub_identity(value)}
+        return {"key": key, "value": cleaned}
+    cleaned = privacy.scrub_any_value(value_in, text=privacy.is_conversation_text(key))
+    if cleaned is None:
+        return None
+    plain = any_value_to_python(cleaned)
+    masked = capture.mask(key, plain)
+    if masked is None or masked == "":
+        return None
+    if masked != plain:  # REDACTED_VALUE, or FI_PII_REDACTION rewrote the text
+        if isinstance(masked, list):
+            cleaned = {"arrayValue": {"values": [python_to_any_value(v) for v in masked]}}
+        elif not isinstance(masked, dict):
+            cleaned = python_to_any_value(masked)
+    return {"key": key, "value": cleaned}
 
 
-def _filter_attributes(
-    attributes: Optional[Iterable[Mapping[str, Any]]], capture_content: bool
-) -> List[Dict[str, Any]]:
+def _filter_attributes(attributes: Optional[Iterable[Mapping[str, Any]]], capture: Capture) -> List[Dict[str, Any]]:
+    kept: List[Dict[str, Any]] = []
+    for attribute in attributes or []:
+        if not isinstance(attribute, Mapping) or "key" not in attribute:
+            continue
+        out = _keep_attribute(str(attribute["key"]), attribute.get("value", {}), capture)
+        if out is not None:
+            kept.append(out)
+    return kept
+
+
+def _filter_resource(attributes: Optional[Iterable[Mapping[str, Any]]]) -> List[Dict[str, Any]]:
+    """Resource attributes: an allowlist in every mode (no host, process or OS details)."""
     kept: List[Dict[str, Any]] = []
     for attribute in attributes or []:
         if not isinstance(attribute, Mapping) or "key" not in attribute:
             continue
         key = str(attribute["key"])
         value = any_value_to_python(attribute.get("value", {}))
-        if _contains_signed_url(value):
+        if key not in privacy.RESOURCE_ALLOWLIST or not isinstance(value, (str, int, float, bool)):
             continue
-        if capture_content or _is_safe_metadata(key, value):
+        if privacy.contains_signed_url(value):
+            continue
+        if isinstance(value, str):
+            kept.append({"key": key, "value": {"stringValue": privacy.scrub_identity(value)}})
+        else:
             kept.append({"key": key, "value": copy.deepcopy(attribute.get("value", {}))})
     return kept
 
@@ -242,13 +245,17 @@ def map_otlp_traces(
     project_name: str,
     agent_id: Optional[str] = None,
     user_id: Optional[str] = None,
-    capture_content: bool = False,
+    trace_config: Optional[TraceConfig] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Return ``(export_request, summary)``.
+
+    ``trace_config`` is the standard traceAI privacy switch; ``None`` reads the
+    ``FI_HIDE_*`` environment variables, as ``TraceConfig()`` does everywhere.
 
     Raises :class:`MappingInputError` for a payload that is not a trace.
     Any other exception is a bug in this module and must not be exported.
     """
+    capture = Capture.from_trace_config(trace_config)
     if not project_name:
         raise ValueError("project_name is required")
     if not isinstance(otlp_traces, Mapping):
@@ -311,7 +318,7 @@ def map_otlp_traces(
     last_user_text: Optional[str] = None
     for _, span, attrs in turns:
         is_user = span.get("name") == USER_TURN_SPAN_NAME
-        text = attrs.get(ATTR_USER_TEXT if is_user else ATTR_AGENT_TEXT)
+        text = privacy.conversation_text(attrs.get(ATTR_USER_TEXT if is_user else ATTR_AGENT_TEXT))
         if not is_user and last_user_text:
             last_user_text_before[str(span.get("spanId"))] = last_user_text
         if not isinstance(text, str) or not text.strip():
@@ -331,7 +338,7 @@ def map_otlp_traces(
         resource_in = resource_span.get("resource") or {}
         resource_attributes = [
             a
-            for a in _filter_attributes(resource_in.get("attributes"), capture_content)
+            for a in _filter_resource(resource_in.get("attributes"))
             if a["key"] not in _RESERVED_RESOURCE_KEYS and not a["key"].startswith(_RESERVED_RESOURCE_PREFIXES)
         ]
         _set_attr(resource_attributes, "project_name", project_name)
@@ -345,7 +352,7 @@ def map_otlp_traces(
                     session_id=session_id,
                     agent_id=agent_id,
                     user_id=user_id,
-                    capture_content=capture_content,
+                    capture=capture,
                     turns=turns,
                     transcript=transcript,
                     last_user_text_before=last_user_text_before,
@@ -367,7 +374,7 @@ def map_otlp_traces(
         "span_count": span_count,
         "root_found": root is not None,
         "turns": sum(1 for _ in turns),
-        "transcript_rows": len(transcript) if capture_content else 0,
+        "transcript_rows": len(transcript) if capture.everything else 0,
     }
     return {"resourceSpans": out_resource_spans}, summary
 
@@ -379,14 +386,14 @@ def _map_span(
     session_id: str,
     agent_id: Optional[str],
     user_id: Optional[str],
-    capture_content: bool,
+    capture: Capture,
     turns: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
     transcript: List[Dict[str, Any]],
     last_user_text_before: Mapping[str, str],
 ) -> Dict[str, Any]:
     name = str(span.get("name") or "")
     attrs_in = attributes_to_dict(span.get("attributes"))
-    attributes = _filter_attributes(span.get("attributes"), capture_content)
+    attributes = _filter_attributes(span.get("attributes"), capture)
 
     out: Dict[str, Any] = {
         "traceId": str(span["traceId"]).lower(),
@@ -402,8 +409,11 @@ def _map_span(
     status = span.get("status")
     if isinstance(status, Mapping):
         status_out = {k: status[k] for k in ("code",) if k in status}
-        if capture_content and status.get("message"):
-            status_out["message"] = status["message"]
+        # Error text is output: one scrubbed line, never a stack trace or a path.
+        message = privacy.error_summary(status.get("message")) if capture.output else None
+        message = capture.mask("exception.message", message) if message else None
+        if message:
+            status_out["message"] = message
         out["status"] = status_out
 
     events = []
@@ -411,8 +421,9 @@ def _map_span(
         if not isinstance(event, Mapping):
             continue
         event_out = {k: event[k] for k in ("name", "timeUnixNano") if k in event}
-        if capture_content and event.get("attributes"):
-            event_out["attributes"] = _filter_attributes(event.get("attributes"), True)
+        event_attributes = _event_attributes(event.get("attributes"), capture)
+        if event_attributes:
+            event_out["attributes"] = event_attributes
         events.append(event_out)
     if events:
         out["events"] = events
@@ -424,6 +435,10 @@ def _map_span(
         out["links"] = links
 
     _set_attr(attributes, "session.id", session_id)
+
+    def content(key: str, value: Any, side: str) -> None:
+        if (capture.input if side == INPUT else capture.output) and value not in (None, ""):
+            _set_masked(attributes, capture, key, value)
 
     if is_root:
         _set_attr(attributes, "fi.span.kind", "CONVERSATION")
@@ -442,36 +457,36 @@ def _map_span(
             _set_attr(attributes, "call.duration", float(duration))
         if turns:
             _set_attr(attributes, "call.total_turns", len(turns))
-        if capture_content:
-            if user_id:
-                _set_attr(attributes, "user.id", user_id)
-            if transcript:
-                rendered = json.dumps(
-                    [{k: row[k] for k in ("role", "content", "time") if k in row} for row in transcript],
-                    ensure_ascii=False,
+        # The caller's id from ElevenLabs is an input. One that carries an email address,
+        # a local path or a host name is never written.
+        if user_id and privacy.scrub_identity(user_id) == user_id:
+            content("user.id", user_id, INPUT)
+        if transcript and capture.everything:
+            rendered = json.dumps(
+                [{k: row[k] for k in ("role", "content", "time") if k in row} for row in transcript],
+                ensure_ascii=False,
+            )
+            _set_masked(attributes, capture, "conversation.transcript", rendered)
+            _set_masked(attributes, capture, "fi.conversation.transcript", rendered)
+            for index, row in enumerate(transcript):
+                _set_attr(attributes, "conversation.transcript.{0}.message.role".format(index), row["role"])
+                _set_masked(
+                    attributes, capture, "conversation.transcript.{0}.message.content".format(index), row["content"]
                 )
-                _set_attr(attributes, "conversation.transcript", rendered)
-                _set_attr(attributes, "fi.conversation.transcript", rendered)
-                for index, row in enumerate(transcript):
-                    _set_attr(attributes, "conversation.transcript.{0}.message.role".format(index), row["role"])
-                    _set_attr(attributes, "conversation.transcript.{0}.message.content".format(index), row["content"])
-                first_user = next((r["content"] for r in transcript if r["role"] == "user"), None)
-                last_agent = next((r["content"] for r in reversed(transcript) if r["role"] == "assistant"), None)
-                if first_user:
-                    _set_attr(attributes, "input.value", first_user)
-                if last_agent:
-                    _set_attr(attributes, "output.value", last_agent)
+        first_user = next((r["content"] for r in transcript if r["role"] == "user"), None)
+        last_agent = next((r["content"] for r in reversed(transcript) if r["role"] == "assistant"), None)
+        content("input.value", first_user, INPUT)
+        content("output.value", last_agent, OUTPUT)
     elif name.startswith(TOOL_SPAN_PREFIX):
         _set_attr(attributes, "fi.span.kind", "TOOL")
         tool_name = name[len(TOOL_SPAN_PREFIX):]
         if tool_name:
             _set_attr(attributes, "tool.name", tool_name)
-        if capture_content:
-            params, result = attrs_in.get(ATTR_TOOL_PARAMS), attrs_in.get(ATTR_TOOL_RESULT)
-            if params not in (None, ""):
-                _set_attr(attributes, "input.value", params if isinstance(params, str) else json.dumps(params))
-            if result not in (None, ""):
-                _set_attr(attributes, "output.value", result if isinstance(result, str) else json.dumps(result))
+        params, result = attrs_in.get(ATTR_TOOL_PARAMS), attrs_in.get(ATTR_TOOL_RESULT)
+        if params not in (None, ""):
+            content("input.value", privacy.conversation_text(_as_text(params)), INPUT)
+        if result not in (None, ""):
+            content("output.value", privacy.conversation_text(_as_text(result)), OUTPUT)
     elif name == AGENT_TURN_SPAN_NAME:
         model = attrs_in.get(ATTR_PRODUCING_LLM)
         if isinstance(model, str) and model:
@@ -482,22 +497,50 @@ def _map_span(
                 _set_attr(attributes, "gen_ai.usage.input_tokens", input_tokens)
             if output_tokens is not None:
                 _set_attr(attributes, "gen_ai.usage.output_tokens", output_tokens)
-            if capture_content and last_user_text_before.get(str(span.get("spanId"))):
-                _set_attr(attributes, "input.value", last_user_text_before[str(span.get("spanId"))])
+            content("input.value", last_user_text_before.get(str(span.get("spanId"))), INPUT)
         else:
             _set_attr(attributes, "fi.span.kind", "CHAIN")
         text = attrs_in.get(ATTR_AGENT_TEXT)
-        if capture_content and isinstance(text, str) and text:
-            _set_attr(attributes, "output.value", text)
+        if isinstance(text, str):
+            content("output.value", privacy.conversation_text(text), OUTPUT)
     elif name == USER_TURN_SPAN_NAME:
         _set_attr(attributes, "fi.span.kind", "CHAIN")
         text = attrs_in.get(ATTR_USER_TEXT)
-        if capture_content and isinstance(text, str) and text:
-            _set_attr(attributes, "input.value", text)
+        if isinstance(text, str):
+            content("input.value", privacy.conversation_text(text), INPUT)
     # Any other span name passes through with its (filtered) attributes and no kind.
 
     out["attributes"] = attributes
     return out
+
+
+def _as_text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _event_attributes(attributes: Optional[Iterable[Mapping[str, Any]]], capture: Capture) -> List[Dict[str, Any]]:
+    """Span event attributes. The exception type always; its message (one scrubbed line)
+    only with output capture on; a stack trace never; anything else like a span attribute."""
+    kept: List[Dict[str, Any]] = []
+    for attribute in attributes or []:
+        if not isinstance(attribute, Mapping) or "key" not in attribute:
+            continue
+        key = str(attribute["key"])
+        value = any_value_to_python(attribute.get("value", {}))
+        if key == "exception.type" and isinstance(value, str):
+            kept.append({"key": key, "value": {"stringValue": privacy.scrub_identity(value)}})
+        elif key == "exception.message":
+            message = privacy.error_summary(value) if capture.output else None
+            message = capture.mask(key, message) if message else None
+            if message:
+                kept.append({"key": key, "value": {"stringValue": message}})
+        elif key == "exception.escaped" and isinstance(value, bool):
+            kept.append({"key": key, "value": {"boolValue": value}})
+        else:
+            out = _keep_attribute(key, attribute.get("value", {}), capture)
+            if out is not None:
+                kept.append(out)
+    return kept
 
 
 def _token_totals(attrs: Mapping[str, Any]) -> Tuple[Optional[int], Optional[int]]:

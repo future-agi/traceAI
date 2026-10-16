@@ -7,6 +7,11 @@ Put TLS in front of it (a reverse proxy or your platform's HTTPS ingress):
 ElevenLabs delivers to an HTTPS URL. Request logs carry the method, path and
 status only; the forwarder's own log lines carry the conversation id and the
 outcome only.
+
+A body is read into memory (at most ``max_body_bytes``; a larger declared length is
+refused with 413 unread) before its signature can be checked, because the HMAC
+covers the raw bytes. A delivery whose signature fails is never parsed. Rate- and
+size-limit unauthenticated traffic at your ingress.
 """
 
 from __future__ import annotations

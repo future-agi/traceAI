@@ -10,9 +10,11 @@ They are **not** captured from a live ElevenLabs workspace. Replace them with on
 real body when one is available.
 
 `{{MARKER}}` is replaced at load time with a unique string so tests can prove that
-no content reaches an exported span when content capture is off. A few attributes
-ElevenLabs does not send (`host.name`, `process.executable.path`, `project_name` on
-the resource, a stack trace event) are adversarial extras for the privacy and
+no content reaches an exported span when the standard `FI_HIDE_*` switches are on, and
+that it does by default. A few values ElevenLabs is not documented to send
+(`host.name` and `process.executable.path` on the resource, a `project_name` on the
+resource, a stack trace event, a local path and host name in a status message, an
+email in a dynamic variable) are adversarial extras for the never-exported and
 project-binding tests.
 
 | File | What it is |
