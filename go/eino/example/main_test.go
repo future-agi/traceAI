@@ -247,8 +247,9 @@ func TestExampleExportsOneTracePerQuestion(t *testing.T) {
 			for _, s := range ok {
 				if len(s.ParentSpanId) == 0 {
 					roots++
-					if s.Name != "trip_request" {
-						t.Errorf("root is %s", s.Name)
+					if s.Name != "trip_request" || !strings.Contains(s.attrs["input.value"], "QMARK-42") ||
+						!strings.Contains(s.attrs["output.value"], "rain jacket") {
+						t.Errorf("root %s: input %q output %q", s.Name, s.attrs["input.value"], s.attrs["output.value"])
 					}
 				} else if !ids[fmt.Sprintf("%x", s.ParentSpanId)] {
 					t.Errorf("%s is orphaned", s.Name)

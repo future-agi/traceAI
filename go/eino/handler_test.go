@@ -796,6 +796,36 @@ func TestADKAgentRun(t *testing.T) {
 	}
 }
 
+// With outputs hidden the agent span says it had an answer, redacted.
+func TestADKAgentOutputRedactedWhenHidden(t *testing.T) {
+	rec, _, h := recorder(t, TraceConfig{HideInputs: true, HideOutputs: true})
+	ctx := context.Background()
+	ag, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
+		Name: "quiet_agent", Description: "d", Instruction: "i",
+		Model: &fakeModel{name: "m", callbacks: true, answer: "SECRET answer"},
+	})
+	must(t, err)
+	it := adk.NewRunner(ctx, adk.RunnerConfig{Agent: ag}).Query(ctx, "SECRET question", adk.WithCallbacks(h))
+	for {
+		if _, ok := it.Next(); !ok {
+			break
+		}
+	}
+	waitEnded(t, h)
+	for _, s := range rec.Ended() {
+		for _, kv := range s.Attributes() {
+			if strings.Contains(kv.Value.String(), "SECRET") {
+				t.Fatalf("%s %s leaked", s.Name(), kv.Key)
+			}
+		}
+		if k, _ := attr(s, GenAISpanKind); k == SpanKindAgent {
+			if got, _ := attr(s, OutputValue); got != RedactedValue {
+				t.Fatalf("agent output.value = %q", got)
+			}
+		}
+	}
+}
+
 // An agent whose model fails ends ERROR.
 func TestADKAgentErrorEndsAgentSpanWithError(t *testing.T) {
 	rec, _, h := recorder(t, TraceConfig{})

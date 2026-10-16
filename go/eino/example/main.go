@@ -207,6 +207,9 @@ func ask(ctx context.Context, tp trace.TracerProvider, agent adk.Agent, q string
 			attribute.String(traceaieino.GenAISpanKind, traceaieino.SpanKindChain))...))
 	defer span.End()
 	fmt.Println("trace_id=" + span.SpanContext().TraceID().String())
+	// The question and answer on your own span obey the same FI_HIDE_* switches.
+	tc := traceaieino.TraceConfigFromEnv()
+	tc.SetAttributes(span, attribute.String(traceaieino.InputValue, q))
 
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: *stream})
 	events := runner.Query(ctx, q)
@@ -237,6 +240,8 @@ func ask(ctx context.Context, tp trace.TracerProvider, agent adk.Agent, q string
 			answer = mo.Message.Content
 		}
 	}
+	tc.SetAttributes(span, attribute.String(traceaieino.OutputValue, answer))
+	span.SetStatus(codes.Ok, "")
 	return answer, nil
 }
 

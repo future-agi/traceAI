@@ -121,6 +121,7 @@ func drainAgentEvents[M adk.MessageType](h *Handler, st *runState, events *adk.A
 	keep := traced && !h.tc.HideOutputs
 	var (
 		last        any
+		sawOutput   bool
 		runErr      error
 		interrupted bool
 	)
@@ -142,6 +143,7 @@ func drainAgentEvents[M adk.MessageType](h *Handler, st *runState, events *adk.A
 			continue
 		}
 		mv := ev.Output.MessageOutput
+		sawOutput = true
 		if mv.IsStreaming {
 			if mv.MessageStream == nil {
 				continue
@@ -173,6 +175,11 @@ func drainAgentEvents[M adk.MessageType](h *Handler, st *runState, events *adk.A
 			kvs = append(kvs, messageValue(OutputValue, OutputMimeType, m)...)
 		}
 	case nil:
+		if sawOutput && !keep {
+			// The agent answered but outputs are hidden: the TraceConfig
+			// turns this into __REDACTED__, as on every other span.
+			kvs = append(kvs, attribute.String(OutputValue, RedactedValue))
+		}
 	default:
 		kvs = append(kvs, valueAttributes(OutputValue, OutputMimeType, m)...)
 	}
