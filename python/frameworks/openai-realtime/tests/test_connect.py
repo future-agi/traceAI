@@ -24,7 +24,7 @@ SDK3 = hasattr(rt.AsyncRealtimeConnectionManager, "send")  # 3.x: pre-open queue
 
 
 def _args(**kw):
-    base = dict(model="gpt-realtime-2.1", marker=MARKER, metadata_only=False, user_id=None, text=False,
+    base = dict(model="gpt-realtime-2.1", marker=MARKER, user_id=None, text=False,
                 typed=None, error_case=False, playback_speed=6.0, mic_pace=0.002)
     base.update(kw)
     return argparse.Namespace(**base)
@@ -37,10 +37,12 @@ def _client(server, key=API_KEY, cls=AsyncOpenAI):
 def test_async_voice_call_end_to_end(instrument, exporter, stub_server):
     """J1-J3 through the real SDK: tool call, barge-in with truncate, four responses."""
     instrument(user_id="caller-1")
-    # Slow enough that the long answer is still being generated when the scripted
-    # barge-in arrives (about 170 ms of wall time into its playback).
+    # The stub generates audio at 10x real time and the example "plays" it at 3x, so
+    # unplayed audio is still buffered when the scripted barge-in arrives (about
+    # 330 ms of wall time into the long answer) and the example sends a truncate,
+    # even when a loaded runner slows generation down.
     server = stub_server(pace=0.01)
-    asyncio.run(voice_agent.voice_call(_client(server), _args()))
+    asyncio.run(voice_agent.voice_call(_client(server), _args(playback_speed=3.0)))
     spans = exporter.get_finished_spans()
     assert_voice_tab(spans, forbidden_substrings=(API_KEY, "UklGRg"))
     root = root_of(spans)

@@ -55,12 +55,15 @@ class OpenAIRealtimeInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     ``instrument()`` keyword arguments:
 
     * ``tracer_provider``: the provider from ``fi_instrumentation.register()``.
-    * ``config``: a ``fi_instrumentation.TraceConfig``. ``hide_inputs`` drops user
-      transcripts and text, instructions and tool arguments; ``hide_outputs`` drops
-      assistant transcripts and text, tool results and error messages. Both also
-      read ``FI_HIDE_INPUTS`` / ``FI_HIDE_OUTPUTS``.
-    * ``metadata_only``: ``True`` drops all of the above at once. Names, timings,
-      token counts, tool names, error types and codes, model and voice stay.
+    * ``config``: a ``fi_instrumentation.TraceConfig``, the same privacy switch every
+      traceAI instrumentor uses. Content is captured by default. ``hide_inputs``
+      (``FI_HIDE_INPUTS``), ``hide_input_messages`` (``FI_HIDE_INPUT_MESSAGES``) or
+      ``hide_input_text`` (``FI_HIDE_INPUT_TEXT``) drop user transcripts and text,
+      instructions and tool arguments; ``hide_outputs``, ``hide_output_messages`` or
+      ``hide_output_text`` (``FI_HIDE_OUTPUTS`` / ``FI_HIDE_OUTPUT_MESSAGES`` /
+      ``FI_HIDE_OUTPUT_TEXT``) drop assistant transcripts and text, tool results and
+      error messages. Either side drops the combined conversation transcript. Names,
+      timings, token counts, tool names, error types and codes, model and voice stay.
     * ``session_id`` / ``user_id``: written on every session root. A
       ``using_session`` / ``using_user`` context around ``connect()`` wins over
       these, and these win over the OpenAI session id.
@@ -77,10 +80,9 @@ class OpenAIRealtimeInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         config = kwargs.get("config") or TraceConfig()
         if not isinstance(config, TraceConfig):
             raise TypeError("config must be a fi_instrumentation.TraceConfig")
-        metadata_only = bool(kwargs.get("metadata_only", False))
         settings = Settings(
-            capture_input=not (metadata_only or bool(config.hide_inputs)),
-            capture_output=not (metadata_only or bool(config.hide_outputs)),
+            capture_input=not _hides(config, "hide_inputs", "hide_input_messages", "hide_input_text"),
+            capture_output=not _hides(config, "hide_outputs", "hide_output_messages", "hide_output_text"),
             session_id=_text(kwargs.get("session_id")),
             user_id=_text(kwargs.get("user_id")),
         )
@@ -108,7 +110,6 @@ def instrument(
     tracer_provider: Any = None,
     *,
     config: Optional[TraceConfig] = None,
-    metadata_only: bool = False,
     session_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> OpenAIRealtimeInstrumentor:
@@ -117,11 +118,17 @@ def instrument(
     instrumentor.instrument(
         tracer_provider=tracer_provider,
         config=config,
-        metadata_only=metadata_only,
         session_id=session_id,
         user_id=user_id,
     )
     return instrumentor
+
+
+def _hides(config: TraceConfig, *flags: str) -> bool:
+    """True when any of the TraceConfig hide flags (or their FI_HIDE_* env vars) is on.
+    In a Realtime session the transcripts are the messages, so hiding the messages or
+    their text hides the transcripts too."""
+    return any(bool(getattr(config, flag, False)) for flag in flags)
 
 
 def _text(value: Any) -> Optional[str]:

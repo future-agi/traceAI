@@ -52,9 +52,8 @@ with `.enter()` and closed with `.close()`, and one read with `recv()`, `recv_by
 | Option | Effect |
 |---|---|
 | `tracer_provider` | The provider from `register()`. |
-| `metadata_only=True` | Drop all content: transcripts, user text, instructions, tool arguments, tool results, error messages. |
-| `config=TraceConfig(hide_inputs=True)` | Drop what goes in: user speech and text, instructions, tool arguments. Also `FI_HIDE_INPUTS=true`. |
-| `config=TraceConfig(hide_outputs=True)` | Drop what comes out: assistant speech and text, tool results, error messages. Also `FI_HIDE_OUTPUTS=true`. |
+| `config=TraceConfig(hide_inputs=True)` | Drop what goes in: user speech and text, instructions, tool arguments. Also `FI_HIDE_INPUTS=true`, `FI_HIDE_INPUT_MESSAGES=true` or `FI_HIDE_INPUT_TEXT=true`. |
+| `config=TraceConfig(hide_outputs=True)` | Drop what comes out: assistant speech and text, tool results, error messages. Also `FI_HIDE_OUTPUTS=true`, `FI_HIDE_OUTPUT_MESSAGES=true` or `FI_HIDE_OUTPUT_TEXT=true`. |
 | `session_id`, `user_id` | Written on every session root. `using_session()` / `using_user()` around `connect()` take precedence. |
 
 `examples/voice_agent.py` is a complete server-side voice agent: session setup with input
@@ -101,9 +100,13 @@ truncated transcript.
 ## Privacy
 
 - Audio bytes never land on a span, in any mode. Audio is only counted and measured.
-- Content is on by default, like the rest of traceAI. `metadata_only=True` (or `FI_HIDE_INPUTS` and
-  `FI_HIDE_OUTPUTS`) turns it off; names, timings, token counts, tool names, error types and codes,
-  model and voice stay.
+- Content is on by default, like every traceAI instrumentor, and the switch is the same one:
+  `FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true` (or `TraceConfig(hide_inputs=True, hide_outputs=True)`)
+  turns it off. Names, timings, token counts, tool names, error types and codes, model and voice
+  stay. In a Realtime session the transcripts are the messages, so `FI_HIDE_INPUT_MESSAGES` /
+  `FI_HIDE_INPUT_TEXT` drop the user side the same way `FI_HIDE_INPUTS` does, and the `OUTPUT`
+  variants drop the model side. Either side drops the combined `conversation.transcript`. There is no
+  package-specific privacy switch.
 - The API key is never recorded: not the `Authorization` header, not a key in a URL query, not the
   browser subprotocol form. Error and exception text is scrubbed of the client's key and of anything
   shaped like a key before it is written. URLs and hosts are not recorded at all.

@@ -18,7 +18,9 @@ socket (or to a local stand-in, see README).
 Optional:
     OPENAI_WEBSOCKET_BASE_URL   this example's own setting: passed to AsyncOpenAI(websocket_base_url=...),
                                 e.g. ws://127.0.0.1:8765/v1 for the stand-in server
-    --metadata-only             trace without transcripts, instructions, tool arguments or results
+    FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true
+                                the standard traceAI switches: trace without transcripts, instructions,
+                                tool arguments, tool results or error text
     --typed "What's the weather in Paris?"
                                 type the question, hear the answer: an audio session with a tool call
                                 and no microphone (the shortest live check)
@@ -64,7 +66,7 @@ TOOLS = [
 def get_weather(city: str, marker: str = "", **_: Any) -> str:
     result = {"city": city, "temp_c": 18, "conditions": "sunny"}
     if marker:
-        # Content that must never leave the process in metadata-only mode.
+        # Content that must never leave the process with FI_HIDE_INPUTS / FI_HIDE_OUTPUTS on.
         tag = marker.rsplit("-", 1)[-1].lower()
         result["note"] = f"{marker} report filed by ops+{tag}@example.com from /Users/alice-{tag}/weather/cache.json"
     return json.dumps(result)
@@ -230,7 +232,6 @@ def main() -> int:
     ap.add_argument("--project", default=os.getenv("FI_PROJECT_NAME", "openai-realtime-example"))
     ap.add_argument("--model", default="gpt-realtime-2.1")
     ap.add_argument("--marker", default="")
-    ap.add_argument("--metadata-only", action="store_true")
     ap.add_argument("--user-id", default=None)
     ap.add_argument("--text", action="store_true")
     ap.add_argument("--typed", default=None, help="type this question instead of speaking; the answer is spoken")
@@ -240,9 +241,8 @@ def main() -> int:
     args = ap.parse_args()
 
     provider = register(project_type=ProjectType.OBSERVE, project_name=args.project)
-    OpenAIRealtimeInstrumentor().instrument(
-        tracer_provider=provider, metadata_only=args.metadata_only, user_id=args.user_id
-    )
+    # Content capture follows the standard traceAI switches (FI_HIDE_INPUTS, FI_HIDE_OUTPUTS, ...).
+    OpenAIRealtimeInstrumentor().instrument(tracer_provider=provider, user_id=args.user_id)
 
     client_kwargs: Dict[str, Any] = {}
     if os.getenv("OPENAI_WEBSOCKET_BASE_URL"):
