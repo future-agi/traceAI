@@ -531,6 +531,26 @@ func TestBreakingOutThenCancellingEndsTheSpan(t *testing.T) {
 	}
 }
 
+func TestAlreadyCancelledStreamEndsOnce(t *testing.T) {
+	srv := startAgent(t, completes(), false)
+	client, rec, _ := newClient(t, card(srv.URL, false, true))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, err := range client.SendStreamingMessage(ctx, userMessage("hi")) {
+		if err == nil {
+			t.Fatal("want the context error")
+		}
+	}
+	waitEnded(t, rec, 1)
+	time.Sleep(50 * time.Millisecond)
+	if n := len(rec.Ended()); n != 1 {
+		t.Fatalf("want exactly one ended span, got %d", n)
+	}
+	if s := rec.Ended()[0]; s.Status().Code != codes.Error || str(attrs(s), traceaia2a.ErrorType) != "canceled" {
+		t.Errorf("status %+v", s.Status())
+	}
+}
+
 func TestTimeoutIsError(t *testing.T) {
 	srv := startAgent(t, blocks(), false)
 	client, rec, _ := newClient(t, card(srv.URL, false, true))
@@ -597,6 +617,54 @@ func TestGetTaskAndCancelTask(t *testing.T) {
 		if spans[i].Status().Code != codes.Ok {
 			t.Errorf("span %d status %+v", i, spans[i].Status())
 		}
+	}
+}
+
+func TestSubscribeToTaskIsOneSpanEndingAtCancel(t *testing.T) {
+	srv := startAgent(t, blocks(), false)
+	client, rec, _ := newClient(t, card(srv.URL, false, true))
+	ctx := context.Background()
+	req := userMessage("background job")
+	req.Config = &a2a.SendMessageConfig{ReturnImmediately: true}
+	res, err := client.SendMessage(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := res.(*a2a.Task)
+	done := make(chan []string, 1)
+	go func() {
+		var kinds []string
+		for ev, err := range client.SubscribeToTask(ctx, &a2a.SubscribeToTaskRequest{ID: task.ID}) {
+			if err != nil {
+				break
+			}
+			kinds = append(kinds, typeName(ev))
+			if len(kinds) == 1 {
+				if _, err := client.CancelTask(ctx, &a2a.CancelTaskRequest{ID: task.ID}); err != nil {
+					t.Error(err)
+				}
+			}
+		}
+		done <- kinds
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("subscription did not end at cancel")
+	}
+	var sub sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == "a2a.SubscribeToTask" {
+			sub = s
+		}
+	}
+	if sub == nil {
+		t.Fatal("no SubscribeToTask span")
+	}
+	a := attrs(sub)
+	if str(a, traceaia2a.GenAIOperationName) != "a2a.subscribe_to_task" || str(a, traceaia2a.A2ATaskID) != string(task.ID) ||
+		str(a, traceaia2a.A2ATaskState) != "TASK_STATE_CANCELED" || !a[traceaia2a.A2AStreaming].AsBool() || sub.Status().Code == codes.Error {
+		t.Errorf("status %+v attrs %v", sub.Status(), a)
 	}
 }
 

@@ -214,8 +214,12 @@ func (i *Interceptor) Before(ctx context.Context, req *a2aclient.Request) (conte
 	if st.streaming {
 		// A stream ends without a callback when the caller stops reading
 		// early; the span then ends when the caller's context is done.
+		// The lock keeps a watcher that fires at once (an already-cancelled
+		// context) from reading stopWatch before it is set.
 		spanCtx := ctx
+		st.mu.Lock()
 		st.stopWatch = context.AfterFunc(ctx, func() { st.endWithContextError(spanCtx) })
+		st.mu.Unlock()
 	}
 	return context.WithValue(ctx, stateKey{}, st), nil, nil
 }
