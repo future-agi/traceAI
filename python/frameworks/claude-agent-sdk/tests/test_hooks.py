@@ -249,3 +249,89 @@ class TestClearActiveToolSpans:
 
         assert len(_active_tool_spans) == 0
         assert len(_subagent_spans) == 0
+
+
+class TestSubagentNesting:
+    """A subagent's tool calls nest under the call that launched it."""
+
+    def _tracer(self):
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        return provider.get_tracer("test"), exporter
+
+    def _run(self, events):
+        import asyncio
+        from traceai_claude_agent_sdk._hooks import (
+            clear_active_tool_spans,
+            create_post_tool_use_hook,
+            create_pre_tool_use_hook,
+            create_subagent_start_hook,
+        )
+
+        clear_active_tool_spans()
+        tracer, exporter = self._tracer()
+        hooks = {
+            "pre": create_pre_tool_use_hook(tracer),
+            "post": create_post_tool_use_hook(tracer),
+            "start": create_subagent_start_hook(tracer),
+        }
+
+        async def play():
+            for kind, data, tool_use_id in events:
+                await hooks[kind](data, tool_use_id, None)
+
+        asyncio.run(play())
+        spans = exporter.get_finished_spans()
+        ids = {span.context.span_id: span for span in spans}
+        return {
+            span.attributes.get("claude_agent.tool.use_id") or span.name: (
+                ids[span.parent.span_id].attributes.get("claude_agent.tool.use_id")
+                if span.parent and span.parent.span_id in ids
+                else None
+            )
+            for span in spans
+        }
+
+    def test_parallel_agent_launches_nest_their_own_tool_calls(self):
+        launch = lambda use_id: {"tool_name": "Agent", "tool_input": {"subagent_type": "reader"}}
+        read = lambda agent: {"tool_name": "Read", "tool_input": {"file_path": "x"}, "agent_id": agent, "agent_type": "reader"}
+        parents = self._run([
+            ("pre", launch("t1"), "t1"),
+            ("pre", launch("t2"), "t2"),
+            ("start", {"agent_id": "a1", "agent_type": "reader"}, None),
+            ("start", {"agent_id": "a2", "agent_type": "reader"}, None),
+            ("pre", read("a2"), "r2"),
+            ("pre", read("a1"), "r1"),
+            ("post", {"tool_name": "Read"}, "r2"),
+            ("post", {"tool_name": "Read"}, "r1"),
+            ("post", {"tool_name": "Agent"}, "t1"),
+            ("post", {"tool_name": "Agent"}, "t2"),
+        ])
+        assert parents["r1"] == "t1"
+        assert parents["r2"] == "t2"
+
+    def test_a_subagent_is_bound_on_its_first_tool_call_without_a_start_hook(self):
+        parents = self._run([
+            ("pre", {"tool_name": "Agent", "tool_input": {"subagent_type": "reader"}}, "t1"),
+            ("pre", {"tool_name": "Grep", "tool_input": {"pattern": "x"}, "agent_id": "a1"}, "g1"),
+            ("pre", {"tool_name": "Read", "tool_input": {}}, "main"),
+            ("post", {"tool_name": "Grep"}, "g1"),
+            ("post", {"tool_name": "Read"}, "main"),
+            ("post", {"tool_name": "Agent"}, "t1"),
+        ])
+        assert parents["g1"] == "t1"
+        assert parents["main"] is None
+
+    def test_the_older_task_launch_with_parent_tool_use_id_still_nests(self):
+        parents = self._run([
+            ("pre", {"tool_name": "Task", "tool_input": {}}, "t1"),
+            ("pre", {"tool_name": "Read", "tool_input": {}, "parent_tool_use_id": "t1"}, "r1"),
+            ("post", {"tool_name": "Read"}, "r1"),
+            ("post", {"tool_name": "Task"}, "t1"),
+        ])
+        assert parents["r1"] == "t1"

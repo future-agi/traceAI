@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "traceai-claude-agent-sdk"
-version = "0.1.0"
+version = "0.1.1"
 description = "OpenTelemetry instrumentation for Claude Agent SDK"
 authors = ["FutureAGI <dev@futureagi.com>"]
 license = "Apache-2.0"

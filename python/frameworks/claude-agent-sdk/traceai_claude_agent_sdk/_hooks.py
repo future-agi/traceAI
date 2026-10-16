@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
@@ -26,9 +26,19 @@ logger = logging.getLogger(__name__)
 # Key: tool_use_id, Value: (span, start_time, tool_name)
 _active_tool_spans: Dict[str, Tuple[Span, float, str]] = {}
 
+# Tools that launch a subagent: "Task" in older Claude Code releases, "Agent" in current ones
+SUBAGENT_TOOLS = ("Task", "Agent")
+
 # Storage for subagent spans
-# Key: tool_use_id (Task tool), Value: span
+# Key: tool_use_id (subagent launch), Value: span
 _subagent_spans: Dict[str, Span] = {}
+
+# Launches not yet bound to a running subagent, in launch order: (tool_use_id, subagent_type)
+_pending_launches: List[Tuple[str, str]] = []
+
+# Current SDKs attribute a subagent's tool hooks by agent_id rather than parent_tool_use_id
+# Key: agent_id, Value: tool_use_id of the launch that started it
+_agent_launches: Dict[str, str] = {}
 
 # Parent span context for tool tracing
 _parent_span: Optional[Span] = None
@@ -63,6 +73,48 @@ def set_mcp_servers(servers: Dict[str, Dict[str, Any]]) -> None:
 def get_subagent_span(parent_tool_use_id: str) -> Optional[Span]:
     """Get the subagent span for a given Task tool_use_id."""
     return _subagent_spans.get(parent_tool_use_id)
+
+
+def _launch_for_agent(agent_id: Optional[str], agent_type: str = "", tool_use_id: Optional[str] = None) -> Optional[str]:
+    """The launch a running subagent belongs to, binding it the first time it is seen.
+
+    A launch's own tool_use_id wins when the SDK supplies it; otherwise the oldest pending
+    launch of the same subagent type, then the oldest pending launch of any type.
+    """
+    if not agent_id:
+        return None
+    if agent_id in _agent_launches:
+        return _agent_launches[agent_id]
+    pending = [launch for launch, _ in _pending_launches]
+    if tool_use_id in pending:
+        chosen = tool_use_id
+    else:
+        typed = [launch for launch, kind in _pending_launches if agent_type and kind == agent_type]
+        chosen = (typed or pending or [None])[0]
+    if chosen is None:
+        return None
+    _pending_launches[:] = [item for item in _pending_launches if item[0] != chosen]
+    _agent_launches[agent_id] = chosen
+    return chosen
+
+
+def create_subagent_start_hook(tracer: trace_api.Tracer) -> Callable:
+    """Create a SubagentStart hook that binds a starting subagent to its launch."""
+
+    async def subagent_start_hook(
+        input_data: Dict[str, Any],
+        tool_use_id: Optional[str],
+        context: Any,
+    ) -> Dict[str, Any]:
+        try:
+            _launch_for_agent(
+                input_data.get("agent_id"), str(input_data.get("agent_type") or ""), tool_use_id
+            )
+        except Exception as e:
+            logger.warning(f"Error in SubagentStart hook: {e}")
+        return {}
+
+    return subagent_start_hook
 
 
 def safe_json_serialize(obj: Any, max_length: int = 5000) -> str:
@@ -127,14 +179,16 @@ def create_pre_tool_use_hook(tracer: trace_api.Tracer) -> Callable:
         try:
             # Determine parent span
             parent_span = get_parent_span()
-            parent_tool_use_id = input_data.get("parent_tool_use_id")
+            parent_tool_use_id = input_data.get("parent_tool_use_id") or _launch_for_agent(
+                input_data.get("agent_id"), str(input_data.get("agent_type") or "")
+            )
 
             # If this tool is within a subagent, use subagent span as parent
             if parent_tool_use_id and parent_tool_use_id in _subagent_spans:
                 parent_span = _subagent_spans[parent_tool_use_id]
 
             # Determine span kind based on tool type
-            if tool_name == "Task":
+            if tool_name in SUBAGENT_TOOLS:
                 span_kind_attr = ClaudeAgentSpanKind.SUBAGENT
             else:
                 span_kind_attr = ClaudeAgentSpanKind.TOOL_EXECUTION
@@ -179,9 +233,10 @@ def create_pre_tool_use_hook(tracer: trace_api.Tracer) -> Callable:
             # Store span for PostToolUse correlation
             _active_tool_spans[tool_use_id] = (span, start_time, tool_name)
 
-            # If this is a Task tool, also store as subagent span
-            if tool_name == "Task":
+            # If this launches a subagent, also store as subagent span
+            if tool_name in SUBAGENT_TOOLS:
                 _subagent_spans[tool_use_id] = span
+                _pending_launches.append((tool_use_id, str(tool_input.get("subagent_type") or "")))
                 # Set subagent-specific attributes
                 subagent_type = tool_input.get("subagent_type", "")
                 description = tool_input.get("description", "")
@@ -301,9 +356,12 @@ def create_post_tool_use_hook(tracer: trace_api.Tracer) -> Callable:
             # End the span
             span.end()
 
-            # Clean up subagent span if this was a Task tool
-            if tool_name == "Task":
+            # Clean up subagent span if this launched a subagent
+            if tool_name in SUBAGENT_TOOLS:
                 _subagent_spans.pop(tool_use_id, None)
+                _pending_launches[:] = [item for item in _pending_launches if item[0] != tool_use_id]
+                for agent_id in [a for a, launch in _agent_launches.items() if launch == tool_use_id]:
+                    del _agent_launches[agent_id]
 
             logger.debug(
                 f"Completed tool trace: {tool_name} "
@@ -414,3 +472,5 @@ def clear_active_tool_spans() -> None:
 
     _active_tool_spans.clear()
     _subagent_spans.clear()
+    _pending_launches.clear()
+    _agent_launches.clear()
