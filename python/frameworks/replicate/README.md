@@ -152,7 +152,7 @@ recorded.
   `TraceConfig(hide_inputs=True, hide_outputs=True)` or `FI_HIDE_INPUTS=true`
   / `FI_HIDE_OUTPUTS=true`: `input.value` / `output.value` become
   `__REDACTED__`, and with outputs hidden a failed prediction's error string
-  (span status, exception message and stack trace) is `__REDACTED__` too.
+  (span status and exception message) is `__REDACTED__` too.
   With `pii_redaction` / `FI_PII_REDACTION=true`, PII is replaced by tokens
   such as `<EMAIL_ADDRESS>` in every attribute and, after the token is
   removed, in the error status and the exception event.
@@ -162,6 +162,10 @@ recorded.
   header the client built from `REPLICATE_API_TOKEN`), it is replaced by
   `[redacted]` in every recorded value, status and exception. The package
   itself never reads `REPLICATE_API_TOKEN`.
+- **No stack trace, local path or user name is exported.** The exception
+  event carries `exception.type` and `exception.message` only, in every
+  mode; the Python traceback (your file paths, user name and virtualenv) is
+  never recorded.
 - **Files are never fetched.** File outputs are recorded as URL strings; the
   package never reads a `FileOutput`. A `data:` URI keeps only its media type
   (`data:image/png;base64,<N characters omitted>`), because its payload is the
@@ -173,7 +177,8 @@ recorded.
 
 - An exception from the client (`ModelError` for a failed `run`,
   `ReplicateError` for an HTTP error, `ValueError` for a bad ref) sets the
-  span to ERROR, records one exception event, and is re-raised unchanged.
+  span to ERROR, records one exception event (type and message, no stack
+  trace), and is re-raised unchanged.
 - A prediction that ends `failed` (for example after `wait()`, which does not
   raise) sets the span to ERROR with the prediction's `error` string.
 - A prediction that ends `canceled` is a terminal state, not a failure: the

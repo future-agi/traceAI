@@ -33,7 +33,6 @@ import copy
 import logging
 import threading
 import time
-import traceback
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple, TypeVar
 
@@ -113,16 +112,11 @@ def _is_model_error(error: BaseException) -> bool:
     return type(error).__name__ == "ModelError" and type(error).__module__.startswith("replicate")
 
 
-def _stacktrace(error: BaseException, hide: bool) -> str:
-    try:
-        if hide:
-            frames = "".join(traceback.format_tb(error.__traceback__))
-            return "Traceback (most recent call last):\n{0}{1}: {2}\n".format(
-                frames, type(error).__name__, REDACTED_VALUE
-            )
-        return "".join(traceback.format_exception(type(error), error, error.__traceback__))
-    except Exception:
-        return ""
+def _exception_type(error: BaseException) -> str:
+    """``module.QualName`` (bare for builtins), as the OpenTelemetry SDK writes it."""
+    module = type(error).__module__
+    qualname = type(error).__qualname__
+    return qualname if not module or module == "builtins" else "{0}.{1}".format(module, qualname)
 
 
 class _Call:
@@ -313,11 +307,15 @@ class _Call:
             description = REDACTED_VALUE
         else:
             description = self._clean("{0}: {1}".format(type(error).__name__, _text(error)), tokens)
-        self.span.record_exception(
-            error,
+        # Not span.record_exception(): it always adds exception.stacktrace, and
+        # a Python traceback carries local file paths and the user name, which
+        # traceAI never exports. The event keeps the type and the message.
+        self.span.add_event(
+            "exception",
             attributes={
+                "exception.type": _exception_type(error),
                 "exception.message": REDACTED_VALUE if hide else self._clean(_text(error), tokens),
-                "exception.stacktrace": self._clean(_stacktrace(error, hide), tokens),
+                "exception.escaped": "False",
             },
         )
         self.span.set_status(Status(StatusCode.ERROR, description))

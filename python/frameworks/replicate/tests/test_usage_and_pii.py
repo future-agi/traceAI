@@ -51,7 +51,7 @@ def test_pii_redaction_also_covers_a_failed_predictions_error_text():
     span = traced.one()
     assert span.status.status_code is StatusCode.ERROR
     (event,) = [event for event in span.events if event.name == "exception"]
-    for text in (span.status.description, event.attributes["exception.message"],
-                 event.attributes["exception.stacktrace"]):
+    for text in (span.status.description, event.attributes["exception.message"]):
         assert "ops@example.com" not in text
+    assert "exception.stacktrace" not in event.attributes
     assert "<EMAIL_ADDRESS>" in span.status.description

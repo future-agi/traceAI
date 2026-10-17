@@ -14,3 +14,5 @@ All notable changes to `traceAI-replicate` will be documented here.
   `output_tokens` / `total_tokens`. No cost is recorded.
 - The API token is removed from every recorded value, status and exception; `pii_redaction` also covers
   the error status and the exception event.
+- Exception events carry `exception.type` and `exception.message` only: no stack trace, so no local
+  file path or user name leaves the process.
