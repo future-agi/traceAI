@@ -98,6 +98,10 @@ the Future AGI collector reads. If another instrumentation in your app (for
 example a framework that wraps the same embedding call) also records usage for
 it, the trace counts those tokens twice.
 
+## Live vendor verification (2026-10-17)
+
+Run against the real Voyage API (`api.voyageai.com`, default host, no `base_url`) with `voyageai` 0.5.0, `voyage-3.5-lite` embeddings and `rerank-2.5-lite`, exported to Future AGI: an `AGENT` span with `voyage.embed` (EMBEDDING, tokens recorded), `voyage.rerank` (RERANKER, tokens recorded) and an invalid-key `voyage.embed` as an `ERROR` span (`AuthenticationError`). Default, `capture_content=True` and `FI_HIDE_*` privacy modes were checked with a marker scan. Not yet run live: the Atlas host (`ai.mongodb.com`), geography hosts and local in-process models.
+
 ## Privacy and content capture
 
 By default the rerank span records the query and the relevance scores, as PRD
