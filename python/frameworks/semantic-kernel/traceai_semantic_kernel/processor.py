@@ -315,6 +315,43 @@ def _replace_attributes(span: ReadableSpan, mapped: Dict[str, Any]) -> None:
     span._attributes = mapped  # type: ignore[attr-defined]
 
 
+EXCEPTION_STACKTRACE = "exception.stacktrace"
+EXCEPTION_MESSAGE = "exception.message"
+
+
+def _scrub_errors(span: ReadableSpan, sensitive: bool) -> None:
+    """Remove raw error text from the ended span before the exporter sees it.
+
+    Always: ``exception.stacktrace`` on span events (it carries local file
+    paths and the user name). Without ``sensitive``: also ``exception.message``
+    on span events and the text after the exception type in the ERROR status
+    description, because exception messages routinely echo tool arguments or
+    model output. ``exception.type`` and ``error.type`` are kept.
+    """
+    events = getattr(span, "_events", None)
+    if events:
+        from opentelemetry.sdk.trace import Event
+
+        cleaned = []
+        changed = False
+        for event in events:
+            attrs = dict(event.attributes or {})
+            if EXCEPTION_STACKTRACE in attrs or (not sensitive and EXCEPTION_MESSAGE in attrs):
+                attrs.pop(EXCEPTION_STACKTRACE, None)
+                if not sensitive:
+                    attrs.pop(EXCEPTION_MESSAGE, None)
+                event = Event(name=event.name, attributes=attrs, timestamp=event.timestamp)
+                changed = True
+            cleaned.append(event)
+        if changed:
+            span._events = type(events)(cleaned) if isinstance(events, (list, tuple)) else cleaned  # type: ignore[attr-defined]
+    status = span.status
+    if not sensitive and status.status_code is StatusCode.ERROR and status.description:
+        kind = status.description.split(":", 1)[0].strip()
+        if kind != status.description:
+            span._status = Status(StatusCode.ERROR, kind)  # type: ignore[attr-defined]
+
+
 def _is_semantic_kernel(span: Any) -> bool:
     scope = getattr(span, "instrumentation_scope", None)
     name = getattr(scope, "name", None) or ""
@@ -418,6 +455,10 @@ class SemanticKernelSpanProcessor(SpanProcessor):
                 span._status = Status(StatusCode.ERROR, str(attributes[ERROR_TYPE]))  # type: ignore[attr-defined]
         except Exception:
             logger.debug("traceai-semantic-kernel: span mapping failed", exc_info=True)
+        try:
+            _scrub_errors(span, self.sensitive)
+        except Exception:
+            logger.debug("traceai-semantic-kernel: error scrub failed", exc_info=True)
 
     def shutdown(self) -> None:
         self._disabled = True

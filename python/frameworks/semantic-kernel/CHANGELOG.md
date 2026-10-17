@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Privacy: the processor always removes `exception.stacktrace` from span events (it carried local file paths and the user name). With `sensitive=False` it also removes `exception.message` and cuts the ERROR status description to the exception type, so a tool or model error that echoes its input is not exported.
+- Tested on `semantic-kernel` 1.45.0.
+
 ## 0.1.0
 
 - Initial release. `SemanticKernelInstrumentor().instrument()` enables Semantic Kernel's native OpenTelemetry GenAI diagnostics in process and installs a mapping-only span processor (span kind, provider alias, total tokens, session, content default). No `wrapt`, no wrapping of `Kernel.invoke`.

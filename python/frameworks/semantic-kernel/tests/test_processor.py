@@ -401,3 +401,36 @@ def test_shutdown_disables_mapping(pipeline):
     _emit(provider, MODEL_SCOPE, "chat gpt-4o-mini", CHAT_ATTRS)
     assert FI_SPAN_KIND not in _attrs(exporter, "chat gpt-4o-mini")
     assert processor.force_flush() is True
+
+
+def _failing_tool_span(provider):
+    tracer = provider.get_tracer(FUNCTION_SCOPE)
+    with pytest.raises(RuntimeError):
+        with tracer.start_as_current_span("execute_tool Weather-get_weather", attributes=dict(TOOL_ATTRS)):
+            raise RuntimeError("secret-arg-MARKER at /Users/someone/app.py")
+
+
+def _event_attrs(span):
+    return [dict(event.attributes or {}) for event in span.events if event.name == "exception"]
+
+
+def test_stacktrace_and_message_never_exported_when_sensitive_off(pipeline):
+    provider, exporter, _ = pipeline(sensitive=False)
+    _failing_tool_span(provider)
+    (span,) = exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "RuntimeError"
+    (event,) = _event_attrs(span)
+    assert event["exception.type"] == "RuntimeError"
+    assert "exception.message" not in event and "exception.stacktrace" not in event
+    assert "MARKER" not in repr(span.events) + str(span.status.description)
+
+
+def test_sensitive_on_keeps_message_but_still_drops_stacktrace(pipeline):
+    provider, exporter, _ = pipeline(sensitive=True)
+    _failing_tool_span(provider)
+    (span,) = exporter.get_finished_spans()
+    (event,) = _event_attrs(span)
+    assert "MARKER" in event["exception.message"]
+    assert "exception.stacktrace" not in event
+    assert "MARKER" in span.status.description

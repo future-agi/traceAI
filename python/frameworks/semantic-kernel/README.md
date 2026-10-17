@@ -62,7 +62,7 @@ A runnable example with a mocked model (no model key) is in [`examples/basic_age
 - With `sensitive=False`, `instrument()` forces Semantic Kernel's sensitive switch off even if your environment or `.env` turned it on (a warning is logged), and the processor removes `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, `input.value` and `output.value` from Semantic Kernel spans.
 - With `sensitive=True`, `TraceConfig` and its environment variables still apply. `instrument(config=TraceConfig(hide_inputs=True))` or `FI_HIDE_INPUTS=true` drops tool arguments, agent and model-call input messages, `input.value` and `input.mime_type`; `hide_outputs` / `FI_HIDE_OUTPUTS=true` drops tool results, agent and model-call output messages, `output.value` and `output.mime_type`. The keys are removed, not replaced with `__REDACTED__`. Without `config`, a `TraceConfig()` is built from the environment when `instrument()` runs. Other `TraceConfig` fields (`hide_input_messages`, `hide_output_messages`, `hide_input_text`, `hide_output_text`, image and embedding limits, `pii_redaction`, `hide_llm_invocation_parameters`) are not applied by this package. A `config` that is not a `TraceConfig` raises `TypeError`.
 - Model-call (`chat`) messages: Semantic Kernel writes them only to Python `logging` (`model_diagnostics/decorators.py` `_set_completion_input` / `_set_completion_response`), not to the span. With `sensitive=True`, `instrument()` puts a proxy in front of that module's `logger` that also appends each message to the current `chat` span as `gen_ai.input.messages` / `gen_ai.output.messages` (JSON lists of Semantic Kernel's message dicts), and `uninstrument()` puts the original back. The proxy passes every call on to the real logger unchanged, so the records still reach whatever handlers your Python logging has at INFO. With `sensitive=False` no proxy is installed.
-- Exception events recorded by Semantic Kernel keep the exception message.
+- Errors: Semantic Kernel records the exception on the span (type, message and a stack trace with local file paths). The processor always removes `exception.stacktrace`. With `sensitive=False` it also removes `exception.message` and cuts the ERROR status description down to the exception type (`RuntimeError`), because messages often echo tool arguments or model output. `exception.type`, `error.type` and the ERROR status stay. With `sensitive=True` the message is kept.
 
 ## Spans and attributes
 
@@ -119,8 +119,9 @@ Not available: retrieval spans (memory/vector connectors were not inspected), ca
 
 | `semantic-kernel` | Python | Resolved alongside |
 |---|---|---|
+| 1.45.0 (latest stable on 2026-10-16) | 3.12 (re-verification, 63 tests plus a live run against a local Future AGI) | `openai` 3.33.0; `fi-instrumentation-otel` 1.1.0 |
 | 1.44.1 | 3.10, 3.11, 3.12, 3.13 | `openai` 3.24.0; `opentelemetry-sdk` 1.45.0, and 1.29.0 (the declared floor) on Python 3.11 |
-| 1.38.0 (floor) | 3.10, 3.11, 3.12, 3.13 | `openai` 1.109.1; `opentelemetry-sdk` 1.45.0, and 1.29.0 (the declared floor) on Python 3.11 |
+| 1.38.0 (floor) | 3.10, 3.11, 3.12, 3.13 (re-verification: 63 tests on 3.10) | `openai` 1.109.1; `opentelemetry-sdk` 1.45.0, and 1.29.0 (the declared floor) on Python 3.11 |
 
 Semantic Kernel's own classifiers stop at Python 3.12; both versions install on 3.13 and the full suite passes there.
 
