@@ -6,7 +6,7 @@ client: `TavilyClient` and `AsyncTavilyClient`, `search` and `extract`.
 This package wraps Tavily client calls. It is not a Tavily exporter; Tavily does
 not publish one. It exists because a measurement showed the bare client emits
 nothing on its own (see [What Tavily already emits](#what-tavily-already-emits)).
-Alpha: validated against a local test server, never against api.tavily.com.
+Alpha: validated against a local test server and a local Future AGI deployment, never against api.tavily.com.
 
 ## Installation
 
@@ -14,8 +14,15 @@ Alpha: validated against a local test server, never against api.tavily.com.
 pip install traceAI-tavily
 ```
 
+`traceAI-tavily` is not published to PyPI yet (the command above works once it
+is). Until then, install it from a checkout of this repository:
+`pip install ./python/frameworks/tavily`.
+
 It accepts `tavily-python>=0.8.4,<1` and `fi-instrumentation-otel>=1.1.0`, and is
-tested with `tavily-python` 0.8.4 on Python 3.10, 3.11, 3.12 and 3.13.
+tested with `tavily-python` 0.8.4 and 0.8.5 (the latest release on 2026-10-16;
+0.8.5 only renames the `max_hours` argument of `search` to `max_age_hours`; this
+package reads the query by name, so it is unaffected) on Python 3.10, 3.11, 3.12 and 3.13. The 0.8.5 test run and the
+local Future AGI end-to-end run were on Python 3.12.
 
 ## Which path do you use?
 

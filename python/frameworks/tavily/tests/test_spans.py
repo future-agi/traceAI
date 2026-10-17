@@ -399,3 +399,20 @@ def test_deprecated_client_subclass_is_traced_through_tavily_client(fake):
 
     assert fake.paths() == ["/search"]
     assert [span.name for span in traced.spans()] == ["tavily.search"]
+
+
+def test_search_keyword_renamed_between_releases_is_traced(fake):
+    """tavily-python 0.8.5 renamed search's ``max_hours`` to ``max_age_hours``.
+
+    The span must not depend on which spelling the installed release has.
+    """
+    from tavily import TavilyClient
+
+    names = inspect.signature(TavilyClient.search.__wrapped__ if hasattr(
+        TavilyClient.search, "__wrapped__") else TavilyClient.search).parameters
+    keyword = "max_age_hours" if "max_age_hours" in names else "max_hours"
+    with instrumented() as traced:
+        _sync_client(fake).search(QUERY, **{keyword: 24})
+    span = traced.one()
+    assert attrs(span)["input.value"] == QUERY
+    assert fake.bodies()[0][keyword] == 24
