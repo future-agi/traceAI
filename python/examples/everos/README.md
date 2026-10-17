@@ -8,16 +8,21 @@ package: EverOS has exported its own OpenTelemetry spans since 1.2.0, off by
 default, and this recipe only turns that export on and points it at Future
 AGI. It adds no instrumentor, no span processor and no HTTP wrapper.
 
-Pinned: `everos[otel]==1.4.1`, the latest release on PyPI on 2026-10-05
-(released 2026-09-24), `Requires-Python: >=3.12`. Its wheel METADATA declares
-`License: Apache-2.0` (license files `LICENSE` and `NOTICE`). It is a
-dependency of this example only. The `otel` extra installs
-`opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` (`>=1.27.0`);
-`requirements.txt` pins 1.45.0 of both, the versions tested. Only 1.4.1 was
-tested; 1.2.0, the release that added tracing, was not. Tested on Python 3.12
-and 3.13 against loopback fakes only (see [Tests](#tests)). Statements marked
+Pinned: `everos[otel]==1.4.2`, the latest release on PyPI on 2026-10-16
+(released 2026-10-14). 1.4.1 (released 2026-09-24), the version the fixtures
+were recorded on, passes the same tests. Both declare `Requires-Python:
+>=3.12`; the 1.4.1 wheel METADATA declares `License: Apache-2.0` (license
+files `LICENSE` and `NOTICE`). It is a dependency of this example only. The
+`otel` extra installs `opentelemetry-sdk` and
+`opentelemetry-exporter-otlp-proto-http` (`>=1.27.0`); `requirements.txt` pins
+1.45.0 of both, the versions tested. 1.4.1 and 1.4.2 were tested; 1.2.0, the
+release that added tracing, was not. Tested on Python 3.12 and 3.13 against
+loopback fakes (see [Tests](#tests)); 1.4.1 and 1.4.2 were also run on Python
+3.12 against a real local Future AGI (see [Notes](#notes)). Statements marked
 "source reading" come from the everos 1.4.1 wheel or from Future AGI source
-and are not exercised by the tests.
+and are not exercised by the tests. 1.4.2 changed the persistence layer (LanceDB/index
+modules) and the embedding provider; `core/observability/**` and
+`core/lifespan/tracing_lifespan.py` have identical sources in both wheels.
 
 ## Set up
 
@@ -63,7 +68,7 @@ and its shipped `config/default.toml:219-238` (`settings.py:692-697,
 725-746`). The server's startup builds the tracer from it
 (`core/lifespan/tracing_lifespan.py:36-45`, registered first in
 `entrypoints/api/app.py:85-95`). Paths in this page are relative to the
-`everos` package in the 1.4.1 wheel.
+`everos` package in the 1.4.1 wheel (identical in 1.4.2 for `core/observability/**`).
 
 ### Endpoint
 
@@ -133,7 +138,7 @@ memory call and `shutdown_tracing()` at exit. `tests/everos_config_probe.py`
 calls the two around one EverOS span; driving EverOS's memory calls that way,
 without the server, was not tested.
 
-## Spans EverOS 1.4.1 emits
+## Spans EverOS 1.4.1 and 1.4.2 emit
 
 From the recorded scenario (one `add`, one `flush`, one hybrid `search`),
 with capture off. Every span has OTel kind `INTERNAL`, the tags
@@ -334,6 +339,29 @@ status descriptions. This recipe adds no such filter.
   in the named project; a batch without `project_name` was rejected with
   400, wrong keys with 401, and an endpoint without its path with 404.
 
+### Real Future AGI run (2026-10-16)
+
+`everos server start` from a venv of each version (1.4.2 and 1.4.1), set up
+exactly as in [Set up](#set-up) except for a local endpoint
+(`http://localhost:14338/tracer/v1/traces`), with a real chat model
+(`gpt-6-luna` through a local OpenAI-compatible proxy) and real embeddings
+(`gemini-embedding-001`), one `add`, `flush`, `search` over HTTP. Future AGI
+(built from `dev`) stored 15 spans in 3 traces per run: `everos.memory.add`
+(with `everos.memcell.boundary`), `everos.memory.flush` (with
+`everos.memcell.boundary`, `everos.extract`, `everos.persist.markdown`,
+`everos.ome.*`, `everos.embedding`) and `everos.memory.search` (with
+`everos.search.recall`, `everos.embedding`, `everos.search.rank`). Every span
+was stored with kind `unknown`; model and tokens were filled on the spans
+listed above; Input/Output were empty; sessions were not grouped. With
+capture off a unique marker in the message and the query was in no stored
+column (every column of the `spans` table scanned, including
+`resource_attrs`, `attrs_string`, `span_events`); with capture on it was in
+the `attrs_string` of `everos.memory.search` and `everos.extract` only. A
+search whose embedding endpoint rejected the API key (HTTP 400) stored
+`everos.memory.search`, `everos.search.recall` and `everos.embedding` with
+status ERROR and the provider's message in the status description, as
+described in [error text](#error-text-is-not-covered-by-the-switch).
+
 ## Tests
 
 `tests/test_everos_recipe.py` has two parts.
@@ -384,7 +412,7 @@ From the repository root, Python 3.12:
 ```bash
 env -u PYTHONPATH PYTHONPATH="python:python/tests" \
   uv run --no-project --python 3.12 \
-  --with pytest --with 'everos[otel]==1.4.1' \
+  --with pytest --with 'everos[otel]==1.4.2' \
   --with 'opentelemetry-sdk==1.45.0' --with 'opentelemetry-exporter-otlp-proto-http==1.45.0' \
   --with requests --with jsonschema --with wrapt \
   pytest python/examples/everos/tests -q -p no:cacheprovider \
@@ -398,8 +426,9 @@ imports the repository's `python/__init__.py` package (which imports
 from it. Re-record the fixtures by running the same command with
 `EVEROS_RECORD_FIXTURE=1`. A full run takes under a minute once uv has the packages.
 
-All 37 tests pass on Python 3.12.10 and 3.13.15 (macOS arm64) with the pins
-above and what uv resolved on 2026-10-05: fastapi 0.142.2, starlette 1.7.0,
+All 37 tests pass on Python 3.12.10 and 3.13.15 (macOS arm64) with the 1.4.1 pin
+and the packages below (2026-10-05); on 2026-10-16 they also pass on Python 3.12.10 and 3.13 with
+everos 1.4.2 and on 3.12.10 with 1.4.1 (the live tests accept exactly these two versions). Packages as uv resolved on 2026-10-05: fastapi 0.142.2, starlette 1.7.0,
 httpx 0.28.1, openai 2.54.0, pydantic 2.13.5, pydantic-settings 2.15.0,
 lancedb 0.34.0, tiktoken 0.14.0, protobuf 7.36.2, opentelemetry-proto
 1.45.0, and the everalgo packages everos pins (core 0.3.0, boundary 0.2.1,

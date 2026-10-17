@@ -28,6 +28,7 @@ provider, Langfuse or Future AGI, and no EverOS server is started.
 from __future__ import annotations
 
 import concurrent.futures
+import importlib.metadata
 import importlib.util
 import json
 import os
@@ -70,7 +71,12 @@ from _fake_openai import (  # noqa: E402
 )
 from _scenario import MESSAGE_MARKER, SESSION_ID, USER_ID  # noqa: E402
 
+# The fixtures were recorded on 1.4.1; 1.4.2 (the latest release on PyPI on
+# 2026-10-16) exports the same spans and attributes and passes the same live
+# tests. Anything else installed is untested: the live tests fail loudly.
 EVEROS_VERSION = "1.4.1"
+EVEROS_TESTED_VERSIONS = ("1.4.1", "1.4.2")
+EVEROS_PINNED = "1.4.2"
 PROJECT = "everos-recipe-contract"
 FI_API_KEY = "fi-api-placeholder-0000"
 # A comma and an equals sign: the JSON headers value must carry them intact.
@@ -162,6 +168,9 @@ RUN_TIMEOUT_SECONDS = 600
 PROBE_TIMEOUT_SECONDS = 180
 
 EVEROS_INSTALLED = importlib.util.find_spec("everos") is not None
+EVEROS_INSTALLED_VERSION = (
+    importlib.metadata.version("everos") if EVEROS_INSTALLED else None
+)
 
 
 # --------------------------------------------------------------------------
@@ -619,7 +628,10 @@ class Scenario:
 
 def require_everos() -> None:
     if not EVEROS_INSTALLED:
-        pytest.skip("everos[otel]=={0} is not installed".format(EVEROS_VERSION))
+        pytest.skip("everos[otel]=={0} is not installed".format(EVEROS_PINNED))
+    assert EVEROS_INSTALLED_VERSION in EVEROS_TESTED_VERSIONS, (
+        "everos {0} is untested; tested: {1}".format(EVEROS_INSTALLED_VERSION, EVEROS_TESTED_VERSIONS)
+    )
 
 
 @pytest.fixture(scope="module")
@@ -700,7 +712,7 @@ def test_recipe_resource_is_an_observe_project(
         assert resource["project_name"] == PROJECT
         assert resource["project_type"] == "observe"
         assert resource["service.name"] == "everos"
-        assert resource["service.version"] == EVEROS_VERSION
+        assert resource["service.version"] == EVEROS_INSTALLED_VERSION
         # Same keys as the recorded resource (service.instance.id differs per run).
         assert set(resource) == set(recorded_resource)
 
@@ -1050,7 +1062,8 @@ def test_readme_states_that_error_text_is_not_covered_by_the_content_switch() ->
 def test_readme_states_what_the_tests_check() -> None:
     readme = README.read_text(encoding="utf-8")
     for fact in (
-        "everos[otel]==1.4.1",
+        "everos[otel]==1.4.2",
+        "1.4.1",
         "License: Apache-2.0",
         "EVEROS_OBSERVABILITY__ENABLED",
         "EVEROS_OBSERVABILITY__ENDPOINT",
@@ -1075,6 +1088,6 @@ def test_requirements_pin_the_tested_versions() -> None:
         line.split("#")[0].strip()
         for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines()
     ]
-    assert "everos[otel]==1.4.1" in lines
+    assert "everos[otel]==1.4.2" in lines
     assert "opentelemetry-sdk==1.45.0" in lines
     assert "opentelemetry-exporter-otlp-proto-http==1.45.0" in lines
