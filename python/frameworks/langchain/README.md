@@ -156,13 +156,13 @@ Tested versions, as printed by the compatibility test:
 
 | Package | Version |
 |---|---|
-| `deepagents` | 0.7.21 (PyPI wheel); 0.7.23 also passes |
+| `deepagents` | 0.7.21 (PyPI wheel); 0.7.23 and 0.7.28 (latest on 2026-10-16) also pass |
 | `langchain` | 1.4.3; 1.4.4 with deepagents 0.7.23 |
-| `langchain-core` | 1.6.6 (the floor `deepagents` 0.7.21 requires); 1.6.9 also passes |
-| `langgraph` | 1.2.12; 1.2.14 also passes |
+| `langchain-core` | 1.6.6 (the floor `deepagents` 0.7.21 requires); 1.6.9 and 1.6.12 (latest) also pass |
+| `langgraph` | 1.2.12; 1.2.14 and 1.2.16 (latest) also pass |
 | `langgraph-prebuilt` | as resolved with `langgraph` 1.2.12 (printed by the test), and 1.1.0 with `langgraph` 1.2.14; its `ToolNode` re-raises tool errors |
 | `traceAI-langchain` | this repository after 0.2.0 (unreleased): the `thread_id` → `session.id` change is **not** in the published 0.2.0, whose version string is the same |
-| Python | 3.11.12 and 3.13.7; 3.12 with deepagents 0.7.23 |
+| Python | 3.11.12 and 3.13.7; 3.13.15 with deepagents 0.7.28; 3.12 with deepagents 0.7.23 |
 
 `traceAI-langchain`'s own lower bound (`langchain-core>=0.2.43`) is unchanged.
 Deep Agents itself needs `langchain-core>=1.6.6` and `langgraph`.
@@ -217,6 +217,10 @@ What you get (all from `traceAI-langchain`; Deep Agents adds no keys):
   (unreleased; see the session note above).
 - **Errors**: a tool that raises ends its TOOL span `ERROR` with an `exception`
   event (LangGraph's default tool error handler re-raises, so `invoke` raises too).
+  The status description and the event carry the exception type and message, never a
+  stack trace (a traceback holds local file paths; unreleased, 0.2.0 exports it). With
+  `TraceConfig(hide_inputs=True)` or `hide_outputs=True` only the exception type
+  name is kept, because an error message can echo prompt or tool content.
   Cancelling an `astream` early closes every span; the root span ends `ERROR`
   with a `GeneratorExit` description (asserted by the compatibility test).
 - **CI**: no CI job installs `deepagents`, so the compatibility test skips unless it is
