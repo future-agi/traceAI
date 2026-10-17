@@ -1,8 +1,9 @@
 """Contract test for the Cognee tracing recipe.
 
-Runs ``src/app.py`` as written with the real ``cognee`` 1.6.2 and traceAI's
-``register()``, plus two one-call scenario scripts, each in a subprocess whose
-network, and that of the worker processes Cognee spawns, is limited to
+Runs ``src/app.py`` as written with the real ``cognee`` (pinned 1.6.5; 1.6.2
+also passes) and traceAI's ``register()``, plus two one-call scenario
+scripts, each in a subprocess whose network, and that of the worker
+processes Cognee spawns, is limited to
 127.0.0.1 (``loopback_guard/sitecustomize.py``). Cognee's LLM and
 embedding endpoints are a loopback fake of the OpenAI API
 (``_fake_openai.py``). Spans go to the shared harness ``Receiver``, which
@@ -180,6 +181,26 @@ RUN_TIMEOUT_SECONDS = 900
 COGNEE_INSTALLED = importlib.util.find_spec("cognee") is not None
 
 
+def litellm_tokenizers_dir() -> str | None:
+    """LiteLLM's bundled tiktoken files, so Cognee never downloads them.
+
+    Cognee 1.6.5 builds its embedding tokenizer with tiktoken before LiteLLM
+    has pointed TIKTOKEN_CACHE_DIR at the BPE files it ships, so tiktoken would
+    fetch cl100k_base from openaipublic.blob.core.windows.net, which the
+    loopback guard refuses. A test-environment setting only: the recipe itself
+    needs no such variable.
+    """
+    spec = importlib.util.find_spec("litellm")
+    for location in (spec.submodule_search_locations or []) if spec else []:
+        tokenizers = Path(location) / "litellm_core_utils" / "tokenizers"
+        if tokenizers.is_dir():
+            return str(tokenizers)
+    return None
+
+
+TOKENIZERS_DIR = litellm_tokenizers_dir()
+
+
 # --------------------------------------------------------------------------
 # Helpers shared by the live run and the recorded fixture
 # --------------------------------------------------------------------------
@@ -197,6 +218,13 @@ def spans_named(spans: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
     return [span for span in spans if span["name"] == name]
 
 
+# Spans whose number depends on the Cognee patch release rather than on the
+# recipe: one add/cognify/search run issues 14 graph queries on cognee 1.6.2
+# and 17 on 1.6.5. shape() compares their names, kinds, keys and statuses, not
+# their count.
+VERSION_DEPENDENT_COUNTS = frozenset({"cognee.db.graph.query"})
+
+
 def shape(spans: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Per span name: kinds, attribute keys, status codes and count."""
     out: dict[str, dict[str, Any]] = {}
@@ -208,6 +236,8 @@ def shape(spans: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         entry["keys"] |= set(attributes(span))
         entry["status"].add(span.get("status", {}).get("code", "STATUS_CODE_UNSET"))
         entry["count"] += 1
+    for name in VERSION_DEPENDENT_COUNTS & set(out):
+        out[name]["count"] = "at least 1"
     return out
 
 
@@ -450,6 +480,23 @@ def without_error_detail(span: dict[str, Any]) -> tuple[list[dict[str, Any]], di
     return events, status
 
 
+def without_stacktraces(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recorded events as the filter exports them with capture on.
+
+    Content capture keeps exception messages, but exception.stacktrace is
+    never exported: serialized tracebacks carry local paths (and can quote
+    content).
+    """
+    events = copy.deepcopy(events)
+    for event in events:
+        event["attributes"] = [
+            attribute
+            for attribute in event["attributes"]
+            if attribute["key"] != "exception.stacktrace"
+        ]
+    return events
+
+
 def filtered_attributes(span: dict[str, Any], capture_content: bool) -> dict[str, Any]:
     """A recorded span's attributes as the filter should export them."""
     expected = {
@@ -527,6 +574,8 @@ class Scenario:
             "TELEMETRY_DISABLED": "1",
             # Keep LiteLLM from fetching its model cost map at import.
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            # Offline tokenizer files (see litellm_tokenizers_dir).
+            **({"TIKTOKEN_CACHE_DIR": TOKENIZERS_DIR} if TOKENIZERS_DIR else {}),
             "LLM_PROVIDER": "openai",
             "LLM_MODEL": LLM_MODEL,
             "LLM_ENDPOINT": fake.base_url,
@@ -623,7 +672,7 @@ class Scenario:
 @pytest.fixture(scope="module")
 def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Scenario]:
     if not COGNEE_INSTALLED:
-        pytest.skip("cognee==1.6.2 is not installed")
+        pytest.skip("cognee is not installed")
     scenarios = [
         Scenario("recipe", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("recipe")),
         Scenario("capture", APP, [QUESTION, DOCUMENT], tmp_path_factory.mktemp("capture")),
@@ -1198,8 +1247,13 @@ def test_filter_capture_content_keeps_error_detail(
     wire = filtered(cognee_filter, spans, capture_content=True)
     for before, after in zip(spans, wire):
         assert attributes(after) == filtered_attributes(before, capture_content=True)
-        assert after["events"] == before["events"]
+        assert after["events"] == without_stacktraces(before["events"])
         assert after["status"] == before["status"]
+        assert [attributes(event)["exception.message"] for event in after["events"]] == [
+            attributes(event)["exception.message"] for event in before["events"]
+        ]
+        for event in after["events"]:
+            assert "exception.stacktrace" not in attributes(event)
 
 
 def test_filter_omits_forged_chained_traceback_on_every_span_by_default(
@@ -1233,7 +1287,7 @@ def test_filter_omits_forged_chained_traceback_on_every_span_by_default(
     captured = filtered(cognee_filter, spans, capture_content=True)
     for before, after in zip(spans, captured):
         assert attributes(after) == filtered_attributes(before, capture_content=True)
-        assert after["events"] == before["events"]
+        assert after["events"] == without_stacktraces(before["events"])
         assert after["status"] == before["status"]
         assert found_in(after, [CHAIN_FRAME_MARKER]) == [CHAIN_FRAME_MARKER]
 
@@ -1270,11 +1324,20 @@ def test_filter_removes_detail_of_a_raised_chained_exception(cognee_filter: Any)
     assert exception_type.endswith(".ContentPolicyFilterError")
     assert clean.status.description == exception_type + TYPE_ONLY
     assert "exception.stacktrace" not in event.attributes
-    # Capture mode keeps all content and error detail; only the span-kind
-    # mapping (applied in both modes) is added.
+    # Capture mode keeps all content and the error message and status; it
+    # adds only the span-kind mapping (applied in both modes) and drops only
+    # the serialized stack trace, which carries local paths.
     assert cognee_filter.span_kind(GENERATION_SPAN) == "LLM"
     assert dict(captured.attributes) == {**dict(raw.attributes), "fi.span.kind": "LLM"}
-    assert captured.events == raw.events
+    assert [event.name for event in captured.events] == [event.name for event in raw.events]
+    for captured_event, raw_event in zip(captured.events, raw.events):
+        assert "exception.stacktrace" in raw_event.attributes
+        assert dict(captured_event.attributes) == {
+            key: value
+            for key, value in raw_event.attributes.items()
+            if key != "exception.stacktrace"
+        }
+    assert PAYLOAD_MARKER in captured.events[0].attributes["exception.message"]
     assert captured.status == raw.status
 
 
@@ -1368,7 +1431,7 @@ MARK = "TMARK5e0a"
 )
 
 
-def test_filter_omits_serialized_stacktraces_but_capture_preserves_them(
+def test_filter_omits_serialized_stacktraces_in_both_modes(
     cognee_filter: Any, trace: list[str], exception_type: str
 ) -> None:
     exporter, captured_exporter = InMemorySpanExporter(), InMemorySpanExporter()
@@ -1395,12 +1458,37 @@ def test_filter_omits_serialized_stacktraces_but_capture_preserves_them(
         "exception.escaped": "False",
     }
     assert found_in(dict(exported.events[0].attributes), [MARK]) == []
+    # Capture mode keeps the message (content the user opted into) but never
+    # the serialized stack trace.
     assert dict(captured.events[0].attributes) == {
         "exception.type": exception_type,
         "exception.message": MARK,
-        "exception.stacktrace": "\n".join(trace) + "\n",
         "exception.escaped": "False",
     }
+
+
+@pytest.mark.parametrize("capture_content", [False, True], ids=["default", "capture"])
+def test_filter_never_exports_stack_traces_or_local_paths(
+    cognee_filter: Any, recorded: list[dict[str, Any]], capture_content: bool
+) -> None:
+    # The recorded run's vector-search probes carry Cognee's real stack
+    # traces, whose frames name the local Python installation (scrubbed to
+    # <python-lib> in the fixture). Kept as errors here, so their events reach
+    # the exporter, they must arrive without the trace in both modes.
+    local = ["<python-lib>", TRACEBACK_HEADER]
+    assert found_in(recorded, local) == local
+    wire = filtered(
+        cognee_filter,
+        recorded,
+        capture_content=capture_content,
+        collection_missing_as_error=True,
+    )
+    assert error_names(wire) == error_names(recorded)
+    assert found_in(wire, ["<python-lib>", TRACEBACK_HEADER, "site-packages"]) == []
+    for span in wire:
+        for event in span.get("events", []):
+            assert "exception.stacktrace" not in attributes(event)
+            assert "exception.type" in attributes(event)
 
 
 def test_filter_keeps_only_known_keys_and_non_text_values_in_events(cognee_filter: Any) -> None:
@@ -1583,7 +1671,7 @@ def test_readme_states_what_the_tests_check() -> None:
     ):
         assert line in app and line in readme, line
     for fact in (
-        "cognee==1.6.2",
+        "cognee==1.6.5",
         "COGNEE_TRACING_ENABLED",
         "/tracer/v1/traces",
         "X-Api-Key",
@@ -1608,7 +1696,11 @@ def test_readme_states_what_the_tests_check() -> None:
     [
         pytest.param("TH-8394", id="R2-register-follow-up"),
         pytest.param("pass the same ones", id="R3-same-exporter-options"),
-        pytest.param('pip install "cognee[tracing]==1.6.2"', id="R5-option-b-install"),
+        pytest.param('pip install "cognee[tracing]==1.6.5"', id="R5-option-b-install"),
+        pytest.param(
+            "Stack traces are never exported, in either mode", id="RV-stacktrace-both-modes"
+        ),
+        pytest.param("x-api-key=...,x-secret-key=...", id="RV-option-b-grpc-lowercase-headers"),
         pytest.param("cognee.disable_tracing()", id="R7-disable-tracing"),
         pytest.param("License-Expression: Apache-2.0", id="D9-license-metadata"),
         pytest.param("less useful for debugging", id="N1-error-detail-trade-off"),
@@ -1624,4 +1716,4 @@ def test_readme_covers_review_items(fact: str) -> None:
 def test_requirements_pin_the_register_behaviour_the_recipe_relies_on() -> None:
     lines = REQUIREMENTS.read_text(encoding="utf-8").splitlines()
     assert "fi-instrumentation-otel>=1.1.0,<1.2" in lines
-    assert "cognee==1.6.2" in lines
+    assert "cognee==1.6.5" in lines

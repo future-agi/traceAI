@@ -9,16 +9,21 @@ exporter that sends spans to Future AGI (see app.py)::
 and changes only what that exporter sends. It exports copies, so Cognee's
 own span buffer and any other processor still see the original spans.
 
-Content. Cognee 1.6.2 writes prompts, document text, answers and search
+Content. Cognee 1.6.5 writes prompts, document text, answers and search
 questions to span attributes and has no setting to stop that, and its
 errors can quote them (a content-policy rejection quotes the whole prompt).
 By default the filter removes those attributes (``CONTENT_KEYS``) and, on
 every span, all free-text error detail: exception messages and status
 descriptions are replaced, exception stack traces are omitted, and other event
 values are kept only if they are not text. Pass ``capture_content=True``, or set
-``COGNEE_FI_CAPTURE_CONTENT=true``, to export everything. With capture on, the
-filter also copies that content to ``input.value`` and ``output.value``
-(``IO_SOURCES``), the keys Future AGI shows as a span's Input and Output.
+``COGNEE_FI_CAPTURE_CONTENT=true``, to export content and error messages too.
+With capture on, the filter also copies that content to ``input.value`` and
+``output.value`` (``IO_SOURCES``), the keys Future AGI shows as a span's Input
+and Output.
+
+Stack traces. ``exception.stacktrace`` is never exported, with or without
+content capture: a serialized traceback carries local file paths (home
+directory, user name, virtualenv layout) and can quote content.
 
 Span kinds. Cognee sets no span-kind attribute, so Future AGI would store
 search and LLM spans as ``unknown``. The filter sets ``fi.span.kind`` by span
@@ -51,7 +56,7 @@ from opentelemetry.trace import Status, StatusCode
 
 logger = logging.getLogger(__name__)
 
-# Attributes in which Cognee 1.6.2 exports content (paths in the cognee wheel).
+# Attributes in which Cognee 1.6.x exports content (paths in the cognee wheel).
 CONTENT_KEYS = frozenset(
     {
         # LLM prompt arguments and response: modules/observability/get_observe.py
@@ -79,7 +84,7 @@ SPAN_KIND_KEYS = (
     "openinference.span.kind",
 )
 # Cognee names a span after the decorated method; every
-# @observe(as_type="generation") method in Cognee 1.6.2 is acreate_structured_output.
+# @observe(as_type="generation") method in Cognee 1.6.5 is acreate_structured_output.
 LLM_SPANS = frozenset({"cognee.observe.acreate_structured_output"})
 # What replaces error text by default.
 DETAIL_REMOVED = "__REDACTED__ (content capture off)"
@@ -91,7 +96,7 @@ COLLECTION_MISSING = (
 )
 COLLECTION_MISSING_KEY = "cognee.vector_search.collection_missing"
 # The only event keys whose string values are kept: the exception's class name
-# and "True"/"False". Cognee 1.6.2 adds no events other than OpenTelemetry's
+# and "True"/"False". Cognee 1.6.5 adds no events other than OpenTelemetry's
 # "exception" events; any other event gets the same allowlist.
 SAFE_EVENT_KEYS = frozenset({"exception.type", "exception.escaped"})
 
@@ -164,7 +169,10 @@ class CogneeExportFilter(SpanExporter):
             return _copy(span, attributes, (), Status(StatusCode.OK))
         if self._capture_content:
             _add_input_output(attributes)
-            return _copy(span, attributes, span.events, span.status)
+            events = [
+                Event(e.name, _without_stacktrace(e.attributes), e.timestamp) for e in span.events
+            ]
+            return _copy(span, attributes, events, span.status)
         for key in CONTENT_KEYS:
             attributes.pop(key, None)
         events = [Event(e.name, _without_detail(e.attributes), e.timestamp) for e in span.events]
@@ -216,6 +224,11 @@ def _only_collection_missing(span: ReadableSpan) -> bool:
         and (event.attributes or {}).get("exception.type") == COLLECTION_MISSING
         for event in span.events
     )
+
+
+def _without_stacktrace(attributes: Optional[Mapping[str, Any]]) -> dict:
+    """An event's attributes as recorded, minus the serialized stack trace (local paths)."""
+    return {k: v for k, v in (attributes or {}).items() if k != "exception.stacktrace"}
 
 
 def _without_detail(attributes: Optional[Mapping[str, Any]]) -> dict:
