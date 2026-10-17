@@ -49,10 +49,13 @@ drops a batch without `project_name`.
 
 Copy `src/tracing.mjs` into your app. It wraps TanStack AI's
 `otelMiddleware` (imported from the `@tanstack/ai/middlewares/otel` subpath,
-not from `@tanstack/ai`) with the Future AGI span kinds, the root usage move
-and the optional session, and registers the tracer provider with
-`@traceai/fi-core`. Do not pass a bare `otelMiddleware` to `chat()`: its root
-span repeats every model call's usage, so Future AGI would count it twice.
+not from `@tanstack/ai`) with the Future AGI span kinds, the root usage move,
+the optional session and error privacy, and registers
+the tracer provider with `@traceai/fi-core`. It needs `@opentelemetry/api`,
+which `@tanstack/ai` already asks for as a peer. Do not pass a bare
+`otelMiddleware` to `chat()`: its root span repeats every model call's
+usage, so Future AGI would count it twice, and it exports error text and
+stack traces.
 
 The SDK pin does not travel with `src/tracing.mjs`: it lives in this
 example's `package.json` `overrides`
@@ -158,6 +161,11 @@ model-call spans carry `gen_ai.operation.name`. The root's kind is set in
 `onSpanEnd`, because `attributeEnricher` runs for the root before the number
 of model calls is known.
 
+A failed model call or tool is an ERROR span with `error.type` (see
+"Privacy"); a tool failure also sets `tanstack.ai.tool.outcome=error`, and
+an aborted run ends every open span as ERROR `cancelled` with
+`tanstack.ai.completion.reason=cancelled`.
+
 ## Session
 
 Pass the caller's conversation id as TanStack's `threadId`, and build the
@@ -188,16 +196,37 @@ id per call, and each request would become its own session.
 
 ## Privacy
 
-`captureContent` defaults to `false`, so no prompt, completion, system prompt,
-or tool argument or result reaches a span. Do not pass `captureContent: true`.
-If you opt in, use `redact`: a redactor that throws emits `[redaction_failed]`,
-never the raw text.
+Content capture is off by default: no prompt, completion, system prompt, tool
+argument or result, and no error message reaches a span. A stack trace never
+does, in either mode.
 
-Errors are exported whatever `captureContent` is. When a model call or a tool
-fails, `otelMiddleware` sets the error's message as the span status and
-records an `exception` event with its message and stack trace. That text
-comes from the provider or your tool, not from the recipe: if it repeats
-request content, that content reaches Future AGI.
+- Messages and tools: `captureContent` (TanStack's own option) stays at its
+  default of `false`.
+- Errors: TanStack records a failed model call or tool with
+  `span.recordException(error)` and the error's message as the span status,
+  whatever `captureContent` is. That text comes from the provider or from
+  your tool (a file path, an id, a masked key), and the exception event
+  carries the stack trace with local paths and the user name. The recipe
+  hands `otelMiddleware` a tracer whose spans replace both
+  (`futureAgiErrorPrivacy` in `src/tracing.mjs`, public Tracer and Span API
+  only): the span gets `error.type`, which is the provider's error code
+  (`400`, `model_not_found`, `context_overflow`) or the error's class name;
+  the status message and the `exception` event carry only that type. An
+  aborted run keeps TanStack's fixed status text `cancelled`.
+
+Opt in to content with `captureContent: true`. TanStack then exports
+messages, tool arguments and results (`gen_ai.input.messages`,
+`gen_ai.output.messages`, message events), and the recipe exports the
+error's message too, still without a stack trace. Pass `redact` to rewrite
+each text first; a redactor that throws yields `[redaction_failed]`, never
+the raw text:
+
+```js
+const middleware = futureAgiOtelMiddleware(tracer, {
+  captureContent: true,
+  redact: (text) => text.replace(/\b[\w.+-]+@[\w-]+\.[\w.]+\b/g, "[email]"),
+});
+```
 
 Keep `FI_API_KEY` and `FI_SECRET_KEY` on the server. Never import this code
 into a browser bundle.
@@ -228,6 +257,14 @@ into a browser bundle.
   `shutdownTraces()` when the process stops.
 - Do not also register the OpenInference TanStack middleware or wrap `chat()`.
   Either duplicates spans.
+- Future AGI's Tracing list shows a trace's tokens from its root span, while
+  the trace view, sessions and dashboards sum every span. The recipe moves
+  the root's usage to `tanstack.ai.root_usage.*` so those sums count each
+  model call once; the list's Tokens cell for a TanStack trace is therefore
+  empty. Per-call tokens and cost are on the LLM spans.
+- With content capture on, the messages are span attributes
+  (`gen_ai.input.messages`, `gen_ai.output.messages`): Future AGI shows them
+  in the span's attributes, not in its Input and Output panes.
 
 ## Contract test
 
@@ -243,11 +280,14 @@ PYTHONPATH="python/tests" uv run --no-project --python 3.11 \
 ```
 
 It also runs `tests/span_kinds.test.mjs` with `node --test` (span kinds,
-root usage move and session against fake spans and the pinned SDK span) and
-the snippet under "The recipe" as written.
+root usage move, session and the error privacy tracer
+against fake spans and the pinned SDK span) and the snippet under "The
+recipe" as written.
 
-`tests/capture_content_on.mjs` is a test control that turns content capture
-on, to prove the no-content check would catch a leak. `tests/timed_route.mjs`
+`tests/capture_content_on.mjs` turns on the documented content opt-in, to
+prove it works and that the no-content check would catch a leak.
+`tests/tool_error.mjs` runs a tool that throws an error carrying a marker
+and a file path, with content off and on. `tests/timed_route.mjs`
 and `tests/abort_mid_stream.mjs` are fixtures for the flush bound and the
 abort case. `tests/disconnect_route.mjs` serves one HTTP request with the
 route (the README snippet's or `src/chat.mjs`'s) and aborts its signal when

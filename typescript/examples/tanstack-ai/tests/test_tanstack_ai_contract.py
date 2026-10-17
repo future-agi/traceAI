@@ -295,7 +295,8 @@ def test_export_has_auth_headers_project_resource_and_collector_path(default_run
 
 
 def test_capture_content_control_is_detected():
-    """If content were captured, the checks above would see it."""
+    """The documented opt-in (captureContent: true) exports content, so the
+    no-content checks above would see a leak."""
     with Receiver() as receiver, FakeOpenAI(
         CITY, ANSWER
     ) as fake:
@@ -390,29 +391,87 @@ def test_failed_model_call_exports_error_spans():
     for name in (ROOT, ITERATION_0):
         status = spans[name].get("status", {})
         assert _is_error(status), (name, status)
-        assert status.get("message") == "500 boom", (name, status)
     assert spans[ITERATION_0]["parentSpanId"] == spans[ROOT]["spanId"]
     assert _attributes(spans[ITERATION_0])["gen_ai.span.kind"] == "LLM"
     assert _attributes(spans[ROOT])["gen_ai.span.kind"] == "CHAIN"
     # No thread id was passed, so no session (chat() generated its own id).
     for name in (ROOT, ITERATION_0):
         assert "session.id" not in _attributes(spans[name]), name
-    # The provider's error text is exported whatever captureContent is: as
-    # the status message above and as an exception event with a stack trace
-    # (README "Privacy"). The request content is not.
+    # With content capture off, the provider's error text is not exported:
+    # the span carries the error's type (here the HTTP status TanStack puts
+    # in the RUN_ERROR code), as error.type, as the status message and as
+    # the only attribute of the exception event. No stack trace either way.
     for name in (ROOT, ITERATION_0):
-        exceptions = [
-            _attributes(event) for event in spans[name].get("events", [])
-            if event.get("name") == "exception"
-        ]
-        assert exceptions, (name, spans[name].get("events"))
-        assert all("boom" in event["exception.message"] for event in exceptions), exceptions
-        assert all(event.get("exception.stacktrace") for event in exceptions), exceptions
+        assert _attributes(spans[name])["error.type"] == "500", name
+        assert spans[name]["status"].get("message") == "500", name
+        assert _exception_events(spans[name]) == [{"exception.type": "500"}], name
     exported = json.dumps(raw_spans)
-    for marker in (PROMPT, CITY, SYSTEM_PROMPT, "PROMPT-MARKER"):
+    for marker in (PROMPT, CITY, SYSTEM_PROMPT, "PROMPT-MARKER", "boom"):
         assert marker not in exported, marker
+    _assert_no_stack_trace(raw_spans)
     # The provider error is printed; the credentials are not.
     _assert_no_placeholder_keys(raw_spans, result)
+
+
+def _exception_events(span: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        _attributes(event) for event in span.get("events", []) if event.get("name") == "exception"
+    ]
+
+
+def _assert_no_stack_trace(spans: list[dict[str, Any]]) -> None:
+    """No stack trace, and so no local file path, leaves the process."""
+    exported = json.dumps(spans)
+    assert "exception.stacktrace" not in exported
+    for fragment in ("file://", "node_modules", ".mjs:", "    at "):
+        assert fragment not in exported, fragment
+
+
+# tests/tool_error.mjs: the tool's error message, with a marker and a path.
+TOOL_ERROR = "TOOLERR-MARKER-8e1f cannot read /home/th8238-user/private/notes.json"
+
+
+def _tool_error_run(*args: str) -> Any:
+    with Receiver() as receiver, FakeOpenAI(CITY, ANSWER) as fake:
+        result = _node(TESTS / "tool_error.mjs", receiver.origin, fake, *args)
+        raw_spans = receiver.spans()
+        model_requests = list(fake.requests)
+    assert result.returncode == 0, result.stderr.decode()
+    assert "outcome=answered" in result.stdout.decode()
+    # Positive control: TanStack sent the error text to the model as the
+    # tool result, so it really was in play.
+    tool_results = [m for m in model_requests[-1]["messages"] if m.get("role") == "tool"]
+    assert len(tool_results) == 1 and TOOL_ERROR in tool_results[0]["content"]
+    spans = _by_name(raw_spans)
+    assert sorted(spans) == sorted([ROOT, ITERATION_0, TOOL, ITERATION_1])
+    tool = spans[TOOL]
+    assert _is_error(tool["status"]), tool["status"]
+    assert _attributes(tool)["tanstack.ai.tool.outcome"] == "error"
+    assert _attributes(tool)["error.type"] == "Error"
+    # The model recovered, so only the tool span is an error.
+    for name in (ROOT, ITERATION_0, ITERATION_1):
+        assert not _is_error(spans[name].get("status", {})), name
+    _assert_no_stack_trace(raw_spans)
+    _assert_no_placeholder_keys(raw_spans, result)
+    return SimpleNamespace(raw_spans=raw_spans, tool=tool)
+
+
+def test_failed_tool_exports_its_error_type_not_its_text():
+    """A tool that throws: the error's text (here a local path) stays home."""
+    run_ = _tool_error_run()
+    assert run_.tool["status"].get("message") == "Error"
+    assert _exception_events(run_.tool) == [{"exception.type": "Error"}]
+    exported = json.dumps(run_.raw_spans)
+    for fragment in ("TOOLERR-MARKER", "/home/th8238-user", "notes.json"):
+        assert fragment not in exported, fragment
+
+
+def test_content_opt_in_exports_error_text_but_never_a_stack_trace():
+    run_ = _tool_error_run("capture")
+    assert run_.tool["status"].get("message") == TOOL_ERROR
+    assert _exception_events(run_.tool) == [
+        {"exception.type": "Error", "exception.message": TOOL_ERROR}
+    ]
 
 
 def test_abort_mid_stream_ends_spans_as_cancelled():

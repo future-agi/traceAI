@@ -1,9 +1,10 @@
 // Future AGI tracing for TanStack AI. This is a recipe, not a package:
 // TanStack AI's own otelMiddleware creates the spans, and @traceai/fi-core
 // only supplies the tracer provider and the exporter.
+import { SpanStatusCode } from "@opentelemetry/api";
 import { register, ProjectType } from "@traceai/fi-core";
 // otelMiddleware is exported from this subpath only, not from "@tanstack/ai"
-// (@tanstack/ai 0.64.0 src/middlewares/index.ts lines 15 to 18).
+// (@tanstack/ai 0.64.0 to 0.69.0, src/middlewares/index.ts).
 import { otelMiddleware } from "@tanstack/ai/middlewares/otel";
 
 export const GEN_AI_SPAN_KIND = "gen_ai.span.kind";
@@ -215,17 +216,123 @@ export function futureAgiSpanKinds({ threadIdAsSession = false } = {}) {
   };
 }
 
+export const ERROR_TYPE = "error.type";
+/** TanStack's own fixed status text for an aborted run; kept as is. */
+const CANCELLED = "cancelled";
+const REDACTION_FAILED = "[redaction_failed]";
+
+/** A provider error code (RUN_ERROR code, HTTP status) or the error's class name. */
+export function errorType(error) {
+  const code = error?.code;
+  if ((typeof code === "string" && code) || (typeof code === "number" && Number.isFinite(code))) {
+    return String(code);
+  }
+  const name = error?.name;
+  return typeof name === "string" && name ? name : "Error";
+}
+
+function errorText(error) {
+  if (typeof error === "string") return error;
+  const message = error?.message;
+  return typeof message === "string" ? message : undefined;
+}
+
 /**
- * The one middleware to pass to chat(). captureContent is left unset, so it
- * stays at its default of false and no prompt, completion, or tool argument
- * text lands on a span. Do not pass captureContent: true.
+ * Wrap the tracer otelMiddleware uses, so error details are exported the way
+ * content is.
  *
- * Pass `{ threadIdAsSession: true }` when this chat() call gets the caller's
- * `threadId` (see futureAgiSpanKinds).
+ * otelMiddleware calls span.recordException(error) and sets the error's
+ * message as the span status whatever captureContent is. That text comes
+ * from the provider or from your tool, and the exception event carries the
+ * stack trace, with local file paths and the user name. Through this
+ * tracer:
+ *
+ * - a stack trace is never exported;
+ * - with content capture off (the default), the error's message is not
+ *   exported either: the exception event keeps only exception.type, the
+ *   span status message is that type, and the span gets error.type (the
+ *   provider's error code, such as "400" or "context_overflow", or the
+ *   error class name);
+ * - with captureContent: true, the message is exported, passed through the
+ *   same `redact` as content (a redactor that throws yields
+ *   "[redaction_failed]").
+ *
+ * Only the public Tracer and Span API is used: each span is the SDK span
+ * behind a Proxy that replaces recordException and setStatus.
  */
-export function futureAgiOtelMiddleware(tracer, { threadIdAsSession = false } = {}) {
+export function futureAgiErrorPrivacy(tracer, { captureContent = false, redact = (text) => text } = {}) {
+  const safeRedact = (text) => {
+    try {
+      return redact(text);
+    } catch {
+      return REDACTION_FAILED;
+    }
+  };
+  const wrap = (span) => {
+    let lastType;
+    const proxy = new Proxy(span, {
+      get(target, property) {
+        if (property === "recordException") {
+          return (exception, time) => {
+            lastType = errorType(exception);
+            target.setAttribute(ERROR_TYPE, lastType);
+            const text = captureContent ? errorText(exception) : undefined;
+            target.recordException(
+              text ? { name: lastType, message: safeRedact(text) } : { name: lastType },
+              time,
+            );
+          };
+        }
+        if (property === "setStatus") {
+          return (status) => {
+            let next = status;
+            if (
+              status?.code === SpanStatusCode.ERROR &&
+              typeof status.message === "string" &&
+              status.message !== CANCELLED
+            ) {
+              next = {
+                code: status.code,
+                message: captureContent ? safeRedact(status.message) : (lastType ?? "Error"),
+              };
+            }
+            target.setStatus(next);
+            return proxy;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    return proxy;
+  };
+  return {
+    startSpan: (name, options, context) => wrap(tracer.startSpan(name, options, context)),
+    startActiveSpan: (...args) => tracer.startActiveSpan(...args),
+  };
+}
+
+/**
+ * The one middleware to pass to chat().
+ *
+ * Content capture is off by default: no prompt, completion, system prompt,
+ * tool argument or result, and no error message, reaches a span, and a
+ * stack trace never does (see futureAgiErrorPrivacy).
+ *
+ * Options:
+ * - `threadIdAsSession: true` when this chat() call gets the caller's
+ *   `threadId` (see futureAgiSpanKinds).
+ * - `captureContent: true` to opt in to message, tool and error text
+ *   (TanStack's own option), with an optional `redact(text)`.
+ */
+export function futureAgiOtelMiddleware(
+  tracer,
+  { threadIdAsSession = false, captureContent = false, redact } = {},
+) {
   return otelMiddleware({
-    tracer,
+    tracer: futureAgiErrorPrivacy(tracer, { captureContent, ...(redact ? { redact } : {}) }),
+    captureContent,
+    ...(redact ? { redact } : {}),
     ...futureAgiSpanKinds({ threadIdAsSession }),
   });
 }

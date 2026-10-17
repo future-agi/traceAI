@@ -11,9 +11,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { trace } from "@opentelemetry/api";
+import { SpanStatusCode, context, trace } from "@opentelemetry/api";
 import {
+  ERROR_TYPE,
   GEN_AI_SPAN_KIND,
+  errorType,
+  futureAgiErrorPrivacy,
   futureAgiSpanKinds,
   registerFutureAgiTracing,
   shutdownTraces,
@@ -348,4 +351,109 @@ test("an adapter name with no known vendor leaves gen_ai.provider.name unset", (
     assert.equal(modelCalls[0].attributes["gen_ai.provider.name"], undefined, String(adapter));
     assert.equal(root.attributes["gen_ai.provider.name"], undefined, String(adapter));
   }
+});
+
+function privacyRun(options, act) {
+  const { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } = fiCoreSdk().sdk;
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const tracer = futureAgiErrorPrivacy(provider.getTracer("error-privacy-test"), options);
+  act(tracer);
+  return exporter.getFinishedSpans();
+}
+
+function failingSpan(tracer, error, message = error.message) {
+  // What otelMiddleware does on a failed model call or tool.
+  const span = tracer.startSpan("failing");
+  span.recordException(error);
+  span.setStatus({ code: SpanStatusCode.ERROR, message });
+  span.end();
+}
+
+const SECRET_ERROR = "MARKER-7a1c cannot read /Users/someone/private/notes.json";
+
+test("content off: an error exports its type, never its message or stack", () => {
+  const error = new Error(SECRET_ERROR);
+  assert.ok(error.stack.includes("span_kinds.test.mjs"));
+  const [span] = privacyRun({}, (tracer) => failingSpan(tracer, error));
+  assert.equal(span.status.code, SpanStatusCode.ERROR);
+  assert.equal(span.status.message, "Error");
+  assert.equal(span.attributes[ERROR_TYPE], "Error");
+  assert.deepEqual(span.events.map((event) => [event.name, event.attributes]), [
+    ["exception", { "exception.type": "Error" }],
+  ]);
+  const exported = JSON.stringify({ attributes: span.attributes, events: span.events, status: span.status });
+  for (const fragment of ["MARKER-7a1c", "/Users/someone", "span_kinds.test.mjs", "stacktrace"]) {
+    assert.ok(!exported.includes(fragment), fragment);
+  }
+});
+
+test("error type: the provider's code first, then the class name", () => {
+  const rateLimited = Object.assign(new Error("slow down"), { code: 429 });
+  const overflow = Object.assign(new Error("too long"), { code: "context_overflow" });
+  class ToolTimeout extends Error {
+    name = "ToolTimeout";
+  }
+  assert.equal(errorType(rateLimited), "429");
+  assert.equal(errorType(overflow), "context_overflow");
+  assert.equal(errorType(new ToolTimeout("x")), "ToolTimeout");
+  assert.equal(errorType("a thrown string"), "Error");
+  assert.equal(errorType(undefined), "Error");
+  const [span] = privacyRun({}, (tracer) => failingSpan(tracer, overflow));
+  assert.equal(span.status.message, "context_overflow");
+  assert.equal(span.attributes[ERROR_TYPE], "context_overflow");
+});
+
+test("cancelled and OK statuses pass through unchanged", () => {
+  const spans = privacyRun({}, (tracer) => {
+    const aborted = tracer.startSpan("aborted");
+    aborted.setStatus({ code: SpanStatusCode.ERROR, message: "cancelled" });
+    aborted.end();
+    const ok = tracer.startSpan("ok");
+    ok.setStatus({ code: SpanStatusCode.OK });
+    ok.end();
+  });
+  const byName = Object.fromEntries(spans.map((span) => [span.name, span]));
+  assert.deepEqual(byName.aborted.status, { code: SpanStatusCode.ERROR, message: "cancelled" });
+  assert.equal(byName.ok.status.code, SpanStatusCode.OK);
+  assert.equal(byName.aborted.events.length, 0);
+});
+
+test("content opt-in: the error message is exported through redact, a stack never", () => {
+  const redact = (text) => text.replace(/\/Users\/[^ ]+/g, "[path]");
+  const [span] = privacyRun({ captureContent: true, redact }, (tracer) =>
+    failingSpan(tracer, new Error(SECRET_ERROR)),
+  );
+  assert.equal(span.status.message, "MARKER-7a1c cannot read [path]");
+  assert.deepEqual(span.events.map((event) => event.attributes), [
+    { "exception.type": "Error", "exception.message": "MARKER-7a1c cannot read [path]" },
+  ]);
+  const throwing = () => {
+    throw new Error("redactor bug");
+  };
+  const [failed] = privacyRun({ captureContent: true, redact: throwing }, (tracer) =>
+    failingSpan(tracer, new Error(SECRET_ERROR)),
+  );
+  assert.equal(failed.status.message, "[redaction_failed]");
+  assert.equal(failed.events[0].attributes["exception.message"], "[redaction_failed]");
+  assert.ok(!JSON.stringify(failed.events).includes("stacktrace"));
+});
+
+test("wrapped spans still parent, take attributes and feed the root usage move", () => {
+  const spans = privacyRun({}, (tracer) => {
+    const root = tracer.startSpan("chat");
+    const child = tracer.startSpan("chat #0", {}, trace.setSpan(context.active(), root));
+    child.setAttributes(usage(11, 7)).end();
+    const hooks = futureAgiSpanKinds();
+    hooks.onSpanEnd({ kind: "iteration", ctx: root, iteration: 0 }, child);
+    root.setAttributes(usage(11, 7));
+    hooks.onSpanEnd({ kind: "chat", ctx: root }, root);
+    assert.equal(root.isRecording(), true);
+    root.end();
+  });
+  const byName = Object.fromEntries(spans.map((span) => [span.name, span]));
+  assert.equal(byName["chat #0"].parentSpanContext.spanId, byName.chat.spanContext().spanId);
+  assert.deepEqual(promotedKeys(byName.chat.attributes), []);
+  assert.equal(byName.chat.attributes["tanstack.ai.root_usage.input_tokens"], 11);
+  assert.equal(byName["chat #0"].attributes["gen_ai.usage.input_tokens"], 11);
 });
