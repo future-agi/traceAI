@@ -188,11 +188,13 @@ VoltAgent itself has no capture flag; a VoltOps export of the same run still has
 
 ## Flushing, serverless and failures
 
-- Spans are batched. Flush before a short-lived process or a serverless handler returns:
+- Spans are batched. Flush before a serverless handler returns:
   `await observability.forceFlush()` (VoltAgent flushes every processor) or
-  `await processor.forceFlush()`. `observability.shutdown()` flushes too. VoltAgent ends some
-  memory spans in the background just after `generateText` resolves, so flush at the end of the
-  handler.
+  `await processor.forceFlush()`. VoltAgent ends some memory spans in the background just after
+  `generateText` resolves, so flush at the end of the handler.
+- A one-off script does not exit after `forceFlush()`: `new VoltAgent()` keeps the process running
+  (it installs signal handlers for a graceful shutdown). End it with
+  `await observability.shutdown()`, which flushes every processor too.
 - On platforms with `waitUntil`, VoltAgent's serverless observability can flush in the background:
   `setWaitUntil(waitUntil: (promise: Promise<unknown>) => void)` from `@voltagent/core`
   (`src/observability/wait-until.ts`).
