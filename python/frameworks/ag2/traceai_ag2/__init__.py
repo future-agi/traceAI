@@ -3,7 +3,8 @@
 AG2 1.x already emits OpenTelemetry GenAI spans from its own
 ``TelemetryMiddleware``. This package does not wrap ``Agent``. It:
 
-* attaches ``TelemetryMiddleware`` with ``capture_content=False``
+* attaches ``TelemetryMiddleware`` (content captured by default, hidden with
+  ``TraceConfig`` / ``FI_HIDE_*``)
   (``setup`` / ``create_telemetry_middleware``),
 * registers the Future AGI exporter through ``fi_instrumentation.register()``
   when you do not pass a provider,

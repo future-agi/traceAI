@@ -2,8 +2,16 @@
 
 ## [0.1.0] - unreleased
 
+- Privacy follows the traceAI `TraceConfig` convention (re-verification 2026-10-16):
+  content is captured by default and hidden with `FI_HIDE_*` / `TraceConfig`;
+  `capture_content` now defaults to `True` (AG2's own default) instead of a
+  second, package-specific switch. In both modes local paths, stack traces
+  and raw exception text are no longer exported: tracebacks in tool messages
+  are cut, absolute paths become `[path]`, an ERROR status carries only the
+  exception class name, and exception events keep `exception.type`.
+
 - New package for AG2 1.x (PyPI `ag2`, import `ag2`). `setup()` attaches AG2's
-  own `TelemetryMiddleware` with `capture_content=False` and registers the
+  own `TelemetryMiddleware` and registers the
   Future AGI exporter; `AG2SpanProcessor` sets `gen_ai.span.kind` from
   `gen_ai.operation.name` and aliases AG2's cache/thinking usage keys
   (originals kept). Does not wrap `Agent` and never imports `autogen`.

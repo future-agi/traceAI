@@ -16,7 +16,7 @@ does not create spans. On every span from AG2's instrumentation scope it only:
   ``output_tokens`` / ``total_tokens`` to ``ag2.usage.*`` so the trace total
   counts each model call once. ``aggregation`` and ``compaction`` usage keeps
   its promoted tokens: AG2 calls the model outside the middleware for those;
-* applies ``TraceConfig`` as a second content gate. AG2 records message
+* applies ``TraceConfig`` (the traceAI privacy controls). AG2 records message
   content as one JSON string per span, so ``hide_inputs`` /
   ``hide_input_text`` drop every input-side content key (input messages,
   system instructions, tool arguments, human-input prompt), ``hide_outputs`` /
@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections import OrderedDict
 from typing import AbstractSet, Any, Dict, FrozenSet, Mapping, Optional, Set, Tuple
@@ -56,7 +57,8 @@ from fi_instrumentation.instrumentation.config import TraceConfig
 from fi_instrumentation.instrumentation.context_attributes import CONTEXT_ATTRIBUTES, get_attributes_from_context
 from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
+from opentelemetry.sdk.trace import Event, ReadableSpan, Span, SpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,86 @@ _IO_SOURCES: Mapping[str, Tuple[str, str]] = {
 }
 
 
+# --- local paths and stack traces are never exported ------------------------
+#
+# A failing tool's text is sent back to the model by AG2 and recorded as a
+# tool message in the next chat span's input; for an exception that text is a
+# full Python traceback with absolute file paths and the user's home
+# directory. Span status descriptions and exception events carry
+# ``str(exc)`` and ``exception.stacktrace``. None of that is exported in
+# either privacy mode: tracebacks are cut, absolute local paths are replaced.
+_TRACEBACK_RE = re.compile(r"Traceback \(most recent call last\):.*", re.DOTALL)
+_PATH_RE = re.compile(
+    r"(?<![\w:/.])(?:[A-Za-z]:\\[^\s\"'<>|:*?]+|/(?:Users|home|root|private|var|tmp|opt|usr|srv|mnt|app|workspace|etc)/[^\s\"'<>|:*?,;)\]]+)"
+)
+STACK_TRACE_REMOVED = "[stack trace removed]"
+PATH_REMOVED = "[path]"
+
+
+def scrub_text(value: str) -> str:
+    """Cut a Python traceback and replace absolute local file paths."""
+    if "Traceback (most recent call last)" in value:
+        value = _TRACEBACK_RE.sub(STACK_TRACE_REMOVED, value)
+    return _PATH_RE.sub(PATH_REMOVED, value)
+
+
+def _scrub_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return scrub_text(value)
+    if isinstance(value, list):
+        return [_scrub_json(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub_json(v) for k, v in value.items()}
+    return value
+
+
+def _scrub_content_value(value: Any) -> Any:
+    """Scrub a content attribute: plain text, or AG2's JSON-string messages."""
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return scrub_text(value)
+    if isinstance(parsed, (dict, list)):
+        scrubbed = _scrub_json(parsed)
+        return value if scrubbed == parsed else json.dumps(scrubbed, ensure_ascii=False)
+    return scrub_text(value)
+
+
+def _scrub_paths_and_traces(mapped: Dict[str, Any]) -> None:
+    for key in _INPUT_CONTENT_KEYS + _OUTPUT_CONTENT_KEYS:
+        if key in mapped:
+            mapped[key] = _scrub_content_value(mapped[key])
+
+
+def _sanitize_error_details(span: ReadableSpan) -> None:
+    """Drop raw exception text from the span status and exception events.
+
+    The status keeps ``ERROR`` and gets the exception class name (from the
+    exception event AG2 records) as its description instead of ``str(exc)``;
+    exception events keep ``exception.type`` only.
+    """
+    events = list(span.events or ())
+    error_type: Optional[str] = None
+    new_events = []
+    changed = False
+    for event in events:
+        attrs = dict(event.attributes or {})
+        if event.name == "exception":
+            error_type = error_type or (str(attrs["exception.type"]) if attrs.get("exception.type") else None)
+            kept = {k: v for k, v in attrs.items() if k == "exception.type"}
+            if kept != attrs:
+                changed = True
+                event = Event(name=event.name, attributes=kept, timestamp=event.timestamp)
+        new_events.append(event)
+    if changed:
+        span._events = new_events  # type: ignore[attr-defined]
+    status = span.status
+    if status is not None and status.status_code == StatusCode.ERROR and status.description != error_type:
+        span._status = Status(StatusCode.ERROR, error_type)  # type: ignore[attr-defined]
+
+
 def span_kind_for(attributes: Mapping[str, Any]) -> Optional[str]:
     """Return the Future AGI span kind for an AG2 span, or ``None``."""
     operation = attributes.get(SpanAttributes.GEN_AI_OPERATION_NAME)
@@ -161,6 +243,7 @@ def normalize_attributes(
     _demote_duplicate_usage(mapped, instrumented_agents)
     _count_cached_input(mapped)
 
+    _scrub_paths_and_traces(mapped)
     hidden = _hidden_content_keys(config) if config is not None else set()
     _copy_content_to_io(mapped, hidden)
 
@@ -499,6 +582,7 @@ class AG2SpanProcessor(SpanProcessor):
             if session is not None:
                 mapped[_SESSION_ID] = session
             _move_context_keys_last(mapped)
+            _sanitize_error_details(span)
             if mapped != current:
                 # ``ReadableSpan.attributes`` is a read-only view over
                 # ``_attributes``; every later processor and exporter in the

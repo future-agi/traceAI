@@ -61,34 +61,69 @@ def test_scope_and_strings_match_installed_ag2():
     for key in traceai_ag2.USAGE_KEY_ALIASES:
         assert f'"{key}"' in source
     params = inspect.signature(telemetry.TelemetryMiddleware.__init__).parameters
-    assert params["capture_content"].default is True  # upstream default the helper overrides
+    assert params["capture_content"].default is True  # upstream default; the helper keeps it
     # README: hide_llm_invocation_parameters has nothing to act on because AG2
     # sets no invocation-parameter attribute.
     assert "gen_ai.request.parameters" not in source + inspect.getsource(_telemetry_consts)
 
 
-# --- AC-05 privacy default ---------------------------------------------------
+# --- privacy: traceAI TraceConfig convention (content on by default) -------
 
 
-def test_setup_defaults_capture_content_off_and_spans_have_no_content():
+def test_setup_defaults_capture_content_on_and_spans_carry_content():
     provider, exporter = memory_provider()
     agent = weather_agent()
-    setup(agent, tracer_provider=provider)
+    setup(agent, tracer_provider=provider, config=TraceConfig())
 
     (mw,) = _telemetry_middlewares(agent)
-    assert mw._capture_content is False
+    assert mw._capture_content is True
 
     reply = ask(agent)
     assert reply.body == FINAL_ANSWER
+    spans = exporter.get_finished_spans()
+    (tool,) = find(spans, "execute_tool")
+    assert attrs(tool)["gen_ai.tool.call.result"] == TOOL_RESULT
+    (final_chat,) = find(spans, f"chat {MODEL}")
+    assert USER_PROMPT in attrs(final_chat)["gen_ai.input.messages"]
+
+
+def test_default_content_is_hidden_by_trace_config_alone():
+    """No second switch: TraceConfig hide flags remove content from a default setup()."""
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(agent, tracer_provider=provider, config=TraceConfig(hide_inputs=True, hide_outputs=True))
+    ask(agent)
     spans = exporter.get_finished_spans()
     assert spans
     for span in spans:
         assert_no_content(attrs(span), span.name)
 
 
-def test_create_telemetry_middleware_defaults_off():
+def test_default_content_is_hidden_by_fi_hide_env(monkeypatch):
+    monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+    monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(agent, tracer_provider=provider)  # config=None -> TraceConfig() reads FI_HIDE_*
+    ask(agent)
+    spans = exporter.get_finished_spans()
+    assert spans
+    for span in spans:
+        assert_no_content(attrs(span), span.name)
+
+
+def test_create_telemetry_middleware_defaults_on():
     mw = create_telemetry_middleware()
-    assert mw._capture_content is False
+    assert mw._capture_content is True
+
+
+def test_capture_content_false_passthrough_has_no_content():
+    provider, exporter = memory_provider()
+    agent = weather_agent()
+    setup(agent, tracer_provider=provider, capture_content=False)
+    ask(agent)
+    for span in exporter.get_finished_spans():
+        assert_no_content(attrs(span), span.name)
 
 
 def test_capture_content_opt_in_forwards_true():
@@ -599,7 +634,7 @@ def test_j4_ag2_halt_with_per_call_policies_gives_a_chat_span_without_reason():
     _, _, emit_halt = _short_circuit_middlewares()
     provider, exporter = memory_provider()
     agent = Agent("halted_bot", config=TestConfig("unreachable"), middleware=[emit_halt])
-    setup(agent, tracer_provider=provider)
+    setup(agent, tracer_provider=provider, config=TraceConfig(hide_inputs=True, hide_outputs=True))
     assert ask(agent, plugins=[Plugin().add_policy(AlertPolicy())]).body == "HALTED: budget exceeded"
     spans = exporter.get_finished_spans()
     assert [s.name for s in spans] == ["chat", "invoke_agent halted_bot"]
@@ -708,7 +743,7 @@ def test_manual_middleware_with_setup_installing_only_the_processor():
     from ag2 import Agent
 
     provider, exporter = memory_provider()
-    assert setup(tracer_provider=provider) is provider
+    assert setup(tracer_provider=provider, config=TraceConfig(hide_inputs=True, hide_outputs=True)) is provider
     mw = create_telemetry_middleware(tracer_provider=provider, agent_name="late_bot")
     agent = Agent("late_bot", config=weather_config(), tools=[get_weather], middleware=[mw])
     ask(agent)
@@ -745,3 +780,72 @@ def test_max_tool_result_chars_forwarded_only_when_given():
     upstream_default = inspect.signature(TelemetryMiddleware.__init__).parameters["max_tool_result_chars"].default
     assert default._max_tool_result_chars == upstream_default
     assert create_telemetry_middleware(max_tool_result_chars=16)._max_tool_result_chars == 16
+
+
+# --- local paths, stack traces and raw error text are never exported --------
+
+
+def _failing_agent():
+    from ag2 import Agent
+    from ag2.events import ModelMessage, ModelResponse, ToolCallEvent
+    from ag2.testing import TestConfig
+    from ag2.usage import Usage
+
+    def broken(city: str) -> str:
+        """Always fails."""
+        raise RuntimeError("boom-MARK /Users/someone/secret.txt")
+
+    return Agent(
+        "broken_bot",
+        config=TestConfig(
+            ToolCallEvent("broken", arguments='{"city": "Paris"}', id="call_b1"),
+            ModelResponse(ModelMessage("failed"), usage=Usage(prompt_tokens=1, completion_tokens=1), model=MODEL),
+        ),
+        tools=[broken],
+    )
+
+
+@pytest.mark.parametrize("hide", [False, True])
+def test_error_text_paths_and_stack_traces_are_not_exported(hide):
+    provider, exporter = memory_provider()
+    agent = _failing_agent()
+    config = TraceConfig(hide_inputs=hide, hide_outputs=hide)
+    setup(agent, tracer_provider=provider, config=config)
+    try:
+        ask(agent)
+    except RuntimeError:  # the scripted model does not catch the tool error
+        pass
+    spans = exporter.get_finished_spans()
+    (tool,) = find(spans, "execute_tool")
+    assert tool.status.status_code == StatusCode.ERROR
+    assert tool.status.description == "RuntimeError"  # class name only
+    for span in spans:
+        for event in span.events:
+            assert set(event.attributes or {}) <= {"exception.type"}, event.attributes
+        blob = repr(dict(span.attributes)) + repr(span.status.description) + repr([e.attributes for e in span.events])
+        for leak in ("/Users/", "secret.txt", "Traceback", "site-packages", "boom-MARK"):
+            assert leak not in blob, (span.name, leak)
+
+
+def test_scrub_text_cuts_tracebacks_and_local_paths_but_keeps_urls():
+    from traceai_ag2._processor import scrub_text
+
+    assert "Users" not in scrub_text('File "/Users/me/app.py", line 3')
+    assert "home" not in scrub_text("open /home/bob/a.txt failed")
+    assert "bob" not in scrub_text(r"C:\Users\bob\a.py")
+    assert scrub_text("x Traceback (most recent call last):\n  File \"/a/b.py\"\nValueError: q") == "x [stack trace removed]"
+    assert scrub_text("see https://example.com/home/page and /not/a/known/root") == "see https://example.com/home/page and /not/a/known/root"
+
+
+def test_traceback_in_a_tool_message_is_cut_from_chat_input_and_input_value():
+    import json
+
+    from traceai_ag2 import normalize_attributes
+
+    tb = 'Traceback (most recent call last):\n  File "/Users/me/venv/x.py", line 1\nRuntimeError: boom'
+    messages = json.dumps([{"role": "user", "content": "hi"}, {"role": "tool", "content": tb}])
+    out = normalize_attributes({"gen_ai.operation.name": "chat", "gen_ai.input.messages": messages}, TraceConfig())
+    for key in ("gen_ai.input.messages", "input.value"):
+        assert "Traceback" not in out[key] and "/Users/" not in out[key], key
+        assert "[stack trace removed]" in out[key]
+        assert json.loads(out[key])[0]["content"] == "hi"

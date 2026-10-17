@@ -38,18 +38,19 @@ _UNSET: Any = _Unset()
 def create_telemetry_middleware(
     *,
     tracer_provider: Optional[TracerProvider] = None,
-    capture_content: bool = False,
+    capture_content: bool = True,
     agent_name: Optional[str] = None,
     provider_name: Optional[str] = None,
     model_name: Optional[str] = None,
     span_attributes: Optional[Dict[str, str]] = None,
     max_tool_result_chars: Any = _UNSET,
 ) -> Any:
-    """Build AG2's own ``TelemetryMiddleware`` with content capture off.
+    """Build AG2's own ``TelemetryMiddleware``.
 
-    Upstream ``TelemetryMiddleware`` defaults ``capture_content=True``; this
-    factory defaults it to ``False``. Pass ``capture_content=True`` to store
-    prompts, completions, tool arguments and tool results.
+    Content is captured by default, like every traceAI instrumentor, and is
+    hidden with ``TraceConfig`` / the ``FI_HIDE_*`` variables (applied by
+    ``AG2SpanProcessor``). ``capture_content`` is AG2's own constructor
+    argument, passed through unchanged; it is not a second privacy setting.
 
     ``provider_name`` is never invented. Leave it ``None`` and AG2 fills it
     from the model response when the client reports one.
@@ -242,7 +243,7 @@ def setup(
     *agents: Any,
     tracer_provider: Optional[TracerProvider] = None,
     project_name: Optional[str] = None,
-    capture_content: bool = False,
+    capture_content: bool = True,
     provider_name: Optional[str] = None,
     model_name: Optional[str] = None,
     span_attributes: Optional[Dict[str, str]] = None,
@@ -266,14 +267,14 @@ def setup(
             provider and one ``AG2SpanProcessor``.
         project_name: Used only when ``setup`` registers a provider; ignored,
             with a warning, when it differs from the one already registered.
-        capture_content: Forwarded to ``TelemetryMiddleware``. Defaults to
-            ``False``, overriding AG2's upstream default of ``True``.
+        capture_content: Forwarded to ``TelemetryMiddleware`` (AG2's own
+            argument; default ``True``, the same as upstream). Hide content
+            with ``config=TraceConfig(...)`` or the ``FI_HIDE_*`` variables.
         provider_name, model_name, span_attributes, max_tool_result_chars:
             Forwarded to ``TelemetryMiddleware``. ``span_attributes`` is one
             way to stamp ``session.id`` on every span (AG2 emits no session
             id); traceAI's ``using_session`` context takes precedence.
-        config: ``TraceConfig`` applied by the span processor as a second
-            content gate. Defaults to ``TraceConfig()`` (reads ``FI_HIDE_*``).
+        config: ``TraceConfig`` applied by the span processor. Defaults to ``TraceConfig()`` (reads ``FI_HIDE_*``).
             One processor serves the whole provider: when it is already
             installed, an explicit ``config`` replaces its config (the most
             recent call wins, with a warning when it changes) and

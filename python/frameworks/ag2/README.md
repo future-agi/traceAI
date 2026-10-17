@@ -25,8 +25,9 @@ This package does not wrap `Agent`. It:
 
 1. registers the Future AGI exporter through `fi_instrumentation.register()`
    (or uses the provider you pass),
-2. attaches `TelemetryMiddleware` to your agents with `capture_content=False`
-   through AG2's public `Agent.add_middleware`,
+2. attaches `TelemetryMiddleware` to your agents through AG2's public
+   `Agent.add_middleware` (content is captured by default, like every traceAI
+   instrumentor; hide it with `FI_HIDE_*` / `TraceConfig`),
 3. installs `AG2SpanProcessor`, which, on spans from AG2's
    `opentelemetry.instrumentation.ag2` scope only:
    - sets `gen_ai.span.kind` from `gen_ai.operation.name`
@@ -46,8 +47,8 @@ This package does not wrap `Agent`. It:
      span that repeats a chat span's usage (see below), they move to
      `ag2.usage.*` with the token counts.
 
-   - applies `TraceConfig` (`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, ...) as a
-     second content gate.
+   - applies `TraceConfig` (`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, ...), and
+     removes local paths, stack traces and raw error text (see Privacy).
 
 ## Set up
 
@@ -70,7 +71,7 @@ from traceai_ag2 import setup
 trace_provider = register(project_type=ProjectType.OBSERVE, project_name="my-chatbot")
 
 agent = Agent("assistant", "You are helpful.", config=OpenAIConfig(model="gpt-4o-mini"))
-setup(agent, tracer_provider=trace_provider)  # capture_content=False
+setup(agent, tracer_provider=trace_provider)  # content captured; FI_HIDE_* hides it
 
 reply = await agent.ask("Hello")  # inside an async function
 trace_provider.force_flush()  # short scripts: flush before exit
@@ -130,17 +131,29 @@ An offline example with a scripted model (no model API key) is in
 
 ## Privacy
 
-Content is off unless you opt in. Upstream `TelemetryMiddleware` defaults
-`capture_content=True`; `setup` and `create_telemetry_middleware` pass `False`.
-With it off, spans carry no prompts, completions, tool arguments, tool results
-or human-input text.
+This package follows the traceAI `TraceConfig` convention: prompts, replies,
+tool arguments and tool results are captured by default, and hidden with the
+standard variables (or `TraceConfig(...)`):
 
-```python
-setup(agent, tracer_provider=trace_provider, capture_content=True)  # opt in
+```bash
+export FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true   # or FI_HIDE_INPUT_MESSAGES, FI_HIDE_OUTPUT_MESSAGES, FI_HIDE_INPUT_TEXT, ...
 ```
 
-With content on, `TraceConfig` (or the matching `FI_HIDE_*` variables) still
-removes it in the span processor. AG2 records message content as one JSON
+There is no second switch. `capture_content` is AG2's own `TelemetryMiddleware`
+argument and defaults to `True`, as upstream; `setup(..., capture_content=False)`
+stops AG2 itself from recording content, but the supported way to hide it is
+`FI_HIDE_*`.
+
+Never exported, in either mode: local file paths, user names, stack traces and
+raw exception text. Tracebacks that AG2 puts into a tool message (a failing
+tool's error is sent back to the model and recorded in the next chat span's
+input) are cut to `[stack trace removed]`, absolute local paths become
+`[path]`, a failing span's status description is the exception class name
+(for example `RuntimeError`) instead of `str(exc)`, and exception events keep
+`exception.type` only.
+
+`TraceConfig` (or the matching `FI_HIDE_*` variables) removes it in the span
+processor. AG2 records message content as one JSON
 string per span (`gen_ai.input.messages`, `gen_ai.output.messages`), not as
 the per-message keys that `TraceConfig.mask`'s text and image rules match, so
 the processor drops whole attributes:
@@ -168,8 +181,8 @@ not copied to `input.value` / `output.value` either.
 | Tokens | `gen_ai.usage.input_tokens` / `output_tokens` pass through, except on `anthropic` spans, where cache read and write tokens are added to `input_tokens` (and `total_tokens` recomputed when present; see the note below). Cache tokens are aliased to `gen_ai.usage.cache_read_tokens` / `cache_write_tokens` and thinking tokens to `gen_ai.usage.reasoning.output_tokens`, originals kept | When the usage field is zero/absent. Cost is not emitted |
 | Session | Not emitted by AG2. `session.id` from traceAI's `using_session` / `using_attributes` context, which wins over a static value; or set it yourself: `setup(..., span_attributes={"session.id": "..."})` | When neither is set |
 | User, metadata, tags | `user.id`, `metadata`, `tag.tags` (and the other traceAI context keys) from `using_user` / `using_metadata` / `using_tags` / `using_attributes`; a key AG2 or `span_attributes` already set is not overridden | When the context does not set them |
-| Tools | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`; arguments/result only with `capture_content=True` | |
-| Input / output | `input.value` / `output.value` (what Observe shows as a span's input and output), copied from the captured chat messages, tool arguments and result, or human input. A single chat completion goes on `output.value` as its message object, which Observe's chat view shows as the assistant reply. `invoke_agent` gets the first chat input and the last chat output of its turn, so the trace list shows the question and the answer | Without `capture_content=True`, when a `TraceConfig` flag hides the source, and always on `record_usage` spans (AG2 records no content there) |
+| Tools | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`; arguments/result unless hidden by `FI_HIDE_*` | |
+| Input / output | `input.value` / `output.value` (what Observe shows as a span's input and output), copied from the captured chat messages, tool arguments and result, or human input. A single chat completion goes on `output.value` as its message object, which Observe's chat view shows as the assistant reply. `invoke_agent` gets the first chat input and the last chat output of its turn, so the trace list shows the question and the answer | When a `TraceConfig` flag hides the source, and always on `record_usage` spans (AG2 records no content there) |
 | Errors | OTel status `ERROR` on failing tool / model / agent spans | |
 
 Notes:
@@ -254,7 +267,8 @@ Notes:
   concurrently (`TracerProvider(active_span_processor=ConcurrentMultiSpanProcessor())`;
   `setup` logs a warning), so the exporter can read a span before
   `AG2SpanProcessor` normalizes it. Use the default synchronous processor.
-- Content appeared without opting in: you constructed `TelemetryMiddleware`
-  yourself. Pass `capture_content=False`, or use `create_telemetry_middleware`.
+- Content is missing: a `FI_HIDE_*` variable or `TraceConfig` hide flag is set.
+- Content you wanted hidden still appears: you constructed `TelemetryMiddleware`
+  yourself on a provider without `AG2SpanProcessor`; use `setup()`.
 - This package never imports `autogen`. If your code imports `autogen`, you
   are on AG2 Classic or Microsoft AutoGen; use that integration instead.

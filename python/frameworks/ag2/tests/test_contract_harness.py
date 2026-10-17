@@ -28,6 +28,8 @@ from ._support import (  # noqa: E402
     MODEL,
     PROVIDER,
     TOOL_CALL_ID,
+    TOOL_RESULT,
+    USER_PROMPT,
     ask,
     assert_no_content,
     expected_one_tool_kinds,
@@ -65,7 +67,7 @@ def test_one_tool_run_reaches_collector_path_with_normalized_gen_ai_spans(fi_env
         )
         try:
             agent = weather_agent()
-            setup(agent, tracer_provider=trace_provider)  # capture_content defaults off
+            setup(agent, tracer_provider=trace_provider)  # content captured by default (TraceConfig)
             reply = ask(agent)
             assert reply.body
             assert trace_provider.force_flush(timeout_millis=10_000)
@@ -116,10 +118,12 @@ def test_one_tool_run_reaches_collector_path_with_normalized_gen_ai_spans(fi_env
     )
     assert promoted_input == 11, "trace-level input tokens must count the model call once"
 
-    # session: AG2 emits none; content: capture is off
+    # session: AG2 emits none; content: captured by default (TraceConfig)
     for name, attributes in by_name.items():
         assert "session.id" not in attributes, name
-        assert_no_content(attributes, name)
+    assert USER_PROMPT in chat["gen_ai.input.messages"]
+    assert by_name["execute_tool get_weather"]["gen_ai.tool.call.result"] == TOOL_RESULT
+    assert by_name["execute_tool get_weather"]["output.value"] == TOOL_RESULT
 
     for span in spans:
         assert span.get("status", {}).get("code") not in _STATUS_ERROR, span["name"]
@@ -135,6 +139,8 @@ def test_short_script_flushes_spans_before_exit():
                 "FI_API_KEY": "placeholder-api-key",
                 "FI_SECRET_KEY": "placeholder-secret-key",
                 "FI_PROJECT_NAME": "ag2-contract-script",
+                "FI_HIDE_INPUTS": "true",
+                "FI_HIDE_OUTPUTS": "true",
                 "PYTHONPATH": os.pathsep.join(
                     [str(_PACKAGE_DIR), str(_PYTHON_DIR), env.get("PYTHONPATH", "")]
                 ),
