@@ -3,7 +3,22 @@
  * `shutdown()` that flushes the tracer provider before a short script exits.
  */
 import { TracerProvider, diag, trace } from "@opentelemetry/api";
-import { FITracer, TraceConfigOptions } from "@traceai/fi-core";
+import {
+  DEFAULT_HIDE_INPUTS,
+  DEFAULT_HIDE_INPUT_MESSAGES,
+  DEFAULT_HIDE_INPUT_TEXT,
+  DEFAULT_HIDE_OUTPUTS,
+  DEFAULT_HIDE_OUTPUT_MESSAGES,
+  DEFAULT_HIDE_OUTPUT_TEXT,
+  FITracer,
+  FI_HIDE_INPUTS,
+  FI_HIDE_INPUT_MESSAGES,
+  FI_HIDE_INPUT_TEXT,
+  FI_HIDE_OUTPUTS,
+  FI_HIDE_OUTPUT_MESSAGES,
+  FI_HIDE_OUTPUT_TEXT,
+  TraceConfigOptions,
+} from "@traceai/fi-core";
 import { ContentPolicy } from "./spans";
 import { QueryTracingContext, wrapQueryFunction } from "./queryWrapper";
 import { QueryFunctionLike } from "./types";
@@ -11,40 +26,62 @@ import { VERSION } from "./version";
 
 export const INSTRUMENTATION_NAME = "@traceai/claude-agent-sdk";
 
-/**
- * fi-core env keys. Read fail-closed, unlike fi-core (`value.toLowerCase() ===
- * "true"`, so `1`, `yes` or ` true` would turn capture ON): only an explicit
- * `false` (trimmed, any case) opts in to content capture.
- */
-const FI_HIDE_INPUTS = "FI_HIDE_INPUTS";
-const FI_HIDE_OUTPUTS = "FI_HIDE_OUTPUTS";
-
 export interface ClaudeAgentSDKInstrumentationConfig {
   /** Provider to create spans with. Defaults to the global provider at call time. */
   tracerProvider?: TracerProvider;
   /**
-   * fi-core trace config. Unlike fi-core, `hideInputs` and `hideOutputs`
-   * default to `true` here: prompts, tool inputs and tool outputs can contain
-   * source code, file contents or secrets. Opt in with `false`, or with
-   * `FI_HIDE_INPUTS=false` / `FI_HIDE_OUTPUTS=false`.
+   * fi-core trace config, same defaults as every traceAI instrumentor: content
+   * is captured unless you hide it. `hideInputs` / `hideOutputs` (or
+   * `FI_HIDE_INPUTS=true` / `FI_HIDE_OUTPUTS=true`) hide every input / output
+   * value; `hideInputMessages` / `hideInputText` and `hideOutputMessages` /
+   * `hideOutputText` hide the prompt-side and assistant-side text only.
    */
   traceConfig?: TraceConfigOptions;
 }
 
-/** `false` only for an explicit `false`; any other value (or none) keeps content hidden. */
-function envHide(key: string): boolean {
-  const value = typeof process !== "undefined" ? process.env?.[key] : undefined;
-  return !(typeof value === "string" && value.trim().toLowerCase() === "false");
+/**
+ * One fi-core boolean flag: option > env var > fi-core default, with fi-core's
+ * own env rule (`value.toLowerCase() === "true"` hides). Same precedence as
+ * fi-core `generateTraceConfig`, which is not exported; read here so the env
+ * vars apply even when no `traceConfig` is passed (fi-core only reads them
+ * when one is).
+ */
+function flag(option: boolean | undefined, envKey: string, fallback: boolean): boolean {
+  if (option !== undefined) return option;
+  const value = typeof process !== "undefined" ? process.env?.[envKey] : undefined;
+  if (value !== undefined) return value.toLowerCase() === "true";
+  return fallback;
+}
+
+/** The fi-core flags this package reads, resolved (option > env > default). */
+export function resolveHideFlags(traceConfig?: TraceConfigOptions): Required<
+  Pick<
+    TraceConfigOptions,
+    "hideInputs" | "hideOutputs" | "hideInputMessages" | "hideOutputMessages" | "hideInputText" | "hideOutputText"
+  >
+> {
+  return {
+    hideInputs: flag(traceConfig?.hideInputs, FI_HIDE_INPUTS, DEFAULT_HIDE_INPUTS),
+    hideOutputs: flag(traceConfig?.hideOutputs, FI_HIDE_OUTPUTS, DEFAULT_HIDE_OUTPUTS),
+    hideInputMessages: flag(traceConfig?.hideInputMessages, FI_HIDE_INPUT_MESSAGES, DEFAULT_HIDE_INPUT_MESSAGES),
+    hideOutputMessages: flag(traceConfig?.hideOutputMessages, FI_HIDE_OUTPUT_MESSAGES, DEFAULT_HIDE_OUTPUT_MESSAGES),
+    hideInputText: flag(traceConfig?.hideInputText, FI_HIDE_INPUT_TEXT, DEFAULT_HIDE_INPUT_TEXT),
+    hideOutputText: flag(traceConfig?.hideOutputText, FI_HIDE_OUTPUT_TEXT, DEFAULT_HIDE_OUTPUT_TEXT),
+  };
 }
 
 /**
- * Resolve content capture. Precedence: explicit option > fi-core env var >
- * this package's default (hidden).
+ * Resolve content capture from the standard fi-core flags. Content is
+ * captured by default (fi-core `DEFAULT_HIDE_* = false`, like every traceAI
+ * instrumentor and the Python package).
  */
 export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentPolicy {
+  const f = resolveHideFlags(traceConfig);
   return {
-    hideInputs: traceConfig?.hideInputs ?? envHide(FI_HIDE_INPUTS),
-    hideOutputs: traceConfig?.hideOutputs ?? envHide(FI_HIDE_OUTPUTS),
+    hideInputs: f.hideInputs,
+    hideOutputs: f.hideOutputs,
+    hideInputMessages: f.hideInputs || f.hideInputMessages || f.hideInputText,
+    hideOutputMessages: f.hideOutputs || f.hideOutputMessages || f.hideOutputText,
   };
 }
 
@@ -127,9 +164,11 @@ export class ClaudeAgentSDKInstrumentation {
   private tracingContext(): QueryTracingContext {
     const policy = this.contentPolicy;
     const provider = this.tracerProvider ?? trace.getTracerProvider();
+    // Always pass an object, so FITracer also reads the other fi-core env vars
+    // (FI_PII_REDACTION, ...) when the app gave no traceConfig.
     const tracer = new FITracer({
       tracer: provider.getTracer(INSTRUMENTATION_NAME, VERSION),
-      traceConfig: { ...this.traceConfig, hideInputs: policy.hideInputs, hideOutputs: policy.hideOutputs },
+      traceConfig: { ...(this.traceConfig ?? {}), ...resolveHideFlags(this.traceConfig) },
     });
     return { tracer, policy };
   }

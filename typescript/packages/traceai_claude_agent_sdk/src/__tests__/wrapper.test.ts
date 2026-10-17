@@ -41,7 +41,15 @@ import {
 } from "./fixtures/messages";
 import { StackContextManager, allAttributeText, byName, drain, memoryProvider, one, parentId } from "./helpers";
 
-const CONTENT_ENV = ["FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"] as const;
+const CONTENT_ENV = [
+  "FI_HIDE_INPUTS",
+  "FI_HIDE_OUTPUTS",
+  "FI_HIDE_INPUT_MESSAGES",
+  "FI_HIDE_OUTPUT_MESSAGES",
+  "FI_HIDE_INPUT_TEXT",
+  "FI_HIDE_OUTPUT_TEXT",
+] as const;
+const HIDE_ALL = { hideInputs: true, hideOutputs: true };
 
 describe("wrapQuery", () => {
   let saved: Record<string, string | undefined>;
@@ -64,7 +72,7 @@ describe("wrapQuery", () => {
   async function run(
     messages: ReturnType<typeof simpleToolJourney>,
     options: Record<string, unknown> = {},
-    traceConfig?: { hideInputs?: boolean; hideOutputs?: boolean },
+    traceConfig?: Record<string, boolean>,
   ) {
     const { provider, exporter } = memoryProvider();
     const fake = makeFakeQuery(messages);
@@ -147,8 +155,8 @@ describe("wrapQuery", () => {
       }
     });
 
-    it("AC-07: keeps prompt, tool input/output and assistant text off spans by default", async () => {
-      const { spans } = await run(simpleToolJourney(), { systemPrompt: "SECRET_SYSTEM_PROMPT_MARKER" });
+    it("AC-07: keeps prompt, tool input/output and assistant text off spans with hideInputs/hideOutputs", async () => {
+      const { spans } = await run(simpleToolJourney(), { systemPrompt: "SECRET_SYSTEM_PROMPT_MARKER" }, HIDE_ALL);
       const text = allAttributeText(spans);
       for (const marker of [
         "SECRET_PROMPT_MARKER",
@@ -175,12 +183,8 @@ describe("wrapQuery", () => {
       }
     });
 
-    it("writes content only when hideInputs/hideOutputs are false", async () => {
-      const { spans } = await run(
-        simpleToolJourney(),
-        { systemPrompt: "be brief" },
-        { hideInputs: false, hideOutputs: false },
-      );
+    it("captures content by default (fi-core DEFAULT_HIDE_* = false, same as the Python package)", async () => {
+      const { spans } = await run(simpleToolJourney(), { systemPrompt: "be brief" });
       const conversation = one(spans, "claude_agent.conversation");
       const tool = one(spans, "tool.Read");
       expect(conversation.attributes["input.value"]).toBe(PROMPT);
@@ -206,38 +210,75 @@ describe("wrapQuery", () => {
       expect(text).not.toContain("SECRET_PROMPT_MARKER");
       expect(text).not.toContain(TOOL_INPUT_MARKER);
       expect(text).toContain(TOOL_OUTPUT_MARKER);
+      expect(text).toContain(ASSISTANT_TEXT_MARKER);
     });
 
-    it("honours FI_HIDE_INPUTS=false / FI_HIDE_OUTPUTS=false as an opt-in", async () => {
-      process.env.FI_HIDE_INPUTS = "false";
-      process.env.FI_HIDE_OUTPUTS = "false";
-      const { spans } = await run(simpleToolJourney());
-      const text = allAttributeText(spans);
-      expect(text).toContain("SECRET_PROMPT_MARKER");
-      expect(text).toContain(TOOL_OUTPUT_MARKER);
-    });
+    it.each(["true", "TRUE", "True"])(
+      "hides every content value for FI_HIDE_INPUTS=FI_HIDE_OUTPUTS=%j with no traceConfig",
+      async (value) => {
+        process.env.FI_HIDE_INPUTS = value;
+        process.env.FI_HIDE_OUTPUTS = value;
+        const { spans } = await run(simpleToolJourney(), { systemPrompt: "SECRET_SYSTEM_PROMPT_MARKER" });
+        const text = allAttributeText(spans);
+        for (const marker of [
+          "SECRET_PROMPT_MARKER",
+          "SECRET_SYSTEM_PROMPT_MARKER",
+          TOOL_INPUT_MARKER,
+          TOOL_OUTPUT_MARKER,
+          ASSISTANT_TEXT_MARKER,
+        ]) {
+          expect(text).not.toContain(marker);
+        }
+      },
+    );
 
-    it.each([" False ", "FALSE"])("treats FI_HIDE_*=%j (trimmed, any case) as the opt-in", async (value) => {
-      process.env.FI_HIDE_INPUTS = value;
-      process.env.FI_HIDE_OUTPUTS = value;
-      const { spans } = await run(simpleToolJourney());
-      const text = allAttributeText(spans);
-      expect(text).toContain("SECRET_PROMPT_MARKER");
-      expect(text).toContain(TOOL_OUTPUT_MARKER);
-    });
-
-    it.each(["1", "yes", " true", "TRUE", "", "0", "no", "off"])(
-      "keeps content hidden for FI_HIDE_*=%j: only an explicit 'false' opts in",
+    it.each(["false", "1", "yes", " true", "", "0"])(
+      "follows fi-core's env rule: FI_HIDE_*=%j is not 'true', so content stays captured",
       async (value) => {
         process.env.FI_HIDE_INPUTS = value;
         process.env.FI_HIDE_OUTPUTS = value;
         const { spans } = await run(simpleToolJourney());
         const text = allAttributeText(spans);
-        for (const marker of ["SECRET_PROMPT_MARKER", TOOL_INPUT_MARKER, TOOL_OUTPUT_MARKER, ASSISTANT_TEXT_MARKER]) {
-          expect(text).not.toContain(marker);
-        }
+        expect(text).toContain("SECRET_PROMPT_MARKER");
+        expect(text).toContain(TOOL_OUTPUT_MARKER);
       },
     );
+
+    it("lets an explicit traceConfig override the env vars", async () => {
+      process.env.FI_HIDE_INPUTS = "true";
+      process.env.FI_HIDE_OUTPUTS = "true";
+      const { spans } = await run(simpleToolJourney(), {}, { hideInputs: false, hideOutputs: false });
+      const text = allAttributeText(spans);
+      expect(text).toContain("SECRET_PROMPT_MARKER");
+      expect(text).toContain(TOOL_OUTPUT_MARKER);
+    });
+
+    it.each([
+      ["FI_HIDE_INPUT_MESSAGES"],
+      ["FI_HIDE_INPUT_TEXT"],
+    ])("%s=true hides the prompt and system prompt but keeps tool input and outputs", async (key) => {
+      process.env[key] = "true";
+      const { spans } = await run(simpleToolJourney(), { systemPrompt: "SECRET_SYSTEM_PROMPT_MARKER" });
+      const text = allAttributeText(spans);
+      expect(text).not.toContain("SECRET_PROMPT_MARKER");
+      expect(text).not.toContain("SECRET_SYSTEM_PROMPT_MARKER");
+      expect(text).toContain(TOOL_INPUT_MARKER);
+      expect(text).toContain(TOOL_OUTPUT_MARKER);
+      expect(text).toContain(ASSISTANT_TEXT_MARKER);
+    });
+
+    it.each([
+      ["FI_HIDE_OUTPUT_MESSAGES"],
+      ["FI_HIDE_OUTPUT_TEXT"],
+    ])("%s=true hides assistant text and the final result but keeps tool output and inputs", async (key) => {
+      process.env[key] = "true";
+      const { spans } = await run(simpleToolJourney());
+      const text = allAttributeText(spans);
+      expect(text).not.toContain(ASSISTANT_TEXT_MARKER);
+      expect(one(spans, "claude_agent.conversation").attributes["output.value"]).toBeUndefined();
+      expect(text).toContain(TOOL_OUTPUT_MARKER);
+      expect(text).toContain("SECRET_PROMPT_MARKER");
+    });
 
     it("AC-08: yields the same message objects, in order, and passes params through unchanged", async () => {
       const messages = simpleToolJourney();
@@ -281,7 +322,7 @@ describe("wrapQuery", () => {
 
   describe("J2: subagent (AC-01, AC-04)", () => {
     it("nests the subagent under the Agent tool span and the subagent's turns and tools under the subagent", async () => {
-      const { spans } = await run(subagentJourney());
+      const { spans } = await run(subagentJourney(), {}, HIDE_ALL);
       const conversation = one(spans, "claude_agent.conversation");
       const agentTool = one(spans, "tool.Agent");
       const subagent = one(spans, "claude_agent.subagent.code-reviewer");
@@ -315,7 +356,7 @@ describe("wrapQuery", () => {
       expect(subagent.attributes["claude_agent.subagent.status"]).toBe("completed");
       expect(grep.attributes["claude_agent.parent_tool_use_id"]).toBe(AGENT_TOOL_ID);
       expect(grep.attributes["claude_agent.tool.use_id"]).toBe(SUBAGENT_GREP_ID);
-      // Content off by default: the subagent prompt and description are inputs.
+      // hideInputs: the subagent prompt and description are inputs.
       expect(subagent.attributes["claude_agent.subagent.prompt"]).toBeUndefined();
       expect(subagent.attributes["claude_agent.subagent.description"]).toBeUndefined();
       expect(allAttributeText(spans)).not.toContain("SECRET_SUBAGENT_PROMPT_MARKER");
@@ -448,7 +489,7 @@ describe("wrapQuery", () => {
 
   describe("J3: MCP tool error and error result", () => {
     it("marks the MCP tool span mcp_tool/TOOL with ERROR and the conversation ERROR", async () => {
-      const { spans } = await run(mcpErrorJourney());
+      const { spans } = await run(mcpErrorJourney(), {}, HIDE_ALL);
       const tool = one(spans, "tool.mcp__docs__search");
       const conversation = one(spans, "claude_agent.conversation");
 
@@ -459,19 +500,27 @@ describe("wrapQuery", () => {
       expect(tool.attributes["claude_agent.mcp.tool_name"]).toBe("search");
       expect(tool.attributes["claude_agent.tool.is_error"]).toBe(true);
       expect(tool.status.code).toBe(SpanStatusCode.ERROR);
-      // Error text is tool output: hidden by default.
+      // Error text is tool output: hidden with hideOutputs.
       expect(tool.attributes["claude_agent.tool.error_message"]).toBeUndefined();
       expect(tool.status.message).toBe("tool error");
 
       expect(conversation.status.code).toBe(SpanStatusCode.ERROR);
       expect(conversation.attributes["claude_agent.is_error"]).toBe(true);
       expect(conversation.attributes["claude_agent.error.type"]).toBe("error_max_turns");
-      expect(conversation.attributes["claude_agent.error.message"]).toBe("Reached maximum number of turns (3)");
+      // The result's error strings are raw error text: hidden with hideOutputs.
+      expect(conversation.attributes["claude_agent.error.message"]).toBeUndefined();
+      expect(conversation.status.message).toBe("error_max_turns");
       expect(conversation.attributes["gen_ai.cost.total"]).toBe(0.002);
     });
 
-    it("records the tool error text when outputs are visible", async () => {
-      const { spans } = await run(mcpErrorJourney(), {}, { hideOutputs: false });
+    it("records the result's error text by default", async () => {
+      const { spans } = await run(mcpErrorJourney());
+      const conversation = one(spans, "claude_agent.conversation");
+      expect(conversation.attributes["claude_agent.error.message"]).toBe("Reached maximum number of turns (3)");
+    });
+
+    it("records the tool error text when outputs are visible (the default)", async () => {
+      const { spans } = await run(mcpErrorJourney());
       const tool = one(spans, "tool.mcp__docs__search");
       expect(tool.attributes["claude_agent.tool.error_message"]).toBe("server unavailable");
       expect(tool.status.message).toBe("server unavailable");
@@ -582,10 +631,54 @@ describe("wrapQuery", () => {
       const conversation = one(spans, "claude_agent.conversation");
       expect(conversation.status.code).toBe(SpanStatusCode.ERROR);
       expect(conversation.attributes["claude_agent.error.message"]).toBe("CLI exited with code 1");
-      expect(conversation.events.some((e) => e.name === "exception")).toBe(true);
+      const exception = conversation.events.find((e) => e.name === "exception");
+      expect(exception?.attributes).toEqual({ "exception.type": "Error", "exception.message": "CLI exited with code 1" });
       expect(conversation.attributes["claude_agent.cancelled"]).toBeUndefined();
       expect(spans).toHaveLength(3);
       for (const span of spans) expect(span.ended).toBe(true);
+    });
+
+    it("never exports a stack trace, local path, user name or host name from a thrown error", async () => {
+      const os = await import("os");
+      const { provider, exporter } = memoryProvider();
+      const home = os.homedir();
+      const boom = new Error(
+        `spawn ${home}/proj/node_modules/@anthropic-ai/claude-agent-sdk/cli.js ENOENT (user ${os.userInfo().username}` +
+          ` on ${os.hostname()}, contact dev@example.com, C:\\Users\\someone\\app.js)`,
+      );
+      const fake = makeFakeQuery(simpleToolJourney(), { throwAt: 3, error: boom });
+      await expect(drain(wrapQuery(fake.query, { tracerProvider: provider })({ prompt: PROMPT }))).rejects.toBe(boom);
+      const conversation = one(exporter.getFinishedSpans(), "claude_agent.conversation");
+      const exported = JSON.stringify({
+        attributes: conversation.attributes,
+        events: conversation.events,
+        status: conversation.status,
+      });
+      expect(exported).not.toContain("exception.stacktrace");
+      expect(exported).not.toContain(home);
+      expect(exported).not.toContain(os.userInfo().username);
+      expect(exported).not.toContain(os.hostname());
+      expect(exported).not.toContain("dev@example.com");
+      expect(exported).not.toContain("someone");
+      expect(exported).not.toContain("wrapper.test");
+      expect(conversation.attributes["claude_agent.error.message"]).toContain(
+        "spawn ~/proj/node_modules/@anthropic-ai/claude-agent-sdk/cli.js ENOENT",
+      );
+    });
+
+    it("keeps the thrown error's text off the span with hideOutputs (type only)", async () => {
+      const { provider, exporter } = memoryProvider();
+      const boom = new TypeError("SECRET_ERROR_TEXT_MARKER");
+      const fake = makeFakeQuery(simpleToolJourney(), { throwAt: 3, error: boom });
+      const traced = wrapQuery(fake.query, { tracerProvider: provider, traceConfig: HIDE_ALL });
+      await expect(drain(traced({ prompt: PROMPT }))).rejects.toBe(boom);
+      const conversation = one(exporter.getFinishedSpans(), "claude_agent.conversation");
+      expect(JSON.stringify({ a: conversation.attributes, e: conversation.events, s: conversation.status })).not.toContain(
+        "SECRET_ERROR_TEXT_MARKER",
+      );
+      expect(conversation.status.message).toBe("TypeError");
+      expect(conversation.attributes["claude_agent.error.type"]).toBe("TypeError");
+      expect(conversation.events.find((e) => e.name === "exception")?.attributes).toEqual({ "exception.type": "TypeError" });
     });
 
     const ASYNC_DISPOSE =

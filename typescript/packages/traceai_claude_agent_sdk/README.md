@@ -2,7 +2,7 @@
 
 OpenTelemetry tracing for the TypeScript [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) `query()`, exported to Future AGI through `@traceai/fi-core`.
 
-Alpha. Tested against `@anthropic-ai/claude-agent-sdk` 0.3.289 with recorded message fixtures and with the real SDK and bundled CLI pointed at a loopback mock of the Messages API. No live Anthropic call was made.
+Alpha. Tested against `@anthropic-ai/claude-agent-sdk` 0.3.289 (the devDependency pin) and 0.3.302 (latest on 2026-10-16) with recorded message fixtures, with the real SDK and bundled CLI pointed at a loopback mock of the Messages API, and end to end against a local Future AGI with the real CLI calling a real model through an Anthropic-compatible gateway (`ANTHROPIC_BASE_URL`). No direct `api.anthropic.com` call was made.
 
 This is not the Python package (`traceAI-claude-agent-sdk`), not Claude Code CLI session tracing, and not the Anthropic Messages API instrumentation (`@traceai/anthropic`).
 
@@ -12,8 +12,8 @@ This is not the Python package (`traceAI-claude-agent-sdk`), not Claude Code CLI
 
 | Item | Value |
 |---|---|
-| Tested pin | `@anthropic-ai/claude-agent-sdk` 0.3.289 (npm shasum `36c710c40a2d9761d6c12c42b469d002e64e9be8`) |
-| Peer range | `^0.3.142` (0.3.142 is the oldest 0.3.x on npm; its `query()` and the message fields read here match 0.3.289, and the real-SDK contract test passed against it) |
+| Tested versions | `@anthropic-ai/claude-agent-sdk` 0.3.289 (devDependency pin, npm shasum `36c710c40a2d9761d6c12c42b469d002e64e9be8`) and 0.3.302 (latest, 2026-10-16: contract suite + end-to-end run) |
+| Peer range | `^0.3.277`. Before 0.3.277 a resumed or forked session's `total_cost_usd` / `modelUsage` restarted at zero (SDK CHANGELOG 0.3.277), so the per-query usage below would be wrong; the real-SDK resume, continue/fork and restart contract tests fail on 0.3.142, 0.3.215, 0.3.250, 0.3.272 and 0.3.276 and the whole contract suite passes on 0.3.277, 0.3.289 and 0.3.302 |
 | Node | 18, 20, 22 (CJS and ESM import checked); the SDK itself declares `node >=18` |
 
 ## Install
@@ -79,7 +79,7 @@ A foreground subagent span ends with its `tool.Agent` / `tool.Task` result. A su
 | Cost | `claude_agent.cost.total_usd` and `gen_ai.cost.total` | result `total_cost_usd`; never computed here. See "Usage and cost" |
 | Session | `session.id`, `claude_agent.session.id`, `claude_agent.session_id`; `claude_agent.session.is_new` / `is_resumed` (`resume` or `continue`); `claude_agent.session.fork_from` on fork | init / result `session_id`, `options.sessionId`, `options.resume`, `options.continue` |
 | Tools | `claude_agent.tool.name`, `gen_ai.tool.name`, `use_id`, `source` (`builtin` / `mcp` / `custom`), `is_error`, `duration_ms` | `tool_use` / `tool_result` blocks |
-| Errors | span status ERROR; `claude_agent.error.type` / `error.message`; `claude_agent.cancelled=true` on abort | error result, thrown error, `is_error` tool results, `AbortController` |
+| Errors | span status ERROR; `claude_agent.error.type` / `error.message`; an `exception` event with `exception.type` (and `exception.message` when outputs are visible); `claude_agent.cancelled=true` on abort. No stack trace is ever recorded, and error text has local paths, emails and this machine's user and host names replaced | error result, thrown error, `is_error` tool results, `AbortController` |
 
 The `claude_agent.*` names are the Python package's names (`_attributes.py`); a test fails if one is missing.
 
@@ -98,18 +98,29 @@ The Future AGI collector promotes `gen_ai.usage.*` and `gen_ai.cost.total` on an
 - Every conversation span with a result also carries the running totals on unpromoted keys: `claude_agent.cumulative.cost_usd`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`.
 - A result with no cost and no `modelUsage`, or a zeroed crash result, writes none of these keys and leaves the session's saved totals unchanged.
 
-## Privacy: content is off by default
+## Privacy: standard traceAI `TraceConfig`
 
-Prompts, system prompts, tool inputs, tool outputs, assistant text and the final result can contain source code, file contents or secrets. They are **not** recorded unless you opt in:
+Like every traceAI instrumentor (and the Python package), content is **captured by default**: the prompt, system prompt, tool inputs, tool outputs, assistant text, the final result and error text. Prompts and tool I/O can contain source code, file contents or secrets, so hide them in production when you do not want that text in Future AGI:
 
 ```typescript
-wrapQuery(query, { tracerProvider, traceConfig: { hideInputs: false, hideOutputs: false } });
-// or: FI_HIDE_INPUTS=false FI_HIDE_OUTPUTS=false
+wrapQuery(query, { tracerProvider, traceConfig: { hideInputs: true, hideOutputs: true } });
+// or: FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true
 ```
 
-Precedence: `traceConfig` option, then the env var, then hidden. The env vars fail closed: only the value `false` (trimmed, any case) turns capture on. Any other value, including `1`, `yes`, `true`, ` true` or an empty string, keeps content hidden. (fi-core itself treats every value other than `true` as "show", so `FI_HIDE_INPUTS=1` would capture there; this package does not follow that rule.)
+| fi-core flag (env var) | Hides |
+|---|---|
+| `hideInputs` (`FI_HIDE_INPUTS`) | prompt, system prompt, tool input (`input.value`, `claude_agent.tool.input`, `file_path`, `command`, `pattern`, `url`, `search_query`), subagent prompt and description |
+| `hideOutputs` (`FI_HIDE_OUTPUTS`) | assistant text, tool output, tool error text, final result, error text (only the error type is kept) |
+| `hideInputMessages` / `hideInputText` (`FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_INPUT_TEXT`) | prompt, system prompt and subagent prompt text only |
+| `hideOutputMessages` / `hideOutputText` (`FI_HIDE_OUTPUT_MESSAGES` / `FI_HIDE_OUTPUT_TEXT`) | assistant text and final result only |
 
-This is stricter than fi-core's own default and than the Python package, which records the prompt and tool input/output unconditionally.
+Precedence and parsing are fi-core's: the `traceConfig` option, then the env var (hidden only when the value is `true`, any case), then the fi-core default (`false`). The env vars apply even when you pass no `traceConfig`. `FI_PII_REDACTION=true` applies fi-core's regex redaction on top.
+
+Structure is always kept: span names and kinds, model, provider, tokens, cost, session, tool names and ids, durations, status.
+
+Never exported, in either mode: local file paths, stack traces, and (in error text) emails and this machine's user and host names. In captured content the query's working directory (`options.cwd`, else `process.cwd()`) is written as `[cwd]`, the home directory as `~`, and any other absolute local path (`/Users/...`, `/home/...`, `/private/...`, `/tmp/...`, `C:\...`, `file://...`) as `[path]`; Python tracebacks and V8 `at ...` frames become `[stack trace removed]`. So a Read of `<cwd>/src/a.ts` shows `claude_agent.tool.file_path = [cwd]/src/a.ts`. A thrown error is recorded as an `exception` event with `exception.type` (plus the scrubbed `exception.message` when outputs are visible), never with `recordException()`'s stack trace.
+
+A streaming-input prompt (an async iterable) is not recorded: the wrapper does not read or copy the app's input stream.
 
 ## Flushing and batching
 

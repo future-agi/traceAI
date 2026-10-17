@@ -52,6 +52,7 @@ CONTENT_MARKERS = (
     "SECRET_ASSISTANT_TEXT_MARKER",
     "SECRET_SUBAGENT_PROMPT_MARKER",
 )
+HIDE_CONTENT = {"FI_HIDE_INPUTS": "true", "FI_HIDE_OUTPUTS": "true"}
 PLACEHOLDER_API_KEY = "contract-api-key-PLACEHOLDER"
 PLACEHOLDER_SECRET_KEY = "contract-secret-key-PLACEHOLDER"
 
@@ -143,9 +144,9 @@ def _one(spans: List[Dict[str, Any]], name: str) -> Dict[str, Any]:
     return matches[0]
 
 
-def test_conversation_turn_tool_reach_collector_path_with_content_off(built_package: Path, fixtures_dir: Path) -> None:
+def test_conversation_turn_tool_reach_collector_path_with_content_hidden(built_package: Path, fixtures_dir: Path) -> None:
     with Receiver() as receiver:
-        output = _run_journey(receiver, fixtures_dir, "simple")
+        output = _run_journey(receiver, fixtures_dir, "simple", HIDE_CONTENT)
         spans = receiver.spans()
         requests = receiver.requests()
 
@@ -199,7 +200,7 @@ def test_conversation_turn_tool_reach_collector_path_with_content_off(built_pack
         assert _attrs(span)["session.id"] == SESSION_ID
         assert _status_code(span) == 1
 
-    # Content capture is off by default.
+    # FI_HIDE_INPUTS=true / FI_HIDE_OUTPUTS=true: no content anywhere in the export.
     blob = json.dumps(spans)
     for marker in CONTENT_MARKERS:
         assert marker not in blob
@@ -236,9 +237,10 @@ def test_subagent_and_mcp_spans_reach_the_receiver(built_package: Path, fixtures
     assert conversation["claude_agent.error.type"] == "error_max_turns"
 
 
-def test_content_is_exported_only_after_opt_in(built_package: Path, fixtures_dir: Path) -> None:
+def test_content_is_exported_by_default(built_package: Path, fixtures_dir: Path) -> None:
+    """traceAI TraceConfig convention: content on unless FI_HIDE_* / traceConfig hides it."""
     with Receiver() as receiver:
-        _run_journey(receiver, fixtures_dir, "simple", {"FI_HIDE_INPUTS": "false", "FI_HIDE_OUTPUTS": "false"})
+        _run_journey(receiver, fixtures_dir, "simple")
         spans = receiver.spans()
     conversation = _attrs(_one(spans, "claude_agent.conversation"))
     tool = _attrs(_one(spans, "tool.Read"))
@@ -506,7 +508,7 @@ def test_real_sdk_query_through_anthropic_base_url_mock(built_package: Path) -> 
     Mechanism from the ADR: Options.env.ANTHROPIC_BASE_URL. No Anthropic call: placeholder
     key, dead-port HTTPS_PROXY, temp HOME. Spans go through fi-core to the shared Receiver.
     """
-    output, spans, exported = _run_real_sdk("tool", "th8235-real-sdk-contract")
+    output, spans, exported = _run_real_sdk("tool", "th8235-real-sdk-contract", HIDE_CONTENT)
 
     # The CLI called the mock (host root + /v1/messages), streaming, with the placeholder key.
     mock_requests = output["requests"]
@@ -550,6 +552,17 @@ def test_real_sdk_query_through_anthropic_base_url_mock(built_package: Path) -> 
         assert marker not in blob
     assert PLACEHOLDER_API_KEY not in blob and "PLACEHOLDER-not-a-key" not in blob
     _assert_exported_with_both_keys(exported, "th8235-real-sdk-contract")
+
+
+@requires_real_sdk
+def test_real_sdk_captures_content_by_default(built_package: Path) -> None:
+    """Same real-SDK run with no FI_HIDE_* set: prompt, tool output and assistant text are exported."""
+    _, spans, _ = _run_real_sdk("tool", "th8235-real-sdk-contract-content")
+    conversation = _attrs(_one(spans, "claude_agent.conversation"))
+    tool = _attrs(_one(spans, "tool.Read"))
+    assert "SECRET_PROMPT_MARKER" in conversation["input.value"]
+    assert "SECRET_TOOL_OUTPUT_MARKER" in tool["claude_agent.tool.output"]
+    assert "SECRET_ASSISTANT_TEXT_MARKER" in json.dumps(spans)
 
 
 def _read_member(tar: tarfile.TarFile, member: Any) -> bytes:
@@ -616,7 +629,7 @@ def test_packed_tarball_has_no_sdk_sources_or_native_binary(built_package: Path,
             assert _sha256(data) not in sdk_hashes, f"{relative} is a copy of {sdk_hashes[_sha256(data)]}"
             assert b"Anthropic PBC. All rights reserved" not in data, relative
 
-    assert manifest["peerDependencies"] == {"@anthropic-ai/claude-agent-sdk": "^0.3.142"}
+    assert manifest["peerDependencies"] == {"@anthropic-ai/claude-agent-sdk": "^0.3.277"}
     assert "@anthropic-ai/claude-agent-sdk" not in manifest.get("dependencies", {})
     assert not manifest.get("bundledDependencies") and not manifest.get("bundleDependencies")
     assert manifest["license"] == "Apache-2.0"

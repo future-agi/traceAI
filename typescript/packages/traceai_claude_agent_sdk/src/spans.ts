@@ -36,6 +36,7 @@ import {
   getToolSource,
   parseMcpToolName,
 } from "./attributes";
+import { ScrubContext, defaultScrubContext, scrubContent, scrubErrorText } from "./scrub";
 import {
   AbortSignalLike,
   AssistantMessageLike,
@@ -47,10 +48,19 @@ import {
   UserMessageLike,
 } from "./types";
 
-/** Which content the wrapper may copy onto spans. Both default to hidden. */
+/**
+ * Which content the wrapper may copy onto spans, resolved from the standard
+ * fi-core flags (all default to false: content is captured).
+ */
 export interface ContentPolicy {
+  /** FI_HIDE_INPUTS: every input-side value (prompt, system prompt, tool input, subagent prompt). */
   hideInputs: boolean;
+  /** FI_HIDE_OUTPUTS: every output-side value (assistant text, tool output, final result, error text). */
   hideOutputs: boolean;
+  /** hideInputs, FI_HIDE_INPUT_MESSAGES or FI_HIDE_INPUT_TEXT: prompt, system prompt and subagent prompt text. */
+  hideInputMessages: boolean;
+  /** hideOutputs, FI_HIDE_OUTPUT_MESSAGES or FI_HIDE_OUTPUT_TEXT: assistant text and the final result. */
+  hideOutputMessages: boolean;
 }
 
 /** How the wrapped iterator stopped. */
@@ -284,6 +294,8 @@ export class QueryTracer {
   private readonly appSetSession: boolean;
   private readonly providerName: string;
   private readonly mcpServerNames = new Set<string>();
+  /** cwd and home directory, rewritten in exported content (see scrub.ts). */
+  private readonly scrubContext: ScrubContext;
 
   private conversation?: Span;
   private conversationContext?: Context;
@@ -329,6 +341,7 @@ export class QueryTracer {
     this.contextAttributes = safeContextAttributes(args.parentContext);
     this.appSetSession = this.contextAttributes[T.SESSION_ID] != null;
     this.providerName = resolveProviderName(this.options);
+    this.scrubContext = defaultScrubContext(this.options?.cwd);
     for (const name of Object.keys(this.options?.mcpServers ?? {})) {
       this.mcpServerNames.add(name);
     }
@@ -469,11 +482,18 @@ export class QueryTracer {
       } else if (failed) {
         const { type, message } = errorParts((outcome as { error: unknown }).error);
         conversation.setAttribute(A.ERROR_TYPE, type);
-        conversation.setAttribute(A.ERROR_MESSAGE, truncate(message, ERROR_MESSAGE_MAX));
-        if ((outcome as { error: unknown }).error instanceof Error) {
-          conversation.recordException((outcome as { error: Error }).error);
+        // No recordException(): it would export the stack trace (local paths).
+        // The event carries the type, and the scrubbed message only when
+        // outputs are visible.
+        const event: Attributes = { "exception.type": type };
+        let statusMessage = type;
+        if (!this.policy.hideOutputs) {
+          statusMessage = truncate(scrubErrorText(message, this.scrubContext), ERROR_MESSAGE_MAX);
+          conversation.setAttribute(A.ERROR_MESSAGE, statusMessage);
+          event["exception.message"] = statusMessage;
         }
-        conversation.setStatus({ code: SpanStatusCode.ERROR, message: truncate(message, ERROR_MESSAGE_MAX) });
+        conversation.addEvent("exception", event, toHrTime(endMs));
+        conversation.setStatus({ code: SpanStatusCode.ERROR, message: statusMessage });
       } else if (!this.conversationIsError && (outcome.kind === "completed" || this.resultSeen)) {
         conversation.setStatus({ code: SpanStatusCode.OK });
       }
@@ -561,8 +581,8 @@ export class QueryTracer {
 
     turn.span.setAttribute(A.MESSAGE_HAS_TOOL_USE, turn.toolUseCount > 0);
     turn.span.setAttribute(A.MESSAGE_TOOL_USE_COUNT, turn.toolUseCount);
-    if (!this.policy.hideOutputs && turn.textParts.length > 0) {
-      const text = truncate(turn.textParts.join(" "), MESSAGE_CONTENT_MAX);
+    if (!this.policy.hideOutputMessages && turn.textParts.length > 0) {
+      const text = this.clean(turn.textParts.join(" "), MESSAGE_CONTENT_MAX);
       turn.span.setAttribute(A.MESSAGE_CONTENT, text);
       turn.span.setAttribute(T.OUTPUT_VALUE, text);
       turn.span.setAttribute(T.OUTPUT_MIME_TYPE, "text/plain");
@@ -631,17 +651,17 @@ export class QueryTracer {
       this.conversationIsError = true;
       const errorType = subtype ?? "error";
       conversation.setAttribute(A.ERROR_TYPE, errorType);
-      if (Array.isArray(message.errors) && message.errors.length > 0) {
+      if (!this.policy.hideOutputs && Array.isArray(message.errors) && message.errors.length > 0) {
         conversation.setAttribute(
           A.ERROR_MESSAGE,
-          truncate(message.errors.map(String).join("; "), ERROR_MESSAGE_MAX),
+          truncate(scrubErrorText(message.errors.map(String).join("; "), this.scrubContext), ERROR_MESSAGE_MAX),
         );
       }
       conversation.setStatus({ code: SpanStatusCode.ERROR, message: errorType });
     }
 
-    if (!this.policy.hideOutputs && typeof message.result === "string") {
-      conversation.setAttribute(T.OUTPUT_VALUE, truncate(message.result, CONTENT_MAX));
+    if (!this.policy.hideOutputMessages && typeof message.result === "string") {
+      conversation.setAttribute(T.OUTPUT_VALUE, this.clean(message.result, CONTENT_MAX));
       conversation.setAttribute(T.OUTPUT_MIME_TYPE, "text/plain");
     }
   }
@@ -833,11 +853,11 @@ export class QueryTracer {
     }
     const input = block.input;
     if (!this.policy.hideInputs && input !== undefined && input !== null) {
-      const serialized = safeJson(input);
+      const serialized = this.clean(safeJson(input), CONTENT_MAX);
       span.setAttribute(A.TOOL_INPUT, serialized);
       span.setAttribute(T.INPUT_VALUE, serialized);
       span.setAttribute(T.INPUT_MIME_TYPE, typeof input === "string" ? "text/plain" : "application/json");
-      setToolSpecificAttributes(span, name, input);
+      setToolSpecificAttributes(span, name, input, (value, max) => this.clean(value, max));
     }
 
     const tool: ToolState = { span, name, startMs, turn };
@@ -870,9 +890,9 @@ export class QueryTracer {
     const endMs = clockMs();
     span.setAttribute(A.TOOL_DURATION_MS, endMs - tool.startMs);
     span.setAttribute(A.TOOL_IS_ERROR, isError);
-    const output = flattenToolResult(content);
+    const output = this.policy.hideOutputs ? "" : this.clean(flattenToolResult(content), CONTENT_MAX);
     if (!this.policy.hideOutputs) {
-      const serialized = truncate(output, CONTENT_MAX);
+      const serialized = output;
       span.setAttribute(A.TOOL_OUTPUT, serialized);
       span.setAttribute(T.OUTPUT_VALUE, serialized);
       span.setAttribute(T.OUTPUT_MIME_TYPE, "text/plain");
@@ -914,13 +934,14 @@ export class QueryTracer {
     if (scope !== null) {
       span.setAttribute(A.PARENT_TOOL_USE_ID, scope);
     }
-    if (!this.policy.hideInputs) {
+    if (!this.policy.hideInputMessages) {
       if (typeof fields.description === "string" && fields.description) {
-        span.setAttribute(A.SUBAGENT_DESCRIPTION, truncate(fields.description, 500));
+        span.setAttribute(A.SUBAGENT_DESCRIPTION, this.clean(fields.description, 500));
       }
       if (typeof fields.prompt === "string" && fields.prompt) {
-        span.setAttribute(A.SUBAGENT_PROMPT, truncate(fields.prompt, PROMPT_MAX));
-        span.setAttribute(T.INPUT_VALUE, truncate(fields.prompt, PROMPT_MAX));
+        const prompt = this.clean(fields.prompt, PROMPT_MAX);
+        span.setAttribute(A.SUBAGENT_PROMPT, prompt);
+        span.setAttribute(T.INPUT_VALUE, prompt);
         span.setAttribute(T.INPUT_MIME_TYPE, "text/plain");
       }
     }
@@ -1123,6 +1144,16 @@ export class QueryTracer {
     }
   }
 
+  /**
+   * Content as exported: stack traces cut and local paths rewritten
+   * (scrub.ts), then truncated like the Python package. Bounded before the
+   * scrub so a huge tool result is not scanned in full.
+   */
+  private clean(value: string, max: number): string {
+    const bounded = value.length > max * 2 ? value.slice(0, max * 2) : value;
+    return truncate(scrubContent(bounded, this.scrubContext), max);
+  }
+
   /** The model this query asked for: options.model, else the init message's model. */
   private requestedModel(): string | undefined {
     const model = this.options?.model;
@@ -1164,18 +1195,18 @@ export class QueryTracer {
       attributes[A.SESSION_FORK_FROM] = resume;
     }
 
-    if (!this.policy.hideInputs) {
+    if (!this.policy.hideInputMessages) {
       if (typeof this.params.prompt === "string") {
-        const prompt = truncate(this.params.prompt, PROMPT_MAX);
+        const prompt = this.clean(this.params.prompt, PROMPT_MAX);
         attributes[A.AGENT_PROMPT] = prompt;
         attributes[T.INPUT_VALUE] = prompt;
         attributes[T.INPUT_MIME_TYPE] = "text/plain";
       }
       const systemPrompt = options.systemPrompt;
       if (typeof systemPrompt === "string" && systemPrompt) {
-        attributes[A.AGENT_SYSTEM_PROMPT] = truncate(systemPrompt, SYSTEM_PROMPT_MAX);
+        attributes[A.AGENT_SYSTEM_PROMPT] = this.clean(systemPrompt, SYSTEM_PROMPT_MAX);
       } else if (systemPrompt && typeof systemPrompt === "object") {
-        attributes[A.AGENT_SYSTEM_PROMPT] = safeJson(systemPrompt, SYSTEM_PROMPT_MAX);
+        attributes[A.AGENT_SYSTEM_PROMPT] = this.clean(safeJson(systemPrompt, SYSTEM_PROMPT_MAX), SYSTEM_PROMPT_MAX);
       }
     }
     return attributes;
@@ -1262,8 +1293,13 @@ function cumulativeUsage(message: ResultMessageLike): UsageTotals | undefined {
   return values.some((v) => v !== 0) ? totals : undefined;
 }
 
-/** Python `_set_tool_specific_attributes`. Only called when inputs are visible. */
-function setToolSpecificAttributes(span: Span, toolName: string, input: unknown): void {
+/** Python `_set_tool_specific_attributes`. Only called when inputs are visible; values go through `clean`. */
+function setToolSpecificAttributes(
+  span: Span,
+  toolName: string,
+  input: unknown,
+  clean: (value: string, max: number) => string,
+): void {
   if (!input || typeof input !== "object") return;
   const fields = input as Record<string, unknown>;
   const str = (key: string) => (typeof fields[key] === "string" ? (fields[key] as string) : undefined);
@@ -1272,28 +1308,28 @@ function setToolSpecificAttributes(span: Span, toolName: string, input: unknown)
     case "Write":
     case "Edit": {
       const filePath = str("file_path");
-      if (filePath) span.setAttribute(A.TOOL_FILE_PATH, filePath);
+      if (filePath) span.setAttribute(A.TOOL_FILE_PATH, clean(filePath, CONTENT_MAX));
       break;
     }
     case "Bash": {
       const command = str("command");
-      if (command) span.setAttribute(A.TOOL_COMMAND, truncate(command, TOOL_COMMAND_MAX));
+      if (command) span.setAttribute(A.TOOL_COMMAND, clean(command, TOOL_COMMAND_MAX));
       break;
     }
     case "Glob":
     case "Grep": {
       const pattern = str("pattern");
-      if (pattern) span.setAttribute(A.TOOL_PATTERN, pattern);
+      if (pattern) span.setAttribute(A.TOOL_PATTERN, clean(pattern, CONTENT_MAX));
       break;
     }
     case "WebSearch": {
       const query = str("query");
-      if (query) span.setAttribute(A.TOOL_SEARCH_QUERY, query);
+      if (query) span.setAttribute(A.TOOL_SEARCH_QUERY, clean(query, CONTENT_MAX));
       break;
     }
     case "WebFetch": {
       const url = str("url");
-      if (url) span.setAttribute(A.TOOL_URL, url);
+      if (url) span.setAttribute(A.TOOL_URL, clean(url, CONTENT_MAX));
       break;
     }
     default:

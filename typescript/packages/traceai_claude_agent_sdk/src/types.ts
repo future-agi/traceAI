@@ -1,7 +1,7 @@
 /**
  * Structural types for the parts of the Claude Agent SDK surface this package
  * reads. They are written from `sdk.d.ts` of `@anthropic-ai/claude-agent-sdk`
- * 0.3.289 (and checked against 0.3.142) and deliberately do not import the
+ * 0.3.289 (and checked against 0.3.277 and 0.3.302) and deliberately do not import the
  * SDK, so the SDK stays a peer dependency with no type or runtime import.
  *
  * Every field is optional: the wrapper reads defensively and never fails the
@@ -131,6 +131,8 @@ export interface OptionsLike {
   resumeSessionAt?: string;
   sessionId?: string;
   mcpServers?: Record<string, unknown>;
+  /** The CLI's working directory; rewritten to `[cwd]` in exported content. */
+  cwd?: string;
   [key: string]: unknown;
 }
 
