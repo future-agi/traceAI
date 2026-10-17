@@ -29,7 +29,7 @@ const getWeather = toolDefinition({
  *
  * Reads chat()'s stream to the end, even after a RUN_ERROR chunk, and only
  * then throws. Do not use `stream: false` with otelMiddleware: at
- * @tanstack/ai 0.64.0 it collects text with streamToText, which throws at
+ * @tanstack/ai 0.64.0 to 0.69.0 it collects text with streamToText, which throws at
  * the first RUN_ERROR and stops reading. The run then never reaches its
  * onError hook, so the chat and model-call spans are never ended or exported
  * and a failed request leaves no trace. For the same reason, stop early only

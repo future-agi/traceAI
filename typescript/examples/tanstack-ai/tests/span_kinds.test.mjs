@@ -1,7 +1,7 @@
 // Unit tests for futureAgiSpanKinds() and the tracer provider registration,
 // run with `node --test` (the contract test runs this file). Fake spans stand
 // in for the SDK span, and run() calls
-// the hooks in the order otelMiddleware does at @tanstack/ai 0.64.0:
+// the hooks in the order otelMiddleware does at @tanstack/ai 0.64.0 to 0.69.0:
 // attributeEnricher for the root at start, then per model call
 // attributeEnricher, the usage attributes and onSpanEnd, then applyRootUsage
 // on the root (the sum over calls, or the finish usage when no call reported
@@ -21,7 +21,7 @@ import {
 
 // The root-usage move edits the SDK span's attributes object, which is not
 // public API. These are the versions it was tested against.
-const TESTED_SDK_TRACE = "2.11.0";
+const TESTED_SDK_TRACE = "2.12.0";
 
 /** Resolve `name` the way the package that owns `req` resolves it. */
 function packageInfo(req, name) {
@@ -217,7 +217,7 @@ test(`fi-core's provider creates spans with @opentelemetry/sdk-trace ${TESTED_SD
 
 test("package.json engines starts at a Node version the pinned SDK supports", () => {
   // The lowest Node the example allows must be inside every pinned SDK
-  // package's own engines range (2.11.0: ^18.19.0 || >=20.6.0).
+  // package's own engines range (2.12.0: ^18.19.0 || >=20.6.0).
   const example = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   const range = example.engines.node;
   assert.match(range, /^>=\s*\d+(\.\d+){0,2}$/, `engines.node is not a >= floor: ${range}`);

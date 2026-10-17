@@ -5,19 +5,22 @@ creates the spans. This example registers a Future AGI tracer provider with
 `@traceai/fi-core`, passes its tracer to `otelMiddleware`, and leaves content
 capture off.
 
-Pinned: `@tanstack/ai` 0.64.0, `@tanstack/ai-openai` 0.26.0,
-`@traceai/fi-core` 1.0.0, `@opentelemetry/api` 1.9.1, and through `overrides`
-`@tanstack/openai-base` 0.12.2: `@tanstack/ai-openai` 0.26.0 asks for
-`^0.12.2`, and every later 0.12.x needs a newer `@tanstack/ai` than 0.64.0
-(0.12.6 needs `^0.66.0` and `openai` 7), so an unpinned install mixes
+Pinned: `@tanstack/ai` 0.69.0 (the latest release on 2026-10-16),
+`@tanstack/ai-openai` 0.30.0, `@traceai/fi-core` 1.0.0, `@opentelemetry/api`
+1.9.1, and through `overrides` `@tanstack/openai-base` 0.14.0: TanStack's
+adapter packages move in lockstep with `@tanstack/ai` (each `openai-base`
+minor asks for a newer `@tanstack/ai`), so an unpinned install can mix
 versions this example was not tested with. `package-lock.json` (generated on
-Node 22 against this set) pins every transitive version; `npm ci` installs it. Node `>=20.6.0`, the
-floor of the pinned OpenTelemetry SDK 2.11.0 on the Node 20 line. The
-contract test and `node --test` suite (see "Contract test") pass on Node
-20.20.2, 22.23.3 and 26.8.1.
-`package.json` `overrides` also pins `@opentelemetry/sdk-trace-node` 2.11.0,
+Node 22 against this set) pins every transitive version; `npm ci` installs
+it. Also tested: the earlier pinned set, `@tanstack/ai` 0.64.0 with
+`@tanstack/ai-openai` 0.26.0, `@tanstack/openai-base` 0.12.2 and the SDK at
+2.11.0 (`otelMiddleware` is byte-identical from 0.64.0 to 0.69.0). Node
+`>=20.6.0`, the floor of the pinned OpenTelemetry SDK on the Node 20 line.
+The contract test and `node --test` suite (see "Contract test") pass on Node
+22.18.0 and 26.8.1.
+`package.json` `overrides` also pins `@opentelemetry/sdk-trace-node` 2.12.0,
 which pins `@opentelemetry/sdk-trace-base` and `@opentelemetry/sdk-trace`
-2.11.0: the root usage move in `src/tracing.mjs` edits the SDK span's
+2.12.0: the root usage move in `src/tracing.mjs` edits the SDK span's
 attributes object, which is not public API, so re-run the tests before
 changing that pin.
 `@tanstack/ai` is MIT and is a dependency of this example only. It is not
@@ -53,13 +56,13 @@ span repeats every model call's usage, so Future AGI would count it twice.
 
 The SDK pin does not travel with `src/tracing.mjs`: it lives in this
 example's `package.json` `overrides`
-(`"@opentelemetry/sdk-trace-node": "2.11.0"`). Copy that entry into your
+(`"@opentelemetry/sdk-trace-node": "2.12.0"`). Copy that entry into your
 app's `package.json` too (npm reads `overrides`; pnpm and Yarn have their own
 field, `pnpm.overrides` and `resolutions`). Without it your app resolves the
 SDK through `@traceai/fi-core`'s `^2.0.1` range, and the root usage move is
-tested only on 2.11.0. If an SDK version stopped exposing the span's plain
-`attributes` object, the move would do nothing, silently, and Future AGI
-would count every model call's usage twice.
+tested only on 2.11.0 and 2.12.0. If an SDK version stopped exposing the
+span's plain `attributes` object, the move would do nothing, silently, and
+Future AGI would count every model call's usage twice.
 
 A route then looks like this:
 
@@ -203,8 +206,9 @@ into a browser bundle.
 
 - Spans are exported by `register()`'s default `SimpleSpanProcessor`.
   `register({ batch: true })` does not attach its batch processor with
-  `@traceai/fi-core` 1.0.0 on `@opentelemetry/sdk-trace(-base)` 2.11.0 (the
-  versions this example installs), so it is not passed.
+  `@traceai/fi-core` 1.0.0 on `@opentelemetry/sdk-trace(-base)` 2.11.0 or
+  2.12.0 (`addSpanProcessor` fills a list the SDK 2.x provider never reads),
+  so it is not passed.
 - `forceFlush()` rejects when the collector is unreachable and can wait for
   the exporter's 10 s timeout when the collector accepts but does not answer.
   `flushTraces()` logs either case, waits at most 2 s (`FLUSH_TIMEOUT_MS`),
