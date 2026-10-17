@@ -21,8 +21,10 @@ pip install traceAI-mcp-use
 
 It accepts `mcp-use>=1.7.1,<2`, `langchain-core>=1.0.0,<2` and
 `fi-instrumentation-otel>=1.1.0`, on Python `>=3.11,<3.14` (mcp-use itself
-requires 3.11). The suite runs with mcp-use 1.7.1 on Python 3.11, 3.12 and
-3.13.
+requires 3.11). The suite runs with mcp-use 1.7.1 (the latest release on
+2026-10-16) on Python 3.11, 3.12 and 3.13, and was run end to end against a
+real model and a real stdio MCP server with mcp-use 1.7.1, langchain-core
+1.6.12, langchain-openai 1.7.2 and langgraph 1.2.16.
 
 ## Usage
 
@@ -91,8 +93,9 @@ call (for example an HTTP client span) is not a child of the tool span.
 | `mcp_use.tool.error_type` | tool | Error type, when the tool's failure came back as its result |
 | `mcp_use.cancelled`, `mcp_use.incomplete` | any | See [Errors and cancellation](#errors-and-cancellation) |
 
-A value the callback is not given is omitted, never written as 0. With
-`capture_content=True` (see [Privacy](#privacy)) these are added:
+A value the callback is not given is omitted, never written as 0. Content
+is recorded too, unless a `TraceConfig` hide flag turns it off (see
+[Privacy](#privacy)):
 
 | Attribute | Span | Value |
 |---|---|---|
@@ -121,25 +124,49 @@ agent does); use these context managers instead.
 
 ## Privacy
 
-Content is off by default. Without `capture_content=True`, spans carry
-names, kinds, the model and provider, request parameters, usage, finish
-reasons, counts, the tool-call id, statuses and exception types. They do
-not carry prompts, messages, model output, tool arguments, tool results,
-error messages or stack traces.
+Content follows `TraceConfig`, like every traceAI instrumentor: prompts,
+messages, model output, tool arguments, tool results and error messages are
+recorded by default, and the standard hide flags turn them off. There is no
+separate switch in this package.
+
+```bash
+export FI_HIDE_INPUTS=true    # prompts, input messages, tool arguments
+export FI_HIDE_OUTPUTS=true   # model output, output messages, tool results
+```
+
+or `FutureAGICallback(tracer_provider=..., config=TraceConfig(hide_inputs=True, hide_outputs=True))`.
+With both flags on, spans carry names, kinds, the model and provider,
+request parameters, usage, finish reasons, counts, the tool-call id,
+statuses and exception types; `input.value` and `output.value` are
+`__REDACTED__`.
+
+Never recorded, whatever the flags:
+
+- stack traces. The `exception` event has `exception.type` and, when
+  content is on, `exception.message`; never `exception.stacktrace`. mcp-use
+  sends a failed tool call back to the model as `format_error()`'s dict,
+  whose `stack` is a full traceback; in that tool message the trace is
+  replaced with `[stack trace removed]` and the rest of the JSON is kept.
+  Any other text loses everything from `Traceback (most recent call last):`
+  on;
+- absolute local paths (`/Users/...`, `/home/...`, `/tmp/...`, `C:\...`
+  and similar), replaced with `[path]`;
+- this machine's user name and host name, replaced with `[user]` and
+  `[host]` (names of 4 characters or more that are not generic, such as
+  `root` or `app`).
 
 ```python
 FutureAGICallback(
     tracer_provider=trace_provider,
-    capture_content=True,              # prompts, messages, output, tool arguments and results, error text
-    redact=["my-mcp-server-token"],    # extra secret strings to remove
+    config=TraceConfig(hide_inputs=True),  # optional; default reads FI_HIDE_* from the environment
+    redact=["my-mcp-server-token"],        # extra secret strings to remove
 )
 ```
 
-`capture_content` must be a bool and `redact` an iterable of strings;
-anything else raises `TypeError`.
+`redact` must be an iterable of strings; anything else raises `TypeError`.
 
 Secrets are removed from every text the callback writes, including names
-and ids, with content on or off. They are replaced by `[redacted]`:
+and ids, with content on or hidden. They are replaced by `[redacted]`:
 
 - the strings passed as `redact=`;
 - the value (8 characters or longer) of every environment variable whose
@@ -158,13 +185,22 @@ environment variables before creating the callback:
 
 | Setting | Effect |
 |---|---|
-| `hide_inputs` / `FI_HIDE_INPUTS=true` | `input.value` is `__REDACTED__`; input messages and tool-call arguments (on tool spans and in model replies) are dropped. With `capture_content`, error messages and stack traces have every input text of the run replaced with `__REDACTED__`: the user messages, the messages sent to the model, and each string value of each tool call's arguments. |
-| `hide_outputs` / `FI_HIDE_OUTPUTS=true` | `output.value` is `__REDACTED__`; output messages and tool results are dropped. Model replies and tool results sent back to the model as input messages (later in the same run, or from earlier turns; see below) keep their role but lose their content and tool-call arguments, and an LLM span whose last input message is one of them has `input.value` `__REDACTED__`. The error text of a tool failure that came back as the tool's result is dropped, and other error text has every output the run has seen (model replies, their tool-call arguments, tool results, earlier turns' included) replaced with `__REDACTED__`. |
+| `hide_inputs` / `FI_HIDE_INPUTS=true` | `input.value` is `__REDACTED__`; input messages and tool-call arguments (on tool spans and in model replies) are dropped. Every other text of the run has each input it has seen replaced with `__REDACTED__`: the user messages, the messages sent to the model, and each string value of each tool call's arguments. Error messages are dropped: the status and the `exception` event carry the exception type only. |
+| `hide_outputs` / `FI_HIDE_OUTPUTS=true` | `output.value` is `__REDACTED__`; output messages and tool results are dropped. Model replies and tool results sent back to the model as input messages (later in the same run, or from earlier turns; see below) keep their role but lose their content and tool-call arguments, and an LLM span whose last input message is one of them has `input.value` `__REDACTED__`. Every other text of the run has each output it has seen (model replies, their tool-call arguments, tool results, earlier turns' included) replaced with `__REDACTED__`. Error messages are dropped: the status and the `exception` event carry the exception type only. |
+| `hide_input_messages`, `hide_output_messages`, `hide_input_text`, `hide_output_text` (`FI_HIDE_INPUT_MESSAGES`, ...) | Applied by `FITracer` to the `gen_ai.input.messages.*` / `gen_ai.output.messages.*` attributes, as for every traceAI instrumentor. |
 | `pii_redaction` / `FI_PII_REDACTION=true` | Emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` keys become tokens such as `<EMAIL_ADDRESS>` in every recorded text: attributes, the error status and the `exception` event. It runs after secrets (and hidden inputs/outputs) are removed and before the size caps. |
 
 `config` must be a `fi_instrumentation.TraceConfig`; anything else raises
 `TypeError`. Other `TraceConfig` fields act only through `FITracer`'s
 attribute masking.
+
+mcp-use's own console logging is not part of the trace and is not changed
+by these flags: at its default level it prints query previews and tool
+results (INFO), and a failed tool call's formatted error with its stack
+trace (ERROR, `mcp_use/errors/error_formatting.py`). `Logger.set_debug(0)`
+(`from mcp_use import Logger`) hides the INFO lines;
+`logging.getLogger("mcp_use").setLevel(logging.CRITICAL)` also hides the
+ERROR line.
 
 Multi-turn conversations: `MCPAgent` keeps memory by default
 (`memory_enabled=True`) and sends the earlier turns, model replies and tool
@@ -189,8 +225,8 @@ stays. Texts shorter than 3 characters are only matched in quoted form,
 and non-string argument values (numbers, booleans) are not matched. With a
 hide flag on, the callback remembers at most 2048 text forms or about 4
 million characters per run; past that it fails closed and records no
-content for the rest of that run (no messages, arguments, results, error
-messages or stack traces).
+content for the rest of that run (no messages, arguments, results or
+error messages).
 
 ## Errors and cancellation
 
@@ -212,10 +248,11 @@ When the run itself fails (for example the model call raises), the LLM
 span and the agent span end with status ERROR and an `exception` event,
 and the exception reaches your code unchanged.
 
-Without `capture_content`, the status description and the event carry
-only the exception type. With it they also carry the message (cut to 1 KB)
-and the event carries the stack trace (its last 16 KB), cleaned as
-described in [Privacy](#privacy).
+By default the status description is `<type>: <message>` and the event
+carries `exception.type` and `exception.message` (cut to 1 KB, cleaned as
+described in [Privacy](#privacy): secrets, local paths, user and host name
+removed). With `hide_inputs` or `hide_outputs` both carry the exception type
+only. No stack trace is recorded.
 
 Cancelling the task that runs the agent (`asyncio.CancelledError`) or
 leaving `stream()` before it ends (`GeneratorExit`) ends the open spans
@@ -268,9 +305,8 @@ the TypeScript agent).
 - Recorded text is cut on a UTF-8 character boundary after it is cleaned
   (secrets, then hidden inputs/outputs, then PII): 4 KB for each content
   attribute, 256 bytes for names and ids (model, provider, tool name,
-  tool-call id, exception type), 1 KB for the error message in the status
-  and the `exception` event, and 16 KB for the stack trace, keeping its
-  end. With `pii_redaction`, `FITracer` runs its own PII pass on every
+  tool-call id, exception type) and 1 KB for the error message in the
+  status and the `exception` event. With `pii_redaction`, `FITracer` runs its own PII pass on every
   attribute after the cut; a token such as `<PHONE_NUMBER>` can make an
   attribute a few bytes longer than its cap. The status and events are not
   passed through it. At most 32 messages and 16 tool calls per message are
@@ -299,7 +335,7 @@ the TypeScript agent).
   as it ends.
 - Passed to a LangChain runnable other than `MCPAgent`, the callback still
   names the outermost run `mcp_use.agent`.
-- Tested with mcp-use 1.7.1 only.
+- Tested with mcp-use 1.7.1 only (the latest release on 2026-10-16).
 
 ## Tests
 
@@ -322,7 +358,9 @@ for the contract test; the example test uses the example's own stdio
 calculator server. Those send spans through
 `fi_instrumentation.register()` to the shared `harness.Receiver` on
 127.0.0.1 and check the `/tracer/v1/traces` path, both auth headers,
-`project_type=observe` and that no key or content is exported by default.
+`project_type=observe`, that content is exported by default and not with
+`FI_HIDE_INPUTS`/`FI_HIDE_OUTPUTS`, and that no key, stack trace or local
+path is exported either way.
 The example test runs `examples/agent_with_tools.py` as its own process,
 once alone and once with `traceai_mcp` instrumented. The suite turns off
 mcp-use's usage telemetry.

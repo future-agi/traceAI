@@ -12,11 +12,16 @@
 - Spans come from `FITracer`: `TraceConfig` and `using_session`,
   `using_user`, `using_metadata` and `using_tags` apply.
 - Content (prompts, messages, model output, tool arguments and results,
-  error messages and stack traces) is off by default; `capture_content=True`
-  turns it on. `hide_inputs`, `hide_outputs` and `pii_redaction` also apply
-  to error text. Under `hide_outputs`, model replies and tool results that
-  `MCPAgent` memory or `external_history` sends back on a later turn are
-  outputs too.
+  error messages) follows `TraceConfig` like every traceAI instrumentor:
+  recorded by default, hidden with `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS`
+  (and the message/text variants) or `config=TraceConfig(...)`. There is no
+  package-specific switch. With either hide flag, error messages are
+  dropped (exception type only). Under `hide_outputs`, model replies and
+  tool results that `MCPAgent` memory or `external_history` sends back on a
+  later turn are outputs too.
+- Never recorded: stack traces (no `exception.stacktrace`; the `stack` of
+  mcp-use's formatted tool error is cut from the tool message the model
+  gets), absolute local paths, and this machine's user and host name.
 - Secrets (values passed in `redact=`, secret-named environment variables,
   bearer tokens and key-shaped strings) are removed from everything written,
   names and ids included. Recorded text is size-capped.
