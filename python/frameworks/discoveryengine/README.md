@@ -126,7 +126,7 @@ no span: the span covers the call that created the pager, and
 | `discoveryengine.answer.state` | successful `answer_query` with an answer | The answer state name, for example `SUCCEEDED` or `FAILED`. |
 | `discoveryengine.session` | `answer_query` with a session | The session resource name from the request and then from the response. A request for a new session (`.../sessions/-`) records the name the response returns. |
 | `gen_ai.retrieval.query`, `input.value` | requests with a query | `SearchRequest.query` or `AnswerQueryRequest.query.text`, recorded by default. See [Privacy](#privacy). |
-| `discoveryengine.error.status`, `discoveryengine.error.code` | failed calls | The gRPC status name (for example `PERMISSION_DENIED`) and the HTTP-style code `google-api-core` maps it to (for example `403`). For a `RetryError`, the last attempt's. |
+| `discoveryengine.error.status`, `discoveryengine.error.code` | failed calls | The gRPC status name (for example `PERMISSION_DENIED`) and the HTTP-style code `google-api-core` maps it to (for example `403`). On the REST transport, where `google-api-core` raises by HTTP code (403 is `Forbidden`, without a gRPC status), the status name is the canonical `status` of the JSON error body. For a `RetryError`, the last attempt's. |
 | `discoveryengine.cancelled` | cancelled async calls | `true`; see [Errors and cancellation](#errors-and-cancellation). |
 
 No model name, token count or cost is recorded. At 0.20.5
@@ -272,9 +272,8 @@ your call proceeds with its own result or exception.
   `discoveryengine_v1beta` and `discoveryengine_v1alpha` clients produce no
   spans.
 - `stream_answer_query` and `converse_conversation` are not traced.
-- The tests use the gRPC and gRPC asyncio transports. The REST transport
-  (`transport="rest"`) goes through the same wrapped client methods but is
-  not exercised by the suite.
+- The tests cover the gRPC, gRPC asyncio and REST (`transport="rest"`)
+  transports. The async REST transport is not exercised.
 - `instrument()` checks the installed `google-cloud-discoveryengine`
   version. Outside `>=0.20.5,<1` it logs an error and wraps nothing.
 - Do not combine this package with another instrumentor that wraps the same
@@ -286,7 +285,9 @@ your call proceeds with its own result or exception.
 
 The tests drive the real `google-cloud-discoveryengine` clients over their
 own gRPC transports against a gRPC fake on 127.0.0.1
-(`tests/_discoveryengine_support.py`). They use no Google credentials, no
+(`tests/_discoveryengine_support.py`), and over the REST transport against a
+loopback HTTP server that answers the documented v1 REST routes
+(`tests/test_discoveryengine_rest.py`). They use no Google credentials, no
 ADC and no GCP project: credentials are placeholders, and the serving config
 is a placeholder resource name. The contract tests export through the real
 `register()` OTLP exporter into the shared `harness.Receiver`, and post

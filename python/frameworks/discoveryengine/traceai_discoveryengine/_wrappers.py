@@ -422,16 +422,63 @@ def _describe(error: BaseException) -> str:
         return "<unprintable {0}>".format(type(error).__name__)
 
 
+# The canonical google.rpc.Code names; a REST error's "status" is one of them.
+_STATUS_NAMES = frozenset(
+    {
+        "OK",
+        "CANCELLED",
+        "UNKNOWN",
+        "INVALID_ARGUMENT",
+        "DEADLINE_EXCEEDED",
+        "NOT_FOUND",
+        "ALREADY_EXISTS",
+        "PERMISSION_DENIED",
+        "RESOURCE_EXHAUSTED",
+        "FAILED_PRECONDITION",
+        "ABORTED",
+        "OUT_OF_RANGE",
+        "UNIMPLEMENTED",
+        "INTERNAL",
+        "UNAVAILABLE",
+        "DATA_LOSS",
+        "UNAUTHENTICATED",
+    }
+)
+
+
+def _rest_status(error: Any) -> Optional[str]:
+    """The ``error.status`` of a REST error body, such as ``PERMISSION_DENIED``.
+
+    On the REST transport ``google-api-core`` picks the exception class from
+    the HTTP code (403 is ``Forbidden``, which has no gRPC status), so the
+    status name comes from the JSON body the server sent. Only a canonical
+    status name is returned, never other body text.
+    """
+    response = getattr(error, "response", None)
+    json_method = getattr(response, "json", None)
+    if not callable(json_method):
+        return None
+    try:
+        body = json_method()
+    except Exception:
+        return None
+    status = _field(_field(body, "error"), "status") if isinstance(body, Mapping) else None
+    return status if isinstance(status, str) and status in _STATUS_NAMES else None
+
+
 def _error_attributes(error: BaseException) -> Dict[str, Any]:
     """The gRPC status name and HTTP-style code of a ``google.api_core`` error.
 
     A ``RetryError`` has neither; the last attempt's error (``cause``) does.
+    A REST-transport error has no gRPC status; its JSON body's status is used.
     """
     source: Any = error
     if getattr(error, "grpc_status_code", None) is None and getattr(error, "cause", None) is not None:
         source = error.cause  # type: ignore[attr-defined]
     attributes: Dict[str, Any] = {}
     status = getattr(getattr(source, "grpc_status_code", None), "name", None)
+    if not isinstance(status, str):
+        status = _rest_status(source)
     if isinstance(status, str):
         attributes[ERROR_STATUS] = status
     code = getattr(source, "code", None)

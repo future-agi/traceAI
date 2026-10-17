@@ -19,6 +19,9 @@ First release.
   answer text are never recorded.
 - The `exception` event carries the type and the cleaned message only; no
   `exception.stacktrace` (traceback frames hold local file paths).
+- REST transport: `discoveryengine.error.status` comes from the canonical
+  `status` of the JSON error body (`google-api-core` raises REST errors by
+  HTTP code, for example `Forbidden`, which has no gRPC status).
 - Google credentials (transport credentials, read again when an error is
   recorded; `client_options.api_key`; per-call auth metadata; and Google
   token shapes, including JWTs) are removed from every recorded value.
