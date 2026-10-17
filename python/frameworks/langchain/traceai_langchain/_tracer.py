@@ -1,8 +1,8 @@
 import json
 import logging
 import math
+import re
 import time
-import traceback
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
@@ -107,6 +107,11 @@ class _DictWithLock(ObjectProxy, Generic[K, V]):  # type: ignore
 
 class FiTracer(BaseTracer):
     __slots__ = ("_tracer", "_spans_by_run", "_context_by_run")
+
+    def _hide_error_text(self) -> bool:
+        """True when TraceConfig hides inputs or outputs: error text may echo either."""
+        config = getattr(self._tracer, "_self_config", None)
+        return bool(getattr(config, "hide_inputs", False) or getattr(config, "hide_outputs", False))
 
     def _extract_content(self, data: Any) -> Any:
         """Extract clean content from various message formats"""
@@ -260,7 +265,13 @@ class FiTracer(BaseTracer):
         # an already-started span must be closed or it leaks.
         if not context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             try:
-                _update_span(span, run, captured_context, is_interrupt=is_interrupt)
+                _update_span(
+                    span,
+                    run,
+                    captured_context,
+                    is_interrupt=is_interrupt,
+                    hide_error_text=self._hide_error_text(),
+                )
 
                 # Send final span data with both input and output
                 output_data = None
@@ -315,7 +326,7 @@ class FiTracer(BaseTracer):
                     span.set_attribute("langgraph.interrupt", True)
                     span.add_event("interrupt", {"langgraph.interrupt": True})
         elif span is not None:
-            _record_exception(span, error)
+            _record_exception(span, error, hide_error_text=self._hide_error_text())
         return forward(error, *args, run_id=run_id, **kwargs)
 
     def on_llm_error(
@@ -399,36 +410,58 @@ def _is_graph_interrupt(error: BaseException) -> bool:
     return _GraphBubbleUp is not None and isinstance(error, _GraphBubbleUp)
 
 
+_TRACEBACK_MARKER = "Traceback (most recent call last)"
+_ERROR_TEXT_LIMIT = 500
+
+
+def _error_description(text: Any, hide_error_text: bool) -> str:
+    """Span status description for a failed run.
+
+    LangChain's ``run.error`` is ``repr(error)`` followed by the formatted
+    traceback. The traceback holds local file paths, so it is never exported. When
+    ``TraceConfig`` hides inputs or outputs the error message is hidden too (it can
+    echo prompt or tool content) and only the exception type name is kept.
+    """
+    text = str(text or "")
+    head = text.split(_TRACEBACK_MARKER, 1)[0].strip()
+    if hide_error_text:
+        match = re.match(r"[A-Za-z_][\w.]*", head)
+        return match.group(0) if match else "Error"
+    return head[:_ERROR_TEXT_LIMIT] or "Error"
+
+
 @audit_timing  # type: ignore
-def _record_exception(span: Span, error: BaseException) -> None:
-    if isinstance(error, Exception):
-        span.record_exception(error)
-        return
-    exception_type = error.__class__.__name__
-    exception_message = str(error)
-    if not exception_message:
-        exception_message = repr(error)
+def _record_exception(span: Span, error: BaseException, hide_error_text: bool = False) -> None:
+    """Add an ``exception`` event with the type and (unless hidden) the message.
+
+    ``Span.record_exception`` also attaches ``exception.stacktrace``, which carries
+    local file paths, so the event is built by hand and never has a stack trace.
+    """
     attributes: Dict[str, AttributeValue] = {
-        OTELSpanAttributes.EXCEPTION_TYPE: exception_type,
-        OTELSpanAttributes.EXCEPTION_MESSAGE: exception_message,
+        OTELSpanAttributes.EXCEPTION_TYPE: error.__class__.__name__,
         OTELSpanAttributes.EXCEPTION_ESCAPED: False,
     }
-    try:
-        # See e.g. https://github.com/open-telemetry/opentelemetry-python/blob/e9c7c7529993cd13b4af661e2e3ddac3189a34d0/opentelemetry-sdk/src/opentelemetry/sdk/trace/__init__.py#L967  # noqa: E501
-        attributes[OTELSpanAttributes.EXCEPTION_STACKTRACE] = traceback.format_exc()
-    except Exception:
-        logger.exception("Failed to record exception stacktrace.")
+    if not hide_error_text:
+        attributes[OTELSpanAttributes.EXCEPTION_MESSAGE] = (str(error) or repr(error))[:_ERROR_TEXT_LIMIT]
     span.add_event(name="exception", attributes=attributes)
 
 
 @audit_timing  # type: ignore
 def _update_span(
-    span: Span, run: Run, captured_context: Dict[str, Any], is_interrupt: bool = False
+    span: Span,
+    run: Run,
+    captured_context: Dict[str, Any],
+    is_interrupt: bool = False,
+    hide_error_text: bool = False,
 ) -> None:
     if run.error is None or is_interrupt:
         span.set_status(trace_api.StatusCode.OK)
     else:
-        span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, run.error))
+        span.set_status(
+            trace_api.Status(
+                trace_api.StatusCode.ERROR, _error_description(run.error, hide_error_text)
+            )
+        )
     span_kind = (
         FiSpanKindValues.AGENT
         if "agent" in run.name.lower()
@@ -470,6 +503,7 @@ def _update_span(
                     _tools(run),
                     _retrieval_documents(run),
                     _metadata(run),
+                    _session_id_from_thread_id(run, captured_context),
                     _as_raw_input_output(run),
                     _as_query(query),
                 )
@@ -842,11 +876,17 @@ def _model_name(extra: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, str]]
 
 @stop_on_exception
 def _token_counts(outputs: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, int]]:
-    """Yields token count information if present."""
+    """Yields token count information if present.
+
+    The message's ``usage_metadata`` (LangChain's normalized usage) comes
+    first. The provider's raw ``llm_output`` usage is the fallback: Anthropic's
+    raw ``input_tokens`` leaves out cached prompt tokens, which
+    ``usage_metadata`` counts, so a cached prompt was reported as a few tokens.
+    """
     if not (
         token_usage := (
-            _parse_token_usage_for_non_streaming_outputs(outputs)
-            or _parse_token_usage_for_streaming_outputs(outputs)
+            _parse_token_usage_for_streaming_outputs(outputs)
+            or _parse_token_usage_for_non_streaming_outputs(outputs)
         )
     ):
         return
@@ -1016,6 +1056,31 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
 
     # Also include the full metadata as JSON for completeness
     yield METADATA, safe_json_dumps(metadata)
+
+
+@stop_on_exception
+def _session_id_from_thread_id(
+    run: Run, captured_context: Mapping[str, Any]
+) -> Iterator[Tuple[str, str]]:
+    """Fall back to LangGraph's ``thread_id`` for ``session.id``.
+
+    LangGraph copies ``configurable.thread_id`` into run metadata, so every node,
+    LLM and tool run of a thread carries it. It is used only when nothing more
+    specific set the session: ``using_session(...)`` (already on the span from
+    ``captured_context``) and ``metadata["session_id"]`` (emitted by ``_metadata``)
+    both win. A blank ``thread_id`` sets nothing. The choice is made per run, so a
+    session set for only part of a graph run covers only the runs inside it.
+    """
+    if SESSION_ID in captured_context:
+        return
+    if not run.extra or not isinstance(metadata := run.extra.get("metadata"), Mapping):
+        return
+    if metadata.get(LANGCHAIN_SESSION_ID) is not None:
+        return
+    thread_id = metadata.get(LANGCHAIN_THREAD_ID)
+    if thread_id is None or (isinstance(thread_id, str) and not thread_id.strip()):
+        return
+    yield SESSION_ID, str(thread_id)
 
 
 @stop_on_exception
@@ -1207,6 +1272,7 @@ RERANKER_QUERY = RerankerAttributes.RERANKER_QUERY
 RERANKER_TOP_K = RerankerAttributes.RERANKER_TOP_K
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
 GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
+SESSION_ID = SpanAttributes.SESSION_ID
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
 GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION
