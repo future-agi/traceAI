@@ -429,6 +429,10 @@ def test_guard_refuses_and_logs_non_loopback_connections(tmp_path: Path) -> None
 
 @needs_sdk
 def test_installed_langsmith_is_the_pinned_version() -> None:
+    # LANGSMITH_TEST_LATEST=1 runs the whole suite against a newer langsmith
+    # (the "latest stable" matrix leg) instead of the pinned 0.14.4.
+    if os.environ.get("LANGSMITH_TEST_LATEST") == "1":
+        pytest.skip("running against a newer langsmith on purpose")
     assert version("langsmith") == PINNED_LANGSMITH
 
 

@@ -43,6 +43,19 @@ of any traceAI package.
 
 No call to LangSmith, Future AGI or a model was made.
 
+## Live check with a real LangChain agent (opt-in)
+
+`e2e/real_langchain_run.py` runs a real LangChain agent (real model call, one
+tool) and a second run whose tool raises, through the same `init_tracing()`.
+Set the README environment, `OPENAI_API_KEY` / `OPENAI_BASE_URL` and
+`pip install langchain langchain-openai`, then `python e2e/real_langchain_run.py`.
+Re-verified 2026-10-16 against a local Future AGI stack with langsmith 0.14.11
+(latest) and 0.14.4: root `chain` > `model`/`tools` chains > `llm` (model and
+tokens filled) and `tool` spans, the failing tool as `ERROR`. The contract
+suite also passes on 0.14.11 with `LANGSMITH_TEST_LATEST=1`. Known gap: the
+trace view's Input/Output panels stay empty because content arrives as the
+single `gen_ai.prompt` / `gen_ai.completion` attributes.
+
 ## Two modes
 
 | Goal | LangSmith variables | LangSmith key | What langsmith 0.14.4 does |
