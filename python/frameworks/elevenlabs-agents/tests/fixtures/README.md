@@ -6,8 +6,9 @@ https://elevenlabs.io/docs/eleven-agents/customization/opentelemetry-traces (re-
 (https://langfuse.com/integrations/no-code/elevenlabs, `elevenlabs.tool.params`,
 `elevenlabs.producing_llm`, `elevenlabs.llm_usage.<model>.<kind>`, `elevenlabs.turn.index`).
 
-They are **not** captured from a live ElevenLabs workspace. Replace them with one
-real body when one is available.
+Except `live_get_conversation_opentelemetry.json`, they are **not** captured from a live
+ElevenLabs workspace. That one is a sanitized real `GET ?format=opentelemetry` body captured
+2026-10-17 (ids replaced, clock-derived variables dropped).
 
 `{{MARKER}}` is replaced at load time with a unique string so tests can prove that
 no content reaches an exported span when the standard `FI_HIDE_*` switches are on, and
@@ -24,3 +25,4 @@ project-binding tests.
 | `post_call_transcription_otel_no_text.json` | Turns without text, zero-length root with `time_in_call_secs` |
 | `get_conversation_opentelemetry.json` | `GET /v1/convai/conversations/{id}?format=opentelemetry` body |
 | `other_webhook_types.json` | `post_call_transcription`, `post_call_audio`, `call_initiation_failure` bodies |
+| `live_get_conversation_opentelemetry.json` | Captured 2026-10-17 from the live API: user turn, three LLM turns with usage, one webhook tool call |

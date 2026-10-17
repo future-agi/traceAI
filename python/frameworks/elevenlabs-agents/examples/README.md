@@ -5,7 +5,9 @@ environment variables from the package README, and drives it with `standin.py`, 
 **stand-in for ElevenLabs**: deliveries built from the docs-shaped fixtures in
 `tests/fixtures/`, signed exactly as documented with a throwaway secret, and a
 `GET /v1/convai/conversations/{id}?format=opentelemetry` endpoint. No ElevenLabs account
-is used and nothing here is a live ElevenLabs session.
+is used and nothing here is a live ElevenLabs session. The webhook leg stays a stand-in;
+the `backfill` command was separately run against the live ElevenLabs API on 2026-10-17 (see
+the package README, "What was tested").
 
 ```bash
 pip install -e ..            # or: pip install traceAI-elevenlabs-agents

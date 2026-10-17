@@ -1,3 +1,8 @@
+## [Unreleased]
+### Verified
+- `backfill` run against the live ElevenLabs API (2026-10-17); attribute names matched. Added a
+  sanitized captured body as a test fixture. Webhook delivery is still verified with a stand-in only.
+
 ## [0.1.0] - 2026-10-15
 ### Feature
 - ElevenLabs Agents post-call OpenTelemetry forwarder: HMAC-verified `post_call_transcription_otel`

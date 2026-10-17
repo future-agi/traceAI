@@ -12,9 +12,10 @@ host. This package is that webhook: it runs in your environment, checks the
 exports it to Future AGI with your own keys. Future AGI never sees your ElevenLabs
 signing secret.
 
-Status: alpha. Verified end to end against a local Future AGI collector with a
-documented-shape ElevenLabs stand-in (see "What was tested"), not yet against a live
-ElevenLabs workspace.
+Status: alpha. The `backfill` path (the `GET ...?format=opentelemetry` export) was verified
+on 2026-10-17 against a live ElevenLabs workspace and a local Future AGI. Webhook delivery
+(HMAC header, ElevenLabs retries, the `post_call_transcription_otel` body) has only been
+tested with a documented-shape ElevenLabs stand-in, not yet against a live webhook.
 
 ## Install
 
@@ -172,9 +173,16 @@ the transcript unless you set `FI_PII_REDACTION=true` or hide that side.
 - `examples/run_e2e.sh`: the real `traceai-elevenlabs-agents` process against a local
   Future AGI collector, with ElevenLabs stood in by `examples/standin.py` (docs-shaped
   deliveries signed with a local secret; a GET endpoint the real SDK client parses).
-- Fixtures follow the documented payload and the attribute names in the Langfuse
-  ElevenLabs cookbook. They are not captured from a live workspace (see
-  `tests/fixtures/README.md`).
+  This is still a STANDIN for the webhook leg.
+- Live, 2026-10-17: a throwaway agent and three short text-only SDK conversations
+  (`elevenlabs` 2.73.0), exported with `backfill` against the real ElevenLabs API into a
+  local Future AGI (`fi_verify` PASS, privacy scan clean with `FI_HIDE_*` on). The real
+  attribute names matched. ElevenLabs sent status OK for failing tool calls (404, an
+  unanswered client tool), so no live ERROR span was produced; the ERROR mapping is
+  covered by fixtures only. `tests/fixtures/live_get_conversation_opentelemetry.json` is
+  one sanitized captured body, used by `tests/test_live_capture.py`.
+- The other fixtures follow the documented payload and the attribute names in the Langfuse
+  ElevenLabs cookbook (see `tests/fixtures/README.md`).
 
 ## Sources (re-read 2026-10-15)
 
