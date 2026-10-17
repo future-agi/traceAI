@@ -1,0 +1,619 @@
+import { providerFromAiSdk } from "../mapping";
+import { FISpanKind } from "@traceai/fi-semantic-conventions";
+import {
+  contentSide,
+  isContentKey,
+  isFreeTextKey,
+  isStackKey,
+  mapSpanEvents,
+  isPromotedUsageKey,
+  isSecretKey,
+  mapVoltAgentAttributes,
+  reconcileOperationUsage,
+  resolveSpanKind,
+} from "../mapping";
+import { SHOW_ALL } from "../privacy";
+
+/** FI_HIDE_INPUTS=true + FI_HIDE_OUTPUTS=true. */
+const OFF = { policy: { ...SHOW_ALL, hideInputs: true, hideOutputs: true } };
+/** traceAI TraceConfig defaults: content captured. */
+const ON = { policy: SHOW_ALL };
+
+/** Keys trace-context.ts (2.11.0) writes on an agent root span. */
+function rootSpanAttributes() {
+  return {
+    "user.id": "user-9",
+    "conversation.id": "conv-123",
+    "operation.id": "op-1",
+    "entity.id": "assistant",
+    "entity.type": "agent",
+    "entity.name": "assistant",
+    "agent.state": "completed",
+    input: "SECRET_PROMPT",
+    output: "SECRET_ANSWER",
+    "agent.instructions": "SECRET_INSTRUCTIONS",
+    "agent.messages": '[{"role":"user","content":"SECRET_PROMPT"}]',
+    "agent.messages.ui": "[]",
+    "agent.stateSnapshot": '{"instructions":"SECRET_INSTRUCTIONS"}',
+    "ai.model.name": "openai/gpt-4o-mini",
+    "ai.model.provider": "openai",
+    "ai.model.temperature": 0.2,
+    "ai.model.max_tokens": 256,
+    "ai.response.finish_reason": "stop",
+    "usage.prompt_tokens": 24,
+    "usage.completion_tokens": 12,
+    "usage.total_tokens": 36,
+    "usage.cached_tokens": 3,
+    "usage.reasoning_tokens": 0,
+  };
+}
+
+/** Keys agent.ts (2.11.0) writes on an `llm:<operation>` span. */
+function llmSpanAttributes(overrides: Record<string, unknown> = {}) {
+  return {
+    "user.id": "user-9",
+    "conversation.id": "conv-123",
+    "operation.id": "op-1",
+    "entity.type": "agent",
+    "span.type": "llm",
+    "llm.operation": "generateText",
+    "llm.model": "openai/gpt-4o-mini",
+    "llm.provider": "openai",
+    "llm.temperature": 0.2,
+    "llm.max_output_tokens": 256,
+    "llm.messages": '[{"role":"user","content":"SECRET_PROMPT"}]',
+    "llm.messages.count": 2,
+    "llm.usage.prompt_tokens": 13,
+    "llm.usage.completion_tokens": 5,
+    "llm.usage.total_tokens": 18,
+    "llm.usage.cached_tokens": 2,
+    "llm.usage.reasoning_tokens": 4,
+    "llm.finish_reason": "stop",
+    ...overrides,
+  };
+}
+
+describe("resolveSpanKind (AC-03)", () => {
+  it.each([
+    [{ "span.type": "agent" }, FISpanKind.AGENT],
+    [{ "span.type": "llm" }, FISpanKind.LLM],
+    [{ "span.type": "tool" }, FISpanKind.TOOL],
+    [{ "span.type": "retriever" }, FISpanKind.RETRIEVER],
+    [{ "span.type": "vector" }, FISpanKind.RETRIEVER],
+    [{ "span.type": "embedding" }, FISpanKind.EMBEDDING],
+    [{ "span.type": "memory", "memory.operation": "read" }, FISpanKind.RETRIEVER],
+    [{ "span.type": "memory", "memory.operation": "write" }, FISpanKind.CHAIN],
+    [{ "span.type": "memory", "memory.operation": "write_steps" }, FISpanKind.CHAIN],
+    [{ "span.type": "guardrail" }, FISpanKind.CHAIN],
+    [{ "span.type": "middleware" }, FISpanKind.CHAIN],
+    [{ "span.type": "summary" }, FISpanKind.CHAIN],
+    [{ "span.type": "workflow-step" }, FISpanKind.CHAIN],
+    [{ "span.type": "something-new" }, FISpanKind.CHAIN],
+    [{ "entity.type": "agent" }, FISpanKind.AGENT],
+    [{ "entity.type": "workflow" }, FISpanKind.CHAIN],
+    // span.type wins over the inherited entity.type on child spans.
+    [{ "entity.type": "agent", "span.type": "tool" }, FISpanKind.TOOL],
+  ])("%j -> %s", (attributes, kind) => {
+    expect(resolveSpanKind(attributes)).toBe(kind);
+  });
+
+  it("leaves spans without VoltAgent type keys untyped", () => {
+    expect(resolveSpanKind({ "http.method": "GET" })).toBeUndefined();
+    const mapped = mapVoltAgentAttributes({ "http.method": "GET" }, OFF);
+    expect(mapped.attributes["fi.span.kind"]).toBeUndefined();
+    expect(mapped.attributes["http.method"]).toBe("GET");
+  });
+
+  it("sets fi.span.kind, gen_ai.span.kind and openinference.span.kind together", () => {
+    const { attributes } = mapVoltAgentAttributes({ "span.type": "tool", "tool.name": "x" }, OFF);
+    expect(attributes["fi.span.kind"]).toBe("TOOL");
+    expect(attributes["gen_ai.span.kind"]).toBe("TOOL");
+    expect(attributes["openinference.span.kind"]).toBe("TOOL");
+    expect(attributes["voltagent.span_type"]).toBe("tool");
+  });
+
+  it("does not override a kind that is already set", () => {
+    const { attributes } = mapVoltAgentAttributes({ "span.type": "tool", "fi.span.kind": "GUARDRAIL" }, OFF);
+    expect(attributes["fi.span.kind"]).toBe("GUARDRAIL");
+  });
+});
+
+describe("mapVoltAgentAttributes (AC-02)", () => {
+  it("maps the agent root span: session, user, model, provider; summed usage off promoted keys", () => {
+    const source = rootSpanAttributes();
+    const before = JSON.stringify(source);
+    const mapped = mapVoltAgentAttributes(source, OFF);
+    const a = mapped.attributes;
+
+    expect(JSON.stringify(source)).toBe(before); // input not mutated
+    expect(mapped.kind).toBe(FISpanKind.AGENT);
+    expect(mapped.isOperationRoot).toBe(true);
+    expect(mapped.isModelCall).toBe(false);
+    expect(mapped.operationId).toBe("op-1");
+
+    expect(a["fi.span.kind"]).toBe("AGENT");
+    expect(a["gen_ai.operation.name"]).toBe("invoke_agent");
+    expect(a["session.id"]).toBe("conv-123");
+    expect(a["gen_ai.conversation.id"]).toBe("conv-123");
+    expect(a["user.id"]).toBe("user-9");
+    expect(a["gen_ai.request.model"]).toBe("openai/gpt-4o-mini");
+    expect(a["gen_ai.response.model"]).toBe("openai/gpt-4o-mini");
+    expect(a["gen_ai.provider.name"]).toBe("openai");
+    expect(a["gen_ai.request.temperature"]).toBe(0.2);
+    expect(a["gen_ai.request.max_tokens"]).toBe(256);
+    expect(a["gen_ai.response.finish_reasons"]).toEqual(["stop"]);
+
+    // Summed usage is namespaced, never on a promoted key.
+    expect(a["voltagent.usage.input_tokens"]).toBe(24);
+    expect(a["voltagent.usage.output_tokens"]).toBe(12);
+    expect(a["voltagent.usage.total_tokens"]).toBe(36);
+    expect(a["voltagent.usage.cache_read_tokens"]).toBe(3);
+    for (const key of Object.keys(a)) expect(isPromotedUsageKey(key)).toBe(false);
+
+    // Copy, do not delete.
+    expect(a["entity.type"]).toBe("agent");
+    expect(a["usage.prompt_tokens"]).toBe(24);
+    expect(a["ai.model.name"]).toBe("openai/gpt-4o-mini");
+    expect(a["conversation.id"]).toBe("conv-123");
+  });
+
+  it("maps llm span usage onto the promoted GenAI keys", () => {
+    const mapped = mapVoltAgentAttributes(llmSpanAttributes(), OFF);
+    const a = mapped.attributes;
+    expect(mapped.isModelCall).toBe(true);
+    expect(a["fi.span.kind"]).toBe("LLM");
+    expect(a["gen_ai.operation.name"]).toBe("chat");
+    expect(a["gen_ai.request.model"]).toBe("openai/gpt-4o-mini");
+    expect(a["gen_ai.provider.name"]).toBe("openai");
+    expect(a["gen_ai.request.max_tokens"]).toBe(256);
+    expect(a["gen_ai.usage.input_tokens"]).toBe(13);
+    expect(a["gen_ai.usage.output_tokens"]).toBe(5);
+    expect(a["gen_ai.usage.total_tokens"]).toBe(18);
+    expect(a["gen_ai.usage.cache_read.input_tokens"]).toBe(2);
+    expect(a["gen_ai.usage.cache_read_tokens"]).toBe(2);
+    expect(a["gen_ai.usage.reasoning.output_tokens"]).toBe(4);
+    expect(a["gen_ai.usage.output_tokens.reasoning"]).toBe(4);
+    expect(a["llm.usage.prompt_tokens"]).toBe(13); // original kept
+    expect(a["llm.messages.count"]).toBe(2); // counts are not content
+  });
+
+  it("does not overwrite an existing session.id", () => {
+    const { attributes } = mapVoltAgentAttributes({ ...rootSpanAttributes(), "session.id": "explicit" }, OFF);
+    expect(attributes["session.id"]).toBe("explicit");
+    expect(attributes["gen_ai.conversation.id"]).toBe("conv-123");
+  });
+
+  it("maps tool name, call id and description", () => {
+    const { attributes } = mapVoltAgentAttributes(
+      {
+        "span.type": "tool",
+        "tool.name": "get_weather",
+        "tool.call.id": "call-1",
+        "tool.description": "weather",
+        input: '{"city":"SECRET"}',
+      },
+      OFF,
+    );
+    expect(attributes["gen_ai.tool.name"]).toBe("get_weather");
+    expect(attributes["gen_ai.tool.call.id"]).toBe("call-1");
+    expect(attributes["gen_ai.tool.description"]).toBe("weather");
+    expect(attributes["gen_ai.operation.name"]).toBe("execute_tool");
+    expect(attributes.input).toBeUndefined();
+  });
+
+  it("moves promoted token/cost keys off spans that are not model calls", () => {
+    const { attributes } = mapVoltAgentAttributes(
+      {
+        "entity.type": "agent",
+        "agent.state": "completed",
+        "gen_ai.usage.input_tokens": 99,
+        "llm.usage.prompt_tokens": 98,
+        "llm.token_count.prompt": 97,
+        "gen_ai.cost.total": 0.5,
+        "llm.cost.total": 0.4,
+      },
+      OFF,
+    );
+    for (const key of Object.keys(attributes)) expect(isPromotedUsageKey(key)).toBe(false);
+    expect(attributes["voltagent.gen_ai.usage.input_tokens"]).toBe(99);
+    expect(attributes["voltagent.llm.usage.prompt_tokens"]).toBe(98);
+    expect(attributes["voltagent.gen_ai.cost.total"]).toBe(0.5);
+  });
+
+  it("also moves the cost-part keys the collector sums into its cost column", () => {
+    // fi-collector pkg/adapter/adapter.go DeriveHotKeys: with no cost.total, cost = input + output
+    // from gen_ai.cost.input / llm.cost.prompt and gen_ai.cost.output / llm.cost.completion.
+    const costParts = {
+      "gen_ai.cost.input": 0.1,
+      "gen_ai.cost.output": 0.2,
+      "llm.cost.prompt": 0.3,
+      "llm.cost.completion": 0.4,
+    };
+    for (const key of Object.keys(costParts)) expect(isPromotedUsageKey(key)).toBe(true);
+    const { attributes } = mapVoltAgentAttributes(
+      { "span.type": "tool", "tool.name": "t", ...costParts },
+      OFF,
+    );
+    for (const [key, value] of Object.entries(costParts)) {
+      expect(attributes[key]).toBeUndefined();
+      expect(attributes[`voltagent.${key}`]).toBe(value);
+    }
+    const llm = mapVoltAgentAttributes({ "span.type": "llm", ...costParts }, OFF).attributes;
+    for (const [key, value] of Object.entries(costParts)) expect(llm[key]).toBe(value);
+  });
+});
+
+describe("content (AC-07, traceAI TraceConfig: captured by default, FI_HIDE_* hides)", () => {
+  const summaryMemoryPlanContent = {
+    "agent.summary.preview": "SECRET_SUMMARY_PREVIEW",
+    "agent.summary.text": "SECRET_SUMMARY_TEXT",
+    "agent.workingMemory.finalContent": "SECRET_WORKING_MEMORY",
+    "planagent.todos": '[{"content":"SECRET_TODO"}]',
+    "planagent.task.description": "SECRET_TASK_BRIEF",
+    "planagent.task.response_preview": "SECRET_SUBAGENT_ANSWER",
+  };
+  const contentCarrier = {
+    ...rootSpanAttributes(),
+    "llm.messages": "SECRET",
+    "agent.context": "SECRET",
+    "middleware.input.original": "SECRET",
+    "guardrail.output.after": "SECRET",
+    "tool.search.query": "SECRET",
+    "workspace.search.query": "SECRET",
+    "vector.query": "SECRET",
+    "embedding.query": "SECRET",
+    "workflow.resume.data": "SECRET",
+    "suspension.checkpoint": "SECRET",
+    "workspace.sandbox.command": "SECRET",
+    // The workflow root's snapshot carries the run input (workflow/core.ts: `inputSchema: input`).
+    "workflow.stateSnapshot": '{"id":"approval","inputSchema":{"question":"SECRET"}}',
+    // Summarization, working memory and PlanAgent text (VoltAgent 2.11.0 apply-summarization.ts,
+    // agent.ts working-memory finalization, planagent/planning/index.ts, planagent/plan-agent.ts).
+    ...summaryMemoryPlanContent,
+  };
+
+  it("drops prompts, messages, instructions, tool payloads and queries with inputs and outputs hidden", () => {
+    const { attributes } = mapVoltAgentAttributes(contentCarrier, OFF);
+    expect(JSON.stringify(attributes)).not.toContain("SECRET");
+    expect(attributes["input.value"]).toBeUndefined();
+    expect(attributes["output.value"]).toBeUndefined();
+  });
+
+  it("drops summary, working-memory and plan text when hidden and keeps it by default", () => {
+    const off = mapVoltAgentAttributes({ "span.type": "summary", ...summaryMemoryPlanContent }, OFF).attributes;
+    const on = mapVoltAgentAttributes({ "span.type": "summary", ...summaryMemoryPlanContent }, ON).attributes;
+    for (const [key, value] of Object.entries(summaryMemoryPlanContent)) {
+      expect([key, off[key]]).toEqual([key, undefined]);
+      expect([key, on[key]]).toEqual([key, value]);
+    }
+  });
+
+  it("drops eval scorer metadata, guardrail decision metadata and guardrail text when hidden; keeps them by default", () => {
+    // VoltAgent 2.11.0: finalizeScorerSpan stores combineEvalMetadata(...) under eval.scorer.metadata,
+    // and that object holds the run's verbatim input and output; eval.expected is the reference
+    // answer. A guardrail decision's metadata
+    // (guardrail.result.metadata) is whatever the guardrail returns, often the matched text.
+    const evalAndGuardrail = {
+      "eval.scorer.metadata": '{"input":"SECRET_EVAL_INPUT","output":"SECRET_EVAL_OUTPUT"}',
+      "eval.expected": "SECRET_EVAL_EXPECTED",
+      "guardrail.result.metadata": '{"matched":"SECRET_GUARDRAIL_MATCH"}',
+      // Free text: a custom guardrail's message can quote what it matched.
+      "guardrail.message": "Blocked SECRET_GUARDRAIL_TEXT",
+    };
+    const kept = {
+      "eval.scorer.id": "scorer-1",
+      "eval.scorer.status": "success",
+      "guardrail.name": "pii",
+      "guardrail.action": "block",
+      "guardrail.metadata": '{"owner":"team-a"}',
+    };
+    const off = mapVoltAgentAttributes({ "span.type": "scorer", ...evalAndGuardrail, ...kept }, OFF).attributes;
+    const on = mapVoltAgentAttributes({ "span.type": "scorer", ...evalAndGuardrail, ...kept }, ON).attributes;
+    expect(JSON.stringify(off)).not.toContain("SECRET");
+    for (const [key, value] of Object.entries(evalAndGuardrail)) {
+      expect([key, off[key]]).toEqual([key, undefined]);
+      expect([key, on[key]]).toEqual([key, value]);
+    }
+    for (const [key, value] of Object.entries(kept)) {
+      expect([key, off[key]]).toEqual([key, value]);
+    }
+  });
+
+  it("copies input/output to input.value/output.value by default", () => {
+    const { attributes } = mapVoltAgentAttributes(rootSpanAttributes(), ON);
+    expect(attributes["input.value"]).toBe("SECRET_PROMPT");
+    expect(attributes["input.mime_type"]).toBe("text/plain");
+    expect(attributes["output.value"]).toBe("SECRET_ANSWER");
+    expect(attributes.input).toBe("SECRET_PROMPT");
+    expect(attributes["agent.instructions"]).toBe("SECRET_INSTRUCTIONS");
+  });
+
+  it("uses llm.messages as the llm span's input unless inputs are hidden", () => {
+    // VoltAgent 2.11.0 writes the prompt on llm spans only as llm.messages (agent.ts
+    // buildLLMSpanAttributes), and fi-collector fills a span's input column only from input.value.
+    const llm = {
+      "span.type": "llm",
+      "llm.model": "m",
+      "llm.messages": '[{"role":"user","content":"SECRET_PROMPT"}]',
+      "llm.messages.count": 1,
+    };
+    const off = mapVoltAgentAttributes(llm, OFF).attributes;
+    expect(off["input.value"]).toBeUndefined();
+    expect(off["llm.messages"]).toBeUndefined();
+    const on = mapVoltAgentAttributes(llm, ON).attributes;
+    expect(on["input.value"]).toBe(llm["llm.messages"]);
+    expect(on["input.mime_type"]).toBe("application/json");
+    // Not on other span kinds.
+    const agent = mapVoltAgentAttributes({ "entity.type": "agent", "llm.messages": "[]" }, ON).attributes;
+    expect(agent["input.value"]).toBeUndefined();
+  });
+
+  it("uses the vector/embedding query as retriever input unless inputs are hidden", () => {
+    const off = mapVoltAgentAttributes({ "span.type": "vector", "vector.query": "find cats" }, OFF);
+    expect(off.attributes["input.value"]).toBeUndefined();
+    const on = mapVoltAgentAttributes({ "span.type": "vector", "vector.query": "find cats" }, ON);
+    expect(on.attributes["input.value"]).toBe("find cats");
+    expect(on.attributes["fi.span.kind"]).toBe("RETRIEVER");
+  });
+
+  it("classifies keys", () => {
+    expect(isContentKey("input", "x")).toBe(true);
+    expect(isContentKey("llm.messages", "x")).toBe(true);
+    expect(isContentKey("llm.messages.count", 2)).toBe(false);
+    expect(isContentKey("memory.context_limit", 10)).toBe(false);
+    expect(isContentKey("gen_ai.usage.input_tokens", 3)).toBe(false);
+    expect(isContentKey("tool.name", "x")).toBe(false);
+    // Span-event content (VoltAgent 2.11.0 guardrail stream and workflow suspend/resume events).
+    expect(isContentKey("guardrail.chunk.text", "x")).toBe(true);
+    expect(isContentKey("suspension.data", "x")).toBe(true);
+    expect(isContentKey("suspension.checkpoint", "x")).toBe(true);
+    expect(isContentKey("resume.data", "x")).toBe(true);
+    expect(isContentKey("guardrail.chunk.index", 4)).toBe(false);
+    expect(isContentKey("suspension.step_index", 0)).toBe(false);
+    expect(isContentKey("exception.message", "boom")).toBe(false);
+    expect(isContentKey("eval.scorer.metadata", "{}")).toBe(true);
+    expect(isContentKey("eval.expected", "x")).toBe(true);
+    expect(isContentKey("guardrail.result.metadata", "{}")).toBe(true);
+    expect(isContentKey("guardrail.metadata", "{}")).toBe(false);
+    expect(isContentKey("guardrail.message", "x")).toBe(false);
+    expect(isFreeTextKey("guardrail.message", "x")).toBe(true);
+    expect(isFreeTextKey("exception.message", "x")).toBe(true);
+    expect(isFreeTextKey("error.message", "x")).toBe(true);
+    expect(isFreeTextKey("workflow.step.skipped_reason", "x")).toBe(true);
+    expect(isFreeTextKey("llm.finish_reason", "stop")).toBe(false);
+    expect(isFreeTextKey("ai.response.finish_reason", "stop")).toBe(false);
+    expect(contentSide("input", "x")).toBe("input");
+    expect(contentSide("output", "x")).toBe("output");
+    expect(contentSide("eval.scorer.metadata", "{}")).toBe("both");
+    expect(contentSide("middleware.input.original", "x")).toBe("input");
+    expect(contentSide("guardrail.output.after", "x")).toBe("output");
+    expect(contentSide("workflow.resume.data", "x")).toBe("both");
+    expect(contentSide("workspace.fs.path", "/x")).toBe("input");
+  });
+
+  it("hides one side at a time (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS)", () => {
+    const inputsOff = mapVoltAgentAttributes(rootSpanAttributes(), { policy: { ...SHOW_ALL, hideInputs: true } }).attributes;
+    expect(inputsOff.input).toBeUndefined();
+    expect(inputsOff["input.value"]).toBeUndefined();
+    expect(inputsOff["agent.instructions"]).toBeUndefined();
+    expect(inputsOff["agent.messages"]).toBeUndefined();
+    expect(inputsOff["agent.stateSnapshot"]).toBeUndefined(); // holds both sides
+    expect(inputsOff["output.value"]).toBe("SECRET_ANSWER");
+    const outputsOff = mapVoltAgentAttributes(rootSpanAttributes(), { policy: { ...SHOW_ALL, hideOutputs: true } }).attributes;
+    expect(outputsOff.output).toBeUndefined();
+    expect(outputsOff["output.value"]).toBeUndefined();
+    expect(outputsOff["agent.stateSnapshot"]).toBeUndefined();
+    expect(outputsOff["input.value"]).toBe("SECRET_PROMPT");
+  });
+
+  it("FI_HIDE_INPUT_MESSAGES drops the message lists; FI_HIDE_INPUT_TEXT keeps roles and redacts text", () => {
+    const llm = {
+      "span.type": "llm",
+      "llm.model": "m",
+      "llm.messages": '[{"role":"system","content":"SECRET_SYS"},{"role":"user","content":[{"type":"text","text":"SECRET_PROMPT"}]}]',
+    };
+    const noMessages = mapVoltAgentAttributes(llm, { policy: { ...SHOW_ALL, hideInputMessages: true } }).attributes;
+    expect(noMessages["llm.messages"]).toBeUndefined();
+    expect(noMessages["input.value"]).toBeUndefined();
+    const noText = mapVoltAgentAttributes(llm, { policy: { ...SHOW_ALL, hideInputText: true } }).attributes;
+    expect(JSON.parse(String(noText["llm.messages"]))).toEqual([
+      { role: "system", content: "__REDACTED__" },
+      { role: "user", content: "__REDACTED__" },
+    ]);
+    expect(noText["input.value"]).toBe(noText["llm.messages"]);
+    expect(JSON.stringify(noText)).not.toContain("SECRET");
+    // The agent root's own input is not a message list: FI_HIDE_INPUT_TEXT leaves it (fi-core semantics).
+    const root = mapVoltAgentAttributes(rootSpanAttributes(), { policy: { ...SHOW_ALL, hideInputText: true } }).attributes;
+    expect(root["input.value"]).toBe("SECRET_PROMPT");
+    expect(JSON.parse(String(root["agent.messages"]))).toEqual([{ role: "user", content: "__REDACTED__" }]);
+    // UI messages carry parts instead of content.
+    const ui = mapVoltAgentAttributes(
+      { "entity.type": "agent", "agent.messages.ui": '[{"role":"user","parts":[{"type":"text","text":"SECRET"}]}]' },
+      { policy: { ...SHOW_ALL, hideInputText: true } },
+    ).attributes;
+    expect(JSON.parse(String(ui["agent.messages.ui"]))).toEqual([{ role: "user", parts: "__REDACTED__" }]);
+  });
+});
+
+describe("stack traces, local paths and error text (never exported, either mode)", () => {
+  const scrub = { cwd: "/Users/someone/app", home: "/Users/someone" };
+  const failingTool = {
+    "span.type": "tool",
+    "tool.name": "read_config",
+    input: '{"file":"/Users/someone/app/config.json"}',
+    output: "read /Users/someone/.ssh/known_hosts and /tmp/x.log",
+    "error.type": "Error",
+    "error.message": "ENOENT /Users/someone/app/data.db (owner ops@example.com)",
+    "error.stack": "Error: ENOENT\n    at readFile (/Users/someone/app/node_modules/x/index.js:10:5)",
+    "workspace.fs.path": "/Users/someone/app/src/a.ts",
+    "eval.scorer.error_message": "judge failed at /home/ci/run",
+  };
+
+  it("drops error.stack and rewrites paths in every kept string by default", () => {
+    const { attributes } = mapVoltAgentAttributes(failingTool, { ...ON, scrub });
+    expect(attributes["error.stack"]).toBeUndefined();
+    expect(attributes.input).toBe('{"file":"[cwd]/config.json"}');
+    expect(attributes["input.value"]).toBe('{"file":"[cwd]/config.json"}');
+    expect(attributes.output).toBe("read ~/.ssh/known_hosts and [path]");
+    expect(attributes["workspace.fs.path"]).toBe("[cwd]/src/a.ts");
+    expect(attributes["error.message"]).toBe("ENOENT [cwd]/data.db (owner <email>)");
+    expect(attributes["eval.scorer.error_message"]).toBe("judge failed at [path]");
+    expect(attributes["error.type"]).toBe("Error");
+    expect(JSON.stringify(attributes)).not.toContain("/Users/");
+    expect(JSON.stringify(attributes)).not.toContain("    at ");
+  });
+
+  it("drops error text when inputs or outputs are hidden; keeps the error type", () => {
+    for (const policy of [OFF.policy, { ...SHOW_ALL, hideInputs: true }, { ...SHOW_ALL, hideOutputs: true }]) {
+      const { attributes } = mapVoltAgentAttributes(failingTool, { policy, scrub });
+      expect(attributes["error.message"]).toBeUndefined();
+      expect(attributes["eval.scorer.error_message"]).toBeUndefined();
+      expect(attributes["error.stack"]).toBeUndefined();
+      expect(attributes["error.type"]).toBe("Error");
+    }
+  });
+
+  it("filters exception events: no stacktrace ever, message scrubbed by default and dropped when hidden", () => {
+    const events = [
+      {
+        name: "exception",
+        time: [1, 2] as [number, number],
+        attributes: {
+          "exception.type": "TypeError",
+          "exception.message": "bad value in /Users/someone/app/x.ts for ops@example.com",
+          "exception.stacktrace": "TypeError: bad\n    at f (/Users/someone/app/x.ts:1:1)",
+        },
+      },
+    ];
+    const shown = mapSpanEvents(events, { ...ON, scrub })[0].attributes ?? {};
+    expect(shown).toEqual({ "exception.type": "TypeError", "exception.message": "bad value in [cwd]/x.ts for <email>" });
+    const hidden = mapSpanEvents(events, { ...OFF, scrub })[0].attributes ?? {};
+    expect(hidden).toEqual({ "exception.type": "TypeError" });
+    expect(events[0].attributes["exception.stacktrace"]).toContain("    at "); // the original is untouched
+  });
+
+  it("classifies stack keys", () => {
+    expect(isStackKey("error.stack")).toBe(true);
+    expect(isStackKey("exception.stacktrace")).toBe(true);
+    expect(isStackKey("error.stack_trace")).toBe(true);
+    expect(isStackKey("stack.size")).toBe(false);
+  });
+});
+
+describe("credentials", () => {
+  it("never exports API keys or headers, even with content captured", () => {
+    const { attributes } = mapVoltAgentAttributes(
+      {
+        "span.type": "llm",
+        "llm.api_key": "sk-PLACEHOLDER",
+        "http.request.headers": "x-api-key: PLACEHOLDER",
+        "provider.authorization": "Bearer PLACEHOLDER",
+        "voltops.secret_key": "PLACEHOLDER",
+      },
+      ON,
+    );
+    expect(JSON.stringify(attributes)).not.toContain("PLACEHOLDER");
+    expect(isSecretKey("usage.total_tokens")).toBe(false);
+  });
+});
+
+describe("reconcileOperationUsage", () => {
+  const held = (overrides: Record<string, unknown> = {}, isError = false) => {
+    const source = llmSpanAttributes(overrides);
+    return { source, attributes: mapVoltAgentAttributes(source, OFF).attributes, isError };
+  };
+
+  it("puts the operation total on the single main llm span and keeps the last step", () => {
+    const span = held();
+    const result = reconcileOperationUsage(rootSpanAttributes(), [span]);
+    expect(result).toBe(span.attributes);
+    const a = span.attributes;
+    expect(a["gen_ai.usage.input_tokens"]).toBe(24);
+    expect(a["gen_ai.usage.output_tokens"]).toBe(12);
+    expect(a["gen_ai.usage.total_tokens"]).toBe(36);
+    expect(a["llm.usage.prompt_tokens"]).toBe(24);
+    expect(a["llm.usage.completion_tokens"]).toBe(12);
+    expect(a["gen_ai.usage.cache_read.input_tokens"]).toBe(3);
+    expect(a["gen_ai.usage.reasoning.output_tokens"]).toBeUndefined(); // root reported 0
+    expect(a["llm.usage.reasoning_tokens"]).toBeUndefined();
+    expect(a["voltagent.llm.last_step_usage.prompt_tokens"]).toBe(13);
+    expect(a["voltagent.llm.last_step_usage.completion_tokens"]).toBe(5);
+    expect(a["voltagent.usage.reconciled"]).toBe(true);
+  });
+
+  it("leaves single-step calls alone", () => {
+    const span = held({ "llm.usage.prompt_tokens": 24, "llm.usage.completion_tokens": 12 });
+    expect(reconcileOperationUsage(rootSpanAttributes(), [span])).toBeUndefined();
+    expect(span.attributes["gen_ai.usage.input_tokens"]).toBe(24);
+  });
+
+  it("does nothing when the main call is ambiguous or failed", () => {
+    expect(reconcileOperationUsage(rootSpanAttributes(), [held(), held()])).toBeUndefined();
+    expect(reconcileOperationUsage(rootSpanAttributes(), [held({}, true)])).toBeUndefined();
+    expect(
+      reconcileOperationUsage(rootSpanAttributes(), [held({ "llm.operation": "generateTitle" })]),
+    ).toBeUndefined();
+    const { "usage.prompt_tokens": _p, "usage.completion_tokens": _c, ...noUsage } = rootSpanAttributes();
+    expect(reconcileOperationUsage(noUsage, [held()])).toBeUndefined();
+  });
+
+  it("provider tool via tool routing: two main calls, no reconciliation, under-count never double count", () => {
+    // agent.ts executeProviderToolViaCallTool -> runInternalGenerateText opens a second successful
+    // llm:generateText span in the same operation. Its usage is not in the root total.
+    const main = held(); // last step: 13 input tokens; the root total for the main call is 24
+    const internal = held({ "llm.usage.prompt_tokens": 6, "llm.usage.completion_tokens": 2, "llm.usage.total_tokens": 8 });
+    expect(reconcileOperationUsage(rootSpanAttributes(), [main, internal])).toBeUndefined();
+    const traceInput = [main, internal].reduce(
+      (sum, span) => sum + Number(span.attributes["gen_ai.usage.input_tokens"]),
+      0,
+    );
+    expect(traceInput).toBe(13 + 6);
+    expect(traceInput).toBeLessThan(24 + 6); // every model call's tokens: under-counted, not doubled
+  });
+
+  it("rolls up only the llm operations 2.11.0 emits for a main call (generateText, streamText)", () => {
+    for (const operation of ["generateText", "streamText"]) {
+      expect(reconcileOperationUsage(rootSpanAttributes(), [held({ "llm.operation": operation })])).toBeDefined();
+    }
+    // generateObject / streamObject create no llm span in 2.11.0; their usage is only on the root.
+    for (const operation of ["generateObject", "streamObject"]) {
+      expect(reconcileOperationUsage(rootSpanAttributes(), [held({ "llm.operation": operation })])).toBeUndefined();
+    }
+  });
+
+  it("reconciles the one main call even when a title-generation call is present", () => {
+    const main = held();
+    const title = held({ "llm.operation": "generateTitle", "llm.usage.prompt_tokens": 4 });
+    expect(reconcileOperationUsage(rootSpanAttributes(), [main, title])).toBe(main.attributes);
+    expect(title.attributes["gen_ai.usage.input_tokens"]).toBe(4);
+  });
+});
+
+describe("provider from an AI SDK model object's provider id", () => {
+  it.each([
+    ["openai.chat", "openai"],
+    ["openai.responses", "openai"],
+    ["anthropic.messages", "anthropic"],
+    ["google.generative-ai", "google"],
+    ["google.vertex.chat", "vertexai"],
+    ["vertex.anthropic.messages", "vertexai"],
+    ["azure.chat", "azure"],
+    ["amazon-bedrock", "aws"],
+    ["mistral.chat", "mistralai"],
+    ["groq.chat", "groq"],
+    ["xai.chat", "xai"],
+    ["deepseek.chat", "deepseek"],
+    ["cohere.chat", "cohere"],
+    ["cerebras.chat", "cerebras"],
+    ["togetherai.chat", "together"],
+  ])("%s -> %s", (id, provider) => {
+    expect(providerFromAiSdk(id)).toBe(provider);
+  });
+
+  it.each(["acme-proxy.chat", "openai-compatible", "gateway", "mock-provider", "", "  "])(
+    "leaves %j unset rather than guessing",
+    (id) => {
+      expect(providerFromAiSdk(id)).toBeUndefined();
+    },
+  );
+});
