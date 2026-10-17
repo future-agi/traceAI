@@ -86,6 +86,22 @@ def _base_env() -> Dict[str, str]:
     return {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "NO_PROXY": "127.0.0.1,localhost"}
 
 
+# traceAI TraceConfig: content is captured by default; these env vars hide it.
+HIDDEN_ENV = {"FI_HIDE_INPUTS": "true", "FI_HIDE_OUTPUTS": "true"}
+# Never exported in either mode (stack frames, the local working/home directories).
+STACK_MARKERS = ("    at ", "\\n    at ", "exception.stacktrace", "error.stack")
+
+
+def _assert_no_stack_or_paths(spans: List[Dict[str, Any]], cwd: str) -> None:
+    blob = json.dumps(spans)
+    for marker in STACK_MARKERS:
+        assert marker not in blob, marker
+    assert cwd not in blob, "working directory exported"
+    home = os.environ.get("HOME", "")
+    if len(home) > 1:
+        assert home not in blob, "home directory exported"
+
+
 @pytest.fixture(scope="session")
 def built_package() -> Path:
     result = run([PNPM, "--dir", str(PKG_DIR), "run", "build"], env=_base_env(), stdin=None, timeout=300)
@@ -175,9 +191,9 @@ def _assert_collector_contract(requests: List[Dict[str, Any]]) -> None:
 
 
 @pytest.mark.parametrize("node", NODES)
-def test_tool_journey_reaches_collector_path_mapped_with_content_off(built_package: Path, node: str) -> None:
+def test_tool_journey_reaches_collector_path_mapped_with_content_hidden(built_package: Path, node: str) -> None:
     with Receiver() as receiver:
-        output = _run_fixture(node, receiver.origin, "tools")
+        output = _run_fixture(node, receiver.origin, "tools", HIDDEN_ENV)
         spans = receiver.spans()
         requests = receiver.requests()
 
@@ -240,14 +256,18 @@ def test_tool_journey_reaches_collector_path_mapped_with_content_off(built_packa
             assert not [key for key in _attrs(span) if _is_promoted(key)], span["name"]
     assert r["voltagent.usage.input_tokens"] == 24 and r["usage.prompt_tokens"] == 24
 
-    # Errors.
+    # Errors: ERROR status carrying the error type only; no message, no stack trace.
     assert _status(failing) == 2
-    assert f["error.message"] == "tool exploded"
-    assert "exception" in [event["name"] for event in failing.get("events", [])]
+    assert "error.message" not in f and "error.stack" not in f
+    assert failing["status"].get("message") == f["error.type"]
+    exception = [event for event in failing.get("events", []) if event["name"] == "exception"]
+    assert exception and set(_attrs(exception[0])) == {"exception.type"}
     assert _status(weather) == 1 and _status(root) == 1
 
-    # No content by default, no credentials anywhere on spans.
+    # Hidden: no content, no error text, no stack traces or local paths, no credentials anywhere.
     blob = json.dumps(spans)
+    assert "tool exploded" not in blob
+    _assert_no_stack_or_paths(spans, output["cwd"])
     for marker in MARKERS:
         assert marker not in blob, marker
     for span in spans:
@@ -266,12 +286,20 @@ def _hex_span_id(span_id: str) -> str:
     return binascii.hexlify(base64.b64decode(span_id)).decode()
 
 
-def test_content_is_exported_only_after_opt_in(built_package: Path) -> None:
+def test_content_is_exported_by_default(built_package: Path) -> None:
     with Receiver() as receiver:
-        _run_fixture(NODE, receiver.origin, "tools", {"CAPTURE_CONTENT": "true"})
+        output = _run_fixture(NODE, receiver.origin, "tools")
         spans = receiver.spans()
     root = _attrs(_one(spans, "assistant"))
     weather = _attrs(_one(spans, "tool.execution:get_weather"))
+    failing = _one(spans, "tool.execution:explode")
+    # The error text stays, with the local path rewritten; the stack trace never leaves.
+    assert _attrs(failing)["error.message"] == "tool exploded reading [cwd]/data.db"
+    assert failing["status"]["message"] == "tool exploded reading [cwd]/data.db"
+    exception = [event for event in failing.get("events", []) if event["name"] == "exception"][0]
+    assert _attrs(exception)["exception.message"] == "tool exploded reading [cwd]/data.db"
+    assert "exception.stacktrace" not in _attrs(exception)
+    _assert_no_stack_or_paths(spans, output["cwd"])
     assert root["input.value"] == "SECRET_PROMPT_MARKER"
     assert root["output.value"] == "SECRET_ANSWER_MARKER"
     assert "SECRET_TOOL_ARG_MARKER" in weather["input.value"]
@@ -281,7 +309,7 @@ def test_content_is_exported_only_after_opt_in(built_package: Path) -> None:
 
 def test_subagent_is_one_trace_under_the_supervisor(built_package: Path) -> None:
     with Receiver() as receiver:
-        output = _run_fixture(NODE, receiver.origin, "subagent")
+        output = _run_fixture(NODE, receiver.origin, "subagent", HIDDEN_ENV)
         spans = receiver.spans()
         requests = receiver.requests()
     _assert_collector_contract(requests)
@@ -324,10 +352,10 @@ def _event_values(spans: List[Dict[str, Any]]) -> Dict[tuple, List[Any]]:
 
 
 @pytest.mark.parametrize("node", NODES)
-def test_span_events_carry_no_content_by_default(built_package: Path, node: str) -> None:
+def test_span_events_carry_no_content_when_hidden(built_package: Path, node: str) -> None:
     """Guardrail stream chunks and workflow suspend/resume payloads in span events (M1)."""
     with Receiver() as receiver:
-        output = _run_fixture(node, receiver.origin, "events")
+        output = _run_fixture(node, receiver.origin, "events", HIDDEN_ENV)
         spans = receiver.spans()
         requests = receiver.requests()
     assert output["text"] == "SECRET_ANSWER_MARKER"
@@ -351,7 +379,7 @@ def test_span_events_carry_no_content_by_default(built_package: Path, node: str)
     assert PLACEHOLDER_API_KEY not in blob and PLACEHOLDER_SECRET_KEY not in blob
 
     with Receiver() as receiver:
-        _run_fixture(node, receiver.origin, "events", {"CAPTURE_CONTENT": "true"})
+        _run_fixture(node, receiver.origin, "events")
         captured = _event_values(receiver.spans())
     assert "SECRET_ANSWER_MARKER" in captured[("guardrail.stream.process", "guardrail.chunk.text")]
     assert "SECRET_SUSPEND_DATA_MARKER" in captured[("workflow.suspended", "suspension.data")][0]

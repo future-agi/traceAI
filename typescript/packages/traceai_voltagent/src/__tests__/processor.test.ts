@@ -1,8 +1,9 @@
-import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { DiagLogLevel, SpanKind, SpanStatusCode, diag } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { Agent } from "@voltagent/core";
 import { z } from "zod";
+import type { TraceConfigOptions } from "@traceai/fi-core";
 import { FIVoltAgentSpanProcessor } from "../FIVoltAgentSpanProcessor";
 import { isPromotedUsageKey } from "../mapping";
 import {
@@ -34,7 +35,9 @@ afterEach(async () => {
   observability = undefined;
 });
 
-async function runToolCallingAgent(options: { captureContent?: boolean } = {}) {
+const HIDDEN: TraceConfigOptions = { hideInputs: true, hideOutputs: true };
+
+async function runToolCallingAgent(options: { traceConfig?: TraceConfigOptions } = {}) {
   const { exporter, provider } = fiProvider();
   const recorder = new RecordingProcessor();
   const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider, ...options });
@@ -121,24 +124,89 @@ describe("FIVoltAgentSpanProcessor with a real VoltAgent agent (AC-01)", () => {
     expect(root["usage.prompt_tokens"]).toBe(modelCallInputTokens);
   });
 
-  it("exports no content by default", async () => {
-    const { exported } = await runToolCallingAgent();
-    const blob = JSON.stringify(exported.map((span) => [span.name, span.attributes, span.events]));
+  it("exports no content with hideInputs + hideOutputs (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS)", async () => {
+    const { exported, recorded } = await runToolCallingAgent({ traceConfig: HIDDEN });
+    const blob = JSON.stringify(exported.map((span) => [span.name, span.attributes, span.events, span.status]));
     for (const marker of Object.values(MARKERS)) expect(blob).not.toContain(marker);
     for (const span of exported) {
       for (const key of ["input", "output", "input.value", "output.value", "llm.messages", "agent.instructions"]) {
         expect(attrs(span)[key]).toBeUndefined();
       }
     }
-    // Exception events keep exception.type / .message / .stacktrace (README: passed through).
-    const exception = one(exported, "tool.execution:explode").events.find((event) => event.name === "exception");
-    expect(exception?.attributes?.["exception.message"]).toBe("tool exploded");
+    // The error keeps its type only: no message, no stack trace, a status carrying the type.
+    const failing = one(exported, "tool.execution:explode");
+    const exception = failing.events.find((event) => event.name === "exception");
     expect(exception?.attributes?.["exception.type"]).toEqual(expect.any(String));
-    expect(exception?.attributes?.["exception.stacktrace"]).toEqual(expect.stringContaining("tool exploded"));
+    expect(exception?.attributes?.["exception.message"]).toBeUndefined();
+    expect(exception?.attributes?.["exception.stacktrace"]).toBeUndefined();
+    expect(attrs(failing)["error.message"]).toBeUndefined();
+    expect(failing.status).toEqual({ code: SpanStatusCode.ERROR, message: attrs(failing)["error.type"] });
+    expect(blob).not.toContain("tool exploded");
+    // Control: VoltAgent wrote the message and the stack on the span the other processors got.
+    const original = one(recorded, "tool.execution:explode");
+    expect(original.status.message).toBe("tool exploded");
+    expect(String(original.events.find((e) => e.name === "exception")?.attributes?.["exception.stacktrace"])).toContain(
+      "    at ",
+    );
   });
 
-  it("exports content only after captureContent: true (control run)", async () => {
-    const { exported } = await runToolCallingAgent({ captureContent: true });
+  it("never exports a stack trace; the error message stays by default", async () => {
+    const { exported } = await runToolCallingAgent();
+    const failing = one(exported, "tool.execution:explode");
+    const exception = failing.events.find((event) => event.name === "exception");
+    expect(exception?.attributes?.["exception.message"]).toBe("tool exploded");
+    expect(exception?.attributes?.["exception.type"]).toEqual(expect.any(String));
+    expect(exception?.attributes?.["exception.stacktrace"]).toBeUndefined();
+    expect(attrs(failing)["error.stack"]).toBeUndefined();
+    expect(failing.status).toEqual({ code: SpanStatusCode.ERROR, message: "tool exploded" });
+    const blob = JSON.stringify(exported.map((span) => [span.attributes, span.events, span.status]));
+    expect(blob).not.toContain("    at ");
+    expect(blob).not.toContain(process.cwd());
+  });
+
+  it("reads FI_HIDE_INPUTS / FI_HIDE_OUTPUTS from the environment; traceConfig wins over env", async () => {
+    const saved = { inputs: process.env.FI_HIDE_INPUTS, outputs: process.env.FI_HIDE_OUTPUTS };
+    process.env.FI_HIDE_INPUTS = "TRUE";
+    process.env.FI_HIDE_OUTPUTS = "true";
+    try {
+      const hidden = await runToolCallingAgent();
+      const blob = JSON.stringify(hidden.exported.map((span) => [span.attributes, span.events, span.status]));
+      for (const marker of Object.values(MARKERS)) expect(blob).not.toContain(marker);
+      await resetOtelGlobals(observability);
+      const shown = await runToolCallingAgent({ traceConfig: { hideInputs: false, hideOutputs: false } });
+      expect(attrs(one(shown.exported, "assistant"))["input.value"]).toBe(MARKERS.prompt);
+      await resetOtelGlobals(observability);
+      process.env.FI_HIDE_INPUTS = "1"; // fi-core: only "true" hides
+      process.env.FI_HIDE_OUTPUTS = "false";
+      const notHidden = await runToolCallingAgent();
+      expect(attrs(one(notHidden.exported, "assistant"))["input.value"]).toBe(MARKERS.prompt);
+    } finally {
+      if (saved.inputs === undefined) delete process.env.FI_HIDE_INPUTS;
+      else process.env.FI_HIDE_INPUTS = saved.inputs;
+      if (saved.outputs === undefined) delete process.env.FI_HIDE_OUTPUTS;
+      else process.env.FI_HIDE_OUTPUTS = saved.outputs;
+    }
+  });
+
+  it("warns that the removed captureContent option does nothing", () => {
+    const warnings: string[] = [];
+    diag.setLogger(
+      { warn: (message: string) => warnings.push(message), error() {}, info() {}, debug() {}, verbose() {} },
+      DiagLogLevel.WARN,
+    );
+    try {
+      new FIVoltAgentSpanProcessor({
+        exporter: new InMemorySpanExporter(),
+        captureContent: false,
+      } as unknown as ConstructorParameters<typeof FIVoltAgentSpanProcessor>[0]);
+    } finally {
+      diag.disable();
+    }
+    expect(warnings.some((message) => message.includes("captureContent was removed"))).toBe(true);
+  });
+
+  it("exports content by default (traceAI TraceConfig defaults)", async () => {
+    const { exported } = await runToolCallingAgent();
     const root = attrs(one(exported, "assistant"));
     expect(root["input.value"]).toBe(MARKERS.prompt);
     expect(root["output.value"]).toBe(MARKERS.answer);
@@ -152,8 +220,8 @@ describe("FIVoltAgentSpanProcessor with a real VoltAgent agent (AC-01)", () => {
     expect(llm["output.value"]).toBe(MARKERS.answer);
   });
 
-  it("leaves the llm span's output empty when content is off", async () => {
-    const { exported } = await runToolCallingAgent();
+  it("leaves the llm span's input and output empty when inputs and outputs are hidden", async () => {
+    const { exported } = await runToolCallingAgent({ traceConfig: HIDDEN });
     const llm = attrs(one(exported, "llm:generateText"));
     expect(llm["input.value"]).toBeUndefined();
     expect(llm["output.value"]).toBeUndefined();
@@ -198,7 +266,7 @@ describe("provider from the agent's AI SDK model object", () => {
 describe("streamText", () => {
   it("maps the streaming path and reconciles its multi-step usage", async () => {
     const { exporter, provider } = fiProvider();
-    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider });
+    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider, traceConfig: HIDDEN });
     const { model, reported } = scriptedModel("mockai/mock-model-1", toolCallingSteps());
     const agent = new Agent({ name: "assistant", instructions: "x", model, tools: [weatherTool, explodingTool] });
     observability = voltagent({ assistant: agent }, [processor]);
@@ -212,6 +280,7 @@ describe("streamText", () => {
     expect(promotedInputTokens(spans)).toBe(reported.reduce((sum, step) => sum + step.input, 0));
     expect(llm["fi.span.kind"]).toBe("LLM");
     expect(attrs(one(spans, "assistant"))["session.id"]).toBe("conv-stream");
+    // Hidden: no prompt anywhere.
     expect(JSON.stringify(spans.map((span) => span.attributes))).not.toContain(MARKERS.prompt);
   });
 });
@@ -244,7 +313,7 @@ describe("coexistence with other processors in the same array (AC-06)", () => {
 describe("subagents (AC-04)", () => {
   it("puts the subagent in the supervisor's trace under the delegate_task tool span", async () => {
     const { exporter, provider } = fiProvider();
-    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider });
+    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider, traceConfig: HIDDEN });
     const child = scriptedModel("mockai/child-model", [{ kind: "text", text: "child answer", input: 5, output: 3 }]);
     const supervisorModel = scriptedModel("mockai/supervisor-model", [
       {
@@ -470,9 +539,9 @@ describe("span events (M1)", () => {
       { name: "workflow.resumed", attributes: { "resume.step_index": 0, "resume.data": '{"note":"SECRET_RESUME_DATA"}' } },
     ]);
 
-  function exportWith(captureContent: boolean) {
+  function exportWith(hidden: boolean) {
     const exporter = new InMemorySpanExporter();
-    const processor = new FIVoltAgentSpanProcessor({ exporter, batch: false, captureContent });
+    const processor = new FIVoltAgentSpanProcessor({ exporter, batch: false, traceConfig: hidden ? HIDDEN : {} });
     const originals = [guardrailSpan(), workflowSpan()];
     const before = JSON.stringify(originals.map((span) => span.events));
     for (const span of originals) processor.onEnd(span);
@@ -487,8 +556,8 @@ describe("span events (M1)", () => {
     return { exported, event };
   }
 
-  it("removes content from event attributes by default; names, times, counts and exceptions stay", () => {
-    const { exported, event } = exportWith(false);
+  it("removes content and error text from event attributes when hidden; names, times, counts and exception types stay", () => {
+    const { exported, event } = exportWith(true);
     expect(one(exported, "guardrail.output.stream.1").events.map((e) => [e.name, e.time])).toEqual([
       ["guardrail.stream.start", [0, 1]],
       ["guardrail.stream.process", [0, 2]],
@@ -501,23 +570,21 @@ describe("span events (M1)", () => {
       "guardrail.chunk.type": "text-delta",
       "guardrail.chunk.action": "pass",
     });
-    expect(event("guardrail.output.stream.1", "exception")).toEqual({
-      "exception.type": "Error",
-      "exception.message": "guardrail failed",
-      "exception.stacktrace": "Error: guardrail failed\n    at handler (guardrail.ts:1:1)",
-    });
-    expect(event("workflow.approval", "workflow.suspended")).toEqual({
-      "suspension.step_index": 0,
-      "suspension.reason": "needs approval",
-    });
+    expect(event("guardrail.output.stream.1", "exception")).toEqual({ "exception.type": "Error" });
+    expect(event("workflow.approval", "workflow.suspended")).toEqual({ "suspension.step_index": 0 });
     expect(event("workflow.approval", "workflow.resumed")).toEqual({ "resume.step_index": 0 });
     const blob = JSON.stringify(exported.map((span) => span.events));
     expect(blob).not.toContain("SECRET");
     expect(blob).not.toContain("PLACEHOLDER");
   });
 
-  it("keeps event content after captureContent: true, but never credentials", () => {
-    const { exported, event } = exportWith(true);
+  it("keeps event content by default, but never credentials or stack traces", () => {
+    const { exported, event } = exportWith(false);
+    expect(event("guardrail.output.stream.1", "exception")).toEqual({
+      "exception.type": "Error",
+      "exception.message": "guardrail failed",
+    });
+    expect(event("workflow.approval", "workflow.suspended")["suspension.reason"]).toBe("needs approval");
     expect(event("guardrail.output.stream.1", "guardrail.stream.process")["guardrail.chunk.text"]).toBe(
       "SECRET_CHUNK_TEXT",
     );
@@ -531,10 +598,10 @@ describe("span events (M1)", () => {
 });
 
 describe("span events from a real agent and workflow (M1)", () => {
-  async function runEventJourney(captureContent: boolean) {
+  async function runEventJourney(hidden: boolean) {
     const { exporter, provider } = fiProvider();
     const recorder = new RecordingProcessor();
-    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider, captureContent });
+    const processor = new FIVoltAgentSpanProcessor({ tracerProvider: provider, traceConfig: hidden ? HIDDEN : undefined });
     const { model } = scriptedModel("mockai/mock-model-1", [{ kind: "text", text: MARKERS.answer, input: 3, output: 2 }]);
     const agent = new Agent({ name: "assistant", instructions: "x", model, outputGuardrails: [passThroughGuardrail()] });
     const workflow = approvalWorkflow();
@@ -562,15 +629,15 @@ describe("span events from a real agent and workflow (M1)", () => {
     return { exported, events: (name: string) => events(exported, name) };
   }
 
-  it("drops streamed guardrail text and workflow suspend/resume payloads from events by default", async () => {
-    const { exported, events } = await runEventJourney(false);
+  it("drops streamed guardrail text and workflow suspend/resume payloads from events when hidden", async () => {
+    const { exported, events } = await runEventJourney(true);
     const processed = events("guardrail.stream.process");
     expect(processed.map((a) => a["guardrail.chunk.type"])).toContain("text-delta");
     for (const a of processed) expect(a["guardrail.chunk.text"]).toBeUndefined();
     expect(events("guardrail.stream.start")).toHaveLength(1);
     const [suspended] = events("workflow.suspended");
     expect(suspended).toMatchObject({ "suspension.step_index": 0 });
-    expect(suspended["suspension.reason"]).toEqual(expect.any(String));
+    expect(suspended["suspension.reason"]).toBeUndefined(); // free text, hidden with inputs/outputs
     expect(suspended["suspension.data"]).toBeUndefined();
     expect(suspended["suspension.checkpoint"]).toBeUndefined();
     const [resumed] = events("workflow.resumed");
@@ -584,8 +651,8 @@ describe("span events from a real agent and workflow (M1)", () => {
     }
   });
 
-  it("keeps them after captureContent: true (control run)", async () => {
-    const { events } = await runEventJourney(true);
+  it("keeps them by default (control run)", async () => {
+    const { events } = await runEventJourney(false);
     expect(events("guardrail.stream.process").map((a) => a["guardrail.chunk.text"])).toContain(MARKERS.answer);
     const [suspended] = events("workflow.suspended");
     expect(String(suspended["suspension.data"])).toContain(MARKERS.suspendData);

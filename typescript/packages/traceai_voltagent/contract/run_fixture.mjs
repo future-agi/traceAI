@@ -6,7 +6,8 @@
 // exporter posts to FI_BASE_URL + /tracer/v1/traces (the shared harness Receiver in tests).
 //
 // Env: FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME (placeholders in tests),
-//      JOURNEY = tools | subagent | burst | events, CAPTURE_CONTENT = "true" to opt in.
+//      JOURNEY = tools | subagent | burst | events. Content follows the traceAI TraceConfig flags
+//      the processor reads itself: captured by default, FI_HIDE_INPUTS / FI_HIDE_OUTPUTS=true hide it.
 // Prints one line "RESULT_JSON:{...}" on stdout.
 import { ProjectType, register } from "@traceai/fi-core";
 import { FIVoltAgentSpanProcessor } from "@traceai/voltagent";
@@ -24,7 +25,7 @@ import { MockLanguageModelV3, convertArrayToReadableStream } from "ai/test";
 import { z } from "zod";
 
 const JOURNEY = process.env.JOURNEY ?? "tools";
-const CAPTURE = process.env.CAPTURE_CONTENT === "true";
+const HIDDEN = process.env.FI_HIDE_INPUTS === "true" && process.env.FI_HIDE_OUTPUTS === "true";
 const BURST = 20;
 
 export const MARKERS = {
@@ -111,7 +112,8 @@ const explodingTool = createTool({
   description: "Always fails",
   parameters: z.object({ x: z.number() }),
   execute: async () => {
-    throw new Error("tool exploded");
+    // A local path in the error text, like a real I/O error: never exported as-is.
+    throw new Error(`tool exploded reading ${process.cwd()}/data.db`);
   },
 });
 
@@ -139,10 +141,10 @@ const tracerProvider = register({
   projectType: ProjectType.OBSERVE,
   setGlobalTracerProvider: false,
 });
-const processor = new FIVoltAgentSpanProcessor({ tracerProvider, captureContent: CAPTURE });
+const processor = new FIVoltAgentSpanProcessor({ tracerProvider });
 const observability = new VoltAgentObservability({ spanProcessors: [recorder, processor] });
 
-const result = { journey: JOURNEY, captureContent: CAPTURE };
+const result = { journey: JOURNEY, hidden: HIDDEN, cwd: process.cwd() };
 const started = Date.now();
 
 if (JOURNEY === "subagent") {

@@ -10,9 +10,9 @@ It plugs into VoltAgent's own `ObservabilityConfig.spanProcessors`. It does not 
 it does not change the span VoltAgent hands to its other processors (VoltOps, local storage,
 websocket): it exports a mapped copy.
 
-Status: alpha. Fixture-validated against `@voltagent/core` 2.11.0 with the AI SDK mock model, and
-run end to end with a live model (an OpenAI-compatible endpoint through
-`@ai-sdk/openai-compatible`) into a local Future AGI collector.
+Status: alpha. Tested against `@voltagent/core` 2.11.0 (the latest release) with the AI SDK mock
+model, and end to end into a local Future AGI collector with live models: `api.openai.com`
+(`gpt-4.1-nano`) and an OpenAI-compatible endpoint, both through `@ai-sdk/openai`.
 
 ## Install
 
@@ -46,7 +46,7 @@ const tracerProvider = register({
 const observability = new VoltAgentObservability({
   spanProcessors: [
     // ...keep any processors you already have here...
-    new FIVoltAgentSpanProcessor({ tracerProvider }), // captureContent defaults to false
+    new FIVoltAgentSpanProcessor({ tracerProvider }),
   ],
 });
 
@@ -67,15 +67,16 @@ remove them. VoltAgent's sampling wrapper only wraps its VoltOps exporter, so a 
 |---|---|---|
 | `tracerProvider` | | The provider from `register()`. Spans carry its resource (`project_name`, `project_type`) and go out through its OTLP exporter (`/tracer/v1/traces`, `x-api-key` / `x-secret-key`). |
 | `exporter`, `resource` | | Instead of `tracerProvider`: any `SpanExporter`, and the resource to export with. |
-| `captureContent` | `false` | Export prompts, messages, instructions, tool arguments/results and retrieval queries. |
+| `traceConfig` | content captured | fi-core `TraceConfigOptions`, the same flags as every traceAI instrumentor: `hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`, `hideInputText`, `hideOutputText`. Each falls back to its `FI_HIDE_*` env var, then to the fi-core default (`false`). See Privacy. |
 | `batch` | `true` | Batch through a `BatchSpanProcessor` (with `tracerProvider`, it wraps the provider's exporter). `false` exports each span as it ends. |
 | `batchConfig` | SDK defaults | `BatchSpanProcessor` settings: queue 2048, batch 512, delay 5000 ms. Spans beyond a full queue are dropped by the SDK. |
 | `usageReconciliationTimeoutMs` | `30000` | How long an llm span waits for its operation's root span (see Tokens). |
 
 ## What is mapped
 
-Every original VoltAgent key stays on the exported copy, except content (below), credentials, and
-promoted token keys on spans that are not model calls (moved under `voltagent.`).
+Every original VoltAgent key stays on the exported copy, except content you hide (see Privacy),
+credentials, stack traces, and promoted token keys on spans that are not model calls (moved under
+`voltagent.`). Kept strings have local paths rewritten (see Privacy).
 
 | Future AGI field | VoltAgent source (2.11.0) | Notes |
 |---|---|---|
@@ -92,8 +93,8 @@ promoted token keys on spans that are not model calls (moved under `voltagent.`)
 | `gen_ai.usage.reasoning.output_tokens`, `gen_ai.usage.output_tokens.reasoning` | `llm.usage.reasoning_tokens` | llm spans only, when > 0 |
 | `voltagent.usage.input_tokens`, `.output_tokens`, `.total_tokens`, `.cache_read_tokens`, `.reasoning_tokens` | `usage.prompt_tokens`, ... on the agent span | the operation total; namespaced so it is not counted twice |
 | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.description` | `tool.name`, `tool.call.id`, `tool.description` | |
-| status, `exception` events, `error.*` | passed through | a failing tool is an `ERROR` span; `exception` events keep `exception.type`, `.message` and `.stacktrace`. Other event attributes are filtered like span attributes (see Content) |
-| `input.value`, `output.value` | `input`, `output` (`vector.query` / `embedding.query` as retriever input). llm spans: `llm.messages` (the last 10 messages VoltAgent sent) as input; as output, the agent span's `output` when the operation has exactly one successful `llm:generateText` / `llm:streamText` span (VoltAgent records no response text on llm spans) | **only with `captureContent: true`** |
+| status, `exception` events, `error.*` | passed through, filtered | a failing tool is an `ERROR` span. `exception` events keep `exception.type` and `exception.message`; `exception.stacktrace` and `error.stack` are never exported. The status message, `error.message` and `exception.message` have local paths, emails and this machine's user and host names removed; with inputs or outputs hidden they are dropped and an `ERROR` status carries the error type (`VoltAgentError`, `AI_APICallError`, ...) |
+| `input.value`, `output.value` | `input`, `output` (`vector.query` / `embedding.query` as retriever input). llm spans: `llm.messages` (the last 10 messages VoltAgent sent) as input; as output, the agent span's `output` when the operation has exactly one successful `llm:generateText` / `llm:streamText` span (VoltAgent records no response text on llm spans) | by default; not with `hideInputs` / `hideOutputs` (see Privacy) |
 | cost | not mapped | VoltAgent sets `usage.cost` only from OpenRouter provider metadata; it is passed through unchanged and not promoted |
 
 ### Tokens
@@ -133,46 +134,57 @@ twice.
   another request's flush), or a root that does not end within `usageReconciliationTimeoutMs`,
   releases the llm span unreconciled: it carries last-step usage only.
 
-## Content
+## Privacy
 
-Off by default. VoltAgent itself has no capture flag: it writes the prompt, the answer, system
-instructions, message history, tool arguments and results, memory payloads, conversation summaries
-and plans onto its spans. The Future AGI copy drops them unless you pass `captureContent: true`.
-This is stricter than VoltAgent; a VoltOps export of the same run still has the originals.
+Content follows the traceAI `TraceConfig` convention, like every traceAI instrumentor: it is
+**exported by default**, and the standard flags hide it. VoltAgent writes the prompt, the answer,
+system instructions, message history, tool arguments and results, memory payloads, conversation
+summaries and plans onto its spans; the Future AGI copy carries them unless you hide them.
 
-Dropped keys: `input`, `output`, `agent.instructions`, `agent.messages`, `agent.messages.ui`,
-`agent.context`, `agent.stateSnapshot`, `llm.messages`, `workflow.context`,
-`workflow.stateSnapshot` (step source and the run input), `workspace.sandbox.command`,
-`workspace.sandbox.args`, `suspension.checkpoint`, `agent.summary.preview`, `agent.summary.text`
-(summarization), `agent.workingMemory.finalContent` (working memory), `planagent.todos`,
-`planagent.task.description`, `planagent.task.response_preview` (PlanAgent), `eval.scorer.metadata`
-(evals: holds the run's input and output), `eval.expected` (the eval's reference answer), `guardrail.result.metadata` (a guardrail decision's
-payload), `guardrail.chunk.text`, `suspension.data`, `resume.data` (span events, below), any key with an
-`input` or `output` segment (`middleware.input.original`, `guardrail.output.after`, ...), and string
-values whose last segment is `messages`, `instructions`, `query`, `context`, `data`, `checkpoint`,
-`prompt(s)`, `completion`, `content`, `arguments` or `args` (`tool.search.query`, `vector.query`,
-`workflow.resume.data`, ...). Counts such as `llm.messages.count` stay.
+```bash
+export FI_HIDE_INPUTS=true    # prompts, instructions, messages, tool arguments, queries, memory reads
+export FI_HIDE_OUTPUTS=true   # answers, tool results, summaries, plans, streamed guardrail chunks
+```
 
-Span events are filtered the same way. VoltAgent puts content in event attributes too: an output
-guardrail with a streaming handler adds a `guardrail.stream.process` event per answer chunk with
-the chunk in `guardrail.chunk.text`, and a workflow adds `workflow.suspended` (`suspension.data`,
-`suspension.checkpoint`) and `workflow.resumed` (`resume.data`). Without `captureContent`, those
-keys are removed from the exported events; the event names, times and other attributes
-(`guardrail.chunk.index`, `suspension.reason`, `resume.step_index`, ...) stay. `exception` events
-keep `exception.type`, `exception.message` and `exception.stacktrace`, which contain whatever text
-the thrown error carries.
+or in code (an option wins over its env var; only the string `true` hides, as in fi-core):
 
-Credentials are never exported, whatever `captureContent` says: keys with a segment like
-`api_key`, `secret`, `secret_key`, `password`, `authorization`, `cookie` or `header(s)` are dropped,
-from span attributes and from event attributes. The filter is by key: a JSON value such as
-`llm.provider_options` is exported whole, so do not put credentials in provider options.
+```typescript
+new FIVoltAgentSpanProcessor({ tracerProvider, traceConfig: { hideInputs: true, hideOutputs: true } });
+```
 
-Kept in every mode, because they are short strings your code or VoltAgent writes rather than
-prompt or answer text: `guardrail.message` and the `guardrail.stream.abort` event's
-`guardrail.reason` (the built-in guardrails write fixed messages such as "Output blocked due to
-profanity."; a custom guardrail's message is exported as written), `suspension.reason`,
-`cancellation.reason`, workflow step reasons, and the workspace tool fields `workspace.fs.path`,
-`workspace.fs.pattern` and `workspace.sandbox.cwd`, which can carry model-chosen paths.
+| Flag (env var) | What it hides on the exported copy |
+|---|---|
+| `hideInputs` (`FI_HIDE_INPUTS`) | input-side keys: `input`, `input.value`, `agent.instructions`, `agent.context`, `agent.messages`, `agent.messages.ui`, `llm.messages`, `workflow.context`, `workspace.sandbox.command` / `.args`, `workspace.fs.path` / `.pattern`, `workspace.sandbox.cwd`, `planagent.task.description`, `resume.data`, any key with an `input` segment (`middleware.input.original`, `eval.input`, ...) and string keys ending in `messages`, `instructions`, `query`, `context`, `prompt(s)`, `arguments`, `args` (`tool.search.query`, `vector.query`, ...) |
+| `hideOutputs` (`FI_HIDE_OUTPUTS`) | output-side keys: `output`, `output.value`, `agent.summary.preview` / `.text`, `planagent.todos`, `planagent.task.response_preview`, `guardrail.chunk.text`, any key with an `output` segment (`guardrail.output.after`, `eval.output`, ...) and string keys ending in `completion` |
+| either of the two | keys that hold both sides: `agent.stateSnapshot`, `workflow.stateSnapshot` (step source and the run input), `suspension.checkpoint`, `suspension.data`, `agent.workingMemory.finalContent`, `eval.scorer.metadata` (the run's input and output), `eval.expected`, `guardrail.result.metadata`, string keys ending in `data`, `checkpoint`, `content`; and run-time free text: the status message, `error.message`, `exception.message`, `eval.scorer.error_message`, `workspace.error`, `guardrail.message`, `guardrail.reason`, `suspension.reason`, `cancellation.reason` and the workflow step reasons |
+| `hideInputMessages` / `hideOutputMessages` | the message lists only (`llm.messages`, `agent.messages`, `agent.messages.ui`; `gen_ai.output.messages`) |
+| `hideInputText` / `hideOutputText` | keeps the message lists' roles and replaces each message's `content` / `parts` with `__REDACTED__` |
+
+Span events are filtered the same way: the `guardrail.stream.process` event's `guardrail.chunk.text`,
+`workflow.suspended`'s `suspension.data` / `suspension.checkpoint` and `workflow.resumed`'s
+`resume.data` follow the flags; event names, times and structural attributes
+(`guardrail.chunk.index`, `resume.step_index`, ...) always stay. Counts such as `llm.messages.count`
+are never content.
+
+Never exported, in either mode:
+
+- **Credentials**: keys with a segment like `api_key`, `secret`, `secret_key`, `password`,
+  `authorization`, `cookie` or `header(s)`, on span and event attributes. The filter is by key: a
+  JSON value such as `llm.provider_options` is exported whole, so do not put credentials in
+  provider options.
+- **Stack traces**: `error.stack` and `exception.stacktrace` are dropped, and V8 frames
+  (`    at ...`) and Python tracebacks are cut from every exported string, including stack traces
+  inside JSON (a failed tool's error object in `llm.messages`).
+- **Local paths**: in every exported string (JSON documents included) the working directory becomes
+  `[cwd]`, the home directory `~`, and other absolute local paths, `file://` URLs and Windows paths
+  `[path]`. URL paths such as `/v1/chat/completions` are left alone.
+- **In error text** (status message, `error.message`, `exception.message` and the other free-text
+  keys above): emails become `<email>` and this machine's user and host names `<redacted>`.
+  Captured message content is exported as the model saw it: an email in a prompt or a tool result
+  stays unless you hide inputs/outputs.
+
+VoltAgent itself has no capture flag; a VoltOps export of the same run still has the original keys.
+`FI_PII_REDACTION` is not applied by this processor.
 
 ## Flushing, serverless and failures
 
@@ -196,10 +208,11 @@ profanity."; a custom guardrail's message is exported as written), `suspension.r
 
 | Component | Version |
 |---|---|
-| `@voltagent/core` | 2.11.0 (npm `latest` on 2026-10-04) |
-| `ai` (mock model, `ai/test` `MockLanguageModelV3`) | 6.0.97 |
-| `@traceai/fi-core` exporter | workspace (OpenTelemetry SDK 2.0.1, OTLP HTTP exporter 0.202.0) |
-| Node.js | 26.8.1: jest and every contract test. 20.20.2 and 22.23.3 as well: the contract tool journey, span-event journey and ESM/CJS entry-point check (the tests `TRACEAI_NODE_MATRIX` parametrizes) |
+| `@voltagent/core` | 2.11.0 (npm `latest` on 2026-10-04 and still on 2026-10-16; `next` is 3.0.0-next.1, not tested) |
+| `ai` | 6.0.97 (mock model, `ai/test` `MockLanguageModelV3`, in the tests); 6.0.309 with `@ai-sdk/openai` 3.0.130 (end to end) |
+| `@traceai/fi-core` exporter | workspace build in the tests; 1.0.0 from npm end to end (OpenTelemetry SDK 2.x, OTLP HTTP exporter 0.202.0) |
+| Node.js | 20.20.2, 22.18.0 and 26.8.1: jest (20.20.2, 26.8.1) and the contract tool journey, span-event journey and ESM/CJS entry-point check (the tests `TRACEAI_NODE_MATRIX` parametrizes); every other contract test and the end-to-end run on 26.8.1 |
+| Models (end to end) | `gpt-4.1-nano` on `api.openai.com`; `gpt-5.6-terra` through an OpenAI-compatible endpoint |
 
 `@voltagent/core` 2.11.0 is MIT-licensed (`license` in its `package.json`; the published tarball
 has no LICENSE file, its README and `docs/community/licence.md` carry the MIT text, "Copyright (c)
@@ -212,8 +225,11 @@ has no LICENSE file, its README and `docs/community/licence.md` carry the MIT te
 - Retriever, embedding and vector spans are mapped from source reading; the fixture runs only the
   agent's memory spans (`memory.read`, `memory.write`, `memory.steps.write`).
 - VoltAgent logs (`RemoteLogProcessor`) are not exported. Eval scorer spans are exported with
-  their ids, status, score and threshold; `eval.scorer.metadata`, `eval.expected`, `eval.input` and
-  `eval.output` are dropped unless `captureContent` is on. `eval.scorer.error_message` is kept.
+  their ids, status, score and threshold; `eval.scorer.metadata`, `eval.expected`, `eval.input`,
+  `eval.output` and `eval.scorer.error_message` follow the hide flags (see Privacy).
+- Tokens are on the llm spans, not on the agent root (see Tokens), so the Observe trace list's
+  Tokens column, which reads the root span, is empty for VoltAgent traces; the trace view shows the
+  tokens and cost of each model call.
 - Only the Node runtime was tested; edge runtimes were not.
 
 ## Development

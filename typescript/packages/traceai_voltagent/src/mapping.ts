@@ -1,10 +1,20 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
 import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import { FIAttributes, VoltAgentAttributes as VA, VoltAgentFIAttributes } from "./attributes";
+import {
+  type ContentPolicy,
+  type ScrubContext,
+  hidesFreeText,
+  redactMessageText,
+  scrubContent,
+  scrubErrorText,
+} from "./privacy";
 
 export interface MapOptions {
-  /** Copy prompts, messages, tool arguments/results and retrieval queries. Default false. */
-  captureContent: boolean;
+  /** The resolved TraceConfig flags (`resolveContentPolicy`). Content is exported unless hidden. */
+  policy: ContentPolicy;
+  /** The working and home directories rewritten to `[cwd]` / `~` in exported strings. */
+  scrub?: ScrubContext;
 }
 
 export interface MappedAttributes {
@@ -42,93 +52,177 @@ export function isPromotedUsageKey(key: string): boolean {
 }
 
 /**
- * Content-bearing keys VoltAgent 2.11.0 writes (prompts, messages, tool args/results,
- * system instructions, memory payloads, retrieval queries). Dropped unless captureContent.
+ * Content-bearing keys VoltAgent 2.11.0 writes, by side. Input-side keys are hidden by
+ * `hideInputs` (FI_HIDE_INPUTS), output-side keys by `hideOutputs` (FI_HIDE_OUTPUTS), and keys that
+ * hold both (state snapshots, eval metadata, ...) by either. Exported by default (TraceConfig).
  */
-const CONTENT_EXACT = new Set<string>([
+const INPUT_EXACT = new Set<string>([
   "input",
-  "output",
   "agent.instructions",
-  "agent.messages",
-  "agent.messages.ui",
   "agent.context",
-  "agent.stateSnapshot",
-  "llm.messages",
   "workflow.context",
-  // The workflow root's snapshot: step source code plus the run input, which workflow/core.ts
-  // stores under `inputSchema` (`inputSchema: input`).
-  "workflow.stateSnapshot",
   "workspace.sandbox.command",
   "workspace.sandbox.args",
-  "suspension.checkpoint",
+  // Workspace tool arguments: model-chosen paths and glob patterns (also path-scrubbed when shown).
+  "workspace.fs.path",
+  "workspace.fs.pattern",
+  "workspace.sandbox.cwd",
+  // PlanAgent: the delegation brief.
+  "planagent.task.description",
+  // The workflow resume payload (workflow.resumed event).
+  "resume.data",
+  "input.value",
+  "gen_ai.prompts",
+  "gen_ai.system_instructions",
+]);
+/** Message lists sent to the model: hidden by hideInputs or hideInputMessages; text by hideInputText. */
+const INPUT_MESSAGE_KEYS = new Set<string>(["llm.messages", "agent.messages", "agent.messages.ui", "gen_ai.input.messages"]);
+const OUTPUT_EXACT = new Set<string>([
+  "output",
+  "output.value",
   // Model-written summary (agent/apply-summarization.ts, span.type=summary).
   "agent.summary.preview",
   "agent.summary.text",
+  // PlanAgent: the plan and the subagent's answer.
+  "planagent.todos",
+  "planagent.task.response_preview",
+  // Each streamed answer chunk an output guardrail sees (guardrail.stream.process event).
+  "guardrail.chunk.text",
+]);
+const OUTPUT_MESSAGE_KEYS = new Set<string>(["gen_ai.output.messages"]);
+const BOTH_EXACT = new Set<string>([
+  "agent.stateSnapshot",
+  // The workflow root's snapshot: step source code plus the run input (workflow/core.ts).
+  "workflow.stateSnapshot",
+  "suspension.checkpoint",
+  "suspension.data",
   // The whole working-memory document (agent.ts, on the agent root).
   "agent.workingMemory.finalContent",
-  // PlanAgent: the plan, the delegation brief and the subagent's answer (planagent/).
-  "planagent.todos",
-  "planagent.task.description",
-  "planagent.task.response_preview",
-  // Evals: finalizeScorerSpan (eval.ts) stores combineEvalMetadata(...) here, which holds the run's
-  // verbatim input and output. eval.input / eval.output are caught by the segment rule below.
+  // Evals: finalizeScorerSpan stores combineEvalMetadata(...) here, with the run's input and output.
   "eval.scorer.metadata",
-  // The eval's reference answer (eval.ts scorer attributes).
+  // The eval's reference answer.
   "eval.expected",
   // A guardrail decision's metadata: whatever the guardrail returns, often the matched text.
   // (guardrail.metadata is the guardrail's own static config and stays.)
   "guardrail.result.metadata",
-  // Span-event content: each streamed answer chunk an output guardrail sees
-  // (agent/streaming/output-guardrail-stream-runner.ts, guardrail.stream.process), and the
-  // workflow suspend/resume payloads (workflow/open-telemetry/trace-context.ts,
-  // workflow.suspended / workflow.resumed). Listed here so the value type does not matter.
-  "guardrail.chunk.text",
-  "suspension.data",
-  "resume.data",
-  // Future AGI / GenAI content keys, in case an upstream span already carries them.
-  "input.value",
-  "output.value",
-  "gen_ai.input.messages",
-  "gen_ai.output.messages",
-  "gen_ai.prompts",
-  "gen_ai.system_instructions",
 ]);
-/** Any dotted segment equal to one of these marks content (middleware.input.original, ...). */
-const CONTENT_SEGMENTS = new Set<string>(["input", "output"]);
-/** A final segment equal to one of these marks content (tool.search.query, resume.data, ...). */
-const CONTENT_LAST_SEGMENTS = new Set<string>([
-  "messages",
-  "instructions",
-  "query",
-  "context",
-  "data",
-  "checkpoint",
-  "prompt",
-  "prompts",
-  "completion",
-  "content",
-  "arguments",
-  "args",
-]);
+/** A final segment equal to one of these marks input content (tool.search.query, ...). */
+const INPUT_LAST_SEGMENTS = new Set<string>(["messages", "instructions", "query", "context", "prompt", "prompts", "arguments", "args"]);
+const OUTPUT_LAST_SEGMENTS = new Set<string>(["completion"]);
+const BOTH_LAST_SEGMENTS = new Set<string>(["data", "checkpoint", "content"]);
 
-export function isContentKey(key: string, value: AttributeValue | undefined): boolean {
-  if (CONTENT_EXACT.has(key)) return true;
+export type ContentSide = "input" | "output" | "both";
+
+/** Which side of the run a key's value comes from, or undefined when it is not content. */
+export function contentSide(key: string, value: AttributeValue | undefined): ContentSide | undefined {
+  if (INPUT_EXACT.has(key) || INPUT_MESSAGE_KEYS.has(key)) return "input";
+  if (OUTPUT_EXACT.has(key) || OUTPUT_MESSAGE_KEYS.has(key)) return "output";
+  if (BOTH_EXACT.has(key)) return "both";
   // Counts, flags and sizes are never content.
-  if (typeof value === "number" || typeof value === "boolean") return false;
+  if (typeof value === "number" || typeof value === "boolean") return undefined;
   const segments = key.split(".");
-  if (segments.some((segment) => CONTENT_SEGMENTS.has(segment))) return true;
-  return CONTENT_LAST_SEGMENTS.has(segments[segments.length - 1]);
+  // Any dotted segment input/output marks content (middleware.input.original, eval.output, ...).
+  const isInput = segments.includes("input");
+  const isOutput = segments.includes("output");
+  if (isInput && isOutput) return "both";
+  if (isInput) return "input";
+  if (isOutput) return "output";
+  const last = segments[segments.length - 1];
+  if (INPUT_LAST_SEGMENTS.has(last)) return "input";
+  if (OUTPUT_LAST_SEGMENTS.has(last)) return "output";
+  if (BOTH_LAST_SEGMENTS.has(last)) return "both";
+  return undefined;
 }
 
-/** Credentials never belong on a span, whatever captureContent says. */
+export function isContentKey(key: string, value: AttributeValue | undefined): boolean {
+  return contentSide(key, value) !== undefined;
+}
+
+/**
+ * Free text written at run time: error messages and human-readable reasons, which can quote the
+ * input or output (a tool error naming its argument, a custom guardrail's message). Exported with
+ * paths, emails and local user/host names removed; hidden when inputs or outputs are hidden.
+ */
+const FREE_TEXT_EXACT = new Set<string>([
+  "error.message",
+  "exception.message",
+  "eval.scorer.error_message",
+  "workspace.error",
+  "guardrail.message",
+  "guardrail.reason",
+  "suspension.reason",
+  "cancellation.reason",
+  "workflow.step.skipped_reason",
+  "workflow.step.suspension_reason",
+  "workflow.step.cancellation_reason",
+]);
+
+export function isFreeTextKey(key: string, value: AttributeValue | undefined): boolean {
+  if (FREE_TEXT_EXACT.has(key)) return true;
+  if (typeof value !== "string") return false;
+  const last = key.split(".").pop() ?? "";
+  if (last === "finish_reason") return false;
+  return last === "message" || last === "error_message" || last === "reason" || last.endsWith("_reason");
+}
+
+/** Stack traces carry local paths and source lines: never exported. */
+const STACK_SEGMENT = /^(stack|stacktrace|stack_trace|stacktraces)$/i;
+
+export function isStackKey(key: string): boolean {
+  return STACK_SEGMENT.test(key.split(".").pop() ?? "");
+}
+
+/** Credentials never belong on a span, whatever the content settings say. */
 const SECRET_SEGMENT = /^(api[_-]?key|apikey|secret|secret[_-]?key|password|passwd|authorization|auth[_-]?token|access[_-]?token|bearer|cookie|set-cookie|x-api-key|x-secret-key|headers?)$/i;
 
 export function isSecretKey(key: string): boolean {
   return key.split(".").some((segment) => SECRET_SEGMENT.test(segment));
 }
 
-/** The OpenTelemetry exception event keys (type, message, stacktrace, escaped). */
-const EXCEPTION_PREFIX = "exception.";
+function hiddenBySide(side: ContentSide, key: string, policy: ContentPolicy): boolean {
+  if (side === "both") return policy.hideInputs || policy.hideOutputs;
+  if (side === "input") {
+    if (policy.hideInputs) return true;
+    return INPUT_MESSAGE_KEYS.has(key) && policy.hideInputMessages;
+  }
+  if (policy.hideOutputs) return true;
+  return OUTPUT_MESSAGE_KEYS.has(key) && policy.hideOutputMessages;
+}
+
+/**
+ * The value one VoltAgent attribute gets on the exported copy, or undefined to drop it.
+ * Order: credentials and stack traces are always dropped; free text and content follow the
+ * TraceConfig flags; every string that is kept has its local paths and stack frames removed.
+ */
+export function exportValue(key: string, value: AttributeValue | undefined, options: MapOptions): AttributeValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (isSecretKey(key) || isStackKey(key)) return undefined;
+  const { policy, scrub } = options;
+  if (isFreeTextKey(key, value)) {
+    if (hidesFreeText(policy)) return undefined;
+    return typeof value === "string" ? scrubErrorText(value, scrub) : value;
+  }
+  const side = contentSide(key, value);
+  if (side !== undefined && hiddenBySide(side, key, policy)) return undefined;
+  let out: AttributeValue = value;
+  if (
+    typeof out === "string" &&
+    ((INPUT_MESSAGE_KEYS.has(key) && policy.hideInputText) || (OUTPUT_MESSAGE_KEYS.has(key) && policy.hideOutputText))
+  ) {
+    const redacted = redactMessageText(out);
+    if (redacted === undefined) return undefined;
+    out = redacted;
+  }
+  return scrubValue(out, scrub);
+}
+
+function scrubValue(value: AttributeValue, scrub?: ScrubContext): AttributeValue {
+  if (typeof value === "string") return scrubContent(value, scrub);
+  if (Array.isArray(value)) {
+    return value.map((item) => (typeof item === "string" ? scrubContent(item, scrub) : item)) as AttributeValue;
+  }
+  return value;
+}
 
 /** A span event as `ReadableSpan.events` holds it. */
 export interface SpanEventLike {
@@ -137,10 +231,10 @@ export interface SpanEventLike {
 }
 
 /**
- * Filter span event attributes the way span attributes are filtered: credential keys are always
- * removed, content keys are removed unless captureContent. `exception.*` keys are kept (exception
- * events pass through). Event names, times and every other field are kept. Returns new event
- * objects; the events of the span other processors hold are never mutated.
+ * Filter span event attributes the way span attributes are filtered (`exportValue`): credentials
+ * and stack traces (`exception.stacktrace`) are always removed, content and error text follow the
+ * TraceConfig flags, local paths are rewritten. Event names, times and every other field are kept.
+ * Returns new event objects; the events of the span other processors hold are never mutated.
  */
 export function mapSpanEvents<T extends SpanEventLike>(events: readonly T[] | undefined, options: MapOptions): T[] {
   if (!events) return [];
@@ -148,10 +242,8 @@ export function mapSpanEvents<T extends SpanEventLike>(events: readonly T[] | un
     if (!event.attributes) return { ...event };
     const attributes: Attributes = {};
     for (const [key, value] of Object.entries(event.attributes)) {
-      if (value === undefined) continue;
-      if (isSecretKey(key)) continue;
-      if (!key.startsWith(EXCEPTION_PREFIX) && !options.captureContent && isContentKey(key, value)) continue;
-      attributes[key] = value;
+      const exported = exportValue(key, value, options);
+      if (exported !== undefined) attributes[key] = exported;
     }
     return { ...event, attributes };
   });
@@ -296,9 +388,10 @@ function setIfAbsent(attributes: Attributes, key: string, value: AttributeValue 
 /**
  * Map one VoltAgent span's attributes onto Future AGI / GenAI keys.
  *
- * Copy, do not delete: VoltAgent's own keys are kept, except content (unless captureContent),
- * credentials, and promoted token keys on spans that are not model calls (moved under
- * `voltagent.`). The input object is never mutated; the result is a new object.
+ * Copy, do not delete: VoltAgent's own keys are kept, except content the TraceConfig flags hide,
+ * credentials, stack traces, and promoted token keys on spans that are not model calls (moved
+ * under `voltagent.`). Kept strings have local paths and stack frames removed (`exportValue`).
+ * The input object is never mutated; the result is a new object.
  */
 export function mapVoltAgentAttributes(source: Attributes, options: MapOptions): MappedAttributes {
   const kind = resolveSpanKind(source);
@@ -311,10 +404,9 @@ export function mapVoltAgentAttributes(source: Attributes, options: MapOptions):
   const operationId = asString(source[VA.OPERATION_ID]);
 
   const out: Attributes = {};
-  for (const [key, value] of Object.entries(source)) {
+  for (const [key, raw] of Object.entries(source)) {
+    const value = exportValue(key, raw, options);
     if (value === undefined) continue;
-    if (isSecretKey(key)) continue;
-    if (!options.captureContent && isContentKey(key, value)) continue;
     if (!isModelCall && isPromotedUsageKey(key)) {
       // Summed or derived usage on a non-model span: keep it, but not on a promoted key.
       out[`voltagent.${key}`] = value;
@@ -385,24 +477,22 @@ export function mapVoltAgentAttributes(source: Attributes, options: MapOptions):
     setIfAbsent(out, FIAttributes.GEN_AI_TOOL_DESCRIPTION, asString(source[VA.TOOL_DESCRIPTION]));
   }
 
-  // Content, only after opt-in.
-  if (options.captureContent) {
-    // VoltAgent writes no `input` on llm spans; their prompt is only in `llm.messages`, and
-    // fi-collector fills a span's input column from input.value only.
-    const input =
-      asString(source[VA.INPUT]) ??
-      asString(source[VA.VECTOR_QUERY]) ??
-      asString(source[VA.EMBEDDING_QUERY]) ??
-      (isModelCall ? asString(source[VA.LLM_MESSAGES]) : undefined);
-    if (input !== undefined && out[FIAttributes.INPUT_VALUE] === undefined) {
-      out[FIAttributes.INPUT_VALUE] = input;
-      setIfAbsent(out, FIAttributes.INPUT_MIME_TYPE, looksLikeJson(input) ? "application/json" : "text/plain");
-    }
-    const output = asString(source[VA.OUTPUT]);
-    if (output !== undefined && out[FIAttributes.OUTPUT_VALUE] === undefined) {
-      out[FIAttributes.OUTPUT_VALUE] = output;
-      setIfAbsent(out, FIAttributes.OUTPUT_MIME_TYPE, looksLikeJson(output) ? "application/json" : "text/plain");
-    }
+  // input.value / output.value (the collector's input and output columns), from the values kept
+  // above: what the TraceConfig flags hide is already gone, and paths are already rewritten.
+  // VoltAgent writes no `input` on llm spans; their prompt is only in `llm.messages`.
+  const input =
+    asString(out[VA.INPUT]) ??
+    asString(out[VA.VECTOR_QUERY]) ??
+    asString(out[VA.EMBEDDING_QUERY]) ??
+    (isModelCall ? asString(out[VA.LLM_MESSAGES]) : undefined);
+  if (input !== undefined && out[FIAttributes.INPUT_VALUE] === undefined) {
+    out[FIAttributes.INPUT_VALUE] = input;
+    setIfAbsent(out, FIAttributes.INPUT_MIME_TYPE, looksLikeJson(input) ? "application/json" : "text/plain");
+  }
+  const output = asString(out[VA.OUTPUT]);
+  if (output !== undefined && out[FIAttributes.OUTPUT_VALUE] === undefined) {
+    out[FIAttributes.OUTPUT_VALUE] = output;
+    setIfAbsent(out, FIAttributes.OUTPUT_MIME_TYPE, looksLikeJson(output) ? "application/json" : "text/plain");
   }
 
   return { attributes: out, kind, isModelCall, isOperationRoot, operationId };
@@ -438,14 +528,15 @@ function soleMainCall<T extends { source: Attributes; isError: boolean }>(llmSpa
  * VoltAgent 2.11.0 records no response text on llm spans (agent.ts createLLMSpanFinalizer sets
  * usage, finish reason and status only). With exactly one successful main-call llm span, that
  * span's final answer is the operation's `output` on the root span, so the exported copy of the
- * llm span gets it as output.value. Call only when content capture is on. Returns the updated
- * span attributes, if any.
+ * llm span gets it as output.value. Pass the root's MAPPED attributes (`mapVoltAgentAttributes`):
+ * their `output` is absent when outputs are hidden and already has paths rewritten. Returns the
+ * updated span attributes, if any.
  */
 export function copyOperationOutput(
-  rootSource: Attributes,
+  rootAttributes: Attributes,
   llmSpans: Array<{ source: Attributes; attributes: Attributes; isError: boolean }>,
 ): Attributes | undefined {
-  const output = asString(rootSource[VA.OUTPUT]);
+  const output = asString(rootAttributes[VA.OUTPUT]);
   if (output === undefined) return undefined;
   const target = soleMainCall(llmSpans);
   if (!target || target.attributes[FIAttributes.OUTPUT_VALUE] !== undefined) return undefined;

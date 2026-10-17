@@ -8,12 +8,21 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
+import type { TraceConfigOptions } from "@traceai/fi-core";
 import { providerForAgentModel } from "./agentModels";
 import { FIAttributes, VoltAgentAttributes as VA } from "./attributes";
-import { copyOperationOutput, mapSpanEvents, mapVoltAgentAttributes, reconcileOperationUsage } from "./mapping";
+import {
+  type MapOptions,
+  copyOperationOutput,
+  mapSpanEvents,
+  mapVoltAgentAttributes,
+  reconcileOperationUsage,
+} from "./mapping";
+import { type ContentPolicy, defaultScrubContext, hidesFreeText, resolveContentPolicy, scrubErrorText } from "./privacy";
 
 type Resource = ReadableSpan["resource"];
 type SpanEvents = ReadableSpan["events"];
+type SpanStatus = ReadableSpan["status"];
 
 /**
  * Anything shaped like an OpenTelemetry SDK 2.x `BasicTracerProvider`, such as the
@@ -43,11 +52,14 @@ export interface FIVoltAgentSpanProcessorOptions {
   /** BatchSpanProcessor settings (SDK defaults: queue 2048, batch 512, delay 5000 ms). */
   batchConfig?: BufferConfig;
   /**
-   * Export prompts, messages, instructions, tool arguments/results and retrieval queries, on span
-   * attributes and on span event attributes. Default false. VoltAgent itself has no such flag and
-   * always writes them; this processor drops them from the Future AGI copy unless you opt in.
+   * fi-core trace config, with the same defaults as every traceAI instrumentor: content (prompts,
+   * messages, instructions, tool arguments/results, retrieval queries, answers) is exported unless
+   * you hide it. `hideInputs` / `hideOutputs` (or `FI_HIDE_INPUTS=true` / `FI_HIDE_OUTPUTS=true`)
+   * hide every input-side / output-side value and the run's error text; `hideInputMessages` /
+   * `hideOutputMessages` hide the message lists; `hideInputText` / `hideOutputText` keep the
+   * message roles and replace the text with `__REDACTED__`. Option > env var > default.
    */
-  captureContent?: boolean;
+  traceConfig?: TraceConfigOptions;
   /**
    * How long an llm span waits for its operation's root span before it is exported without
    * usage reconciliation. Default 30000 ms.
@@ -67,6 +79,7 @@ interface PendingLLMSpan {
   source: Attributes;
   attributes: Attributes;
   events: SpanEvents;
+  status: SpanStatus;
   isError: boolean;
 }
 
@@ -88,7 +101,8 @@ let globalConflictWarned = false;
  * (VoltOps, local storage, websocket) is never modified: this processor exports a copy.
  */
 export class FIVoltAgentSpanProcessor implements SpanProcessor {
-  private readonly captureContent: boolean;
+  private readonly policy: ContentPolicy;
+  private readonly mapOptions: MapOptions;
   private readonly reconciliationTimeoutMs: number;
   private readonly delegate: Delegate;
   private readonly pending = new Map<string, PendingOperation>();
@@ -98,7 +112,14 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
     if (!options || (!options.tracerProvider && !options.exporter)) {
       throw new Error("FIVoltAgentSpanProcessor needs a tracerProvider (from register()) or an exporter");
     }
-    this.captureContent = options.captureContent === true;
+    this.policy = resolveContentPolicy(options.traceConfig);
+    this.mapOptions = { policy: this.policy, scrub: defaultScrubContext() };
+    if ((options as { captureContent?: unknown }).captureContent !== undefined) {
+      diag.warn(
+        "@traceai/voltagent: captureContent was removed. Content is exported by default; hide it with " +
+          "traceConfig ({ hideInputs, hideOutputs, ... }) or FI_HIDE_INPUTS / FI_HIDE_OUTPUTS.",
+      );
+    }
     this.reconciliationTimeoutMs = options.usageReconciliationTimeoutMs ?? DEFAULT_RECONCILIATION_TIMEOUT_MS;
     this.delegate = options.tracerProvider
       ? delegateFromProvider(options.tracerProvider, options)
@@ -113,13 +134,15 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
     if (this.isShutdown) return;
     try {
       const source = span.attributes ?? {};
-      const options = { captureContent: this.captureContent };
+      const options = this.mapOptions;
       const mapped = mapVoltAgentAttributes(source, options);
       if (mapped.isModelCall || mapped.isOperationRoot) {
         setProviderFromModelObject(source, mapped.attributes, mapped.isModelCall);
       }
-      // Event attributes carry content too (guardrail stream chunks, workflow suspend/resume data).
+      // Event attributes carry content too (guardrail stream chunks, workflow suspend/resume data)
+      // and exception events carry stack traces.
       const events = mapSpanEvents(span.events, options);
+      const status = this.exportStatus(span, source);
 
       if (mapped.isModelCall && mapped.operationId) {
         this.hold(mapped.operationId, {
@@ -127,6 +150,7 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
           source,
           attributes: mapped.attributes,
           events,
+          status,
           isError: span.status?.code === SpanStatusCode.ERROR,
         });
         return;
@@ -140,18 +164,17 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
           } catch (error) {
             diag.warn("@traceai/voltagent: usage reconciliation failed", error);
           }
-          if (this.captureContent) {
-            try {
-              copyOperationOutput(source, operation.spans);
-            } catch (error) {
-              diag.warn("@traceai/voltagent: copying the operation output failed", error);
-            }
+          try {
+            // Reads the mapped root: no output when outputs are hidden.
+            copyOperationOutput(mapped.attributes, operation.spans);
+          } catch (error) {
+            diag.warn("@traceai/voltagent: copying the operation output failed", error);
           }
-          for (const held of operation.spans) this.forward(held.original, held.attributes, held.events);
+          for (const held of operation.spans) this.forward(held.original, held.attributes, held.events, held.status);
         }
       }
 
-      this.forward(span, mapped.attributes, events);
+      this.forward(span, mapped.attributes, events, status);
     } catch (error) {
       diag.error("@traceai/voltagent: failed to map or export a VoltAgent span", error);
     }
@@ -205,20 +228,46 @@ export class FIVoltAgentSpanProcessor implements SpanProcessor {
   private release(operationId: string): void {
     const operation = this.take(operationId);
     if (!operation) return;
-    for (const held of operation.spans) this.forward(held.original, held.attributes, held.events);
+    for (const held of operation.spans) this.forward(held.original, held.attributes, held.events, held.status);
   }
 
   private releaseAll(): void {
     for (const operationId of Array.from(this.pending.keys())) this.release(operationId);
   }
 
-  private forward(span: ReadableSpan, attributes: Attributes, events: SpanEvents): void {
+  private forward(span: ReadableSpan, attributes: Attributes, events: SpanEvents, status: SpanStatus): void {
     try {
-      this.delegate.processor.onEnd(copySpan(span, attributes, this.delegate.resource ?? span.resource, events));
+      this.delegate.processor.onEnd(
+        copySpan(span, attributes, this.delegate.resource ?? span.resource, events, status),
+      );
     } catch (error) {
       diag.error("@traceai/voltagent: exporter rejected a span", error);
     }
   }
+
+  /**
+   * The status message is the thrown error's text (a tool error naming its argument, an API error
+   * with a local path). Exported with paths, emails and local user/host names removed; when inputs
+   * or outputs are hidden, an ERROR status carries the error type only.
+   */
+  private exportStatus(span: ReadableSpan, source: Attributes): SpanStatus {
+    const status = span.status;
+    if (!status || typeof status.message !== "string" || status.message.length === 0) return status;
+    if (!hidesFreeText(this.policy)) return { ...status, message: scrubErrorText(status.message, this.mapOptions.scrub) };
+    const errorType = status.code === SpanStatusCode.ERROR ? errorTypeOf(span, source) : undefined;
+    return errorType ? { ...status, message: errorType } : { code: status.code };
+  }
+}
+
+/** The error's class name, from VoltAgent's `error.type` or the exception event's `exception.type`. */
+function errorTypeOf(span: ReadableSpan, source: Attributes): string | undefined {
+  const fromAttribute = source["error.type"];
+  if (typeof fromAttribute === "string" && /^[\w.$-]{1,80}$/.test(fromAttribute)) return fromAttribute;
+  for (const event of span.events ?? []) {
+    const type = event.attributes?.["exception.type"];
+    if (typeof type === "string" && /^[\w.$-]{1,80}$/.test(type)) return type;
+  }
+  return undefined;
 }
 
 /** Fill gen_ai.provider.name from the agent's AI SDK model object when VoltAgent set none. */
@@ -236,14 +285,16 @@ function setProviderFromModelObject(source: Attributes, attributes: Attributes, 
 }
 
 /**
- * A ReadableSpan with new attributes, resource and (optionally) events; every other field reads
- * through. Pass events filtered with `mapSpanEvents`, or the original events are copied as-is.
+ * A ReadableSpan with new attributes, resource, events and status; every other field reads
+ * through. Pass events filtered with `mapSpanEvents` (the span's own events still carry content
+ * and `exception.stacktrace`).
  */
 export function copySpan(
   span: ReadableSpan,
   attributes: Attributes,
   resource: Resource,
-  events: SpanEvents = span.events,
+  events: SpanEvents,
+  status: SpanStatus = span.status,
 ): ReadableSpan {
   const spanContext = span.spanContext();
   const copy = {
@@ -253,7 +304,7 @@ export function copySpan(
     parentSpanContext: span.parentSpanContext,
     startTime: span.startTime,
     endTime: span.endTime,
-    status: span.status,
+    status,
     attributes,
     links: span.links,
     events,

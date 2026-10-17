@@ -1,16 +1,23 @@
 import { providerFromAiSdk } from "../mapping";
 import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import {
+  contentSide,
   isContentKey,
+  isFreeTextKey,
+  isStackKey,
+  mapSpanEvents,
   isPromotedUsageKey,
   isSecretKey,
   mapVoltAgentAttributes,
   reconcileOperationUsage,
   resolveSpanKind,
 } from "../mapping";
+import { SHOW_ALL } from "../privacy";
 
-const OFF = { captureContent: false };
-const ON = { captureContent: true };
+/** FI_HIDE_INPUTS=true + FI_HIDE_OUTPUTS=true. */
+const OFF = { policy: { ...SHOW_ALL, hideInputs: true, hideOutputs: true } };
+/** traceAI TraceConfig defaults: content captured. */
+const ON = { policy: SHOW_ALL };
 
 /** Keys trace-context.ts (2.11.0) writes on an agent root span. */
 function rootSpanAttributes() {
@@ -236,7 +243,7 @@ describe("mapVoltAgentAttributes (AC-02)", () => {
   });
 });
 
-describe("content (AC-07)", () => {
+describe("content (AC-07, traceAI TraceConfig: captured by default, FI_HIDE_* hides)", () => {
   const summaryMemoryPlanContent = {
     "agent.summary.preview": "SECRET_SUMMARY_PREVIEW",
     "agent.summary.text": "SECRET_SUMMARY_TEXT",
@@ -265,14 +272,14 @@ describe("content (AC-07)", () => {
     ...summaryMemoryPlanContent,
   };
 
-  it("drops prompts, messages, instructions, tool payloads and queries by default", () => {
+  it("drops prompts, messages, instructions, tool payloads and queries with inputs and outputs hidden", () => {
     const { attributes } = mapVoltAgentAttributes(contentCarrier, OFF);
     expect(JSON.stringify(attributes)).not.toContain("SECRET");
     expect(attributes["input.value"]).toBeUndefined();
     expect(attributes["output.value"]).toBeUndefined();
   });
 
-  it("drops summary, working-memory and plan text by default and keeps it after opt-in", () => {
+  it("drops summary, working-memory and plan text when hidden and keeps it by default", () => {
     const off = mapVoltAgentAttributes({ "span.type": "summary", ...summaryMemoryPlanContent }, OFF).attributes;
     const on = mapVoltAgentAttributes({ "span.type": "summary", ...summaryMemoryPlanContent }, ON).attributes;
     for (const [key, value] of Object.entries(summaryMemoryPlanContent)) {
@@ -281,7 +288,7 @@ describe("content (AC-07)", () => {
     }
   });
 
-  it("drops eval scorer metadata and guardrail decision metadata by default and keeps them after opt-in", () => {
+  it("drops eval scorer metadata, guardrail decision metadata and guardrail text when hidden; keeps them by default", () => {
     // VoltAgent 2.11.0: finalizeScorerSpan stores combineEvalMetadata(...) under eval.scorer.metadata,
     // and that object holds the run's verbatim input and output; eval.expected is the reference
     // answer. A guardrail decision's metadata
@@ -290,13 +297,14 @@ describe("content (AC-07)", () => {
       "eval.scorer.metadata": '{"input":"SECRET_EVAL_INPUT","output":"SECRET_EVAL_OUTPUT"}',
       "eval.expected": "SECRET_EVAL_EXPECTED",
       "guardrail.result.metadata": '{"matched":"SECRET_GUARDRAIL_MATCH"}',
+      // Free text: a custom guardrail's message can quote what it matched.
+      "guardrail.message": "Blocked SECRET_GUARDRAIL_TEXT",
     };
     const kept = {
       "eval.scorer.id": "scorer-1",
       "eval.scorer.status": "success",
       "guardrail.name": "pii",
       "guardrail.action": "block",
-      "guardrail.message": "Output blocked due to profanity.",
       "guardrail.metadata": '{"owner":"team-a"}',
     };
     const off = mapVoltAgentAttributes({ "span.type": "scorer", ...evalAndGuardrail, ...kept }, OFF).attributes;
@@ -311,7 +319,7 @@ describe("content (AC-07)", () => {
     }
   });
 
-  it("copies input/output to input.value/output.value only after opt-in", () => {
+  it("copies input/output to input.value/output.value by default", () => {
     const { attributes } = mapVoltAgentAttributes(rootSpanAttributes(), ON);
     expect(attributes["input.value"]).toBe("SECRET_PROMPT");
     expect(attributes["input.mime_type"]).toBe("text/plain");
@@ -320,7 +328,7 @@ describe("content (AC-07)", () => {
     expect(attributes["agent.instructions"]).toBe("SECRET_INSTRUCTIONS");
   });
 
-  it("uses llm.messages as the llm span's input only after opt-in", () => {
+  it("uses llm.messages as the llm span's input unless inputs are hidden", () => {
     // VoltAgent 2.11.0 writes the prompt on llm spans only as llm.messages (agent.ts
     // buildLLMSpanAttributes), and fi-collector fills a span's input column only from input.value.
     const llm = {
@@ -340,7 +348,7 @@ describe("content (AC-07)", () => {
     expect(agent["input.value"]).toBeUndefined();
   });
 
-  it("uses the vector/embedding query as retriever input only after opt-in", () => {
+  it("uses the vector/embedding query as retriever input unless inputs are hidden", () => {
     const off = mapVoltAgentAttributes({ "span.type": "vector", "vector.query": "find cats" }, OFF);
     expect(off.attributes["input.value"]).toBeUndefined();
     const on = mapVoltAgentAttributes({ "span.type": "vector", "vector.query": "find cats" }, ON);
@@ -368,11 +376,132 @@ describe("content (AC-07)", () => {
     expect(isContentKey("guardrail.result.metadata", "{}")).toBe(true);
     expect(isContentKey("guardrail.metadata", "{}")).toBe(false);
     expect(isContentKey("guardrail.message", "x")).toBe(false);
+    expect(isFreeTextKey("guardrail.message", "x")).toBe(true);
+    expect(isFreeTextKey("exception.message", "x")).toBe(true);
+    expect(isFreeTextKey("error.message", "x")).toBe(true);
+    expect(isFreeTextKey("workflow.step.skipped_reason", "x")).toBe(true);
+    expect(isFreeTextKey("llm.finish_reason", "stop")).toBe(false);
+    expect(isFreeTextKey("ai.response.finish_reason", "stop")).toBe(false);
+    expect(contentSide("input", "x")).toBe("input");
+    expect(contentSide("output", "x")).toBe("output");
+    expect(contentSide("eval.scorer.metadata", "{}")).toBe("both");
+    expect(contentSide("middleware.input.original", "x")).toBe("input");
+    expect(contentSide("guardrail.output.after", "x")).toBe("output");
+    expect(contentSide("workflow.resume.data", "x")).toBe("both");
+    expect(contentSide("workspace.fs.path", "/x")).toBe("input");
+  });
+
+  it("hides one side at a time (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS)", () => {
+    const inputsOff = mapVoltAgentAttributes(rootSpanAttributes(), { policy: { ...SHOW_ALL, hideInputs: true } }).attributes;
+    expect(inputsOff.input).toBeUndefined();
+    expect(inputsOff["input.value"]).toBeUndefined();
+    expect(inputsOff["agent.instructions"]).toBeUndefined();
+    expect(inputsOff["agent.messages"]).toBeUndefined();
+    expect(inputsOff["agent.stateSnapshot"]).toBeUndefined(); // holds both sides
+    expect(inputsOff["output.value"]).toBe("SECRET_ANSWER");
+    const outputsOff = mapVoltAgentAttributes(rootSpanAttributes(), { policy: { ...SHOW_ALL, hideOutputs: true } }).attributes;
+    expect(outputsOff.output).toBeUndefined();
+    expect(outputsOff["output.value"]).toBeUndefined();
+    expect(outputsOff["agent.stateSnapshot"]).toBeUndefined();
+    expect(outputsOff["input.value"]).toBe("SECRET_PROMPT");
+  });
+
+  it("FI_HIDE_INPUT_MESSAGES drops the message lists; FI_HIDE_INPUT_TEXT keeps roles and redacts text", () => {
+    const llm = {
+      "span.type": "llm",
+      "llm.model": "m",
+      "llm.messages": '[{"role":"system","content":"SECRET_SYS"},{"role":"user","content":[{"type":"text","text":"SECRET_PROMPT"}]}]',
+    };
+    const noMessages = mapVoltAgentAttributes(llm, { policy: { ...SHOW_ALL, hideInputMessages: true } }).attributes;
+    expect(noMessages["llm.messages"]).toBeUndefined();
+    expect(noMessages["input.value"]).toBeUndefined();
+    const noText = mapVoltAgentAttributes(llm, { policy: { ...SHOW_ALL, hideInputText: true } }).attributes;
+    expect(JSON.parse(String(noText["llm.messages"]))).toEqual([
+      { role: "system", content: "__REDACTED__" },
+      { role: "user", content: "__REDACTED__" },
+    ]);
+    expect(noText["input.value"]).toBe(noText["llm.messages"]);
+    expect(JSON.stringify(noText)).not.toContain("SECRET");
+    // The agent root's own input is not a message list: FI_HIDE_INPUT_TEXT leaves it (fi-core semantics).
+    const root = mapVoltAgentAttributes(rootSpanAttributes(), { policy: { ...SHOW_ALL, hideInputText: true } }).attributes;
+    expect(root["input.value"]).toBe("SECRET_PROMPT");
+    expect(JSON.parse(String(root["agent.messages"]))).toEqual([{ role: "user", content: "__REDACTED__" }]);
+    // UI messages carry parts instead of content.
+    const ui = mapVoltAgentAttributes(
+      { "entity.type": "agent", "agent.messages.ui": '[{"role":"user","parts":[{"type":"text","text":"SECRET"}]}]' },
+      { policy: { ...SHOW_ALL, hideInputText: true } },
+    ).attributes;
+    expect(JSON.parse(String(ui["agent.messages.ui"]))).toEqual([{ role: "user", parts: "__REDACTED__" }]);
+  });
+});
+
+describe("stack traces, local paths and error text (never exported, either mode)", () => {
+  const scrub = { cwd: "/Users/someone/app", home: "/Users/someone" };
+  const failingTool = {
+    "span.type": "tool",
+    "tool.name": "read_config",
+    input: '{"file":"/Users/someone/app/config.json"}',
+    output: "read /Users/someone/.ssh/known_hosts and /tmp/x.log",
+    "error.type": "Error",
+    "error.message": "ENOENT /Users/someone/app/data.db (owner ops@example.com)",
+    "error.stack": "Error: ENOENT\n    at readFile (/Users/someone/app/node_modules/x/index.js:10:5)",
+    "workspace.fs.path": "/Users/someone/app/src/a.ts",
+    "eval.scorer.error_message": "judge failed at /home/ci/run",
+  };
+
+  it("drops error.stack and rewrites paths in every kept string by default", () => {
+    const { attributes } = mapVoltAgentAttributes(failingTool, { ...ON, scrub });
+    expect(attributes["error.stack"]).toBeUndefined();
+    expect(attributes.input).toBe('{"file":"[cwd]/config.json"}');
+    expect(attributes["input.value"]).toBe('{"file":"[cwd]/config.json"}');
+    expect(attributes.output).toBe("read ~/.ssh/known_hosts and [path]");
+    expect(attributes["workspace.fs.path"]).toBe("[cwd]/src/a.ts");
+    expect(attributes["error.message"]).toBe("ENOENT [cwd]/data.db (owner <email>)");
+    expect(attributes["eval.scorer.error_message"]).toBe("judge failed at [path]");
+    expect(attributes["error.type"]).toBe("Error");
+    expect(JSON.stringify(attributes)).not.toContain("/Users/");
+    expect(JSON.stringify(attributes)).not.toContain("    at ");
+  });
+
+  it("drops error text when inputs or outputs are hidden; keeps the error type", () => {
+    for (const policy of [OFF.policy, { ...SHOW_ALL, hideInputs: true }, { ...SHOW_ALL, hideOutputs: true }]) {
+      const { attributes } = mapVoltAgentAttributes(failingTool, { policy, scrub });
+      expect(attributes["error.message"]).toBeUndefined();
+      expect(attributes["eval.scorer.error_message"]).toBeUndefined();
+      expect(attributes["error.stack"]).toBeUndefined();
+      expect(attributes["error.type"]).toBe("Error");
+    }
+  });
+
+  it("filters exception events: no stacktrace ever, message scrubbed by default and dropped when hidden", () => {
+    const events = [
+      {
+        name: "exception",
+        time: [1, 2] as [number, number],
+        attributes: {
+          "exception.type": "TypeError",
+          "exception.message": "bad value in /Users/someone/app/x.ts for ops@example.com",
+          "exception.stacktrace": "TypeError: bad\n    at f (/Users/someone/app/x.ts:1:1)",
+        },
+      },
+    ];
+    const shown = mapSpanEvents(events, { ...ON, scrub })[0].attributes ?? {};
+    expect(shown).toEqual({ "exception.type": "TypeError", "exception.message": "bad value in [cwd]/x.ts for <email>" });
+    const hidden = mapSpanEvents(events, { ...OFF, scrub })[0].attributes ?? {};
+    expect(hidden).toEqual({ "exception.type": "TypeError" });
+    expect(events[0].attributes["exception.stacktrace"]).toContain("    at "); // the original is untouched
+  });
+
+  it("classifies stack keys", () => {
+    expect(isStackKey("error.stack")).toBe(true);
+    expect(isStackKey("exception.stacktrace")).toBe(true);
+    expect(isStackKey("error.stack_trace")).toBe(true);
+    expect(isStackKey("stack.size")).toBe(false);
   });
 });
 
 describe("credentials", () => {
-  it("never exports API keys or headers, even with captureContent", () => {
+  it("never exports API keys or headers, even with content captured", () => {
     const { attributes } = mapVoltAgentAttributes(
       {
         "span.type": "llm",
