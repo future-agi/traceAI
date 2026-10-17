@@ -319,7 +319,8 @@ recipe calls "displayed". It was read from fi-collector at future-agi `main`
 `exporter/clickhouse25exporter/converter.go`); the opt-in test (see
 "Tests") re-reads from that source the alias lists and the keys `input` and
 `output` are read from, and checks this table against them and against the
-keys the run emitted. No fi-collector was run.
+keys the run emitted. The contract test runs no fi-collector; "Live check" below
+records a run against a local Future AGI stack.
 
 | Column | Filled from | Source |
 |---|---|---|
@@ -507,9 +508,38 @@ Read from source; no Firecrawl call was made.
   `Failed to export spans batch code: 401, reason: Unauthorized` to stderr
   and the app carries on and exits 0; nothing raises in your code (tested
   against a recorder that answers 401).
-- No fi-collector, OpenLIT host, GitHub or OpenAI was called. Auth, project
-  stamping and storage are fi-collector behaviour the harness receiver does
-  not reproduce.
+- The contract test calls no fi-collector, OpenLIT host, GitHub or OpenAI.
+  Auth, project stamping and storage are fi-collector behaviour the harness
+  receiver does not reproduce; see "Live check" for a run that did.
+
+## Live check
+
+Run on 2026-10-16 against a local Future AGI stack (fi-collector on `:14338`,
+ClickHouse spans table, trace UI), with the recipe's `src/app.py`
+`init_tracing()` unchanged, `openlit` 1.45.0 (the latest release on PyPI that
+day), `openai` 2.54.0 (the latest 2.x; `openlit` requires `<3`), Python 3.12.
+One agent run made two chat calls with a tool in between (the tool function
+wrapped in `@openlit.trace`), plus one call to an unknown model.
+
+- The export was accepted with the origin as `OTEL_EXPORTER_OTLP_ENDPOINT`
+  and both percent-encoded key headers. The project came from
+  `OTEL_RESOURCE_ATTRIBUTES`.
+- Stored tree: `agent` > two `chat <model>` spans (each with a child `POST`) and
+  `lookup_order`. The chat spans had `observation_type=llm`, `model`, `provider`,
+  and prompt, completion and total tokens. The `agent`, `lookup_order` and
+  `POST` spans were `unknown` kind, as listed under "What Future AGI shows".
+- The failed call was stored with status `ERROR`; its status message holds
+  the provider's error body (see "Privacy"). The stored `span_events` kept only
+  the two `exception` event names and timestamps, with no `exception.message`
+  or `exception.stacktrace` attributes. The status message, tool arguments and
+  `user` were stored as the "Privacy" section says.
+- With `capture_message_content=True`, the prompt and answer were stored only
+  in `attrs_string` (`gen_ai.input.messages`, `gen_ai.output.messages`); the
+  span's `input` and `output` columns stayed empty, so the trace UI shows no
+  input or output for the model-call span.
+- `gen_ai.usage.cost` (0 with the recipe's empty price table) was not in the stored
+  attributes of this local stack, and the `cost` column was 0. The key
+  inventory table above records what OpenLIT sent, not what this stack kept.
 
 ## Tests
 
