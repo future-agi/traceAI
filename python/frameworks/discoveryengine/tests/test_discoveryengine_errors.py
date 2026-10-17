@@ -51,10 +51,11 @@ def fake():
 
 def _error_texts(span):
     exception = event(span, "exception") or {}
+    # No stack trace is ever recorded: frames carry local file paths.
+    assert "exception.stacktrace" not in exception
     return (
         span.status.description or "",
         exception.get("exception.message", ""),
-        exception.get("exception.stacktrace", ""),
     )
 
 
@@ -87,7 +88,7 @@ def test_permission_denied_sets_error_with_the_status_code_and_reraises(fake):
 def test_an_api_key_from_client_options_is_never_exported(fake):
     # search_lite is the method Google documents for API-key auth.
     client = search_client_with_api_key(fake, API_KEY)
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         client.search_lite(request=search_request("ok"))
         with pytest.raises(core_exceptions.PermissionDenied):
             client.search_lite(request=search_request(FAIL_DENIED))
@@ -115,7 +116,7 @@ def test_api_key_credentials_on_the_transport_are_never_exported(fake):
 )
 def test_auth_metadata_passed_per_call_is_never_exported(fake, key, value):
     metadata = [(key, value)]
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         with pytest.raises(core_exceptions.PermissionDenied):
             search_client(fake).search(request=search_request(FAIL_DENIED), metadata=metadata)
         answer_client(fake).answer_query(request=answer_request(), metadata=metadata)
@@ -129,9 +130,9 @@ def test_auth_metadata_passed_per_call_is_never_exported(fake, key, value):
             assert "authorization" not in key and "metadata" not in key, key
 
 
-def test_a_query_that_contains_the_token_is_redacted_when_captured(fake):
+def test_a_query_that_contains_the_token_is_redacted_when_recorded(fake):
     client = search_client(fake, credentials=oauth_credentials())
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         client.search(request=search_request("find " + ACCESS_TOKEN))
 
     values = attrs(traced.one())
@@ -210,7 +211,7 @@ def test_the_bearer_pass_runs_on_server_text_only(fake):
     # A captured query is the user's words: "bearer <word>" stays. Token
     # shapes and held credentials are still removed from it.
     query = "bearer responsibility " + UNSEEN_ACCESS_TOKEN
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         search_client(fake).search(request=search_request(query))
 
     assert attrs(traced.one())["input.value"] == "bearer responsibility [redacted]"
@@ -235,7 +236,7 @@ def test_refresh_token_and_client_secret_are_never_exported():
         "refresh failed for {0} with {1}".format(refresh_token, client_secret)
     )
     span = _call_wrapper(
-        _wrappers.OperationWrapper, "search", Client(), error, search_request("q"), capture_query=True
+        _wrappers.OperationWrapper, "search", Client(), error, search_request("q")
     )
 
     wire = span.to_json()
@@ -283,17 +284,12 @@ def test_error_text_is_capped_after_redaction(fake):
             client.search(request=search_request(FAIL_HUGE))
 
     span = traced.one()
-    description, message, stacktrace = _error_texts(span)
+    description, message = _error_texts(span)
     prefix = "InvalidArgument: "
     assert description.startswith(prefix)
     assert len(description[len(prefix):].encode("utf-8")) <= _wrappers.MAX_VALUE_BYTES
     assert _wrappers.MAX_VALUE_BYTES - 3 <= len(message.encode("utf-8")) <= _wrappers.MAX_VALUE_BYTES
-    assert (
-        _wrappers.MAX_STACKTRACE_BYTES - 3
-        <= len(stacktrace.encode("utf-8"))
-        <= _wrappers.MAX_STACKTRACE_BYTES
-    )
-    for text in (description, message, stacktrace):
+    for text in (description, message):
         assert ACCESS_TOKEN not in text
         # Whole characters only: the cut never leaves a broken euro sign.
         text.encode("utf-8").decode("utf-8")
@@ -359,14 +355,19 @@ def test_an_escaped_copy_of_a_hidden_query_is_removed(copy):
     error = core_exceptions.InvalidArgument("bad query '{0}'".format(copy))
     error.__cause__ = cause
     span = _call_wrapper(
-        _wrappers.OperationWrapper, "search", _Client(None), error, search_request(ESCAPED_QUERY)
+        _wrappers.OperationWrapper,
+        "search",
+        _Client(None),
+        error,
+        search_request(ESCAPED_QUERY),
+        hide_inputs=True,
     )
 
     for text in _error_texts(span):
         assert "Zelda" not in text and "quoted" not in text, text
         assert "__REDACTED__" in text
-    stacktrace = event(span, "exception")["exception.stacktrace"]
-    assert "direct cause" in stacktrace and "debug_error_string" in stacktrace
+    # The chained gRPC cause (debug_error_string) is never exported: no stack trace.
+    assert "debug_error_string" not in span.to_json()
 
 
 def _protobuf_text(text):
@@ -398,7 +399,12 @@ def test_a_hex_digit_after_a_hex_escape_is_matched_as_grpc_escapes_it():
     # absl escapes a hex digit that follows \xHH too: U+00E9 then 1 is \xc3\xa9\x31.
     error = core_exceptions.InvalidArgument(r"bad query 'caf\xc3\xa9\x31\x32 x'")
     span = _call_wrapper(
-        _wrappers.OperationWrapper, "search", _Client(None), error, search_request("caf\xe912 x")
+        _wrappers.OperationWrapper,
+        "search",
+        _Client(None),
+        error,
+        search_request("caf\xe912 x"),
+        hide_inputs=True,
     )
 
     assert event(span, "exception")["exception.message"] == "400 bad query '__REDACTED__'"
@@ -429,7 +435,6 @@ def test_credentials_that_cannot_be_read_fail_closed():
         Unreadable(),
         error,
         search_request("secret-query"),
-        capture_query=True,
     )
     values = attrs(span)
     assert "input.value" not in values
@@ -487,3 +492,46 @@ def test_async_errors_are_redacted_the_same_way(fake):
     span = traced.one()
     assert attrs(span)["discoveryengine.error.code"] == 403
     assert ACCESS_TOKEN not in traced.wire()
+
+
+def test_no_stack_trace_or_local_path_is_recorded(fake):
+    # traceback frames carry absolute file paths (home directory, user name,
+    # virtualenv). The exception event has the type and the cleaned message
+    # only, so none of that leaves the process.
+    import getpass
+    import os
+    import socket
+    from pathlib import Path
+
+    with instrumented() as traced:
+        with pytest.raises(core_exceptions.PermissionDenied):
+            search_client(fake).search(request=search_request(FAIL_DENIED))
+        with pytest.raises(core_exceptions.RetryError):
+            from google.api_core import retry as retries
+
+            search_client(fake).search(
+                request=search_request(FAIL_UNAVAILABLE),
+                retry=retries.Retry(
+                    predicate=retries.if_exception_type(core_exceptions.ServiceUnavailable),
+                    initial=0.01,
+                    maximum=0.02,
+                    timeout=0.1,
+                ),
+            )
+
+    for span in traced.spans():
+        assert sorted(event(span, "exception")) == ["exception.message", "exception.type"]
+    wire = traced.wire()
+    for local in (
+        "exception.stacktrace",
+        "Traceback",
+        'File "',
+        "site-packages",
+        str(Path.home()),
+        os.getcwd(),
+        getpass.getuser(),
+        socket.gethostname(),
+    ):
+        # Very short user or host names (CI runners) could match by chance.
+        if len(local) >= 4:
+            assert local not in wire, local

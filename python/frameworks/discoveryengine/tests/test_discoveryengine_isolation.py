@@ -40,7 +40,7 @@ def _boom(*_args, **_kwargs):
 
 def test_a_failing_request_reader_still_returns_the_result(fake, monkeypatch):
     monkeypatch.setattr(_wrappers, "_request_attributes", _boom)
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         pager = search_client(fake).search(request=search_request("q"))
 
     assert len(pager.results) == SEARCH_RESULTS
@@ -85,12 +85,12 @@ def test_a_failing_error_recorder_still_raises_the_vendor_error(fake, monkeypatc
 
 
 def test_a_query_that_cannot_be_read_keeps_no_server_text(fake, monkeypatch):
-    # The query is hidden by default; if it cannot be read, the server's
-    # error text (which may echo it) is replaced as a whole.
-    from fi_instrumentation import REDACTED_VALUE
+    # With hide_inputs, if the query cannot be read, the server's error
+    # text (which may echo it) is replaced as a whole.
+    from fi_instrumentation import REDACTED_VALUE, TraceConfig
 
     monkeypatch.setattr(_wrappers, "_hidden_inputs", _boom)
-    with instrumented() as traced:
+    with instrumented(config=TraceConfig(hide_inputs=True)) as traced:
         with pytest.raises(core_exceptions.PermissionDenied):
             search_client(fake).search(request=search_request(FAIL_DENIED))
 
@@ -98,13 +98,13 @@ def test_a_query_that_cannot_be_read_keeps_no_server_text(fake, monkeypatch):
     assert span.status.description == "PermissionDenied: " + REDACTED_VALUE
     exception = [item for item in span.events if item.name == "exception"][0].attributes
     assert exception["exception.message"] == REDACTED_VALUE
-    assert exception["exception.stacktrace"] == REDACTED_VALUE
+    assert "exception.stacktrace" not in exception
     assert attrs(span)["discoveryengine.error.status"] == "PERMISSION_DENIED"
 
 
 def test_a_failing_credential_lookup_still_runs_the_call(fake, monkeypatch):
     monkeypatch.setattr(_wrappers, "_credential_values", _boom)
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         pager = search_client(fake).search(request=search_request("q"))
 
     assert len(pager.results) == SEARCH_RESULTS

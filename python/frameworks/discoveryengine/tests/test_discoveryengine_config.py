@@ -1,4 +1,4 @@
-"""Content capture, TraceConfig hide flags and PII redaction, including error text."""
+"""Query capture follows TraceConfig (on by default, FI_HIDE_INPUTS hides it); PII redaction; error text."""
 
 from __future__ import annotations
 
@@ -47,10 +47,11 @@ def clean_env(monkeypatch):
 
 def _error_texts(span):
     exception = event(span, "exception") or {}
+    # No stack trace is ever recorded: frames carry local file paths.
+    assert "exception.stacktrace" not in exception
     return (
         span.status.description or "",
         exception.get("exception.message", ""),
-        exception.get("exception.stacktrace", ""),
     )
 
 
@@ -63,27 +64,36 @@ def _denied(fake, traced_options):
     return traced.one()
 
 
-def test_query_text_is_off_by_default_everywhere_including_error_text(fake):
+def test_the_query_is_recorded_by_default_and_kept_in_error_text(fake):
+    # TraceConfig default (DEFAULT_HIDE_INPUTS = False), as in every traceAI
+    # instrumentor: the query reaches the span and the server's echo of it
+    # stays in the error text.
     span = _denied(fake, {})
     values = attrs(span)
-    assert "input.value" not in values and "gen_ai.retrieval.query" not in values
+    assert values["input.value"] == DENIED_QUERY
+    assert values["gen_ai.retrieval.query"] == DENIED_QUERY
+    for text in _error_texts(span):
+        assert DENIED_QUERY in text
+
+
+@pytest.mark.parametrize("source", ["config", "env"])
+def test_hide_inputs_removes_the_query_everywhere_including_error_text(fake, monkeypatch, source):
+    # Control for the test above: FI_HIDE_INPUTS (or TraceConfig) hides it.
+    options = {}
+    if source == "config":
+        options["config"] = _config(hide_inputs=True)
+    else:
+        monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+    span = _denied(fake, options)
+    values = attrs(span)
+    assert values["input.value"] == REDACTED_VALUE
+    assert "gen_ai.retrieval.query" not in values
     for text in _error_texts(span):
         assert text
         assert DENIED_QUERY not in text
         assert EMAIL not in text
     assert REDACTED_VALUE in span.status.description
     assert DENIED_QUERY not in span.to_json()
-
-
-def test_capture_query_records_it_and_keeps_it_in_error_text(fake):
-    # Control for the test above: with capture on, the query reaches the
-    # span and the server's echo of it stays in the error text.
-    span = _denied(fake, {"capture_query": True})
-    values = attrs(span)
-    assert values["input.value"] == DENIED_QUERY
-    assert values["gen_ai.retrieval.query"] == DENIED_QUERY
-    for text in _error_texts(span):
-        assert DENIED_QUERY in text
 
 
 def _quoted(fake, traced_options):
@@ -97,16 +107,16 @@ def _quoted(fake, traced_options):
 
 
 def test_the_server_echo_of_the_query_includes_an_escaped_copy(fake):
-    # Control for the test below: with capture on, both copies are kept.
-    span = _quoted(fake, {"capture_query": True})
+    # Control for the test below: by default (query recorded) both copies are kept.
+    span = _quoted(fake, {})
     for text in _error_texts(span):
         assert QUOTED_QUERY in text
         assert QUOTED_DETAIL in text
 
 
-@pytest.mark.parametrize("hide_inputs", [False, True], ids=["default", "hide_inputs"])
-def test_escaped_copies_of_the_query_are_removed_from_error_text(fake, hide_inputs):
-    options = {"capture_query": True, "config": _config(hide_inputs=True)} if hide_inputs else {}
+@pytest.mark.parametrize("source", ["config", "env"])
+def test_escaped_copies_of_the_query_are_removed_from_error_text(fake, monkeypatch, source):
+    options = _hidden_options(monkeypatch, source)
     span = _quoted(fake, options)
     for text in _error_texts(span):
         assert text
@@ -125,15 +135,15 @@ CONTROL_DETAIL = r"Zelda\013control\033copy\177end"
 
 def test_the_status_detail_writes_control_characters_as_octal(fake):
     # Control: the escaped copy really is in the error the caller sees.
-    with instrumented(capture_query=True):
+    with instrumented():
         with pytest.raises(core_exceptions.InvalidArgument) as raised:
             search_client(fake).search(request=search_request(CONTROL_QUERY))
     assert CONTROL_DETAIL in str(raised.value)
 
 
-@pytest.mark.parametrize("hide_inputs", [False, True], ids=["default", "hide_inputs"])
-def test_octal_escaped_copies_of_the_query_are_removed_from_error_text(fake, hide_inputs):
-    options = {"capture_query": True, "config": _config(hide_inputs=True)} if hide_inputs else {}
+@pytest.mark.parametrize("source", ["config", "env"])
+def test_octal_escaped_copies_of_the_query_are_removed_from_error_text(fake, monkeypatch, source):
+    options = _hidden_options(monkeypatch, source)
     with instrumented(**options) as traced:
         with pytest.raises(core_exceptions.InvalidArgument) as raised:
             search_client(fake).search(request=search_request(CONTROL_QUERY))
@@ -152,34 +162,38 @@ def _config(**fields):
     return TraceConfig(**fields)
 
 
-@pytest.mark.parametrize("source", ["config", "env"])
-def test_hide_inputs_wins_over_capture_query_everywhere(fake, monkeypatch, source):
-    options = {"capture_query": True}
+def _hidden_options(monkeypatch, source):
     if source == "config":
-        options["config"] = _config(hide_inputs=True)
-    else:
-        monkeypatch.setenv("FI_HIDE_INPUTS", "true")
-    span = _denied(fake, options)
-
-    values = attrs(span)
-    assert values["input.value"] == REDACTED_VALUE
-    assert "gen_ai.retrieval.query" not in values
-    for text in _error_texts(span):
-        assert DENIED_QUERY not in text and EMAIL not in text
-    assert DENIED_QUERY not in span.to_json()
+        return {"config": _config(hide_inputs=True)}
+    monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+    return {}
 
 
-def test_hide_inputs_without_capture_records_no_placeholder(fake):
+def test_hide_inputs_records_only_the_placeholder(fake):
     with instrumented(config=_config(hide_inputs=True)) as traced:
         search_client(fake).search(request=search_request("plain"))
 
-    assert "input.value" not in attrs(traced.one())
+    values = attrs(traced.one())
+    assert values["input.value"] == REDACTED_VALUE
+    assert "gen_ai.retrieval.query" not in values
+    assert "plain" not in traced.wire()
+
+
+def test_capture_query_is_ignored_with_a_warning(fake, caplog):
+    # The pre-release package-specific switch is gone (one privacy switch:
+    # TraceConfig). Passing it changes nothing and logs why.
+    with caplog.at_level("WARNING", logger="traceai_discoveryengine"):
+        with instrumented(capture_query=False) as traced:
+            search_client(fake).search(request=search_request("still recorded"))
+
+    assert attrs(traced.one())["input.value"] == "still recorded"
+    assert "capture_query is ignored" in caplog.text
 
 
 def test_hide_outputs_changes_nothing_because_no_output_text_is_recorded(fake):
-    with instrumented(capture_query=True) as plain:
+    with instrumented() as plain:
         answer_client(fake).answer_query(request=answer_request("same"))
-    with instrumented(capture_query=True, config=_config(hide_outputs=True)) as hidden:
+    with instrumented(config=_config(hide_outputs=True)) as hidden:
         answer_client(fake).answer_query(request=answer_request("same"))
 
     assert attrs(hidden.one()) == attrs(plain.one())
@@ -187,7 +201,7 @@ def test_hide_outputs_changes_nothing_because_no_output_text_is_recorded(fake):
 
 @pytest.mark.parametrize("source", ["config", "env"])
 def test_pii_redaction_covers_the_query_and_the_error_text(fake, monkeypatch, source):
-    options = {"capture_query": True}
+    options = {}
     if source == "config":
         options["config"] = _config(pii_redaction=True)
     else:
@@ -203,7 +217,7 @@ def test_pii_redaction_covers_the_query_and_the_error_text(fake, monkeypatch, so
 
 def test_pii_straddling_the_cap_is_replaced_before_the_cut(fake):
     query = "x" * (_wrappers.MAX_VALUE_BYTES - 8) + " " + EMAIL
-    with instrumented(capture_query=True, config=_config(pii_redaction=True)) as traced:
+    with instrumented(config=_config(pii_redaction=True)) as traced:
         search_client(fake).search(request=search_request(query))
 
     value = attrs(traced.one())["input.value"]
@@ -224,7 +238,7 @@ def test_pii_redaction_also_matches_a_project_number_in_resource_names(fake):
 
 def test_the_query_is_capped_on_a_character_boundary(fake):
     query = "\u20ac" * 600  # 1800 bytes of UTF-8
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         search_client(fake).search(request=search_request(query))
 
     value = attrs(traced.one())["input.value"]
@@ -250,7 +264,7 @@ def test_async_calls_honour_the_same_settings(fake):
         finally:
             await client.transport.close()
 
-    with instrumented(capture_query=True, config=_config(hide_inputs=True)) as traced:
+    with instrumented(config=_config(hide_inputs=True)) as traced:
         asyncio.run(call())
 
     span = traced.one()
@@ -262,8 +276,7 @@ def test_async_calls_honour_the_same_settings(fake):
     "options, message",
     [
         ({"config": {"hide_inputs": True}}, "config must be a fi_instrumentation.TraceConfig"),
-        ({"capture_query": "yes"}, "capture_query must be a bool"),
-        ({"capture_query": 1}, "capture_query must be a bool"),
+        ({"config": "hide"}, "config must be a fi_instrumentation.TraceConfig"),
     ],
 )
 def test_bad_options_raise_type_error_and_wrap_nothing(options, message):

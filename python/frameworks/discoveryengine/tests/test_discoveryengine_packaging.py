@@ -127,5 +127,8 @@ def test_the_readme_documents_every_attribute_the_code_can_write():
 def test_the_readme_states_the_caps_the_code_applies():
     readme = README.read_text()
     assert _wrappers.MAX_VALUE_BYTES == 1024
-    assert _wrappers.MAX_STACKTRACE_BYTES == 16 * 1024
-    assert "1 KB" in readme and "16 KB" in readme
+    assert "1 KB" in readme
+    # No stack trace is recorded, so there is no stack trace cap.
+    assert not hasattr(_wrappers, "MAX_STACKTRACE_BYTES")
+    assert "16 KB" not in readme
+    assert "`exception.stacktrace` is never written" in readme

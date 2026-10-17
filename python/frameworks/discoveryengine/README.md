@@ -11,8 +11,10 @@ ingestion, data store and engine administration produce no spans from this
 package. It does not instrument `google.genai`; for the Gemini client use
 `traceAI-google-genai`.
 
-Status: alpha. Every test runs against a loopback gRPC fake; nothing in this
-package has been run against a live Google endpoint.
+Status: alpha. Every test runs against a loopback gRPC fake, and the
+end-to-end check exported real client calls (made against that fake) into a
+local Future AGI. Nothing in this package has been run against a live Google
+endpoint yet.
 
 ## Why a wrapper
 
@@ -29,6 +31,14 @@ transport spans, which carry no query, result count or retriever kind.
 
 ```bash
 pip install traceAI-discoveryengine
+```
+
+Until the first release reaches PyPI, install it from a checkout of this
+repository:
+
+```bash
+pip install "fi-instrumentation-otel>=1.1.0" "google-cloud-discoveryengine>=0.20.5,<1" \
+  ./python/frameworks/discoveryengine
 ```
 
 It accepts `google-cloud-discoveryengine>=0.20.5,<1` and
@@ -115,7 +125,7 @@ no span: the span covers the call that created the pager, and
 | `discoveryengine.answer.length` | successful `answer_query` with an answer | Length of `answer_text` in characters. The text itself is never recorded. |
 | `discoveryengine.answer.state` | successful `answer_query` with an answer | The answer state name, for example `SUCCEEDED` or `FAILED`. |
 | `discoveryengine.session` | `answer_query` with a session | The session resource name from the request and then from the response. A request for a new session (`.../sessions/-`) records the name the response returns. |
-| `gen_ai.retrieval.query`, `input.value` | `capture_query=True` | See [Privacy](#privacy). |
+| `gen_ai.retrieval.query`, `input.value` | requests with a query | `SearchRequest.query` or `AnswerQueryRequest.query.text`, recorded by default. See [Privacy](#privacy). |
 | `discoveryengine.error.status`, `discoveryengine.error.code` | failed calls | The gRPC status name (for example `PERMISSION_DENIED`) and the HTTP-style code `google-api-core` maps it to (for example `403`). For a `RetryError`, the last attempt's. |
 | `discoveryengine.cancelled` | cancelled async calls | `true`; see [Errors and cancellation](#errors-and-cancellation). |
 
@@ -134,29 +144,35 @@ separate attribute.
 
 ## Privacy
 
-Recorded by default: counts, the answer state, the serving config and
-session resource names, and error text with the query removed.
+The query follows `TraceConfig`, like the input of every traceAI
+instrumentor: it is recorded by default (`gen_ai.retrieval.query` and
+`input.value`, with credentials removed and cut to 1 KB of UTF-8 on a
+character boundary), and `FI_HIDE_INPUTS=true` or
+`TraceConfig(hide_inputs=True)` hides it everywhere, including server error
+text. There is no package-specific switch.
+
+Also recorded: counts, the answer state, the serving config and session
+resource names, and error text (status name, code and message).
 
 Never recorded: Google credentials, search results (titles, snippets,
-documents, summaries), answer text, citations and reference content, and
-request metadata. There is no setting that adds them.
+documents, summaries), answer text, citations and reference content,
+request metadata, stack traces and local file paths. There is no setting
+that adds them.
 
-Not recorded unless you opt in, because it is your user's content:
+To keep the query off the trace:
 
 ```python
+from fi_instrumentation import TraceConfig
+
 DiscoveryEngineInstrumentor().instrument(
     tracer_provider=tracer_provider,
-    capture_query=True,   # gen_ai.retrieval.query and input.value
+    config=TraceConfig(hide_inputs=True),   # or FI_HIDE_INPUTS=true
 )
 ```
 
-`capture_query` records `SearchRequest.query` or
-`AnswerQueryRequest.query.text`, with credentials removed and cut to 1 KB of
-UTF-8 on a character boundary. It must be a boolean.
-
-While the query is not recorded (the default, or with `hide_inputs`), each
-occurrence of it in server-written text (the error status description, the
-`exception` event's message and stack trace) becomes `__REDACTED__`. That
+While the query is hidden, each occurrence of it in server-written text
+(the error status description and the `exception` event's message) becomes
+`__REDACTED__`. That
 covers the verbatim text and the escaped copies the client libraries write:
 protobuf text format (a status detail that quotes the query, which
 `google-api-core` appends to the error message with `'`, `"` and `\`
@@ -171,8 +187,8 @@ If the query cannot be read, the error message is recorded as
 `__REDACTED__`. Other request fields that a server error may quote (a
 `filter`, `user_pseudo_id`) are not removed.
 
-Credentials are removed from every recorded value, including error messages
-and stack traces, and replaced with `[redacted]`. The package looks for them
+Credentials are removed from every recorded value, including error
+messages, and replaced with `[redacted]`. The package looks for them
 where the client keeps them: the transport's google.auth credentials
 (`token`, `refresh_token`, `client_secret`; an API key credential's
 `token`), `client_options.api_key`, and per-call `metadata` entries named
@@ -192,14 +208,14 @@ self-signed token), and, in server-written text only, the value after
 `metadata`) cannot be read, before or after the call, the call is traced
 without the query and with
 `[not recorded: the client credentials could not be read]` in place of the
-error message, and without a stack trace.
+error message.
 
 `TraceConfig` settings apply. Pass `config=TraceConfig(...)` or set the
 environment variables before calling `instrument()`:
 
 | Setting | Effect |
 |---|---|
-| `hide_inputs` / `FI_HIDE_INPUTS=true` | With `capture_query`, records `input.value` as `__REDACTED__` and drops `gen_ai.retrieval.query`. The query is also removed from error text as described above. Counts and resource names stay. |
+| `hide_inputs` / `FI_HIDE_INPUTS=true` | Records `input.value` as `__REDACTED__` and drops `gen_ai.retrieval.query`. The query is also removed from error text as described above. Counts and resource names stay. |
 | `hide_outputs` / `FI_HIDE_OUTPUTS=true` | No effect: no output text is recorded. |
 | `pii_redaction` / `FI_PII_REDACTION=true` | Replaces emails, phone numbers, SSNs, card numbers, IPv4 addresses and `sk-`/`pk-` style keys with tokens such as `<EMAIL_ADDRESS>` in every recorded text: attributes, the error status and the `exception` event. It runs after credentials (and the hidden query) are removed and before the size caps, so a cut cannot leave part of an email. The patterns also match ids: in a resource name with a GCP project number, the last ten digits are replaced (`projects/123456789012/...` is recorded as `projects/12<PHONE_NUMBER>/...`). |
 
@@ -218,8 +234,10 @@ unchanged, so your code still sees the server's original message.
 
 The error text is cleaned in this order: credentials, then the hidden query,
 then PII with `pii_redaction`. It is then cut on a UTF-8 character boundary:
-the status description's message and `exception.message` to 1 KB, and
-`exception.stacktrace` to 16 KB (the head is kept).
+the status description's message and `exception.message` to 1 KB. The
+`exception` event carries `exception.type` and `exception.message` only:
+`exception.stacktrace` is never written, because traceback frames contain
+local file paths (home directory, user name, virtualenv).
 
 An `answer_query` that returns an answer with state `FAILED` is not an
 exception: the span gets status ERROR with description `answer state FAILED`
@@ -238,7 +256,7 @@ your call proceeds with its own result or exception.
 
 - Recorded text is cut on a UTF-8 character boundary after it is cleaned:
   1 KB for the query and each resource name, 1 KB for `exception.message`
-  and the message in the error status, 16 KB for `exception.stacktrace`.
+  and the message in the error status. No stack trace is recorded.
   With `pii_redaction`, `FITracer` runs its own PII pass on attributes after
   the cut, and a new match can make a value a few bytes longer; that pass
   only redacts more.
@@ -285,6 +303,10 @@ env -u PYTHONPATH PYTHONPATH="python/frameworks/discoveryengine:python:python/te
   --with 'google-cloud-discoveryengine==0.20.5' \
   pytest python/frameworks/discoveryengine/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
 ```
+
+To run against the published `fi-instrumentation-otel` wheel instead of the
+in-repo source, drop `python:` from `PYTHONPATH` and add
+`--with 'fi-instrumentation-otel==1.1.0'`.
 
 Replace `3.11` with `3.10`, `3.12` or `3.13` for the other supported
 Pythons.

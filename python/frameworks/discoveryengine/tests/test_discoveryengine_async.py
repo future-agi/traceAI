@@ -52,9 +52,11 @@ async def _async_journey(fake):
         await answer.transport.close()
 
 
-@pytest.mark.parametrize("capture_query", [False, True])
-def test_async_spans_match_sync_spans(fake, capture_query):
-    with instrumented(capture_query=capture_query) as traced:
+@pytest.mark.parametrize("hide_inputs", [False, True], ids=["default", "hide_inputs"])
+def test_async_spans_match_sync_spans(fake, hide_inputs):
+    from fi_instrumentation import TraceConfig
+
+    with instrumented(config=TraceConfig(hide_inputs=hide_inputs)) as traced:
         _sync_journey(fake)
         asyncio.run(_async_journey(fake))
 

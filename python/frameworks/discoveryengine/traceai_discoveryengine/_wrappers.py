@@ -8,7 +8,6 @@ import contextvars
 import json
 import logging
 import re
-import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
@@ -42,7 +41,6 @@ REDACTED = "[redacted]"
 # holds could not be read, so they cannot be removed from it.
 UNREADABLE = "[not recorded: the client credentials could not be read]"
 MAX_VALUE_BYTES = 1024
-MAX_STACKTRACE_BYTES = 16 * 1024
 _FAILED_STATE = "FAILED"
 
 # gRPC metadata keys that carry a credential, compared in lower case.
@@ -78,13 +76,14 @@ _ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
 
 @dataclass(frozen=True)
 class Options:
-    """What a span may carry beyond counts and resource names, and how text is cleaned.
+    """How a span's text is cleaned, from the ``TraceConfig`` that ``FITracer`` also applies.
 
-    ``capture_query`` is off by default. ``hide_*`` and ``pii_redaction``
-    come from the ``TraceConfig`` that ``FITracer`` also applies.
+    The query is recorded unless ``hide_inputs`` (``FI_HIDE_INPUTS``) is set,
+    as in every traceAI instrumentor. Result and answer text are never
+    recorded (counts and lengths only), so ``hide_outputs`` has nothing to
+    hide.
     """
 
-    capture_query: bool = False
     hide_inputs: bool = False
     hide_outputs: bool = False
     pii_redaction: bool = False
@@ -297,22 +296,21 @@ def _request_attributes(
         if session is not None:
             attributes[SESSION] = session
 
-    if options.capture_query:
-        query = _query_text(operation, request)
-        if query and options.hide_inputs:
-            # The placeholder FITracer writes for a hidden input.value; the
-            # query text never reaches the span.
-            attributes[INPUT_VALUE] = REDACTED_VALUE
-        elif query and secrets is not None:
-            text = _clean(query, secrets, pii=pii)
-            attributes[RETRIEVAL_QUERY] = text
-            # The backend input panel reads input.value; keep both keys equal.
-            attributes[INPUT_VALUE] = text
+    query = _query_text(operation, request)
+    if query and options.hide_inputs:
+        # The placeholder FITracer writes for a hidden input.value; the
+        # query text never reaches the span.
+        attributes[INPUT_VALUE] = REDACTED_VALUE
+    elif query and secrets is not None:
+        text = _clean(query, secrets, pii=pii)
+        attributes[RETRIEVAL_QUERY] = text
+        # The backend input panel reads input.value; keep both keys equal.
+        attributes[INPUT_VALUE] = text
     return attributes
 
 
 def _hides_query(options: Options) -> bool:
-    return options.hide_inputs or not options.capture_query
+    return options.hide_inputs
 
 
 def _c_escaped(text: str) -> str:
@@ -360,7 +358,7 @@ def _hidden_inputs(
     detail ``str(error)`` appends) and gRPC core's CHexEscape (the chained
     gRPC error's ``debug_error_string`` in older releases). Longest first,
     so a longer copy wins where two match at the same place. Empty when the
-    query is recorded (``capture_query`` without ``hide_inputs``) or empty.
+    query is recorded (``hide_inputs`` off, the default) or empty.
     """
     if not _hides_query(options):
         return ()
@@ -448,12 +446,13 @@ def _exception_attributes(
     pii: bool = False,
     hidden: Hidden = (),
 ) -> Dict[str, Any]:
-    """The OTel exception event, with credentials removed from every text.
+    """The OTel exception event: the type and the cleaned message, never a stack trace.
 
-    The hidden query and then PII are replaced next when enabled. The
-    message is then cut to 1 KB and the stacktrace to 16 KB of UTF-8: a
-    server error can echo a large request into both. Without readable
-    credentials only the type is kept.
+    Credentials are removed from the message, then the hidden query and PII
+    when enabled, then it is cut to 1 KB of UTF-8 (a server error can echo a
+    large request). ``exception.stacktrace`` is never written: traceback
+    frames carry local file paths, which include the user name. Without
+    readable credentials only the type is kept.
     """
     error_type = type(error)
     module = error_type.__module__
@@ -464,13 +463,9 @@ def _exception_attributes(
     )
     if secrets is None:
         return {"exception.type": qualified, "exception.message": UNREADABLE}
-    stacktrace = "".join(traceback.format_exception(error_type, error, error.__traceback__))
     return {
         "exception.type": qualified,
         "exception.message": _clean(_describe(error), secrets, pii=pii, hidden=hidden, server=True),
-        "exception.stacktrace": _clean(
-            stacktrace, secrets, MAX_STACKTRACE_BYTES, pii, hidden, server=True
-        ),
     }
 
 

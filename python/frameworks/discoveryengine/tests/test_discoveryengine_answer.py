@@ -22,7 +22,7 @@ from _discoveryengine_support import (
     instrumented,
 )
 
-QUERY = "ANSWER-QUERY-OFF-BY-DEFAULT"
+QUERY = "ANSWER-QUERY-MARKER"
 
 
 @pytest.fixture()
@@ -44,10 +44,13 @@ def test_answer_query_is_one_retriever_span_with_counts_not_the_answer(fake):
         "discoveryengine.result_count": ANSWER_REFERENCES,
         "discoveryengine.answer.length": len(ANSWER_TEXT),
         "discoveryengine.answer.state": "SUCCEEDED",
+        # TraceConfig default: the query (the span's input) is recorded.
+        "gen_ai.retrieval.query": QUERY,
+        "input.value": QUERY,
     }
     assert span.status.status_code is StatusCode.OK
+    # The answer text and reference content are never recorded.
     wire = traced.wire()
-    assert QUERY not in wire
     for marker in CONTENT_MARKERS:
         assert marker not in wire, marker
 
@@ -56,7 +59,7 @@ def test_no_model_name_is_invented(fake):
     # AC-04: the 0.20.5 AnswerQueryResponse carries no model name, so the
     # span has none, even when the request names a model version.
     request = answer_request(answer_generation_spec={"model_spec": {"model_version": "MODEL-VERSION-MARKER"}})
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         answer_client(fake).answer_query(request=request)
 
     for key in attrs(traced.one()):
@@ -111,8 +114,8 @@ def test_a_response_without_an_answer_omits_the_counts(fake):
         ),
     ],
 )
-def test_capture_query_records_the_query_text(fake, request_factory):
-    with instrumented(capture_query=True) as traced:
+def test_the_query_text_is_recorded_by_default(fake, request_factory):
+    with instrumented() as traced:
         answer_client(fake).answer_query(request_factory("what is a retriever span"))
 
     values = attrs(traced.one())

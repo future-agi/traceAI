@@ -46,7 +46,7 @@ from _discoveryengine_support import (  # noqa: E402
 FI_API_KEY = "placeholder-fi-api-key"
 FI_SECRET_KEY = "placeholder-fi-secret-key"
 PROJECT = "discoveryengine-contract"
-QUERY = "CONTRACT-QUERY-OFF-BY-DEFAULT"
+QUERY = "CONTRACT-QUERY-MARKER"
 
 
 def _journey(receiver, fake, monkeypatch, **options) -> List[dict]:
@@ -140,7 +140,8 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
         assert values["gen_ai.span.kind"] == "RETRIEVER"
         assert values["discoveryengine.serving_config"] == SERVING_CONFIG
         assert int(values["discoveryengine.result_count"]) == SEARCH_RESULTS
-        assert "input.value" not in values
+        # TraceConfig default: the query is recorded.
+        assert values["input.value"] == QUERY
         # register()'s processor also promotes UNSET to OK on export
         # (fi_instrumentation/otel.py _auto_set_ok_status), so the wrapper's
         # own OK is pinned by the in-memory tests.
@@ -162,7 +163,8 @@ def test_real_client_calls_reach_the_collector_contract(monkeypatch):
     assert [event["name"] for event in failed_search.get("events", [])] == ["exception"]
 
 
-def test_no_credential_query_or_content_is_exported(monkeypatch):
+def test_with_fi_hide_inputs_no_credential_query_or_content_is_exported(monkeypatch):
+    monkeypatch.setenv("FI_HIDE_INPUTS", "true")
     with FakeDiscoveryEngine() as fake, Receiver() as receiver:
         spans = _journey(receiver, fake, monkeypatch)
         exports = receiver.requests()
@@ -175,11 +177,12 @@ def test_no_credential_query_or_content_is_exported(monkeypatch):
         assert secret not in wire, secret
 
 
-def test_capture_query_reaches_the_collector(monkeypatch):
-    # Control for the test above: with capture on, the query is on the wire,
-    # still without the token or any response content.
+def test_the_query_reaches_the_collector_by_default(monkeypatch):
+    # Control for the test above: by default the query is on the wire,
+    # still without the token, any response content or a stack trace.
+    monkeypatch.delenv("FI_HIDE_INPUTS", raising=False)
     with FakeDiscoveryEngine() as fake, Receiver() as receiver:
-        spans = _journey(receiver, fake, monkeypatch, capture_query=True)
+        spans = _journey(receiver, fake, monkeypatch)
 
     search = _flatten_attributes(_by_name(spans)["discoveryengine.search"][0]["attributes"])
     assert search["input.value"] == QUERY
@@ -188,6 +191,8 @@ def test_capture_query_reaches_the_collector(monkeypatch):
     assert ACCESS_TOKEN not in wire
     for marker in CONTENT_MARKERS:
         assert marker not in wire, marker
+    for local in ("exception.stacktrace", "Traceback", 'File "', "site-packages", str(Path.home())):
+        assert local not in wire, local
 
 
 def test_post_otlp_round_trip_of_captured_spans():

@@ -11,10 +11,14 @@ First release.
   `discoveryengine.result_count`; for answers also
   `discoveryengine.answer.length`, `discoveryengine.answer.state` and
   `discoveryengine.session`. No model name, tokens or cost.
-- Query text only with `capture_query=True`; off by default, and removed
-  from error text whenever it is not recorded, verbatim and in the escaped
-  copies the client libraries write. Results and answer text are never
-  recorded.
+- The query follows `TraceConfig`: recorded by default
+  (`gen_ai.retrieval.query`, `input.value`), hidden with `FI_HIDE_INPUTS` /
+  `hide_inputs`, and then also removed from error text, verbatim and in the
+  escaped copies the client libraries write. No package-specific switch (a
+  pre-release `capture_query` option is ignored with a warning). Results and
+  answer text are never recorded.
+- The `exception` event carries the type and the cleaned message only; no
+  `exception.stacktrace` (traceback frames hold local file paths).
 - Google credentials (transport credentials, read again when an error is
   recorded; `client_options.api_key`; per-call auth metadata; and Google
   token shapes, including JWTs) are removed from every recorded value.

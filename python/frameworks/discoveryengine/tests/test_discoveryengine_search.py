@@ -22,7 +22,7 @@ from _discoveryengine_support import (
     search_request,
 )
 
-QUERY = "QUERY-TEXT-OFF-BY-DEFAULT"
+QUERY = "SEARCH-QUERY-MARKER"
 
 
 @pytest.fixture()
@@ -44,12 +44,14 @@ def test_one_retriever_span_with_serving_config_and_result_count(fake, method):
         "gen_ai.span.kind": "RETRIEVER",
         "discoveryengine.serving_config": SERVING_CONFIG,
         "discoveryengine.result_count": SEARCH_RESULTS,
+        # TraceConfig default: the query (the span's input) is recorded.
+        "gen_ai.retrieval.query": QUERY,
+        "input.value": QUERY,
     }
     assert span.status.status_code is StatusCode.OK
     assert span.events == ()
-    # Query text is content: off by default, so it is nowhere on the span.
+    # Result content is never recorded, only the count.
     wire = traced.wire()
-    assert QUERY not in wire
     for marker in CONTENT_MARKERS:
         assert marker not in wire, marker
 
@@ -78,7 +80,7 @@ def test_search_lite_and_search_are_distinguished_by_span_name_only(fake):
     ],
 )
 def test_the_request_is_read_however_it_is_passed(fake, call):
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         call(search_client(fake), search_request("how is it passed"))
 
     values = attrs(traced.one())
@@ -87,7 +89,7 @@ def test_the_request_is_read_however_it_is_passed(fake, call):
 
 
 def test_a_request_without_serving_config_or_query_records_neither(fake):
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         search_client(fake).search()
 
     values = attrs(traced.one())
@@ -139,7 +141,7 @@ def test_the_serving_config_is_capped_at_1_kb(fake):
 
 
 def test_no_model_token_or_cost_attributes(fake):
-    with instrumented(capture_query=True) as traced:
+    with instrumented() as traced:
         search_client(fake).search(request=search_request())
 
     for key in attrs(traced.one()):

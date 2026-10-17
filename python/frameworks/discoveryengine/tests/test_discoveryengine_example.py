@@ -83,8 +83,12 @@ def test_example_exports_one_search_and_one_answer_span(monkeypatch, capsys):
             assert resource["project_name"] == "discoveryengine-example"
             assert resource["project_type"] == "observe"
 
+    # TraceConfig default: the query is the span's input; results and the
+    # answer text are never recorded.
+    assert search["input.value"] == example.QUERY
+    assert answer["input.value"] == example.QUESTION
     wire = json.dumps(spans)
-    for marker in CONTENT_MARKERS + (example.QUERY, example.QUESTION):
+    for marker in CONTENT_MARKERS:
         assert marker not in wire, marker
 
 

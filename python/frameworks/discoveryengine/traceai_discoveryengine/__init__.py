@@ -57,20 +57,15 @@ _TARGETS = (
 )
 
 
-def _flag(kwargs: Dict[str, Any], name: str) -> bool:
-    value = kwargs.get(name, False)
-    if not isinstance(value, bool):
-        raise TypeError("{0} must be a bool, got {1}".format(name, type(value).__name__))
-    return value
-
-
 class DiscoveryEngineInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """Instrument Discovery Engine v1 search and answer client methods.
 
-    ``instrument()`` accepts ``tracer_provider``, ``config`` (a
-    ``fi_instrumentation.TraceConfig``; its ``hide_inputs``, ``hide_outputs``
-    and ``pii_redaction`` are honoured) and ``capture_query`` (off by
-    default). Spans come from an ``FITracer``, so ``using_session`` /
+    ``instrument()`` accepts ``tracer_provider`` and ``config`` (a
+    ``fi_instrumentation.TraceConfig``, read from the ``FI_HIDE_*`` and
+    ``FI_PII_REDACTION`` environment variables when omitted). The query is
+    recorded by default, like the input of every traceAI instrumentor, and
+    ``hide_inputs`` / ``FI_HIDE_INPUTS`` hides it everywhere, including
+    server error text. Spans come from an ``FITracer``, so ``using_session`` /
     ``using_user`` / ``using_metadata`` / ``using_tags`` / ``using_attributes``
     context attributes are stamped on them.
     """
@@ -88,8 +83,13 @@ class DiscoveryEngineInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                     type(config).__name__
                 )
             )
+        if "capture_query" in kwargs:
+            # Removed before release: the query follows TraceConfig now.
+            logger.warning(
+                "capture_query is ignored: the query is recorded unless "
+                "TraceConfig(hide_inputs=True) or FI_HIDE_INPUTS=true is set"
+            )
         options = Options(
-            capture_query=_flag(kwargs, "capture_query"),
             hide_inputs=bool(config.hide_inputs),
             hide_outputs=bool(config.hide_outputs),
             pii_redaction=bool(config.pii_redaction),
