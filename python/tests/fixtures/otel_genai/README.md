@@ -181,3 +181,15 @@ export FI_COLLECTOR_ADAPTER_GO=/tmp/adapter.go   # then run the command above
 
 Not covered here: a live instrumentor, `OTEL_SEMCONV_STABILITY_OPT_IN`, auth
 (401), project stamping, ClickHouse storage, cost, and the rendered trace.
+
+## Live check against a running stack (2026-10-16)
+
+`live_check.py` compares rows stored by a real Future AGI stack with
+`columns.golden.json`. Post the three fixtures to the collector with a scratch
+`project_name` (uncompressed, `X-Api-Key`/`X-Secret-Key` headers), export the
+rows (`fi_verify.py --json spans.json`) and run
+`python live_check.py spans.json`. `live_rows.sample.json` holds rows exported
+from a local stack built from `dev` on 2026-10-16; `test_live_check.py`
+checks them offline. On that stack every golden column matched: era B model
+`gpt-test`, tokens 3 / 4 / 7, dual-emit 3 / 4 / 7 (not 6 / 8 / 14), era A
+tokens 0, `retrieval` and `invoke_agent` stored with kind `unknown`.
