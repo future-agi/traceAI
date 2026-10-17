@@ -207,3 +207,14 @@ skips the span.
 - `/v1beta/search` is not traced. No `parallel-web` 1.x method calls it.
 - Do not combine this package with another instrumentor that wraps the
   same `parallel-web` methods, or calls will produce duplicate spans.
+
+## Live vendor verification (2026-10-17)
+
+Run against the real Parallel API with `parallel-web` 1.3.5 and
+`traceAI-parallel` 0.1.0 on Python 3.12: `search` and `extract` (sync and
+async) produced `RETRIEVER` and `TOOL` spans with the documented attributes,
+and a call with a bad API key produced an `ERROR` span (`AuthenticationError`,
+HTTP 401) whose stacktrace holds the exception line only. With
+`FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true` the queries were absent from
+every stored column. Not run live: `with_raw_response` and
+`with_streaming_response` (package tests only).
