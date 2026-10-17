@@ -58,6 +58,9 @@ enable_fi_attribute_mapping()
 
 `enable_sensitive_data=True` records prompts, completions and tool arguments on the spans. Leave it off to keep that content out of your traces.
 
+### Privacy
+Content is captured by default (as in every traceAI integration) once `enable_sensitive_data` is on. Hide it with the standard `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT` and `FI_HIDE_OUTPUT_TEXT` environment variables, or pass `enable_fi_attribute_mapping(config=TraceConfig(...))`. Tool arguments/results and system instructions follow `hide_inputs` / `hide_outputs`. Raw exception text and stack traces are never exported: an errored span keeps ERROR status and the exception class name.
+
 Agent Framework emits on the global tracer provider only, so keep `set_global_tracer_provider=True` in `register(...)`.
 
 ### Create Agent Framework Components

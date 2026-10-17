@@ -24,10 +24,11 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import ReadableSpan, Span
+from opentelemetry.sdk.trace import Event, ReadableSpan, Span
 from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
-from fi_instrumentation import get_attributes_from_context
+from fi_instrumentation import TraceConfig, get_attributes_from_context
 from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
@@ -396,6 +397,70 @@ class _SpanIO:
         self.absorb_output(other.output_value, other.output_mime, other.output_time)
 
 
+
+# ---------------------------------------------------------------------------
+# Privacy: TraceConfig (FI_HIDE_*) and error text
+# ---------------------------------------------------------------------------
+
+_SYSTEM_INSTRUCTIONS = SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS
+_ERROR_TYPE = "error.type"
+
+
+def _apply_trace_config(mapped: Dict[str, Any], config: TraceConfig) -> Dict[str, Any]:
+    """Apply the standard traceAI ``TraceConfig`` (``FI_HIDE_*``) to a span's attributes.
+
+    Content is captured by default, like every traceAI instrumentor. Setting
+    ``FI_HIDE_INPUTS`` / ``FI_HIDE_OUTPUTS`` / ``FI_HIDE_INPUT_MESSAGES`` /
+    ``FI_HIDE_OUTPUT_MESSAGES`` / ``FI_HIDE_INPUT_TEXT`` / ``FI_HIDE_OUTPUT_TEXT``
+    (or passing a ``TraceConfig``) removes or redacts it. The framework's raw
+    ``gen_ai.input.messages`` / ``gen_ai.output.messages`` keys are covered by
+    ``TraceConfig.mask``; tool arguments/results and system instructions, which
+    ``mask`` does not know, are handled here.
+    """
+    out: Dict[str, Any] = {}
+    for key, value in mapped.items():
+        if not isinstance(key, str):
+            out[key] = value
+            continue
+        if config.hide_inputs and key in (_TOOL_ARGS, _SYSTEM_INSTRUCTIONS):
+            continue
+        if config.hide_input_messages and key == _SYSTEM_INSTRUCTIONS:
+            continue
+        if config.hide_outputs and key == _TOOL_RESULT:
+            continue
+        masked = config.mask(key, value)
+        if masked is not None:
+            out[key] = masked
+    return out
+
+
+def _sanitize_errors(span: ReadableSpan, attrs: Dict[str, Any]) -> None:
+    """Never export raw exception text (it can hold paths, hosts, secrets).
+
+    The span keeps its ERROR status and ``error.type``; the description is
+    replaced by the exception class name and ``exception`` events keep only
+    ``exception.type``.
+    """
+    status = getattr(span, "_status", None)
+    if status is not None and status.status_code == StatusCode.ERROR and status.description:
+        etype = attrs.get(_ERROR_TYPE)
+        etype = etype if isinstance(etype, str) and etype else None
+        if etype is None:
+            etype = status.description.split("(", 1)[0].split(":", 1)[0].strip()[:80] or "error"
+        setattr(span, "_status", Status(StatusCode.ERROR, etype))
+    events = getattr(span, "_events", None)
+    if events:
+        cleaned = []
+        for ev in events:
+            if getattr(ev, "name", None) == "exception":
+                keep = {k: v for k, v in (ev.attributes or {}).items() if k == "exception.type"}
+                ev = Event(ev.name, keep, ev.timestamp)
+            cleaned.append(ev)
+        try:
+            setattr(span, "_events", cleaned)
+        except Exception:
+            pass
+
 # ---------------------------------------------------------------------------
 # session.id
 # ---------------------------------------------------------------------------
@@ -436,7 +501,8 @@ class AgentFrameworkSpanProcessor(SpanProcessor):
     Spans from other instrumentation scopes pass through untouched.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
         self._desc_io: Dict[int, _SpanIO] = {}
         # Open spans, so a child can read its parent's attributes, and the
         # session each open span inherited from its ancestors.
@@ -480,6 +546,9 @@ class AgentFrameworkSpanProcessor(SpanProcessor):
 
             if mapped.get(SpanAttributes.GEN_AI_SPAN_KIND) == FiSpanKindValues.CHAIN.value:
                 self._apply_chain_bubble(span, mapped)
+
+            mapped = _apply_trace_config(mapped, self._config)
+            _sanitize_errors(span, mapped)
 
             # Write back onto the live ReadableSpan; ``span.attributes`` is a
             # MappingProxyType over ``span._attributes``, so downstream

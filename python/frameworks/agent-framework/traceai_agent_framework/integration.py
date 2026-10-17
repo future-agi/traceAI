@@ -14,6 +14,8 @@ from typing import Optional
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 
+from fi_instrumentation import TraceConfig
+
 from .processor import AgentFrameworkSpanProcessor
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,7 @@ def _ensure_native_instrumentation_enabled() -> None:
 
 def enable_fi_attribute_mapping(
     tracer_provider: Optional[TracerProvider] = None,
+    config: Optional[TraceConfig] = None,
 ) -> bool:
     """Install the FI attribute mapping on a tracer provider.
 
@@ -65,6 +68,7 @@ def enable_fi_attribute_mapping(
             tracer provider is used. A provider that is not the global one is
             still accepted (it may be made global later), but a warning is
             logged because no Agent Framework span reaches it until then.
+        config: Optional ``TraceConfig`` (default: read the ``FI_HIDE_*`` env vars).
 
     Returns:
         True if the processor was installed; False if there was no usable
@@ -102,7 +106,7 @@ def enable_fi_attribute_mapping(
     # exporter on the first ``add_span_processor`` call, so the public path
     # would silently lose spans. Prepending also ensures our mutations land
     # before any synchronous downstream processor reads attrs.
-    new_processor = AgentFrameworkSpanProcessor()
+    new_processor = AgentFrameworkSpanProcessor(config)
     try:
         active._span_processors = (new_processor,) + existing
     except AttributeError:
