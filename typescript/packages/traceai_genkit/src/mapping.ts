@@ -1,11 +1,13 @@
 import type { Attributes, AttributeValue } from "@opentelemetry/api";
+import { REDACTED_VALUE } from "@traceai/fi-core";
 import { FISpanKind, MimeType, SemanticConventions } from "@traceai/fi-semantic-conventions";
 import {
   FI_SPAN_KIND,
   GEN_AI_SPAN_KIND,
   GEN_AI_TOOL_NAME,
-  GENKIT_CONTENT_KEYS,
+  GENKIT_INPUT_KEYS,
   GENKIT_NEVER_EXPORTED_KEYS,
+  GENKIT_OUTPUT_KEYS,
   GENKIT_USAGE_PREFIX,
   GenkitAttributes,
   GenkitSpanType,
@@ -16,10 +18,24 @@ import {
   isPromotedUsageKey,
   splitModelName,
 } from "./attributes";
+import {
+  type ContentPolicy,
+  redactEmbeddingVectors,
+  redactMessageText,
+  SHOW_ALL,
+  type ScrubContext,
+  scrubContent,
+} from "./privacy";
 
 export interface MapOptions {
-  /** Copy `genkit:input` / `genkit:output` to `input.value` / `output.value` and keep them. Default false. */
-  captureContent?: boolean;
+  /**
+   * Resolved TraceConfig content flags (see `resolveContentPolicy`). Default: fi-core's defaults,
+   * nothing hidden: `genkit:input` / `genkit:output` are exported and copied to `input.value` /
+   * `output.value`.
+   */
+  policy?: ContentPolicy;
+  /** cwd / home directory rewritten in every exported string. Default: none (other local paths are still removed). */
+  scrub?: ScrubContext;
   /**
    * Attributes read from the OTel context when the span started (fi-core
    * `setSession`, `setUser`, `setMetadata`, `setTags`, `setAttributes`). Applied
@@ -97,6 +113,41 @@ function modelCallAttributes(source: Attributes): Attributes {
   return out;
 }
 
+/** How one side (input or output) of a span is exported. */
+type SideMode = "show" | "text" | "hide";
+
+function sideModes(policy: ContentPolicy, isModelCall: boolean): { input: SideMode; output: SideMode } {
+  // On a model span `genkit:input` is the request (the message list) and `genkit:output` the
+  // response message, so the *_MESSAGES and *_TEXT flags apply there as they do to
+  // gen_ai.input.messages / gen_ai.output.messages in fi-core.
+  const input: SideMode =
+    policy.hideInputs || (isModelCall && policy.hideInputMessages)
+      ? "hide"
+      : isModelCall && policy.hideInputText
+        ? "text"
+        : "show";
+  const output: SideMode =
+    policy.hideOutputs || (isModelCall && policy.hideOutputMessages)
+      ? "hide"
+      : isModelCall && policy.hideOutputText
+        ? "text"
+        : "show";
+  return { input, output };
+}
+
+function sideValue(
+  value: AttributeValue,
+  mode: SideMode,
+  scrub: ScrubContext,
+  hideVectors: boolean,
+): AttributeValue | undefined {
+  if (mode === "hide") return undefined;
+  if (typeof value !== "string") return value;
+  let text = mode === "text" ? (redactMessageText(value) ?? REDACTED_VALUE) : value;
+  if (hideVectors) text = redactEmbeddingVectors(text) as string;
+  return scrubContent(text, scrub);
+}
+
 /**
  * Map one Genkit span's attributes to the attributes exported to Future AGI.
  *
@@ -104,21 +155,30 @@ function modelCallAttributes(source: Attributes): Attributes {
  * exporters (dev UI telemetry server, Firebase plugin) read the same span.
  */
 export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}): Attributes {
-  const captureContent = options.captureContent === true;
+  const policy = options.policy ?? SHOW_ALL;
+  const scrub = options.scrub ?? {};
   const kind = genkitSpanKind(source);
   const isModelCall = kind === FISpanKind.LLM;
+  const modes = sideModes(policy, isModelCall);
+  // FI_HIDE_EMBEDDING_VECTORS: the vectors are in an embedder span's output.
+  const hideVectors = kind === FISpanKind.EMBEDDING && policy.hideEmbeddingVectors === true;
   const out: Attributes = {};
 
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined) continue;
     if (GENKIT_NEVER_EXPORTED_KEYS.includes(key)) continue;
-    if (!captureContent && GENKIT_CONTENT_KEYS.includes(key)) continue;
+    if (GENKIT_INPUT_KEYS.includes(key) || GENKIT_OUTPUT_KEYS.includes(key)) {
+      const isInput = GENKIT_INPUT_KEYS.includes(key);
+      const exported = sideValue(value, isInput ? modes.input : modes.output, scrub, hideVectors && !isInput);
+      if (exported !== undefined) out[key] = exported;
+      continue;
+    }
     if (!isModelCall && isPromotedUsageKey(key)) {
       // Aggregate usage on a non-model span would be summed again by Observe.
       out[GENKIT_USAGE_PREFIX + key] = value;
       continue;
     }
-    out[key] = value;
+    out[key] = typeof value === "string" ? scrubContent(value, scrub) : value;
   }
 
   if (kind !== undefined) {
@@ -127,8 +187,21 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
   }
 
   if (isModelCall) {
+    // Read from the source span before any content is hidden: tokens, finish reason and model are
+    // not content and stay available with FI_HIDE_OUTPUTS.
     for (const [key, value] of Object.entries(modelCallAttributes(source))) {
       if (value !== undefined && out[key] === undefined) out[key] = value;
+    }
+  }
+
+  if (kind === FISpanKind.EMBEDDING) {
+    // The registered embedder action name, e.g. "googleai/gemini-embedding-001".
+    const name = source[GenkitAttributes.NAME];
+    if (typeof name === "string" && name.length > 0) {
+      const { namespace, model } = splitModelName(name);
+      if (out[SemanticConventions.EMBEDDING_MODEL_NAME] === undefined) out[SemanticConventions.EMBEDDING_MODEL_NAME] = model;
+      const provider = namespace === undefined ? undefined : MODEL_NAMESPACE_TO_PROVIDER[namespace];
+      if (provider !== undefined && out[SemanticConventions.LLM_PROVIDER] === undefined) out[SemanticConventions.LLM_PROVIDER] = provider;
     }
   }
 
@@ -156,15 +229,23 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
     }
   }
 
-  if (captureContent) {
-    const input = source[GenkitAttributes.INPUT];
-    const output = source[GenkitAttributes.OUTPUT];
-    if (typeof input === "string" && out[SemanticConventions.INPUT_VALUE] === undefined) {
-      out[SemanticConventions.INPUT_VALUE] = input;
+  // input.value / output.value, the keys Future AGI shows as a span's input and output. A hidden
+  // side gets fi-core's "__REDACTED__" and no mime type, as fi-core's own masking does.
+  const input = source[GenkitAttributes.INPUT];
+  if (typeof input === "string" && out[SemanticConventions.INPUT_VALUE] === undefined) {
+    if (modes.input === "hide") {
+      out[SemanticConventions.INPUT_VALUE] = REDACTED_VALUE;
+    } else {
+      out[SemanticConventions.INPUT_VALUE] = out[GenkitAttributes.INPUT] as string;
       out[SemanticConventions.INPUT_MIME_TYPE] = MimeType.JSON;
     }
-    if (typeof output === "string" && out[SemanticConventions.OUTPUT_VALUE] === undefined) {
-      out[SemanticConventions.OUTPUT_VALUE] = output;
+  }
+  const output = source[GenkitAttributes.OUTPUT];
+  if (typeof output === "string" && out[SemanticConventions.OUTPUT_VALUE] === undefined) {
+    if (modes.output === "hide") {
+      out[SemanticConventions.OUTPUT_VALUE] = REDACTED_VALUE;
+    } else {
+      out[SemanticConventions.OUTPUT_VALUE] = out[GenkitAttributes.OUTPUT] as string;
       out[SemanticConventions.OUTPUT_MIME_TYPE] = MimeType.JSON;
     }
   }

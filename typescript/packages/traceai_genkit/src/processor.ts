@@ -10,8 +10,18 @@ import {
   type SpanStatus,
   trace,
 } from "@opentelemetry/api";
-import { getAttributesFromContext } from "@traceai/fi-core";
+import { getAttributesFromContext, REDACTED_VALUE, type TraceConfigOptions } from "@traceai/fi-core";
 import { mapGenkitAttributes } from "./mapping";
+import {
+  type ContentPolicy,
+  defaultScrubContext,
+  hidesFreeText,
+  resolveContentPolicy,
+  SHOW_ALL,
+  type ScrubContext,
+  scrubContent,
+  scrubErrorText,
+} from "./privacy";
 
 /** Instrumentation scope as both sdk-trace-base 1.x (`instrumentationLibrary`) and 2.x (`instrumentationScope`) carry it. */
 export interface InstrumentationScopeLike {
@@ -88,10 +98,20 @@ export interface FIGenkitSpanProcessorOptions {
    */
   tracerProvider: FITracerProviderLike;
   /**
-   * Export Genkit's `genkit:input` / `genkit:output` (also copied to
-   * `input.value` / `output.value`). Default false: content is dropped, and
-   * the data Genkit's schema-validation errors embed after "Provided data:" is
-   * cut from the span status message and exception events.
+   * traceAI content switches, as for every traceAI instrumentor. Content (Genkit's
+   * `genkit:input` / `genkit:output`, copied to `input.value` / `output.value`) is
+   * exported by default; `hideInputs` / `hideOutputs` (or `FI_HIDE_INPUTS=true` /
+   * `FI_HIDE_OUTPUTS=true`) hide it and drop error message text, and
+   * `hideInputMessages` / `hideOutputMessages` / `hideInputText` / `hideOutputText`
+   * apply to model spans. Precedence: option > env var > default. The env vars apply
+   * even when this option is not passed.
+   */
+  traceConfig?: TraceConfigOptions;
+  /**
+   * Removed. Use `traceConfig` or the FI_HIDE_* env vars. Passing it logs a warning;
+   * `false` still hides inputs and outputs (unless `traceConfig` or the env vars say
+   * otherwise), so an old configuration never exports more than it asked for.
+   * @deprecated
    */
   captureContent?: boolean;
   /** Upper bound for `forceFlush()` / `shutdown()`. Default 30000 ms. They resolve, never reject. */
@@ -101,48 +121,71 @@ export interface FIGenkitSpanProcessorOptions {
 const DEFAULT_FLUSH_TIMEOUT_MILLIS = 30_000;
 const DEFAULT_SCOPE: InstrumentationScopeLike = { name: "genkit-tracer" };
 
-/**
- * Genkit's schema ValidationError puts the rejected input or output after this
- * marker (`@genkit-ai/core` 1.42.0 src/schema.ts:78), and Genkit copies the
- * error message to the span status and the exception event
- * (core/src/tracing/instrumentation.ts:156-162).
- */
-export const GENKIT_PROVIDED_DATA_MARKER = "Provided data:";
-/** Replaces everything from {@link GENKIT_PROVIDED_DATA_MARKER} on when `captureContent` is off. */
-export const ERROR_DATA_REDACTED_NOTE = "[data redacted: captureContent is off]";
 const EXCEPTION_EVENT_NAME = "exception";
-const EXCEPTION_TEXT_KEYS = ["exception.message", "exception.stacktrace"] as const;
+const EXCEPTION_MESSAGE = "exception.message";
+const EXCEPTION_TYPE = "exception.type";
+/** Raw stack traces (local paths, module layout) are never exported. */
+const EXCEPTION_STACKTRACE = "exception.stacktrace";
 
-/** Cut a Genkit error text at "Provided data:" and append the fixed note. Text without the marker is returned as is. */
-export function redactErrorData(text: string): string {
-  const at = text.indexOf(GENKIT_PROVIDED_DATA_MARKER);
-  return at === -1 ? text : text.slice(0, at) + ERROR_DATA_REDACTED_NOTE;
+export interface ExportPrivacy {
+  policy?: ContentPolicy;
+  scrub?: ScrubContext;
 }
 
-function redactStatus(status: SpanStatus): SpanStatus {
-  if (typeof status?.message !== "string") return status;
-  const message = redactErrorData(status.message);
+function exceptionType(events: TimedEventLike[] | undefined): string | undefined {
+  if (!Array.isArray(events)) return undefined;
+  for (const event of events) {
+    const type = event?.name === EXCEPTION_EVENT_NAME ? event.attributes?.[EXCEPTION_TYPE] : undefined;
+    if (typeof type === "string" && type.length > 0) return type;
+  }
+  return undefined;
+}
+
+/**
+ * The exported status. With inputs or outputs hidden the message (which can quote user data, as
+ * Genkit's schema-validation "Provided data:" errors and tool errors do) becomes
+ * `<exception.type>: __REDACTED__`; otherwise it is exported without local paths, stack traces,
+ * emails, or this machine's user and host names.
+ */
+export function exportStatus(status: SpanStatus, events: TimedEventLike[] | undefined, privacy: ExportPrivacy = {}): SpanStatus {
+  if (typeof status?.message !== "string" || status.message.length === 0) return status;
+  const policy = privacy.policy ?? SHOW_ALL;
+  if (hidesFreeText(policy)) {
+    const type = exceptionType(events);
+    return { ...status, message: type ? `${scrubErrorText(type, privacy.scrub)}: ${REDACTED_VALUE}` : REDACTED_VALUE };
+  }
+  const message = scrubErrorText(status.message, privacy.scrub);
   return message === status.message ? status : { ...status, message };
 }
 
-/** New event objects for exception events whose message or stacktrace carries Genkit data; the rest are shared. */
-function redactExceptionEvents(events: TimedEventLike[]): TimedEventLike[] {
+/**
+ * The exported events. Every `exception` event loses `exception.stacktrace`; its message follows
+ * the status rule above. String attributes of other events are scrubbed of local paths and stack
+ * traces. Genkit's own event objects are never modified.
+ */
+export function exportEvents(events: TimedEventLike[], privacy: ExportPrivacy = {}): TimedEventLike[] {
   if (!Array.isArray(events)) return events;
-  let changed = false;
-  const out = events.map((event) => {
-    if (event?.name !== EXCEPTION_EVENT_NAME || !event.attributes) return event;
-    let attributes: Attributes | undefined;
-    for (const key of EXCEPTION_TEXT_KEYS) {
-      const value = event.attributes[key];
-      if (typeof value !== "string") continue;
-      const redacted = redactErrorData(value);
-      if (redacted !== value) attributes = { ...(attributes ?? event.attributes), [key]: redacted };
+  const policy = privacy.policy ?? SHOW_ALL;
+  return events.map((event) => {
+    if (!event?.attributes) return event;
+    const isException = event.name === EXCEPTION_EVENT_NAME;
+    const attributes: Attributes = {};
+    for (const [key, value] of Object.entries(event.attributes)) {
+      if (value === undefined) continue;
+      if (isException && key === EXCEPTION_STACKTRACE) continue;
+      if (isException && key === EXCEPTION_MESSAGE && typeof value === "string") {
+        attributes[key] = hidesFreeText(policy) ? REDACTED_VALUE : scrubErrorText(value, privacy.scrub);
+        continue;
+      }
+      attributes[key] =
+        typeof value === "string"
+          ? isException
+            ? scrubErrorText(value, privacy.scrub)
+            : scrubContent(value, privacy.scrub)
+          : value;
     }
-    if (!attributes) return event;
-    changed = true;
     return { ...event, attributes };
   });
-  return changed ? out : events;
 }
 
 function resolveTarget(provider: FITracerProviderLike): { processor: TargetSpanProcessor; resource: unknown } {
@@ -174,7 +217,7 @@ export function toExportableSpan(
   span: GenkitReadableSpan,
   attributes: Attributes,
   resource: unknown,
-  options: { captureContent?: boolean } = {},
+  privacy: ExportPrivacy = {},
 ): ExportableSpan {
   const ctx = span.spanContext();
   let parentSpanContext = span.parentSpanContext;
@@ -183,7 +226,6 @@ export function toExportableSpan(
     parentSpanContext = { traceId: ctx.traceId, spanId: parentSpanId, traceFlags: ctx.traceFlags, isRemote: false };
   }
   const scope = span.instrumentationScope ?? span.instrumentationLibrary ?? DEFAULT_SCOPE;
-  const captureContent = options.captureContent === true;
   return {
     name: span.name,
     kind: span.kind,
@@ -192,10 +234,10 @@ export function toExportableSpan(
     parentSpanContext,
     startTime: span.startTime,
     endTime: span.endTime,
-    status: captureContent ? span.status : redactStatus(span.status),
+    status: exportStatus(span.status, span.events, privacy),
     attributes,
     links: span.links,
-    events: captureContent ? span.events : redactExceptionEvents(span.events),
+    events: exportEvents(span.events, privacy),
     duration: span.duration,
     ended: span.ended,
     resource,
@@ -240,8 +282,9 @@ function hasAttributes(attributes: Attributes): boolean {
  * Genkit keeps its own telemetry-server processor first in the list
  * (`@genkit-ai/core` tracing/node-telemetry-provider.ts:66-77), so the dev UI
  * keeps working. For each ended Genkit span this processor builds a copy with
- * Future AGI span kinds, model, usage and session mapped, content dropped
- * unless opted in, and the Future AGI resource (`project_name`,
+ * Future AGI span kinds, model, usage and session mapped, content handled per
+ * the traceAI TraceConfig (exported by default, FI_HIDE_* hides it), stack
+ * traces and local paths removed, and the Future AGI resource (`project_name`,
  * `project_type`), then hands it to the `@traceai/fi-core` provider's span
  * processor and exporter. Genkit's span object is never modified.
  *
@@ -251,7 +294,8 @@ export class FIGenkitSpanProcessor {
   private readonly provider: FITracerProviderLike;
   private readonly target: TargetSpanProcessor;
   private readonly resource: unknown;
-  private readonly captureContent: boolean;
+  private readonly policy: ContentPolicy;
+  private readonly scrub: ScrubContext;
   private readonly flushTimeoutMillis: number;
   private readonly contextAttributes = new WeakMap<object, Attributes>();
   private isShutdown = false;
@@ -265,7 +309,17 @@ export class FIGenkitSpanProcessor {
     const { processor, resource } = resolveTarget(options.tracerProvider);
     this.target = processor;
     this.resource = resource;
-    this.captureContent = options.captureContent === true;
+    if (options.captureContent !== undefined) {
+      diag.warn(
+        "@traceai/genkit: captureContent was removed. Content follows the traceAI TraceConfig: exported by default, " +
+          "hidden with traceConfig ({ hideInputs, hideOutputs, ... }) or FI_HIDE_INPUTS / FI_HIDE_OUTPUTS.",
+      );
+    }
+    this.policy = resolveContentPolicy(
+      options.traceConfig,
+      options.captureContent === false ? { hideInputs: true, hideOutputs: true } : {},
+    );
+    this.scrub = defaultScrubContext();
     this.flushTimeoutMillis = options.flushTimeoutMillis ?? DEFAULT_FLUSH_TIMEOUT_MILLIS;
     if (isGlobalTracerProvider(options.tracerProvider)) {
       const message =
@@ -296,10 +350,11 @@ export class FIGenkitSpanProcessor {
     try {
       const contextAttributes = this.contextAttributes.get(span);
       const attributes = mapGenkitAttributes(span.attributes, {
-        captureContent: this.captureContent,
+        policy: this.policy,
+        scrub: this.scrub,
         contextAttributes,
       });
-      this.target.onEnd(toExportableSpan(span, attributes, this.resource, { captureContent: this.captureContent }));
+      this.target.onEnd(toExportableSpan(span, attributes, this.resource, { policy: this.policy, scrub: this.scrub }));
     } catch (error) {
       diag.warn(`FIGenkitSpanProcessor.onEnd: span not exported: ${error}`);
     }

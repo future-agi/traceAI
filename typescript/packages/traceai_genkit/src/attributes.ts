@@ -111,16 +111,24 @@ export const TYPE_TO_KIND: Readonly<Record<string, FISpanKind>> = {
 };
 
 /**
- * Keys that carry user content or request context. Dropped unless
- * `captureContent: true`; `genkit:metadata:context` is dropped always.
+ * Input-side content keys: hidden by `hideInputs` (FI_HIDE_INPUTS), and on model spans also by
+ * `hideInputMessages` (the model request is the message list). `genkit:init` is a beta agent's
+ * initial state; `genkit:metadata:resumed` is the data a resumed tool call was given.
  */
-export const GENKIT_CONTENT_KEYS: readonly string[] = [
+export const GENKIT_INPUT_KEYS: readonly string[] = [
   GenkitAttributes.INPUT,
-  GenkitAttributes.OUTPUT,
   GenkitAttributes.INIT,
-  GenkitAttributes.METADATA_INTERRUPT,
   GenkitAttributes.METADATA_RESUMED,
 ];
+
+/**
+ * Output-side content keys: hidden by `hideOutputs` (FI_HIDE_OUTPUTS), and on model spans also by
+ * `hideOutputMessages`. `genkit:metadata:interrupt` is the payload a tool interrupt returned.
+ */
+export const GENKIT_OUTPUT_KEYS: readonly string[] = [GenkitAttributes.OUTPUT, GenkitAttributes.METADATA_INTERRUPT];
+
+/** Every key that carries user content: {@link GENKIT_INPUT_KEYS} and {@link GENKIT_OUTPUT_KEYS}. */
+export const GENKIT_CONTENT_KEYS: readonly string[] = [...GENKIT_INPUT_KEYS, ...GENKIT_OUTPUT_KEYS];
 
 /** Request context can hold credentials or headers. Never exported. */
 export const GENKIT_NEVER_EXPORTED_KEYS: readonly string[] = [GenkitAttributes.METADATA_CONTEXT];
@@ -148,8 +156,8 @@ export const USAGE_TO_ATTRIBUTE: Readonly<Record<string, string>> = {
 /**
  * GenerationUsageSchema fields at 1.42.0 that neither the inventory nor the
  * google-genai plugin sets. They are unavailable: not copied to any Future AGI
- * key (they stay inside `genkit:output`, which is exported only with
- * `captureContent: true`).
+ * key (they stay inside `genkit:output`, which is exported unless
+ * `hideOutputs` / FI_HIDE_OUTPUTS hides it).
  */
 export const GENKIT_USAGE_NOT_MAPPED: readonly string[] = [
   "inputCharacters",

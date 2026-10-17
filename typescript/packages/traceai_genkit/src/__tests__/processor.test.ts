@@ -1,4 +1,5 @@
-import { context, ROOT_CONTEXT, trace } from "@opentelemetry/api";
+import { context, diag, ROOT_CONTEXT, trace } from "@opentelemetry/api";
+import * as os from "os";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -17,6 +18,28 @@ import {
   toolAttributes,
   v1Span,
 } from "./fixtures";
+
+const HIDE_ENV = [
+  "FI_HIDE_INPUTS",
+  "FI_HIDE_OUTPUTS",
+  "FI_HIDE_INPUT_MESSAGES",
+  "FI_HIDE_OUTPUT_MESSAGES",
+  "FI_HIDE_INPUT_TEXT",
+  "FI_HIDE_OUTPUT_TEXT",
+];
+const savedEnv: Record<string, string | undefined> = {};
+beforeEach(() => {
+  for (const key of HIDE_ENV) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+});
+afterEach(() => {
+  for (const key of HIDE_ENV) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
+});
 
 function fiLikeProvider() {
   const exporter = new InMemorySpanExporter();
@@ -87,14 +110,50 @@ describe("FIGenkitSpanProcessor: forwarding to the Future AGI provider", () => {
     expect(span.resource).toEqual({ attributes: { "service.name": "genkit-app" } });
   });
 
-  it("drops content by default and exports it with captureContent", async () => {
-    const off = fiLikeProvider();
-    const on = fiLikeProvider();
+  it("exports content by default and hides it with traceConfig (option) or FI_HIDE_* (env)", async () => {
     const span = v1Span({ name: "fixture/mock", attributes: modelAttributes(), spanId: "5555555555555555" });
-    new FIGenkitSpanProcessor({ tracerProvider: off.provider }).onEnd(span);
-    new FIGenkitSpanProcessor({ tracerProvider: on.provider, captureContent: true }).onEnd(span);
-    expect(JSON.stringify(off.exporter.getFinishedSpans()[0].attributes)).not.toContain(PROMPT_MARKER);
+    const on = fiLikeProvider();
+    new FIGenkitSpanProcessor({ tracerProvider: on.provider }).onEnd(span);
     expect(on.exporter.getFinishedSpans()[0].attributes["input.value"]).toContain(PROMPT_MARKER);
+
+    const byOption = fiLikeProvider();
+    new FIGenkitSpanProcessor({ tracerProvider: byOption.provider, traceConfig: { hideInputs: true, hideOutputs: true } }).onEnd(span);
+    expect(JSON.stringify(byOption.exporter.getFinishedSpans()[0].attributes)).not.toContain(PROMPT_MARKER);
+    expect(byOption.exporter.getFinishedSpans()[0].attributes["input.value"]).toBe("__REDACTED__");
+
+    process.env.FI_HIDE_INPUTS = "TRUE";
+    process.env.FI_HIDE_OUTPUTS = "true";
+    const byEnv = fiLikeProvider();
+    new FIGenkitSpanProcessor({ tracerProvider: byEnv.provider }).onEnd(span);
+    expect(JSON.stringify(byEnv.exporter.getFinishedSpans()[0].attributes)).not.toContain(PROMPT_MARKER);
+
+    // option > env, as in fi-core
+    const optionWins = fiLikeProvider();
+    new FIGenkitSpanProcessor({ tracerProvider: optionWins.provider, traceConfig: { hideInputs: false, hideOutputs: false } }).onEnd(span);
+    expect(optionWins.exporter.getFinishedSpans()[0].attributes["input.value"]).toContain(PROMPT_MARKER);
+
+    // only "true" hides (fi-core's env parsing)
+    process.env.FI_HIDE_INPUTS = "1";
+    process.env.FI_HIDE_OUTPUTS = "yes";
+    const notTrue = fiLikeProvider();
+    new FIGenkitSpanProcessor({ tracerProvider: notTrue.provider }).onEnd(span);
+    expect(notTrue.exporter.getFinishedSpans()[0].attributes["input.value"]).toContain(PROMPT_MARKER);
+  });
+
+  it("treats the removed captureContent: false as hide inputs and outputs, with a warning", async () => {
+    const warn = jest.spyOn(diag, "warn").mockImplementation(() => undefined);
+    try {
+      const span = v1Span({ name: "fixture/mock", attributes: modelAttributes(), spanId: "5555555555555556" });
+      const off = fiLikeProvider();
+      new FIGenkitSpanProcessor({ tracerProvider: off.provider, captureContent: false }).onEnd(span);
+      expect(JSON.stringify(off.exporter.getFinishedSpans()[0].attributes)).not.toContain(PROMPT_MARKER);
+      const on = fiLikeProvider();
+      new FIGenkitSpanProcessor({ tracerProvider: on.provider, captureContent: true }).onEnd(span);
+      expect(on.exporter.getFinishedSpans()[0].attributes["input.value"]).toContain(PROMPT_MARKER);
+      expect(warn.mock.calls.filter(([m]) => String(m).includes("captureContent was removed"))).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("applies session/user set with the fi-core context helpers at span start", async () => {
@@ -110,25 +169,26 @@ describe("FIGenkitSpanProcessor: forwarding to the Future AGI provider", () => {
   });
 });
 
-describe("FIGenkitSpanProcessor: schema-validation data in errors", () => {
+describe("FIGenkitSpanProcessor: error text, stack traces and local identity", () => {
   // @genkit-ai/core 1.42.0 src/schema.ts:78 (ValidationError) and src/error.ts:78 (GenkitError prefix).
   // core/src/tracing/instrumentation.ts:156-162 copies e.message to status.message and records the exception.
   const DATA_MARKER = "SECRET_STRUCTURED_OUTPUT_MARKER";
-  const REDACTED = "[data redacted: captureContent is off]";
+  const user = os.userInfo().username;
+  const host = os.hostname();
   const head = "INVALID_ARGUMENT: Schema validation failed. Parse Errors:\n\n- /answer: must be string\n\n";
   const message =
     head +
     `Provided data:\n\n${JSON.stringify({ answer: 42, note: DATA_MARKER }, null, 2)}\n\n` +
-    `Required JSON schema:\n\n${JSON.stringify({ type: "object", properties: { answer: { type: "string" } } }, null, 2)}`;
-  const stacktrace = `GenkitError: ${message}\n    at parseSchema (schema.js:71:11)\n    at GenerateResponse.assertValidSchema (response.js:124:7)`;
-  const validationSpan = (spanId: string) =>
+    `owner jane.doe@example.com on ${host} as ${user}, config ${process.cwd()}/genkit.config.json, also /Users/someone/x.txt`;
+  const stacktrace = `GenkitError: ${message}\n    at parseSchema (${process.cwd()}/node_modules/@genkit-ai/core/lib/schema.js:71:11)`;
+  const errorSpan = (spanId: string) =>
     v1Span({
       name: "generate",
       attributes: { ...generateAttributes(), "genkit:state": "error" },
       spanId,
       status: { code: 2, message },
       events: [
-        { name: "custom", time: [1, 0], attributes: { note: "not an exception" } },
+        { name: "custom", time: [1, 0], attributes: { note: "not an exception", where: `${os.homedir()}/notes` } },
         {
           name: "exception",
           time: [1, 5],
@@ -136,51 +196,67 @@ describe("FIGenkitSpanProcessor: schema-validation data in errors", () => {
         },
       ],
     });
+  const forbidden = ["jane.doe@example.com", user, host, process.cwd(), os.homedir(), "/Users/someone", "schema.js:71"];
 
-  it("cuts everything from 'Provided data:' in status.message and exception events when content is off", async () => {
+  it("default: exports the error message without paths, emails, user or host names, and never the stack trace", async () => {
     const { exporter, provider } = fiLikeProvider();
-    const span = validationSpan("9999999999999991");
+    const span = errorSpan("9999999999999991");
     const processor = new FIGenkitSpanProcessor({ tracerProvider: provider });
     processor.onEnd(span);
     await processor.forceFlush();
     const [exported] = exporter.getFinishedSpans();
-    expect(JSON.stringify({ status: exported.status, events: exported.events })).not.toContain(DATA_MARKER);
-    expect(exported.status).toEqual({ code: 2, message: head + REDACTED });
+    const blob = JSON.stringify({ status: exported.status, events: exported.events, attributes: exported.attributes });
+    for (const value of forbidden) expect(blob).not.toContain(value);
+    // Content is on by default: the data Genkit quotes stays (it is the app's own content).
+    expect(exported.status.message).toContain(DATA_MARKER);
+    expect(exported.status.message).toContain("<email>");
+    expect(exported.status.message).toContain("[cwd]/genkit.config.json");
     expect(exported.events.map((e) => e.name)).toEqual(["custom", "exception"]);
-    expect(exported.events[0]).toEqual(span.events[0]);
+    expect(exported.events[0].attributes?.where).toBe("~/notes");
     const exception = exported.events[1];
     expect(exception.time).toEqual([1, 5]);
-    expect(exception.attributes).toEqual({
-      "exception.type": "GenkitError",
-      "exception.message": head + REDACTED,
-      "exception.stacktrace": `GenkitError: ${head}${REDACTED}`,
-    });
-    // Genkit's own span (read by the Dev UI exporter) keeps the full message.
+    expect(exception.attributes?.["exception.type"]).toBe("GenkitError");
+    expect(exception.attributes?.["exception.message"]).toBe(exported.status.message);
+    expect(exception.attributes).not.toHaveProperty("exception.stacktrace");
+    // Genkit's own span (read by the Dev UI exporter) keeps the full message and stack.
     expect(span.status.message).toBe(message);
-    expect(span.events[1].attributes?.["exception.message"]).toBe(message);
+    expect(span.events[1].attributes?.["exception.stacktrace"]).toBe(stacktrace);
   });
 
-  it("exports status.message and exception events unchanged with captureContent", async () => {
+  it("hidden (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS): replaces the message with the error type and __REDACTED__", async () => {
+    for (const traceConfig of [{ hideInputs: true }, { hideOutputs: true }]) {
+      const { exporter, provider } = fiLikeProvider();
+      const processor = new FIGenkitSpanProcessor({ tracerProvider: provider, traceConfig });
+      processor.onEnd(errorSpan("9999999999999992"));
+      await processor.forceFlush();
+      const [exported] = exporter.getFinishedSpans();
+      const blob = JSON.stringify({ status: exported.status, events: exported.events, attributes: exported.attributes });
+      expect(blob).not.toContain(DATA_MARKER);
+      for (const value of forbidden) expect(blob).not.toContain(value);
+      expect(exported.status).toEqual({ code: 2, message: "GenkitError: __REDACTED__" });
+      expect(exported.events[1].attributes).toEqual({ "exception.type": "GenkitError", "exception.message": "__REDACTED__" });
+    }
+  });
+
+  it("hidden: a status with no exception event becomes __REDACTED__", async () => {
     const { exporter, provider } = fiLikeProvider();
-    const span = validationSpan("9999999999999992");
-    const processor = new FIGenkitSpanProcessor({ tracerProvider: provider, captureContent: true });
-    processor.onEnd(span);
+    const processor = new FIGenkitSpanProcessor({ tracerProvider: provider, traceConfig: { hideInputs: true, hideOutputs: true } });
+    processor.onEnd(v1Span({ name: "lookup", attributes: toolAttributes(), spanId: "9999999999999993", status: { code: 2, message: `bad ${DATA_MARKER}` } }));
     await processor.forceFlush();
-    const [exported] = exporter.getFinishedSpans();
-    expect(exported.status).toEqual({ code: 2, message });
-    expect(exported.events).toEqual(span.events);
-    expect(JSON.stringify(exported.events)).toContain(DATA_MARKER);
+    expect(exporter.getFinishedSpans()[0].status).toEqual({ code: 2, message: "__REDACTED__" });
   });
 
-  it("leaves error messages without the marker unchanged when content is off", async () => {
+  it("leaves a plain error message unchanged by default and an OK status untouched", async () => {
     const { exporter, provider } = fiLikeProvider();
     const processor = new FIGenkitSpanProcessor({ tracerProvider: provider });
     const events = [{ name: "exception", time: [1, 0] as [number, number], attributes: { "exception.type": "Error", "exception.message": "boom", "exception.stacktrace": "Error: boom\n    at x (y.js:1:1)" } }];
-    processor.onEnd(v1Span({ name: "lookup", attributes: toolAttributes(), spanId: "9999999999999993", status: { code: 2, message: "boom" }, events }));
+    processor.onEnd(v1Span({ name: "lookup", attributes: toolAttributes(), spanId: "9999999999999994", status: { code: 2, message: "boom" }, events }));
+    processor.onEnd(v1Span({ name: "qaFlow", attributes: flowAttributes(), spanId: "9999999999999995" }));
     await processor.forceFlush();
-    const [exported] = exporter.getFinishedSpans();
-    expect(exported.status).toEqual({ code: 2, message: "boom" });
-    expect(exported.events).toEqual(events);
+    const spans = exportedByName(exporter);
+    expect(spans.lookup.status).toEqual({ code: 2, message: "boom" });
+    expect(spans.lookup.events[0].attributes).toEqual({ "exception.type": "Error", "exception.message": "boom" });
+    expect(spans.qaFlow.status).toEqual({ code: 0 });
   });
 });
 

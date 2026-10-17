@@ -10,7 +10,8 @@
  *   FI_BASE_URL, FI_API_KEY, FI_SECRET_KEY, FI_PROJECT_NAME   read by fi-core register()
  *   GENKIT_TELEMETRY_SERVER   optional; Genkit's own dev-UI trace exporter target
  *   JOURNEY                   tool | stream | error | schema | agent | sigterm | devserver
- *   CAPTURE_CONTENT=1         captureContent: true
+ *   FI_HIDE_INPUTS / FI_HIDE_OUTPUTS (and the other FI_HIDE_*)  traceAI TraceConfig content switches,
+ *                             read by the processor from the environment (content is exported by default)
  *   SESSION_ID                wrap the flow call in fi-core setSession()
  *   FI_GLOBAL_PROVIDER=1      misconfiguration control: register() as the global provider
  *   SIGNAL_MODE               sigterm journey: helper (flushOnSignals, default) | plain (app listener only)
@@ -38,10 +39,7 @@ const tracerProvider = register({
 });
 
 // 2. Genkit telemetry with our processor appended after Genkit's own telemetry-server processor.
-const processor = new FIGenkitSpanProcessor({
-  tracerProvider,
-  captureContent: process.env.CAPTURE_CONTENT === '1',
-});
+const processor = new FIGenkitSpanProcessor({ tracerProvider });
 await enableTelemetry({ spanProcessors: [processor] });
 
 const ai = genkit({});

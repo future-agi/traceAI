@@ -1,7 +1,10 @@
 export {
   FIGenkitSpanProcessor,
+  exportEvents,
+  exportStatus,
   toExportableSpan,
   type ExportableSpan,
+  type ExportPrivacy,
   type FIGenkitSpanProcessorOptions,
   type FITracerProviderLike,
   type GenkitReadableSpan,
@@ -15,6 +18,8 @@ export {
   GEN_AI_TOOL_NAME,
   GENKIT_ACTION_SUBTYPES,
   GENKIT_CONTENT_KEYS,
+  GENKIT_INPUT_KEYS,
+  GENKIT_OUTPUT_KEYS,
   GENKIT_NEVER_EXPORTED_KEYS,
   GENKIT_USAGE_NOT_MAPPED,
   GENKIT_USAGE_PREFIX,
@@ -28,3 +33,19 @@ export {
   splitModelName,
 } from "./attributes";
 export { flushOnSignals, type FlushOnSignalsOptions, type SignalTarget } from "./signals";
+export {
+  CWD_TOKEN,
+  HIDE_ALL,
+  PATH_REMOVED,
+  SHOW_ALL,
+  STACK_TRACE_REMOVED,
+  defaultScrubContext,
+  hidesFreeText,
+  redactEmbeddingVectors,
+  redactMessageText,
+  resolveContentPolicy,
+  scrubContent,
+  scrubErrorText,
+  type ContentPolicy,
+  type ScrubContext,
+} from "./privacy";

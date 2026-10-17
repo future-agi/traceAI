@@ -2,6 +2,11 @@ import { FISpanKind } from "@traceai/fi-semantic-conventions";
 import {
   GENKIT_ACTION_SUBTYPES,
   GENKIT_CONTENT_KEYS,
+  GENKIT_INPUT_KEYS,
+  GENKIT_OUTPUT_KEYS,
+  HIDE_ALL,
+  SHOW_ALL,
+  type ContentPolicy,
   GENKIT_USAGE_NOT_MAPPED,
   SUBTYPE_TO_KIND,
   USAGE_TO_ATTRIBUTE,
@@ -204,7 +209,7 @@ describe("model call spans", () => {
 
   it("puts promoted token keys only on model spans, never on flow / generate / tool spans", () => {
     for (const attributes of [flowAttributes(), generateAttributes(), toolAttributes(), flowStepAttributes()]) {
-      const out = mapGenkitAttributes(attributes, { captureContent: true });
+      const out = mapGenkitAttributes(attributes);
       expect(Object.keys(out).filter(isPromotedUsageKey)).toEqual([]);
     }
   });
@@ -280,6 +285,37 @@ describe("model call spans", () => {
   });
 });
 
+describe("embedder spans", () => {
+  // Shape of a real @genkit-ai/google-genai 1.42.0 embedder span (gemini-embedding-001), vector shortened.
+  const embedderAttributes = () => ({
+    "genkit:type": "action",
+    "genkit:metadata:subtype": "embedder",
+    "genkit:name": "googleai/gemini-embedding-001",
+    "genkit:input": JSON.stringify({ input: [{ content: [{ text: PROMPT_MARKER }] }], options: {} }),
+    "genkit:output": JSON.stringify({ embeddings: [{ embedding: [0.0145, -0.0166, 0.0121] }] }),
+    "genkit:state": "success",
+  });
+
+  it("sets EMBEDDING kind, the bare embedding.model_name and the provider", () => {
+    const out = mapGenkitAttributes(embedderAttributes());
+    expect(out["fi.span.kind"]).toBe("EMBEDDING");
+    expect(out["embedding.model_name"]).toBe("gemini-embedding-001");
+    expect(out["gen_ai.provider.name"]).toBe("google");
+    expect(out["gen_ai.request.model"]).toBeUndefined();
+    expect(out["output.value"]).toContain("0.0145");
+  });
+
+  it("FI_HIDE_EMBEDDING_VECTORS replaces the vectors and keeps the rest", () => {
+    const out = mapGenkitAttributes(embedderAttributes(), { policy: { ...SHOW_ALL, hideEmbeddingVectors: true } });
+    expect(JSON.parse(String(out["output.value"]))).toEqual({ embeddings: [{ embedding: "__REDACTED__" }] });
+    expect(out["genkit:output"]).toBe(out["output.value"]);
+    expect(out["input.value"]).toContain(PROMPT_MARKER);
+    // Only embedder outputs are touched.
+    const tool = mapGenkitAttributes(toolAttributes(), { policy: { ...SHOW_ALL, hideEmbeddingVectors: true } });
+    expect(tool["output.value"]).toContain(TOOL_OUTPUT_MARKER);
+  });
+});
+
 describe("tool spans", () => {
   it("copies the tool action name to tool.name and gen_ai.tool.name", () => {
     const out = mapGenkitAttributes(toolAttributes());
@@ -288,53 +324,148 @@ describe("tool spans", () => {
   });
 });
 
-describe("content", () => {
+describe("content (traceAI TraceConfig)", () => {
   const all = () => [flowAttributes(), flowStepAttributes(), generateAttributes(), modelAttributes(), toolAttributes()];
+  const withExtras = (attributes: Record<string, unknown>) => ({
+    ...attributes,
+    "genkit:init": `{"state":"${PROMPT_MARKER}"}`,
+    "genkit:metadata:interrupt": `{"ask":"${OUTPUT_MARKER}"}`,
+    "genkit:metadata:resumed": `{"answer":"${PROMPT_MARKER}"}`,
+  });
+  const policy = (p: Partial<ContentPolicy>): ContentPolicy => ({ ...SHOW_ALL, ...p });
 
-  it("drops genkit:input/output/init/interrupt/resumed by default", () => {
+  it("exports input and output by default (fi-core DEFAULT_HIDE_* = false)", () => {
+    const out = mapGenkitAttributes(toolAttributes());
+    expect(out["input.value"]).toBe(JSON.stringify({ id: 7 }));
+    expect(out["output.value"]).toContain(TOOL_OUTPUT_MARKER);
+    expect(out["input.mime_type"]).toBe("application/json");
+    expect(out["output.mime_type"]).toBe("application/json");
+    expect(out["genkit:input"]).toBe(JSON.stringify({ id: 7 }));
+    expect(out["genkit:output"]).toContain(TOOL_OUTPUT_MARKER);
+  });
+
+  it("exports the model request and response by default", () => {
+    const out = mapGenkitAttributes(modelAttributes());
+    expect(out["input.value"]).toContain(PROMPT_MARKER);
+    expect(out["output.value"]).toContain('"toolRequest"');
+  });
+
+  it("hideInputs + hideOutputs drop every content key and set input/output.value to __REDACTED__", () => {
     for (const attributes of all()) {
-      const out = mapGenkitAttributes({
-        ...attributes,
-        "genkit:init": "{}",
-        "genkit:metadata:interrupt": "{}",
-        "genkit:metadata:resumed": "{}",
-      });
+      const out = mapGenkitAttributes(withExtras(attributes), { policy: policy({ hideInputs: true, hideOutputs: true }) });
       for (const key of GENKIT_CONTENT_KEYS) expect(out[key]).toBeUndefined();
-      expect(out["input.value"]).toBeUndefined();
-      expect(out["output.value"]).toBeUndefined();
+      if (attributes["genkit:input"] !== undefined) expect(out["input.value"]).toBe("__REDACTED__");
+      expect(out["input.mime_type"]).toBeUndefined();
+      if (attributes["genkit:output"] !== undefined) expect(out["output.value"]).toBe("__REDACTED__");
+      expect(out["output.mime_type"]).toBeUndefined();
       const blob = JSON.stringify(out);
       for (const marker of [PROMPT_MARKER, OUTPUT_MARKER, TOOL_OUTPUT_MARKER]) expect(blob).not.toContain(marker);
     }
   });
 
-  it("never exports genkit:metadata:context, even with captureContent", () => {
-    for (const captureContent of [false, true]) {
-      const out = mapGenkitAttributes(flowAttributes(), { captureContent });
+  it("hideInputs hides only the input side", () => {
+    const out = mapGenkitAttributes(withExtras(toolAttributes()), { policy: policy({ hideInputs: true }) });
+    for (const key of GENKIT_INPUT_KEYS) expect(out[key]).toBeUndefined();
+    expect(out["input.value"]).toBe("__REDACTED__");
+    expect(out["output.value"]).toContain(TOOL_OUTPUT_MARKER);
+    expect(out["genkit:metadata:interrupt"]).toContain(OUTPUT_MARKER);
+  });
+
+  it("hideOutputs hides only the output side", () => {
+    const out = mapGenkitAttributes(withExtras(toolAttributes()), { policy: policy({ hideOutputs: true }) });
+    for (const key of GENKIT_OUTPUT_KEYS) expect(out[key]).toBeUndefined();
+    expect(out["output.value"]).toBe("__REDACTED__");
+    expect(out["input.value"]).toBe(JSON.stringify({ id: 7 }));
+    expect(out["genkit:init"]).toContain(PROMPT_MARKER);
+  });
+
+  it("hideInputMessages / hideOutputMessages hide model request / response, not tool or flow content", () => {
+    const p = policy({ hideInputMessages: true, hideOutputMessages: true });
+    const model = mapGenkitAttributes(modelAttributes(), { policy: p });
+    expect(model["genkit:input"]).toBeUndefined();
+    expect(model["genkit:output"]).toBeUndefined();
+    expect(model["input.value"]).toBe("__REDACTED__");
+    expect(model["output.value"]).toBe("__REDACTED__");
+    expect(model["gen_ai.usage.total_tokens"]).toBe(14);
+    const tool = mapGenkitAttributes(toolAttributes(), { policy: p });
+    expect(tool["output.value"]).toContain(TOOL_OUTPUT_MARKER);
+  });
+
+  it("hideInputText / hideOutputText redact message text on model spans and keep roles and usage", () => {
+    const textModel = {
+      ...modelAttributes(),
+      "genkit:output": JSON.stringify({
+        message: { role: "model", content: [{ text: OUTPUT_MARKER }, { reasoning: OUTPUT_MARKER }] },
+        finishReason: "stop",
+        usage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 },
+      }),
+    };
+    const out = mapGenkitAttributes(textModel, { policy: policy({ hideInputText: true, hideOutputText: true }) });
+    const input = JSON.parse(String(out["input.value"]));
+    const output = JSON.parse(String(out["output.value"]));
+    expect(JSON.stringify(input)).not.toContain(PROMPT_MARKER);
+    expect(JSON.stringify(output)).not.toContain(OUTPUT_MARKER);
+    expect(input.messages[0].role).toBe("user");
+    expect(input.messages[0].content[0].text).toBe("__REDACTED__");
+    expect(output.message.role).toBe("model");
+    expect(output.usage.totalTokens).toBe(14);
+    expect(out["gen_ai.usage.total_tokens"]).toBe(14);
+    // Not a model span: the text flags do not apply (fi-core applies them to LLM messages only).
+    const tool = mapGenkitAttributes(toolAttributes(), { policy: policy({ hideInputText: true, hideOutputText: true }) });
+    expect(tool["output.value"]).toContain(TOOL_OUTPUT_MARKER);
+  });
+
+  it("never exports genkit:metadata:context, in either mode", () => {
+    for (const p of [SHOW_ALL, HIDE_ALL]) {
+      const out = mapGenkitAttributes(flowAttributes(), { policy: p });
       expect(out["genkit:metadata:context"]).toBeUndefined();
       expect(JSON.stringify(out)).not.toContain("SECRET_HEADER_MARKER");
     }
   });
 
-  it("exports input and output after opt-in", () => {
-    const out = mapGenkitAttributes(toolAttributes(), { captureContent: true });
-    expect(out["input.value"]).toBe(JSON.stringify({ id: 7 }));
-    expect(out["output.value"]).toContain(TOOL_OUTPUT_MARKER);
-    expect(out["input.mime_type"]).toBe("application/json");
-    expect(out["output.mime_type"]).toBe("application/json");
-    expect(out["genkit:output"]).toContain(TOOL_OUTPUT_MARKER);
-  });
-
-  it("keeps usage on model spans with content off (usage is read before the output is dropped)", () => {
-    const out = mapGenkitAttributes(modelAttributes());
+  it("keeps usage on model spans with outputs hidden (usage is read before the output is dropped)", () => {
+    const out = mapGenkitAttributes(modelAttributes(), { policy: HIDE_ALL });
     expect(out["genkit:output"]).toBeUndefined();
     expect(out["gen_ai.usage.total_tokens"]).toBe(14);
+    expect(out["gen_ai.response.finish_reasons"]).toEqual(["stop"]);
+  });
+
+  it("rewrites local paths and removes stack traces inside exported content, in either mode", () => {
+    const scrub = { cwd: "/srv/app", home: "/home/dev" };
+    const out = mapGenkitAttributes(
+      {
+        ...toolAttributes(),
+        "genkit:output": JSON.stringify({
+          file: "/srv/app/data/orders.json",
+          cfg: "/home/dev/.config/x",
+          other: "/Users/someone/notes.txt",
+          err: "boom\n    at run (/srv/app/tool.js:1:2)",
+          url: "https://example.com/v1/models",
+        }),
+      },
+      { scrub },
+    );
+    const output = String(out["output.value"]);
+    expect(output).not.toContain("/srv/app");
+    expect(output).not.toContain("/home/dev");
+    expect(output).not.toContain("/Users/someone");
+    expect(output).not.toContain("tool.js:1:2");
+    expect(output).toContain("[cwd]/data/orders.json");
+    expect(output).toContain("~/.config/x");
+    expect(output).toContain("https://example.com/v1/models");
+    expect(out["genkit:output"]).toBe(output);
+  });
+
+  it("leaves Genkit action paths alone", () => {
+    const out = mapGenkitAttributes(flowAttributes(), { scrub: { cwd: "/srv/app" } });
+    expect(out["genkit:path"]).toBe(flowAttributes()["genkit:path"]);
   });
 
   it("never modifies the source attributes", () => {
     const source = modelAttributes();
     const before = JSON.stringify(source);
     mapGenkitAttributes(source);
-    mapGenkitAttributes(source, { captureContent: true });
+    mapGenkitAttributes(source, { policy: HIDE_ALL });
     expect(JSON.stringify(source)).toBe(before);
   });
 });

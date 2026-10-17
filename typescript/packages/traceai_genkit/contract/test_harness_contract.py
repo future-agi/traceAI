@@ -60,7 +60,9 @@ CONTENT_MARKERS = (
     "SECRET_CHUNK_MARKER",
     "SECRET_STRUCTURED_OUTPUT_MARKER",
 )
-REDACTED_NOTE = "[data redacted: captureContent is off]"
+REDACTED = "__REDACTED__"  # fi-core REDACTED_VALUE
+# The documented opt-out (traceAI TraceConfig): content is exported by default, these env vars hide it.
+HIDE_ENV = {"FI_HIDE_INPUTS": "true", "FI_HIDE_OUTPUTS": "true"}
 PROMOTED_EXACT = {
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.output_tokens",
@@ -163,15 +165,46 @@ def _assert_collector_contract(requests: List[Dict[str, Any]]) -> None:
             assert resource["project_type"] == "observe"
 
 
+def _local_identity() -> List[str]:
+    """Strings that must never be exported in either mode: home and working directories, user and host names."""
+    import getpass
+    import socket
+
+    values = [os.path.expanduser("~"), os.getcwd(), str(REPO_ROOT)]
+    try:
+        values.append(getpass.getuser())
+    except Exception:  # noqa: BLE001
+        pass
+    host = socket.gethostname()
+    values += [host, host.split(".")[0]]
+    return [v for v in values if v and len(v) >= 3 and v.lower() != "localhost"]
+
+
+def _assert_no_local_identity(spans: List[Dict[str, Any]]) -> None:
+    """Never exported, content on or off: stack traces, local paths, user and host names, credentials."""
+    blob = json.dumps(spans)
+    for value in _local_identity():
+        assert value not in blob, value
+    for span in spans:
+        for event in span.get("events", []):
+            keys = {i["key"] for i in event.get("attributes", [])}
+            assert "exception.stacktrace" not in keys, (span["name"], event["name"])
+    assert "    at " not in blob  # no V8 stack frame
+    assert PLACEHOLDER_API_KEY not in blob and PLACEHOLDER_SECRET_KEY not in blob
+
+
 def _assert_no_content(spans: List[Dict[str, Any]]) -> None:
+    """Content hidden with FI_HIDE_INPUTS / FI_HIDE_OUTPUTS: no marker anywhere, no raw genkit content keys."""
     blob = json.dumps(spans)
     for marker in CONTENT_MARKERS:
         assert marker not in blob, marker
     for span in spans:
         attrs = _attrs(span)
-        for key in ("input.value", "output.value", "genkit:input", "genkit:output", "genkit:metadata:context"):
+        for key in ("genkit:input", "genkit:output", "genkit:init", "genkit:metadata:context", "input.mime_type", "output.mime_type"):
             assert key not in attrs, (span["name"], key)
-    assert PLACEHOLDER_API_KEY not in blob and PLACEHOLDER_SECRET_KEY not in blob
+        for key in ("input.value", "output.value"):
+            assert attrs.get(key, REDACTED) == REDACTED, (span["name"], key)
+    _assert_no_local_identity(spans)
 
 
 class TelemetryServerStandIn:
@@ -338,8 +371,19 @@ def test_promoted_tokens_only_on_model_calls_and_trace_sum_equals_model_calls(to
     assert (total_input, total_output, total) == (32, 7, 39)
 
 
-def test_content_is_off_by_default(tool_run: Dict[str, Any]) -> None:
-    _assert_no_content(tool_run["spans"])
+def test_content_is_exported_by_default_like_every_traceai_instrumentor(tool_run: Dict[str, Any]) -> None:
+    """traceAI TraceConfig default (fi-core DEFAULT_HIDE_* = false): inputs and outputs are exported."""
+    spans = tool_run["spans"]
+    flow = _attrs(_one(spans, "qaFlow"))
+    tool = _attrs(_one(spans, "lookup"))
+    assert "SECRET_PROMPT_MARKER" in flow["input.value"]
+    assert "SECRET_OUTPUT_MARKER" in flow["output.value"]
+    assert flow["input.mime_type"] == "application/json"
+    assert "SECRET_TOOL_OUTPUT_MARKER" in tool["output.value"]
+    models = [_attrs(m) for m in _by_name(spans, "contract/tool-model")]
+    assert all("SECRET_PROMPT_MARKER" in m["input.value"] for m in models)
+    assert "genkit:metadata:context" not in flow  # request context: never exported
+    _assert_no_local_identity(spans)
 
 
 def test_genkit_own_trace_export_keeps_working_and_sees_unmodified_spans(tool_run: Dict[str, Any]) -> None:
@@ -352,20 +396,19 @@ def test_genkit_own_trace_export_keeps_working_and_sees_unmodified_spans(tool_ru
     assert "fi.span.kind" not in flow["attributes"]  # our mapping went to a copy, not Genkit's span
 
 
-def test_content_is_exported_only_after_opt_in(built_package: Path) -> None:
+def test_fi_hide_inputs_and_outputs_hide_content_and_keep_kinds_and_tokens(built_package: Path) -> None:
+    """The documented opt-out: FI_HIDE_INPUTS=true + FI_HIDE_OUTPUTS=true in the environment."""
     with Receiver() as receiver:
-        result = run([NODE, str(FIXTURE)], env=_fixture_env(receiver.origin, "tool", {"CAPTURE_CONTENT": "1"}), stdin=None, timeout=90)
-        _check(result, "node run_fixture.mjs (tool, captureContent)")
+        result = run([NODE, str(FIXTURE)], env=_fixture_env(receiver.origin, "tool", HIDE_ENV), stdin=None, timeout=90)
+        _check(result, "node run_fixture.mjs (tool, FI_HIDE_INPUTS/OUTPUTS)")
         spans = receiver.spans()
+    _assert_no_content(spans)
     flow = _attrs(_one(spans, "qaFlow"))
-    tool = _attrs(_one(spans, "lookup"))
-    assert "SECRET_PROMPT_MARKER" in flow["input.value"]
-    assert "SECRET_OUTPUT_MARKER" in flow["output.value"]
-    assert flow["input.mime_type"] == "application/json"
-    assert "SECRET_TOOL_OUTPUT_MARKER" in tool["output.value"]
-    assert "genkit:metadata:context" not in flow
-    blob = json.dumps(spans)
-    assert PLACEHOLDER_API_KEY not in blob and PLACEHOLDER_SECRET_KEY not in blob
+    assert flow["input.value"] == REDACTED and flow["output.value"] == REDACTED
+    models = [_attrs(m) for m in _by_name(spans, "contract/tool-model")]
+    assert sorted((m["gen_ai.usage.input_tokens"], m["gen_ai.usage.output_tokens"]) for m in models) == [(11, 3), (21, 4)]
+    assert all(m["fi.span.kind"] == "LLM" and m["gen_ai.request.model"] == "tool-model" for m in models)
+    assert _attrs(_one(spans, "lookup"))["tool.name"] == "lookup"
 
 
 def test_stream_flow_has_one_closed_model_span(built_package: Path) -> None:
@@ -390,7 +433,8 @@ def test_stream_flow_has_one_closed_model_span(built_package: Path) -> None:
     assert _attrs(flow)["fi.span.kind"] == "CHAIN"
     generate = _one(spans, "generate")
     assert model["parentSpanId"] == generate["spanId"] and generate["parentSpanId"] == flow["spanId"]
-    _assert_no_content(spans)
+    assert "SECRET_CHUNK_MARKER" in a["output.value"]  # content on by default: the streamed answer
+    _assert_no_local_identity(spans)
 
 
 def test_throwing_action_marks_error_with_exception_event(built_package: Path) -> None:
@@ -417,6 +461,23 @@ def test_throwing_action_marks_error_with_exception_event(built_package: Path) -
     # Genkit marks only the first failing span as the failure source (instrumentation.ts:164-172).
     assert _attrs(tool)["genkit:isFailureSource"] is True
     assert "genkit:isFailureSource" not in _attrs(root)
+    _assert_no_local_identity(spans)  # the exception events lose exception.stacktrace
+
+
+def test_throwing_action_with_content_hidden_exports_error_type_only(built_package: Path) -> None:
+    """With FI_HIDE_INPUTS / FI_HIDE_OUTPUTS the error message (which can quote user data) is replaced."""
+    with Receiver() as receiver:
+        result = run([NODE, str(FIXTURE)], env=_fixture_env(receiver.origin, "error", HIDE_ENV), stdin=None, timeout=90)
+        _check(result, "node run_fixture.mjs (error, hidden)")
+        spans = receiver.spans()
+    assert _last_json_line(result.stdout)["error"] == "lookup exploded"  # the app still gets the full error
+    assert "lookup exploded" not in json.dumps(spans)
+    for span in (_one(spans, "failingFlow"), _one(spans, "brokenLookup")):
+        assert _status_code(span) == 2, span["name"]
+        assert span["status"]["message"] == f"Error: {REDACTED}", span["status"]
+        events = _exception_events(span)
+        assert events == [{"exception.type": "Error", "exception.message": REDACTED}], events
+    _assert_no_content(spans)
 
 
 def _exception_events(span: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -437,49 +498,47 @@ def _run_schema_journey(extra: Optional[Dict[str, str]] = None) -> Dict[str, Any
     return {"output": output, "spans": spans}
 
 
-def test_schema_validation_error_does_not_export_model_output_with_content_off(built_package: Path) -> None:
+def test_schema_validation_error_does_not_export_model_output_with_content_hidden(built_package: Path) -> None:
     """N1: ai.generate with an output schema gets non-matching JSON from the model. Genkit's
     ValidationError embeds that output in the error message, which Genkit writes to span status
-    and exception events. With captureContent off the model output must appear nowhere."""
-    run_ = _run_schema_journey()
+    and exception events. With FI_HIDE_INPUTS / FI_HIDE_OUTPUTS the model output must appear nowhere."""
+    run_ = _run_schema_journey(HIDE_ENV)
     spans, model_output = run_["spans"], run_["output"]["modelOutput"]
     blob = json.dumps(spans)
     assert "SECRET_STRUCTURED_OUTPUT_MARKER" not in blob
     assert model_output not in blob and json.dumps(model_output) not in blob
+    assert "Provided data:" not in blob
     _assert_no_content(spans)
 
     flow = _one(spans, "structuredFlow")
     generate = _one(spans, "generate")
     for span in (flow, generate):
         assert _status_code(span) == 2, span["name"]
-        message = span["status"]["message"]
-        assert message.startswith("INVALID_ARGUMENT: Schema validation failed. Parse Errors:"), message
-        assert message.endswith(REDACTED_NOTE) and "Provided data:" not in message, message
-        events = _exception_events(span)
-        assert len(events) == 1, span["name"]
         # Kept as recorded: sdk-trace-base 1.25 Span.recordException uses `error.code` first
         # (GenkitError.code is the HTTP status, 400 for INVALID_ARGUMENT).
-        assert events[0]["exception.type"] == "400"
-        assert events[0]["exception.message"] == message
-        assert events[0]["exception.stacktrace"].endswith(REDACTED_NOTE)
+        assert span["status"]["message"] == f"400: {REDACTED}", span["status"]
+        events = _exception_events(span)
+        assert events == [{"exception.type": "400", "exception.message": REDACTED}], (span["name"], events)
     assert _attrs(generate)["genkit:isFailureSource"] is True
 
 
-def test_schema_validation_error_keeps_data_after_opt_in(built_package: Path) -> None:
-    """Control for N1: with captureContent the same error message is exported unchanged."""
-    spans = _run_schema_journey({"CAPTURE_CONTENT": "1"})["spans"]
+def test_schema_validation_error_keeps_data_by_default_but_never_the_stack_trace(built_package: Path) -> None:
+    """Control for N1: with content on (the default) the error message is exported; the stack trace is not."""
+    spans = _run_schema_journey()["spans"]
     generate = _one(spans, "generate")
     assert "Provided data:" in generate["status"]["message"]
     assert "SECRET_STRUCTURED_OUTPUT_MARKER" in generate["status"]["message"]
-    assert "SECRET_STRUCTURED_OUTPUT_MARKER" in _exception_events(generate)[0]["exception.message"]
-    assert REDACTED_NOTE not in json.dumps(spans)
+    events = _exception_events(generate)
+    assert "SECRET_STRUCTURED_OUTPUT_MARKER" in events[0]["exception.message"]
+    assert "exception.stacktrace" not in events[0]
+    _assert_no_local_identity(spans)
 
 
 def test_beta_agent_session_id_maps_to_session_id(built_package: Path) -> None:
     """Session: the native key at 1.42.0 is genkit:metadata:agent:sessionId on the beta agent span."""
     with Receiver() as receiver:
-        result = run([NODE, str(FIXTURE)], env=_fixture_env(receiver.origin, "agent"), stdin=None, timeout=90)
-        _check(result, "node run_fixture.mjs (agent)")
+        result = run([NODE, str(FIXTURE)], env=_fixture_env(receiver.origin, "agent", HIDE_ENV), stdin=None, timeout=90)
+        _check(result, "node run_fixture.mjs (agent, content hidden)")
         spans = receiver.spans()
         _assert_collector_contract(receiver.requests())
     output = _last_json_line(result.stdout)
@@ -492,7 +551,7 @@ def test_beta_agent_session_id_maps_to_session_id(built_package: Path) -> None:
     assert (a["fi.span.kind"], a["gen_ai.span.kind"]) == ("AGENT", "AGENT")
     assert a["session.id"] == session_id
     assert a["genkit:metadata:agent:sessionId"] == session_id
-    assert "genkit:init" not in a  # agent init state is content
+    assert "genkit:init" not in a  # agent init state is input content, hidden by FI_HIDE_INPUTS
     model = _one(spans, "contract/agent-model")
     m = _attrs(model)
     assert (m["fi.span.kind"], m["gen_ai.usage.input_tokens"], m["gen_ai.usage.output_tokens"]) == ("LLM", 3, 2)
@@ -627,7 +686,7 @@ def test_dev_runtime_reflection_server_and_telemetry_server_still_work(built_pac
     fi_ids = {s["spanId"] for s in fi_spans if s["traceId"] == trace_id}
     assert len(genkit_ids) == 7 and genkit_ids == fi_ids
     assert all(_attrs(s).get("fi.span.kind") for s in fi_spans if s["traceId"] == trace_id)
-    _assert_no_content(fi_spans)
+    _assert_no_local_identity(fi_spans)
 
 
 def test_inventory_types_are_all_mapped(built_package: Path) -> None:

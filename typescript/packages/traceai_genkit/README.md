@@ -2,7 +2,7 @@
 
 Send [Firebase Genkit](https://genkit.dev) (JavaScript) spans to Future AGI. Genkit already creates OpenTelemetry spans for flows, models, tools and steps. `FIGenkitSpanProcessor` is a span processor you pass to Genkit's `enableTelemetry({ spanProcessors })`. It maps Genkit's `genkit:*` attributes to Future AGI span kinds, model and token keys, and exports the mapped copy through `@traceai/fi-core`.
 
-Alpha. Validated with real `genkit` 1.42.0 flows on Genkit's own test model (`mockModel` from `genkit/testing`), exported to a loopback OTLP receiver, and end to end with the Google AI plugin (`@genkit-ai/google-genai` 1.42.0, `gemini-3.8-flash`: tool call, streaming, model and tool errors) exported to a local Future AGI collector. GCP telemetry was not called.
+Alpha. Validated with real `genkit` 1.42.0 (the latest stable release on npm on 2026-10-16) flows on Genkit's own test model (`mockModel` from `genkit/testing`), exported to a loopback OTLP receiver, and end to end with the Google AI plugin (`@genkit-ai/google-genai` 1.42.0, `gemini-3.8-flash` and `gemini-embedding-001`: retriever, embedder, tool call, streaming, a failing tool) exported to a local Future AGI collector. GCP telemetry was not called.
 
 JavaScript only. Genkit Python and Genkit Go are not covered. This package does not use the Firebase / Google Cloud plugin, cannot run next to it in one process in this release (see [Firebase / Google Cloud telemetry plugin](#firebase--google-cloud-telemetry-plugin)), and does not wrap `ai.generate()`.
 
@@ -46,7 +46,7 @@ const tracerProvider = register({
 });
 
 await enableTelemetry({
-  spanProcessors: [new FIGenkitSpanProcessor({ tracerProvider })], // captureContent defaults to false
+  spanProcessors: [new FIGenkitSpanProcessor({ tracerProvider })], // content on by default; FI_HIDE_INPUTS / FI_HIDE_OUTPUTS hide it
 });
 
 const ai = genkit({ plugins: [/* your model plugins */] });
@@ -104,14 +104,15 @@ Cost: the Future AGI export adds no Google Cloud cost. The Firebase / Google Clo
 | `tool.name`, `gen_ai.tool.name` | `genkit:name` of the tool action span | tool spans |
 | `session.id` | `genkit:metadata:agent:sessionId` (`ai/src/agent.ts:1061-1063`) | the beta agent span only |
 | `session.id`, `user.id`, `metadata`, `tag.tags` | fi-core `setSession` / `setUser` / `setMetadata` / `setTags` around the flow call | every span started in that context |
-| `input.value` / `output.value` (+ `application/json` mime types) | `genkit:input` / `genkit:output` | only with `captureContent: true` |
+| `embedding.model_name`, `gen_ai.provider.name` | `genkit:name` of the embedder action span without its plugin namespace (`googleai/gemini-embedding-001` becomes `gemini-embedding-001`), provider as for models | embedder spans |
+| `input.value` / `output.value` (+ `application/json` mime types) | `genkit:input` / `genkit:output` | by default; `__REDACTED__` (no mime type) when hidden, see [Content](#content) |
 | `genkit:*` | passed through, except the content keys below | every Genkit span |
 
 Cost is not set by this package: fi-collector prices each model span from its tokens and `gen_ai.request.model` (an exact lookup in its litellm price table), so a model the table lists, such as `gemini-3.5-flash`, gets a cost and one it does not list shows none. Unavailable at 1.42.0, and not set: user id (unless the app sets it), retriever documents, and the other `GenerationUsage` fields (the character / image / video / audio counters, `custom`). Those stay inside `genkit:output`.
 
 Tokens are written only on model call spans. The `generate` span's `genkit:output` repeats the last turn's usage; it stays inside that JSON and is not promoted. If any non-model span carries a key the collector promotes (`gen_ai.usage.*`, `llm.token_count.*`, `llm.usage.*`, `gen_ai.cost.*`, `llm.cost.*`; the cost prefixes cover the parts such as `gen_ai.cost.input` and `llm.cost.completion` as well as the totals), the processor moves it to `genkit.usage.<key>`, so the trace-wide token and cost sums equal the model calls.
 
-Errors: Genkit sets the OTel status to `ERROR` and records an `exception` event on every span the error passes through (`core/src/tracing/instrumentation.ts:153-172`). Both are exported; with content off, schema-validation data is cut from them (see [Content](#content)). `genkit:isFailureSource` marks the first failing span.
+Errors: Genkit sets the OTel status to `ERROR` and records an `exception` event on every span the error passes through (`core/src/tracing/instrumentation.ts:153-172`). Both are exported, without `exception.stacktrace` and without local paths, emails, or this machine's user and host names in the message; with inputs or outputs hidden the message itself is replaced (see [Content](#content)). `genkit:isFailureSource` marks the first failing span.
 
 ### Session
 
@@ -126,22 +127,41 @@ await context.with(setSession(context.active(), { sessionId: "chat-123" }), () =
 
 ## Content
 
-Content is off by default. That is stricter than Genkit, which records inputs and outputs on its spans.
+Content follows the traceAI `TraceConfig` convention, the same as every other traceAI instrumentor: Genkit's inputs and outputs (flow input and output, prompts and model responses, tool arguments and results, retriever queries and documents, embedder input and vectors) are **exported by default**, and the standard switches hide them. Set them as environment variables, or pass the same options as `traceConfig`; the option wins over the variable, and only the string `true` (any case) hides.
 
-| Genkit key | Default | `captureContent: true` |
-|---|---|---|
-| `genkit:input`, `genkit:output`, `genkit:init` | dropped | exported, and copied to `input.value` / `output.value` |
-| `genkit:metadata:interrupt`, `genkit:metadata:resumed` (tool interrupts) | dropped | exported |
-| `genkit:metadata:context` (request context; Genkit redacts `auth` and `secrets`, headers can remain) | dropped | dropped |
-| Span status message, `exception.message` and `exception.stacktrace` of `exception` events | cut at `Provided data:`, followed by `[data redacted: captureContent is off]` | exported unchanged |
+```bash
+export FI_HIDE_INPUTS=true    # every span: genkit:input, genkit:init, genkit:metadata:resumed
+export FI_HIDE_OUTPUTS=true   # every span: genkit:output, genkit:metadata:interrupt
+```
 
-Usage and finish reason are read from `genkit:output` before it is dropped, so tokens are present with content off.
+```typescript
+new FIGenkitSpanProcessor({ tracerProvider, traceConfig: { hideInputs: true, hideOutputs: true } });
+```
 
-Genkit's schema-validation error embeds the rejected data in its message: `Schema validation failed. Parse Errors: ... Provided data: <the JSON> Required JSON schema: ...` (`@genkit-ai/core` `src/schema.ts:78`). It is raised, for example, when `ai.generate({ output: { schema } })` gets model output that does not match the schema (the contract `schema` journey), and Genkit copies the message to the status and the exception event of every span the error passes through. With content off, the processor keeps the text before `Provided data:` (status, parse errors and paths), drops the rest (data, schema and, in the stack trace, the stack frames) and appends `[data redacted: captureContent is off]`. `exception.type` and the event itself are kept. Other error messages are exported as thrown: an error your own code throws with user input in its message is not redacted. Two Genkit errors also embed data without the `Provided data:` marker and are exported as thrown: the `validateSupport` model middleware, which a model plugin opts into, puts the whole request in its message (`Model '<name>' does not support ... Request: <JSON>`, `@genkit-ai/ai` `src/model/middleware.ts:107-115`), and a misconfigured `defineSimpleRetriever` puts the failing item in its message (`Item: <JSON>`, `src/retriever.ts:396-422`). The text kept before `Provided data:` can include object key paths from the parse errors.
+| Switch (env / `traceConfig`) | Effect on the exported copy |
+|---|---|
+| `FI_HIDE_INPUTS` / `hideInputs` | Input-side keys dropped, `input.value` = `__REDACTED__`, no `input.mime_type`, and the error message rule below |
+| `FI_HIDE_OUTPUTS` / `hideOutputs` | Output-side keys dropped, `output.value` = `__REDACTED__`, no `output.mime_type`, and the error message rule below |
+| `FI_HIDE_INPUT_MESSAGES` / `FI_HIDE_OUTPUT_MESSAGES` | The same, on model spans only (a model span's input is the message list, its output the response message) |
+| `FI_HIDE_INPUT_TEXT` / `FI_HIDE_OUTPUT_TEXT` | On model spans, every `text` and `reasoning` part becomes `__REDACTED__`; roles, tool requests, finish reason and usage stay |
+| `FI_HIDE_EMBEDDING_VECTORS` | On embedder spans, every vector becomes `__REDACTED__` |
+
+Hidden or not, tokens, finish reason, model, provider, kinds, names and session are exported: they are read from Genkit's span before anything is hidden.
+
+Never exported, in either mode:
+
+| What | How |
+|---|---|
+| `genkit:metadata:context` (request context; Genkit redacts `auth` and `secrets`, headers can remain) | dropped |
+| `exception.stacktrace` of `exception` events | dropped |
+| Stack frames and local file paths in any exported string (content included) | frames removed; the working directory becomes `[cwd]`, the home directory `~`, other absolute local paths, `file://` URLs and Windows paths `[path]`. URL paths and Genkit action paths (`genkit:path`) are left alone |
+| Emails and this machine's user and host names in the span status message and `exception.message` | replaced by `<email>` / `<redacted>` |
+
+Error messages: Genkit copies the thrown message to the span status and the `exception` event of every span the error passes through, and messages often quote user data: a tool that throws with its input in the text, Genkit's schema-validation error (`Schema validation failed. Parse Errors: ... Provided data: <the JSON> ...`, `@genkit-ai/core` `src/schema.ts:78`), the `validateSupport` model middleware (`Request: <JSON>`, `@genkit-ai/ai` `src/model/middleware.ts:107-115`), a misconfigured `defineSimpleRetriever` (`Item: <JSON>`, `src/retriever.ts:396-422`). By default the message is exported after the scrubbing above. With `FI_HIDE_INPUTS` or `FI_HIDE_OUTPUTS` on, the status message becomes `<exception.type>: __REDACTED__` (for example `Error: __REDACTED__`, or `400: __REDACTED__` for a Genkit `INVALID_ARGUMENT` error, whose recorded type is its HTTP code) and `exception.message` becomes `__REDACTED__`. The `ERROR` status, the event and `exception.type` are kept. Your app still receives the full error.
 
 The processor never changes Genkit's span. Genkit's Dev UI and any other exporter see the original attributes; Future AGI gets a mapped copy.
 
-fi-core's `TraceConfig` masking (`FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS` and the other `FI_HIDE_*` settings) is not applied to Genkit spans: `captureContent` is the only content switch in this package.
+The `captureContent` option of earlier pre-release builds is removed. Passing it logs a warning; `captureContent: false` still hides inputs and outputs (unless `traceConfig` or the `FI_HIDE_*` variables say otherwise), so an old configuration never exports more than it asked for.
 
 ## Flush and shutdown
 
@@ -183,4 +203,4 @@ PYTHONPATH=python/tests uv run --no-project --python 3.11 --with pytest --with p
   pytest typescript/packages/traceai_genkit/contract -q -p no:cacheprovider --noconftest -o addopts=''
 ```
 
-The contract suite builds the package, runs `contract/run_fixture.mjs` against the real fi-core exporter and the shared receiver, and checks the collector path and headers, the resource, span names, kinds and parenting, model and tokens, the trace token sum, content off by default with an opt-in control run, one closed model span for a streamed flow, error status and exception events, schema-validation data cut from status and exception events with content off (and kept after opt-in), SIGTERM flushing (with a control that shows a plain listener loses the race), a collector that is down, Genkit's Dev UI reflection server and telemetry export in `GENKIT_ENV=dev`, the inventory drift check, the packed tarball, and the CJS / ESM entry points. `NODE_BINARY` is the node every fixture journey and the inventory check run on (the build and `pnpm pack` steps use the `node` on `PATH`). `TRACEAI_NODE_MATRIX` (path-separated) parametrizes only the CJS / ESM entry-point import check, which loads the built package through a symlink in a temporary `node_modules` (not a clean `npm install`); unset, it is `NODE_BINARY` alone. The suite ran on 20.20.2, 22.23.3 and 26.8.1, one run each with the matrix above: 22 passed per run (19 tests plus the import check on three Nodes). jest ran on the same three Nodes (that Node first on `PATH`): 68 passed each.
+The contract suite builds the package, runs `contract/run_fixture.mjs` against the real fi-core exporter and the shared receiver, and checks the collector path and headers, the resource, span names, kinds and parenting, model and tokens, the trace token sum, content exported by default and hidden with `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` (tokens, kinds and model kept), no stack trace, local path, user or host name in any journey, one closed model span for a streamed flow, error status and exception events (the message replaced by the error type when content is hidden), schema-validation data absent from status and exception events with content hidden (and kept by default), SIGTERM flushing (with a control that shows a plain listener loses the race), a collector that is down, Genkit's Dev UI reflection server and telemetry export in `GENKIT_ENV=dev`, the inventory drift check, the packed tarball, and the CJS / ESM entry points. `NODE_BINARY` is the node every fixture journey and the inventory check run on (the build and `pnpm pack` steps use the `node` on `PATH`). `TRACEAI_NODE_MATRIX` (path-separated) parametrizes only the CJS / ESM entry-point import check, which loads the built package through a symlink in a temporary `node_modules` (not a clean `npm install`); unset, it is `NODE_BINARY` alone. Re-verification 2026-10-16 (TraceConfig privacy, embedder mapping): the contract suite ran once with `NODE_BINARY` 20.20.2 and once with 22.18.0, `TRACEAI_NODE_MATRIX` set to both: 22 passed per run (20 tests plus the import check on two Nodes). jest ran on the same two Nodes: 95 passed each. The earlier review rounds ran the suite on 20.20.2, 22.23.3 and 26.8.1.
