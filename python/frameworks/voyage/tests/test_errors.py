@@ -99,7 +99,6 @@ def test_pii_redaction_covers_the_error_status_and_exception_event(fake, operati
     for recorded in (
         span.status.description,
         event.attributes["exception.message"],
-        event.attributes["exception.stacktrace"],
     ):
         assert EMAIL not in recorded
         assert "<EMAIL_ADDRESS>" in recorded
@@ -114,7 +113,20 @@ def test_without_pii_redaction_error_text_is_unchanged_apart_from_the_key(fake):
     span = traced.one()
     assert EMAIL in span.status.description
     assert EMAIL in span.events[0].attributes["exception.message"]
-    assert EMAIL in span.events[0].attributes["exception.stacktrace"]
+    assert "exception.stacktrace" not in span.events[0].attributes
+
+
+def test_no_stacktrace_or_local_path_is_exported(fake):
+    with instrumented() as traced:
+        with pytest.raises(voyageai.error.InvalidRequestError):
+            client(fake).embed(["x"], model="echo-input")
+
+    span = traced.one()
+    assert "exception.stacktrace" not in span.events[0].attributes
+    wire = traced.wire()
+    assert "Traceback" not in wire
+    assert "site-packages" not in wire
+    assert __file__ not in wire
 
 
 def test_the_key_is_redacted_before_pii_redaction(fake):

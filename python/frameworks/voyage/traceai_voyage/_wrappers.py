@@ -15,7 +15,6 @@ import asyncio
 import json
 import logging
 import sys
-import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
@@ -401,12 +400,9 @@ def _record_error(
     span: Span, error: BaseException, secrets: Sequence[str], config: TraceConfig
 ) -> None:
     name, message = _describe(error, secrets)
-    try:
-        stacktrace = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-    except Exception:
-        stacktrace = ""
     message = _redact_pii(message, config)
-    stacktrace = _redact_pii(_redact(stacktrace, secrets), config)
+    # No exception.stacktrace: a Python traceback carries local file paths and
+    # the user name, which this package never exports.
     # The SDK's record_exception would copy str(error) verbatim; the key may
     # be in it (a server echoing it back), so the event is built here.
     span.add_event(
@@ -414,7 +410,6 @@ def _record_error(
         {
             "exception.type": "{0}.{1}".format(type(error).__module__, type(error).__qualname__),
             "exception.message": message,
-            "exception.stacktrace": stacktrace,
         },
     )
     span.set_status(Status(StatusCode.ERROR, "{0}: {1}".format(name, message)))

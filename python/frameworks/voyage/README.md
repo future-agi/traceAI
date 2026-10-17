@@ -146,7 +146,7 @@ phone numbers with tokens such as `<EMAIL_ADDRESS>`. It covers:
   scores JSON, and the other attributes above (an IP `server.address` becomes
   `<IP_ADDRESS>`);
 - the error status description and the `exception` event's
-  `exception.message` and `exception.stacktrace`, after the API key is
+  `exception.message`, after the API key is
   removed from them.
 
 It does not change span names, event names or `exception.type`. The patterns
