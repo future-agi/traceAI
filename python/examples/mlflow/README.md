@@ -500,11 +500,15 @@ tests). Whatever MLflow captures lands in Future AGI.
 MLflow's own hook for removing it is a span processor:
 
 ```python
+from mlflow.entities import SpanStatusCode
+
 def drop_content(span):
     if span.inputs is not None:
         span.set_inputs("[REDACTED]")
     if span.outputs is not None:
         span.set_outputs("[REDACTED]")
+    if span.status.status_code == SpanStatusCode.ERROR:
+        span.set_status("ERROR")   # keeps ERROR, drops the exception text
 
 mlflow.tracing.configure(span_processors=[drop_content])
 ```
@@ -515,11 +519,24 @@ switch off and on: none of the question, the policy text or the answer is
 anywhere in the export; with the switch off the two keys remain, holding
 `"[REDACTED]"`, and with it on no message key is exported.
 
-Not covered by that processor (source reading, not tested): when code
-inside a span raises, MLflow sets the span status to `ERROR` and adds an
-`exception` event with the message and stack trace
-(`mlflow/tracing/provider.py:309-311`, `mlflow/entities/span.py:1062-1073`);
-attributes your code sets with other keys are exported as they are; and
+**Errors and stack traces (tested, mlflow 3.16.1 and 3.17.1).** When code inside a
+span raises, MLflow sets the span status to `ERROR`, puts the exception text
+(`"<Type>: <message>"`; a provider fills it with request details) in the
+status message, and adds an `exception` event holding the message and
+`exception.stacktrace`, whose frames are local file paths (so the user
+name). Plain MLflow exports all of it. `src/app.py` therefore always
+registers `drop_exception_events`, which removes the `exception` events
+(MLflow has no public call for that: it clears the underlying OpenTelemetry
+span's event list, and does nothing if that attribute is missing), and
+`--drop-content` additionally clears the status message
+(`drop_content` above). The span stays `ERROR` either way. Copy
+`drop_exception_events` from `src/app.py` into your own app if you do not
+use it; without it your stack traces and local paths are exported.
+
+Not covered by those processors (source reading, not tested): attributes
+your code sets with other keys are exported as they are; autolog also
+exports the tool schemas you pass to the model (`tools`,
+`gen_ai.tool.definitions`), which are your code, not user content; and
 trace tags are written on the root span as `mlflow.traceTag.<key>` after the
 span processors have run (`mlflow/tracing/processor/otel.py:68-79`).
 
@@ -552,6 +569,17 @@ the app's output (tested); they travel only as request headers.
   [Turning the switch off](#turning-the-switch-off).
 - **Old traces never arrived.** Expected: this is live export, not a
   backfill.
+
+## Re-verification (2026-10-16)
+
+Run against mlflow **3.17.1** (the latest stable on PyPI) as well as the
+pinned 3.16.1, with `opentelemetry-exporter-otlp-proto-http` 1.45.1 and
+1.45.0, Python 3.12. The Run block works unchanged on 3.17.1 and the contract
+test passes on both. With 3.17.1 and the real `openai` client against an
+OpenAI-compatible endpoint, `mlflow.openai.autolog()` produced the same span
+shapes as in the table above (agent `unknown`, tool `tool`, model calls `llm`
+with model and tokens, a failed call `ERROR`). Only `requirements.txt` stays on
+3.16.1, the version the recipe was written against.
 
 ## Tests
 

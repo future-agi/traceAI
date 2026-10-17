@@ -24,7 +24,7 @@ import sys
 from urllib.parse import unquote, urlparse
 
 import mlflow
-from mlflow.entities import LiveSpan, SpanType
+from mlflow.entities import LiveSpan, SpanStatusCode, SpanType
 
 MODEL = "gpt-4o-mini"
 PROVIDER = "openai"
@@ -111,16 +111,38 @@ def check_environment() -> None:
         raise SystemExit("Add project_name=<your project> to OTEL_RESOURCE_ATTRIBUTES.")
 
 
+def drop_exception_events(span: LiveSpan) -> None:
+    """Remove the ``exception`` events from a span before it is exported.
+
+    When a span fails, MLflow records an ``exception`` event holding the
+    exception message and ``exception.stacktrace``, which contains the local
+    file paths of the failing process (and so the user name). Nothing in
+    MLflow's own settings turns that off, and the status stays ERROR without
+    it. MLflow has no public call that removes an event, so this clears the
+    underlying OpenTelemetry span's event list (the span has ended, so nothing
+    appends to it again); the processor is a no-op if that attribute is not there. ``main()`` always registers it.
+    """
+    otel_span = getattr(span, "_span", None)
+    if getattr(otel_span, "_events", None):
+        otel_span._events = []
+
+
 def drop_content(span: LiveSpan) -> None:
-    """Replace a span's inputs and outputs before it is exported.
+    """Replace a span's inputs and outputs, and the text of its error, before it
+    is exported.
 
     MLflow has no setting that keeps tracing on and content off; a span
     processor registered with ``mlflow.tracing.configure`` is its own hook.
+    A failed span keeps status ERROR, but MLflow would otherwise export the
+    exception text (``"<Type>: <message>"``, which providers fill with request
+    details such as model names and sometimes prompt text) as its status message.
     """
     if span.inputs is not None:
         span.set_inputs(REDACTED)
     if span.outputs is not None:
         span.set_outputs(REDACTED)
+    if span.status.status_code == SpanStatusCode.ERROR:
+        span.set_status("ERROR")
 
 
 def call_model(messages: list[dict[str, str]]) -> tuple[str, dict[str, int]]:
@@ -173,9 +195,11 @@ def answer(question: str) -> str:
 def main(argv: list[str]) -> int:
     args = argv[1:]
     check_environment()
+    processors = [drop_exception_events]
     if args[:1] == ["--drop-content"]:
-        mlflow.tracing.configure(span_processors=[drop_content])
+        processors.append(drop_content)
         args = args[1:]
+    mlflow.tracing.configure(span_processors=processors)
     question = args[0] if args else "What is the refund window?"
     print(answer(question))
     # MLflow's OTLP exporter runs in an OpenTelemetry BatchSpanProcessor, and

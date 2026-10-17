@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import importlib.metadata
 import importlib.util
 import json
 import os
@@ -44,6 +45,7 @@ README = RECIPE_DIR / "README.md"
 BARE_SPAN = TESTS_DIR / "bare_span.py"
 SET_DESTINATION = TESTS_DIR / "set_destination_app.py"
 GUARD = TESTS_DIR / "_guarded_run.py"
+FAILING_APP = TESTS_DIR / "failing_app.py"
 GUARD_PROBE = TESTS_DIR / "_guard_probe.py"
 GEN_AI_FIXTURE = TESTS_DIR / "fixtures" / "gen_ai_span.otlp.json"
 
@@ -387,7 +389,7 @@ def test_resource_carries_the_project(recipe_run: dict[str, Any]) -> None:
             assert resource.get("project_type") == "observe"
             assert resource.get("service.name") == SERVICE_NAME
             assert resource.get("telemetry.sdk.name") == "mlflow"
-            assert resource.get("telemetry.sdk.version") == "3.16.1"
+            assert resource.get("telemetry.sdk.version") == importlib.metadata.version("mlflow")
 
 
 def test_span_tree(recipe_run: dict[str, Any]) -> None:
@@ -525,6 +527,39 @@ def test_drop_content_processor_removes_inputs_and_outputs(
             assert "gen_ai.input.messages" not in attrs
             assert "gen_ai.output.messages" not in attrs
             assert "gen_ai.system_instructions" not in attrs
+
+
+ERROR_MARKER = "ERRTEXT-8334-9f1c"
+
+
+@pytest.mark.parametrize("mode", ["none", "events", "content"])
+def test_error_text_and_stack_trace_are_dropped_and_status_stays_error(
+    tmp_path: Path, mode: str
+) -> None:
+    flags = {"none": [], "events": ["--drop-events"], "content": ["--drop-content"]}[mode]
+    record = _run_script(tmp_path, FAILING_APP, flags + [ERROR_MARKER])
+    _assert_exited_cleanly(record)
+    assert "failed as expected" in record["stdout"]
+    assert len(record["spans"]) == 1
+    span = record["spans"][0]
+    assert span["status"]["code"] == "STATUS_CODE_ERROR", "the failed span must stay ERROR"
+    dump = _export_dump(record)
+    if mode == "none":
+        # positive control: plain MLflow exports the message, the stack trace and local paths
+        assert ERROR_MARKER in span["status"]["message"]
+        assert "exception.stacktrace" in dump
+        assert "Traceback" in dump
+    else:
+        # no stack trace, no local path, no exception event in either processor mode
+        assert "exception.stacktrace" not in dump
+        assert "Traceback" not in dump
+        assert str(Path(__file__).resolve().parents[4]) not in dump
+        assert not span.get("events")
+    if mode == "events":
+        assert ERROR_MARKER in span["status"]["message"], "--drop-events keeps the status message"
+    if mode == "content":
+        assert ERROR_MARKER not in dump
+        assert not span["status"].get("message")
 
 
 # --------------------------------------------------------------------------
