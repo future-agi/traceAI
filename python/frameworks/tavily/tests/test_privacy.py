@@ -284,3 +284,71 @@ def test_redaction_happens_before_the_cap(fake):
     value = attrs(traced.one())["input.value"]
     assert value == "x" * 1015 + "[redacted"
     assert "tvly-" not in json.dumps(value)
+
+
+FRAME_MARKERS = ("Traceback", 'File "', "/Users/", "/home/", "site-packages", "Documents/")
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("hide", [False, True], ids=["defaults", "hide-inputs"])
+def test_error_events_never_carry_a_raw_traceback(fake, monkeypatch, mode, hide):
+    """The exception event must hold no frames, local paths or username.
+
+    The in-memory provider keeps span events, so this scans what an exporter
+    would send for them (fi_verify does not return events).
+    """
+    import getpass
+    import os
+
+    from tavily import AsyncTavilyClient, BadRequestError, TavilyClient
+
+    if hide:
+        monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+    query = "{0} {1}".format(ECHO_400, PRIVATE)
+
+    async def call_async() -> None:
+        client = AsyncTavilyClient(api_key=TAVILY_KEY, api_base_url=fake.origin)
+        try:
+            await client.search(query)
+        finally:
+            await client.close()
+
+    with instrumented() as traced:
+        with pytest.raises(BadRequestError) as info:
+            if mode == "sync":
+                TavilyClient(api_key=TAVILY_KEY, api_base_url=fake.origin).search(query)
+            else:
+                asyncio.run(call_async())
+
+    # The caller still gets the real traceback.
+    assert info.value.__traceback__ is not None
+    span = traced.one()
+    (event,) = [event for event in span.events if event.name == "exception"]
+    stacktrace = event.attributes["exception.stacktrace"]
+    assert stacktrace.startswith("BadRequestError")
+    wire = traced.wire()
+    for marker in FRAME_MARKERS + (os.path.expanduser("~"), getpass.getuser(), __file__):
+        assert marker not in wire, marker
+    assert TAVILY_KEY not in wire
+
+
+def test_error_event_with_unreadable_key_has_no_traceback(fake):
+    """When the key cannot be read the event is a placeholder, still frames-free."""
+    from tavily import TavilyClient
+
+    client = TavilyClient(api_key=TAVILY_KEY, api_base_url=fake.origin)
+
+    class _Unreadable:
+        def get(self, *_):
+            raise RuntimeError("no headers")
+
+    client.headers = _Unreadable()
+    with instrumented() as traced:
+        with pytest.raises(Exception):
+            client.search("fail-401")
+    span = traced.one()
+    (event,) = [event for event in span.events if event.name == "exception"]
+    assert event.attributes["exception.message"] == "[redacted]"
+    wire = traced.wire()
+    for marker in FRAME_MARKERS:
+        assert marker not in wire, marker

@@ -12,7 +12,6 @@ import asyncio
 import concurrent.futures
 import inspect
 import logging
-import traceback
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
@@ -289,24 +288,19 @@ class _Operation:
             span.set_status(Status(StatusCode.ERROR, description))
         except Exception:
             logger.debug("Could not set the %s status", self._span_name, exc_info=True)
-        # The SDK copies str(error) and the traceback into the event; an error
-        # body can repeat the query, so the key (and, with inputs hidden, the
-        # query) is removed there too.
-        event: Optional[Dict[str, Any]] = None
-        if keys is None or message is None:
-            event = {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
-        elif keys or hidden or self._pii:
-            try:
-                stacktrace = _scrub(
-                    "".join(traceback.format_exception(type(error), error, error.__traceback__)),
-                    keys,
-                    hidden,
-                )
-                if self._pii:
-                    stacktrace = redact_pii_in_string(stacktrace)
-            except Exception:
-                stacktrace = _REDACTED
-            event = {"exception.message": message, "exception.stacktrace": stacktrace}
+        # The SDK would copy str(error) and the raw traceback into the event.
+        # A raw traceback carries local file paths, the username and code
+        # frames, so it is never exported: "exception.stacktrace" is always a
+        # frames-free summary (type and the same scrubbed message as the status),
+        # and "exception.message" is the scrubbed message. The key (and, with
+        # inputs hidden, the query) is removed from both.
+        if message is None:
+            event: Dict[str, Any] = {
+                "exception.message": _REDACTED,
+                "exception.stacktrace": name,
+            }
+        else:
+            event = {"exception.message": message, "exception.stacktrace": description}
         try:
             span.record_exception(error, attributes=event)
         except Exception:

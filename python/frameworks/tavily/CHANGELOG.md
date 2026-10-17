@@ -4,7 +4,15 @@ All notable changes to `traceAI-tavily` will be documented here.
 
 ## [0.1.0] - Unreleased
 
+### Fixed
+- The exception event no longer carries the raw traceback (local file paths, username, code frames):
+  `exception.stacktrace` is now the frames-free `<Type>: <message>` summary, with the key (and a hidden
+  query) removed. Tests scan the span events in default and hidden-input modes.
+
 ### Verified
+- Live 2026-10-17 against api.tavily.com (tavily-python 0.8.5): search, extract, keyless search and a bad-key
+  error exported to a local Future AGI; stored rows scanned. `langchain-tavily` 0.2.18 `TavilySearch` run:
+  not traced by this package.
 - Re-verified 2026-10-16 against tavily-python 0.8.4 and 0.8.5 (latest): full suite, plus an end-to-end run
   into a local Future AGI deployment. 0.8.5 renames `search`'s `max_hours` to `max_age_hours`; a test covers both.
 

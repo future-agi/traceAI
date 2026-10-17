@@ -6,7 +6,7 @@ client: `TavilyClient` and `AsyncTavilyClient`, `search` and `extract`.
 This package wraps Tavily client calls. It is not a Tavily exporter; Tavily does
 not publish one. It exists because a measurement showed the bare client emits
 nothing on its own (see [What Tavily already emits](#what-tavily-already-emits)).
-Alpha: validated against a local test server and a local Future AGI deployment, never against api.tavily.com.
+Alpha: validated against a local test server and a local Future AGI deployment, and in a live run against api.tavily.com on 2026-10-17 (see [Live vendor verification](#live-vendor-verification-2026-10-17)).
 
 ## Installation
 
@@ -39,8 +39,10 @@ and `output.value` (the tool's result text).
 
 Installing this package as well adds no span to that path:
 `TavilySearchResults` posts to the Tavily API with `requests` itself and never
-calls `TavilyClient`. (`langchain-tavily` 0.2.18 does the same, from reading its
-source; that package was not run here.)
+calls `TavilyClient`. The current recommended tool, `langchain_tavily.TavilySearch`
+(`langchain-tavily` 0.2.18; the Tavily docs mark the community tool as deprecated),
+was run live on 2026-10-17 with this package instrumented: it returned results
+and this package produced 0 spans, so it needs `traceAI-langchain` too.
 
 `traceAI-langchain` exports the result text by default. `FI_HIDE_OUTPUTS=true`
 masks the tool span's `output.value`, but the text is then the next agent turn's
@@ -185,6 +187,11 @@ An exception from the call (tested with `InvalidAPIKeyError`,
 `httpx.HTTPStatusError`) sets the span status to ERROR with
 `<ExceptionType>: <message>` (key redacted, the query too when inputs are
 hidden, 1 KB cap), records one exception event, and is re-raised unchanged.
+The exception event never carries the raw traceback (it would hold local file
+paths, the username and code frames): `exception.stacktrace` is the same
+frames-free `<ExceptionType>: <message>` summary as the status, and
+`exception.type` is the class name. The caller still gets the original
+exception with its own traceback.
 There is no retry.
 
 Cancelling an `AsyncTavilyClient` call ends the span with status ERROR,
@@ -206,13 +213,39 @@ start, the call runs untraced.
   the two methods, `instrument()` logs a WARNING naming it, skips it, and
   instruments the rest.
 
+## Keyless clients
+
+tavily-python 0.8.5 lets `TavilyClient()` run with no key (`search` and
+`extract` only; past the free allowance it raises `TavilyKeylessLimitError`).
+The wrapper traces these calls like keyed ones: there is no key to redact, the
+query is recorded (or hidden with `FI_HIDE_INPUTS`), and a limit error is an
+ERROR span. Covered by tests and by one live keyless search. The `project_id`
+and session header options on the client are not read or recorded.
+
+## Live vendor verification (2026-10-17)
+
+Real `api.tavily.com` with a Future AGI-owned key, `tavily-python` 0.8.5,
+Python 3.12, exporting through `register()` to a local Future AGI: an agent span
+with one `search` (RETRIEVER, 1 result), one `extract` (TOOL, 1 URL, 0 failed),
+one keyless `search`, and one call with an invalid key (ERROR,
+`InvalidAPIKeyError: Unauthorized: missing or invalid API key`). `fi_verify`
+passed (1 trace, 5 spans); the same run on the pinned 0.8.4 (no keyless client) passed with 4 spans and the same scan. Scanning every stored column of the 5 rows (including
+span events, resource and other attributes): the Tavily key, `tvly-`, the
+response text and response URL, `Traceback`, `File "`, `/Users/`, the username
+and the hostname appear in 0 rows. A unique query marker appears in 3 of 5 rows
+by default and in 0 of 5 with `FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true`.
+Future AGI stores an exception event's name and time only, so the exported
+event attributes were checked separately on the span objects an exporter
+receives (`tests/test_privacy.py`, and a live bad-key call: the event holds
+`InvalidAPIKeyError: Unauthorized: missing or invalid API key.` and no frames).
+
 ## Limits
 
 - Only `search` and `extract`; see [Instrumented calls](#instrumented-calls).
 - No usage, credits, request id or search parameters (depth, topic, domains)
   are recorded.
-- Validated against a local Tavily fake only; no call to api.tavily.com was
-  made.
+- Live verification was one search, one extract, one keyless search and one
+  bad-key call (below); no load or long-running test.
 
 ## Tests
 
