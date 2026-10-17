@@ -13,6 +13,11 @@ pip install traceAI-exa
 It accepts `exa-py>=2.25.0,<3` and is tested with `exa-py` 2.25.0 on Python
 3.10, 3.11, 3.12 and 3.13.
 
+Live vendor verification (2026-10-17): a real run against `api.exa.ai` with
+`exa-py` 2.25.0 (`search`, `get_contents`, `answer`, both streams, `AsyncExa.search`
+and an invalid-key 401 recorded as ERROR) exported the expected spans to Future
+AGI, and `FI_HIDE_INPUTS=true` kept the query out of every stored column.
+
 ## Usage
 
 ```python
@@ -131,6 +136,8 @@ ended first). Code that must also run without this instrumentor can call
 
 A missing API key raises `ValueError` in `Exa()` or `AsyncExa()` itself,
 before any traced method runs, so no span is recorded for it.
+
+`find_similar` and `find_similar_and_contents` are not traced.
 
 Do not use this package together with another instrumentor that wraps the same
 Exa client methods, or duplicate spans may result.

@@ -19,3 +19,6 @@ All notable changes to `traceAI-exa` will be documented here.
   method twice; a tracer that fails to start a span leaves the call untraced instead of raising.
 - The exception event has `exception.type` and `exception.message` only; no stack trace (local paths) is exported.
 - `pii_redaction` also applies to the error status and the exception event.
+
+### Verified
+- 2026-10-17: live run against api.exa.ai with exa-py 2.25.0; response shapes matched, no code change needed.
