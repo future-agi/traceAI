@@ -41,7 +41,6 @@ from _mcp_use_support import (
     wire,
 )
 from fi_instrumentation import (
-    REDACTED_VALUE,
     TraceConfig,
     suppress_tracing,
     using_metadata,
@@ -61,6 +60,10 @@ pytest.importorskip("uvicorn", reason="the loopback MCP server runs on uvicorn")
 def _traced(**kwargs: Any):
     exporter, provider = new_provider()
     return exporter, FutureAGICallback(tracer_provider=provider, **kwargs)
+
+
+# Content off: the standard traceAI hide flags (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS).
+HIDDEN = TraceConfig(hide_inputs=True, hide_outputs=True)
 
 
 def _assert_j1_tree(spans) -> None:
@@ -136,14 +139,16 @@ def test_a_streamed_completion_is_one_llm_span(method):
     assert final_turn.attributes["mcp_use.llm.chunk_count"] >= 5
     assert {event.name for event in final_turn.events} == {"mcp_use.llm.chunk"}
     assert len(final_turn.events) == final_turn.attributes["mcp_use.llm.chunk_count"]
-    assert "ANSWER-MARKER" not in wire(spans)
+    # The answer is the LLM span's output, never a chunk event's.
+    for event in final_turn.events:
+        assert set(event.attributes) == {"mcp_use.llm.chunk.index"}
     if method == "run":
         assert result == ANSWER
 
 
-def test_content_and_keys_are_not_recorded_by_default(monkeypatch):
+def test_content_and_keys_are_not_recorded_with_the_hide_flags(monkeypatch):
     monkeypatch.setenv(ENV_SECRET_NAME, ENV_SECRET)
-    exporter, handler = _traced()
+    exporter, handler = _traced(config=HIDDEN)
     script = [tool_call("echo", {"text": ARG + " " + ENV_SECRET}), answer()]
     run_agent(script, [handler], query=PROMPT + " " + ENV_SECRET)
     spans = exporter.get_finished_spans()
@@ -153,9 +158,9 @@ def test_content_and_keys_are_not_recorded_by_default(monkeypatch):
         assert marker not in text, marker
 
 
-def test_capture_content_records_content_without_secrets(monkeypatch):
+def test_content_is_recorded_by_default_without_secrets(monkeypatch):
     monkeypatch.setenv(ENV_SECRET_NAME, ENV_SECRET)
-    exporter, handler = _traced(capture_content=True, redact=[EXPLICIT_SECRET])
+    exporter, handler = _traced(redact=[EXPLICIT_SECRET])
     leak = "{0} {1} {2}".format(ENV_SECRET, EXPLICIT_SECRET, LLM_KEY)
     script = [tool_call("echo", {"text": ARG + " " + leak}), answer()]
     run_agent(script, [handler], query=PROMPT + " " + leak)
@@ -175,7 +180,7 @@ def test_mcp_tool_error_fails_the_tool_span_and_the_agent_recovers():
     # mcp-use 1.7.1 turns a failed MCP call into a formatted error the LLM
     # reads (agents/adapters/langchain_adapter.py:181-206), so the run
     # succeeds; the tool span is ERROR and the agent counts the error.
-    exporter, handler = _traced()
+    exporter, handler = _traced(config=HIDDEN)
     script = [tool_call("fail", {"reason": ARG}), answer()]
     assert run_agent(script, [handler]) == ANSWER
     spans = exporter.get_finished_spans()
@@ -190,20 +195,29 @@ def test_mcp_tool_error_fails_the_tool_span_and_the_agent_recovers():
     assert "tool failed because" not in wire(spans) and ARG not in wire(spans)
 
 
-def test_tool_error_text_is_recorded_with_capture_and_scrubbed_with_hide_inputs():
-    exporter, handler = _traced(capture_content=True)
-    run_agent([tool_call("fail", {"reason": ARG}), answer()], [handler])
-    tool = only(exporter.get_finished_spans(), "execute_tool fail")
-    assert tool.status.description == "RuntimeError: Error executing tool fail: tool failed because " + ARG
-
-    exporter, handler = _traced(capture_content=True, config=TraceConfig(hide_inputs=True))
+def test_tool_error_text_is_recorded_by_default_and_dropped_with_hide_inputs():
+    exporter, handler = _traced()
     run_agent([tool_call("fail", {"reason": ARG}), answer()], [handler])
     spans = exporter.get_finished_spans()
     tool = only(spans, "execute_tool fail")
-    assert tool.status.description == "RuntimeError: Error executing tool fail: tool failed because " + REDACTED_VALUE
+    assert tool.status.description == "RuntimeError: Error executing tool fail: tool failed because " + ARG
     (event,) = tool.events
-    assert ARG not in event.attributes["exception.message"]
-    assert ARG not in event.attributes["exception.stacktrace"]
+    assert "exception.stacktrace" not in event.attributes
+    # mcp-use's format_error "stack" reaches the next model call as the
+    # tool message; the trace is cut there, the rest of the JSON kept.
+    final = sorted(spans_named(spans, LLM_SPAN), key=lambda span: span.start_time)[-1]
+    replayed = json.loads(attrs(final)["gen_ai.input.messages.3.message.content"])
+    assert replayed["stack"] == "[stack trace removed]" and replayed["tool"] == "fail"
+    for needle in ("Traceback", 'File "', "site-packages"):
+        assert needle not in wire(spans), needle
+
+    exporter, handler = _traced(config=TraceConfig(hide_inputs=True))
+    run_agent([tool_call("fail", {"reason": ARG}), answer()], [handler])
+    spans = exporter.get_finished_spans()
+    tool = only(spans, "execute_tool fail")
+    assert tool.status.description == "RuntimeError"
+    (event,) = tool.events
+    assert dict(event.attributes) == {"exception.type": "RuntimeError"}
     assert ARG not in wire(spans) and "PROMPT-MARKER" not in wire(spans)
 
 
@@ -225,7 +239,7 @@ def _three_turns(method: str, external: bool, **options: Any) -> List[Any]:
     turns 2 and 3 send turn 1's messages to the model again. Turn 2 echoes
     and answers; in turn 3 the model raises an error quoting the history.
     """
-    exporter, handler = _traced(capture_content=True, **options)
+    exporter, handler = _traced(**options)
     script = add_script() + [
         tool_call("echo", {"text": "SECOND-ARG"}, "call-2"),
         answer(SECOND_ANSWER),
@@ -281,14 +295,13 @@ def test_hide_outputs_keeps_earlier_turns_out_of_later_turns(method, external):
     assert values["gen_ai.input.messages.5.message.content"] == "SECOND-PROMPT echo it"
     for index in (2, 3, 4):
         assert "gen_ai.input.messages.{0}.message.content".format(index) not in values
-    # Inputs are still recorded, and the error text is kept with the earlier
-    # outputs taken out of it.
+    # Inputs are still recorded; the error text (it quotes the earlier
+    # outputs) is dropped, the exception type kept.
     assert attrs(only(third, AGENT))["input.value"] == "THIRD-PROMPT"
     for span in (only(third, AGENT), only(third, LLM_SPAN)):
-        assert span.status.description.startswith("ValueError: model rejected the history: ")
-        assert REDACTED_VALUE in span.status.description
+        assert span.status.description == "ValueError"
         (event,) = span.events
-        assert REDACTED_VALUE in event.attributes["exception.message"]
+        assert dict(event.attributes) == {"exception.type": "ValueError"}
 
 
 @pytest.mark.parametrize("method,external", _TURN_MODES)
@@ -501,7 +514,7 @@ def test_a_broken_tracer_does_not_change_the_agent_result():
         def start_span(self, *args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("tracer is broken")
 
-    handler = FutureAGICallback(tracer_provider=Broken(), capture_content=True)
+    handler = FutureAGICallback(tracer_provider=Broken())
     assert run_agent(add_script(), [handler]) == ANSWER
     for method in ("stream", "stream_events"):
         run_agent(add_script(), [handler], method=method)
@@ -522,7 +535,7 @@ def test_sync_and_async_langchain_dispatch_give_the_same_spans():
 
     shapes = []
     for mode in ("sync", "async"):
-        exporter, handler = _traced(capture_content=True)
+        exporter, handler = _traced()
         graph = create_agent(ChatFake(script=add_script()), [add])
         inputs = {"messages": [("user", PROMPT)]}
         config: Dict[str, Any] = {"callbacks": [handler]}

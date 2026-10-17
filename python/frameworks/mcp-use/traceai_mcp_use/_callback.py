@@ -22,7 +22,6 @@ import asyncio
 import json
 import logging
 import threading
-import traceback
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -38,7 +37,6 @@ from opentelemetry.trace import Span, Status, StatusCode
 from traceai_mcp_use._text import (
     MAX_ERROR_BYTES,
     MAX_NAME_BYTES,
-    MAX_STACKTRACE_BYTES,
     MAX_VALUE_BYTES,
     KnownTexts,
     Secrets,
@@ -115,9 +113,6 @@ class _Failure:
     type_name: str
     qualified: str
     message: Optional[str]
-    stacktrace: Optional[str]
-    # The message is the tool's own output (an MCP error result).
-    from_output: bool = False
 
 
 @dataclass
@@ -160,14 +155,8 @@ def _qualified(error: BaseException) -> str:
 
 
 def _failure_from_exception(error: BaseException) -> _Failure:
-    stacktrace: Optional[str]
-    try:
-        stacktrace = "".join(
-            traceback.format_exception(type(error), error, error.__traceback__)
-        )
-    except Exception:
-        stacktrace = None
-    return _Failure(type(error).__name__, _qualified(error), _describe(error), stacktrace)
+    # No stack trace: it carries local file paths and the user name.
+    return _Failure(type(error).__name__, _qualified(error), _describe(error))
 
 
 def _is_cancellation(error: BaseException) -> bool:
@@ -326,13 +315,14 @@ class FutureAGICallback(BaseCallbackHandler):
     Args:
         tracer_provider: the provider spans go to; defaults to the global
             provider. Pass the one ``fi_instrumentation.register()`` returned.
-        config: a ``fi_instrumentation.TraceConfig``. ``hide_inputs``,
-            ``hide_outputs`` and ``pii_redaction`` (or ``FI_HIDE_INPUTS``,
-            ``FI_HIDE_OUTPUTS``, ``FI_PII_REDACTION``) apply to every text
-            this handler writes.
-        capture_content: record prompts, model output, tool arguments, tool
-            results and error messages. Off by default: spans then carry
-            names, kinds, model, usage, counts, statuses and exception types.
+        config: a ``fi_instrumentation.TraceConfig``; by default read from
+            the environment like every traceAI instrumentor. Content
+            (prompts, messages, model output, tool arguments and results,
+            error messages) is recorded unless the config hides it: ``hide_inputs``,
+            ``hide_outputs`` (``FI_HIDE_INPUTS``, ``FI_HIDE_OUTPUTS``) and
+            the message/text variants, plus ``pii_redaction``
+            (``FI_PII_REDACTION``). Stack traces, local paths, the user
+            name and the host name are never recorded.
         redact: secret strings to remove from everything written (for
             example an LLM key or an MCP server header the environment does
             not hold).
@@ -351,7 +341,6 @@ class FutureAGICallback(BaseCallbackHandler):
         self,
         tracer_provider: Optional[trace_api.TracerProvider] = None,
         config: Optional[TraceConfig] = None,
-        capture_content: bool = False,
         redact: Iterable[str] = (),
     ) -> None:
         super().__init__()
@@ -362,10 +351,6 @@ class FutureAGICallback(BaseCallbackHandler):
                 "config must be a fi_instrumentation.TraceConfig, got {0}".format(
                     type(config).__name__
                 )
-            )
-        if not isinstance(capture_content, bool):
-            raise TypeError(
-                "capture_content must be a bool, got {0}".format(type(capture_content).__name__)
             )
         if isinstance(redact, str):
             raise TypeError("redact must be an iterable of strings, not a string")
@@ -381,7 +366,6 @@ class FutureAGICallback(BaseCallbackHandler):
         self._tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, provider), config=config
         )
-        self._capture = capture_content
         self._hide_inputs = bool(config.hide_inputs)
         self._hide_outputs = bool(config.hide_outputs)
         self._pii = bool(config.pii_redaction)
@@ -402,12 +386,10 @@ class FutureAGICallback(BaseCallbackHandler):
             scrubs.append(root.outputs)
         return scrubs
 
-    def _clean(
-        self, text: Optional[str], root: Optional[_Root], limit: int, tail: bool = False
-    ) -> Optional[str]:
+    def _clean(self, text: Optional[str], root: Optional[_Root], limit: int) -> Optional[str]:
         if not isinstance(text, str):
             return None
-        return clean(text, self._secrets, limit, self._pii, self._scrubs(root), tail)
+        return clean(text, self._secrets, limit, self._pii, self._scrubs(root))
 
     def _name(self, text: Any) -> Optional[str]:
         """An identifier (model, tool name, id): secrets removed, 256-byte cap."""
@@ -416,7 +398,7 @@ class FutureAGICallback(BaseCallbackHandler):
         return cap(self._secrets.redact(text), MAX_NAME_BYTES)
 
     def _remember(self, root: Optional[_Root], texts: Iterable[Optional[str]], output: bool) -> None:
-        if root is None or not self._capture:
+        if root is None:
             return
         if output and not self._hide_outputs:
             return
@@ -590,13 +572,11 @@ class FutureAGICallback(BaseCallbackHandler):
         type_name = self._name(failure.type_name) or "Error"
         qualified = self._name(failure.qualified) or type_name
         message: Optional[str] = None
-        stacktrace: Optional[str] = None
-        if self._capture and not (failure.from_output and self._hide_outputs):
-            # Error text can quote prompts, tool arguments and tool results,
-            # so it is content: recorded only with capture_content, and with
-            # every hidden input/output removed from it.
+        if not (self._hide_inputs or self._hide_outputs):
+            # Error text quotes prompts, tool arguments and tool results, and
+            # a server's own data: it is content, dropped when either hide
+            # flag is on. Stack traces are never recorded.
             message = self._clean(failure.message, root, MAX_ERROR_BYTES)
-            stacktrace = self._clean(failure.stacktrace, root, MAX_STACKTRACE_BYTES, tail=True)
         description = "{0}: {1}".format(type_name, message) if message else type_name
         try:
             span.set_status(Status(StatusCode.ERROR, description))
@@ -605,8 +585,6 @@ class FutureAGICallback(BaseCallbackHandler):
         event: Dict[str, Any] = {"exception.type": qualified}
         if message:
             event["exception.message"] = message
-        if stacktrace:
-            event["exception.stacktrace"] = stacktrace
         try:
             span.add_event("exception", event)
         except Exception:
@@ -665,7 +643,7 @@ class FutureAGICallback(BaseCallbackHandler):
             self._remember(root, [_content(m) for m in history], output=False)
             # Earlier turns' outputs, known before any content of this run is written.
             self._remember(root, _replayed_outputs(history), output=True)
-            if run.span is None or not self._capture:
+            if run.span is None:
                 return
             if self._hide_inputs:
                 self._set(run.span, INPUT_VALUE, REDACTED_VALUE)
@@ -697,18 +675,17 @@ class FutureAGICallback(BaseCallbackHandler):
                 return
             span = run.span
             self._agent_counts(span, root)
-            if self._capture:
-                answer = None
-                messages = outputs.get("messages") if isinstance(outputs, Mapping) else None
-                for message in reversed(messages) if isinstance(messages, list) else []:
-                    if _role(message) == "assistant" and not _tool_calls(message):
-                        answer = _content(message)
-                        break
-                if answer is not None:
-                    if self._hide_outputs:
-                        self._set(span, OUTPUT_VALUE, REDACTED_VALUE)
-                    else:
-                        self._set(span, OUTPUT_VALUE, self._clean(answer, root, MAX_VALUE_BYTES))
+            answer = None
+            messages = outputs.get("messages") if isinstance(outputs, Mapping) else None
+            for message in reversed(messages) if isinstance(messages, list) else []:
+                if _role(message) == "assistant" and not _tool_calls(message):
+                    answer = _content(message)
+                    break
+            if answer is not None:
+                if self._hide_outputs:
+                    self._set(span, OUTPUT_VALUE, REDACTED_VALUE)
+                else:
+                    self._set(span, OUTPUT_VALUE, self._clean(answer, root, MAX_VALUE_BYTES))
             self._ok(span)
             self._end(span)
         except Exception:
@@ -845,8 +822,6 @@ class FutureAGICallback(BaseCallbackHandler):
                 texts.extend(_strings_in(call.get("args")))
         self._remember(root, texts, output=False)
         self._remember(root, _replayed_outputs(messages), output=True)
-        if not self._capture:
-            return
         if self._hide_inputs:
             self._set(run.span, INPUT_VALUE, REDACTED_VALUE)
             return
@@ -996,7 +971,7 @@ class FutureAGICallback(BaseCallbackHandler):
         self._remember(root, texts + arguments, output=True)
         # The arguments the model chose are the next tool call's input.
         self._remember(root, arguments, output=False)
-        if not self._capture or not messages:
+        if not messages:
             return
         if self._hide_outputs:
             self._set(span, OUTPUT_VALUE, REDACTED_VALUE)
@@ -1058,8 +1033,6 @@ class FutureAGICallback(BaseCallbackHandler):
             if isinstance(inputs, Mapping):
                 texts.extend(_strings_in(inputs))
             self._remember(root, texts, output=False)
-            if not self._capture:
-                return
             if self._hide_inputs:
                 self._set(run.span, INPUT_VALUE, REDACTED_VALUE)
                 return
@@ -1089,21 +1062,17 @@ class FutureAGICallback(BaseCallbackHandler):
                 if formatted is not None:
                     error_type = str(formatted.get("error"))
                     details = formatted.get("details")
-                    stack = formatted.get("stack")
+                    # format_error's "stack" is never read.
                     failure = _Failure(
                         error_type,
                         error_type,
                         details if isinstance(details, str) else None,
-                        stack if isinstance(stack, str) else None,
-                        from_output=True,
                     )
                 elif getattr(output, "status", None) == "error":
                     failure = _Failure(
                         "ToolException",
                         "langchain_core.tools.ToolException",
                         _tool_output_text(output),
-                        None,
-                        from_output=True,
                     )
             except Exception:
                 logger.debug("Could not classify the tool result", exc_info=True)
@@ -1119,13 +1088,12 @@ class FutureAGICallback(BaseCallbackHandler):
                 self._set(span, TOOL_ERROR_TYPE, self._name(failure.type_name))
                 self._record_failure(span, failure, root)
             else:
-                if self._capture:
-                    if self._hide_outputs:
-                        self._set(span, OUTPUT_VALUE, REDACTED_VALUE)
-                    else:
-                        cleaned = self._clean(text, root, MAX_VALUE_BYTES)
-                        self._set(span, TOOL_RESULT, cleaned)
-                        self._set(span, OUTPUT_VALUE, cleaned)
+                if self._hide_outputs:
+                    self._set(span, OUTPUT_VALUE, REDACTED_VALUE)
+                else:
+                    cleaned = self._clean(text, root, MAX_VALUE_BYTES)
+                    self._set(span, TOOL_RESULT, cleaned)
+                    self._set(span, OUTPUT_VALUE, cleaned)
                 self._ok(span)
             self._end(span)
         except Exception:

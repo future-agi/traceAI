@@ -101,8 +101,11 @@ def _check(result: Any, spans: List[Dict[str, Any]], exports: List[Dict[str, Any
             assert resource["project_type"] == "observe"
 
     wire = json.dumps(spans)
-    for text in (FI_API_KEY, FI_SECRET_KEY, LLM_KEY, "What is 2 + 3", "EXAMPLE-ANSWER"):
+    for text in (FI_API_KEY, FI_SECRET_KEY, LLM_KEY):
         assert text not in wire, text
+    # Content is captured by default (TraceConfig); FI_HIDE_* turns it off.
+    for text in ("What is 2 + 3", "EXAMPLE-ANSWER"):
+        assert text in wire, text
 
 
 def test_example_exports_one_agent_tree_at_exit():

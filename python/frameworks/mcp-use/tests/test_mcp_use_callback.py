@@ -9,8 +9,10 @@ node chain holding each tool run. Spans go to an InMemorySpanExporter.
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 import os
+import socket
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import UUID, uuid4
 
@@ -53,8 +55,8 @@ from traceai_mcp_use import AGENT_SPAN_NAME, FutureAGICallback
 from traceai_mcp_use._text import (
     MAX_ERROR_BYTES,
     MAX_NAME_BYTES,
-    MAX_STACKTRACE_BYTES,
     MAX_VALUE_BYTES,
+    scrub_local,
 )
 
 TOOL_SPAN = "execute_tool add"
@@ -169,6 +171,21 @@ def _handler(**kwargs: Any):
     return exporter, FutureAGICallback(tracer_provider=provider, **kwargs)
 
 
+# Content off: the standard traceAI hide flags (FI_HIDE_INPUTS / FI_HIDE_OUTPUTS).
+HIDDEN = TraceConfig(hide_inputs=True, hide_outputs=True)
+_CONTENT_PREFIXES = ("input.", "output.", "gen_ai.input.", "gen_ai.output.")
+_CONTENT_KEYS = ("gen_ai.tool.call.arguments", "gen_ai.tool.call.result")
+
+
+def _meta(span: Any) -> Dict[str, Any]:
+    """A span's attributes without the content ones (messages, arguments, results)."""
+    return {
+        key: value
+        for key, value in attrs(span).items()
+        if not key.startswith(_CONTENT_PREFIXES) and key not in _CONTENT_KEYS
+    }
+
+
 def test_three_span_kinds_from_a_fake_callback_sequence():
     exporter, handler = _handler()
     _journey(handler)
@@ -186,14 +203,14 @@ def test_three_span_kinds_from_a_fake_callback_sequence():
         assert parent_id(child) == agent.context.span_id
         assert child.context.trace_id == agent.context.trace_id
 
-    assert attrs(agent) == {
+    assert _meta(agent) == {
         "gen_ai.span.kind": "AGENT",
         "gen_ai.operation.name": "invoke_agent",
         "mcp_use.agent.llm_call_count": 2,
         "mcp_use.agent.tool_call_count": 1,
         "mcp_use.agent.tool_error_count": 0,
     }
-    assert attrs(first_llm) == {
+    assert _meta(first_llm) == {
         "gen_ai.span.kind": "LLM",
         "gen_ai.operation.name": "chat",
         "gen_ai.request.model": MODEL,
@@ -211,7 +228,7 @@ def test_three_span_kinds_from_a_fake_callback_sequence():
     }
     assert attrs(second_llm)["mcp_use.llm.input_message_count"] == 4
     assert attrs(second_llm)["gen_ai.response.finish_reasons"] == ("stop",)
-    assert attrs(tool) == {
+    assert _meta(tool) == {
         "gen_ai.span.kind": "TOOL",
         "gen_ai.operation.name": "execute_tool",
         "gen_ai.tool.name": "add",
@@ -222,20 +239,24 @@ def test_three_span_kinds_from_a_fake_callback_sequence():
         assert span.events == ()
 
 
-def test_content_is_off_by_default():
-    exporter, handler = _handler()
+def test_hide_inputs_and_outputs_turn_content_off():
+    exporter, handler = _handler(config=HIDDEN)
     _journey(handler)
     text = wire(exporter.get_finished_spans())
     for marker in CONTENT_MARKERS + (LLM_KEY, "You are an MCP agent"):
         assert marker not in text, marker
     for span in exporter.get_finished_spans():
-        for key in attrs(span):
-            assert not key.startswith(("input.", "output.", "gen_ai.input.", "gen_ai.output."))
-            assert key not in ("gen_ai.tool.call.arguments", "gen_ai.tool.call.result")
+        for key, value in attrs(span).items():
+            if key in ("input.value", "output.value"):
+                assert value == REDACTED_VALUE, key
+                continue
+            assert not key.startswith(_CONTENT_PREFIXES), key
+            assert key not in _CONTENT_KEYS, key
 
 
-def test_capture_content_records_prompt_messages_arguments_and_results():
-    exporter, handler = _handler(capture_content=True)
+def test_content_is_recorded_by_default():
+    # The traceAI TraceConfig convention: content on unless a hide flag is set.
+    exporter, handler = _handler()
     _journey(handler)
     spans = exporter.get_finished_spans()
     agent = attrs(only(spans, AGENT))
@@ -268,7 +289,7 @@ def test_capture_content_records_prompt_messages_arguments_and_results():
 
 
 def test_hide_inputs_drops_every_input_including_tool_arguments():
-    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_inputs=True))
+    exporter, handler = _handler(config=TraceConfig(hide_inputs=True))
     _journey(handler)
     spans = exporter.get_finished_spans()
     text = wire(spans)
@@ -285,7 +306,7 @@ def test_hide_inputs_drops_every_input_including_tool_arguments():
 
 
 def test_hide_outputs_drops_every_output():
-    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_outputs=True))
+    exporter, handler = _handler(config=TraceConfig(hide_outputs=True))
     _journey(handler)
     spans = exporter.get_finished_spans()
     text = wire(spans)
@@ -301,7 +322,7 @@ def test_hide_outputs_drops_every_output():
 def test_hide_outputs_drops_earlier_turns_replayed_as_input():
     # mcp-use's memory (or external_history) sends earlier turns' replies
     # and tool results back as input: under hide_outputs they are outputs.
-    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_outputs=True))
+    exporter, handler = _handler(config=TraceConfig(hide_outputs=True))
     earlier = [
         HumanMessage(content="OLD-PROMPT"),
         AIMessage(
@@ -337,11 +358,12 @@ def test_hide_outputs_drops_earlier_turns_replayed_as_input():
     assert call + "function.arguments" not in llm_span
     assert llm_span["input.value"] == PROMPT
     for span in spans:
-        assert span.status.description == "ValueError: cannot use {0}, {0}, {0} or {0}".format(REDACTED_VALUE)
+        # Error text is content: dropped with either hide flag.
+        assert span.status.description == "ValueError"
 
 
 def test_hide_outputs_with_a_replayed_reply_last_redacts_the_llm_input_value():
-    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_outputs=True))
+    exporter, handler = _handler(config=TraceConfig(hide_outputs=True))
     run = Run(handler)
     run.history.append(ToolMessage(content="OLD-RESULT", tool_call_id="c0"))
     run.llm(AIMessage(content=ANSWER))
@@ -354,7 +376,7 @@ def test_hide_outputs_with_a_replayed_reply_last_redacts_the_llm_input_value():
 def test_hide_flags_are_read_from_the_environment(monkeypatch):
     monkeypatch.setenv("FI_HIDE_INPUTS", "true")
     monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
-    exporter, handler = _handler(capture_content=True)
+    exporter, handler = _handler()
     _journey(handler)
     text = wire(exporter.get_finished_spans())
     for marker in CONTENT_MARKERS:
@@ -377,38 +399,103 @@ def _failing_tool(handler: FutureAGICallback, error: BaseException, query: str =
     run.finish()
 
 
-def test_tool_error_records_type_only_by_default():
+def test_tool_error_records_its_message_by_default_and_never_a_stack_trace():
     exporter, handler = _handler()
     _failing_tool(handler, ValueError("tool failed because " + ARG))
     spans = exporter.get_finished_spans()
     tool = only(spans, "execute_tool fail")
     assert tool.status.status_code is StatusCode.ERROR
-    assert tool.status.description == "ValueError"
+    assert tool.status.description == "ValueError: tool failed because " + ARG
     (event,) = tool.events
     assert event.name == "exception"
-    assert dict(event.attributes) == {"exception.type": "ValueError"}
+    assert dict(event.attributes) == {
+        "exception.type": "ValueError",
+        "exception.message": "tool failed because " + ARG,
+    }
     agent = only(spans, AGENT)
     # The agent recovered (mcp-use returns tool errors to the LLM).
     assert agent.status.status_code is StatusCode.OK
     assert attrs(agent)["mcp_use.agent.tool_error_count"] == 1
-    assert "tool failed because" not in wire(spans)
+    assert "Traceback" not in wire(spans) and 'File "' not in wire(spans)
 
 
-def test_tool_error_text_with_capture_and_hide_inputs_scrubs_the_arguments():
-    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_inputs=True))
-    error = ValueError("tool failed because " + ARG + " jane.doe@example.com")
-    _failing_tool(handler, error)
-    tool = only(exporter.get_finished_spans(), "execute_tool fail")
-    (event,) = tool.events
-    for text in (tool.status.description, event.attributes["exception.message"], event.attributes["exception.stacktrace"]):
-        assert "tool failed because" in text
-        assert ARG not in text, text
-        assert "jane.doe" not in text, text
-        assert REDACTED_VALUE in text
+@pytest.mark.parametrize(
+    "config",
+    [TraceConfig(hide_inputs=True), TraceConfig(hide_outputs=True), HIDDEN],
+    ids=["hide_inputs", "hide_outputs", "both"],
+)
+def test_either_hide_flag_drops_the_error_text(config):
+    # Error text quotes tool arguments, tool results and a server's own data.
+    exporter, handler = _handler(config=config)
+    _failing_tool(handler, ValueError("tool failed because " + ARG + " SERVER-SIDE-TEXT"))
+    spans = exporter.get_finished_spans()
+    tool = only(spans, "execute_tool fail")
+    assert tool.status.status_code is StatusCode.ERROR
+    assert tool.status.description == "ValueError"
+    assert dict(tool.events[0].attributes) == {"exception.type": "ValueError"}
+    assert "SERVER-SIDE-TEXT" not in wire(spans) and "tool failed because" not in wire(spans)
+
+
+def test_stack_traces_paths_user_and_host_are_never_recorded():
+    # mcp-use sends a failed MCP call back to the model as format_error()'s
+    # dict, whose "stack" is a full traceback; exception text quotes paths.
+    user, host = getpass.getuser(), socket.gethostname()
+    home = os.path.expanduser("~")
+    exporter, handler = _handler()
+    run = Run(handler)
+    run.llm(AIMessage(content="", tool_calls=[{"name": "fail", "args": {"topic": "t"}, "id": "c", "type": "tool_call"}]))
+    node, tool = run.start_tool("fail", {"topic": "t"}, "c")
+    try:
+        raise OSError("cannot open {0}/notes/archive.db on {1} as {2}".format(home, host, user))
+    except OSError as raised:
+        handler.on_tool_error(raised, run_id=tool, parent_run_id=node)
+    run.end_node(node)
+    formatted = json.dumps(
+        {
+            "error": "RuntimeError",
+            "details": "Error executing tool fail: down at /home/someone/srv/db.sqlite",
+            "stack": 'Traceback (most recent call last):\n  File "{0}/x.py", line 3, in f\nRuntimeError: down'.format(home),
+            "code": "UNKNOWN",
+            "tool": "fail",
+        }
+    )
+    run.history.append(ToolMessage(content=formatted, tool_call_id="c", name="fail"))
+    run.llm(AIMessage(content="It failed at C:\\Users\\someone\\x.txt"))
+    run.finish(text="done")
+    spans = exporter.get_finished_spans()
+    text = wire(spans)
+    for needle in ("Traceback", 'File "', "/notes/archive.db", "/home/someone", "C:\\Users", home):
+        assert needle not in text, needle
+    if len(user) >= 4 and user.lower() not in ("root", "runner"):
+        assert user not in text
+    if len(host.split(".")[0]) >= 4 and host != "localhost":
+        assert host.split(".")[0] not in text
+    span = only(spans, "execute_tool fail")
+    assert "exception.stacktrace" not in span.events[0].attributes
+    assert span.status.description.startswith("OSError: cannot open [path] on ")
+    replayed = attrs(spans_named(spans, LLM_SPAN)[1])["gen_ai.input.messages.3.message.content"]
+    assert json.loads(replayed) == {
+        "error": "RuntimeError",
+        "details": "Error executing tool fail: down at [path]",
+        "stack": "[stack trace removed]",
+        "code": "UNKNOWN",
+        "tool": "fail",
+    }
+
+
+def test_scrub_local_keeps_ordinary_text():
+    for text in (
+        "see https://example.com/home/docs and /api/v1/items",
+        "2 + 3 = 5",
+        "the root cause was a timeout",
+    ):
+        assert scrub_local(text) == text
+    assert scrub_local("x Traceback (most recent call last):\n  File \"a.py\"") == "x [stack trace removed]"
+    assert scrub_local("open /tmp/abc/d.txt, then /var/log/x.") == "open [path], then [path]"
 
 
 def test_pii_redaction_covers_attributes_status_and_exception_event():
-    exporter, handler = _handler(capture_content=True, config=TraceConfig(pii_redaction=True))
+    exporter, handler = _handler(config=TraceConfig(pii_redaction=True))
     _failing_tool(handler, ValueError("mail jane.doe@example.com failed"), query="ask jane.doe@example.com")
     spans = exporter.get_finished_spans()
     assert "jane.doe@example.com" not in wire(spans)
@@ -420,7 +507,7 @@ def test_pii_redaction_covers_attributes_status_and_exception_event():
 
 def test_secrets_are_removed_from_attributes_status_and_events(monkeypatch):
     monkeypatch.setenv(ENV_SECRET_NAME, ENV_SECRET)
-    exporter, handler = _handler(capture_content=True, redact=[EXPLICIT_SECRET])
+    exporter, handler = _handler(redact=[EXPLICIT_SECRET])
     leaky = "keys {0} {1} {2} Authorization: Bearer abcdefghijklmnop".format(
         ENV_SECRET, EXPLICIT_SECRET, LLM_KEY
     )
@@ -442,7 +529,7 @@ def test_secrets_are_removed_from_attributes_status_and_events(monkeypatch):
 
 def test_secrets_are_removed_from_names_with_content_off(monkeypatch):
     monkeypatch.setenv(ENV_SECRET_NAME, ENV_SECRET)
-    exporter, handler = _handler()
+    exporter, handler = _handler(config=HIDDEN)
     run = Run(handler)
     node, tool = run.start_tool("tool-" + ENV_SECRET, {}, call_id="id-" + ENV_SECRET)
     handler.on_tool_end("done", run_id=tool, parent_run_id=node)
@@ -452,7 +539,7 @@ def test_secrets_are_removed_from_names_with_content_off(monkeypatch):
 
 
 def test_size_caps():
-    exporter, handler = _handler(capture_content=True)
+    exporter, handler = _handler()
     long_text = "é" * 10_000  # 2 bytes each in UTF-8
     run = Run(handler, query=long_text)
     many = [HumanMessage(content="m{0}".format(index)) for index in range(40)]
@@ -464,8 +551,8 @@ def test_size_caps():
     run.llm(AIMessage(content=long_text, tool_calls=calls))
     long_name = "n" * 1000
     node, tool = run.start_tool(long_name, {"text": long_text})
-    # A traceback longer than the cap: the cause's 20 KB message comes
-    # first, the raised exception's line last. The cap keeps the end.
+    # A chained exception with a long message: no stack trace is recorded,
+    # only the message, cut at its cap.
     try:
         try:
             raise RuntimeError("c" * 20_000)
@@ -500,13 +587,12 @@ def test_size_caps():
     message = event.attributes["exception.message"]
     assert message == "x" * MAX_ERROR_BYTES
     assert tool_span.status.description == "ValueError: " + "x" * MAX_ERROR_BYTES
-    stacktrace = event.attributes["exception.stacktrace"]
-    assert MAX_STACKTRACE_BYTES - 4 <= len(stacktrace.encode("utf-8")) <= MAX_STACKTRACE_BYTES
-    assert stacktrace.rstrip().endswith("LAST-LINE-END")
+    assert "exception.stacktrace" not in event.attributes
+    assert "c" * 100 not in wire(spans)  # the cause is not recorded
 
 
 def test_streamed_tokens_are_events_on_one_llm_span_with_capped_count():
-    exporter, handler = _handler(capture_content=True)
+    exporter, handler = _handler()
     run = Run(handler)
     node = run.node("model")
     llm = uuid4()
@@ -527,8 +613,9 @@ def test_streamed_tokens_are_events_on_one_llm_span_with_capped_count():
     assert "TOKEN-TEXT" not in wire(spans)
 
 
-def test_llm_error_fails_the_llm_and_agent_spans():
-    exporter, handler = _handler()
+@pytest.mark.parametrize("hidden", [False, True])
+def test_llm_error_fails_the_llm_and_agent_spans(hidden):
+    exporter, handler = _handler(**({"config": HIDDEN} if hidden else {}))
     run = Run(handler)
     node = run.node("model")
     llm = uuid4()
@@ -541,18 +628,22 @@ def test_llm_error_fails_the_llm_and_agent_spans():
     assert sorted(span.name for span in spans) == sorted([AGENT, LLM_SPAN])
     for span in spans:
         assert span.status.status_code is StatusCode.ERROR
-        assert span.status.description == "ConnectionError"
+        if hidden:
+            assert span.status.description == "ConnectionError"
+        else:
+            assert span.status.description == "ConnectionError: provider down " + PROMPT
         assert [event.name for event in span.events] == ["exception"]
         assert span.events[0].attributes["exception.type"] == "ConnectionError"
+        assert "exception.stacktrace" not in span.events[0].attributes
     assert attrs(only(spans, AGENT))["mcp_use.agent.llm_call_count"] == 1
-    assert PROMPT not in wire(spans)
+    assert (PROMPT in wire(spans)) is not hidden
 
 
 def test_mcp_use_formatted_tool_error_is_an_error_span():
     # mcp-use 1.7.1 returns a failed MCP call as format_error()'s dict, as
     # JSON in the ToolMessage (agents/adapters/langchain_adapter.py:181-206).
     for capture in (False, True):
-        exporter, handler = _handler(capture_content=capture)
+        exporter, handler = _handler(**({} if capture else {"config": HIDDEN}))
         run = Run(handler)
         node, tool = run.start_tool("fail", {"reason": ARG})
         content = json.dumps(
@@ -575,9 +666,10 @@ def test_mcp_use_formatted_tool_error_is_an_error_span():
         assert event.attributes["exception.type"] == "RuntimeError"
         assert "gen_ai.tool.call.result" not in span.attributes
         assert attrs(only(spans, AGENT))["mcp_use.agent.tool_error_count"] == 1
+        assert "exception.stacktrace" not in event.attributes
+        assert "Traceback" not in wire(spans)  # format_error's "stack" is never read
         if capture:
             assert span.status.description == "RuntimeError: Error executing tool fail: tool failed because " + ARG
-            assert event.attributes["exception.stacktrace"].endswith("RuntimeError: boom")
         else:
             assert span.status.description == "RuntimeError"
             assert ARG not in wire(spans)
@@ -590,7 +682,7 @@ def test_a_tool_result_shaped_like_an_mcp_use_error_is_still_a_result(tool_key, 
     # (langchain_adapter.py:197-205, tool_error_middleware.py:61). A tool's
     # own result with the error/details/stack/code keys (an incident
     # lookup, say) and no matching tool key is a successful call.
-    exporter, handler = _handler(capture_content=True)
+    exporter, handler = _handler()
     run = Run(handler)
     node, tool = run.start_tool("incidents", {"id": "INC-1"})
     body: Dict[str, Any] = {
@@ -662,7 +754,7 @@ def test_a_run_whose_parent_ended_first_is_ended_as_incomplete():
 
 
 def test_text_completion_models_get_an_llm_span():
-    exporter, handler = _handler(capture_content=True)
+    exporter, handler = _handler()
     run = Run(handler)
     node = run.node("model")
     llm = uuid4()
@@ -828,7 +920,7 @@ class _BrokenSpan(trace_api.NonRecordingSpan):
     "provider", [_Broken(), _BrokenSpans(on_attribute=False), _BrokenSpans(on_attribute=True)]
 )
 def test_tracer_failures_never_reach_the_caller(provider):
-    handler = FutureAGICallback(tracer_provider=provider, capture_content=True)
+    handler = FutureAGICallback(tracer_provider=provider)
     _journey(handler)
     _failing_tool(handler, ValueError("boom"))
     run = Run(handler)
@@ -842,7 +934,7 @@ def test_tracer_failures_never_reach_the_caller(provider):
 
 @pytest.mark.parametrize("capture", [False, True])
 def test_malformed_callback_payloads_never_raise(capture):
-    exporter, handler = _handler(capture_content=capture)
+    exporter, handler = _handler(**({} if capture else {"config": HIDDEN}))
     root, child = uuid4(), uuid4()
     weird: List[Any] = [None, object(), 42, "text", [object()], {"messages": object()}]
     for value in weird:
@@ -865,8 +957,9 @@ def test_malformed_callback_payloads_never_raise(capture):
 def test_constructor_validates_its_arguments():
     with pytest.raises(TypeError, match="TraceConfig"):
         FutureAGICallback(config={"hide_inputs": True})  # type: ignore[arg-type]
+    # No package-specific privacy switch: TraceConfig / FI_HIDE_* only.
     with pytest.raises(TypeError, match="capture_content"):
-        FutureAGICallback(capture_content="yes")  # type: ignore[arg-type]
+        FutureAGICallback(capture_content=True)  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="not a string"):
         FutureAGICallback(redact="secret-value")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="strings"):
@@ -877,7 +970,7 @@ def test_hide_flags_fail_closed_when_a_run_remembers_too_much(monkeypatch):
     import traceai_mcp_use._text as text_module
 
     monkeypatch.setattr(text_module, "MAX_KNOWN_TEXTS", 4)
-    exporter, handler = _handler(capture_content=True, config=TraceConfig(hide_inputs=True))
+    exporter, handler = _handler(config=TraceConfig(hide_inputs=True))
     _journey(handler)
     _failing_tool(handler, ValueError("tool failed because " + ARG))
     spans = exporter.get_finished_spans()
@@ -892,7 +985,7 @@ def test_hide_flags_fail_closed_when_a_run_remembers_too_much(monkeypatch):
 def test_an_internal_failure_in_any_callback_never_reaches_langchain(monkeypatch):
     # Every public callback catches its own failure, past the inner guards
     # the other tests exercise: make the bookkeeping itself raise.
-    exporter, handler = _handler(capture_content=True)
+    exporter, handler = _handler()
 
     def boom(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("internal failure")

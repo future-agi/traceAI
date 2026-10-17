@@ -52,7 +52,7 @@ SNAPSHOT = textwrap.dedent(
     import traceai_mcp_use
     from uuid import uuid4
     from _mcp_use_support import new_provider
-    handler = traceai_mcp_use.FutureAGICallback(tracer_provider=new_provider()[1], capture_content=True)
+    handler = traceai_mcp_use.FutureAGICallback(tracer_provider=new_provider()[1])
     root = uuid4()
     handler.on_chain_start({}, {"messages": []}, run_id=root)
     handler.on_chain_end({"messages": []}, run_id=root)

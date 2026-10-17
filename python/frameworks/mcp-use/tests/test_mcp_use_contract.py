@@ -137,7 +137,8 @@ def test_agent_runs_reach_the_collector_contract(monkeypatch):
     tool = next(span for span in failed_children if span["name"] == "execute_tool fail")
     assert tool["parentSpanId"] == failed_agent["spanId"]
     assert tool["status"]["code"] == "STATUS_CODE_ERROR"
-    assert tool["status"]["message"] == "RuntimeError"
+    # Default TraceConfig: the error text is content and is recorded.
+    assert tool["status"]["message"] == "RuntimeError: Error executing tool fail: tool failed because " + ARG
     assert [event["name"] for event in tool["events"]] == ["exception"]
     assert failed_agent["status"]["code"] == "STATUS_CODE_OK"
     assert int(_attrs(failed_agent)["mcp_use.agent.tool_error_count"]) == 1
@@ -148,7 +149,10 @@ def test_agent_runs_reach_the_collector_contract(monkeypatch):
         assert set(tools.values()) == {1}
 
 
-def test_no_key_or_content_is_exported_by_default(monkeypatch):
+def test_no_key_or_content_is_exported_with_the_hide_flags(monkeypatch):
+    # Content off the standard traceAI way: FI_HIDE_INPUTS / FI_HIDE_OUTPUTS.
+    monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+    monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
     with Receiver() as receiver:
         spans = _journey(receiver, monkeypatch)
 
@@ -157,21 +161,32 @@ def test_no_key_or_content_is_exported_by_default(monkeypatch):
     for secret in (FI_API_KEY, FI_SECRET_KEY, LLM_KEY, ENV_SECRET) + CONTENT_MARKERS:
         assert secret not in text, secret
     for span in spans:
-        for key in _attrs(span):
-            assert not key.startswith(("input.", "output.", "gen_ai.input.", "gen_ai.output."))
+        for key, value in _attrs(span).items():
+            if key in ("input.value", "output.value"):
+                assert value == "__REDACTED__", key
+                continue
+            assert not key.startswith(("input.", "output.", "gen_ai.input.", "gen_ai.output.")), key
+            assert key not in ("gen_ai.tool.call.arguments", "gen_ai.tool.call.result"), key
+    for needle in ("Traceback", 'File "', "site-packages", "exception.stacktrace"):
+        assert needle not in text, needle
 
 
-def test_opt_in_capture_reaches_the_collector_without_keys(monkeypatch):
-    # Control for the test above: the same journey with capture_content
-    # carries the prompt, arguments, results and answer, still without keys.
+def test_content_reaches_the_collector_by_default_without_keys(monkeypatch):
+    # Control for the test above: with the default TraceConfig the same
+    # journey carries the prompt, arguments, results and answer, still
+    # without keys, stack traces or local paths.
+    monkeypatch.delenv("FI_HIDE_INPUTS", raising=False)
+    monkeypatch.delenv("FI_HIDE_OUTPUTS", raising=False)
     with Receiver() as receiver:
-        spans = _journey(receiver, monkeypatch, capture_content=True)
+        spans = _journey(receiver, monkeypatch)
 
     text = json.dumps(spans)
     for marker in ("PROMPT-MARKER", "ANSWER-MARKER", "SUM-RESULT-5", ARG, "tool failed because"):
         assert marker in text, marker
     for secret in (FI_API_KEY, FI_SECRET_KEY, LLM_KEY, ENV_SECRET):
         assert secret not in text, secret
+    for needle in ("Traceback", 'File "', "site-packages", "exception.stacktrace"):
+        assert needle not in text, needle
     agent = _attrs(_trees(spans)[0][0])
     assert agent["input.value"] == PROMPT + " [redacted]"
 
@@ -181,7 +196,7 @@ def _two_turns(receiver: Receiver, monkeypatch, **options: Any) -> List[Dict[str
     from mcp_use import MCPAgent
 
     provider = _register(receiver, monkeypatch)
-    handler = FutureAGICallback(tracer_provider=provider, capture_content=True, **options)
+    handler = FutureAGICallback(tracer_provider=provider, **options)
 
     async def go() -> None:
         client = mcp_client("stdio")

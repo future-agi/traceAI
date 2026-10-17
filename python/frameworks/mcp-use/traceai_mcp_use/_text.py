@@ -1,17 +1,21 @@
 """Text cleaning applied to every string the callback writes to a span.
 
 Order for every value: remove secrets, then (when a TraceConfig hide flag is
-on) remove text the run already saw as an input or output, then PII when
-``pii_redaction`` is on, then cut to a UTF-8 byte cap. Secrets go first so a
-cap can never leave the start of a key behind; PII goes before the cap so a
+on) remove text the run already saw as an input or output, then cut Python
+stack traces and replace local paths, the user name and the host name, then
+PII when ``pii_redaction`` is on, then cut to a UTF-8 byte cap. Secrets go
+first so a cap can never leave the start of a key behind; hidden texts are
+matched before the local pass rewrites them; PII goes before the cap so a
 cut cannot leave part of an email address.
 """
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import re
+import socket
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 from fi_instrumentation import REDACTED_VALUE
@@ -22,7 +26,6 @@ REDACTED = "[redacted]"
 MAX_VALUE_BYTES = 4096
 MAX_NAME_BYTES = 256
 MAX_ERROR_BYTES = 1024
-MAX_STACKTRACE_BYTES = 16 * 1024
 
 # A secret shorter than this is not searched for: replacing a 3-character
 # value everywhere would shred unrelated text.
@@ -50,16 +53,84 @@ def cap(value: str, limit: int) -> str:
     return value.encode("utf-8", "replace")[:limit].decode("utf-8", "ignore")
 
 
-def cap_tail(value: str, limit: int) -> str:
-    """Return the longest whole-character suffix of at most ``limit`` UTF-8 bytes.
+# --- stack traces, local paths, user and host names are never exported -----
+#
+# mcp-use returns a failed MCP tool call to the model as format_error()'s dict
+# (mcp_use/errors/error_formatting.py), whose "stack" is traceback.format_exc():
+# absolute file paths, the home directory and so the user name. That text is
+# the next LLM call's tool message, and exception messages quote paths too.
+# None of it is exported, with content on or hidden.
+STACK_TRACE_REMOVED = "[stack trace removed]"
+PATH_REMOVED = "[path]"
+USER_REMOVED = "[user]"
+HOST_REMOVED = "[host]"
+_TRACEBACK_HEAD = "Traceback (most recent call last)"
+_TRACEBACK = re.compile(r"Traceback \(most recent call last\):.*", re.DOTALL)
+_LOCAL_PATH = re.compile(
+    r"(?<![\w:/.])(?:[A-Za-z]:\\[^\s\"'<>|:*?]+"
+    r"|/(?:Users|home|root|private|var|tmp|opt|usr|srv|mnt|app|workspace|etc|Volumes)/[^\s\"'<>|:*?,;)\]\\]+)"
+)
+# Account names too generic to replace inside ordinary text.
+_GENERIC_NAMES = frozenset(
+    "root admin administrator user users app ubuntu runner node nobody guest test dev "
+    "default jovyan vscode daemon localhost".split()
+)
 
-    Used for stack traces, whose last lines (the raising frame and the
-    exception line) matter most.
+
+def _identity_patterns() -> List[Tuple["re.Pattern[str]", str]]:
+    """Whole-word patterns for this machine's user name and host name."""
+    names: List[Tuple[str, str]] = []
+    try:
+        names.append((getpass.getuser(), USER_REMOVED))
+    except Exception:  # no user database entry (some containers)
+        pass
+    try:
+        host = socket.gethostname()
+        names.extend(((host, HOST_REMOVED), (host.split(".")[0], HOST_REMOVED)))
+    except Exception:
+        pass
+    patterns: List[Tuple["re.Pattern[str]", str]] = []
+    for name, token in names:
+        if len(name) >= 4 and name.lower() not in _GENERIC_NAMES:
+            word = re.compile(r"(?<![\w.-]){0}(?![\w-])".format(re.escape(name)), re.I)
+            patterns.append((word, token))
+    return patterns
+
+
+_IDENTITY = _identity_patterns()
+
+
+def _cut_tracebacks(value: object) -> object:
+    if isinstance(value, str):
+        return _TRACEBACK.sub(STACK_TRACE_REMOVED, value) if _TRACEBACK_HEAD in value else value
+    if isinstance(value, list):
+        return [_cut_tracebacks(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _cut_tracebacks(item) for key, item in value.items()}
+    return value
+
+
+def scrub_local(text: str) -> str:
+    """Cut Python stack traces; replace local paths, the user and the host name.
+
+    A JSON object or array (an mcp-use formatted tool error is one) has the
+    trace cut inside each string value, so the rest of the JSON survives;
+    any other text loses everything from ``Traceback (most recent call
+    last):`` on.
     """
-    encoded = value.encode("utf-8", "replace")
-    if len(encoded) <= limit:
-        return value
-    return encoded[len(encoded) - limit :].decode("utf-8", "ignore")
+    if _TRACEBACK_HEAD in text:
+        stripped = text.strip()
+        if stripped[:1] in ("{", "["):
+            try:
+                text = json.dumps(_cut_tracebacks(json.loads(stripped)), ensure_ascii=False)
+            except ValueError:
+                pass
+        if _TRACEBACK_HEAD in text:
+            text = _TRACEBACK.sub(STACK_TRACE_REMOVED, text)
+    text = _LOCAL_PATH.sub(PATH_REMOVED, text)
+    for pattern, token in _IDENTITY:
+        text = pattern.sub(token, text)
+    return text
 
 
 class Secrets:
@@ -155,13 +226,12 @@ def clean(
     limit: int,
     pii: bool = False,
     scrub: Sequence[KnownTexts] = (),
-    tail: bool = False,
 ) -> Optional[str]:
-    """Secrets, then known inputs/outputs, then PII, then the byte cap.
+    """Secrets, then known inputs/outputs, then stack traces and local
+    identity, then PII, then the byte cap.
 
-    ``tail`` keeps the end of the text instead of the start. Returns None
-    when a hide flag's text set overflowed: the caller must then record
-    nothing rather than an unscrubbed value.
+    Returns None when a hide flag's text set overflowed: the caller must
+    then record nothing rather than an unscrubbed value.
     """
     text = secrets.redact(text)
     for known in scrub:
@@ -169,6 +239,7 @@ def clean(
         if scrubbed is None:
             return None
         text = scrubbed
+    text = scrub_local(text)
     if pii:
         text = redact_pii_in_string(text)
-    return cap_tail(text, limit) if tail else cap(text, limit)
+    return cap(text, limit)
