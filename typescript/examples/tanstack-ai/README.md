@@ -50,7 +50,7 @@ drops a batch without `project_name`.
 Copy `src/tracing.mjs` into your app. It wraps TanStack AI's
 `otelMiddleware` (imported from the `@tanstack/ai/middlewares/otel` subpath,
 not from `@tanstack/ai`) with the Future AGI span kinds, the root usage move,
-the optional session and error privacy, and registers
+the optional session, error privacy and a new trace per chat, and registers
 the tracer provider with `@traceai/fi-core`. It needs `@opentelemetry/api`,
 which `@tanstack/ai` already asks for as a peer. Do not pass a bare
 `otelMiddleware` to `chat()`: its root span repeats every model call's
@@ -231,6 +231,17 @@ const middleware = futureAgiOtelMiddleware(tracer, {
 Keep `FI_API_KEY` and `FI_SECRET_KEY` on the server. Never import this code
 into a browser bundle.
 
+## Apps with their own OpenTelemetry setup
+
+TanStack starts its chat span under whatever span is active. In an app with
+its own provider and context manager (HTTP server instrumentation, a
+framework's built-in tracing), that is the app's request span, which is
+exported elsewhere. Future AGI would then hold a trace whose root has a
+parent it never received, and the Tracing list would not show it. The
+recipe starts every chat in a new trace (`root: true` from
+`onBeforeSpanStart`). If your app's own spans also go to Future AGI and you
+want the chat nested under them, pass `joinActiveTrace: true`.
+
 ## Notes
 
 - Spans are exported by `register()`'s default `SimpleSpanProcessor`.
@@ -280,14 +291,16 @@ PYTHONPATH="python/tests" uv run --no-project --python 3.11 \
 ```
 
 It also runs `tests/span_kinds.test.mjs` with `node --test` (span kinds,
-root usage move, session and the error privacy tracer
+root usage move, session, the new-trace root and the error privacy tracer
 against fake spans and the pinned SDK span) and the snippet under "The
 recipe" as written.
 
 `tests/capture_content_on.mjs` turns on the documented content opt-in, to
 prove it works and that the no-content check would catch a leak.
 `tests/tool_error.mjs` runs a tool that throws an error carrying a marker
-and a file path, with content off and on. `tests/timed_route.mjs`
+and a file path, with content off and on. `tests/app_parent.mjs` calls the
+route under an app's own active span, with and without `joinActiveTrace`.
+`tests/timed_route.mjs`
 and `tests/abort_mid_stream.mjs` are fixtures for the flush bound and the
 abort case. `tests/disconnect_route.mjs` serves one HTTP request with the
 route (the README snippet's or `src/chat.mjs`'s) and aborts its signal when

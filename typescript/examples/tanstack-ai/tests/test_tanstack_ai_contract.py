@@ -474,6 +474,33 @@ def test_content_opt_in_exports_error_text_but_never_a_stack_trace():
     ]
 
 
+@pytest.mark.parametrize("join", [False, True])
+def test_chat_root_starts_a_new_trace_under_an_app_span(join):
+    """F1: an app with its own provider and context manager has a span active
+    when it calls the route. That span is exported elsewhere, so a chat root
+    under it would leave Future AGI with no root for the trace, and the
+    trace would be missing from the Tracing list. The recipe starts a new
+    trace unless joinActiveTrace is set."""
+    with Receiver() as receiver, FakeOpenAI(CITY, ANSWER) as fake:
+        result = _node(TESTS / "app_parent.mjs", receiver.origin, fake, *(["join"] if join else []))
+        spans = _by_name(receiver.spans())
+    assert result.returncode == 0, result.stderr.decode()
+    app = re.search(r"appTraceId=(\w+) appSpanId=(\w+)", result.stdout.decode())
+    assert app, result.stdout.decode()
+    app_trace, app_span = app.groups()
+    assert sorted(spans) == sorted([ROOT, ITERATION_0, TOOL, ITERATION_1])
+    assert len({span["traceId"] for span in spans.values()}) == 1
+    root = spans[ROOT]
+    if join:
+        assert root["traceId"] == app_trace
+        assert root["parentSpanId"] == app_span
+    else:
+        assert root["traceId"] != app_trace
+        assert not root.get("parentSpanId"), root.get("parentSpanId")
+    assert spans[ITERATION_0]["parentSpanId"] == root["spanId"]
+    assert spans[TOOL]["parentSpanId"] == spans[ITERATION_0]["spanId"]
+
+
 def test_abort_mid_stream_ends_spans_as_cancelled():
     with Receiver() as receiver, FakeOpenAI(
         CITY, ANSWER, stall=True

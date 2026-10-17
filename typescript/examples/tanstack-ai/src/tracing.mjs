@@ -176,9 +176,20 @@ const ADAPTER_PROVIDERS = {
  * neither otelMiddleware nor the plain SDK tracer register()'s provider
  * hands out reads it, so the recipe uses TanStack's own threadId instead.
  */
-export function futureAgiSpanKinds({ threadIdAsSession = false } = {}) {
+export function futureAgiSpanKinds({ threadIdAsSession = false, joinActiveTrace = false } = {}) {
   const iterationsByRun = new WeakMap();
   const usageOnIterations = new WeakSet();
+  // TanStack starts the chat root under the active OpenTelemetry context, so in
+  // an app with its own provider and context manager (an HTTP server span, a
+  // framework's own tracing) the root's parent is a span that is exported
+  // elsewhere. Future AGI then has no root for the trace, and the trace is
+  // missing from the Tracing list. The root starts a new trace unless the
+  // caller asks to join the active one (when that app's spans also go to
+  // Future AGI). Model-call and tool spans are parented explicitly by
+  // TanStack, so they follow the root either way.
+  const onBeforeSpanStart = joinActiveTrace
+    ? undefined
+    : (info, options) => (info.kind === "chat" ? { ...options, root: true } : options);
   const kindAttributes = (info) => {
     if (info.kind === "iteration") {
       iterationsByRun.set(info.ctx, info.iteration + 1);
@@ -190,6 +201,7 @@ export function futureAgiSpanKinds({ threadIdAsSession = false } = {}) {
     return {};
   };
   return {
+    ...(onBeforeSpanStart ? { onBeforeSpanStart } : {}),
     attributeEnricher(info) {
       const attributes = kindAttributes(info);
       const adapter = info.ctx?.provider;
@@ -324,15 +336,17 @@ export function futureAgiErrorPrivacy(tracer, { captureContent = false, redact =
  *   `threadId` (see futureAgiSpanKinds).
  * - `captureContent: true` to opt in to message, tool and error text
  *   (TanStack's own option), with an optional `redact(text)`.
+ * - `joinActiveTrace: true` to keep TanStack's chat root under the app's
+ *   active span (only when the app's own spans also go to Future AGI).
  */
 export function futureAgiOtelMiddleware(
   tracer,
-  { threadIdAsSession = false, captureContent = false, redact } = {},
+  { threadIdAsSession = false, captureContent = false, redact, joinActiveTrace = false } = {},
 ) {
   return otelMiddleware({
     tracer: futureAgiErrorPrivacy(tracer, { captureContent, ...(redact ? { redact } : {}) }),
     captureContent,
     ...(redact ? { redact } : {}),
-    ...futureAgiSpanKinds({ threadIdAsSession }),
+    ...futureAgiSpanKinds({ threadIdAsSession, joinActiveTrace }),
   });
 }

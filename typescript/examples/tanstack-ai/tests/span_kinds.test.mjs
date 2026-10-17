@@ -353,6 +353,20 @@ test("an adapter name with no known vendor leaves gen_ai.provider.name unset", (
   }
 });
 
+test("the chat root starts a new trace; model-call and tool spans keep their options", () => {
+  // TanStack starts the root under the active context. In an app whose own
+  // span is active there, Future AGI would get a root whose parent it never
+  // receives, and the trace would be missing from its Tracing list.
+  const hooks = futureAgiSpanKinds();
+  const base = { kind: 1, attributes: { "gen_ai.request.model": "m" } };
+  assert.deepEqual(hooks.onBeforeSpanStart({ kind: "chat", ctx: {} }, base), { ...base, root: true });
+  for (const kind of ["iteration", "tool", "generation"]) {
+    assert.equal(hooks.onBeforeSpanStart({ kind, ctx: {} }, base), base, kind);
+  }
+  // joinActiveTrace: TanStack's default parenting.
+  assert.equal(futureAgiSpanKinds({ joinActiveTrace: true }).onBeforeSpanStart, undefined);
+});
+
 function privacyRun(options, act) {
   const { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } = fiCoreSdk().sdk;
   const exporter = new InMemorySpanExporter();
