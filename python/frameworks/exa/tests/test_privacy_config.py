@@ -163,9 +163,7 @@ def test_error_text_has_the_key_redacted_and_is_capped(fake, call):
     assert event["exception.type"] == "ValueError"
     assert "[redacted]" in event["exception.message"]
     assert len(event["exception.message"].encode("utf-8")) <= 1024
-    assert event["exception.stacktrace"].startswith("Traceback (most recent call last):")
-    assert EXA_KEY not in event["exception.stacktrace"]
-    assert ECHO_PADDING not in event["exception.stacktrace"]
+    assert "exception.stacktrace" not in event
 
 
 @pytest.mark.parametrize("call", _echo_error_cases(), ids=["search", "stream", "async"])
@@ -332,7 +330,7 @@ def _assert_unprintable_span(traced) -> None:
     event = _exception_event(span)
     assert event["exception.type"].endswith("_Unprintable")
     assert event["exception.message"] == "[redacted]"
-    assert event["exception.stacktrace"] == "[redacted]"
+    assert "exception.stacktrace" not in event
 
 
 def test_unprintable_error_is_reraised_unchanged_and_the_span_ends():
@@ -382,3 +380,19 @@ def test_unprintable_mid_stream_error_ends_the_stream_span():
             next(stream)
 
     _assert_unprintable_span(traced)
+
+
+def test_exception_event_exports_no_stack_trace_or_local_path(fake):
+    """The event never carries frames: no local path, user name or host name."""
+    import getpass
+    import socket
+
+    with instrumented() as traced:
+        with pytest.raises(ValueError):
+            _client(fake).search(FAIL_QUERY)
+    span = traced.one()
+    wire = traced.wire()
+    event = _exception_event(span)
+    assert set(event) <= {"exception.type", "exception.message", "exception.escaped"}
+    for needle in ("Traceback", 'File "', "site-packages", getpass.getuser(), socket.gethostname()):
+        assert needle not in wire

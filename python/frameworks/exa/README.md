@@ -111,9 +111,10 @@ repeat the request. On the span, the status description
 have the Exa key replaced by `[redacted]` (and, with hidden inputs, the query
 or the requested URLs by `__REDACTED__`; with `pii_redaction`, PII by tokens such
 as `<EMAIL_ADDRESS>`) and the message cut to 1 KB of UTF-8.
-If the exception's own `str()` fails, the span records only its type. The event's
-`exception.stacktrace` is the traceback's frames, scrubbed the same way, plus
-that safe message; it does not copy chained exceptions' messages. Only verbatim
+If the exception's own `str()` fails, the span records only its type. The event carries
+`exception.type` and `exception.message` only: no `exception.stacktrace` is
+exported, because frames hold local file paths, user names and host names.
+Chained exceptions' messages are not copied. Only verbatim
 copies are found: an escaped, normalised or truncated echo of the key, query or
 URLs (for example a JSON-escaped `\/` or a percent-encoded URL) is not.
 

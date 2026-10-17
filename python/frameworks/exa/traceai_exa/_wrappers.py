@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import traceback
 import weakref
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
@@ -266,22 +265,18 @@ def _error_text(error: BaseException, scrub: Optional[_Scrub]) -> Tuple[str, dic
     exa-py copies the server's response body into its exceptions, and a body
     can repeat the request. The key (and, with hidden inputs, the query) is
     removed and the message is capped at 1 KB; the caller's exception object
-    is not changed. The stack trace is rebuilt from the frames plus the safe
-    message, so chained exceptions' text is not copied either.
+    is not changed. No stack trace is exported: frames carry local file paths
+    (and so usernames and hostnames), and chained exceptions' text.
     """
     name = type(error).__name__
     if scrub is None:
-        return name, {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
+        return name, {"exception.message": _REDACTED}
     try:
         message = _cap(scrub(str(error)))
-        frames = scrub("".join(traceback.format_tb(error.__traceback__)))
-        stacktrace = "Traceback (most recent call last):\n{0}{1}: {2}\n".format(
-            frames, name, message
-        )
     except Exception:
-        return name, {"exception.message": _REDACTED, "exception.stacktrace": _REDACTED}
+        return name, {"exception.message": _REDACTED}
     description = "{0}: {1}".format(name, message) if message else name
-    return description, {"exception.message": message, "exception.stacktrace": stacktrace}
+    return description, {"exception.message": message}
 
 
 def _current(span: Span) -> Any:

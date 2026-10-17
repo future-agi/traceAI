@@ -102,5 +102,5 @@ def test_pii_redaction_also_covers_error_text(fake):
     (event,) = [event for event in span.events if event.name == "exception"]
     assert "jane.doe@example.com" not in span.status.description
     assert "jane.doe@example.com" not in event.attributes["exception.message"]
-    assert "jane.doe@example.com" not in event.attributes["exception.stacktrace"]
+    assert "exception.stacktrace" not in event.attributes
     assert "<EMAIL_ADDRESS>" in event.attributes["exception.message"]

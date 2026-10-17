@@ -17,4 +17,5 @@ All notable changes to `traceAI-exa` will be documented here.
   `get_contents`), the query in `gen_ai.retrieval.query`, and counts in `exa.result_count` / `exa.url_count`.
 - Only methods defined on each client class are wrapped, so `AsyncExa` can never wrap an inherited `Exa`
   method twice; a tracer that fails to start a span leaves the call untraced instead of raising.
+- The exception event has `exception.type` and `exception.message` only; no stack trace (local paths) is exported.
 - `pii_redaction` also applies to the error status and the exception event.
