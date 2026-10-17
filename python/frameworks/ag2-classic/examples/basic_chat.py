@@ -39,7 +39,8 @@ def main() -> None:
     assistant.register_for_llm(description="Get the weather")(get_weather)
     user.register_for_execution()(get_weather)
 
-    # Content (messages, tool arguments/results) is off unless capture_content=True.
+    # Content (messages, tool arguments/results) is exported unless FI_HIDE_INPUTS /
+    # FI_HIDE_OUTPUTS are set (traceAI TraceConfig convention).
     setup(tracer_provider=trace_provider, agents=[assistant, user])
 
     user.initiate_chat(assistant, message="What is the weather in Paris?", max_turns=3)

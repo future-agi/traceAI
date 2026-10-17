@@ -48,6 +48,9 @@ def pipeline():
     handles = []
 
     def make(**kwargs):
+        # Most tests exercise the hidden-content path; the shown-by-default
+        # behaviour has its own tests below (they pass capture_content=None).
+        kwargs.setdefault("capture_content", False)
         handle = setup(tracer_provider=provider, **kwargs)
         handles.append(handle)
         return handle
@@ -189,7 +192,7 @@ def test_add_span_processor_after_register_and_setup_keeps_our_processor_first(m
         verbose=False,
         set_global_tracer_provider=False,
     )
-    tracing = setup(tracer_provider=provider)
+    tracing = setup(tracer_provider=provider, capture_content=False)
     memory = InMemorySpanExporter()
     try:
         added = SimpleSpanProcessor(memory)
@@ -493,6 +496,53 @@ def test_capture_content_on_keeps_and_lifts_content(pipeline, fake):
     llm = spans["chat {0}".format(FAKE_MODEL)][0].attributes
     assert SECRET_PROMPT in llm["gen_ai.input.messages"]
     assert SECRET_PROMPT in llm["input.value"]
+
+
+def test_default_follows_traceconfig_and_keeps_content(pipeline, fake, monkeypatch):
+    """traceAI convention: no FI_HIDE_* means content is exported (no second switch)."""
+    for name in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES"):
+        monkeypatch.delenv(name, raising=False)
+    _provider, exporter, make = pipeline
+    tracing = make(capture_content=None)
+    assert tracing.capture_content is True
+    two_agent_tool_chat(tracing, fake)
+    spans = _by_name(exporter)
+    assert SECRET_PROMPT in spans["conversation user"][0].attributes["input.value"]
+    tool = spans["execute_tool get_weather"][0].attributes
+    assert json.loads(tool["gen_ai.tool.call.arguments"]) == {"city": TOOL_SECRET_CITY}
+    llm = spans["chat {0}".format(FAKE_MODEL)][0].attributes
+    assert SECRET_PROMPT in llm["gen_ai.input.messages"]
+
+
+def test_fi_hide_env_vars_hide_all_content(pipeline, fake, monkeypatch):
+    monkeypatch.setenv("FI_HIDE_INPUTS", "true")
+    monkeypatch.setenv("FI_HIDE_OUTPUTS", "true")
+    _provider, exporter, make = pipeline
+    tracing = make(capture_content=None)
+    assert tracing.capture_content is False
+    two_agent_tool_chat(tracing, fake)
+    for span in exporter.get_finished_spans():
+        for key in CONTENT_KEYS:
+            assert key not in span.attributes, (key, span.name)
+        blob = json.dumps(dict(span.attributes), default=str)
+        assert SECRET_PROMPT not in blob and TOOL_SECRET_CITY not in blob
+
+
+def test_traceconfig_hide_inputs_keeps_outputs(pipeline, fake):
+    from fi_instrumentation import TraceConfig
+
+    _provider, exporter, make = pipeline
+    tracing = make(capture_content=None, config=TraceConfig(hide_inputs=True))
+    two_agent_tool_chat(tracing, fake)
+    tool = _by_name(exporter)["execute_tool get_weather"][0].attributes
+    assert "gen_ai.tool.call.arguments" not in tool
+    assert tool["gen_ai.tool.call.result"] == "sunny in {0}".format(TOOL_SECRET_CITY) or TOOL_SECRET_CITY in tool["gen_ai.tool.call.result"]
+    for span in exporter.get_finished_spans():
+        assert "gen_ai.input.messages" not in span.attributes
+        # The chat-wide output history still carries the prompt; only the
+        # input side is hidden.
+        assert "gen_ai.tool.call.arguments" not in span.attributes
+        assert "input.value" not in span.attributes
 
 
 # AC-07: tool exception -> ERROR ---------------------------------------------------

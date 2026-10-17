@@ -6,7 +6,7 @@
 2. Prepends :class:`AG2ClassicSpanProcessor` to the provider you pass, ahead
    of the exporting processor ``fi_instrumentation.register()`` installed.
 3. Calls upstream ``instrument_llm_wrapper`` (global, patches
-   ``OpenAIWrapper.create``) with ``capture_messages=capture_content``.
+   ``OpenAIWrapper.create``) with ``capture_messages`` set when any content side is shown.
 4. Calls upstream ``instrument_agent`` / ``instrument_pattern`` for the agents
    and patterns you pass.
 
@@ -23,7 +23,9 @@ from typing import Any, Iterable, Optional
 from opentelemetry import trace as trace_api
 
 from ._guard import check_autogen_classic
-from ._processor import AG2ClassicSpanProcessor
+from fi_instrumentation import TraceConfig
+
+from ._processor import AG2ClassicSpanProcessor, resolve_hidden
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,9 @@ def _warn_if_concurrent(active: Any) -> None:
         )
 
 
-def _install_processor(provider: Any, capture_content: bool) -> AG2ClassicSpanProcessor:
+def _install_processor(
+    provider: Any, hide_inputs: bool, hide_outputs: bool
+) -> AG2ClassicSpanProcessor:
     """Prepend our processor so it runs before the exporting processor.
 
     ``provider.add_span_processor`` is deliberately not used: Future AGI's
@@ -84,11 +88,12 @@ def _install_processor(provider: Any, capture_content: bool) -> AG2ClassicSpanPr
             None,
         )
     if processor is not None:
-        if processor.capture_content != bool(capture_content):
+        if (processor.hide_inputs, processor.hide_outputs) != (hide_inputs, hide_outputs):
             logger.warning(
                 "traceai-ag2-classic is already installed on this provider with "
-                "capture_content=%s; keeping that setting.",
-                processor.capture_content,
+                "hide_inputs=%s hide_outputs=%s; keeping that setting.",
+                processor.hide_inputs,
+                processor.hide_outputs,
             )
         if processor not in tuple(active._span_processors):
             _prepend(active, processor)
@@ -99,7 +104,7 @@ def _install_processor(provider: Any, capture_content: bool) -> AG2ClassicSpanPr
             # filtering in on_end, so reusing it as is would export content.
             processor._reopen()
     else:
-        processor = AG2ClassicSpanProcessor(capture_content=capture_content)
+        processor = AG2ClassicSpanProcessor(hide_inputs=hide_inputs, hide_outputs=hide_outputs)
         _prepend(active, processor)
     _guard_add_span_processor(provider, processor)
     return processor
@@ -286,12 +291,25 @@ class AG2ClassicTracing:
             self._traced_create = None
 
 
+def _hidden_from_config(
+    config: Optional[TraceConfig], capture_content: Optional[bool]
+) -> "tuple[bool, bool]":
+    if capture_content is not None:
+        return resolve_hidden(capture_content)
+    cfg = config if config is not None else TraceConfig()
+    return (
+        bool(cfg.hide_inputs or cfg.hide_input_messages or cfg.hide_input_text),
+        bool(cfg.hide_outputs or cfg.hide_output_messages or cfg.hide_output_text),
+    )
+
+
 def setup(
     tracer_provider: Optional[Any] = None,
     *,
     agents: Iterable[Any] = (),
     patterns: Iterable[Any] = (),
-    capture_content: bool = False,
+    config: Optional[TraceConfig] = None,
+    capture_content: Optional[bool] = None,
     instrument_llm: bool = True,
 ) -> AG2ClassicTracing:
     """Enable AG2 Classic's native tracing on a Future AGI tracer provider.
@@ -301,8 +319,15 @@ def setup(
             Defaults to the global provider, which must be an SDK provider.
         agents: Agents to pass to upstream ``instrument_agent``.
         patterns: Group patterns to pass to upstream ``instrument_pattern``.
-        capture_content: Keep message bodies, tool arguments/results, human
-            input and code output on spans. Off by default.
+        config: A ``fi_instrumentation.TraceConfig``. Defaults to
+            ``TraceConfig()``, which reads ``FI_HIDE_INPUTS`` /
+            ``FI_HIDE_OUTPUTS`` / ``FI_HIDE_INPUT_MESSAGES`` /
+            ``FI_HIDE_OUTPUT_MESSAGES`` / ``FI_HIDE_INPUT_TEXT`` /
+            ``FI_HIDE_OUTPUT_TEXT``. Content (message bodies, tool
+            arguments/results, human input, code output) is captured unless
+            hidden, like every traceAI instrumentor.
+        capture_content: Optional override of ``config``. ``False`` hides all
+            content, ``True`` keeps all of it.
         instrument_llm: Call upstream ``instrument_llm_wrapper`` (LLM spans).
 
     Returns:
@@ -318,12 +343,13 @@ def setup(
     """
     version = check_autogen_classic()
     provider = tracer_provider if tracer_provider is not None else trace_api.get_tracer_provider()
-    processor = _install_processor(provider, capture_content)
+    hide_inputs, hide_outputs = _hidden_from_config(config, capture_content)
+    processor = _install_processor(provider, hide_inputs, hide_outputs)
     handle = AG2ClassicTracing(
         tracer_provider=provider,
         processor=processor,
         autogen_version=version,
-        capture_content=bool(capture_content),
+        capture_content=processor.capture_content,
     )
     if instrument_llm:
         handle._instrument_llm_wrapper()

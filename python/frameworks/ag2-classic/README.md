@@ -4,8 +4,9 @@ Send AG2 Classic traces to Future AGI. AG2 Classic is the `autogen` distribution
 at 0.14.x, imported as `autogen`, from `ag2ai/ag2classic`. It ships its own
 OpenTelemetry instrumentation, `autogen.opentelemetry`. This package turns that
 on against a Future AGI tracer provider and maps its span attributes to Future
-AGI conventions. Alpha. Validated against fixtures and a loopback fake model; no
-live vendor run is claimed.
+AGI conventions. Alpha. Validated against fixtures and a loopback fake model, and re-verified
+2026-10-16 end to end against a local Future AGI stack with a real model
+(autogen 0.14.1 and 0.14.0).
 
 | You installed | Import | Package |
 |---|---|---|
@@ -87,7 +88,7 @@ never called unless you ask.
    0.14.0 alias pairing.
 2. Puts `AG2ClassicSpanProcessor` first on the provider you pass, ahead of the
    Future AGI exporter.
-3. Calls upstream `instrument_llm_wrapper(capture_messages=capture_content)`,
+3. Calls upstream `instrument_llm_wrapper(capture_messages=...)` (on unless every content side is hidden),
    then `instrument_agent` and `instrument_pattern` for what you pass. If one
    of those raises (for example a non-agent in `agents=`), `setup()` restores
    `OpenAIWrapper.create` and re-raises.
@@ -123,7 +124,7 @@ covered by mapping unit tests only.
 | Cost | `gen_ai.cost.total` on LLM spans, copied from upstream `gen_ai.usage.cost` (AG2's own price table) when it is above 0. AG2 reports 0 for a model its price table lacks (it logs "The cost will be 0"); that 0 is not copied, so Future AGI prices the call from its tokens and its own model table. Upstream also reports `response.cost` on a cache hit (`oai/client.py:1230-1241` returns the cached response with its stored cost), so with `cache_seed` set a cached reply carries the cost of the original call and Future AGI over-reports cost for cached responses; its token counts are the original call's too. Not fixed here; upstream behaviour. | Conversation spans carry upstream's aggregate `gen_ai.usage.cost`; it moves to `ag2.usage.cost`, so no `gen_ai.usage.*` or `gen_ai.cost.total` key is left on any non-LLM span. |
 | Session | `session.id` from upstream `gen_ai.conversation.id` (`ChatResult.chat_id`) on the outermost `conversation` span. Inside `using_session(...)` or `using_attributes(session_id=...)` (from `fi_instrumentation`), that id is set on every AG2 span instead and wins over the chat id. Only `conversation` spans from `initiate_chat` / `a_initiate_chat` keep their chat id in `gen_ai.conversation.id`; every other AG2 span (LLM, agent, tool, `initiate_chats`, resumed conversations) carries the session id there, as Future AGI's own tracer does. | Nested chats (for example the internal chat behind group-chat speaker selection, or an inner chat a tool starts) keep `gen_ai.conversation.id` but get no `session.id`. Child spans end before the chat id exists, so only the conversation span carries it. A `GroupChatManager` run emits no own conversation span at 0.14.x. `initiate_chats` gives one session per chat: each chat is its own outermost conversation, and the parent `initiate_chats` span (`multi_conversation`) has no `session.id`, so one trace holds several sessions. For one session over the whole call, wrap it in `with using_session("..."):`. |
 | User | `user.id` (and `metadata`, `tag.tags`) from `using_user(...)` / `using_attributes(...)`, set on every AG2 span started inside it. | Not emitted upstream; absent without that context. |
-| Tools | `gen_ai.tool.name`, `gen_ai.tool.type` (`function`), `gen_ai.tool.call.id`. | Arguments and result (`gen_ai.tool.call.arguments` / `.result`) only with `capture_content=True`. |
+| Tools | `gen_ai.tool.name`, `gen_ai.tool.type` (`function`), `gen_ai.tool.call.id`. | Arguments and result (`gen_ai.tool.call.arguments` / `.result`) hidden by `FI_HIDE_INPUTS` (arguments) / `FI_HIDE_OUTPUTS` (result). |
 | Errors | Exceptions keep OTel's ERROR status. A model call that raises keeps ERROR, and upstream sets `error.type` to the exception class (for example `BadRequestError`, `llm_wrapper.py:97-101`); the span has no usage or cost. A failing tool is caught inside `ConversableAgent.execute_function`, so upstream only sets `error.type=ExecutionError`; this package sets status ERROR from `error.type`. A non-zero code exit (`error.type=CodeExecutionError`) also becomes ERROR. | |
 | Retrieval | Not emitted upstream. | Always. |
 
@@ -140,18 +141,39 @@ covered by mapping unit tests only.
 
 ## Privacy
 
-Content is off unless you opt in with `setup(..., capture_content=True)`.
+Content follows the traceAI `TraceConfig` convention, like every traceAI
+instrumentor: message bodies, tool arguments and results are exported by
+default, and hidden with the standard variables (no package-specific switch):
+
+```bash
+export FI_HIDE_INPUTS=true        # input side: messages in, tool arguments, human prompt
+export FI_HIDE_OUTPUTS=true       # output side: messages out, tool results, code output, chat summaries
+# also honoured: FI_HIDE_INPUT_MESSAGES, FI_HIDE_OUTPUT_MESSAGES, FI_HIDE_INPUT_TEXT, FI_HIDE_OUTPUT_TEXT
+```
+
+or in code, `setup(..., config=TraceConfig(hide_inputs=True, hide_outputs=True))`
+(`from fi_instrumentation import TraceConfig`). `setup(..., capture_content=False)`
+hides both sides and `capture_content=True` keeps both; either overrides `config`.
 
 Upstream has a content flag only on `instrument_llm_wrapper`
-(`capture_messages`, default False). Its agent, conversation, tool,
-human-input and code-execution spans always record message bodies, tool
-arguments and results, the human prompt and answer, code output and chat
-summaries. With content off this package removes these keys before export:
-`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.tool.call.arguments`,
-`gen_ai.tool.call.result`, `ag2.human_input.prompt`, `ag2.human_input.response`,
-`ag2.code_execution.output`, `ag2.chats.summaries`, and any `input.value` /
-`output.value`. That is stricter than upstream. With content on they are kept
-and lifted into `input.value` / `output.value`.
+(`capture_messages`). Its agent, conversation, tool, human-input and
+code-execution spans always record message bodies, tool arguments and results,
+the human prompt and answer, code output and chat summaries. This package
+removes the keys of a hidden side before export. Input side:
+`gen_ai.input.messages`, `gen_ai.tool.call.arguments`, `ag2.human_input.prompt`
+and `input.value`. Output side: `gen_ai.output.messages`,
+`gen_ai.tool.call.result`, `ag2.human_input.response`,
+`ag2.code_execution.output`, `ag2.chats.summaries` and `output.value`. That is
+stricter than upstream. Kept content is lifted into `input.value` /
+`output.value`. Note that a conversation's output messages carry the whole chat
+history, so the prompt also appears there unless `FI_HIDE_OUTPUTS` is set.
+
+Never exported in either mode: local paths, user names, host names, e-mail
+addresses and stack traces (spans carry the exception class in `error.type` and
+OpenTelemetry's status; checked on a real run). Exception messages from the
+model provider or your tool do appear in the span status text, as with any
+OpenTelemetry instrumentation; hide them by not putting secrets in exception
+messages.
 
 The filtering lives in `AG2ClassicSpanProcessor`, which must run before any
 exporting processor. `setup()` keeps it first on the provider:
@@ -206,5 +228,5 @@ Paths are relative to `autogen/opentelemetry/`. Scope name
   when you call it (see Privacy).
 - `setup()` raises and names three packages: you have Microsoft AutoGen, `ag2`
   1.x, or `pyautogen` instead of `autogen` 0.14.x.
-- Content missing: content is off by default here; pass `capture_content=True`.
+- Content missing: check `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` (and the `_MESSAGES` / `_TEXT` variants) and any `TraceConfig` you pass to `setup()`.
 - Exporter errors are logged and never fail the agent.

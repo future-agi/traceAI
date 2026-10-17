@@ -28,12 +28,13 @@ What it does, per span on the ``opentelemetry.instrumentation.ag2`` scope:
 * Status ``ERROR`` when upstream set ``error.type`` but left the status unset
   (tool failures are caught inside ``ConversableAgent.execute_function``, so
   upstream never sets the status itself).
-* Content: off by default. Upstream agent, conversation, tool, human-input and
+* Content follows the traceAI ``TraceConfig`` convention: captured by default,
+  hidden with ``FI_HIDE_INPUTS`` / ``FI_HIDE_OUTPUTS`` (and the message/text
+  variants). Upstream agent, conversation, tool, human-input and
   code-execution spans always record message bodies, tool arguments/results,
-  prompts and code output; there is no upstream flag for those. With
-  ``capture_content=False`` (default) those keys are removed. With
-  ``capture_content=True`` they are kept and lifted into ``input.value`` /
-  ``output.value``.
+  prompts and code output; there is no upstream flag for those, so when a side
+  is hidden this processor removes its keys before export. Kept content is
+  lifted into ``input.value`` / ``output.value``.
 
 Spans from any other instrumentation scope pass through untouched. The
 processor never raises into the SDK.
@@ -91,21 +92,39 @@ INPUT_TOKENS = "gen_ai.usage.input_tokens"
 OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 USAGE_PREFIX = "gen_ai.usage."
 
-# Every key that carries user or model content. Removed unless capture is on.
-CONTENT_KEYS = (
+# Keys that carry user (input side) or model/tool (output side) content.
+# Removed when the matching side is hidden.
+INPUT_CONTENT_KEYS = (
     INPUT_MESSAGES,
-    OUTPUT_MESSAGES,
     TOOL_ARGUMENTS,
-    TOOL_RESULT,
     HUMAN_PROMPT,
+    SpanAttributes.INPUT_VALUE,
+    SpanAttributes.INPUT_MIME_TYPE,
+)
+OUTPUT_CONTENT_KEYS = (
+    OUTPUT_MESSAGES,
+    TOOL_RESULT,
     HUMAN_RESPONSE,
     CODE_OUTPUT,
     CHAT_SUMMARIES,
-    SpanAttributes.INPUT_VALUE,
-    SpanAttributes.INPUT_MIME_TYPE,
     SpanAttributes.OUTPUT_VALUE,
     SpanAttributes.OUTPUT_MIME_TYPE,
 )
+CONTENT_KEYS = INPUT_CONTENT_KEYS + OUTPUT_CONTENT_KEYS
+
+
+def resolve_hidden(
+    capture_content: Optional[bool], hide_inputs: bool = False, hide_outputs: bool = False
+) -> Tuple[bool, bool]:
+    """Return ``(hide_inputs, hide_outputs)``.
+
+    An explicit ``capture_content`` wins: True shows both sides, False hides
+    both. ``None`` uses ``hide_inputs`` / ``hide_outputs`` (traceAI default:
+    both shown).
+    """
+    if capture_content is None:
+        return bool(hide_inputs), bool(hide_outputs)
+    return (not capture_content), (not capture_content)
 
 # utils.py set_llm_request_params (lines 213-219).
 REQUEST_PARAMETER_KEYS = (
@@ -180,7 +199,9 @@ def _bundle_request_parameters(mapped: Dict[str, Any]) -> None:
 def map_ag2_attributes(
     attributes: Mapping[str, Any],
     *,
-    capture_content: bool = False,
+    capture_content: Optional[bool] = None,
+    hide_inputs: bool = False,
+    hide_outputs: bool = False,
     root_conversation: bool = True,
 ) -> Dict[str, Any]:
     """Return a new attribute dict with Future AGI keys added.
@@ -233,11 +254,15 @@ def map_ag2_attributes(
         for key in [k for k in mapped if k.startswith(USAGE_PREFIX)]:
             mapped.setdefault("ag2.usage." + key[len(USAGE_PREFIX) :], mapped.pop(key))
 
-    if capture_content:
-        _surface_content(mapped, str(span_type))
-    else:
-        for key in CONTENT_KEYS:
+    hide_in, hide_out = resolve_hidden(capture_content, hide_inputs, hide_outputs)
+    if hide_in:
+        for key in INPUT_CONTENT_KEYS:
             mapped.pop(key, None)
+    if hide_out:
+        for key in OUTPUT_CONTENT_KEYS:
+            mapped.pop(key, None)
+    if not (hide_in and hide_out):
+        _surface_content(mapped, str(span_type))
 
     return mapped
 
@@ -276,8 +301,14 @@ class AG2ClassicSpanProcessor(SpanProcessor):
     exporter sees the mapped attributes.
     """
 
-    def __init__(self, capture_content: bool = False) -> None:
-        self.capture_content = bool(capture_content)
+    def __init__(
+        self,
+        capture_content: Optional[bool] = None,
+        *,
+        hide_inputs: bool = False,
+        hide_outputs: bool = False,
+    ) -> None:
+        self.hide_inputs, self.hide_outputs = resolve_hidden(capture_content, hide_inputs, hide_outputs)
         # span_id -> (parent span_id, the span if it is an AG2 span else None),
         # for every live span on the provider, AG2 or not. A user span between
         # two AG2 conversations must not hide the outer one.
@@ -315,7 +346,10 @@ class AG2ClassicSpanProcessor(SpanProcessor):
             if attributes.get(SPAN_TYPE_KEY) == "conversation":
                 root = not self._has_live_conversation_ancestor(span)
             mapped = map_ag2_attributes(
-                attributes, capture_content=self.capture_content, root_conversation=root
+                attributes,
+                hide_inputs=self.hide_inputs,
+                hide_outputs=self.hide_outputs,
+                root_conversation=root,
             )
             if mapped != attributes:
                 _replace_attributes(span, mapped)
@@ -325,6 +359,11 @@ class AG2ClassicSpanProcessor(SpanProcessor):
                 span._status = Status(StatusCode.ERROR, str(error_type))  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover - never break the SDK
             logger.debug("traceai-ag2-classic: span mapping failed", exc_info=True)
+
+    @property
+    def capture_content(self) -> bool:
+        """True when any content side is still exported."""
+        return not (self.hide_inputs and self.hide_outputs)
 
     def shutdown(self) -> None:
         self._disabled = True

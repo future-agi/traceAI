@@ -193,13 +193,40 @@ CONTENT_SAMPLE = {
 
 
 @pytest.mark.parametrize("span_type", sorted(EXPECTED_KINDS))
-def test_content_is_dropped_by_default(span_type):
+def test_content_is_dropped_when_hidden(span_type):
     attrs = dict(CONTENT_SAMPLE, **{"ag2.span.type": span_type, "gen_ai.agent.name": "a"})
-    mapped = map_ag2_attributes(attrs)
+    mapped = map_ag2_attributes(attrs, capture_content=False)
     for key in CONTENT_KEYS:
         assert key not in mapped
     assert "secret" not in json.dumps(mapped)
     assert mapped["gen_ai.agent.name"] == "a"
+
+
+@pytest.mark.parametrize("span_type", sorted(EXPECTED_KINDS))
+def test_content_is_kept_by_default(span_type):
+    # traceAI TraceConfig convention: content on unless FI_HIDE_* says otherwise.
+    attrs = dict(CONTENT_SAMPLE, **{"ag2.span.type": span_type})
+    mapped = map_ag2_attributes(attrs)
+    for key in CONTENT_KEYS:
+        if key in attrs:
+            assert mapped[key] == attrs[key]
+
+
+def test_hide_inputs_only_removes_the_input_side():
+    attrs = dict(CONTENT_SAMPLE, **{"ag2.span.type": "tool"})
+    mapped = map_ag2_attributes(attrs, hide_inputs=True)
+    assert "gen_ai.tool.call.arguments" not in mapped
+    assert "input.value" not in mapped
+    assert mapped["gen_ai.tool.call.result"] == attrs["gen_ai.tool.call.result"]
+    assert mapped["output.value"] == attrs["gen_ai.tool.call.result"]
+
+
+def test_hide_outputs_only_removes_the_output_side():
+    attrs = dict(CONTENT_SAMPLE, **{"ag2.span.type": "tool"})
+    mapped = map_ag2_attributes(attrs, hide_outputs=True)
+    assert "gen_ai.tool.call.result" not in mapped
+    assert "output.value" not in mapped
+    assert mapped["gen_ai.tool.call.arguments"] == attrs["gen_ai.tool.call.arguments"]
 
 
 def test_capture_on_lifts_messages_to_input_output():
