@@ -13,7 +13,7 @@ not installed here and the tests do not import it. No license is claimed for
 it here. The fixture's keys are the ones its dependency,
 `openinference-semantic-conventions` 0.1.41, defines.
 
-Alpha, fixture-validated. The tests pass on Python 3.10, 3.11, 3.12 and 3.13
+A real-instrumentor round trip against a live collector is in `../openinference-live/` (re-verified 2026-10-16). Alpha, fixture-validated. The tests pass on Python 3.10, 3.11, 3.12 and 3.13
 (see [Tests](#tests)). They post only to the
 harness `Receiver` on 127.0.0.1: no fi-collector, no Arize account, no live
 instrumentor. Sections marked "source reading" come from future-agi `main`
