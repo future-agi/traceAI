@@ -85,3 +85,7 @@ Pass `config=TraceConfig(...)` from `fi_instrumentation.instrumentation` to `ins
 ## Watchers
 
 `Firecrawl.watcher()` returns a `Watcher` that polls `get_crawl_status` from its own thread. Each poll is a separate root `firecrawl.get_crawl_status` span with no parent, and a poll error the watcher swallows still shows as an ERROR span. `AsyncFirecrawl.watcher()` polls in the task that iterates it, so its poll spans are children of the span current there.
+
+## Live vendor verification (2026-10-17)
+
+Run as documented above against the real `api.firecrawl.dev` with `firecrawl-py` 4.50.0 and `fi-instrumentation-otel` 1.1.0 on Python 3.12, exporting to Future AGI. `scrape`, `search`, `map`, `start_crawl`, `get_crawl_status`, `cancel_crawl` and a blocking `crawl` each produced one span under an AGENT parent (`fi_verify` PASS, trace `fc0dbe7b-cf70-494e-a5ed-d3b06b91e4df`). A wrong key ended the span ERROR `UnauthorizedError` (HTTP 401), and a free-plan HTTP 429 ended `start_crawl` ERROR `RateLimitError` (trace `0e189c43-63d1-4420-b7c1-42bdb92dbca5`). A scan of every stored column found no page content, URL path or query string, or API key; `FI_HIDE_INPUTS=true` removed the search query. The async client, `watcher()` and failed or cancelled job statuses were not run live and are covered by the test suite only.
