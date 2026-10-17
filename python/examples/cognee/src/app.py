@@ -1,6 +1,6 @@
 """Send Cognee's own OpenTelemetry spans to Future AGI.
 
-Recipe example, not a package. Cognee 1.6.2 creates its spans itself when
+Recipe example, not a package. Cognee 1.6.5 creates its spans itself when
 ``COGNEE_TRACING_ENABLED=true``. This file registers a Future AGI tracer
 provider as the global OpenTelemetry provider before Cognee's first traced
 call, so Cognee attaches to that provider instead of creating its own

@@ -9,18 +9,21 @@ operation). Option A adds one small export filter,
 and error text that can quote it, out of the export and marks search and LLM
 spans.
 
-Pinned: `cognee==1.6.2` (Python >=3.10,<3.15). Its wheel METADATA declares
-`License-Expression: Apache-2.0` (license files `LICENSE` and `NOTICE.md`);
-it is a dependency of this example only, not of any traceAI package.
-Option A also needs `fi-instrumentation-otel>=1.1.0,<1.2`, which declares
-Python <3.14. The tests (see [Tests](#tests)) run on Python 3.10, 3.11 and
-3.13 against loopback fakes, with no LLM key and no Future AGI project. The
-recipe was also checked live, on Python 3.12, against a local Future AGI
-stack with a real OpenAI-compatible LLM endpoint and real embeddings: options
-A and B, content off and on, and a failing model call. Traces only: metrics
-and logs are not ingested by this recipe. Statements marked
-"source reading" come from the cognee 1.6.2 code and are not exercised by the
-tests.
+Pinned: `cognee==1.6.5` (Python >=3.10,<3.15), the latest release on
+2026-10-16; `cognee==1.6.2` was tested too and behaves the same. Both wheels'
+METADATA declare `License-Expression: Apache-2.0` (license files `LICENSE`
+and `NOTICE.md`); cognee is a dependency of this example only, not of any
+traceAI package. Option A also needs `fi-instrumentation-otel>=1.1.0,<1.2`,
+which declares Python <3.14. The tests (see [Tests](#tests)) run on Python
+3.10, 3.11 and 3.13 against loopback fakes, with no LLM key and no Future AGI
+project. The recipe was also checked live on 2026-10-16, on Python 3.12,
+against a local Future AGI stack with real OpenAI models (`gpt-4o-mini`,
+`text-embedding-3-small`): option A with content off and on and a failing
+model call (cognee 1.6.5 and 1.6.2), and option B (cognee 1.6.5) over gRPC to
+the local collector and over HTTP with the `:443` URL below to Future AGI
+cloud. Traces only: metrics and logs are not ingested by this recipe.
+Statements marked "source reading" come from the cognee 1.6.5 code and are
+not exercised by the tests.
 
 ## Option A: `register()` (recommended)
 
@@ -116,7 +119,7 @@ tests).
 sends. It exports copies, so Cognee's own span buffer and any other processor
 or exporter still see the original spans.
 
-- **Content is off by default.** For the Cognee 1.6.2 add/cognify/search path
+- **Content is off by default.** For the Cognee 1.6.5 add/cognify/search path
   covered by this recipe's recorded fixture and loopback tests, it removes the
   five content-bearing attributes listed in [Content](#content):
   `langfuse.observation.input`, `langfuse.observation.output`,
@@ -133,15 +136,19 @@ or exporter still see the original spans.
   `<exception type> (detail removed: content capture off)`, or
   `__REDACTED__ (content capture off)` if the span recorded no exception
   type. In every event, numbers and booleans are kept and any other string
-  value is dropped (the tested Cognee 1.6.2 recipe adds no events besides
-  `exception`). Serialized traceback text has no trustworthy boundary between
-  genuine frames and traceback-shaped exception-message content, so frames
-  are available only with the existing content-capture opt-in.
+  value is dropped (the tested Cognee 1.6.5 recipe adds no events besides
+  `exception`).
+- **Stack traces are never exported, in either mode.** `exception.stacktrace`
+  is dropped with content capture on as well: a serialized traceback names
+  local files (home directory, user name, virtualenv layout), and it has no
+  trustworthy boundary between genuine frames and traceback-shaped
+  exception-message content. Use Cognee's own log for frames.
 - **Content capture turns both back on.**
   `CogneeExportFilter(exporter, capture_content=True)`, or
-  `COGNEE_FI_CAPTURE_CONTENT=true` in the environment, exports everything,
-  error detail included, as Cognee recorded it. There is no separate switch
-  for error detail. It also copies that content to `input.value` and
+  `COGNEE_FI_CAPTURE_CONTENT=true` in the environment, exports the content
+  attributes and the error messages and status descriptions as Cognee
+  recorded them; only `exception.stacktrace` stays out. There is no separate
+  switch for error detail. It also copies that content to `input.value` and
   `output.value` (with `input.mime_type` and `output.mime_type`), the only
   keys fi-collector fills a span's Input and Output from: the LLM call's
   arguments (`langfuse.observation.input`), or on search spans the question
@@ -154,9 +161,9 @@ or exporter still see the original spans.
   so the filter sets `fi.span.kind` by span name, only where none of
   `fi.span.kind`, `gen_ai.span.kind`, `llm.request.type` and
   `openinference.span.kind` is set: `RETRIEVER` on `memory.retrieve` and
-  every span whose name starts with `cognee.search` (in 1.6.2,
+  every span whose name starts with `cognee.search` (in 1.6.5 and 1.6.2,
   `cognee.search.authorize` and `cognee.search.dataset`), `LLM` on
-  `cognee.observe.acreate_structured_output` (every LLM call in Cognee 1.6.2). Embedding spans are left as they are:
+  `cognee.observe.acreate_structured_output` (every LLM call in Cognee 1.6.5). Embedding spans are left as they are:
   fi-collector already types them from `gen_ai.operation.name=embeddings`.
 - **Missing-collection probes are not errors.** In every search Cognee
   probes vector collections that do not exist yet, and each probe's
@@ -179,11 +186,11 @@ or exporter still see the original spans.
 The trade-off: with the defaults, error detail in Future AGI is
 less useful for debugging. You see the exception type, but not its message or
 traceback frames; use the existing content-capture opt-in to export the
-original error detail. The filter does not touch Cognee's own logging (for example,
+original error messages (frames stay in Cognee's own log). The filter does not touch Cognee's own logging (for example,
 `run_tasks_base.py` logs a failed pipeline task with `logger.exception`;
 source reading).
 
-What it keeps: span names and event names (in Cognee 1.6.2, fixed strings and
+What it keeps: span names and event names (in Cognee 1.6.5, fixed strings and
 function names), the other span attributes (counts, lengths, names and ids;
 source reading of the attributes Cognee sets on the tested path). The tests
 assert that the planted document, question and answer do not reach the
@@ -198,7 +205,7 @@ provider was registered. It needs Cognee's tracing extra, which installs the
 OpenTelemetry SDK and exporters:
 
 ```bash
-pip install "cognee[tracing]==1.6.2"
+pip install "cognee[tracing]==1.6.5"
 
 export COGNEE_TRACING_ENABLED=true
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.futureagi.com:443/tracer/v1/traces
@@ -232,15 +239,28 @@ path.
   `OTEL_EXPORTER_OTLP_HEADERS` itself: split on `,`, then on the first `=`,
   with no URL decoding. A key that contains a comma cannot be passed this way;
   use option A.
+- **Self-hosted URL without `:443` or `:4318`: Cognee picks gRPC.** With
+  `cognee[tracing]` installed, a URL such as `http://localhost:14338/tracer/v1/traces`
+  goes to the gRPC exporter and nothing arrives (checked live: no project was
+  created). Point `OTEL_EXPORTER_OTLP_ENDPOINT` at the collector's OTLP gRPC
+  port instead (`http://<host>:<grpc-port>`, no path) and write the header
+  names in lower case, `x-api-key=...,x-secret-key=...`: gRPC metadata keys
+  must be lower case, and with `X-Api-Key` every export fails with
+  `Invalid metadata`. Checked live against the local collector's gRPC
+  receiver: 5 traces, 119 spans.
 - **Expect 404s for logs.** Cognee also sends its log records to the same URL
   with `/v1/traces` replaced by `/v1/logs`, and (source reading) its metrics
   to `/v1/metrics`. fi-collector serves traces only; the test run logs
   `Failed to export logs batch code: 404`. Spans are unaffected.
 
-## Spans Cognee 1.6.2 emits
+## Spans Cognee emits
 
 From the recipe run (one `add`, one `cognify`, one `GRAPH_COMPLETION`
-search). "Future AGI type" is what fi-collector derives: it reads the span
+search). Cognee 1.6.5 and 1.6.2 emit the same span names, kinds, attribute
+keys and statuses; only the number of `cognee.db.graph.query` spans differs
+(17 on 1.6.5, 14 on 1.6.2).
+
+"Future AGI type" is what fi-collector derives: it reads the span
 kind from `fi.span.kind`, `gen_ai.span.kind`, `llm.request.type` or
 `openinference.span.kind`, falls back to `gen_ai.operation.name`, and
 otherwise stores `unknown`. Cognee sets none of the first four; with option A
@@ -264,7 +284,7 @@ the export filter sets `fi.span.kind` on the spans marked below.
 With option A, the content attributes in this table are removed unless you
 turn content capture on.
 
-Not in the table: `cognee.api.recall` (`api/v1/recall/recall.py:533`) and
+Not in the table: `cognee.api.recall` (`api/v1/recall/recall.py:540` in 1.6.5) and
 `cognee.agent_memory.retrieve` (`modules/agent_memory/runtime.py:405`) are
 retrieval entry points that the recipe's add/cognify/search path does not
 reach (source reading). The filter does not map them, so they stay `unknown`
@@ -279,7 +299,7 @@ What that means in Future AGI:
   which fi-collector promotes. The provider comes from `gen_ai.system`
   (`litellm-native`, Cognee's adapter name, not the upstream provider). No
   processor that copies `cognee.llm.model` is needed, so none is written.
-- **Token and cost columns: empty.** Cognee 1.6.2 records no token usage on
+- **Token and cost columns: empty.** Cognee 1.6.5 records no token usage on
   any span.
 - **Input and Output: empty by default.** Content capture is off, so no span
   carries content. With content capture on (option A), LLM spans show the
@@ -305,7 +325,7 @@ What that means in Future AGI:
 
 ## Content
 
-With tracing on, Cognee 1.6.2 writes content to span attributes by default,
+With tracing on, Cognee 1.6.5 writes content to span attributes by default,
 and it has no setting that keeps tracing on but leaves content out. Option A's
 export filter removes these attributes before export unless content capture
 is on; option B exports them:
@@ -316,15 +336,16 @@ is on; option B exports them:
 | `langfuse.observation.output` | every LLM span | the model's response (extracted graph JSON, summaries, the answer). Same cap and redaction. |
 | `memory.query.text`, `cognee.search.query` | `memory.retrieve`, `cognee.search.authorize` | the search question (first 500 characters). |
 | `cognee.db.query` | `cognee.db.graph.query` | the graph query text (first 500 characters, redacted). In the test run these are parameterised queries without document text. |
-| `exception.message`, `exception.stacktrace`, the status description | `exception` events and `ERROR` status of the span that raised and of each span the error passes through | the error message can quote content: a content-policy rejection (`litellm_native/native_adapter.py:512-518`) quotes the whole prompt, past the 8000-character cap. Stack traces can also contain that serialized message and host paths. With option A's defaults the message and description are replaced and `exception.stacktrace` is omitted (see [The export filter](#the-export-filter)). |
+| `exception.message`, `exception.stacktrace`, the status description | `exception` events and `ERROR` status of the span that raised and of each span the error passes through | the error message can quote content: a content-policy rejection (`litellm_native/native_adapter.py:532-560` in 1.6.5) quotes the whole prompt, past the 8000-character cap. Stack traces can also contain that serialized message and host paths. With option A's defaults the message and description are replaced; `exception.stacktrace` is omitted in both modes (see [The export filter](#the-export-filter)). |
 
 The test plants markers in the document and the question and asserts that,
 with option A's defaults, none of them arrives anywhere (attributes, status,
 events). With content capture on, it asserts that among span attributes they
 arrive under exactly the attribute keys above plus the filter's `input.value`
-and `output.value` copies, and no others; error text
-(exception events and status descriptions) is then exported as Cognee
-recorded it, so it also carries content whenever an error quotes it.
+and `output.value` copies, and no others; error messages and status
+descriptions are then exported as Cognee recorded them, so they also carry
+content whenever an error quotes it. Stack traces are not exported in either
+mode.
 Embedding spans carry metadata only, not the embedded text.
 
 Not exported: the LLM and embedding API keys and the Future AGI keys (those
@@ -355,23 +376,26 @@ product telemetry, not OpenTelemetry tracing.
   `CogneeExportFilter`.
 - **Error messages read `__REDACTED__ (content capture off)` and no traceback
   appears.** That is option A's default, because serialized error detail can
-  quote content. Check Cognee's own log, or turn content capture on to export
-  the original error detail.
+  quote content. Turn content capture on to export the original error
+  messages; tracebacks are never exported (they name local files), so check
+  Cognee's own log for frames.
 - **Spans doubled.** Another instrumentor is wrapping Cognee or LiteLLM on top
   of Cognee's own spans. Remove it.
 - **Option B exports nothing, with no error.** Either the OpenTelemetry
-  packages are missing (plain `cognee==1.6.2` has none; with tracing on,
-  Cognee then silently uses no-op spans; install `cognee[tracing]==1.6.2`),
-  or the URL has no `:443`, so Cognee chose gRPC.
+  packages are missing (plain `cognee==1.6.5` has none; with tracing on,
+  Cognee then silently uses no-op spans; install `cognee[tracing]==1.6.5`),
+  or the URL has no `:443`, so Cognee chose gRPC (for a self-hosted
+  collector, see option B above).
 - **404 on `/tracer/v1/traces/v1/traces`.** Something appended the path to a
   URL that already had it. Cognee does not append; give the full path once.
 - **Five traces per request.** Wrap the Cognee calls in one parent span.
-- **No token counts.** Cognee 1.6.2 does not record them.
+- **No token counts.** Cognee 1.6.5 does not record them.
 
 ## Tests
 
 `tests/test_cognee_recipe.py` runs, side by side, six subprocesses with the
-real `cognee==1.6.2`. Each loads `tests/loopback_guard/sitecustomize.py`
+real `cognee==1.6.5` (the suite passes on `cognee==1.6.2` too). Each loads
+`tests/loopback_guard/sitecustomize.py`
 through `PYTHONPATH`, and so do the worker processes Cognee spawns for
 LanceDB and Ladybug: in all of them, Python-level connections and DNS lookups
 to any host other than 127.0.0.1 are refused and logged, and the test asserts
@@ -391,13 +415,19 @@ anything:
 - `otlp_env`: option B's environment variables, then one `cognee.add`.
 
 `tests/fixtures/cognee-1.6.2-recipe-spans.json` is Cognee's own spans from
-the recipe run as the Receiver decoded them, before the export filter
+the recipe run on cognee 1.6.2 as the Receiver decoded them, before the
+export filter
 (host paths replaced by `<python-lib>`, `<repo>`, `<tmp>` and `<home>`). The
 fixture tests post it with the harness `post_otlp()`, check it with
 `compare()`, run the same mapping and content assertions on it, and send it
 through the export filter, with no Cognee installed. The live runs must match
 the filtered fixture's shape (span names, kinds, attribute keys, statuses and
-counts). Re-record with `COGNEE_RECORD_FIXTURE=1` (it records the `capture`
+counts; the number of `cognee.db.graph.query` spans is compared only as
+"at least one", because it changes between patch releases). The scenarios
+point `TIKTOKEN_CACHE_DIR` at LiteLLM's bundled tokenizer files, because
+cognee 1.6.5 loads tiktoken before LiteLLM sets that and would otherwise
+download `cl100k_base`, which the loopback guard refuses; the recipe itself
+needs no such setting. Re-record with `COGNEE_RECORD_FIXTURE=1` (it records the `capture`
 run without the `fi.span.kind` the filter adds).
 
 From the repository root:
@@ -409,7 +439,7 @@ env -u PYTHONPATH PYTHONPATH="python/examples/cognee:python:python/tests" \
   --with opentelemetry-sdk --with opentelemetry-instrumentation \
   --with opentelemetry-exporter-otlp-proto-http --with wrapt --with requests \
   --with jsonschema --with protobuf --with opentelemetry-proto \
-  --with 'cognee==1.6.2' \
+  --with 'cognee==1.6.5' \
   pytest python/examples/cognee/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
 ```
 
