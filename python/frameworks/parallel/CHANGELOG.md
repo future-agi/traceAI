@@ -4,6 +4,10 @@ All notable changes to `traceAI-parallel` will be documented here.
 
 ## [0.1.0] - Unreleased
 
+### Security
+- `exception.stacktrace` holds the exception line only. Traceback frames are never exported: they carry local
+  file paths (usernames, virtualenv and host layout).
+
 ### Added
 - `ParallelInstrumentor` for the Parallel web client (`parallel-web>=1.0.1,<2`): `search` and `extract` on
   `Parallel` and `AsyncParallel`, one span per call (`gen_ai.span.kind` `RETRIEVER` for `search`, `TOOL`

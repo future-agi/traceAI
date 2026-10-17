@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -55,7 +56,7 @@ def test_http_401_sets_error_reraises_and_never_records_the_key(fake):
     event = _exception_event(span)
     assert event["exception.type"] == "parallel.AuthenticationError"
     assert "[redacted]" in event["exception.message"]
-    assert "Traceback" in event["exception.stacktrace"]
+    assert event["exception.stacktrace"].startswith("parallel.AuthenticationError: ")
     assert PARALLEL_KEY not in traced.wire()
     # Nothing came back, so no result count or ids are recorded.
     for key in ("parallel.result_count", "parallel.search_id"):
@@ -70,7 +71,7 @@ def test_a_huge_error_stacktrace_is_redacted_and_capped_at_16kb(fake):
 
     event = _exception_event(traced.one())
     stacktrace = event["exception.stacktrace"]
-    assert stacktrace.startswith("Traceback")
+    assert stacktrace.startswith("parallel.BadRequestError: ")
     assert "echo [redacted] \u20ac" in stacktrace
     size = len(stacktrace.encode("utf-8"))
     # Cut to 16 KB, losing at most a split 3-byte character at the end.
@@ -200,3 +201,16 @@ def test_missing_api_key_raises_in_the_constructor_before_any_span(monkeypatch):
             AsyncParallel()
 
     assert traced.spans() == []
+
+
+def test_the_stacktrace_never_carries_frames_or_local_paths(fake):
+    with instrumented() as traced:
+        with pytest.raises(parallel.InternalServerError):
+            sync_client(fake).search(search_queries=[FAIL_500])
+
+    stacktrace = _exception_event(traced.one())["exception.stacktrace"]
+    assert "Traceback" not in stacktrace
+    assert "File \"" not in stacktrace
+    assert "site-packages" not in traced.wire()
+    assert "/Users/" not in traced.wire()
+    assert os.path.dirname(__file__) not in traced.wire()

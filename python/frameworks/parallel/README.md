@@ -143,7 +143,7 @@ environment variables before calling `instrument()`:
 `config` must be a `fi_instrumentation.TraceConfig`; anything else raises
 `TypeError` and nothing is wrapped.
 
-Server-written text (error messages, stack traces and warning messages) is
+Server-written text (error messages and warning messages) is
 recorded as the server wrote it, with the key removed, your inputs removed
 with `hide_inputs`, and PII replaced with `pii_redaction`. `hide_inputs`
 matches each input verbatim only: a copy the server escaped, truncated or
@@ -151,8 +151,10 @@ reformatted stays. For example, a query that contains a newline appears as
 `\n` in a `parallel-web` error message and is not matched. A short input is
 removed wherever it occurs, including inside other words. If the inputs
 cannot be read, the error and warning messages are recorded as
-`__REDACTED__`. `hide_outputs` drops warning messages; error messages and
-stack traces are always recorded on failed calls.
+`__REDACTED__`. `hide_outputs` drops warning messages; error messages are
+always recorded on failed calls. `exception.stacktrace` holds the exception
+line only (type and cleaned message): traceback frames are never exported,
+because they carry local file paths.
 
 ## Errors and cancellation
 

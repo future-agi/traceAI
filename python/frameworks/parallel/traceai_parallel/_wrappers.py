@@ -332,7 +332,7 @@ def _exception_attributes(
     """The OTel exception event, with the Parallel key removed from every text.
 
     The hidden inputs and then PII are replaced next when enabled. The message
-    is then cut to 1 KB and the stacktrace to 16 KB of UTF-8: a server error
+    is then cut to 1 KB and the stacktrace (exception line only, no frames) to 16 KB of UTF-8: a server error
     can echo a large request into both.
     """
     error_type = type(error)
@@ -342,7 +342,9 @@ def _exception_attributes(
         if module and module != "builtins"
         else error_type.__qualname__
     )
-    stacktrace = "".join(traceback.format_exception(error_type, error, error.__traceback__))
+    # Frames are never exported: they carry local file paths (usernames, venv and
+    # host layout). The attribute holds the exception line only.
+    stacktrace = "".join(traceback.format_exception_only(error_type, error))
     return {
         "exception.type": qualified,
         "exception.message": _clean(_describe(error), keys, pii=pii, hidden=hidden),
