@@ -30,6 +30,8 @@ trap cleanup EXIT
 "$WORK/venv/bin/pip" -q install "$PKG" "openai[realtime]==$OPENAI_VERSION"
 PY="$WORK/venv/bin/python"
 EX="$HERE/voice_agent.py"
+MODEL_ARGS=()
+if [ -n "${OPENAI_REALTIME_MODEL:-}" ]; then MODEL_ARGS=(--model "$OPENAI_REALTIME_MODEL"); fi   # e.g. gpt-realtime-mini for a cheaper live run
 export FI_PROJECT_NAME="$PROJECT"
 SHOWN="FI-MARK-shown$RANDOM$RANDOM"
 HIDDEN="FI-MARK-hidden$RANDOM$RANDOM"
@@ -65,12 +67,12 @@ if [ -z "${OPENAI_API_KEY:-}" ] || [ "${STANDIN:-0}" = "1" ]; then
 else
   echo "LIVE: sessions go to the OpenAI Realtime API and spend credits."
   echo "1. typed question, tool call, spoken answer ($SHOWN)"
-  "$PY" "$EX" --typed "What's the weather in Paris?" --marker "$SHOWN" --user-id e2e-caller
+  "$PY" "$EX" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} --typed "What's the weather in Paris?" --marker "$SHOWN" --user-id e2e-caller --error-case
   echo "2. same, FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true ($HIDDEN)"
-  FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true "$PY" "$EX" --typed "What's the weather in Paris?" --marker "$HIDDEN"
+  FI_HIDE_INPUTS=true FI_HIDE_OUTPUTS=true "$PY" "$EX" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} --typed "What's the weather in Paris?" --marker "$HIDDEN" --error-case
   echo "3. text-only session"
-  "$PY" "$EX" --text
+  "$PY" "$EX" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} --text
   echo "4. refused connection (expect connect_failed)"
-  OPENAI_API_KEY="sk-bad-e2e-0000" "$PY" "$EX" --text || true
+  OPENAI_API_KEY="sk-bad-e2e-0000" "$PY" "$EX" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} --text || true
 fi
 echo "Done. In Future AGI open project $PROJECT. $SHOWN appears in the traces; $HIDDEN must appear nowhere."

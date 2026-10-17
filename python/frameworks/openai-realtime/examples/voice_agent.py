@@ -194,6 +194,10 @@ async def typed_call(client: AsyncOpenAI, args: argparse.Namespace) -> None:
         await conn.session.update(
             session={"type": "realtime", "instructions": instructions, "tools": TOOLS, "audio": {"output": {"voice": "marin"}}}
         )
+        if args.error_case:
+            # Two client mistakes the server answers with an `error` event (no model call, no cost).
+            await conn.response.cancel()
+            await conn.conversation.item.delete(item_id=f"item_{args.marker or 'missing'}")
         await conn.conversation.item.create(
             item={"type": "message", "role": "user", "content": [{"type": "input_text", "text": args.typed}]}
         )

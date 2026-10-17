@@ -4,8 +4,12 @@ OpenTelemetry tracing for OpenAI Realtime sessions that your own Python process 
 `client.realtime.connect()`. One connection is one trace. An audio session shows up as a call in
 Future AGI's Voice tab; a text-only session shows up in Traces.
 
-> **Alpha.** Tested end to end with the official `openai` SDK against a local stand-in that speaks
-> the documented Realtime event vocabulary, not yet against a live OpenAI Realtime session.
+> **Live-verified (2026-10-17), still alpha.** Run against OpenAI's live Realtime API
+> (`gpt-realtime-mini`, `openai` 3.33.0): session, typed question with a spoken answer, a function
+> call, token usage from `response.done`, server `error` events, a text-only session, a refused API
+> key and `FI_HIDE_*`. Still tested only against the local stand-in: barge-in and
+> `conversation.item.truncate`, real microphone audio (`call.talk_ratio`), a 1011 socket drop
+> mid-response, and `openai` 3.24.0 / 2.0.0.
 
 ## Install
 

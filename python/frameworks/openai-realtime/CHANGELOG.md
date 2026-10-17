@@ -10,5 +10,8 @@
 - Content on by default, like every traceAI instrumentor; the standard `FI_HIDE_INPUTS` /
   `FI_HIDE_OUTPUTS` (and the `*_MESSAGES` / `*_TEXT` variants) or `TraceConfig(...)` drop it. Audio
   bytes, API keys, URLs and stack traces are never recorded.
-- Alpha until a session against the live OpenAI Realtime API has been traced. Tested against a local
-  stand-in server with openai 3.31.0, 3.24.0 and 2.0.0.
+- Live-verified 2026-10-17 against the OpenAI Realtime API (gpt-realtime-mini, openai 3.33.0): typed
+  question with tool call and spoken answer, token usage, server error events, text-only session,
+  refused key (the live API closes the socket with code 3000 `invalid_api_key`, so the root ends
+  `socket_closed`), and `FI_HIDE_*`. Still alpha: barge-in/truncate, microphone audio and a 1011
+  mid-response drop are verified only against a local stand-in server (openai 3.31.0, 3.24.0, 2.0.0).
