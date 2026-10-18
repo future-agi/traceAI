@@ -3,7 +3,8 @@ import inspect
 import json
 import logging
 from abc import ABC
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
+from functools import partial
 from typing import (
     Any,
     AsyncGenerator,
@@ -11,6 +12,7 @@ from typing import (
     Iterable,
     Iterator,
     Mapping,
+    Optional,
     OrderedDict,
     TypedDict,
     TypeVar,
@@ -76,6 +78,78 @@ class _RunnerRunAsyncKwargs(TypedDict):
     run_config: NotRequired[RunConfig]
 
 
+async def _trace_async_generator(
+    generator: AsyncGenerator[Event, Any],
+    tracer: trace_api.Tracer,
+    name: str,
+    attributes: Mapping[str, AttributeValue],
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Event, Any]:
+    """Trace generator execution without leaving its context in the consumer."""
+    span = tracer.start_span(name=name, attributes=attributes)
+    with ExitStack() as stack:
+        stack.enter_context(trace_api.use_span(span, end_on_exit=False))
+        if user_id is not None:
+            stack.enter_context(using_user(user_id))
+        if session_id is not None:
+            stack.enter_context(using_session(session_id))
+        generator_context = context_api.get_current()
+
+    @contextmanager
+    def resume_context() -> Iterator[None]:
+        nonlocal generator_context
+        token = context_api.attach(generator_context)
+        try:
+            yield
+        finally:
+            # An agent may itself hold a child span across yielded events.
+            generator_context = context_api.get_current()
+            context_api.detach(token)
+
+    advance = generator.__anext__
+    try:
+        try:
+            while True:
+                with resume_context():
+                    event = await advance()
+                    if event.is_final_response():
+                        try:
+                            span.set_attribute(
+                                SpanAttributes.OUTPUT_VALUE,
+                                event.model_dump_json(exclude_none=True),
+                            )
+                            span.set_attribute(
+                                SpanAttributes.OUTPUT_MIME_TYPE,
+                                FiMimeTypeValues.JSON.value,
+                            )
+                        except Exception:
+                            logger.exception(
+                                f"Failed to get attribute: {SpanAttributes.OUTPUT_VALUE}."
+                            )
+                try:
+                    value = yield event
+                except GeneratorExit:
+                    return
+                except BaseException as exc:  # noqa: BLE001
+                    # Forward injected exceptions, including cancellation, unchanged.
+                    advance = partial(generator.athrow, exc)
+                else:
+                    advance = partial(generator.asend, value)
+        finally:
+            with resume_context():
+                await generator.aclose()
+    except StopAsyncIteration:
+        span.set_status(StatusCode.OK)
+    except Exception as exc:
+        span.record_exception(exc)
+        span.set_status(StatusCode.ERROR)
+        raise
+    finally:
+        span.end()
+
+
 class _RunnerRunAsync(_WithTracer):
     def __call__(
         self,
@@ -109,40 +183,14 @@ class _RunnerRunAsync(_WithTracer):
         if (session_id := kwargs.get("session_id")) is not None:
             attributes[SpanAttributes.GEN_AI_CONVERSATION_ID] = session_id
 
-        class _AsyncGenerator(wrapt.ObjectProxy):  # type: ignore[misc]
-            __wrapped__: AsyncGenerator[Event, None]
-
-            async def __aiter__(self) -> Any:
-                with ExitStack() as stack:
-                    span = stack.enter_context(
-                        tracer.start_as_current_span(
-                            name=name,
-                            attributes=attributes,
-                        )
-                    )
-                    if user_id is not None:
-                        stack.enter_context(using_user(user_id))
-                    if session_id is not None:
-                        stack.enter_context(using_session(session_id))
-                    async for event in self.__wrapped__:
-                        if event.is_final_response():
-                            try:
-                                span.set_attribute(
-                                    SpanAttributes.OUTPUT_VALUE,
-                                    event.model_dump_json(exclude_none=True),
-                                )
-                                span.set_attribute(
-                                    SpanAttributes.OUTPUT_MIME_TYPE,
-                                    FiMimeTypeValues.JSON.value,
-                                )
-                            except Exception:
-                                logger.exception(
-                                    f"Failed to get attribute: {SpanAttributes.OUTPUT_VALUE}."
-                                )
-                        yield event
-                    span.set_status(StatusCode.OK)
-
-        return _AsyncGenerator(generator)
+        return _trace_async_generator(
+            generator,
+            tracer,
+            name,
+            attributes,
+            user_id=user_id,
+            session_id=session_id,
+        )
 
 
 class _BaseAgentRunAsync(_WithTracer):
@@ -163,33 +211,7 @@ class _BaseAgentRunAsync(_WithTracer):
         attributes[SpanAttributes.GEN_AI_SPAN_KIND] = FiSpanKindValues.AGENT.value
         attributes[SpanAttributes.GEN_AI_AGENT_NAME] = instance.name
 
-        class _AsyncGenerator(wrapt.ObjectProxy):  # type: ignore[misc]
-            __wrapped__: AsyncGenerator[Event, None]
-
-            async def __aiter__(self) -> Any:
-                with tracer.start_as_current_span(
-                    name=name,
-                    attributes=attributes,
-                ) as span:
-                    async for event in self.__wrapped__:
-                        if event.is_final_response():
-                            try:
-                                span.set_attribute(
-                                    SpanAttributes.OUTPUT_VALUE,
-                                    event.model_dump_json(exclude_none=True),
-                                )
-                                span.set_attribute(
-                                    SpanAttributes.OUTPUT_MIME_TYPE,
-                                    FiMimeTypeValues.JSON.value,
-                                )
-                            except Exception:
-                                logger.exception(
-                                    f"Failed to get attribute: {SpanAttributes.OUTPUT_VALUE}."
-                                )
-                        yield event
-                    span.set_status(StatusCode.OK)
-
-        return _AsyncGenerator(generator)
+        return _trace_async_generator(generator, tracer, name, attributes)
 
 
 class _TraceCallLlm(_WithTracer):
