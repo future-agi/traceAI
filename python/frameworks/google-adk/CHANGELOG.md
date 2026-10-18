@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Allow Google GenAI 2.x alongside 1.x so current Google ADK versions can
+  install with the instrumentor through normal dependency resolution.
+- Add offline integration coverage for the real ADK model/tool loop, span
+  attributes, token usage, error propagation and uninstrumentation.
+
 ## [0.1.5] - 2026-05-15
 
 - Fix `instrument()` crash on `google-adk >= 1.32`. Patch targets and

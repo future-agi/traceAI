@@ -12,7 +12,7 @@ packages = [
 [tool.poetry.dependencies]
 python = ">3.9, <3.13"
 google-adk =  ">= 1.2.1"
-google-genai = "^1.0.0"
+google-genai = ">=1.0.0,<3"
 fi-instrumentation-otel = ">=0.1.14"
 
 
