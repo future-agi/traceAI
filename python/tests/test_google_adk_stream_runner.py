@@ -1,5 +1,6 @@
 """Offline integration with ADK's actual Runner and BaseAgent methods."""
 
+import asyncio
 from typing import ClassVar
 
 import pytest
@@ -21,6 +22,7 @@ from fi_instrumentation.fi_types import SpanAttributes
 @pytest.mark.parametrize("close_early", [False, True])
 async def test_runner_stream_lifecycle(close_early):
     cleaned = []
+    cleanup_finished = asyncio.Event()
 
     class StreamingAgent(BaseAgent):
         outputs: ClassVar[list[Event]] = [
@@ -43,6 +45,7 @@ async def test_runner_stream_lifecycle(close_early):
                     yield result
             finally:
                 cleaned.append(True)
+                cleanup_finished.set()
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -69,6 +72,13 @@ async def test_runner_stream_lifecycle(close_early):
             assert context_api.get_current() is before
             if close_early:
                 await stream.aclose()
+                assert any(
+                    span.name == "invocation [stream-test]"
+                    for span in exporter.get_finished_spans()
+                )
+                # Older ADK runners rely on async-generator finalization for
+                # nested streams rather than closing them before returning.
+                await asyncio.wait_for(cleanup_finished.wait(), timeout=2)
             else:
                 remaining = [result async for result in stream]
                 assert remaining[-1].content.parts[0].text == "complete"
