@@ -30,3 +30,7 @@ First release.
   text. Spans come from `FITracer`, so `using_*` context attributes apply.
 - Accepts `google-cloud-discoveryengine>=0.20.5,<1`; tested with 0.20.5 on
   Python 3.10 to 3.13.
+- Checked against the live v1 API (2026-10-18): `search` on the gRPC, REST
+  and gRPC asyncio transports, and real `NOT_FOUND` and
+  `FAILED_PRECONDITION` errors from `search`, `search_lite` and
+  `answer_query`. The REST tests replay those error bodies.

@@ -11,10 +11,12 @@ ingestion, data store and engine administration produce no spans from this
 package. It does not instrument `google.genai`; for the Gemini client use
 `traceAI-google-genai`.
 
-Status: alpha. Every test runs against a loopback gRPC fake, and the
-end-to-end check exported real client calls (made against that fake) into a
-local Future AGI. Nothing in this package has been run against a live Google
-endpoint yet.
+Status: alpha. Verified against the live `discoveryengine.googleapis.com`
+on 2026-10-18 (see [Live vendor verification](#live-vendor-verification-2026-10-18)):
+`search` succeeded on the gRPC, REST and gRPC asyncio transports, and the
+error paths of `search`, `search_lite` and `answer_query` were recorded from
+real server errors. The success paths of `search_lite` and `answer_query`
+were not available on that setup and are covered by the loopback tests only.
 
 ## Why a wrapper
 
@@ -101,6 +103,21 @@ client = discoveryengine.SearchServiceClient(
 | `SearchServiceClient.search`, `SearchServiceAsyncClient.search` | `discoveryengine.search` |
 | `SearchServiceClient.search_lite`, `SearchServiceAsyncClient.search_lite` | `discoveryengine.search_lite` |
 | `ConversationalSearchServiceClient.answer_query`, `ConversationalSearchServiceAsyncClient.answer_query` | `discoveryengine.answer_query` |
+
+What the server allows depends on your app, not on this package:
+
+- `search_lite` is meant for public website search with an API key
+  (`client_options={"api_key": ...}`). Against any other data store the
+  server answers `FAILED_PRECONDITION` "API key is only supported for public
+  website search." (seen live with OAuth credentials and an unstructured
+  data store).
+- `answer_query` needs an app with the Large Language Model add-on
+  (Enterprise edition). On a Standard edition app the server answers
+  `FAILED_PRECONDITION` "This feature is only available when Large Language
+  Model add-on is enabled." (seen live).
+
+Both errors are traced like any other error (status ERROR,
+`discoveryengine.error.status` = `FAILED_PRECONDITION`, code `400`).
 
 Each call produces one span with `gen_ai.span.kind` = `RETRIEVER`. Retries made
 by `google-api-core` inside one call (when you pass `retry=`; at 0.20.5 these
@@ -281,7 +298,48 @@ your call proceeds with its own result or exception.
   instrumentation adds transport spans under these spans; it does not
   duplicate them.
 
+## Live vendor verification (2026-10-18)
+
+Run against the real `discoveryengine.googleapis.com` (v1, `global`) in a
+staging GCP project, with the smallest app: one unstructured data store with
+three inline `text/plain` documents and one Standard edition generic search
+engine (no LLM add-on). The engine and data store were deleted after the run.
+The code followed [Usage](#usage); the only change was
+`credentials=google.oauth2.credentials.Credentials(token=..., quota_project_id=...)`
+on each client, because the machine had no ADC.
+
+Versions: `google-cloud-discoveryengine` 0.20.5 (latest on PyPI),
+`fi-instrumentation-otel` 1.1.0, google-api-core 2.42.0, google-auth
+2.62.0, grpcio 1.84.0, protobuf 7.36.2, Python 3.12. Spans were exported
+over OTLP/HTTP to a local Future AGI and checked in its store.
+
+| Call | Transport | Live result | Span |
+|---|---|---|---|
+| `search` | gRPC, REST, gRPC asyncio | 2 results | OK, `discoveryengine.result_count` = 2, query, serving config |
+| `search` on a serving config that does not exist | gRPC, REST | `NotFound` 404 | ERROR, `NOT_FOUND` / 404 |
+| `search_lite` (OAuth, not a website data store) | gRPC | `FailedPrecondition` 400 | ERROR, `FAILED_PRECONDITION` / 400 |
+| `answer_query` (Standard edition app) | gRPC | `FailedPrecondition` 400 | ERROR, `FAILED_PRECONDITION` / 400 |
+| `answer_query` (Standard edition app) | REST | `BadRequest` 400 | ERROR, `FAILED_PRECONDITION` (from the JSON error body) / 400 |
+
+With the defaults the query was stored on every Discovery Engine span; with
+`FI_HIDE_INPUTS=true` it was in none of the stored columns (`input.value` =
+`__REDACTED__`, no `gen_ai.retrieval.query`). In both modes the Discovery
+Engine spans held no result content (titles, snippets), and no stored column
+held a credential, the access token, a local path, the user name, the host
+name, the account's e-mail address or a stack trace. The real error messages
+seen did not quote the query.
+
+Not verified live: a successful `search_lite` (needs a public website data
+store and an API key), a successful `answer_query` and its answer
+attributes (`discoveryengine.answer.*`, `discoveryengine.session`; needs the
+LLM add-on), pagination, a regional endpoint, the async REST transport, and
+removal of a hidden query from a server error that quotes it. The loopback
+tests cover these.
+
 ## Tests
+
+The three error bodies the live API returned on 2026-10-18 are replayed in
+`tests/test_discoveryengine_rest.py` (`test_live_rest_error_bodies_record_status_and_code`).
 
 The tests drive the real `google-cloud-discoveryengine` clients over their
 own gRPC transports against a gRPC fake on 127.0.0.1
