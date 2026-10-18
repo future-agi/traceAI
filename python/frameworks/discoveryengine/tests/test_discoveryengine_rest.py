@@ -38,6 +38,43 @@ QUERY = "REST-QUERY-MARKER"
 API_KEY = "placeholder-rest-api-key-must-not-be-exported"
 ROUTE = re.compile(r"^/v1/(projects/.+/servingConfigs/[^/:]+):(search|searchLite|answer)$")
 
+# Error bodies that discoveryengine.googleapis.com returned on 2026-10-18 (v1,
+# a global Standard-tier generic search engine, OAuth credentials), verbatim.
+LIVE_ERRORS = {
+    "live-answer-standard-tier": (
+        400,
+        {
+            "error": {
+                "code": 400,
+                "message": "This feature is only available when Large Language Model add-on is enabled.",
+                "status": "FAILED_PRECONDITION",
+            }
+        },
+    ),
+    "live-search-lite-not-a-website": (
+        400,
+        {
+            "error": {
+                "code": 400,
+                "message": "API key is only supported for public website search.",
+                "status": "FAILED_PRECONDITION",
+            }
+        },
+    ),
+    "live-missing-engine": (
+        404,
+        {
+            "error": {
+                "code": 404,
+                "message": "We were unable to find an engine to service the request. This may be an "
+                "intermittent issue -- please try again in 3-5 minutes. If the issue persists, please "
+                "contact support.",
+                "status": "NOT_FOUND",
+            }
+        },
+    ),
+}
+
 
 def _search_body() -> str:
     from google.cloud.discoveryengine_v1.types import SearchResponse
@@ -92,7 +129,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         query = body.get("query")
         text = query.get("text", "") if isinstance(query, dict) else (query or "")
-        if text.startswith("fail-denied"):
+        live = next((key for key in LIVE_ERRORS if text.startswith(key)), None)
+        if live is not None:
+            status, error_body = LIVE_ERRORS[live]
+            self._send(status, json.dumps(error_body))
+        elif text.startswith("fail-denied"):
             self._send(
                 403,
                 json.dumps(
@@ -244,3 +285,38 @@ def test_only_a_canonical_rest_status_name_is_recorded(endpoint):
     values = attrs(traced.one())
     assert "discoveryengine.error.status" not in values
     assert values["discoveryengine.error.code"] == 400
+
+
+@pytest.mark.parametrize(
+    "key, operation, error_class, status, code",
+    [
+        ("live-answer-standard-tier", "answer_query", core_exceptions.BadRequest, "FAILED_PRECONDITION", 400),
+        ("live-search-lite-not-a-website", "search_lite", core_exceptions.BadRequest, "FAILED_PRECONDITION", 400),
+        ("live-missing-engine", "search", core_exceptions.NotFound, "NOT_FOUND", 404),
+    ],
+)
+def test_live_rest_error_bodies_record_status_and_code(endpoint, key, operation, error_class, status, code):
+    # The three error bodies the live API returned on 2026-10-18. On REST a 400
+    # is a plain BadRequest (no gRPC status), so FAILED_PRECONDITION must come
+    # from the body; a 404 is NotFound, whose class carries NOT_FOUND.
+    search, answers = _clients(endpoint)
+    query = key + " " + QUERY
+    with instrumented() as traced:
+        with pytest.raises(core_exceptions.GoogleAPICallError) as raised:
+            if operation == "answer_query":
+                answers.answer_query(request={"serving_config": SERVING_CONFIG, "query": {"text": query}})
+            else:
+                getattr(search, operation)(request={"serving_config": SERVING_CONFIG, "query": query})
+
+    assert type(raised.value) is error_class
+    span = traced.one()
+    assert span.name == "discoveryengine." + operation
+    values = attrs(span)
+    assert values["discoveryengine.error.status"] == status
+    assert values["discoveryengine.error.code"] == code
+    assert values["gen_ai.retrieval.query"] == query
+    assert "discoveryengine.result_count" not in values
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description.startswith("{0}: {1} POST ".format(error_class.__name__, code))
+    assert LIVE_ERRORS[key][1]["error"]["message"] in span.status.description
+    assert sorted(event(span, "exception")) == ["exception.message", "exception.type"]
