@@ -201,6 +201,14 @@ config = TraceConfig(
 With it off, the status description is the exception message only, never a traceback;
 the stacktrace is recorded on the exception event.
 
+`error.type` is set only on spans that end with status `ERROR` (an exception recorded on
+a span that still succeeds, such as a retried timeout, does not set it). It is the
+provider error code for exceptions from openai, anthropic, groq, litellm,
+botocore/boto3, google-genai, google-api-core and mistralai (for example
+`model_not_found`, `not_found_error`, `ValidationException`, `NOT_FOUND`), the HTTP
+status for httpx `HTTPStatusError` (`"404"`), and the fully qualified exception class
+for everything else (for example `sqlalchemy.exc.OperationalError`).
+
 ## What's Always Captured
 
 Even with maximum redaction, these are always captured:

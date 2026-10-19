@@ -29,9 +29,15 @@ SECRET = "the user's prompt: hunter2"
 
 
 class ModelNotFound(Exception):
+    """Shaped like openai.NotFoundError. Provider error codes are read only from
+    exceptions of known provider SDKs, so it claims the openai module."""
+
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.code = "model_not_found"
+
+
+ModelNotFound.__module__ = "openai"
 
 
 class FailingChatModel(BaseChatModel):

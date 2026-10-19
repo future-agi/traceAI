@@ -214,19 +214,57 @@ class TraceConfig:
         },
     )
     """Enables regex-based PII redaction on attribute values"""
-    hide_error_details: Optional[bool] = field(
+    _hide_error_details: Optional[bool] = field(
         default=None,
         metadata={
             "env_var": FI_HIDE_ERROR_DETAILS,
             "default_value": DEFAULT_HIDE_ERROR_DETAILS,
         },
     )
-    """Hides error details: the ERROR status description, exception.message,
-    exception.stacktrace and error.message. The status stays ERROR and
-    error.type / exception.type are kept. When neither the argument nor
-    FI_HIDE_ERROR_DETAILS is set, it is on if any of hide_inputs, hide_outputs,
-    hide_input_messages, hide_output_messages, hide_input_text or
-    hide_output_text is on."""
+    """The ``hide_error_details`` setting as given: the argument, else
+    FI_HIDE_ERROR_DETAILS, else None ("derive from the content hide flags"). It
+    stays unresolved so that ``dataclasses.replace()`` derives it again from
+    the new flags. Read the ``hide_error_details`` property instead."""
+
+    def __init__(
+        self,
+        hide_llm_invocation_parameters: Optional[bool] = None,
+        hide_inputs: Optional[bool] = None,
+        hide_outputs: Optional[bool] = None,
+        hide_input_messages: Optional[bool] = None,
+        hide_output_messages: Optional[bool] = None,
+        hide_input_images: Optional[bool] = None,
+        hide_input_text: Optional[bool] = None,
+        hide_output_text: Optional[bool] = None,
+        hide_embedding_vectors: Optional[bool] = None,
+        base64_image_max_length: Optional[int] = None,
+        pii_redaction: Optional[bool] = None,
+        hide_error_details: Optional[bool] = None,
+        *,
+        _hide_error_details: Optional[bool] = None,
+    ) -> None:
+        # Written by hand because the public argument ``hide_error_details``
+        # fills the private field ``_hide_error_details``.
+        # ``dataclasses.replace()`` passes that field by its own name; an
+        # explicit ``hide_error_details`` wins over it.
+        values = dict(locals())
+        if hide_error_details is not None:
+            values["_hide_error_details"] = hide_error_details
+        for f in fields(self):
+            object.__setattr__(self, f.name, values[f.name])
+        self.__post_init__()
+
+    @property
+    def hide_error_details(self) -> bool:
+        """Hides error details: the ERROR status description, exception.message,
+        exception.stacktrace and error.message. The status stays ERROR and
+        error.type / exception.type are kept. When neither the argument nor
+        FI_HIDE_ERROR_DETAILS is set, it is on if any of hide_inputs,
+        hide_outputs, hide_input_messages, hide_output_messages, hide_input_text
+        or hide_output_text is on."""
+        if self._hide_error_details is not None:
+            return self._hide_error_details
+        return any(getattr(self, name) for name in _CONTENT_HIDE_FLAGS)
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -238,12 +276,6 @@ class TraceConfig:
                 expected_type,
                 f.metadata["env_var"],
                 f.metadata["default_value"],
-            )
-        if self.hide_error_details is None:
-            object.__setattr__(
-                self,
-                "hide_error_details",
-                any(getattr(self, name) for name in _CONTENT_HIDE_FLAGS),
             )
 
     def mask(
@@ -357,7 +389,7 @@ class TraceConfig:
         else:
             if not isinstance(init_value, expected_type):
                 raise TypeError(
-                    f"The field {field_name} must be of type '{type_name}' "
+                    f"The field {field_name.lstrip('_')} must be of type '{type_name}' "
                     f"but '{type(init_value).__name__}' was found."
                 )
 

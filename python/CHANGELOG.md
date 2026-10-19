@@ -12,21 +12,29 @@
   (or `FI_HIDE_ERROR_DETAILS=false`) to keep the old behaviour.
 - An `ERROR` status description is now the exception message only. The
   `"<Type>: <message>"` form built by OpenTelemetry's `use_span` and most instrumentors
-  becomes `<message>` (the type is in `error.type`), and a Python traceback is never
-  kept in the description.
+  becomes `<message>` (the type is in `error.type`), also when one such line is joined
+  per exception (llama-index), and a Python traceback is never kept in the description.
 
 ### Feature
 - New `TraceConfig(hide_error_details=...)` / `FI_HIDE_ERROR_DETAILS`. Unset, it is
   derived from the content hide flags above; an explicit `true`/`false` wins.
-- Failed spans get `error.type`: the provider error code when the exception carries one
-  (OpenAI-compatible `code`/`type`, botocore `Error.Code`, Anthropic `error.type`,
-  google-genai `status`), otherwise the fully qualified exception class. An
-  instrumentor's own `error.type` is not overwritten.
+  `dataclasses.replace(config, hide_inputs=True)` derives it again from the new flags
+  unless it was set explicitly.
+- Spans that end with status `ERROR` get `error.type` (an exception recorded on a span
+  that still ends OK, such as a recovered retry, does not set it). It is the provider
+  error code for exceptions from known provider SDKs: openai, groq and litellm
+  `code`/`type`, anthropic `error.type`, botocore/boto3 `Error.Code`, google-genai
+  `status`, google-api-core gRPC status, mistralai body `type`, and the HTTP status for
+  httpx `HTTPStatusError`. Every other exception gets its fully qualified class name
+  (for example `sqlalchemy.exc.OperationalError`, never its `.code`). An instrumentor's
+  own `error.type` is not overwritten.
 
 ### Fixed
 - `with tracer.start_span(...) as span:` now yields the FI span wrapper instead of the
   raw SDK span, so attribute masking, span-kind ordering and the error handling above
   also apply inside that block.
+- `fi_instrumentation.instrumentation.version.__version__` now matches the package
+  version (it still said `0.1.19`).
 
 ## [1.1.0] - 2026-08-11
 ### Feature
