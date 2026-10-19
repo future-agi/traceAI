@@ -13,8 +13,12 @@ one JSON object for $GITHUB_OUTPUT:
 * ``run_all`` is true when the PR changes the CI itself (the workflow, this script or the
   known-broken list): then every package is listed.
 * ``core_changed`` is true when ``python/fi_instrumentation/``, ``python/pyproject.toml``
-  or ``python/poetry.lock`` changed: the package jobs then test against the repo's
-  fi_instrumentation instead of the one their own lock resolves.
+  or ``python/poetry.lock`` changed: the package jobs then install the repo's
+  fi_instrumentation over the one their own lock or range resolves. Otherwise the core test
+  files run with ``python -P`` (the repo's source is not on sys.path) and so import the
+  fi-instrumentation-otel installed in the package's environment.
+* A change to ``python/tests/conftest.py`` (shared by every core test file) touches every
+  package that has core tests.
 
 Each package entry carries ``name``, ``dir``, ``backend`` ("poetry" or "hatch"),
 ``own_tests`` (the package has a ``tests/`` folder with test files), ``core_tests``
@@ -24,9 +28,10 @@ one ``<package dir name> | <reason>`` line per package; ``#`` comments and blank
 ignored; the reason is "" for a package that is not listed). The workflow lets a listed
 package fail without failing the check, and fails when a listed package passes.
 
+Paths are read as written (the workflow's git diff runs with ``core.quotepath=off``).
 Standard library only. It fails loudly (non-zero exit, message on stderr) on a
 test_framework file that maps to no package, on a build backend it does not know, and on a
-malformed known-broken list.
+missing or malformed known-broken list.
 """
 
 import json
@@ -44,6 +49,8 @@ CI_FILES = (
     KNOWN_BROKEN_FILE,
 )
 CORE_PATHS = ("python/pyproject.toml", "python/poetry.lock")
+# Shared by every python/tests/test_framework_*.py file.
+CORE_TEST_SHARED = (f"{CORE_TESTS_DIR}/conftest.py",)
 CORE_PREFIX = "python/fi_instrumentation/"
 
 BACKENDS = {
@@ -121,7 +128,11 @@ def load_known_broken(packages, root=REPO_ROOT):
     """Return {package dir name: reason} from the known-broken list; fail on a bad line."""
     path = root / KNOWN_BROKEN_FILE
     listed = {}
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PlanError(f"{KNOWN_BROKEN_FILE}: cannot read the known-broken list ({exc.strerror or exc}); the file must exist") from exc
+    for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -190,6 +201,8 @@ def plan(changed, root=REPO_ROOT):
         touched = set(packages)
     else:
         touched = set()
+        if any(path in CORE_TEST_SHARED for path in changed):
+            touched.update(pkg["name"] for pkg in packages.values() if pkg["core_tests"])
         for path in changed:
             if path.startswith(f"{FRAMEWORKS_DIR}/"):
                 name = path[len(FRAMEWORKS_DIR) + 1 :].split("/", 1)[0]

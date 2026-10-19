@@ -1,19 +1,36 @@
 # Python packages whose tests are known to fail today (see .github/workflows/python-tests.yml).
 # A listed package still runs in CI and shows a warning, but its failures do not fail the required "Python tests" check.
 # If a listed package's tests all pass, CI fails until its line is removed from this file.
+# So a PR that makes a listed package pass must remove its line in the same PR, or CI fails
+# (for example, a LangChain change that fixes its tests). A listed package with no tests at all also fails: remove its line.
 # Each entry should name its follow-up (a ticket or PR) in the reason once one exists.
 # Format: <package dir name under python/frameworks> | <reason in plain words>
 agno | 1 test expects gen_ai.system where the code now writes gen_ai.provider.name
+autogen | 17 tests (12 own, 5 core): the instrumentor no longer has _original_generate or _safe_json_dumps, traceai_autogen no longer exports _is_v04_available, and a dependency name
+bedrock | 1 test expects image.url where the code now writes message_content.image
+cerebras | 3 tests expect the reply text where the code now records the whole response
+cohere | 5 tests: llm.system and mock constants that no longer exist, and generated text that is no longer recorded
+deepseek | 4 tests: mock constants that no longer exist, llm.system, and generated text that is no longer recorded
 dspy | 1 test expects raw.output on embedding spans
+fireworks | 3 tests expect the reply text where the code now records the whole response
+groq | 5 tests expect pre-GenAI attribute names (fi.span.kind, eval.input) and a string instead of a dependency tuple
+guardrails | its core test file does not load (SpanAttributes.FI_SPAN_KIND no longer exists)
 haystack | 5 tests expect pre-GenAI attribute names (llm.token_count.*, fi.span.kind) and a list of dependencies
-huggingface | 4 tests expect llm.system
+huggingface | 3 tests expect llm.system; 1 expects generated text that is no longer recorded
+instructor | 6 tests: instructor.core no longer exists in current instructor (5), and a dependency count
 langchain | 2 tests: dependency count and a set_attributes call no longer made
-litellm | 3 tests use SpanAttributes.FI_SPAN_KIND, removed in fi-instrumentation-otel 1.0
-llama_index | 16 tests: llama_index.core.base.agent no longer exists, and a dependency count
+litellm | 3 tests use SpanAttributes.FI_SPAN_KIND, which no longer exists
+llama_index | 14 tests: llama_index.core.base.agent no longer exists; 1 expects SpanAttributes.LLM_MODEL_NAME; 1 a dependency count
 mcp | 1 test expects two instrumentation dependencies, the package declares one
-ollama | 4 tests expect llm.system and an older embed result
-openai-agents | 2 tests expect raw.output, and its conftest imports traceai_openai, which it does not install
+mistralai | 1 test expects raw.input where the code now writes input.value
+ollama | 2 tests expect llm.system; 2 expect generated text and embedding size that are no longer recorded
+openai-agents | its own tests do not load (conftest imports traceai_openai, not installed); 2 core tests expect raw.output and a trace-start call
+pinecone | 5 tests error: pinecone-client is now a stub that raises "renamed to pinecone"; the package has to move to the pinecone package
 portkey | 10 tests expect pre-GenAI attribute names (llm.model_name, llm.invocation_parameters)
 pydantic-ai | 1 test builds an agent with model "test-model", which pydantic-ai no longer accepts
-smolagents | 6 tests use SpanAttributes.GEN_AI_INPUT_MESSAGES and tool.name, no longer present
+qdrant | 2 tests error: QdrantClient has no query method in current qdrant-client
+smolagents | 6 tests expect pre-GenAI attribute names; its own test file does not load (SpanAttributes.GEN_AI_INPUT_MESSAGES)
+together | 5 tests: llm.system and mock constants that no longer exist, and generated text that is no longer recorded
+vertexai | 2 tests expect pre-GenAI attribute names (llm.output_messages, llm.token_count.prompt)
 vllm | 3 tests expect the reply text where the code now records the whole response
+xai | 3 tests expect the reply text where the code now records the whole response

@@ -146,6 +146,9 @@ class TestRegisterFunction:
 
         assert result is not None
         mock_dependencies['provider_class'].assert_called_once()
+        call_args = mock_dependencies['provider_class'].call_args
+        resource = call_args[1]['resource']
+        assert resource.attributes[PROJECT_TYPE] == ProjectType.OBSERVE.value == "observe"
 
     def test_register_observe_mode_validation(self, mock_dependencies, clean_env):
         """Test register validation in OBSERVE mode."""
@@ -170,14 +173,18 @@ class TestRegisterFunction:
                 project_version_name="v1.0"
             )
 
-    def test_register_experiment_mode_validation(self, mock_dependencies, clean_env):
-        """Test register validation in EXPERIMENT mode."""
-        # Should reject session_name in EXPERIMENT mode
-        with pytest.raises(Exception):  # Could be ValidationError or other implementation-specific error
-            register(
-                project_type=ProjectType.EXPERIMENT,
-                session_name="test_session"
-            )
+    def test_register_experiment_mode(self, mock_dependencies, clean_env):
+        """Test register in EXPERIMENT mode.
+
+        register() has no EXPERIMENT-only validation (only OBSERVE rejects eval tags); this used
+        to pass only because the removed session_name argument raised a TypeError.
+        """
+        result = register(project_type=ProjectType.EXPERIMENT)
+
+        assert result is not None
+        call_args = mock_dependencies['provider_class'].call_args
+        resource = call_args[1]['resource']
+        assert resource.attributes[PROJECT_TYPE] == ProjectType.EXPERIMENT.value == "experiment"
 
     def test_register_duplicate_eval_names(self, mock_dependencies, clean_env):
         """Test register rejects duplicate custom eval names."""
