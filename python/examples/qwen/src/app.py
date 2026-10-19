@@ -48,7 +48,7 @@ def make_client(
 
 def setup_tracing(project_name: str | None = None):
     provider = register(
-        project_name=project_name or "qwen-openai-recipe",
+        project_name=project_name or os.environ.get("FI_PROJECT_NAME") or "qwen-openai-recipe",
         project_type=ProjectType.OBSERVE,
         set_global_tracer_provider=False,
         verbose=False,

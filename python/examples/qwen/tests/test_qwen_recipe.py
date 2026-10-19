@@ -273,6 +273,33 @@ def test_chat_exports_usage_and_keeps_keys_separate(traced):
     assert_usage(attrs)
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "qwen-openai-recipe"),
+    ("", None, "qwen-openai-recipe"),
+    ("qwen-from-env", None, "qwen-from-env"),
+    ("qwen-from-env", "qwen-explicit", "qwen-explicit"),
+], ids=["default", "empty", "env", "explicit"])
+def test_setup_tracing_project_name(monkeypatch, env_project, explicit, expected):
+    # FI_PROJECT_NAME overrides the recipe default; an explicit argument wins over both.
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project is not None:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        provider = app.setup_tracing(explicit)
+        try:
+            client, requests = mock_client(completion())
+            with client:
+                client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Project control."}])
+            assert provider.force_flush()
+            assert len(requests) == 1
+            assert_llm(receiver, expected)
+        finally:
+            OpenAIInstrumentor().uninstrument()
+            provider.shutdown()
+            atexit.unregister(provider.shutdown)
+
+
 def test_response_model_differs_from_request(traced):
     """Span model is the response field, not the request id."""
     assert RESPONSE_MODEL != MODEL
@@ -379,12 +406,15 @@ def test_hide_outputs_removes_answer_from_export(monkeypatch, hidden):
         assert (ANSWER in json.dumps([receiver.spans(), receiver.requests()])) is (not hidden)
 
 
+@pytest.mark.parametrize("env_project", [None, "qwen-subprocess-env"], ids=["default-project", "env-project"])
 @pytest.mark.parametrize("streaming", [False, True], ids=["chat", "stream"])
-def test_app_subprocess_exports_one_span(monkeypatch, streaming):
+def test_app_subprocess_exports_one_span(monkeypatch, streaming, env_project):
     with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="qwen-recipe-") as temporary:
         directory = Path(temporary)
         with Receiver() as receiver, FakeOpenAI() as fake:
             child_env = child_environment(directory, receiver, fake)
+            if env_project:
+                child_env["FI_PROJECT_NAME"] = env_project
             argv = [sys.executable, str(RECIPE / "src" / "app.py"), "--prompt", "Local subprocess prompt."]
             if streaming:
                 argv.append("--stream")
@@ -406,7 +436,7 @@ def test_app_subprocess_exports_one_span(monkeypatch, streaming):
                 assert request["body"]["stream_options"] == {"include_usage": True}
             [span] = receiver.spans()
             project = receiver.requests()[0]["resource_attributes"][0]["project_name"]
-            assert project == "qwen-openai-recipe"
+            assert project == (env_project or "qwen-openai-recipe")
             _, attrs = assert_llm(receiver, project, model=None if streaming else MODEL)
             assert attrs["output.value"] == ANSWER
             assert_usage(attrs)
@@ -560,8 +590,10 @@ def test_readme_and_requirements_pin_contract():
     assert readme.startswith("# Qwen (OpenAI-compatible) with traceAI\n")
     assert DOCUMENTED_BASE in readme
     assert "provider field says `openai`" in readme
-    for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+    for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert name in readme
+    assert "| `FI_PROJECT_NAME` | No | Observe project name. Defaults to `qwen-openai-recipe`. Goes to the tracer only. |" in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "qwen-openai-recipe"' in readme
     for region, base in REGION_BASES.items():
         assert region in readme
         assert base in readme

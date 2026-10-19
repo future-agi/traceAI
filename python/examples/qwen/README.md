@@ -26,6 +26,7 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `DASHSCOPE_MODEL` | Yes, unless `--model` is supplied | A current model id from Model Studio. The example uses `qwen-plus`. |
 | `DASHSCOPE_BASE_URL` | No | Your console workspace's OpenAI-compatible SDK base URL. Overrides the example default. |
 | `FI_BASE_URL` | No | Future AGI collector origin. Defaults to `https://api.futureagi.com`; the tracer adds `/tracer/v1/traces`. |
+| `FI_PROJECT_NAME` | No | Observe project name. Defaults to `qwen-openai-recipe`. Goes to the tracer only. |
 
 The default is the legacy international (Singapore) host. Alibaba asks you to migrate to your workspace host. Your console workspace host wins when you have one: set `DASHSCOPE_BASE_URL` to that URL. Copy the base for your key's region from the console.
 
@@ -43,7 +44,7 @@ python src/app.py
 python src/app.py --stream
 ```
 
-Use `--prompt "What is a rainbow?"` to change the prompt. `--model` overrides `DASHSCOPE_MODEL`. Streaming requests set `stream_options={"include_usage": True}`. An unresolved workspace placeholder or a wrong Alibaba SDK path returns exit code 2 before tracing or a network call.
+Use `--prompt "What is a rainbow?"` to change the prompt. `--model` overrides `DASHSCOPE_MODEL`. Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or empty, they go to `qwen-openai-recipe`. Streaming requests set `stream_options={"include_usage": True}`. An unresolved workspace placeholder or a wrong Alibaba SDK path returns exit code 2 before tracing or a network call.
 
 ## Code
 
@@ -55,8 +56,8 @@ from openai import OpenAI
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_openai import OpenAIInstrumentor
-provider = register(
-    project_name="qwen-openai-recipe", project_type=ProjectType.OBSERVE,
+provider = register(  # FI_PROJECT_NAME overrides, as in src/app.py
+    project_name=os.environ.get("FI_PROJECT_NAME") or "qwen-openai-recipe", project_type=ProjectType.OBSERVE,
     set_global_tracer_provider=False, verbose=False,
 )
 OpenAIInstrumentor().instrument(tracer_provider=provider)
