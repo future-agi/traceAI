@@ -41,6 +41,23 @@ if __name__ == "__main__":
     server.run()
 ```
 
+`enable_http_attribute_mapping()` (or `enable_grpc_attribute_mapping()`) hands the provider to LiveKit for you. If you call
+LiveKit's `set_tracer_provider` yourself on the provider `register()` returned, call it after `enable_*`: before it, the call
+drops the Future AGI exporter. LiveKit installs its privacy filter once per provider, so an `allow_pii` passed in a later call is
+ignored. To keep conversation content out of your traces, set `LIVEKIT_TELEMETRY_ALLOW_PII=false` before calling `enable_*`
+(livekit-agents 1.8 and later).
+
+## Compatibility
+
+*   **livekit-agents**: 1.x. 1.8 is the tested version (it needs Python 3.10 or later). Since 1.7, LiveKit names its content
+    attributes `lk.pii.*` (for example `lk.pii.user_input`); both those names and the earlier ones are mapped to `input.value`
+    and `output.value`.
+*   **fi-instrumentation-otel**: 1.1.0 or later (1.0.0 fails inside `register()` with OpenTelemetry 1.45, which livekit-agents
+    1.8.7 and later require). 1.0 moved span attributes from the `llm.*` names to the OpenTelemetry GenAI `gen_ai.*` names, and
+    renamed the `SpanAttributes` constants with them. Code that only calls `register()` is unaffected; if your code sets or reads
+    those attributes directly, see the
+    [mapping from the old names](https://github.com/future-agi/traceAI/blob/main/docs/OTEL_GENAI_SEMANTIC_CONVENTIONS.md#migration-from-openinference-llm).
+
 ## Features
 
 *   **Automatic Attribute Mapping**: Converts LiveKit attributes (like `lk.user_input`, `gen_ai.usage.input_tokens`) to Future AGI standard attributes (`input.value`, `llm.tokenCount.prompt`).
