@@ -9,7 +9,7 @@ request and session ids, and Python tracebacks carry local file paths. The
 
 import json
 import re
-from typing import Callable, Dict, Iterable, Mapping, NamedTuple, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 from opentelemetry.util.types import AttributeValue
 
@@ -20,6 +20,8 @@ EXCEPTION_STACKTRACE = "exception.stacktrace"
 EXCEPTION_ESCAPED = "exception.escaped"
 ERROR_TYPE = "error.type"
 ERROR_MESSAGE = "error.message"
+# error.type when the failure has no exception to name (OpenTelemetry semconv).
+ERROR_TYPE_OTHER = "_OTHER"
 
 # Attribute keys that carry error text. They are dropped when
 # ``TraceConfig.hide_error_details`` is on.
@@ -85,8 +87,10 @@ def _code_from_error_body(body: object) -> Optional[str]:
 
 
 def _stainless_code(exception: BaseException) -> Optional[str]:
-    # openai (and litellm, whose errors subclass openai's): `code` and `type`
-    # from the error object, e.g. "model_not_found" / "invalid_request_error".
+    # openai: `code` and `type` from the error object, e.g. "model_not_found" /
+    # "invalid_request_error". litellm's errors subclass openai's but are built
+    # with code=None, body=None and type=None, so they fall back to the class
+    # name (e.g. "litellm.exceptions.NotFoundError").
     if code := _as_code(getattr(exception, "code", None)):
         return code
     # groq: body = {"error": {"code": "model_not_found", ...}}; older anthropic:
@@ -221,20 +225,36 @@ def _cut_traceback(description: str) -> Optional[str]:
     return description[:index].rstrip() or None
 
 
-def _type_prefix_pattern(summaries: Iterable[ExceptionSummary]) -> Optional[str]:
+def _prefix_cuts(
+    description: str, summaries: Iterable[ExceptionSummary]
+) -> List[Tuple[int, int]]:
     # "<Type>: " at the start of a line, when the exception's own message
-    # follows it up to the end of that line (or of the description).
-    alternatives = []
+    # follows it up to the end of that line (or of the description). Plain string
+    # operations only: exception messages can be megabytes and quote the prompt,
+    # so they never go into a regular expression (slow to compile and match, and
+    # kept in the global `re` cache after the span ends).
+    size = len(description)
+    cuts: Dict[int, int] = {}
     for summary in summaries:
-        names = "|".join(re.escape(name) for name in summary.type_names)
-        if summary.message:
-            follows = re.escape(summary.message) + r"(?:\n|\Z)"
-            alternatives.append(f"(?:{names}): (?={follows})")
-        else:
-            alternatives.append(rf"(?:{names}): ?(?=\n|\Z)")
-    if not alternatives:
-        return None
-    return "^(?:" + "|".join(alternatives) + ")"
+        for name in summary.type_names:
+            prefix = f"{name}:" if not summary.message else f"{name}: "
+            start = 0
+            while (pos := description.find(prefix, start)) != -1:
+                start = pos + 1
+                if pos and description[pos - 1] != "\n":
+                    continue
+                end = pos + len(prefix)
+                if summary.message:
+                    if not description.startswith(summary.message, end):
+                        continue
+                    tail = end + len(summary.message)
+                else:
+                    tail = end + 1 if description.startswith(" ", end) else end
+                    end = tail
+                if tail != size and description[tail] != "\n":
+                    continue
+                cuts.setdefault(pos, end)
+    return sorted(cuts.items())
 
 
 def clean_error_description(
@@ -259,11 +279,15 @@ def clean_error_description(
         )
     )
     cleaned = description
-    if pattern := _type_prefix_pattern(summaries):
+    if cuts := _prefix_cuts(description, summaries):
         # One pass, so a message that itself starts with "<Type>: " is kept.
-        cleaned = re.sub(pattern, "", description, flags=re.MULTILINE)
-        if cleaned != description:
-            cleaned = cleaned.strip("\n")
+        parts = []
+        last = 0
+        for pos, end in cuts:
+            parts.append(description[last:pos])
+            last = end
+        parts.append(description[last:])
+        cleaned = "".join(parts).strip("\n")
     if _TRACEBACK_MARKER in cleaned:
         if summaries:
             message = summaries[0].message

@@ -83,6 +83,16 @@ FI_HIDE_ERROR_DETAILS = "FI_HIDE_ERROR_DETAILS"
 # Hides error messages, stacktraces and the ERROR status description.
 # Unset: on when any input/output hide flag is on.
 REDACTED_VALUE = "__REDACTED__"
+
+# Besides input.value: the raw request body and the prompt template's values.
+# ``gen_ai.prompt.template.variables`` is what the context helper writes.
+_HIDDEN_WITH_INPUTS = frozenset(
+    {
+        SpanAttributes.RAW_INPUT,
+        SpanAttributes.LLM_PROMPT_TEMPLATE_VARIABLES,
+        SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES,
+    }
+)
 # When a value is hidden, it will be replaced by this redacted value
 
 DEFAULT_HIDE_LLM_INVOCATION_PARAMETERS = False
@@ -294,10 +304,16 @@ class TraceConfig:
             value = REDACTED_VALUE
         elif self.hide_inputs and key == SpanAttributes.INPUT_MIME_TYPE:
             return None
+        elif self.hide_inputs and key in _HIDDEN_WITH_INPUTS:
+            # The raw request body (messages included) and the values filled
+            # into a prompt template are inputs too.
+            value = REDACTED_VALUE
         elif self.hide_outputs and key == SpanAttributes.OUTPUT_VALUE:
             value = REDACTED_VALUE
         elif self.hide_outputs and key == SpanAttributes.OUTPUT_MIME_TYPE:
             return None
+        elif self.hide_outputs and key == SpanAttributes.RAW_OUTPUT:
+            value = REDACTED_VALUE
         elif (
             self.hide_inputs or self.hide_input_messages
         ) and SpanAttributes.GEN_AI_INPUT_MESSAGES in key:

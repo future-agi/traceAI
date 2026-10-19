@@ -622,6 +622,96 @@ class TestErrorTypeOnlyWhenFailed:
         assert exported.attributes["error.type"] == "KeyError"
 
 
+class TestErrorTypeFallback:
+    def test_error_without_any_exception_is_other(self, make_tracer, exporter):
+        span = make_tracer().start_span("op")
+        span.set_status(StatusCode.ERROR)
+        span.end()
+        assert _only_span(exporter).attributes["error.type"] == "_OTHER"
+
+    def test_recovered_exception_is_not_the_error_type(self, make_tracer, exporter):
+        span = make_tracer().start_span("op")
+        span.record_exception(_raise(TimeoutError("attempt 1 timed out")))
+        span.set_status(Status(StatusCode.ERROR, "guardrail rejected"))
+        span.end()
+        assert _only_span(exporter).attributes["error.type"] == "_OTHER"
+
+    def test_recovered_exception_in_hide_mode(self, make_tracer, exporter):
+        span = make_tracer(hide_inputs=True).start_span("op")
+        span.record_exception(_raise(TimeoutError("attempt 1 timed out")))
+        span.set_status(Status(StatusCode.ERROR, "guardrail rejected"))
+        span.end()
+        assert _only_span(exporter).attributes["error.type"] == "_OTHER"
+
+    def test_in_flight_exception_beats_recovered_one(self, make_tracer, exporter):
+        span = make_tracer().start_span("op")
+        span.record_exception(_raise(TimeoutError("attempt 1 timed out")))
+        try:
+            raise KeyError("k")
+        except KeyError:
+            span.set_status(Status(StatusCode.ERROR, "guardrail rejected"))
+        span.end()
+        assert _only_span(exporter).attributes["error.type"] == "KeyError"
+
+    def test_escaped_exception_recorded_on_the_span_is_used(self, make_tracer, exporter):
+        span = make_tracer().start_span("op")
+        span.record_exception(_raise(ValueError("boom")), escaped=True)
+        span.set_status(Status(StatusCode.ERROR, "guardrail rejected"))
+        span.end()
+        assert _only_span(exporter).attributes["error.type"] == "ValueError"
+
+    def test_status_that_mentions_the_recorded_exception(self, make_tracer, exporter):
+        span = make_tracer().start_span("op")
+        span.record_exception(_raise(KeyError("missing")))
+        span.set_status(Status(StatusCode.ERROR, "KeyError: 'missing'"))
+        span.end()
+        assert _only_span(exporter).attributes["error.type"] == "KeyError"
+
+    def test_use_span_still_names_the_exception(self, make_tracer, exporter):
+        tracer = make_tracer()
+        with pytest.raises(ValueError):
+            with tracer.start_as_current_span("op"):
+                raise ValueError("boom")
+        assert _only_span(exporter).attributes["error.type"] == "ValueError"
+
+
+class TestCleanErrorDescriptionPerformance:
+    def test_one_megabyte_message_is_cleaned_quickly(self):
+        import time
+
+        message = "lorem ipsum " * 90_000
+        assert len(message) > 1_000_000
+        start = time.perf_counter()
+        cleaned = clean_error_description("ValueError: " + message, [ValueError(message)])
+        elapsed = time.perf_counter() - start
+        assert cleaned == message
+        # ~1 ms; the regex version took seconds. Generous bound against flakiness.
+        assert elapsed < 0.1
+
+    def test_many_exceptions_with_big_messages(self):
+        import time
+
+        messages = [f"{i} " + "x " * 100_000 for i in range(9)]
+        description = "\n".join(f"ValueError: {m}" for m in messages)
+        start = time.perf_counter()
+        cleaned = clean_error_description(description, [ValueError(m) for m in messages])
+        assert cleaned == "\n".join(messages)
+        assert time.perf_counter() - start < 0.5
+
+    def test_regex_cache_does_not_grow_with_messages(self):
+        import re
+
+        cache = getattr(re, "_cache", None)
+        if not hasattr(cache, "__len__"):
+            pytest.skip("re cache is an implementation detail that is not inspectable")
+        clean_error_description("ValueError: warm", [ValueError("warm")])
+        before = len(cache)
+        for i in range(100):
+            message = f"distinct message {i} quoting a prompt"
+            assert clean_error_description(f"ValueError: {message}", [ValueError(message)]) == message
+        assert len(cache) <= before + 2
+
+
 class TestSetStatus:
     def test_type_prefix_reduced_to_message(self, make_tracer, exporter):
         span = make_tracer().start_span("op")
@@ -650,7 +740,8 @@ class TestSetStatus:
         exported = _only_span(exporter)
         assert exported.status.status_code is StatusCode.ERROR
         assert exported.status.description == "upstream returned 500"
-        assert "error.type" not in exported.attributes
+        # An ERROR with no exception to name gets "_OTHER" (OTel semconv).
+        assert exported.attributes["error.type"] == "_OTHER"
 
     def test_traceback_is_cut(self, make_tracer, exporter):
         span = make_tracer().start_span("op")
@@ -830,3 +921,39 @@ class TestUseSpanAutoRecording:
                 with tracer.start_as_current_span("op"):
                     raise ValueError("x")
         assert exporter.get_finished_spans() == ()
+
+
+class TestRawAndTemplateKeysFollowHideFlags:
+    """hide_inputs also redacts raw.input / the prompt template variables;
+    hide_outputs also redacts raw.output (same keys as the TypeScript SDK)."""
+
+    INPUT_KEYS = ["raw.input", "llm.prompt_template.variables", "gen_ai.prompt.template.variables"]
+
+    @pytest.mark.parametrize("key", INPUT_KEYS)
+    def test_hide_inputs_redacts(self, key):
+        assert TraceConfig(hide_inputs=True).mask(key, SECRET) == "__REDACTED__"
+
+    @pytest.mark.parametrize("key", INPUT_KEYS)
+    def test_hide_outputs_does_not_redact_input_keys(self, key):
+        assert TraceConfig(hide_outputs=True).mask(key, SECRET) == SECRET
+
+    def test_hide_outputs_redacts_raw_output(self):
+        assert TraceConfig(hide_outputs=True).mask("raw.output", SECRET) == "__REDACTED__"
+
+    def test_hide_inputs_keeps_raw_output(self):
+        assert TraceConfig(hide_inputs=True).mask("raw.output", SECRET) == SECRET
+
+    @pytest.mark.parametrize("key", ["raw.input", "raw.output", "llm.prompt_template.variables"])
+    def test_visible_by_default(self, key):
+        assert TraceConfig().mask(key, "v") == "v"
+
+    def test_span_creation_attributes_are_masked(self, make_tracer, exporter):
+        tracer = make_tracer(hide_inputs=True, hide_outputs=True)
+        span = tracer.start_span(
+            "op",
+            attributes={"raw.input": SECRET, "raw.output": SECRET, "llm.prompt_template.variables": SECRET},
+        )
+        span.end()
+        attributes = _only_span(exporter).attributes
+        assert SECRET not in str(dict(attributes))
+        assert attributes["raw.input"] == "__REDACTED__"
