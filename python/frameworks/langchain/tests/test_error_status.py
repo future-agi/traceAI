@@ -49,6 +49,33 @@ class FailingChatModel(BaseChatModel):
         raise ModelNotFound(f"Error code: 404 - {SECRET}")
 
 
+class _ErrorResponse:
+    """httpx.Response-like: langchain-core copies body and headers of an
+    exception's `response` into the failed run's outputs."""
+
+    status_code = 400
+    headers = {"x-request-id": "req_provider_123", "x-gateway-session": "sess_456"}
+
+    def json(self) -> Any:
+        return {"error": {"message": f"unknown model, prompt was: {SECRET}"}}
+
+
+class GatewayError(Exception):
+    def __init__(self) -> None:
+        super().__init__("Error code: 400")
+        self.response = _ErrorResponse()
+        self.request_id = "req_provider_123"
+
+
+class GatewayFailingChatModel(FailingChatModel):
+    @property
+    def _llm_type(self) -> str:
+        return "gateway-failing"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        raise GatewayError()
+
+
 def _fail(_: Any) -> Any:
     raise ValueError(SECRET)
 
@@ -213,3 +240,32 @@ def test_update_span_status_uses_error_object_not_run_error():
     _update_span(span, run, {})
     (status,), _ = span.set_status.call_args
     assert status.description == "ValueError('boom')"
+
+
+def test_failed_llm_run_outputs_kept_by_default():
+    """The failed run's outputs hold the provider error response; with error
+    details shown they stay (behaviour unchanged)."""
+    with _instrumented() as exporter:
+        with pytest.raises(GatewayError):
+            GatewayFailingChatModel().invoke("hello")
+    span = _span(exporter, "GatewayFailingChatModel")
+    assert "req_provider_123" in span.attributes["output.value"]
+
+
+@pytest.mark.parametrize(
+    "config",
+    [TraceConfig(hide_inputs=True), TraceConfig(hide_error_details=True)],
+    ids=["derived-from-hide_inputs", "explicit"],
+)
+def test_failed_llm_run_outputs_dropped_when_hidden(config):
+    """Error body, response headers and request ids are error details."""
+    with _instrumented(config) as exporter:
+        with pytest.raises(GatewayError):
+            GatewayFailingChatModel().invoke("hello")
+    span = _span(exporter, "GatewayFailingChatModel")
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description is None
+    for key, value in span.attributes.items():
+        assert SECRET not in str(value), key
+        assert "req_provider_123" not in str(value), key
+        assert "sess_456" not in str(value), key

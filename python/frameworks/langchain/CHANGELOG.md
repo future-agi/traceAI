@@ -14,6 +14,10 @@
   description, no `exception.message` / `exception.stacktrace`. This is a behaviour
   change for users of those flags; see the core 1.2.0 changelog. The dependency pin
   stays `>=1.0.0` until core 1.2.0 is on PyPI, so upgrade both packages together.
+- With error details hidden, a failed run records no output attributes (`output.value`,
+  output messages, function calls). LangChain fills a failed chat-model run's outputs
+  with the provider's error response: the error body (which can quote the prompt),
+  the response headers and request ids, and AI-gateway metadata.
 
 ## [0.2.0] - 2026-07-30
 ### Fixed

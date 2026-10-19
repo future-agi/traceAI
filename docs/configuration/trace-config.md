@@ -181,7 +181,9 @@ With `hide_error_details` on (Python), a failed span keeps:
 - exception events with `exception.type` (and `exception.escaped`) only
 
 and drops `exception.message`, `exception.stacktrace`, `error.message` and
-instrumentor keys ending in `.error.message` / `.error_message`.
+instrumentor keys ending in `.error.message` / `.error_message`. A failed LangChain run
+also records no outputs: LangChain fills them with the provider's error response
+(error body, response headers, request ids).
 
 If you don't set `hide_error_details` (or `FI_HIDE_ERROR_DETAILS`), it is on whenever
 any of `hide_inputs`, `hide_outputs`, `hide_input_messages`, `hide_output_messages`,

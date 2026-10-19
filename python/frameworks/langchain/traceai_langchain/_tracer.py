@@ -28,7 +28,7 @@ from typing import (
 from uuid import UUID
 
 import wrapt  # type: ignore
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -446,6 +446,15 @@ def _qualified_type_name(error: BaseException) -> str:
     return f"{module}.{qualname}" if module and module != "builtins" else qualname
 
 
+def _hides_error_details(span: Span) -> bool:
+    # FI spans carry the instrumentor's TraceConfig. `hide_error_details` is new
+    # in fi-instrumentation-otel 1.2.0.
+    config = getattr(span, "_self_config", None)
+    return isinstance(config, TraceConfig) and bool(
+        getattr(config, "hide_error_details", False)
+    )
+
+
 # `run.error` is `repr(error)` immediately followed by the formatted traceback.
 _TRACEBACK_MARKER = "Traceback (most recent call last)"
 
@@ -478,7 +487,8 @@ def _update_span(
     is_interrupt: bool = False,
     error: Optional[BaseException] = None,
 ) -> None:
-    if run.error is None or is_interrupt:
+    failed = run.error is not None and not is_interrupt
+    if not failed:
         span.set_status(trace_api.StatusCode.OK)
     else:
         span.set_status(
@@ -486,6 +496,10 @@ def _update_span(
                 trace_api.StatusCode.ERROR, _error_description(error, run.error)
             )
         )
+    # The outputs of a failed run are the provider's error response: for
+    # langchain-openai, an AIMessage whose response_metadata holds the error
+    # body and the response headers (request ids). They are error details.
+    outputs = None if failed and _hides_error_details(span) else run.outputs
     span_kind = (
         FiSpanKindValues.AGENT
         if "agent" in run.name.lower()
@@ -513,21 +527,21 @@ def _update_span(
             _flatten(
                 chain(
                     _as_span_input(filtered_data),
-                    _as_output(_convert_io(run.outputs)),
+                    _as_output(_convert_io(outputs)),
                     _as_input_images(images),
                     _as_eval_input(eval_input),
                     _prompts(run.inputs),
                     _input_messages(run.inputs),
-                    _output_messages(run.outputs),
+                    _output_messages(outputs),
                     _prompt_template(run),
                     _invocation_parameters(run),
                     _model_name(run.extra),
                     _token_counts(run.outputs),
-                    _function_calls(run.outputs),
+                    _function_calls(outputs),
                     _tools(run),
                     _retrieval_documents(run),
                     _metadata(run),
-                    _as_raw_input_output(run),
+                    _as_raw_input_output(run, outputs),
                     _as_query(query),
                 )
             )
@@ -603,13 +617,15 @@ def _as_eval_input(values: Iterable[str]) -> Iterator[Tuple[str, str]]:
     yield INPUT_VALUE, json.dumps(values)
 
 
-def _as_raw_input_output(run: Run) -> Iterator[Tuple[str, Any]]:
+def _as_raw_input_output(
+    run: Run, outputs: Optional[Mapping[str, Any]]
+) -> Iterator[Tuple[str, Any]]:
     if raw_input := run.inputs:
         if isinstance(raw_input, dict):
             yield INPUT_VALUE, safe_json_dumps(raw_input)
         elif hasattr(raw_input, "__dict__"):
             yield INPUT_VALUE, safe_json_dumps(raw_input.__dict__)
-    if raw_output := run.outputs:
+    if raw_output := outputs:
         if isinstance(raw_output, dict):
             yield OUTPUT_VALUE, safe_json_dumps(raw_output)
         elif hasattr(raw_output, "__dict__"):
