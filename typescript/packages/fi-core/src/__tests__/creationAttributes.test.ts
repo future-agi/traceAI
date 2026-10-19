@@ -116,6 +116,21 @@ describe("FITracer creation-time attributes", () => {
     expect(attributes).toEqual({ "input.value": REDACTED_VALUE });
   });
 
+  it("link attributes are masked at creation and on addLink(s) with hideInputs", () => {
+    const linked = trace.getTracer("t").startSpan("other").spanContext();
+    const link = { context: linked, attributes: { "input.value": PROMPT, "error.message": PROMPT, keep: "ok" } };
+    const span = tracerWith({ hideInputs: true }).startSpan("x", { links: [link] });
+    span.addLink({ ...link });
+    span.addLinks([{ ...link }]);
+    span.end();
+    const { links } = onlySpan();
+    expect(links).toHaveLength(3);
+    for (const l of links) {
+      expect(l.attributes).toEqual({ "input.value": REDACTED_VALUE, keep: "ok" });
+    }
+    expect(exported(onlySpan())).not.toContain(PROMPT);
+  });
+
   describe.each([
     ["hideInputs", { hideInputs: true }],
     ["hideInputs, env-style explicit hideErrorDetails", { hideInputs: true, hideErrorDetails: true }],

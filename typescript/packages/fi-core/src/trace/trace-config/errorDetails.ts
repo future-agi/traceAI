@@ -189,6 +189,28 @@ export function getErrorMessage(exception: unknown): string | undefined {
  * such as "  at least one item is required" from matching.
  */
 const JS_STACK_FRAME = /^\s+at\s.*(?::\d+:\d+\)?|\(native\)|<anonymous>\)?)\s*$/;
+/**
+ * The offset of the first stack frame line (see {@link JS_STACK_FRAME}), or -1. Walks the lines
+ * with indexOf, so no array of lines is built and no line is looked at twice.
+ */
+function indexOfFirstFrameLine(text: string): number {
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    let lineEnd = text.indexOf("\n", lineStart);
+    if (lineEnd === -1) {
+      lineEnd = text.length;
+    }
+    // A frame line starts with whitespace; the cheap check skips the regex for all other lines
+    if (lineEnd > lineStart && isWhitespaceCode(text.charCodeAt(lineStart))) {
+      if (JS_STACK_FRAME.test(text.slice(lineStart, lineEnd))) {
+        return lineStart;
+      }
+    }
+    lineStart = lineEnd + 1;
+  }
+  return -1;
+}
+
 /** The header of a Python traceback relayed inside an error message */
 const PYTHON_TRACEBACK = "Traceback (most recent call last):";
 /** The lines Python prints between chained tracebacks */
@@ -198,8 +220,20 @@ const PYTHON_CHAINING_LINES: ReadonlySet<string> = new Set([
 ]);
 /** An error name on its own, followed by ":" ("Error:"), left in front of a relayed traceback */
 const BARE_ERROR_NAME = /^[A-Za-z_$][\w$.]*:$/;
-/** "<Name>: <rest>": the header line that opens a JavaScript stack */
-const NAMED_HEADER = /^([A-Za-z_$][\w$.]*): ([\s\S]*)$/;
+
+/** "  + Exception Group" at the end of the text removed, then trimmed (linear, no regex) */
+function dropExceptionGroupSuffix(text: string): string {
+  const trimmed = text.trimEnd();
+  const suffix = "Exception Group";
+  if (!trimmed.endsWith(suffix)) {
+    return text.trim();
+  }
+  let end = trimmed.length - suffix.length;
+  while (end > 0 && /[\s+|]/.test(trimmed[end - 1])) {
+    end--;
+  }
+  return trimmed.slice(0, end).trim();
+}
 
 /**
  * Removes relayed Python tracebacks: the "Traceback (most recent call last):" header and the
@@ -215,10 +249,7 @@ function stripPythonTracebacks(lines: string[]): { lines: string[]; stripped: bo
     if (header !== -1) {
       // e.g. "Error: Traceback (most recent call last):" when the traceback is an Error's message,
       // or "  + Exception Group Traceback (most recent call last):"
-      const before = line
-        .slice(0, header)
-        .replace(/[\s+|]*Exception Group\s*$/, "")
-        .trim();
+      const before = dropExceptionGroupSuffix(line.slice(0, header));
       if (before.length > 0 && !BARE_ERROR_NAME.test(before)) {
         kept.push(before);
       }
@@ -241,19 +272,94 @@ function stripPythonTracebacks(lines: string[]): { lines: string[]; stripped: bo
   return { lines: kept, stripped };
 }
 
+/** Same characters as the regex `\s` and `String.prototype.trim` */
+function isWhitespaceCode(code: number): boolean {
+  return (
+    (code >= 9 && code <= 13) ||
+    code === 32 ||
+    code === 160 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff
+  );
+}
+
+function isNameStart(code: number): boolean {
+  return (
+    (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 36
+  );
+}
+
+function isNamePart(code: number): boolean {
+  return isNameStart(code) || (code >= 48 && code <= 57) || code === 46;
+}
+
 /**
  * LangChain's `run.error` is `message + "\n\n" + stack`, and a stack opens with
  * `"<Name>: <message>"`. When the text is the message followed by that header, returns the
  * message, so it is not repeated.
+ *
+ * Linear in the text size: every index only moves forward, no tail is sliced or matched by a
+ * regex per separator, and the message is compared only when its length can fit the tail.
  */
 function dropRepeatedStackHeader(text: string): string {
+  const length = text.length;
   let separator = text.indexOf("\n\n");
+  if (separator === -1) {
+    return text;
+  }
+  // The text trimmed: [start, end)
+  let start = 0;
+  while (start < length && isWhitespaceCode(text.charCodeAt(start))) {
+    start++;
+  }
+  let end = length;
+  while (end > start && isWhitespaceCode(text.charCodeAt(end - 1))) {
+    end--;
+  }
+  let scanned = start; // text[start, scanned) was scanned for the last non-whitespace
+  let messageEnd = start; // end of the trimmed text before the separator
+  let tail = 0; // the first non-whitespace at or after the last separator + 2
   while (separator !== -1) {
-    const message = text.slice(0, separator).trim();
-    const rest = text.slice(separator + 2).trim();
-    const header = NAMED_HEADER.exec(rest);
-    if (message.length > 0 && (rest === message || header?.[2].trim() === message)) {
-      return message;
+    for (; scanned < separator; scanned++) {
+      if (!isWhitespaceCode(text.charCodeAt(scanned))) {
+        messageEnd = scanned + 1;
+      }
+    }
+    const messageLength = messageEnd - start;
+    if (messageLength > 0) {
+      tail = Math.max(tail, separator + 2);
+      while (tail < end && isWhitespaceCode(text.charCodeAt(tail))) {
+        tail++;
+      }
+      // rest === message
+      if (tail + messageLength === end && text.startsWith(text.slice(start, messageEnd), tail)) {
+        return text.slice(start, messageEnd);
+      }
+      // rest is "<Name>: <message>"
+      if (tail < end && isNameStart(text.charCodeAt(tail))) {
+        let cursor = tail + 1;
+        while (cursor < end && isNamePart(text.charCodeAt(cursor))) {
+          cursor++;
+        }
+        if (text.charCodeAt(cursor) === 58 && text.charCodeAt(cursor + 1) === 32) {
+          cursor += 2;
+          while (cursor < end && isWhitespaceCode(text.charCodeAt(cursor))) {
+            cursor++;
+          }
+          if (
+            cursor + messageLength === end &&
+            text.startsWith(text.slice(start, messageEnd), cursor)
+          ) {
+            return text.slice(start, messageEnd);
+          }
+        }
+      }
     }
     separator = text.indexOf("\n\n", separator + 2);
   }
@@ -268,20 +374,21 @@ function dropRepeatedStackHeader(text: string): string {
  * final "Type: message" line is kept. Text without a stack is returned unchanged.
  */
 export function stripStackTrace(description: string): string {
-  let lines = description.split("\n");
-  // A JS stack: everything from the first frame on is the stack.
-  const firstFrame = lines.findIndex((line) => JS_STACK_FRAME.test(line));
-  let stripped = firstFrame !== -1;
-  if (stripped) {
-    lines = lines.slice(0, firstFrame);
+  // A JS stack: everything from the first frame line on is the stack.
+  const frame = indexOfFirstFrameLine(description);
+  let stripped = frame !== -1;
+  let text = frame === -1 ? description : description.slice(0, Math.max(frame - 1, 0));
+  if (text.includes(PYTHON_TRACEBACK)) {
+    // Runs of blank lines end up as one blank line anyway; collapsing them first keeps a message
+    // of a million newlines from becoming a million-element array.
+    const python = stripPythonTracebacks(text.replace(/\n{3,}/g, "\n\n").split("\n"));
+    stripped = stripped || python.stripped;
+    text = python.lines.join("\n");
   }
-  const python = stripPythonTracebacks(lines);
-  stripped = stripped || python.stripped;
   if (!stripped) {
     return description;
   }
-  const text = python.lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  return dropRepeatedStackHeader(text);
+  return dropRepeatedStackHeader(text.replace(/\n{3,}/g, "\n\n").trim());
 }
 
 /**

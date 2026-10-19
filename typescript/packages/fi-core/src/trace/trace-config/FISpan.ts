@@ -210,15 +210,22 @@ import {
       return this.span.spanContext();
     }
   
+    /** Link attributes get the same masking as span attributes */
+    private maskLink(link: Link): Link {
+      return link.attributes != null
+        ? { ...link, attributes: maskAttributes({ config: this.config, attributes: link.attributes }) }
+        : link;
+    }
+
     addLink(link: Link): this {
       if (this.isEnded) return this;
-      this.span.addLink(link);
+      this.span.addLink(this.maskLink(link));
       return this;
     }
   
     addLinks(links: Link[]): this {
       if (this.isEnded) return this;
-      this.span.addLinks(links);
+      this.span.addLinks(links.map((link) => this.maskLink(link)));
       return this;
     }
   }

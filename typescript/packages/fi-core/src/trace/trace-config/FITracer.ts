@@ -152,9 +152,17 @@ import {
         attributes != null
           ? maskAttributes({ config: this.config, attributes })
           : undefined;
+      // Link attributes are span attributes too: same masking
+      const links = options?.links?.map((link) =>
+        link.attributes != null
+          ? { ...link, attributes: maskAttributes({ config: this.config, attributes: link.attributes }) }
+          : link,
+      );
       const span = tracer.startSpan(
         name,
-        { ...options, attributes: startAttributes },
+        links != null
+          ? { ...options, attributes: startAttributes, links }
+          : { ...options, attributes: startAttributes },
         context,
       );
       return new FISpan({ span, config: this.config, startAttributes });
