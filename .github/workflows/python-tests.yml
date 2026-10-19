@@ -32,6 +32,12 @@ on:
 permissions:
   contents: read
 
+# With an explicit bash, GitHub runs every run step as `bash --noprofile --norc -eo pipefail {0}`:
+# a failing command stops the step, and so does a failure on the left of a pipe.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: python-tests-${{ github.ref }}
   # A newer run of the same PR cancels the older one. A running push to main or dev is never

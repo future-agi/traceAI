@@ -625,34 +625,154 @@ class WorkflowText(unittest.TestCase):
         for line in step:
             self.assertFalse(line.startswith(("continue-on-error", "if:")), line)
 
+    def test_every_run_step_uses_bash_with_pipefail(self):
+        # `shell: bash` under the workflow's `defaults: run:` makes GitHub run every run step as
+        # `bash --noprofile --norc -eo pipefail {0}` (a bare run step gets `bash -e {0}`, with no pipefail,
+        # so `cmd | tee log` would hide a failed cmd). The block is exactly that, and the file has
+        # exactly one `shell:` anywhere (flow style and comments included), so no job or step overrides it.
+        lines = self.text.splitlines()
+        self.assertEqual(lines.count("defaults:"), 1)
+        start = lines.index("defaults:")
+        self.assertEqual(lines[start : start + 3], ["defaults:", "  run:", "    shell: bash"])
+        self.assertFalse(lines[start + 3].startswith(" "), "another key under defaults")
+        self.assertEqual(len(re.findall(r"\bshell[\"']?\s*:", self.text)), 1)
+
+    INSTALL_STEPS = (
+        # (step id, step name, its if:, the install command that must stand alone on a line)
+        (
+            "install_poetry",
+            "Install the package and its dev dependencies (poetry)",
+            "if: matrix.package.backend == 'poetry'",
+            "poetry install --no-interaction",
+        ),
+        (
+            "install_hatch",
+            "Install the package and its dev dependencies (hatch)",
+            "if: matrix.package.backend == 'hatch'",
+            '.venv/bin/pip install -e ".[dev]"',
+        ),
+        (
+            "core_install",
+            "Test against this repo's fi_instrumentation",
+            "if: needs.plan.outputs.core_changed == 'true'",
+            '"$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/pip" install -e "$GITHUB_WORKSPACE/python"',
+        ),
+    )
+
+    # The commands of each install step, exactly as reviewed (comments and indentation aside). A line
+    # filter cannot see a multi-line wrapper that exempts the install from errexit (`{ ...; } && ...`,
+    # a function called from `if`, `trap ... ERR`, `bash -c '...'`), so the whole script is pinned:
+    # changing an install step means changing this table, in the same diff.
+    INSTALL_SCRIPTS = {
+        "install_poetry": [
+            'pip install "poetry==$POETRY_VERSION"',
+            "poetry install --no-interaction",
+            "for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do",
+            'module=$(echo "${pin%%==*}" | tr - _)',
+            'if poetry run python -c "import $module" 2>/dev/null; then',
+            'echo "$module: already present"',
+            "else",
+            'echo "$module: added $pin"',
+            'poetry run pip install "$pin"',
+            "fi",
+            "done",
+        ],
+        "install_hatch": [
+            "python -m venv .venv",
+            '.venv/bin/pip install -e ".[dev]"',
+            "for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do",
+            'module=$(echo "${pin%%==*}" | tr - _)',
+            'if .venv/bin/python -c "import $module" 2>/dev/null; then',
+            'echo "$module: already present"',
+            "else",
+            'echo "$module: added $pin"',
+            '.venv/bin/pip install "$pin"',
+            "fi",
+            "done",
+        ],
+        "core_install": [
+            '"$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/pip" install -e "$GITHUB_WORKSPACE/python"',
+        ],
+    }
+
+    def test_the_install_scripts_are_exactly_as_reviewed(self):
+        for step_id, name, _condition, _command in self.INSTALL_STEPS:
+            with self.subTest(step_id):
+                step = self.step(name, containing=f"id: {step_id}")
+                commands = [line for line in self.run_lines(step) if line and not line.startswith("#")]
+                self.assertEqual(commands, self.INSTALL_SCRIPTS[step_id])
+
+    @staticmethod
+    def run_lines(step):
+        """The lines of the step's `run: |` block (the run block is the last key of the install steps)."""
+        index = step.index("run: |")
+        return step[index + 1 :]
+
     def test_a_failed_install_fails_its_step_for_a_listed_package_too(self):
         # With continue-on-error on an install step, a failed install of a listed package would not
-        # fail the job, and the Tests step would run on a broken install.
-        for step_id, name in (
-            ("install_poetry", "Install the package and its dev dependencies (poetry)"),
-            ("install_hatch", "Install the package and its dev dependencies (hatch)"),
-            ("core_install", "Test against this repo's fi_instrumentation"),
-        ):
+        # fail the job, and the Tests step would run on a broken install. So, for each install step:
+        #   - no continue-on-error, no `shell:` and exactly the pinned `if:`;
+        #   - over its run lines (comments included): no `||`, no `|` outside a `$( ... )` span (so no
+        #     `cmd | tee log`; a `$(...)` is stripped before looking, nested ones are not handled), and
+        #     no `set +` (so no `set +e` and no `set +o errexit`);
+        #   - the install command is a line of its own, exactly: an `if ! ...; then` wrapper, a trailing
+        #     comment or a pipe on that line is not the exact line, so it fails.
+        for step_id, name, condition, command in self.INSTALL_STEPS:
             with self.subTest(step_id):
                 step = self.step(name, containing=f"id: {step_id}")
                 self.assertEqual([line for line in step if line.startswith("continue-on-error")], [], step)
-                # Nor may a command in it swallow its own failure.
-                self.assertEqual([line for line in step if line.endswith("|| true") or "set +e" in line], [], step)
+                self.assertEqual([line for line in step if re.search(r"\bshell[\"']?\s*:", line)], [], step)
+                self.assertEqual([line for line in step if line.startswith("if:")], [condition], step)
+                run = self.run_lines(step)
+                self.assertIn(command, run)
+                self.assertEqual(run.count(command), 1, run)
+                self.assertEqual([line for line in run if "||" in line], [], run)
+                outside = [re.sub(r"\$\([^)]*\)", "", line) for line in run]
+                self.assertEqual([line for line in outside if "|" in line], [], run)
+                self.assertEqual([line for line in run if "set +" in line], [], run)
         # Only the Tests step may be allowed to fail (for a listed package).
         tests = self.step("Tests", containing="id: tests")
         self.assertEqual(tests.count("continue-on-error: ${{ matrix.package.known_broken }}"), 1)
         self.assertEqual(sum(line.startswith("continue-on-error") for line in self.lines()), 1)
 
+    def test_the_tests_step_is_skipped_after_a_failed_install(self):
+        # The Tests step (id: tests) has no `if:`, so GitHub gives it the default success(): a failed
+        # install step skips it, and a broken install never gets its tests run.
+        tests = self.step("Tests", containing="id: tests")
+        self.assertEqual([line for line in tests if line.startswith("if:")], [], tests)
+
     def test_every_job_has_a_time_limit(self):
-        for key, minutes in (("plan", 10), ("fi-instrumentation", 30), ("package", 45), ("result", 5)):
+        # Every job under `jobs:` has exactly one job-level `timeout-minutes: N` (4 spaces, N a positive
+        # integer; a step's own timeout does not bound the job) and an entry in this table, so a new job
+        # must get both.
+        limits = {"plan": 10, "fi-instrumentation": 30, "package": 45, "result": 5}
+        lines = self.text.splitlines()
+
+        def is_comment(line):
+            return line.lstrip().startswith("#")
+
+        # A comment line (at any indent) neither ends the jobs block nor a job, and a job key may carry
+        # a trailing comment.
+        start = lines.index("jobs:")
+        end = next((i for i in range(start + 1, len(lines)) if re.match(r"^\S", lines[i]) and not is_comment(lines[i])), len(lines))
+        found_keys = {}
+        for i in range(start + 1, end):
+            match = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", lines[i])
+            if match:
+                found_keys[match.group(1)] = i
+        keys = list(found_keys)
+        self.assertEqual(sorted(keys), sorted(limits), "a job without an entry in the table, or an entry without a job")
+        for key in keys:
             with self.subTest(key):
-                # At the job's own level (4 spaces): a step's timeout-minutes does not bound the job.
-                lines = self.text.splitlines()
-                start = lines.index(f"  {key}:")
-                end = next((i for i in range(start + 1, len(lines)) if re.match(r"^  \S|^\S", lines[i])), len(lines))
-                found = [line for line in lines[start:end] if re.match(r"^\s*timeout-minutes:", line)]
-                self.assertEqual(found, [f"    timeout-minutes: {minutes}"])
-        self.assertEqual(sum(line.startswith("timeout-minutes:") for line in self.lines()), 4)
+                first = found_keys[key]
+                last = next(
+                    (i for i in range(first + 1, len(lines)) if re.match(r"^  \S|^\S", lines[i]) and not is_comment(lines[i])),
+                    len(lines),
+                )
+                found = [line for line in lines[first:last] if re.match(r"^    timeout-minutes:", line)]
+                self.assertEqual(len(found), 1, found)
+                self.assertRegex(found[0], r"^    timeout-minutes: [1-9][0-9]*$")
+                self.assertEqual(found, [f"    timeout-minutes: {limits[key]}"])
 
     def test_the_verdict_step_runs_always_for_known_broken_packages(self):
         step = self.step("Known-broken verdict")
