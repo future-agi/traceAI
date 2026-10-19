@@ -236,6 +236,35 @@ def test_response_model_differs_from_request(monkeypatch, tracing):
     assert_export(receiver, project)
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "databricks-openai-recipe"),
+    ("", None, "databricks-openai-recipe"),
+    ("databricks-from-env", None, "databricks-from-env"),
+    ("databricks-from-env", "databricks-explicit", "databricks-explicit"),
+], ids=["default", "empty", "env", "explicit"])
+def test_setup_tracing_project_name(env_project, explicit, expected, monkeypatch):
+    # FI_PROJECT_NAME overrides the recipe default; an explicit argument wins over both.
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project is not None:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        provider = app.setup_tracing(explicit)
+        try:
+            transport = httpx.MockTransport(lambda request: httpx.Response(200, json=chat_response(GATEWAY_MODEL)))
+            with app.make_client(http_client=httpx.Client(transport=transport)) as client:
+                complete(client)
+            only_span(receiver, provider)
+            assert_export(receiver, expected)
+        finally:
+            OpenAIInstrumentor().uninstrument()
+            provider.shutdown()
+            atexit.unregister(provider.shutdown)
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+
+
 def test_make_client_explicit_overrides_and_missing_key(monkeypatch):
     def handler(request):
         raise AssertionError("Creating a client must not make a request")
@@ -515,12 +544,15 @@ def child_environment(tmp_path, **overrides):
     return child
 
 
+@pytest.mark.parametrize("env_project", [None, "databricks-subprocess-env"], ids=["default-project", "env-project"])
 @pytest.mark.parametrize("stream", [False, True], ids=["chat", "stream"])
-def test_app_subprocess_loopback(stream, tmp_path):
+def test_app_subprocess_loopback(stream, env_project, tmp_path):
     with Receiver() as receiver, FakeOpenAI() as fake:
         child = child_environment(tmp_path, **{
             app.BASE_URL_ENV: fake.base_url, "FI_BASE_URL": receiver.origin,
         })
+        if env_project:
+            child["FI_PROJECT_NAME"] = env_project
         command = [sys.executable, str(RECIPE / "src" / "app.py"), "--prompt", PROMPT]
         if stream:
             command.append("--stream")
@@ -549,7 +581,7 @@ def test_app_subprocess_loopback(stream, tmp_path):
         else:
             assert attributes(span)["gen_ai.request.model"] == GATEWAY_MODEL
             assert_usage(span)
-        assert_export(receiver, "databricks-openai-recipe")
+        assert_export(receiver, env_project or "databricks-openai-recipe")
         for key in (VENDOR_KEY, FI_KEY, FI_SECRET):
             assert key not in result.stdout + result.stderr
 
@@ -605,8 +637,10 @@ def test_readme_and_requirement_pins():
     readme = (RECIPE / "README.md").read_text()
     for form in FORMS:
         assert form in readme
-    for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+    for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert name in readme
+    assert "| `FI_PROJECT_NAME` | No | Observe project name; defaults to `databricks-openai-recipe`; tracer only. |" in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "databricks-openai-recipe"' in readme
     assert "the provider field says `openai`" in readme
     assert "Databricks workspace hosts must use `https://`" in readme
     assert "example.staging.cloud.databricks.com is a placeholder, not a real host." in readme

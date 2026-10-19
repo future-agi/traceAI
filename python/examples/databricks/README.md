@@ -28,6 +28,7 @@ The requirements pin `openai==3.24.0`, `traceAI-openai==0.1.10`, and `fi-instrum
 | `DATABRICKS_MODEL` | Yes, unless using `--model` | Your model service name or serving endpoint name. |
 | `DATABRICKS_BASE_URL` | Yes | Your workspace-specific SDK base URL. There is no public default. |
 | `FI_BASE_URL` | No | Future AGI collector origin; uses the tracer's default when unset. |
+| `FI_PROJECT_NAME` | No | Observe project name; defaults to `databricks-openai-recipe`; tracer only. |
 
 Choose one of these two different surfaces. Replace `<workspace-host>` with the host from your workspace URL:
 
@@ -52,7 +53,7 @@ python src/app.py
 python src/app.py --stream
 ```
 
-You can override the model with `--model` and the question with `--prompt`. Missing configuration or a refused URL exits with code 2 before tracing starts. The URL check returns allowed URLs unchanged. The OpenAI SDK then adds a trailing slash to its stored `base_url` and appends `/chat/completions` for this call.
+You can override the model with `--model` and the question with `--prompt`. Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or empty, they go to `databricks-openai-recipe`. Missing configuration or a refused URL exits with code 2 before tracing starts. The URL check returns allowed URLs unchanged. The OpenAI SDK then adds a trailing slash to its stored `base_url` and appends `/chat/completions` for this call.
 
 ## Code
 
@@ -65,8 +66,8 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_openai import OpenAIInstrumentor
 from app import check_base_url
-provider = register(project_name="databricks-openai-recipe", project_type=ProjectType.OBSERVE,
-                    set_global_tracer_provider=False, verbose=False)
+provider = register(project_name=os.environ.get("FI_PROJECT_NAME") or "databricks-openai-recipe",  # as in src/app.py
+                    project_type=ProjectType.OBSERVE, set_global_tracer_provider=False, verbose=False)
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 client = OpenAI(api_key=os.environ["DATABRICKS_TOKEN"],
                 base_url=check_base_url(os.environ["DATABRICKS_BASE_URL"]))
