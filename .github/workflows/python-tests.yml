@@ -1,0 +1,203 @@
+name: Python tests
+
+# Runs on every PR into main:
+#   - the fi_instrumentation tests (python/tests), always;
+#   - the tests of each Python package under python/frameworks/ that the PR touches,
+#     on that package's own dependencies (plus the python/tests/test_framework_*.py
+#     files that belong to it).
+# Editing this workflow or .github/scripts/python_test_plan.py tests every package.
+# The "Python tests" job at the end is the one check to mark required on main.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tests that call register() export spans at shutdown. Point the exporters at a closed
+  # local port so they never reach the real collector.
+  FI_BASE_URL: http://127.0.0.1:9
+  FI_GRPC_URL: http://127.0.0.1:9
+  # Every package's python range allows 3.11.
+  PYTHON_VERSION: "3.11"
+  POETRY_VERSION: "2.1.2"
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_packages: ${{ steps.plan.outputs.has_packages }}
+      core_changed: ${{ steps.plan.outputs.core_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out which packages this change touches
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+        run: |
+          all_files() {
+            echo "No diff to read: treating every file as changed, so every package runs." >&2
+            git ls-files
+          }
+
+          case "$EVENT_NAME" in
+            pull_request)
+              git diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+              ;;
+            push)
+              if [ "$PUSH_BEFORE_SHA" = "0000000000000000000000000000000000000000" ] \
+                 || ! git cat-file -e "$PUSH_BEFORE_SHA^{commit}" 2>/dev/null; then
+                all_files > "$RUNNER_TEMP/changed.txt"
+              else
+                git diff --name-only "$PUSH_BEFORE_SHA..$PUSH_AFTER_SHA" > "$RUNNER_TEMP/changed.txt"
+              fi
+              ;;
+            *)
+              all_files > "$RUNNER_TEMP/changed.txt"
+              ;;
+          esac
+
+          echo "Changed files: $(wc -l < "$RUNNER_TEMP/changed.txt")"
+          python3 .github/scripts/python_test_plan.py < "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/plan.json"
+          jq . "$RUNNER_TEMP/plan.json"
+
+          {
+            echo "matrix=$(jq -c .packages "$RUNNER_TEMP/plan.json")"
+            echo "has_packages=$(jq '.packages | length > 0' "$RUNNER_TEMP/plan.json")"
+            echo "core_changed=$(jq .core_changed "$RUNNER_TEMP/plan.json")"
+          } >> "$GITHUB_OUTPUT"
+
+  fi-instrumentation:
+    name: fi_instrumentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install "poetry==$POETRY_VERSION"
+
+      - name: Install fi_instrumentation and its dev dependencies
+        working-directory: python
+        run: poetry install --no-interaction --all-extras
+
+      - name: Tests
+        working-directory: python
+        run: |
+          echo "Not run here: the $(ls tests/test_framework_*.py | wc -l) framework test files import the framework packages, so each runs in its package's job (package (<name>)): $(ls tests/test_framework_*.py | xargs -n1 basename | tr '\n' ' ')"
+          poetry run pytest tests -p no:cacheprovider --ignore-glob='tests/test_framework_*.py'
+
+  package:
+    name: package (${{ matrix.package.name }})
+    needs: plan
+    if: needs.plan.outputs.has_packages == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PKG_DIR: ${{ matrix.package.dir }}
+      # Both backends get their environment at <package dir>/.venv.
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install the package and its dev dependencies (poetry)
+        if: matrix.package.backend == 'poetry'
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          pip install "poetry==$POETRY_VERSION"
+          poetry install --no-interaction
+          # The shared test toolset: many packages declare no pytest of their own.
+          poetry run pip install pytest pytest-asyncio pytest-mock
+
+      - name: Install the package and its dev dependencies (hatch)
+        if: matrix.package.backend == 'hatch'
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]" pytest pytest-asyncio pytest-mock
+
+      - name: Test against this repo's fi_instrumentation
+        if: needs.plan.outputs.core_changed == 'true'
+        run: |
+          # This change touches python/fi_instrumentation/ (or its pyproject / lock):
+          # replace the fi-instrumentation-otel the package resolved with the one in the repo.
+          "$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/pip" install -e "$GITHUB_WORKSPACE/python"
+
+      - name: Tests
+        env:
+          PKG_NAME: ${{ matrix.package.name }}
+          OWN_TESTS: ${{ matrix.package.own_tests }}
+          CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
+        run: |
+          # Run every set, then fail if any failed (no -x).
+          pytest_bin="$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/python -m pytest"
+          status=0
+          ran=0
+
+          if [ "$OWN_TESTS" = "true" ]; then
+            ran=1
+            echo "::group::$PKG_NAME: $PKG_DIR/tests"
+            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && $pytest_bin tests -p no:cacheprovider) || status=1
+            echo "::endgroup::"
+          fi
+
+          # Tests kept in python/tests/ run from python/ so python/tests/conftest.py applies.
+          for test_file in $CORE_TESTS; do
+            ran=1
+            echo "::group::$PKG_NAME: $test_file"
+            (cd "$GITHUB_WORKSPACE/python" && $pytest_bin "${test_file#python/}" -p no:cacheprovider) || status=1
+            echo "::endgroup::"
+          done
+
+          if [ "$ran" = "0" ]; then
+            echo "::notice::$PKG_NAME has no tests"
+          fi
+          exit "$status"
+
+  result:
+    name: Python tests
+    needs: [plan, fi-instrumentation, package]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the results
+        env:
+          PLAN: ${{ needs.plan.result }}
+          FI_INSTRUMENTATION: ${{ needs.fi-instrumentation.result }}
+          PACKAGE: ${{ needs.package.result }}
+        run: |
+          echo "plan=$PLAN fi-instrumentation=$FI_INSTRUMENTATION package=$PACKAGE"
+          [ "$PLAN" = "success" ] || { echo "::error::plan did not succeed"; exit 1; }
+          [ "$FI_INSTRUMENTATION" = "success" ] || { echo "::error::fi_instrumentation tests did not succeed"; exit 1; }
+          if [ "$PACKAGE" != "success" ] && [ "$PACKAGE" != "skipped" ]; then
+            echo "::error::package tests did not succeed ($PACKAGE)"
+            exit 1
+          fi

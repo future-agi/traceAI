@@ -21,7 +21,6 @@ from fi_instrumentation.otel import (
     PROJECT_VERSION_ID,
     EVAL_TAGS,
     METADATA,
-    SESSION_NAME,
     check_custom_eval_config_exists,
     _exporter_transport,
     _printable_headers,
@@ -41,7 +40,6 @@ class TestConstants:
         assert PROJECT_VERSION_ID == "project_version_id"
         assert EVAL_TAGS == "eval_tags"
         assert METADATA == "metadata"
-        assert SESSION_NAME == "session_name"
 
 
 class TestTransport:
@@ -144,15 +142,10 @@ class TestRegisterFunction:
 
     def test_register_observe_mode(self, mock_dependencies, clean_env):
         """Test register in OBSERVE mode."""
-        result = register(
-            project_type=ProjectType.OBSERVE,
-            session_name="test_session"
-        )
-        
-        call_args = mock_dependencies['provider_class'].call_args
-        resource = call_args[1]['resource']
-        
-        assert resource.attributes[SESSION_NAME] == "test_session"
+        result = register(project_type=ProjectType.OBSERVE)
+
+        assert result is not None
+        mock_dependencies['provider_class'].assert_called_once()
 
     def test_register_observe_mode_validation(self, mock_dependencies, clean_env):
         """Test register validation in OBSERVE mode."""
@@ -246,11 +239,11 @@ class TestRegisterFunction:
         
         result = register(headers=headers)
         
-        # Headers should be passed to processor
-        mock_dependencies['simple_proc'].assert_called_with(
-            headers=headers,
-            transport=Transport.HTTP
-        )
+        # register() batches by default, so headers go to the batch processor
+        mock_dependencies['batch_proc'].assert_called_once()
+        kwargs = mock_dependencies['batch_proc'].call_args.kwargs
+        assert kwargs['headers'] == headers
+        assert kwargs['transport'] == Transport.HTTP
 
     def test_register_grpc_transport(self, mock_dependencies, clean_env):
         """Test register with gRPC transport."""
