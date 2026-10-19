@@ -101,6 +101,21 @@ retrieval, tools, database work and response publishing between `inlet` and
 - An outlet call without a matching inlet is skipped. This avoids duplicate
   zero-duration traces from the legacy `/api/chat/completed` endpoint.
 
+## Live model verification (2026-10-19)
+
+Re-run against the real OpenAI API (`https://api.openai.com/v1`, `gpt-4o-mini`) as the Open WebUI model connection, instead of a local stand-in. Open WebUI 0.11.4 (`pip install open-webui==0.11.4`, Python 3.12), filter `futureagi_filter.py` version 0.3.0 installed through the Open WebUI API as in the install steps, local Future AGI as project `th8103-livefill-TH-8232`. 0.12.3 was not re-run.
+
+| Turn | Trace id in Observe | Result |
+| --- | --- | --- |
+| Plain, default valves (`redact=true`) | `0ed539cf-1c03-5a63-e9c0-24a2b04964bc` | `openwebui.chat` (chain) with child `openwebui.llm`, model `gpt-4o-mini`, 3189 in / 2 out tokens, session = chat id, no content |
+| Native tool call (`add`) | `43ac29ee-713e-368e-a601-e6cd784c29cc` | same two spans, 6471 in / 31 out tokens (cumulative over the tool loop), no content |
+| Plain, `redact=false` | `6d2b79b4-ab6e-214a-8abe-4fb776d1ef11` | prompt and reply stored (`input` 53 B / `output` 2 B on the chain span) |
+| Unknown model id | none | see below |
+
+Privacy: with `redact=true` the unique marker (in the prompt of both turns) was in none of the 4 stored rows, in any column, and the OpenAI key was not either. With `redact=false` the marker was in the 2 rows of that turn.
+
+Unknown model id: a model id that Open WebUI does not list is rejected by Open WebUI itself with HTTP 400 `Model not found` before any filter runs, so there is no trace. With the id listed in the connection (`gpt-4o-mini-not-a-model`), OpenAI returned HTTP 404 `model_not_found`; Open WebUI logged the failure and the filter exported **no span**. This is the stock-0.11.4 limitation already described above (a plain provider error is not passed to the filter), now confirmed against the real API: an upstream error does not produce an ERROR span.
+
 ## Privacy
 
 - Content is off by default (`redact=true`): no message text leaves Open
