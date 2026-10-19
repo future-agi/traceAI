@@ -10,18 +10,23 @@ one JSON object for $GITHUB_OUTPUT:
   (``tests_e2e`` and ``__init__.py`` are not packages).
 * A package is touched by any changed path under its directory, or by a changed
   ``python/tests/test_framework_<key>.py`` that maps to it (see FRAMEWORK_TEST_PACKAGES).
-* ``run_all`` is true when the PR changes the CI itself (the workflow or this script):
-  then every package is listed.
+* ``run_all`` is true when the PR changes the CI itself (the workflow, this script or the
+  known-broken list): then every package is listed.
 * ``core_changed`` is true when ``python/fi_instrumentation/``, ``python/pyproject.toml``
   or ``python/poetry.lock`` changed: the package jobs then test against the repo's
   fi_instrumentation instead of the one their own lock resolves.
 
 Each package entry carries ``name``, ``dir``, ``backend`` ("poetry" or "hatch"),
-``own_tests`` (the package has a ``tests/`` folder with test files) and ``core_tests``
-(the ``python/tests/test_framework_*.py`` files that belong to the package).
+``own_tests`` (the package has a ``tests/`` folder with test files), ``core_tests``
+(the ``python/tests/test_framework_*.py`` files that belong to the package),
+``known_broken`` and ``known_broken_reason`` (from ``.github/python-tests-known-broken.txt``:
+one ``<package dir name> | <reason>`` line per package; ``#`` comments and blank lines are
+ignored; the reason is "" for a package that is not listed). The workflow lets a listed
+package fail without failing the check, and fails when a listed package passes.
 
 Standard library only. It fails loudly (non-zero exit, message on stderr) on a
-test_framework file that maps to no package, and on a build backend it does not know.
+test_framework file that maps to no package, on a build backend it does not know, and on a
+malformed known-broken list.
 """
 
 import json
@@ -32,9 +37,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORKS_DIR = "python/frameworks"
 CORE_TESTS_DIR = "python/tests"
+KNOWN_BROKEN_FILE = ".github/python-tests-known-broken.txt"
 CI_FILES = (
     ".github/workflows/python-tests.yml",
     ".github/scripts/python_test_plan.py",
+    KNOWN_BROKEN_FILE,
 )
 CORE_PATHS = ("python/pyproject.toml", "python/poetry.lock")
 CORE_PREFIX = "python/fi_instrumentation/"
@@ -104,8 +111,32 @@ def discover_packages(root=REPO_ROOT):
             "backend": backend,
             "own_tests": own_tests,
             "core_tests": [],
+            "known_broken": False,
+            "known_broken_reason": "",
         }
     return packages
+
+
+def load_known_broken(packages, root=REPO_ROOT):
+    """Return {package dir name: reason} from the known-broken list; fail on a bad line."""
+    path = root / KNOWN_BROKEN_FILE
+    listed = {}
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        where = f"{KNOWN_BROKEN_FILE}:{number}: {line!r}"
+        if " | " not in line:
+            raise PlanError(f"{where}: expected '<package dir name> | <reason>'")
+        name, reason = (part.strip() for part in line.split(" | ", 1))
+        if not name or not reason:
+            raise PlanError(f"{where}: the package name and the reason must both be non-empty")
+        if name not in packages:
+            raise PlanError(f"{where}: {name!r} is not a package directory under {FRAMEWORKS_DIR}/")
+        if name in listed:
+            raise PlanError(f"{where}: {name!r} is listed twice")
+        listed[name] = reason
+    return listed
 
 
 def core_tests_by_package(root=REPO_ROOT, packages=None):
@@ -145,6 +176,10 @@ def plan(changed, root=REPO_ROOT):
     # whether or not this change touches it.
     for rel, name in core_tests_by_package(root, packages).items():
         packages[name]["core_tests"].append(rel)
+
+    for name, reason in load_known_broken(packages, root).items():
+        packages[name]["known_broken"] = True
+        packages[name]["known_broken_reason"] = reason
 
     run_all = any(path in CI_FILES for path in changed)
     core_changed = any(

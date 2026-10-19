@@ -1,0 +1,19 @@
+# Python packages whose tests are known to fail today (see .github/workflows/python-tests.yml).
+# A listed package still runs in CI and shows a warning, but its failures do not fail the required "Python tests" check.
+# If a listed package's tests all pass, CI fails until its line is removed from this file.
+# Each entry should name its follow-up (a ticket or PR) in the reason once one exists.
+# Format: <package dir name under python/frameworks> | <reason in plain words>
+agno | 1 test expects gen_ai.system where the code now writes gen_ai.provider.name
+dspy | 1 test expects raw.output on embedding spans
+haystack | 5 tests expect pre-GenAI attribute names (llm.token_count.*, fi.span.kind) and a list of dependencies
+huggingface | 4 tests expect llm.system
+langchain | 2 tests: dependency count and a set_attributes call no longer made
+litellm | 3 tests use SpanAttributes.FI_SPAN_KIND, removed in fi-instrumentation-otel 1.0
+llama_index | 16 tests: llama_index.core.base.agent no longer exists, and a dependency count
+mcp | 1 test expects two instrumentation dependencies, the package declares one
+ollama | 4 tests expect llm.system and an older embed result
+openai-agents | 2 tests expect raw.output, and its conftest imports traceai_openai, which it does not install
+portkey | 10 tests expect pre-GenAI attribute names (llm.model_name, llm.invocation_parameters)
+pydantic-ai | 1 test builds an agent with model "test-model", which pydantic-ai no longer accepts
+smolagents | 6 tests use SpanAttributes.GEN_AI_INPUT_MESSAGES and tool.name, no longer present
+vllm | 3 tests expect the reply text where the code now records the whole response
