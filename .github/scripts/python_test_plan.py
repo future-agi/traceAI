@@ -36,7 +36,8 @@ Each package entry carries ``name``, ``dir``, ``backend`` ("poetry" or "hatch"),
 ``known_broken`` and ``known_broken_reason`` (from ``.github/python-tests-known-broken.txt``:
 one ``<package dir name> | <reason>`` line per package; ``#`` comments and blank lines are
 ignored; the reason is "" for a package that is not listed). The workflow lets a listed
-package fail without failing the check, and fails when a listed package passes.
+package's tests fail without failing the check, fails when a listed package passes, and fails
+on any failed install, listed or not.
 
 Paths from git are used exactly as written (stdin lines are stripped). Standard library only,
 plus git for --diff and --all. It fails loudly (non-zero exit, message on stderr) on a

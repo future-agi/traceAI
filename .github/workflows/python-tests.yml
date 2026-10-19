@@ -12,8 +12,10 @@ name: Python tests
 # A change to python/tests/conftest.py or pytest.ini tests the packages that have core tests.
 # A moved file plans both the package it left and the one it entered.
 # A package on .github/python-tests-known-broken.txt still runs and shows a warning, but its
-# failures do not fail the check; if its tests pass, the "Known-broken verdict" step fails the
-# job until the package is taken off the list.
+# test failures do not fail the check; if its tests pass, the "Known-broken verdict" step fails the
+# job until the package is taken off the list. A failed install fails the check, listed or not:
+# the install steps have no continue-on-error, so the package's tests never run on a broken install.
+# Every job has a timeout-minutes, so nothing can hang for GitHub's 6-hour default.
 # The "Python tests" job at the end is the one check to mark required on main and dev (on dev only
 # once this file is on dev: GitHub runs the workflow found in the PR's merge commit or the pushed commit).
 
@@ -52,6 +54,8 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-latest
+    # A hung step would otherwise hold the run for GitHub's 6-hour default.
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       has_packages: ${{ steps.plan.outputs.has_packages }}
@@ -83,9 +87,9 @@ jobs:
             pull_request)
               # The checkout holds every branch's history (fetch-depth 0), so the base commit is
               # missing only when the base branch was force-pushed or deleted. Fetch it (the repo is
-              # public, no credentials needed); if that fails too, run every package.
+              # public, no credentials needed) with a 120 s limit; if that fails or is killed too, run every package.
               if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
-                git fetch --no-tags origin "$PR_BASE_SHA" || true
+                timeout 120 git fetch --no-tags origin "$PR_BASE_SHA" || true
               fi
               if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
                 echo "PR base $PR_BASE_SHA is not in the clone: treating every file as changed" >&2
@@ -118,6 +122,7 @@ jobs:
   fi-instrumentation:
     name: fi_instrumentation
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,6 +150,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.has_packages == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -165,7 +171,6 @@ jobs:
       - name: Install the package and its dev dependencies (poetry)
         id: install_poetry
         if: matrix.package.backend == 'poetry'
-        continue-on-error: ${{ matrix.package.known_broken }}
         working-directory: ${{ matrix.package.dir }}
         run: |
           pip install "poetry==$POETRY_VERSION"
@@ -185,7 +190,6 @@ jobs:
       - name: Install the package and its dev dependencies (hatch)
         id: install_hatch
         if: matrix.package.backend == 'hatch'
-        continue-on-error: ${{ matrix.package.known_broken }}
         working-directory: ${{ matrix.package.dir }}
         run: |
           python -m venv .venv
@@ -205,7 +209,6 @@ jobs:
       - name: Test against this repo's fi_instrumentation
         id: core_install
         if: needs.plan.outputs.core_changed == 'true'
-        continue-on-error: ${{ matrix.package.known_broken }}
         run: |
           # This change touches python/fi_instrumentation/ (or its pyproject / lock):
           # replace the fi-instrumentation-otel the package resolved with the one in the repo.
@@ -254,8 +257,9 @@ jobs:
           fi
           exit "$status"
 
-      # A package on the known-broken list may fail above without failing the job. This step
-      # says so with a warning, and fails the job when the listed package passes instead.
+      # A package on the known-broken list may fail its Tests step without failing the job. This step
+      # says so with a warning, and fails the job when the listed package passes instead, or when an
+      # install step failed (the install steps have no continue-on-error).
       - name: Known-broken verdict
         if: always() && matrix.package.known_broken
         env:
@@ -274,6 +278,7 @@ jobs:
     needs: [plan, fi-instrumentation, package]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check the results
         env:

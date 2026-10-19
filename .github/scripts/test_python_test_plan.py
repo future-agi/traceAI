@@ -75,6 +75,19 @@ class PlanTable(FixtureCase):
         ("a package's own test", ["python/frameworks/alpha/tests/test_x.py"], ["alpha"], False, False),
         ("the traceai package", ["python/traceai/traceai/__init__.py"], ["traceai"], False, False),
         ("a core file", ["python/fi_instrumentation/otel.py"], ALL_PACKAGES, False, True),
+        ("a nested core file", ["python/fi_instrumentation/instrumentation/context_attributes.py"], ALL_PACKAGES, False, True),
+        (
+            "CI files and a core file together (core_install runs in every package job)",
+            [
+                ".github/workflows/python-tests.yml",
+                ".github/scripts/known_broken_verdict.sh",
+                ".github/scripts/test_python_test_plan.py",
+                "python/fi_instrumentation/instrumentation/context_attributes.py",
+            ],
+            ALL_PACKAGES,
+            True,
+            True,
+        ),
         ("poetry.lock", ["python/poetry.lock"], ALL_PACKAGES, False, True),
         ("python/pyproject.toml", ["python/pyproject.toml"], ALL_PACKAGES, False, True),
         ("conftest.py", ["python/tests/conftest.py"], ["gamma"], False, False),
@@ -367,6 +380,9 @@ class CommandLine(GitFixtureCase):
 VERDICT = SCRIPTS_DIR / "known_broken_verdict.sh"
 
 
+INSTALL_FAILS_THE_CHECK = "a failed install fails the check, listed or not"
+
+
 class KnownBrokenVerdict(unittest.TestCase):
     BASE = {
         "PKG_NAME": "pkg",
@@ -385,20 +401,44 @@ class KnownBrokenVerdict(unittest.TestCase):
             "tests pass after a failed install",
             {"TESTS": "success", "INSTALL_POETRY": "failure"},
             1,
-            "failed in this run: install (poetry)",
+            f"pkg: install (poetry) failed; {INSTALL_FAILS_THE_CHECK}",
         ),
         ("tests fail", {"TESTS": "failure"}, 0, "known broken (the listed reason)"),
         (
             "tests fail after failed poetry and core installs",
             {"TESTS": "failure", "INSTALL_POETRY": "failure", "CORE_INSTALL": "failure"},
-            0,
-            "install (poetry), fi_instrumentation install",
+            1,
+            f"pkg: install (poetry), fi_instrumentation install failed; {INSTALL_FAILS_THE_CHECK}",
         ),
         (
             "tests fail after a failed hatch install",
             {"TESTS": "failure", "INSTALL_POETRY": "skipped", "INSTALL_HATCH": "failure"},
-            0,
-            "install (hatch)",
+            1,
+            f"pkg: install (hatch) failed; {INSTALL_FAILS_THE_CHECK}",
+        ),
+        (
+            "tests fail after a failed core install",
+            {"TESTS": "failure", "CORE_INSTALL": "failure"},
+            1,
+            f"pkg: fi_instrumentation install failed; {INSTALL_FAILS_THE_CHECK}",
+        ),
+        (
+            "tests skipped after a failed install (the real case: a failed install skips the Tests step)",
+            {"TESTS": "skipped", "INSTALL_POETRY": "failure"},
+            1,
+            f"pkg: install (poetry) failed; {INSTALL_FAILS_THE_CHECK}",
+        ),
+        (
+            "cancelled after a failed install",
+            {"TESTS": "cancelled", "INSTALL_HATCH": "failure"},
+            1,
+            f"pkg: install (hatch) failed; {INSTALL_FAILS_THE_CHECK}",
+        ),
+        (
+            "no tests, the tests pass, and a failed install",
+            {"TESTS": "success", "OWN_TESTS": "false", "CORE_TESTS": "", "CORE_INSTALL": "failure"},
+            1,
+            INSTALL_FAILS_THE_CHECK,
         ),
         ("tests skipped", {"TESTS": "skipped"}, 1, "did not run"),
         (
@@ -414,6 +454,7 @@ class KnownBrokenVerdict(unittest.TestCase):
             "its tests pass",
         ),
         ("cancelled", {"TESTS": "cancelled"}, 0, "known broken"),
+        ("tests fail, no install failed (skipped installs)", {"TESTS": "failure", "INSTALL_POETRY": "skipped", "CORE_INSTALL": "skipped"}, 0, "known broken (the listed reason)"),
         ("no Tests outcome", {"TESTS": ""}, 1, "unexpected Tests outcome"),
         ("a misspelled outcome", {"TESTS": "succes"}, 1, "unexpected Tests outcome"),
     ]
@@ -436,6 +477,9 @@ class KnownBrokenVerdict(unittest.TestCase):
                 output = done.stdout + done.stderr
                 self.assertEqual(done.returncode, code, output)
                 self.assertIn(phrase, output)
+                # The old "may not reflect the listed reason" warning and "(failed in this run: ...)" note are gone.
+                self.assertNotIn("may not reflect", output)
+                self.assertNotIn("failed in this run", output)
 
     def test_the_syntax_is_valid(self):
         subprocess.run(["bash", "-n", str(VERDICT)], check=True)
@@ -581,6 +625,35 @@ class WorkflowText(unittest.TestCase):
         for line in step:
             self.assertFalse(line.startswith(("continue-on-error", "if:")), line)
 
+    def test_a_failed_install_fails_its_step_for_a_listed_package_too(self):
+        # With continue-on-error on an install step, a failed install of a listed package would not
+        # fail the job, and the Tests step would run on a broken install.
+        for step_id, name in (
+            ("install_poetry", "Install the package and its dev dependencies (poetry)"),
+            ("install_hatch", "Install the package and its dev dependencies (hatch)"),
+            ("core_install", "Test against this repo's fi_instrumentation"),
+        ):
+            with self.subTest(step_id):
+                step = self.step(name, containing=f"id: {step_id}")
+                self.assertEqual([line for line in step if line.startswith("continue-on-error")], [], step)
+                # Nor may a command in it swallow its own failure.
+                self.assertEqual([line for line in step if line.endswith("|| true") or "set +e" in line], [], step)
+        # Only the Tests step may be allowed to fail (for a listed package).
+        tests = self.step("Tests", containing="id: tests")
+        self.assertEqual(tests.count("continue-on-error: ${{ matrix.package.known_broken }}"), 1)
+        self.assertEqual(sum(line.startswith("continue-on-error") for line in self.lines()), 1)
+
+    def test_every_job_has_a_time_limit(self):
+        for key, minutes in (("plan", 10), ("fi-instrumentation", 30), ("package", 45), ("result", 5)):
+            with self.subTest(key):
+                # At the job's own level (4 spaces): a step's timeout-minutes does not bound the job.
+                lines = self.text.splitlines()
+                start = lines.index(f"  {key}:")
+                end = next((i for i in range(start + 1, len(lines)) if re.match(r"^  \S|^\S", lines[i])), len(lines))
+                found = [line for line in lines[start:end] if re.match(r"^\s*timeout-minutes:", line)]
+                self.assertEqual(found, [f"    timeout-minutes: {minutes}"])
+        self.assertEqual(sum(line.startswith("timeout-minutes:") for line in self.lines()), 4)
+
     def test_the_verdict_step_runs_always_for_known_broken_packages(self):
         step = self.step("Known-broken verdict")
         self.assertIn("if: always() && matrix.package.known_broken", step)
@@ -598,7 +671,7 @@ class WorkflowText(unittest.TestCase):
     def test_a_pr_base_missing_from_the_clone_is_fetched_then_everything_runs(self):
         text = self.text
         check = 'if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then'
-        fetch = 'git fetch --no-tags origin "$PR_BASE_SHA" || true'
+        fetch = 'timeout 120 git fetch --no-tags origin "$PR_BASE_SHA" || true'
         message = 'echo "PR base $PR_BASE_SHA is not in the clone: treating every file as changed" >&2'
         diff = 'python3 .github/scripts/python_test_plan.py --diff "$PR_BASE_SHA...$PR_HEAD_SHA"'
         lines = self.lines()

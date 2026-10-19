@@ -1,5 +1,6 @@
 # Python packages whose tests are known to fail today (see .github/workflows/python-tests.yml).
-# A listed package still runs in CI and shows a warning, but its failures do not fail the required "Python tests" check.
+# A listed package still runs in CI and shows a warning, but its test failures do not fail the required "Python tests" check.
+# A failed install fails the check, listed or not.
 # If a listed package's tests all pass, CI fails until its line is removed from this file.
 # So a PR that makes a listed package pass must remove its line in the same PR, or CI fails
 # (for example, a LangChain change that fixes its tests). A listed package with no tests at all also fails: remove its line.
