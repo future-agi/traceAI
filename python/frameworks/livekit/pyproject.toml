@@ -13,10 +13,12 @@ python = ">3.9,<3.14"
 fi-instrumentation-otel = ">=0.1.14"
 
 [tool.poetry.group.dev.dependencies]
-livekit-agents = "*"
-livekit-plugins-openai = "*"
-livekit-plugins-silero = "*"
+# livekit-agents 1.8 is the version whose privacy filter the tests cover; it needs Python 3.10+.
+livekit-agents = { version = "~1.8", python = ">=3.10" }
+livekit-plugins-openai = { version = "~1.8", python = ">=3.10" }
+livekit-plugins-silero = { version = "~1.8", python = ">=3.10" }
 python-dotenv = "*"
+pytest = ">=7.0"
 
 [build-system]
 requires = ["poetry-core"]
