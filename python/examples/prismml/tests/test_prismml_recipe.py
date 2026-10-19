@@ -212,6 +212,34 @@ def test_chat_model_usage_and_key_separation(traced, monkeypatch, base_url, key)
     assert_export_separation(traced[0], traced[2], key)
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "prismml-bonsai"),
+    ("", None, "prismml-bonsai"),
+    ("prismml-from-env", None, "prismml-from-env"),
+    ("prismml-from-env", "prismml-explicit", "prismml-explicit"),
+], ids=["default", "empty", "env", "explicit"])
+def test_setup_tracing_project_name(monkeypatch, env_project, explicit, expected):
+    # FI_PROJECT_NAME overrides the recipe default; an explicit argument wins over both.
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project is not None:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        provider = app.setup_tracing(explicit)
+        try:
+            client, seen = mock_client()
+            with client:
+                client.chat.completions.create(model=REQUEST_MODEL,
+                    messages=[{"role": "user", "content": "project fixture"}])
+            assert len(seen) == 1
+            one_span((receiver, provider, expected))
+            assert_export_separation(receiver, expected)
+        finally:
+            OpenAIInstrumentor().uninstrument()
+            provider.force_flush()
+            provider.shutdown()
+
+
 def test_usage_absent_is_omitted(traced):
     client, seen = mock_client(chat_response(include_usage=False))
     with client:
@@ -615,12 +643,15 @@ def subprocess_environment(tmp_path):
     return env
 
 
+@pytest.mark.parametrize("env_project", [None, "prismml-subprocess-env"], ids=["default-project", "env-project"])
 @pytest.mark.parametrize("stream", [False, True])
-def test_app_subprocess_chat_and_stream(tmp_path, stream):
+def test_app_subprocess_chat_and_stream(tmp_path, stream, env_project):
     with Receiver() as receiver, FakeOpenAI() as fake:
         env = subprocess_environment(tmp_path)
         env.update(FI_BASE_URL=receiver.origin, PRISMML_BASE_URL=fake.base_url,
                    PRISMML_MODEL=REQUEST_MODEL)
+        if env_project:
+            env["FI_PROJECT_NAME"] = env_project
         if stream:
             env["PRISMML_API_KEY"] = "placeholder-prismml-key"
         # The non-streamed child exercises the default not-needed placeholder.
@@ -661,7 +692,7 @@ def test_app_subprocess_chat_and_stream(tmp_path, stream):
         else:
             assert attrs["gen_ai.request.model"] == RESPONSE_MODEL
         assert_usage(attrs, {} if stream else USAGE_ATTRIBUTES)
-        assert_export_separation(receiver, "prismml-bonsai", key)
+        assert_export_separation(receiver, env_project or "prismml-bonsai", key)
 
 
 @pytest.mark.parametrize("operation", ["getaddrinfo", "connect", "connect_ex"])
@@ -691,7 +722,9 @@ def test_readme_and_requirements_contract():
     assert readme.startswith("# PrismML (OpenAI-compatible) with traceAI\n")
     for phrase in ("http://localhost:8080/v1", "http://localhost:8081/v1",
                    "provider field says `openai`", "gen_ai.request.model", "verbose=False",
-                   "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS",
+                   "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS",
+                   "| `FI_PROJECT_NAME` | Optional; `prismml-bonsai` |",
+                   'project_name=os.environ.get("FI_PROJECT_NAME") or "prismml-bonsai"',
                    "thinking_budget_tokens", "tool_calls", "not-needed", "cost",
                    # A real llama-server reports the loaded file's absolute path as `model`
                    # unless started with --alias; the README must say so.

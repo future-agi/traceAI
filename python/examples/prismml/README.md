@@ -32,6 +32,7 @@ Start your server first, following the [PrismML server docs](https://docs.prismm
 | `PRISMML_MODEL` | Optional; `bonsai` | Model name sent by the OpenAI client |
 | `PRISMML_BASE_URL` | Optional; `http://localhost:8080/v1` | OpenAI client; use `http://localhost:8081/v1` for MLX |
 | `FI_BASE_URL` | Optional; the tracer's Future AGI collector default | Tracer export origin |
+| `FI_PROJECT_NAME` | Optional; `prismml-bonsai` | Tracer only; the Observe project name |
 | `FI_HIDE_INPUTS` | Optional; `true` masks input attributes | Tracer only |
 | `FI_HIDE_OUTPUTS` | Optional; `true` masks output attributes | Tracer only |
 | `FI_HIDE_LLM_INVOCATION_PARAMETERS` | Optional; `true` omits invocation parameters | Tracer only |
@@ -54,19 +55,20 @@ python src/app.py
 python src/app.py --stream
 ```
 
-Replace the Future AGI placeholders with your keys. `--prompt` changes the question and `--model` overrides `PRISMML_MODEL`. The app prints answer text and flushes the tracer.
+Replace the Future AGI placeholders with your keys. `--prompt` changes the question and `--model` overrides `PRISMML_MODEL`. Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or empty, they go to `prismml-bonsai`. The app prints answer text and flushes the tracer.
 
 ## Code
 
 Instrument before creating the client. Future AGI keys are read by the tracer from its environment.
 
 ```python
+import os
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from openai import OpenAI
 from traceai_openai import OpenAIInstrumentor
-provider = register(
-    project_name="prismml-bonsai", project_type=ProjectType.OBSERVE,
+provider = register(  # FI_PROJECT_NAME overrides, as in src/app.py
+    project_name=os.environ.get("FI_PROJECT_NAME") or "prismml-bonsai", project_type=ProjectType.OBSERVE,
     set_global_tracer_provider=False, verbose=False,
 )
 OpenAIInstrumentor().instrument(tracer_provider=provider)
