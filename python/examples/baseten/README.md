@@ -28,6 +28,7 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `BASETEN_MODEL` | Required Model APIs slug; `--model` overrides it | Baseten request |
 | `BASETEN_BASE_URL` | Optional override; defaults to `https://inference.baseten.co/v1` | OpenAI client |
 | `FI_BASE_URL` | Optional Future AGI collector origin | Tracer only |
+| `FI_PROJECT_NAME` | Optional Observe project name; defaults to `baseten-openai` | Tracer only |
 
 Choose a slug from Baseten's current [Model APIs table](https://docs.baseten.co/inference/model-apis/overview).
 `zai-org/GLM-5.2` is a documentation example, not a model availability guarantee.
@@ -46,6 +47,8 @@ python src/app.py --stream
 ```
 
 You can also pass `--model <slug>` and `--prompt "What is the capital of France?"`.
+Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or
+empty, they go to `baseten-openai`.
 The app flushes traces before returning. The SDK appends a trailing slash to
 `client.base_url`: `https://inference.baseten.co/v1/`. Its request goes to
 `https://inference.baseten.co/v1/chat/completions`.
@@ -61,8 +64,8 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from openai import OpenAI
 from traceai_openai import OpenAIInstrumentor
-provider = register(project_name="baseten-openai", project_type=ProjectType.OBSERVE,
-                    set_global_tracer_provider=False, verbose=False)
+provider = register(project_name=os.environ.get("FI_PROJECT_NAME") or "baseten-openai",  # as in src/app.py
+                    project_type=ProjectType.OBSERVE, set_global_tracer_provider=False, verbose=False)
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 with OpenAI(base_url="https://inference.baseten.co/v1",
             api_key=os.environ["BASETEN_API_KEY"]) as client:

@@ -271,6 +271,29 @@ def test_response_model_differs_from_request(receiver, start_tracing):
     assert body["choices"][0]["message"]["content"] == ANSWER
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "baseten-openai"),
+    ("", None, "baseten-openai"),
+    ("baseten-from-env", None, "baseten-from-env"),
+    ("baseten-from-env", "baseten-explicit", "baseten-explicit"),
+], ids=["default", "empty", "env", "explicit"])
+def test_setup_tracing_project_name(env_project, explicit, expected, monkeypatch, receiver):
+    # FI_PROJECT_NAME overrides the recipe default; an explicit argument wins over both.
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project is not None:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+    provider = app.setup_tracing(explicit)
+    try:
+        with mock_client(lambda request: httpx.Response(200, json=completion(MODEL))) as client:
+            chat(client)
+        assert provider.force_flush()
+        one_span(receiver, expected)
+    finally:
+        OpenAIInstrumentor().uninstrument()
+        provider.force_flush()
+        provider.shutdown()
+
+
 def test_usage_absent_is_omitted(receiver, start_tracing):
     provider, project = start_tracing()
     with mock_client(lambda _: httpx.Response(200, json=completion(MODEL, usage=False))) as client:
@@ -367,11 +390,14 @@ def test_session_context_is_independent_of_routing_header(receiver, start_tracin
     assert all("s-1" not in str(request.headers) for request in seen)
 
 
+@pytest.mark.parametrize("env_project", [None, "baseten-subprocess-env"], ids=["default-project", "env-project"])
 @pytest.mark.parametrize("stream", [False, True], ids=["chat", "stream"])
-def test_app_subprocess_loopback(stream, receiver, tmp_path):
+def test_app_subprocess_loopback(stream, env_project, receiver, tmp_path):
     with FakeOpenAI() as fake:
         child_env = subprocess_env(tmp_path)
         child_env[app.BASE_URL_ENV] = fake.base_url
+        if env_project:
+            child_env["FI_PROJECT_NAME"] = env_project
         command = [sys.executable, str(RECIPE / "src" / "app.py")]
         if stream:
             command.append("--stream")
@@ -380,7 +406,7 @@ def test_app_subprocess_loopback(stream, receiver, tmp_path):
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == ANSWER
         assert VENDOR_KEY not in result.stdout + result.stderr
-        _, attrs = one_span(receiver, "baseten-openai", model=None if stream else MODEL)
+        _, attrs = one_span(receiver, env_project or "baseten-openai", model=None if stream else MODEL)
         if stream:
             assert ANSWER in attrs["output.value"]
             assert not any(key.startswith("gen_ai.usage.") for key in attrs)
@@ -494,8 +520,10 @@ def test_readme_contract_and_pins():
     assert "no `gen_ai.usage.*` attributes" in readme
     assert "current `traceai-openai` behaviour" in readme
     for variable in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY",
-                     "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+                     "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert variable in readme
+    assert "| `FI_PROJECT_NAME` | Optional Observe project name; defaults to `baseten-openai` |" in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "baseten-openai"' in readme
     # Literal environment lookups in the app must also be documented.
     for variable in re.findall(r'os\.environ(?:\.get\(|\[)["\']([^"\']+)', inspect.getsource(app)):
         assert variable in readme
