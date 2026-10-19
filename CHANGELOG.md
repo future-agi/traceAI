@@ -22,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2026-10-18]
+
+### TypeScript
+
+#### @traceai/fi-core `v1.1.0`
+- ✨ New `hideErrorDetails` trace config option (`FI_HIDE_ERROR_DETAILS`). Unset, it turns on with any content-hiding flag (`hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`, `hideInputText`, `hideOutputText`); explicit `true` / `false` wins. When on, ERROR statuses have no description and exception events keep only `exception.type`.
+- ✨ Error spans carry `error.type` (provider error code, else error class).
+- 🐛 Status descriptions are the error message only, never a stack trace.
+- 🐛 `FI_HIDE_*` env vars apply even when no `traceConfig` is passed.
+- ⚠️ Behaviour change: users of the hide flags now also get error details hidden.
+
+#### @traceai/langchain `v0.1.3`
+- 🐛 Status description is the error message, not LangChain's `run.error` (message plus full stack trace).
+
+#### @traceai/openai-agents `v0.1.1`
+- 🐛 Status description is the error message only; error `data` moves to the exception event.
+
+---
+
 ## [2025-07-08]
 
 ### Python

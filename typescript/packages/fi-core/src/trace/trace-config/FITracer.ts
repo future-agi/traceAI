@@ -103,19 +103,26 @@ import {
       const { attributes } = opts ?? {};
       const contextAttributes = getAttributesFromContext(ctx);
       const mergedAttributes = { ...contextAttributes, ...attributes };
-      return this.tracer.startActiveSpan(
+      // Same steps as the SDK's Tracer.startActiveSpan, but the FISpan (not the raw span) becomes
+      // the active span, so code that reaches the span through the context
+      // (trace.getActiveSpan()?.recordException(...), setStatus(...)) still goes through the
+      // FISpan masking and error-detail policy.
+      const span: Span = this.tracer.startSpan(
         name,
         { ...opts, attributes: undefined },
         ctx,
-        (span: Span) => {
-          const fiSpan = new FISpan({
-            span,
-            config: this.config,
-          });
-          fiSpan.setAttributes(mergedAttributes);
-          return fn(fiSpan);
-        },
       );
+      const fiSpan = new FISpan({
+        span,
+        config: this.config,
+      });
+      fiSpan.setAttributes(mergedAttributes);
+      return apiContext.with(
+        trace.setSpan(ctx, fiSpan),
+        fn,
+        undefined,
+        fiSpan,
+      ) as ReturnType<F>;
     }
   
     startSpan(name: string, options?: SpanOptions, context?: Context): FISpan {

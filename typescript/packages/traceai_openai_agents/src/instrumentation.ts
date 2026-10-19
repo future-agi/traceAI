@@ -38,7 +38,7 @@ interface AgentSpan {
   startedAt?: string;
   endedAt?: string;
   spanData: SpanData;
-  error?: { message: string; data?: string };
+  error?: { message: string; data?: string | Record<string, unknown> };
 }
 
 interface SpanData {
@@ -190,10 +190,17 @@ export class FITracingProcessor implements TracingProcessor {
 
     // Set status based on error
     if (agentSpan.error) {
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: `${agentSpan.error.message}: ${agentSpan.error.data || ""}`,
+      const { message, data } = agentSpan.error;
+      // The status description is the error message only. `data` (e.g. the tool's
+      // error text) can quote content, so it only goes on the exception event, which
+      // FISpan strips when error details are hidden.
+      span.recordException({
+        message:
+          data == null || data === ""
+            ? message
+            : `${message}: ${typeof data === "string" ? data : safeJsonStringify(data)}`,
       });
+      span.setStatus({ code: SpanStatusCode.ERROR, message });
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
     }

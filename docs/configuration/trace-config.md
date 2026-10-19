@@ -73,9 +73,20 @@ const instrumentation = new OpenAIInstrumentation({
         hideOutputText: true,
         hideEmbeddingVectors: true,
         base64ImageMaxLength: 16000,
+        // Optional: defaults to on whenever any of the content-hiding flags above is on
+        hideErrorDetails: true,
     }
 });
 ```
+
+### Error details (TypeScript)
+
+Error text can quote hidden content: provider error bodies echo prompts, and stack traces carry local file paths. `@traceai/fi-core` 1.1.0+ handles errors like this:
+
+- Always: the span keeps status `ERROR` and gets `error.type` (the provider error code such as `model_not_found` when there is one, otherwise the error class name). The status description is the error message only, never a stack trace. The stack trace stays in `exception.stacktrace` on the exception event.
+- With `hideErrorDetails` on: the `ERROR` status has no description, exception events keep only `exception.type`, and `exception.message`, `exception.stacktrace`, `error.message` and instrumentor keys ending in `.error.message` / `.error_message` are dropped.
+
+`hideErrorDetails` (env `FI_HIDE_ERROR_DETAILS`) is tri-state. When you don't set it, it is on if any of `hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`, `hideInputText` or `hideOutputText` is on. Set it to `false` explicitly to keep error details while hiding content.
 
 ## Configuration Precedence
 

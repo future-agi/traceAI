@@ -344,9 +344,25 @@ const instrumentation = new OpenAIInstrumentation({
         hideOutputText: false,
         hideEmbeddingVectors: true,
         base64ImageMaxLength: 16000,
+        // Optional. Unset, it is on whenever any of hideInputs, hideOutputs,
+        // hideInputMessages, hideOutputMessages, hideInputText or hideOutputText is on.
+        hideErrorDetails: true,
     }
 });
 ```
+
+### Error details
+
+A failed span always keeps status `ERROR` and gets `error.type` (the provider error code such as
+`model_not_found` or `not_found_error` when the error has one, otherwise the error class name).
+Its status description is the error message only, never a stack trace; the stack trace stays in
+`exception.stacktrace` on the exception event.
+
+With `hideErrorDetails` on (env `FI_HIDE_ERROR_DETAILS`), the `ERROR` status has no description,
+exception events keep only `exception.type`, and `exception.message`, `exception.stacktrace`,
+`error.message` (and instrumentor keys ending in `.error.message` / `.error_message`) are dropped.
+Error text is content: provider error bodies can quote the prompt back. Set
+`hideErrorDetails: false` to keep error details while hiding content.
 
 ## Error Handling
 
