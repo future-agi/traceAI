@@ -10,6 +10,7 @@ import logging
 import threading
 from typing import Any, Dict, Iterable, Tuple
 
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 # Import Future AGI span attribute keys
@@ -52,6 +53,14 @@ def _first(attributes: Dict[str, Any], keys: Iterable[str]) -> Tuple[bool, Any]:
 
 def _has(attributes: Dict[str, Any], keys: Iterable[str]) -> bool:
     return _first(attributes, keys)[0]
+
+
+def _present(value: Any) -> bool:
+    """Whether a content value holds something: not None and not an empty string.
+
+    `_ensure_json_string("")` would turn an empty value into the JSON text `'""'`.
+    """
+    return value is not None and value != ""
 
 
 def _ensure_json_string(value: Any) -> str:
@@ -166,7 +175,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     # Input: User speech/text (LK_USER_INPUT)
     # Output: often not directly on this span, but might be aggregated or absent
     found, user_input = _first(attributes, LK_USER_INPUT)
-    if found:
+    if found and _present(user_input):
         input_val = user_input
         raw_input_val = user_input
 
@@ -179,7 +188,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
         raw_input_val = chat_ctx
 
     found, response_text = _first(attributes, LK_RESPONSE_TEXT)
-    if found:
+    if found and _present(response_text):
         output_val = response_text
         raw_output_val = output_val
 
@@ -200,7 +209,7 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     # Input: Text to speak (LK_TTS_INPUT_TEXT)
     # Output: Audio (not usually in attributes, maybe just success)
     found, tts_input = _first(attributes, LK_TTS_INPUT_TEXT)
-    if found:
+    if found and _present(tts_input):
         input_val = tts_input
         raw_input_val = tts_input
         # TTS output is audio, we don't have the bytes here usually.
@@ -209,12 +218,12 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     # Input: Arguments (LK_FUNCTION_TOOL_ARGS)
     # Output: Tool Output (LK_FUNCTION_TOOL_OUTPUT)
     found, tool_args = _first(attributes, LK_FUNCTION_TOOL_ARGS)
-    if found:
+    if found and _present(tool_args):
          input_val = tool_args
          raw_input_val = tool_args
 
     found, tool_output = _first(attributes, LK_FUNCTION_TOOL_OUTPUT)
-    if found:
+    if found and _present(tool_output):
          output_val = tool_output
          raw_output_val = tool_output
 
@@ -359,28 +368,42 @@ class BaseMappedSpanExporter(SpanExporter):
             return base
 
     def export(self, spans) -> SpanExportResult:
+        # The spans handed in are shared with every other processor on the provider (LiveKit
+        # Cloud's exporter among them), and LiveKit redacts by attribute name. The mapping copies
+        # conversation content under names with no "pii" segment (input.value, output.value, the
+        # metadata JSON, gen_ai.conversation.id, user.id), so it must never be written back onto
+        # a span we were handed: it goes on a copy, as LiveKit's own pii.redact() builds one.
+        exported = []
         for span in spans:
             try:
-                if (
-                    hasattr(span, "_attributes")
-                    and getattr(span, "_attributes") is not None
-                ):
-                    original_attributes = getattr(span, "_attributes")
-
-                    base_attributes = dict(original_attributes)
-                    
-                    # Include span name in mapping logic if needed, though _convert_attributes currently only takes dict
-                    # We could pass span name to _map_attributes_to_fi_conventions if we refactored, 
-                    # but attribute-based detection is usually robust enough for LiveKit.
-                    
-                    mapped_attributes = self._convert_attributes(base_attributes)
-
-                    setattr(span, "_attributes", mapped_attributes)
-
+                exported.append(self._mapped_copy(span))
             except Exception as exc:
-                # The span is still exported (below), without the Future AGI mapping.
+                # The span is still exported, as it is, without the Future AGI mapping.
                 _warn_mapping_failed_once(exc)
-                continue
+                exported.append(span)
 
-        return super().export(spans)
+        return super().export(exported)
 
+    def _mapped_copy(self, span):
+        """A copy of `span` carrying the mapped attributes; `span` itself when there is nothing to map."""
+        attributes = span.attributes
+        if not attributes:
+            return span
+        original = dict(attributes)
+        mapped = self._convert_attributes(dict(original))
+        if mapped == original:
+            return span
+        return ReadableSpan(
+            name=span.name,
+            context=span.context,
+            parent=span.parent,
+            resource=span.resource,
+            attributes=mapped,
+            events=span.events,
+            links=span.links,
+            kind=span.kind,
+            status=span.status,
+            start_time=span.start_time,
+            end_time=span.end_time,
+            instrumentation_scope=span.instrumentation_scope,
+        )

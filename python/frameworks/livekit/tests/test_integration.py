@@ -34,8 +34,10 @@ from fi_instrumentation.otel import (  # noqa: E402
     Transport,
     register,
 )
+from fi_instrumentation.otel import HTTPSpanExporter as _FIHTTPSpanExporter  # noqa: E402
 from livekit.agents import Agent, AgentSession, llm  # noqa: E402
 from livekit.agents.telemetry import pii, traces  # noqa: E402
+from livekit.agents.telemetry.traces import _GatedSpanExporter  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS  # noqa: E402
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
     ExportTraceServiceRequest,
@@ -81,12 +83,13 @@ def make_provider(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     saved_tracer_provider = traces.tracer._tracer_provider
     providers: List[Any] = []
 
-    def _make(transport: Transport = Transport.HTTP) -> Any:
+    def _make(transport: Transport = Transport.HTTP, batch: bool = True) -> Any:
         provider = register(
             project_name="livekit-test",
             set_global_tracer_provider=False,
             verbose=False,
             transport=transport,
+            batch=batch,
         )
         providers.append(provider)
         monkeypatch.setattr(
@@ -199,6 +202,71 @@ def test_register_alone_still_lets_add_span_processor_replace_its_default(
     provider.add_span_processor(other_processor)
 
     assert _processors(provider) == [other_processor]
+
+
+def test_livekit_cloud_never_receives_our_copies_of_redacted_content(
+    monkeypatch: pytest.MonkeyPatch, make_provider: Any
+) -> None:
+    # Our exporter maps lk.pii.* content into keys with no "pii" segment (input.value, output.value,
+    # the metadata JSON, gen_ai.conversation.id, user.id). LiveKit redacts by key name, so those
+    # copies must never be written onto the span the other exporters on the provider share.
+    # The mapping runs for real; only the network call under it is replaced.
+    monkeypatch.delenv("LIVEKIT_TELEMETRY_ALLOW_PII", raising=False)
+    reached_the_network: List[Any] = []
+
+    def record_instead_of_send(self: Any, spans: Any) -> SpanExportResult:
+        reached_the_network.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    monkeypatch.setattr(_FIHTTPSpanExporter, "export", record_instead_of_send)
+    provider = make_provider(batch=False)
+    assert enable_http_attribute_mapping() is True
+
+    # LiveKit's Cloud exporter comes after ours: it holds the spans of a job that has not decided
+    # on redaction yet, and exports the redacted snapshot of them once the job decides.
+    cloud = InMemorySpanExporter()
+    gate = _GatedSpanExporter(cloud, export_jobs={})
+    gate.open_job("job-1")
+    provider.add_span_processor(SimpleSpanProcessor(gate))
+
+    span = provider.get_tracer("t").start_span(
+        "agent_turn",
+        attributes={
+            "job_id": "job-1",
+            "lk.pii.user_input": "my card is 4111",
+            "lk.pii.response.text": "noted",
+            "lk.pii.room_name": "room-secret",
+            "lk.pii.participant_identity": "caller-secret",
+            "lk.pii.instructions": "secret instructions",
+        },
+    )
+    span.end()
+    provider.force_flush()
+    gate.job_registered("job-1", traces_enabled=True, redacted=True)
+
+    # The mapping ran: our exporter was handed the span with its content under the FI names.
+    assert [s.name for s in reached_the_network] == ["agent_turn"]
+    ours = reached_the_network[0].attributes
+    assert "4111" in ours[SpanAttributes.INPUT_VALUE]
+    assert ours[SpanAttributes.GEN_AI_CONVERSATION_ID] == "room-secret"
+    assert ours[SpanAttributes.USER_ID] == "caller-secret"
+    assert "secret instructions" in ours[SpanAttributes.METADATA]
+
+    # LiveKit Cloud's exporter got exactly that span, redacted, with none of our copies.
+    (received,) = cloud.get_finished_spans()
+    assert received.name == "agent_turn"
+    for key in (
+        SpanAttributes.INPUT_VALUE,
+        SpanAttributes.OUTPUT_VALUE,
+        SpanAttributes.GEN_AI_CONVERSATION_ID,
+        SpanAttributes.USER_ID,
+    ):
+        assert key not in received.attributes
+    assert [k for k in received.attributes if "pii" in k.split(".")] == []
+    for value in received.attributes.values():
+        text = str(value)
+        for secret in ("4111", "room-secret", "caller-secret", "secret instructions"):
+            assert secret not in text
 
 
 # --- One agent turn, end to end -------------------------------------------------------------
