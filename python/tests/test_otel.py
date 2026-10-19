@@ -510,6 +510,16 @@ class TestIntegration:
         assert provider is not None
         assert hasattr(provider, 'add_span_processor')
 
+        # clean_env points the collector at a closed local port, so no test reaches the real one.
+        assert os.environ["FI_BASE_URL"] == "http://127.0.0.1:9"
+        assert os.environ["FI_GRPC_URL"] == "http://127.0.0.1:9"
+        exporters = [
+            processor.span_exporter
+            for processor in provider._active_span_processor._span_processors
+        ]
+        assert exporters
+        assert all(exporter._endpoint.startswith("http://127.0.0.1:9/") for exporter in exporters)
+
     def test_error_handling_network_failure(self, mock_requests):
         """Test error handling for network failures."""
         mock_requests['post'].side_effect = Exception("Network error")

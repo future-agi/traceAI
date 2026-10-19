@@ -5,8 +5,12 @@ name: Python tests
 #   - the tests of each Python package under python/frameworks/, and of python/traceai/, that the PR touches,
 #     on that package's own dependencies (plus the python/tests/test_framework_*.py
 #     files that belong to it).
-# Editing this workflow, .github/scripts/python_test_plan.py or
-# .github/python-tests-known-broken.txt tests every package.
+# Editing this workflow, the scripts under .github/scripts/ (the planner, its tests and the
+# known-broken verdict) or .github/python-tests-known-broken.txt tests every package.
+# So does a change to python/fi_instrumentation/, python/pyproject.toml or python/poetry.lock:
+# each package is then tested against this repo's fi_instrumentation (the core_install step).
+# A change to python/tests/conftest.py or pytest.ini tests the packages that have core tests.
+# A moved file plans both the package it left and the one it entered.
 # A package on .github/python-tests-known-broken.txt still runs and shows a warning, but its
 # failures do not fail the check; if its tests pass, the "Known-broken verdict" step fails the
 # job until the package is taken off the list.
@@ -16,6 +20,9 @@ name: Python tests
 on:
   pull_request:
     branches: [main, dev]
+    # "edited" re-runs a retargeted PR, and a title or body edit too. No `if:` skips those: a skipped
+    # run would cancel a real one, and its skipped result job could count as green.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main, dev]
   workflow_dispatch:
@@ -25,7 +32,9 @@ permissions:
 
 concurrency:
   group: python-tests-${{ github.ref }}
-  # A newer push cancels an older PR run, but never a run on main or dev.
+  # A newer run of the same PR cancels the older one. A running push to main or dev is never
+  # cancelled, but a queued one is replaced by the newer push (GitHub keeps one running and one
+  # pending run per group, even when cancel-in-progress is false).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -53,6 +62,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Test the planner and the known-broken verdict
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
       - name: Work out which packages this change touches
         id: plan
         env:
@@ -62,30 +74,28 @@ jobs:
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           PUSH_AFTER_SHA: ${{ github.event.after }}
         run: |
-          all_files() {
+          plan_all() {
             echo "No diff to read: treating every file as changed, so every package runs." >&2
-            git ls-files
+            python3 .github/scripts/python_test_plan.py --all > "$RUNNER_TEMP/plan.json"
           }
 
           case "$EVENT_NAME" in
             pull_request)
-              git -c core.quotepath=off diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+              python3 .github/scripts/python_test_plan.py --diff "$PR_BASE_SHA...$PR_HEAD_SHA" > "$RUNNER_TEMP/plan.json"
               ;;
             push)
               if [ "$PUSH_BEFORE_SHA" = "0000000000000000000000000000000000000000" ] \
                  || ! git cat-file -e "$PUSH_BEFORE_SHA^{commit}" 2>/dev/null; then
-                all_files > "$RUNNER_TEMP/changed.txt"
+                plan_all
               else
-                git -c core.quotepath=off diff --name-only "$PUSH_BEFORE_SHA..$PUSH_AFTER_SHA" > "$RUNNER_TEMP/changed.txt"
+                python3 .github/scripts/python_test_plan.py --diff "$PUSH_BEFORE_SHA..$PUSH_AFTER_SHA" > "$RUNNER_TEMP/plan.json"
               fi
               ;;
             *)
-              all_files > "$RUNNER_TEMP/changed.txt"
+              plan_all
               ;;
           esac
 
-          echo "Changed files: $(wc -l < "$RUNNER_TEMP/changed.txt")"
-          python3 .github/scripts/python_test_plan.py < "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/plan.json"
           jq . "$RUNNER_TEMP/plan.json"
 
           {
@@ -239,33 +249,7 @@ jobs:
           TESTS: ${{ steps.tests.outcome }}
           OWN_TESTS: ${{ matrix.package.own_tests }}
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
-        run: |
-          echo "outcomes: install (poetry)=$INSTALL_POETRY install (hatch)=$INSTALL_HATCH fi_instrumentation=$CORE_INSTALL tests=$TESTS"
-          install_failed=""
-          [ "$INSTALL_POETRY" = "failure" ] && install_failed="${install_failed:+$install_failed, }install (poetry)"
-          [ "$INSTALL_HATCH" = "failure" ] && install_failed="${install_failed:+$install_failed, }install (hatch)"
-          [ "$CORE_INSTALL" = "failure" ] && install_failed="${install_failed:+$install_failed, }fi_instrumentation install"
-          # The Tests step is skipped only when an earlier step (checkout or setup) failed outright, or
-          # the job was cancelled: that is not a pass, and the job fails with it.
-          if [ "$TESTS" = "skipped" ]; then
-            echo "::error::$PKG_NAME is known broken ($REASON), but its tests did not run (an earlier step failed, or the job was cancelled)"
-            exit 1
-          fi
-          # The tests passed (whatever an install step did): the line has to come off the list.
-          if [ "$TESTS" = "success" ]; then
-            if [ "$OWN_TESTS" != "true" ] && [ -z "$CORE_TESTS" ]; then
-              echo "::error::$PKG_NAME is on the known-broken list but has no tests; remove its line from .github/python-tests-known-broken.txt"
-            else
-              echo "::error::$PKG_NAME is on the known-broken list but its tests pass; remove its line from .github/python-tests-known-broken.txt${install_failed:+ (failed in this run: $install_failed)}"
-            fi
-            exit 1
-          fi
-          # The tests failed. After a failed install that may not be the listed reason: say so.
-          if [ -n "$install_failed" ]; then
-            echo "::warning::$PKG_NAME is known broken, but in this run these steps failed: $install_failed; its test results may not reflect the listed reason ($REASON)"
-            exit 0
-          fi
-          echo "::warning::$PKG_NAME is known broken ($REASON): its failures do not fail the check"
+        run: bash .github/scripts/known_broken_verdict.sh
 
   result:
     name: Python tests

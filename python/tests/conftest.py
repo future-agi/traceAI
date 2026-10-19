@@ -13,8 +13,6 @@ def clean_env():
     
     # Clear relevant environment variables
     env_vars_to_clear = [
-        "FI_BASE_URL",
-        "FI_GRPC_URL", 
         "FI_PROJECT_NAME",
         "FI_PROJECT_VERSION_NAME",
         "FI_API_KEY",
@@ -33,6 +31,12 @@ def clean_env():
     
     for var in env_vars_to_clear:
         os.environ.pop(var, None)
+
+    # The collector URLs point at a closed local port, not at the real collector: a test that
+    # calls register() and exports spans at shutdown never reaches the network. A test that
+    # needs them absent (a default-endpoint test) removes them itself.
+    os.environ["FI_BASE_URL"] = "http://127.0.0.1:9"
+    os.environ["FI_GRPC_URL"] = "http://127.0.0.1:9"
     
     yield
     

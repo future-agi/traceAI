@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 """Decide which Python packages' tests the python-tests workflow runs for a change.
 
-Reads the changed paths (one per line, relative to the repo root) on stdin and prints
-one JSON object for $GITHUB_OUTPUT:
+Reads the changed paths and prints one JSON object for $GITHUB_OUTPUT:
 
     {"packages": [...], "run_all": bool, "core_changed": bool}
+
+The paths come from one of three places (see main):
+
+* ``--diff <range>``: ``git diff --name-only --no-renames -z <range>``. Renames are off, so a
+  file that moved lists both its old and its new path (the package it left is planned too),
+  and ``-z`` keeps a tab, a quote or a backslash in a name exactly as written.
+* ``--all``: ``git ls-files -z``, every tracked file (no diff to read).
+* neither: newline-separated paths on stdin, relative to the repo root (for local use).
 
 * A package is a directory ``python/frameworks/<name>/`` that holds a ``pyproject.toml``
   (``tests_e2e`` and ``__init__.py`` are not packages), plus ``python/traceai/`` (the
   one-liner SDK, listed in EXTRA_PACKAGE_DIRS; its name is ``traceai``).
 * A package is touched by any changed path under its directory, or by a changed
   ``python/tests/test_framework_<key>.py`` that maps to it (see FRAMEWORK_TEST_PACKAGES).
-* ``run_all`` is true when the PR changes the CI itself (the workflow, this script or the
-  known-broken list): then every package is listed.
+* ``run_all`` is true when the PR changes the CI itself (any path in CI_FILES: the workflow,
+  this script, its tests, the known-broken verdict script or the known-broken list): then every
+  package is listed.
 * ``core_changed`` is true when ``python/fi_instrumentation/``, ``python/pyproject.toml``
-  or ``python/poetry.lock`` changed: the package jobs then install the repo's
-  fi_instrumentation over the one their own lock or range resolves. Otherwise the core test
-  files run with ``python -P`` (the repo's source is not on sys.path) and so import the
+  or ``python/poetry.lock`` changed. Every package is then listed (like ``run_all``): the
+  package jobs install the repo's fi_instrumentation over the one their own lock or range
+  resolves, and test against it. Without a core change the core test files run with
+  ``python -P`` (the repo's source is not on sys.path) and so import the
   fi-instrumentation-otel installed in the package's environment.
 * A change to ``python/tests/conftest.py`` or ``python/tests/pytest.ini`` (shared by every
-  core test file) touches every package that has core tests. So does ``core_changed``: the
-  core test files then run against the changed core.
+  core test file) touches only the packages that have core tests.
 
 Each package entry carries ``name``, ``dir``, ``backend`` ("poetry" or "hatch"),
 ``own_tests`` (the package has a ``tests/`` folder with test files), ``core_tests``
@@ -30,14 +38,16 @@ one ``<package dir name> | <reason>`` line per package; ``#`` comments and blank
 ignored; the reason is "" for a package that is not listed). The workflow lets a listed
 package fail without failing the check, and fails when a listed package passes.
 
-Paths are read as written (the workflow's git diff runs with ``core.quotepath=off``).
-Standard library only. It fails loudly (non-zero exit, message on stderr) on a
+Paths from git are used exactly as written (stdin lines are stripped). Standard library only,
+plus git for --diff and --all. It fails loudly (non-zero exit, message on stderr) on a
 test_framework file that maps to no package, on a build backend it does not know, and on a
 missing or malformed known-broken list.
 """
 
+import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,6 +60,8 @@ KNOWN_BROKEN_FILE = ".github/python-tests-known-broken.txt"
 CI_FILES = (
     ".github/workflows/python-tests.yml",
     ".github/scripts/python_test_plan.py",
+    ".github/scripts/test_python_test_plan.py",
+    ".github/scripts/known_broken_verdict.sh",
     KNOWN_BROKEN_FILE,
 )
 CORE_PATHS = ("python/pyproject.toml", "python/poetry.lock")
@@ -185,7 +197,7 @@ def package_for_test_file(rel_path, packages):
 
 
 def plan(changed, root=REPO_ROOT):
-    changed = [line.strip() for line in changed if line.strip()]
+    changed = [path for path in changed if path]
     packages = discover_packages(root)
 
     # Every test_framework file on disk belongs to a package (and fails loudly if not),
@@ -202,15 +214,13 @@ def plan(changed, root=REPO_ROOT):
         path.startswith(CORE_PREFIX) or path in CORE_PATHS for path in changed
     )
 
-    if run_all:
+    if run_all or core_changed:
+        # A core change is installed into every package's environment (the core_install step).
         touched = set(packages)
     else:
         touched = set()
-        if core_changed or any(path in CORE_TEST_SHARED for path in changed):
+        if any(path in CORE_TEST_SHARED for path in changed):
             touched.update(pkg["name"] for pkg in packages.values() if pkg["core_tests"])
-        if core_changed:
-            # The traceai SDK is a thin wrapper over fi_instrumentation: a core change tests it too.
-            touched.update(pkg["name"] for pkg in packages.values() if pkg["dir"] in EXTRA_PACKAGE_DIRS)
         for path in changed:
             owner = next(
                 (pkg["name"] for pkg in packages.values() if path.startswith(f"{pkg['dir']}/")),
@@ -228,9 +238,41 @@ def plan(changed, root=REPO_ROOT):
     }
 
 
-def main():
+def changed_paths(rev_range, root=REPO_ROOT):
+    """Return the changed paths of a git range, or every tracked file when rev_range is None.
+
+    Renames are off (--no-renames): a moved file lists its old and its new path, so the
+    package it left is planned too. -z keeps tabs, quotes and backslashes in a name as written.
+    """
+    if rev_range is None:
+        cmd = ["git", "ls-files", "-z"]
+    else:
+        cmd = ["git", "-c", "core.quotepath=off", "diff", "--name-only", "--no-renames", "-z", rev_range]
     try:
-        result = plan(sys.stdin.read().splitlines())
+        done = subprocess.run(cmd, cwd=root, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", "replace").strip()
+        raise PlanError(f"{' '.join(cmd)} failed (exit {exc.returncode}): {stderr}") from exc
+    except OSError as exc:
+        raise PlanError(f"{' '.join(cmd)}: cannot run git ({exc.strerror or exc})") from exc
+    return [item.decode("utf-8", "surrogateescape") for item in done.stdout.split(b"\0") if item]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--diff", metavar="RANGE", help="plan from the paths `git diff RANGE` changes")
+    source.add_argument("--all", action="store_true", help="plan from every tracked file")
+    args = parser.parse_args(argv)
+    try:
+        if args.diff is not None:
+            changed = changed_paths(args.diff)
+        elif args.all:
+            changed = changed_paths(None)
+        else:
+            changed = [line.strip() for line in sys.stdin.read().splitlines()]
+        print(f"Changed files: {len([path for path in changed if path])}", file=sys.stderr)
+        result = plan(changed)
     except PlanError as exc:
         print(f"python_test_plan: {exc}", file=sys.stderr)
         return 1

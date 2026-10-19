@@ -20,8 +20,9 @@ from fi_instrumentation.settings import (
 class TestEnvironmentVariableGetters:
     """Test environment variable getter functions."""
 
-    def test_get_env_collector_endpoint_default(self, clean_env):
+    def test_get_env_collector_endpoint_default(self, clean_env, monkeypatch):
         """Test default collector endpoint."""
+        monkeypatch.delenv("FI_BASE_URL", raising=False)
         result = get_env_collector_endpoint()
         assert result == "https://api.futureagi.com"
 
@@ -31,8 +32,9 @@ class TestEnvironmentVariableGetters:
         result = get_env_collector_endpoint()
         assert result == "https://custom.example.com"
 
-    def test_get_env_grpc_collector_endpoint_default(self, clean_env):
+    def test_get_env_grpc_collector_endpoint_default(self, clean_env, monkeypatch):
         """Test default gRPC collector endpoint."""
+        monkeypatch.delenv("FI_GRPC_URL", raising=False)
         result = get_env_grpc_collector_endpoint()
         assert result == "https://grpc.futureagi.com"
 
