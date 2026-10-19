@@ -10,13 +10,13 @@ name: Python tests
 # A package on .github/python-tests-known-broken.txt still runs and shows a warning, but its
 # failures do not fail the check; if its tests pass, the "Known-broken verdict" step fails the
 # job until the package is taken off the list.
-# The "Python tests" job at the end is the one check to mark required on main.
+# The "Python tests" job at the end is the one check to mark required on main and dev.
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
@@ -24,7 +24,7 @@ permissions:
 
 concurrency:
   group: python-tests-${{ github.ref }}
-  # A newer push cancels an older PR run, but never a run on main.
+  # A newer push cancels an older PR run, but never a run on main or dev.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -262,6 +262,13 @@ jobs:
             fi
             exit 1
           fi
+          # An install that failed means its tests never ran: say so, rather than blame the listed reason.
+          for outcome in "$INSTALL_POETRY" "$INSTALL_HATCH" "$CORE_INSTALL"; do
+            if [ "$outcome" = "failure" ]; then
+              echo "::warning::$PKG_NAME is known broken, but its install failed in this run, so its tests did not run (listed reason: $REASON)"
+              exit 0
+            fi
+          done
           echo "::warning::$PKG_NAME is known broken ($REASON): its failures do not fail the check"
 
   result:

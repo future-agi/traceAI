@@ -208,6 +208,9 @@ def plan(changed, root=REPO_ROOT):
         touched = set()
         if core_changed or any(path in CORE_TEST_SHARED for path in changed):
             touched.update(pkg["name"] for pkg in packages.values() if pkg["core_tests"])
+        if core_changed:
+            # The traceai SDK is a thin wrapper over fi_instrumentation: a core change tests it too.
+            touched.update(pkg["name"] for pkg in packages.values() if pkg["dir"] in EXTRA_PACKAGE_DIRS)
         for path in changed:
             owner = next(
                 (pkg["name"] for pkg in packages.values() if path.startswith(f"{pkg['dir']}/")),
