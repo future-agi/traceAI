@@ -5,6 +5,10 @@ All notable changes to `traceAI-tavily` will be documented here.
 ## [0.1.0] - Unreleased
 
 ### Fixed
+- Plain `pytest` in the package directory now collects every test, as for the other traceAI Python
+  packages: the three modules that use the shared harness put `python/tests` on `sys.path`
+  themselves instead of relying on a `PYTHONPATH` (collection failed with
+  `No module named 'harness'`).
 - The exception event no longer carries the raw traceback (local file paths, username, code frames):
   `exception.stacktrace` is now the frames-free `<Type>: <message>` summary, with the key (and a hidden
   query) removed. Tests scan the span events in default and hidden-input modes.

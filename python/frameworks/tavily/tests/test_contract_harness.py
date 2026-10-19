@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pytest
 
 pytest.importorskip("tavily", reason="tavily-python must be installed to test its instrumentor")
 pytest.importorskip("opentelemetry.proto", reason="the harness decodes OTLP protobuf")
+
+# The shared harness lives in python/tests (as for the other harness users).
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests"))
 
 from _tavily_fake import CONTENT_MARKERS, FAIL_401, TAVILY_KEY, FakeTavily  # noqa: E402
 from harness import Receiver, _flatten_attributes  # noqa: E402

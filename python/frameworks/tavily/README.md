@@ -249,9 +249,22 @@ receives (`tests/test_privacy.py`, and a live bad-key call: the event holds
 
 ## Tests
 
-Run from the repository root with any `PYTHONPATH` of your own unset; the
-commands set their own. Every Tavily call goes to a loopback fake and every key
-is a placeholder.
+Every Tavily call goes to a loopback fake and every key is a placeholder.
+
+As for the other traceAI Python packages, install the package and run `pytest`
+in its directory (no `PYTHONPATH` needed; the tests that use the shared harness
+in `python/tests/harness` add it to `sys.path` themselves). This tests against
+the published `fi-instrumentation-otel`:
+
+```bash
+cd python/frameworks/tavily
+pip install -e . pytest
+pytest
+```
+
+The two commands below instead run from the repository root against the
+`fi_instrumentation` source in this checkout, with pinned versions. Run them
+with any `PYTHONPATH` of your own unset; they set their own.
 
 Base suite:
 
@@ -276,9 +289,10 @@ PYTHONPATH="python/frameworks/tavily:python:python/tests" uv run --no-project --
   pytest python/frameworks/tavily/tests -q -p no:cacheprovider --noconftest -o addopts= -rs
 ```
 
-The base command skips the 7 measurement tests that run LangChain or LangGraph
-(the AC-01 and AC-04 LangGraph runs, the bare-client run with traceAI-langchain
-on, and the two custom-tool runs, all in `tests/test_measurement.py`); the
+The base command (and plain `pytest` without the LangChain packages installed)
+skips the 7 measurement tests that run LangChain or LangGraph (the AC-01 and
+AC-04 LangGraph runs, the bare-client run with traceAI-langchain on, and the two
+custom-tool runs, all in `tests/test_measurement.py`); the
 second command adds the extras they need and runs them. It pins `wrapt<2`
 (`fi-instrumentation-otel` declares `wrapt ^1.15.0`); the base command takes
 the newest `wrapt`. `--python` can be 3.10, 3.11, 3.12 or 3.13.

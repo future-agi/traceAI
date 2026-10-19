@@ -4,7 +4,10 @@ and the README's test commands."""
 from __future__ import annotations
 
 import ast
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -129,11 +132,14 @@ def _tests_needing_langchain_extras() -> list:
     return gated
 
 
-def test_readme_gives_both_test_commands():
+def test_readme_gives_plain_pytest_and_both_pinned_test_commands():
     section = _readme_tests_section()
     commands = re.findall(r"```bash\n(.*?)```", section, re.S)
-    assert len(commands) == 2, commands
-    base, extras = (" ".join(command.replace("\\\n", " ").split()) for command in commands)
+    assert len(commands) == 3, commands
+    plain, base, extras = (" ".join(command.replace("\\\n", " ").split()) for command in commands)
+    # Plain pytest in the package directory, as for the other packages.
+    assert plain == "cd python/frameworks/tavily pip install -e . pytest pytest"
+    assert "PYTHONPATH" not in plain
     for command in (base, extras):
         assert command.startswith('PYTHONPATH="python/frameworks/tavily:python:python/tests" ')
         assert "--with 'tavily-python==0.8.4'" in command
@@ -145,6 +151,42 @@ def test_readme_gives_both_test_commands():
     assert "--with 'wrapt<2'" in extras
     for pin in ("langchain-community==0.4.2", "langchain-core==1.5.2", "langgraph==1.2.2"):
         assert "--with " + pin in extras, pin
+
+
+def test_plain_pytest_collects_from_the_package_directory():
+    """``pytest`` run in the package directory, as for the other traceAI Python
+    packages, collects every module without a PYTHONPATH that names
+    ``python/tests``: the modules that use the shared harness put it on
+    ``sys.path`` themselves.
+    """
+    import fi_instrumentation
+
+    # Only what an installed package provides: traceai_tavily and
+    # fi_instrumentation. The shared harness directory is left out on purpose.
+    fi_root = Path(fi_instrumentation.__file__).resolve().parents[1]
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "PYTHONPATH" and not key.startswith("PYTEST_")
+    }
+    env["PYTHONPATH"] = os.pathsep.join([str(PACKAGE), str(fi_root)])
+    harness_dir = str(PACKAGE.parents[1] / "tests")
+    assert harness_dir not in env["PYTHONPATH"].split(os.pathsep)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+        cwd=str(PACKAGE),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "ERROR collecting" not in output, output
+    collected = {line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line}
+    for module in ("test_contract_harness.py", "test_example.py", "test_measurement.py"):
+        assert "tests/" + module in collected, (module, sorted(collected))
 
 
 def test_readme_counts_the_tests_that_need_the_langchain_extras():

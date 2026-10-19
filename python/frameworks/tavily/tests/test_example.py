@@ -18,6 +18,9 @@ import pytest
 pytest.importorskip("tavily", reason="tavily-python must be installed to run the example")
 pytest.importorskip("opentelemetry.proto", reason="the harness decodes OTLP protobuf")
 
+# The shared harness lives in python/tests (as for the other harness users).
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests"))
+
 from _tavily_fake import CONTENT_MARKERS, TAVILY_KEY, FakeTavily  # noqa: E402
 from harness import Receiver, _flatten_attributes, run  # noqa: E402
 
