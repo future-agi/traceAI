@@ -78,7 +78,7 @@ def make_client(base_url: str | None = None, api_key: str | None = None, http_cl
 
 def setup_tracing(project_name: str | None = None):
     provider = register(
-        project_name=project_name or "doubleword-example",
+        project_name=project_name or os.environ.get("FI_PROJECT_NAME") or "doubleword-example",
         project_type=ProjectType.OBSERVE,
         set_global_tracer_provider=False,
         verbose=False,

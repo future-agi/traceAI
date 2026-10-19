@@ -185,6 +185,33 @@ def test_realtime_chat_response_model_usage_and_key_separation(journey):
         assert receiver.requests()[0]["resource_attributes"][0]["project_name"] == project
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "doubleword-example"),
+    ("", None, "doubleword-example"),
+    ("doubleword-from-env", None, "doubleword-from-env"),
+    ("doubleword-from-env", "doubleword-explicit", "doubleword-explicit"),
+], ids=["default", "empty", "env", "explicit"])
+def test_setup_tracing_project_name(monkeypatch, env_project, explicit, expected):
+    # FI_PROJECT_NAME overrides the recipe default; an explicit argument wins over both.
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project is not None:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        provider = app.setup_tracing(explicit)
+        try:
+            with mock_client(lambda request: httpx.Response(200, json=completion())) as client:
+                client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Project control"}])
+            only_span(receiver, provider)
+            exports = receiver.requests()
+            assert len(exports) == 1
+            assert exports[0]["resource_attributes"][0]["project_name"] == expected
+        finally:
+            provider.force_flush()
+            OpenAIInstrumentor().uninstrument()
+            provider.shutdown()
+
+
 def test_usage_absent_is_omitted(journey):
     with journey() as (receiver, provider, _), mock_client(lambda r: httpx.Response(200, json=completion(usage=False))) as client:
         client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Usage control"}])
@@ -541,11 +568,14 @@ def child_environment(receiver, fake, directory):
     return env
 
 
+@pytest.mark.parametrize("env_project", [None, "doubleword-subprocess-env"], ids=["default-project", "env-project"])
 @pytest.mark.parametrize("streaming", [False, True])
-def test_app_subprocess_loopback_chat_and_stream(streaming):
+def test_app_subprocess_loopback_chat_and_stream(streaming, env_project):
     with Receiver() as receiver, FakeOpenAI() as fake, tempfile.TemporaryDirectory(dir=RECIPE, prefix=".test-run-") as temporary:
         directory = Path(temporary)
         env = child_environment(receiver, fake, directory)
+        if env_project:
+            env["FI_PROJECT_NAME"] = env_project
         argv = [sys.executable, str(RECIPE / "src/app.py"), "--prompt", "subprocess-prompt-control"]
         if streaming:
             argv.append("--stream")
@@ -587,7 +617,7 @@ def test_app_subprocess_loopback_chat_and_stream(streaming):
         assert exports[0]["path"] == "/tracer/v1/traces"
         assert exports[0]["headers"]["x-api-key"] == FI_KEY
         assert exports[0]["headers"]["x-secret-key"] == FI_SECRET
-        assert exports[0]["resource_attributes"][0]["project_name"] == "doubleword-example"
+        assert exports[0]["resource_attributes"][0]["project_name"] == (env_project or "doubleword-example")
         assert VENDOR_KEY not in json.dumps(spans + exports)
         assert VENDOR_KEY not in result.stdout + result.stderr
 
@@ -618,8 +648,10 @@ def test_readme_requirements_and_public_contract():
     assert readme.startswith("# Doubleword (OpenAI-compatible) with traceAI")
     assert app.DEFAULT_BASE_URL in readme
     assert "provider field says `openai`" in readme
-    for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_EMBEDDING_VECTORS"):
+    for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_EMBEDDING_VECTORS"):
         assert name in readme
+    assert "| `FI_PROJECT_NAME` | No | Observe project name; defaults to `doubleword-example`; tracer only. |" in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "doubleword-example"' in readme
     assert "gen_ai.request.model" in readme
     assert "service_tier=\"flex\"" in readme
     assert "embedding.embeddings" in readme

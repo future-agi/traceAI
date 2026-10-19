@@ -26,6 +26,7 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `DOUBLEWORD_MODEL` | Yes, unless `--model` is supplied | Pick an available model from Doubleword's catalog using its [API reference](https://doubleword.ai/llms.txt). |
 | `DOUBLEWORD_BASE_URL` | No | Defaults to `https://api.doubleword.ai/v1`; optional proxy override. |
 | `FI_BASE_URL` | No | Optional Future AGI collector origin; tracer only. |
+| `FI_PROJECT_NAME` | No | Observe project name; defaults to `doubleword-example`; tracer only. |
 
 The application exits 2 for a missing or empty `DOUBLEWORD_API_KEY`, a missing or empty `DOUBLEWORD_MODEL` without `--model`, or an invalid `DOUBLEWORD_BASE_URL`. It checks these before tracing or network calls. The recipe does not check the Future AGI keys itself.
 
@@ -45,7 +46,7 @@ python src/app.py
 python src/app.py --stream
 ```
 
-You can also pass `--model` and `--prompt`. The project name defaults to `doubleword-example`.
+You can also pass `--model` and `--prompt`. Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or empty, the project name defaults to `doubleword-example`.
 
 ## Code
 
@@ -58,8 +59,8 @@ from fi_instrumentation.fi_types import ProjectType
 from openai import OpenAI
 from traceai_openai import OpenAIInstrumentor
 
-provider = register(project_name="doubleword-example", project_type=ProjectType.OBSERVE,
-                    set_global_tracer_provider=False, verbose=False)
+provider = register(project_name=os.environ.get("FI_PROJECT_NAME") or "doubleword-example",  # as in src/app.py
+                    project_type=ProjectType.OBSERVE, set_global_tracer_provider=False, verbose=False)
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 with OpenAI(base_url="https://api.doubleword.ai/v1", api_key=os.environ["DOUBLEWORD_API_KEY"]) as client:
     response = client.chat.completions.create(model=os.environ["DOUBLEWORD_MODEL"],
