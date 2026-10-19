@@ -1,0 +1,298 @@
+name: Python tests
+
+# Runs on every PR into main and dev, and on every push to them:
+#   - the fi_instrumentation tests (python/tests), always;
+#   - the tests of each Python package under python/frameworks/, and of python/traceai/, that the PR touches,
+#     on that package's own dependencies (plus the python/tests/test_framework_*.py
+#     files that belong to it).
+# Editing this workflow, the scripts under .github/scripts/ (the planner, its tests and the
+# known-broken verdict) or .github/python-tests-known-broken.txt tests every package.
+# So does a change to python/fi_instrumentation/, python/pyproject.toml or python/poetry.lock:
+# each package is then tested against this repo's fi_instrumentation (the core_install step).
+# A change to python/tests/conftest.py or pytest.ini tests the packages that have core tests.
+# A moved file plans both the package it left and the one it entered.
+# A package on .github/python-tests-known-broken.txt still runs and shows a warning, but its
+# failures do not fail the check; if its tests pass, the "Known-broken verdict" step fails the
+# job until the package is taken off the list.
+# The "Python tests" job at the end is the one check to mark required on main and dev (on dev only
+# once this file is on dev: GitHub runs the workflow found in the PR's merge commit or the pushed commit).
+
+on:
+  pull_request:
+    branches: [main, dev]
+    # "edited" re-runs a retargeted PR, and a title or body edit too. No `if:` skips those: a skipped
+    # run would cancel a real one, and its skipped result job could count as green.
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-tests-${{ github.ref }}
+  # A newer run of the same PR cancels the older one. A running push to main or dev is never
+  # cancelled, but a queued one is replaced by the newer push (GitHub keeps one running and one
+  # pending run per group, even when cancel-in-progress is false).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Tests that call register() export spans at shutdown. Point the exporters at a closed
+  # local port so they never reach the real collector.
+  FI_BASE_URL: http://127.0.0.1:9
+  FI_GRPC_URL: http://127.0.0.1:9
+  # Every package's python range allows 3.11.
+  PYTHON_VERSION: "3.11"
+  POETRY_VERSION: "2.1.2"
+  # Install exactly what poetry.lock resolved: Poetry 2.1-2.2 re-resolving on an older Python picks the wrong markers.
+  POETRY_INSTALLER_RE_RESOLVE: "false"
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_packages: ${{ steps.plan.outputs.has_packages }}
+      core_changed: ${{ steps.plan.outputs.core_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test the planner and the known-broken verdict
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+      - name: Work out which packages this change touches
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+        run: |
+          plan_all() {
+            echo "No diff to read: treating every file as changed, so every package runs." >&2
+            python3 .github/scripts/python_test_plan.py --all > "$RUNNER_TEMP/plan.json"
+          }
+
+          case "$EVENT_NAME" in
+            pull_request)
+              # The checkout holds every branch's history (fetch-depth 0), so the base commit is
+              # missing only when the base branch was force-pushed or deleted. Fetch it (the repo is
+              # public, no credentials needed); if that fails too, run every package.
+              if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
+                git fetch --no-tags origin "$PR_BASE_SHA" || true
+              fi
+              if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
+                echo "PR base $PR_BASE_SHA is not in the clone: treating every file as changed" >&2
+                plan_all
+              else
+                python3 .github/scripts/python_test_plan.py --diff "$PR_BASE_SHA...$PR_HEAD_SHA" > "$RUNNER_TEMP/plan.json"
+              fi
+              ;;
+            push)
+              if [ "$PUSH_BEFORE_SHA" = "0000000000000000000000000000000000000000" ] \
+                 || ! git cat-file -e "$PUSH_BEFORE_SHA^{commit}" 2>/dev/null; then
+                plan_all
+              else
+                python3 .github/scripts/python_test_plan.py --diff "$PUSH_BEFORE_SHA..$PUSH_AFTER_SHA" > "$RUNNER_TEMP/plan.json"
+              fi
+              ;;
+            *)
+              plan_all
+              ;;
+          esac
+
+          jq . "$RUNNER_TEMP/plan.json"
+
+          {
+            echo "matrix=$(jq -c .packages "$RUNNER_TEMP/plan.json")"
+            echo "has_packages=$(jq '.packages | length > 0' "$RUNNER_TEMP/plan.json")"
+            echo "core_changed=$(jq .core_changed "$RUNNER_TEMP/plan.json")"
+          } >> "$GITHUB_OUTPUT"
+
+  fi-instrumentation:
+    name: fi_instrumentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pip install "poetry==$POETRY_VERSION"
+
+      - name: Install fi_instrumentation and its dev dependencies
+        working-directory: python
+        run: poetry install --no-interaction --all-extras
+
+      - name: Tests
+        working-directory: python
+        run: |
+          echo "Not run here: the $(ls tests/test_framework_*.py | wc -l) framework test files import the framework packages, so each runs in its package's job (package (<name>)): $(ls tests/test_framework_*.py | xargs -n1 basename | tr '\n' ' ')"
+          poetry run pytest tests -p no:cacheprovider --ignore-glob='tests/test_framework_*.py'
+
+  package:
+    name: package (${{ matrix.package.name }}${{ matrix.package.known_broken && ', known broken' || '' }})
+    needs: plan
+    if: needs.plan.outputs.has_packages == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PKG_DIR: ${{ matrix.package.dir }}
+      # Both backends get their environment at <package dir>/.venv.
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install the package and its dev dependencies (poetry)
+        id: install_poetry
+        if: matrix.package.backend == 'poetry'
+        continue-on-error: ${{ matrix.package.known_broken }}
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          pip install "poetry==$POETRY_VERSION"
+          poetry install --no-interaction
+          # The shared test toolset: missing tools are added at pinned versions. pip may move a pytest
+          # already present to satisfy them (pytest-asyncio 0.24.0, for one, needs pytest below 9).
+          for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do
+            module=$(echo "${pin%%==*}" | tr - _)
+            if poetry run python -c "import $module" 2>/dev/null; then
+              echo "$module: already present"
+            else
+              echo "$module: added $pin"
+              poetry run pip install "$pin"
+            fi
+          done
+
+      - name: Install the package and its dev dependencies (hatch)
+        id: install_hatch
+        if: matrix.package.backend == 'hatch'
+        continue-on-error: ${{ matrix.package.known_broken }}
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
+          # The shared test toolset: missing tools are added at pinned versions. pip may move a pytest
+          # already present to satisfy them (pytest-asyncio 0.24.0, for one, needs pytest below 9).
+          for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do
+            module=$(echo "${pin%%==*}" | tr - _)
+            if .venv/bin/python -c "import $module" 2>/dev/null; then
+              echo "$module: already present"
+            else
+              echo "$module: added $pin"
+              .venv/bin/pip install "$pin"
+            fi
+          done
+
+      - name: Test against this repo's fi_instrumentation
+        id: core_install
+        if: needs.plan.outputs.core_changed == 'true'
+        continue-on-error: ${{ matrix.package.known_broken }}
+        run: |
+          # This change touches python/fi_instrumentation/ (or its pyproject / lock):
+          # replace the fi-instrumentation-otel the package resolved with the one in the repo.
+          # Without it, the package's tests run on the fi-instrumentation-otel its own lock or range resolved.
+          "$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/pip" install -e "$GITHUB_WORKSPACE/python"
+
+      - name: Tests
+        id: tests
+        continue-on-error: ${{ matrix.package.known_broken }}
+        env:
+          PKG_NAME: ${{ matrix.package.name }}
+          OWN_TESTS: ${{ matrix.package.own_tests }}
+          CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
+        run: |
+          # Run every set, then fail if any failed (no -x).
+          venv_python="$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/python"
+          status=0
+          ran=0
+          expected=0
+          [ "$OWN_TESTS" = "true" ] && expected=$((expected + 1))
+          expected=$((expected + $(echo $CORE_TESTS | wc -w)))
+
+          if [ "$OWN_TESTS" = "true" ]; then
+            ran=$((ran + 1))
+            echo "::group::$PKG_NAME: $PKG_DIR/tests"
+            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest tests -p no:cacheprovider) || status=1
+            echo "::endgroup::"
+          fi
+
+          # Tests kept in python/tests/ run from python/ so python/tests/conftest.py applies.
+          # -P keeps python/ (the repo's fi_instrumentation source) off sys.path, so they import
+          # the fi-instrumentation-otel installed in the package's environment.
+          for test_file in $CORE_TESTS; do
+            ran=$((ran + 1))
+            echo "::group::$PKG_NAME: $test_file"
+            (cd "$GITHUB_WORKSPACE/python" && "$venv_python" -P -m pytest "${test_file#python/}" -p no:cacheprovider) || status=1
+            echo "::endgroup::"
+          done
+
+          if [ "$ran" != "$expected" ]; then
+            echo "::error::$PKG_NAME: $expected test sets were planned but $ran ran"
+            exit 1
+          fi
+          if [ "$ran" = "0" ]; then
+            echo "::notice::$PKG_NAME has no tests"
+          fi
+          exit "$status"
+
+      # A package on the known-broken list may fail above without failing the job. This step
+      # says so with a warning, and fails the job when the listed package passes instead.
+      - name: Known-broken verdict
+        if: always() && matrix.package.known_broken
+        env:
+          PKG_NAME: ${{ matrix.package.name }}
+          REASON: ${{ matrix.package.known_broken_reason }}
+          INSTALL_POETRY: ${{ steps.install_poetry.outcome }}
+          INSTALL_HATCH: ${{ steps.install_hatch.outcome }}
+          CORE_INSTALL: ${{ steps.core_install.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          OWN_TESTS: ${{ matrix.package.own_tests }}
+          CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
+        run: bash .github/scripts/known_broken_verdict.sh
+
+  result:
+    name: Python tests
+    needs: [plan, fi-instrumentation, package]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the results
+        env:
+          PLAN: ${{ needs.plan.result }}
+          FI_INSTRUMENTATION: ${{ needs.fi-instrumentation.result }}
+          PACKAGE: ${{ needs.package.result }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          echo "plan=$PLAN fi-instrumentation=$FI_INSTRUMENTATION package=$PACKAGE matrix=${MATRIX:0:200}"
+          [ "$PLAN" = "success" ] || { echo "::error::plan did not succeed"; exit 1; }
+          [ "$FI_INSTRUMENTATION" = "success" ] || { echo "::error::fi_instrumentation tests did not succeed"; exit 1; }
+          # Judge the package jobs against what Plan planned, not against has_packages or the job's if:
+          # a broken wiring between them would skip every package job, and skipped would read as green.
+          if [ -z "$MATRIX" ]; then
+            echo "::error::Plan produced no package matrix"
+            exit 1
+          elif [ "$MATRIX" = "[]" ]; then
+            [ "$PACKAGE" = "skipped" ] || { echo "::error::no packages were planned, but the package jobs ran ($PACKAGE)"; exit 1; }
+          elif [ "$PACKAGE" != "success" ]; then
+            echo "::error::packages were planned, but the package jobs did not succeed ($PACKAGE)"
+            exit 1
+          fi
