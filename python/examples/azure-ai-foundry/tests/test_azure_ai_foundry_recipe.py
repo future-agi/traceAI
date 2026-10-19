@@ -232,6 +232,31 @@ def test_chat_response_model_differs_from_deployment(receiver, tracing):
     assert set(body["usage"]) >= {"prompt_tokens", "completion_tokens", "total_tokens"}
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "azure-ai-foundry"),
+    ("", None, "azure-ai-foundry"),
+    ("azure-from-env", None, "azure-from-env"),
+    ("azure-from-env", "azure-explicit", "azure-explicit"),
+], ids=["default", "empty", "env", "explicit"])
+def test_setup_tracing_project_name(env_project, explicit, expected, receiver, monkeypatch):
+    # FI_PROJECT_NAME overrides the recipe default; an explicit argument wins over both.
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project is not None:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+    requests = []
+    provider = app.setup_tracing(explicit)
+    try:
+        with mock_client(TEST_BASE_URLS[0], chat_response(MODEL), requests) as client:
+            complete(client)
+        provider.force_flush()
+        assert len(requests) == 1
+        assert_export(receiver, expected)
+    finally:
+        provider.force_flush()
+        OpenAIInstrumentor().uninstrument()
+        provider.shutdown()
+
+
 def test_usage_absent_is_omitted(receiver, tracing):
     requests = []
     with tracing() as (provider, project):
@@ -466,16 +491,25 @@ def assert_child_guard(env):
     assert Path(env["LOOPBACK_GUARD_LOG"]).read_text() == ""
 
 
-@pytest.mark.parametrize("mode", ["chat", "stream", "model-override", "responses"])
-def test_loopback_subprocess_journeys(mode, tmp_path, receiver):
+SUBPROCESS_JOURNEYS = [
+    ("chat", True), ("chat", False), ("stream", True), ("stream", False),
+    ("model-override", True), ("responses", True),
+]
+
+
+@pytest.mark.parametrize("mode, env_project", SUBPROCESS_JOURNEYS,
+                         ids=[f"{mode}-{'env' if env else 'default'}-project" for mode, env in SUBPROCESS_JOURNEYS])
+def test_loopback_subprocess_journeys(mode, env_project, tmp_path, receiver):
     with FakeOpenAI() as fake:
         env = child_environment(tmp_path, receiver, fake.base_url, "azure-subprocess-" + uuid.uuid4().hex)
+        if not env_project:
+            # Unset, app.py keeps the recipe default (never register()'s generic one).
+            env.pop("FI_PROJECT_NAME")
+        project = env.get("FI_PROJECT_NAME", "azure-ai-foundry")
         model = MODEL
         if mode == "responses":
-            project = env["FI_PROJECT_NAME"]
             command = [sys.executable, "-c", "import os, app; p = app.setup_tracing(os.environ['FI_PROJECT_NAME']); c = app.make_client(); print(c.responses.create(model=os.environ[app.MODEL_ENV], input='What is a rainbow?').output_text); c.close(); p.force_flush()"]
         else:
-            project = "azure-ai-foundry"
             command = [sys.executable, str(RECIPE / "src" / "app.py")]
             if mode == "stream":
                 command.append("--stream")
@@ -540,8 +574,10 @@ print('guard controls passed')
 
 def test_readme_and_requirement_pins():
     readme = (RECIPE / "README.md").read_text()
-    for value in (*app.DOCUMENTED_BASE_URL_FORMS, app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+    for value in (*app.DOCUMENTED_BASE_URL_FORMS, app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert value in readme
+    assert "| `FI_PROJECT_NAME` | No | Observe project name; defaults to `azure-ai-foundry`; tracer only. |" in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "azure-ai-foundry"' in readme
     assert "model is your deployment name" in readme
     assert "provider field is `openai`" in readme
     assert "Not this page: Foundry Agent Service" in readme

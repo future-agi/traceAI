@@ -29,11 +29,12 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `AZURE_OPENAI_DEPLOYMENT` | Yes, unless `--model` is used | Your deployment name, not an underlying model id. |
 | `AZURE_OPENAI_BASE_URL` | Yes | Your resource-specific inference base URL. There is no public default. |
 | `FI_BASE_URL` | No | Future AGI collector origin; defaults to `https://api.futureagi.com`. |
+| `FI_PROJECT_NAME` | No | Observe project name; defaults to `azure-ai-foundry`; tracer only. |
 | `FI_HIDE_INPUTS` | No | Set to `true` to hide prompt text in exported spans. |
 | `FI_HIDE_OUTPUTS` | No | Set to `true` to hide response text in exported spans. |
 
 The client receives the Azure key. The tracer receives the Future AGI keys.
-The example uses the Future AGI project name `azure-ai-foundry`.
+The example uses the Future AGI project name `azure-ai-foundry` unless `FI_PROJECT_NAME` is set.
 
 ## Run
 
@@ -52,6 +53,8 @@ python src/app.py --stream
 
 Use `--prompt "What is a rainbow?"` to change the question or
 `--model your-deployment-name` to override the deployment environment variable.
+Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or
+empty, they go to `azure-ai-foundry`.
 Missing Azure configuration and refused URLs return exit code 2 before tracing.
 
 ## Code
@@ -67,8 +70,8 @@ from fi_instrumentation.fi_types import ProjectType
 from traceai_openai import OpenAIInstrumentor
 from app import check_base_url
 base_url = check_base_url(os.environ["AZURE_OPENAI_BASE_URL"])
-provider = register(project_name="azure-ai-foundry", project_type=ProjectType.OBSERVE,
-                    set_global_tracer_provider=False, verbose=False)
+provider = register(project_name=os.environ.get("FI_PROJECT_NAME") or "azure-ai-foundry",  # as in src/app.py
+                    project_type=ProjectType.OBSERVE, set_global_tracer_provider=False, verbose=False)
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 client = OpenAI(api_key=os.environ["AZURE_OPENAI_API_KEY"], base_url=base_url)
 response = client.chat.completions.create(model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
