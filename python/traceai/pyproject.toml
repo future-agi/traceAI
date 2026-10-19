@@ -10,7 +10,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.13"
+python = ">3.9,<3.13"
 fi-instrumentation-otel = ">=0.1.7"
 
 [tool.poetry.extras]

@@ -2,7 +2,7 @@ name: Python tests
 
 # Runs on every PR into main:
 #   - the fi_instrumentation tests (python/tests), always;
-#   - the tests of each Python package under python/frameworks/ that the PR touches,
+#   - the tests of each Python package under python/frameworks/, and of python/traceai/, that the PR touches,
 #     on that package's own dependencies (plus the python/tests/test_framework_*.py
 #     files that belong to it).
 # Editing this workflow, .github/scripts/python_test_plan.py or
@@ -148,12 +148,12 @@ jobs:
         run: |
           pip install "poetry==$POETRY_VERSION"
           poetry install --no-interaction
-          # The shared test toolset, pinned, for the modules this environment lacks: many packages
-          # declare no pytest of their own, and one that does keeps its own version.
+          # The shared test toolset: missing tools are added at pinned versions. pip may move a pytest
+          # already present to satisfy them (pytest-asyncio 0.24.0, for one, needs pytest below 9).
           for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do
             module=$(echo "${pin%%==*}" | tr - _)
             if poetry run python -c "import $module" 2>/dev/null; then
-              echo "$module: the package's own version stays"
+              echo "$module: already present"
             else
               echo "$module: added $pin"
               poetry run pip install "$pin"
@@ -168,11 +168,12 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install -e ".[dev]"
-          # The shared test toolset, pinned, for the modules this environment lacks.
+          # The shared test toolset: missing tools are added at pinned versions. pip may move a pytest
+          # already present to satisfy them (pytest-asyncio 0.24.0, for one, needs pytest below 9).
           for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do
             module=$(echo "${pin%%==*}" | tr - _)
             if .venv/bin/python -c "import $module" 2>/dev/null; then
-              echo "$module: the package's own version stays"
+              echo "$module: already present"
             else
               echo "$module: added $pin"
               .venv/bin/pip install "$pin"

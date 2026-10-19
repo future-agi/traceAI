@@ -7,7 +7,8 @@ one JSON object for $GITHUB_OUTPUT:
     {"packages": [...], "run_all": bool, "core_changed": bool}
 
 * A package is a directory ``python/frameworks/<name>/`` that holds a ``pyproject.toml``
-  (``tests_e2e`` and ``__init__.py`` are not packages).
+  (``tests_e2e`` and ``__init__.py`` are not packages), plus ``python/traceai/`` (the
+  one-liner SDK, listed in EXTRA_PACKAGE_DIRS; its name is ``traceai``).
 * A package is touched by any changed path under its directory, or by a changed
   ``python/tests/test_framework_<key>.py`` that maps to it (see FRAMEWORK_TEST_PACKAGES).
 * ``run_all`` is true when the PR changes the CI itself (the workflow, this script or the
@@ -43,6 +44,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRAMEWORKS_DIR = "python/frameworks"
 CORE_TESTS_DIR = "python/tests"
+# Package directories outside python/frameworks/ that are tested like the framework packages.
+EXTRA_PACKAGE_DIRS = ("python/traceai",)
 KNOWN_BROKEN_FILE = ".github/python-tests-known-broken.txt"
 CI_FILES = (
     ".github/workflows/python-tests.yml",
@@ -96,7 +99,8 @@ def discover_packages(root=REPO_ROOT):
     """Return {dir name: package dict without core_tests} for every package directory."""
     packages = {}
     frameworks = root / FRAMEWORKS_DIR
-    for pkg_dir in sorted(frameworks.iterdir()):
+    pkg_dirs = sorted(frameworks.iterdir()) + [root / extra for extra in EXTRA_PACKAGE_DIRS]
+    for pkg_dir in pkg_dirs:
         pyproject = pkg_dir / "pyproject.toml"
         if not pkg_dir.is_dir() or not pyproject.is_file():
             continue
@@ -115,7 +119,7 @@ def discover_packages(root=REPO_ROOT):
         )
         packages[pkg_dir.name] = {
             "name": pkg_dir.name,
-            "dir": f"{FRAMEWORKS_DIR}/{pkg_dir.name}",
+            "dir": pkg_dir.relative_to(root).as_posix(),
             "backend": backend,
             "own_tests": own_tests,
             "core_tests": [],
@@ -144,7 +148,7 @@ def load_known_broken(packages, root=REPO_ROOT):
         if not name or not reason:
             raise PlanError(f"{where}: the package name and the reason must both be non-empty")
         if name not in packages:
-            raise PlanError(f"{where}: {name!r} is not a package directory under {FRAMEWORKS_DIR}/")
+            raise PlanError(f"{where}: {name!r} is not a package")
         if name in listed:
             raise PlanError(f"{where}: {name!r} is listed twice")
         listed[name] = reason
@@ -205,10 +209,12 @@ def plan(changed, root=REPO_ROOT):
         if core_changed or any(path in CORE_TEST_SHARED for path in changed):
             touched.update(pkg["name"] for pkg in packages.values() if pkg["core_tests"])
         for path in changed:
-            if path.startswith(f"{FRAMEWORKS_DIR}/"):
-                name = path[len(FRAMEWORKS_DIR) + 1 :].split("/", 1)[0]
-                if name in packages:
-                    touched.add(name)
+            owner = next(
+                (pkg["name"] for pkg in packages.values() if path.startswith(f"{pkg['dir']}/")),
+                None,
+            )
+            if owner is not None:
+                touched.add(owner)
             elif _TEST_FILE.match(path):
                 touched.add(package_for_test_file(path, packages))
 
