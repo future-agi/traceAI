@@ -17,8 +17,9 @@ one JSON object for $GITHUB_OUTPUT:
   fi_instrumentation over the one their own lock or range resolves. Otherwise the core test
   files run with ``python -P`` (the repo's source is not on sys.path) and so import the
   fi-instrumentation-otel installed in the package's environment.
-* A change to ``python/tests/conftest.py`` (shared by every core test file) touches every
-  package that has core tests.
+* A change to ``python/tests/conftest.py`` or ``python/tests/pytest.ini`` (shared by every
+  core test file) touches every package that has core tests. So does ``core_changed``: the
+  core test files then run against the changed core.
 
 Each package entry carries ``name``, ``dir``, ``backend`` ("poetry" or "hatch"),
 ``own_tests`` (the package has a ``tests/`` folder with test files), ``core_tests``
@@ -50,7 +51,7 @@ CI_FILES = (
 )
 CORE_PATHS = ("python/pyproject.toml", "python/poetry.lock")
 # Shared by every python/tests/test_framework_*.py file.
-CORE_TEST_SHARED = (f"{CORE_TESTS_DIR}/conftest.py",)
+CORE_TEST_SHARED = (f"{CORE_TESTS_DIR}/conftest.py", f"{CORE_TESTS_DIR}/pytest.ini")
 CORE_PREFIX = "python/fi_instrumentation/"
 
 BACKENDS = {
@@ -201,7 +202,7 @@ def plan(changed, root=REPO_ROOT):
         touched = set(packages)
     else:
         touched = set()
-        if any(path in CORE_TEST_SHARED for path in changed):
+        if core_changed or any(path in CORE_TEST_SHARED for path in changed):
             touched.update(pkg["name"] for pkg in packages.values() if pkg["core_tests"])
         for path in changed:
             if path.startswith(f"{FRAMEWORKS_DIR}/"):

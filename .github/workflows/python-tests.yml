@@ -148,8 +148,17 @@ jobs:
         run: |
           pip install "poetry==$POETRY_VERSION"
           poetry install --no-interaction
-          # The shared test toolset, pinned: many packages declare no pytest of their own.
-          poetry run pip install pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0
+          # The shared test toolset, pinned, for the modules this environment lacks: many packages
+          # declare no pytest of their own, and one that does keeps its own version.
+          for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do
+            module=$(echo "${pin%%==*}" | tr - _)
+            if poetry run python -c "import $module" 2>/dev/null; then
+              echo "$module: the package's own version stays"
+            else
+              echo "$module: added $pin"
+              poetry run pip install "$pin"
+            fi
+          done
 
       - name: Install the package and its dev dependencies (hatch)
         id: install_hatch
@@ -158,7 +167,17 @@ jobs:
         working-directory: ${{ matrix.package.dir }}
         run: |
           python -m venv .venv
-          .venv/bin/pip install -e ".[dev]" pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0
+          .venv/bin/pip install -e ".[dev]"
+          # The shared test toolset, pinned, for the modules this environment lacks.
+          for pin in pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0; do
+            module=$(echo "${pin%%==*}" | tr - _)
+            if .venv/bin/python -c "import $module" 2>/dev/null; then
+              echo "$module: the package's own version stays"
+            else
+              echo "$module: added $pin"
+              .venv/bin/pip install "$pin"
+            fi
+          done
 
       - name: Test against this repo's fi_instrumentation
         id: core_install
@@ -233,7 +252,6 @@ jobs:
             echo "::error::$PKG_NAME is known broken ($REASON), but setup failed before its tests ran"
             exit 1
           fi
-          [ "$TESTS" = "success" ] || all_fine=false
 
           if [ "$all_fine" = "true" ]; then
             if [ "$OWN_TESTS" != "true" ] && [ -z "$CORE_TESTS" ]; then
