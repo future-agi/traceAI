@@ -18,6 +18,7 @@ from opentelemetry.context import (
 )
 from opentelemetry.util.types import AttributeValue
 
+from ._errors import is_error_detail_key
 from .logging import logger
 from .pii_redaction import redact_pii_in_value
 
@@ -78,6 +79,9 @@ FI_BASE64_IMAGE_MAX_LENGTH = "FI_BASE64_IMAGE_MAX_LENGTH"
 # Limits characters of a base64 encoding of an image
 FI_PII_REDACTION = "FI_PII_REDACTION"
 # Enables regex-based PII redaction on attribute values
+FI_HIDE_ERROR_DETAILS = "FI_HIDE_ERROR_DETAILS"
+# Hides error messages, stacktraces and the ERROR status description.
+# Unset: on when any input/output hide flag is on.
 REDACTED_VALUE = "__REDACTED__"
 # When a value is hidden, it will be replaced by this redacted value
 
@@ -95,6 +99,19 @@ DEFAULT_HIDE_OUTPUT_TEXT = False
 DEFAULT_HIDE_EMBEDDING_VECTORS = False
 DEFAULT_BASE64_IMAGE_MAX_LENGTH = 32_000
 DEFAULT_PII_REDACTION = False
+DEFAULT_HIDE_ERROR_DETAILS = None
+# None means "derive from the content hide flags", see _CONTENT_HIDE_FLAGS.
+
+# Hiding any of these also hides error details by default, because error text
+# (provider error bodies, exception messages) can quote the same content.
+_CONTENT_HIDE_FLAGS = (
+    "hide_inputs",
+    "hide_outputs",
+    "hide_input_messages",
+    "hide_output_messages",
+    "hide_input_text",
+    "hide_output_text",
+)
 
 
 @dataclass(frozen=True)
@@ -197,6 +214,19 @@ class TraceConfig:
         },
     )
     """Enables regex-based PII redaction on attribute values"""
+    hide_error_details: Optional[bool] = field(
+        default=None,
+        metadata={
+            "env_var": FI_HIDE_ERROR_DETAILS,
+            "default_value": DEFAULT_HIDE_ERROR_DETAILS,
+        },
+    )
+    """Hides error details: the ERROR status description, exception.message,
+    exception.stacktrace and error.message. The status stays ERROR and
+    error.type / exception.type are kept. When neither the argument nor
+    FI_HIDE_ERROR_DETAILS is set, it is on if any of hide_inputs, hide_outputs,
+    hide_input_messages, hide_output_messages, hide_input_text or
+    hide_output_text is on."""
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -209,13 +239,21 @@ class TraceConfig:
                 f.metadata["env_var"],
                 f.metadata["default_value"],
             )
+        if self.hide_error_details is None:
+            object.__setattr__(
+                self,
+                "hide_error_details",
+                any(getattr(self, name) for name in _CONTENT_HIDE_FLAGS),
+            )
 
     def mask(
         self,
         key: str,
         value: Union[AttributeValue, Callable[[], AttributeValue]],
     ) -> Optional[AttributeValue]:
-        if (
+        if self.hide_error_details and is_error_detail_key(key):
+            return None
+        elif (
             self.hide_llm_invocation_parameters
             and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
@@ -305,10 +343,15 @@ class TraceConfig:
                     env_value = self._cast_value(env_value, expected_type)
                     object.__setattr__(self, field_name, env_value)
                 except Exception:
+                    fallback = (
+                        default_value
+                        if default_value is not None
+                        else "derived from the other hide flags"
+                    )
                     logger.warning(
                         f"Could not parse '{env_value}' to {type_name} "
                         f"for the environment variable '{env_var}'. "
-                        f"Using default value instead: {default_value}."
+                        f"Using default value instead: {fallback}."
                     )
                     object.__setattr__(self, field_name, default_value)
         else:

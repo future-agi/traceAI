@@ -187,6 +187,11 @@ class FiTracer(BaseTracer):
         # Run ids whose chain run ended in a LangGraph interrupt (an intentional
         # pause, not an error) — used to keep the node span status OK.
         self._interrupt_run_ids: Dict[UUID, bool] = _DictWithLock[UUID, bool]()
+        # The error object passed to on_*_error, so the status description is
+        # built from it instead of `run.error` (repr + full traceback).
+        self._errors_by_run: Dict[UUID, BaseException] = _DictWithLock[
+            UUID, BaseException
+        ]()
 
     def get_span(self, run_id: UUID) -> Optional[Span]:
         return self._spans_by_run.get(run_id)
@@ -253,6 +258,7 @@ class FiTracer(BaseTracer):
         span = self._spans_by_run.pop(run.id, None)
         captured_context = self._context_by_run.pop(run.id, {})
         is_interrupt = bool(self._interrupt_run_ids.pop(run.id, False))
+        error = self._errors_by_run.pop(run.id, None)
         if span is None:
             return
 
@@ -260,7 +266,13 @@ class FiTracer(BaseTracer):
         # an already-started span must be closed or it leaks.
         if not context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             try:
-                _update_span(span, run, captured_context, is_interrupt=is_interrupt)
+                _update_span(
+                    span,
+                    run,
+                    captured_context,
+                    is_interrupt=is_interrupt,
+                    error=error,
+                )
 
                 # Send final span data with both input and output
                 output_data = None
@@ -315,8 +327,13 @@ class FiTracer(BaseTracer):
                     span.set_attribute("langgraph.interrupt", True)
                     span.add_event("interrupt", {"langgraph.interrupt": True})
         elif span is not None:
+            self._errors_by_run[run_id] = error
             _record_exception(span, error)
-        return forward(error, *args, run_id=run_id, **kwargs)
+        try:
+            # `forward` ends the run synchronously (`_end_trace` consumes the error).
+            return forward(error, *args, run_id=run_id, **kwargs)
+        finally:
+            self._errors_by_run.pop(run_id, None)
 
     def on_llm_error(
         self, error: BaseException, *args: Any, run_id: UUID, **kwargs: Any
@@ -401,34 +418,74 @@ def _is_graph_interrupt(error: BaseException) -> bool:
 
 @audit_timing  # type: ignore
 def _record_exception(span: Span, error: BaseException) -> None:
+    # The stacktrace lives only in the exception event's `exception.stacktrace`
+    # (dropped by the FI span wrapper when error details are hidden).
     if isinstance(error, Exception):
         span.record_exception(error)
         return
-    exception_type = error.__class__.__name__
     exception_message = str(error)
     if not exception_message:
         exception_message = repr(error)
     attributes: Dict[str, AttributeValue] = {
-        OTELSpanAttributes.EXCEPTION_TYPE: exception_type,
+        OTELSpanAttributes.EXCEPTION_TYPE: _qualified_type_name(error),
         OTELSpanAttributes.EXCEPTION_MESSAGE: exception_message,
         OTELSpanAttributes.EXCEPTION_ESCAPED: False,
     }
     try:
-        # See e.g. https://github.com/open-telemetry/opentelemetry-python/blob/e9c7c7529993cd13b4af661e2e3ddac3189a34d0/opentelemetry-sdk/src/opentelemetry/sdk/trace/__init__.py#L967  # noqa: E501
-        attributes[OTELSpanAttributes.EXCEPTION_STACKTRACE] = traceback.format_exc()
+        attributes[OTELSpanAttributes.EXCEPTION_STACKTRACE] = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
     except Exception:
         logger.exception("Failed to record exception stacktrace.")
     span.add_event(name="exception", attributes=attributes)
 
 
+def _qualified_type_name(error: BaseException) -> str:
+    module = type(error).__module__
+    qualname = type(error).__qualname__
+    return f"{module}.{qualname}" if module and module != "builtins" else qualname
+
+
+# `run.error` is `repr(error)` immediately followed by the formatted traceback.
+_TRACEBACK_MARKER = "Traceback (most recent call last)"
+
+
+def _error_description(
+    error: Optional[BaseException], run_error: Optional[str]
+) -> Optional[str]:
+    """The exception message only, never `run.error`'s traceback.
+
+    LangChain sets `run.error` to `repr(error)` plus the formatted traceback,
+    which carries local file paths and source lines.
+    """
+    if error is not None:
+        try:
+            return str(error) or None
+        except Exception:
+            return None
+    if not run_error:
+        return None
+    # No error object (callback not routed through on_*_error): keep the repr
+    # part and drop the traceback.
+    return run_error.split(_TRACEBACK_MARKER, 1)[0].strip() or None
+
+
 @audit_timing  # type: ignore
 def _update_span(
-    span: Span, run: Run, captured_context: Dict[str, Any], is_interrupt: bool = False
+    span: Span,
+    run: Run,
+    captured_context: Dict[str, Any],
+    is_interrupt: bool = False,
+    error: Optional[BaseException] = None,
 ) -> None:
     if run.error is None or is_interrupt:
         span.set_status(trace_api.StatusCode.OK)
     else:
-        span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, run.error))
+        span.set_status(
+            trace_api.Status(
+                trace_api.StatusCode.ERROR, _error_description(error, run.error)
+            )
+        )
     span_kind = (
         FiSpanKindValues.AGENT
         if "agent" in run.name.lower()

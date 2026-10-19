@@ -29,6 +29,8 @@ def clean_env():
         "FI_HIDE_OUTPUT_TEXT",
         "FI_HIDE_EMBEDDING_VECTORS",
         "FI_BASE64_IMAGE_MAX_LENGTH",
+        "FI_HIDE_ERROR_DETAILS",
+        "FI_PII_REDACTION",
     ]
     
     for var in env_vars_to_clear:

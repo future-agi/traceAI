@@ -1,3 +1,33 @@
+## [1.2.0] - 2026-10-18
+### Changed
+- **Behaviour change for users of the hide flags:** setting any of `hide_inputs`,
+  `hide_outputs`, `hide_input_messages`, `hide_output_messages`, `hide_input_text` or
+  `hide_output_text` (or their `FI_HIDE_*` env vars) now also hides error details.
+  Error text is content: provider error bodies quote the prompt back and carry request
+  and session ids, and tracebacks carry local paths. Failed spans keep status `ERROR`,
+  `error.type` and `exception.type`, but the status has no description and exception
+  events drop `exception.message` / `exception.stacktrace`. `error.message`,
+  `exception.message`, `exception.stacktrace` and instrumentor keys ending in
+  `.error.message` / `.error_message` are dropped. Set `hide_error_details=False`
+  (or `FI_HIDE_ERROR_DETAILS=false`) to keep the old behaviour.
+- An `ERROR` status description is now the exception message only. The
+  `"<Type>: <message>"` form built by OpenTelemetry's `use_span` and most instrumentors
+  becomes `<message>` (the type is in `error.type`), and a Python traceback is never
+  kept in the description.
+
+### Feature
+- New `TraceConfig(hide_error_details=...)` / `FI_HIDE_ERROR_DETAILS`. Unset, it is
+  derived from the content hide flags above; an explicit `true`/`false` wins.
+- Failed spans get `error.type`: the provider error code when the exception carries one
+  (OpenAI-compatible `code`/`type`, botocore `Error.Code`, Anthropic `error.type`,
+  google-genai `status`), otherwise the fully qualified exception class. An
+  instrumentor's own `error.type` is not overwritten.
+
+### Fixed
+- `with tracer.start_span(...) as span:` now yields the FI span wrapper instead of the
+  raw SDK span, so attribute masking, span-kind ordering and the error handling above
+  also apply inside that block.
+
 ## [1.1.0] - 2026-08-11
 ### Feature
 - `register()` now accepts span-processor / exporter / provider tuning:
