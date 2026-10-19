@@ -16,24 +16,27 @@ case "$TESTS" in
     exit 1
     ;;
 esac
-# The Tests step is skipped only when an earlier step (checkout or setup) failed outright, or
+# A failed install fails the check, listed or not: the package's tests never ran against a working
+# install, so neither a pass nor a failure of them says anything about the listed reason.
+# The install steps have no continue-on-error, so a failed install skips the Tests step; this
+# check comes before the "skipped" one so the error names the install, whatever TESTS says.
+if [ -n "$install_failed" ]; then
+  echo "::error::$PKG_NAME: $install_failed failed; a failed install fails the check, listed or not"
+  exit 1
+fi
+# The Tests step is skipped when checkout or setup failed outright (a failed install is handled above), or
 # the job was cancelled: that is not a pass, and the job fails with it.
 if [ "$TESTS" = "skipped" ]; then
   echo "::error::$PKG_NAME is known broken ($REASON), but its tests did not run (an earlier step failed, or the job was cancelled)"
   exit 1
 fi
-# The tests passed (whatever an install step did): the line has to come off the list.
+# The tests passed: the line has to come off the list.
 if [ "$TESTS" = "success" ]; then
   if [ "$OWN_TESTS" != "true" ] && [ -z "$CORE_TESTS" ]; then
     echo "::error::$PKG_NAME is on the known-broken list but has no tests; remove its line from .github/python-tests-known-broken.txt"
   else
-    echo "::error::$PKG_NAME is on the known-broken list but its tests pass; remove its line from .github/python-tests-known-broken.txt${install_failed:+ (failed in this run: $install_failed)}"
+    echo "::error::$PKG_NAME is on the known-broken list but its tests pass; remove its line from .github/python-tests-known-broken.txt"
   fi
   exit 1
-fi
-# The tests failed. After a failed install that may not be the listed reason: say so.
-if [ -n "$install_failed" ]; then
-  echo "::warning::$PKG_NAME is known broken, but in this run these steps failed: $install_failed; its test results may not reflect the listed reason ($REASON)"
-  exit 0
 fi
 echo "::warning::$PKG_NAME is known broken ($REASON): its failures do not fail the check"
