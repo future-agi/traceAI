@@ -1,6 +1,6 @@
 name: Python tests
 
-# Runs on every PR into main:
+# Runs on every PR into main and dev, and on every push to them:
 #   - the fi_instrumentation tests (python/tests), always;
 #   - the tests of each Python package under python/frameworks/, and of python/traceai/, that the PR touches,
 #     on that package's own dependencies (plus the python/tests/test_framework_*.py
@@ -10,7 +10,8 @@ name: Python tests
 # A package on .github/python-tests-known-broken.txt still runs and shows a warning, but its
 # failures do not fail the check; if its tests pass, the "Known-broken verdict" step fails the
 # job until the package is taken off the list.
-# The "Python tests" job at the end is the one check to mark required on main and dev.
+# The "Python tests" job at the end is the one check to mark required on main and dev (on dev only
+# once this file is on dev: GitHub runs the workflow found in the PR's merge commit or the pushed commit).
 
 on:
   pull_request:
@@ -240,35 +241,30 @@ jobs:
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
         run: |
           echo "outcomes: install (poetry)=$INSTALL_POETRY install (hatch)=$INSTALL_HATCH fi_instrumentation=$CORE_INSTALL tests=$TESTS"
-          all_fine=true
-          for outcome in "$INSTALL_POETRY" "$INSTALL_HATCH" "$CORE_INSTALL" "$TESTS"; do
-            case "$outcome" in
-              success|skipped) ;;
-              *) all_fine=false ;;
-            esac
-          done
+          install_failed=""
+          [ "$INSTALL_POETRY" = "failure" ] && install_failed="$install_failed install (poetry)"
+          [ "$INSTALL_HATCH" = "failure" ] && install_failed="$install_failed install (hatch)"
+          [ "$CORE_INSTALL" = "failure" ] && install_failed="$install_failed fi_instrumentation install"
           # The Tests step is skipped only when an earlier step (checkout or setup) failed outright:
           # that is not a pass, and the job fails with it.
           if [ "$TESTS" = "skipped" ]; then
             echo "::error::$PKG_NAME is known broken ($REASON), but setup failed before its tests ran"
             exit 1
           fi
-
-          if [ "$all_fine" = "true" ]; then
+          # The tests passed (whatever an install step did): the line has to come off the list.
+          if [ "$TESTS" = "success" ]; then
             if [ "$OWN_TESTS" != "true" ] && [ -z "$CORE_TESTS" ]; then
               echo "::error::$PKG_NAME is on the known-broken list but has no tests; remove its line from .github/python-tests-known-broken.txt"
             else
-              echo "::error::$PKG_NAME is on the known-broken list but its tests pass; remove its line from .github/python-tests-known-broken.txt"
+              echo "::error::$PKG_NAME is on the known-broken list but its tests pass; remove its line from .github/python-tests-known-broken.txt${install_failed:+ (failed this run:$install_failed)}"
             fi
             exit 1
           fi
-          # An install that failed means its tests never ran: say so, rather than blame the listed reason.
-          for outcome in "$INSTALL_POETRY" "$INSTALL_HATCH" "$CORE_INSTALL"; do
-            if [ "$outcome" = "failure" ]; then
-              echo "::warning::$PKG_NAME is known broken, but its install failed in this run, so its tests did not run (listed reason: $REASON)"
-              exit 0
-            fi
-          done
+          # The tests failed. After a failed install that may not be the listed reason: say so.
+          if [ -n "$install_failed" ]; then
+            echo "::warning::$PKG_NAME is known broken, but this run's$install_failed failed, so its test results may not reflect the listed reason ($REASON)"
+            exit 0
+          fi
           echo "::warning::$PKG_NAME is known broken ($REASON): its failures do not fail the check"
 
   result:
