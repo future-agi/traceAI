@@ -133,6 +133,16 @@ Never exported, in any mode: the Anthropic API key and other request headers,
 the Future AGI keys, the `authorization_token` of an MCP server in a request
 body, error message text in the span status or `error.type`, and stack traces.
 
+## Live verification (2026-10-19, real Claude via an Anthropic-compatible proxy)
+
+These calls went through a local Anthropic-compatible proxy (CLIProxy), not directly to `api.anthropic.com`. The proxy serves the Anthropic Messages API backed by real Claude models, so the model answers are real, but the endpoint is the proxy's, and it has not been run against `api.anthropic.com` with an Anthropic API key. The SDK was pointed at the proxy exactly as in step 2: `ANTHROPIC_BASE_URL` set to the proxy and `ANTHROPIC_API_KEY` set to the proxy's key. The middleware does not read either.
+
+- Setup: anthropic-sdk-go v1.82.0, Go 1.24.3, OpenTelemetry Go v1.33.0, model `claude-haiku-5-5`, local Future AGI collector, `go run ./example -stream -fail`.
+- Tool use: a trace is the agent span, an LLM span that asks for `get_weather`, the TOOL span and an LLM span with the answer. The streamed answer is one span with its token counts (483 input, 26 output).
+- Failure: a call with a model id that does not exist is an LLM span with status ERROR and no content beyond the request.
+- Stored spans: type `llm`, `provider` anthropic, the model, input and output tokens (403/50 for the tool-asking call), and Input and Output filled. `fi_verify` passed.
+- Privacy: with `FI_HIDE_INPUTS=true` and `FI_HIDE_OUTPUTS=true`, a unique marker (also sent as an email address and a file path) was absent from every stored column of the project, including resource attributes and span events. With the defaults, the marker was present in the Input and Output columns. The Future AGI keys, the proxy key, host name, user name and home directory were never stored. The SDK's own span still stored the proxy's address (`server.address`, `url.full`), as described under Privacy.
+
 ## Tests
 
 ```bash
