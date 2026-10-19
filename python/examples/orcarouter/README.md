@@ -28,6 +28,7 @@ The requirements pin `openai==3.24.0`, `traceAI-openai==0.1.10`, and `fi-instrum
 | `ORCAROUTER_MODEL` | Requested model, for example `orcarouter/auto`; required unless `--model` is given | OpenAI client |
 | `ORCAROUTER_BASE_URL` | Optional override; defaults to `https://api.orcarouter.ai/v1` | OpenAI client |
 | `FI_BASE_URL` | Optional Future AGI collector origin | Tracer only |
+| `FI_PROJECT_NAME` | Optional Observe project name; defaults to `orcarouter-example` | Tracer only |
 
 The app checks `ORCAROUTER_API_KEY` and `ORCAROUTER_MODEL` (unless `--model` supplies the model). Missing or empty values exit 2 before tracing. A refused `ORCAROUTER_BASE_URL` also exits 2. The recipe does not check the Future AGI keys.
 
@@ -48,20 +49,21 @@ python src/app.py
 python src/app.py --stream
 ```
 
-Use `--model` to override `ORCAROUTER_MODEL`, or `--prompt` to supply a question. These commands make real provider calls when configured with real keys. The tests below use placeholders and local fixtures.
+Use `--model` to override `ORCAROUTER_MODEL`, or `--prompt` to supply a question. Set `FI_PROJECT_NAME` to send the traces to another Observe project; unset or empty, they go to `orcarouter-example`. These commands make real provider calls when configured with real keys. The tests below use placeholders and local fixtures.
 
 ## Code
 
 This is the essential flow from `src/app.py`. Instrument before creating the client. Put `src/` on `PYTHONPATH` to import `make_client` from `app`.
 
 ```python
+import os
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_openai import OpenAIInstrumentor
 from app import make_client
 
-provider = register(
-    project_name="orcarouter-example", project_type=ProjectType.OBSERVE,
+provider = register(  # FI_PROJECT_NAME overrides, as in src/app.py
+    project_name=os.environ.get("FI_PROJECT_NAME") or "orcarouter-example", project_type=ProjectType.OBSERVE,
     set_global_tracer_provider=False, verbose=False,
 )
 OpenAIInstrumentor().instrument(tracer_provider=provider)

@@ -186,6 +186,30 @@ def test_chat_resolved_model_and_key_separation(monkeypatch):
         assert values["output.value"] == ANSWER
 
 
+@pytest.mark.parametrize("env_project, explicit, expected", [
+    (None, None, "orcarouter-example"),
+    ("", None, "orcarouter-example"),
+    ("orcarouter-from-env", None, "orcarouter-from-env"),
+    ("orcarouter-from-env", "orcarouter-explicit", "orcarouter-explicit"),
+], ids=["default", "empty", "env", "explicit"])
+def test_setup_tracing_project_name(monkeypatch, env_project, explicit, expected):
+    # FI_PROJECT_NAME overrides the recipe default; an explicit argument wins over both.
+    # Never fall through to register()'s generic DEFAULT_PROJECT_NAME.
+    if env_project is not None:
+        monkeypatch.setenv("FI_PROJECT_NAME", env_project)
+
+    def handler(request):
+        assert_vendor_request(request)
+        return httpx.Response(200, json=completion())
+
+    with Receiver() as receiver:
+        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
+        provider = app.setup_tracing(explicit)
+        with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
+            client.chat.completions.create(model=REQUESTED_MODEL, messages=MESSAGES)
+        exported_span(receiver, provider, expected)
+
+
 def test_usage_absent_is_omitted(monkeypatch):
     def handler(request):
         assert_vendor_request(request)
@@ -453,10 +477,13 @@ def child_environment(receiver, fake, tmp_path):
     return environment
 
 
+@pytest.mark.parametrize("env_project", [None, "orcarouter-subprocess-env"], ids=["default-project", "env-project"])
 @pytest.mark.parametrize("stream", [False, True], ids=["chat", "stream"])
-def test_app_subprocess_with_installed_guard(monkeypatch, tmp_path, stream):
+def test_app_subprocess_with_installed_guard(monkeypatch, tmp_path, stream, env_project):
     with Receiver() as receiver, FakeOpenAI() as fake:
         environment = child_environment(receiver, fake, tmp_path)
+        if env_project:
+            environment["FI_PROJECT_NAME"] = env_project
         args = [sys.executable, str(RECIPE / "src/app.py")]
         if stream:
             args.append("--stream")
@@ -496,7 +523,7 @@ def test_app_subprocess_with_installed_guard(monkeypatch, tmp_path, stream):
         assert exports[0]["path"] == "/tracer/v1/traces"
         assert exports[0]["headers"]["x-api-key"] == FI_KEY
         assert exports[0]["headers"]["x-secret-key"] == FI_SECRET
-        assert exports[0]["resource_attributes"][0]["project_name"] == "orcarouter-example"
+        assert exports[0]["resource_attributes"][0]["project_name"] == (env_project or "orcarouter-example")
         assert VENDOR_KEY not in json.dumps({"spans": spans, "exports": exports})
 
 
@@ -668,8 +695,10 @@ def test_readme_contract_and_no_real_keys():
     assert readme.startswith("# OrcaRouter (OpenAI-compatible) with traceAI")
     assert "https://api.orcarouter.ai/v1" in readme
     assert "provider field says `openai`" in readme
-    for name in ("FI_API_KEY", "FI_SECRET_KEY", app.API_KEY_ENV, app.MODEL_ENV, app.BASE_URL_ENV, "FI_BASE_URL", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
+    for name in ("FI_API_KEY", "FI_SECRET_KEY", app.API_KEY_ENV, app.MODEL_ENV, app.BASE_URL_ENV, "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert name in readme
+    assert "| `FI_PROJECT_NAME` | Optional Observe project name; defaults to `orcarouter-example` |" in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "orcarouter-example"' in readme
     assert "gen_ai.request.model" in readme
     assert "gen_ai.request.parameters" in readme
     assert "cost lookup" in readme
