@@ -345,26 +345,45 @@ export class TurnTracer {
     }
   }
 
-  /** End every open span for this turn. Idempotent. */
+  /**
+   * End every open span for this turn, the turn span last. Idempotent.
+   * The spans always end, even if recording their attributes throws: item
+   * spans that already ended were exported with the turn as their parent.
+   */
   finish(outcome: FinishOutcome): void {
     if (this.finished) return;
     this.finished = true;
     const turn = this.turn;
     if (!turn) return;
+    const endMs = clockMs();
     try {
-      const endMs = clockMs();
-      // A stream error the turn recovered from (turn.completed followed) is not a failure.
-      const failedText =
-        this.failedMessage ?? (!this.completed && this.streamErrorMessage !== undefined ? this.streamErrorMessage : undefined);
-      const failedLabel = this.failedMessage !== undefined ? "turn failed" : "stream error";
-      const cancelled =
-        (outcome.kind === "returned" && !this.completed && failedText === undefined) ||
-        (outcome.kind === "error" && isAbortLike(outcome.error, this.turnOptions?.signal));
-      const errored = outcome.kind === "error" && !cancelled;
-      if (this.streamErrorCount > 0) turn.setAttribute(C.STREAM_ERROR_COUNT, this.streamErrorCount);
-
+      this.recordFinish(turn, outcome, endMs);
+    } catch (error) {
+      diag.debug(`${LOG}: failed to finish turn: ${error}`);
+    } finally {
       for (const [id, state] of this.items) {
         this.items.delete(id);
+        endSpan(state.span, endMs);
+      }
+      endSpan(turn, endMs);
+    }
+  }
+
+  /** Statuses and attributes for `finish()`; closes open item spans. */
+  private recordFinish(turn: Span, outcome: FinishOutcome, endMs: number): void {
+    // A stream error the turn recovered from (turn.completed followed) is not a failure.
+    const failedText =
+      this.failedMessage ?? (!this.completed && this.streamErrorMessage !== undefined ? this.streamErrorMessage : undefined);
+    const failedLabel = this.failedMessage !== undefined ? "turn failed" : "stream error";
+    const cancelled =
+      (outcome.kind === "returned" && !this.completed && failedText === undefined) ||
+      (outcome.kind === "error" && isAbortLike(outcome.error, this.turnOptions?.signal));
+    const errored = outcome.kind === "error" && !cancelled;
+    if (this.streamErrorCount > 0) turn.setAttribute(C.STREAM_ERROR_COUNT, this.streamErrorCount);
+
+    for (const [id, state] of this.items) {
+      this.items.delete(id);
+      try {
         if (cancelled) {
           state.span.setAttribute(C.CANCELLED, true);
           state.span.setStatus({ code: SpanStatusCode.ERROR, message: "cancelled" });
@@ -372,46 +391,46 @@ export class TurnTracer {
           state.span.setStatus({ code: SpanStatusCode.ERROR, message: "item not completed (turn failed)" });
         } else {
           // todo_list completes with the turn; anything else still open is incomplete, not failed.
-          this.applyItemAttributes(state.span, state.type, state.last);
           if (state.type !== "todo_list") state.span.setAttribute(C.ITEM_INCOMPLETE, true);
+          this.applyItemAttributes(state.span, state.type, state.last);
         }
-        state.span.end(toHrTime(endMs));
+      } catch (error) {
+        diag.debug(`${LOG}: failed to record open item: ${error}`);
+      } finally {
+        endSpan(state.span, endMs);
       }
+    }
 
-      if (this.finalResponse !== undefined && !this.policy.hideOutputs) {
-        turn.setAttribute(S.OUTPUT_VALUE, truncate(this.finalResponse, CONTENT_MAX));
-        turn.setAttribute(S.OUTPUT_MIME_TYPE, MimeType.TEXT);
-      }
+    if (this.finalResponse !== undefined && !this.policy.hideOutputs) {
+      turn.setAttribute(S.OUTPUT_VALUE, truncate(this.finalResponse, CONTENT_MAX));
+      turn.setAttribute(S.OUTPUT_MIME_TYPE, MimeType.TEXT);
+    }
 
-      if (cancelled) {
-        turn.setAttribute(C.CANCELLED, true);
-        turn.setStatus({ code: SpanStatusCode.ERROR, message: "cancelled" });
-      } else if (errored) {
-        const error = (outcome as { error: unknown }).error;
-        turn.setAttribute(C.ERROR_TYPE, errorName(error));
-        if (this.policy.hideOutputs) {
-          // Error text is content (stderr, raw lines, paths): a fixed summary, no stack trace.
-          const summary = errorSummary(error);
-          turn.setAttribute(C.ERROR_MESSAGE, summary);
-          turn.recordException({ name: errorName(error), message: summary });
-          turn.setStatus({ code: SpanStatusCode.ERROR, message: summary });
-        } else {
-          const message = truncate(errorMessage(error), ERROR_MESSAGE_MAX);
-          turn.setAttribute(C.ERROR_MESSAGE, message);
-          if (error instanceof Error) turn.recordException(error);
-          turn.setStatus({ code: SpanStatusCode.ERROR, message });
-        }
-      } else if (failedText !== undefined) {
-        // Provider error bodies and Codex messages can carry content: text only with outputs visible.
-        const message = this.policy.hideOutputs ? failedLabel : truncate(failedText, ERROR_MESSAGE_MAX);
-        turn.setAttribute(C.ERROR_MESSAGE, message);
-        turn.setStatus({ code: SpanStatusCode.ERROR, message });
+    if (cancelled) {
+      turn.setAttribute(C.CANCELLED, true);
+      turn.setStatus({ code: SpanStatusCode.ERROR, message: "cancelled" });
+    } else if (errored) {
+      const error = (outcome as { error: unknown }).error;
+      turn.setAttribute(C.ERROR_TYPE, errorName(error));
+      if (this.policy.hideOutputs) {
+        // Error text is content (stderr, raw lines, paths): a fixed summary, no stack trace.
+        const summary = errorSummary(error);
+        turn.setAttribute(C.ERROR_MESSAGE, summary);
+        turn.recordException({ name: errorName(error), message: summary });
+        turn.setStatus({ code: SpanStatusCode.ERROR, message: summary });
       } else {
-        turn.setStatus({ code: SpanStatusCode.OK });
+        const message = truncate(errorMessage(error), ERROR_MESSAGE_MAX);
+        turn.setAttribute(C.ERROR_MESSAGE, message);
+        if (error instanceof Error) turn.recordException(error);
+        turn.setStatus({ code: SpanStatusCode.ERROR, message });
       }
-      turn.end(toHrTime(endMs));
-    } catch (error) {
-      diag.debug(`${LOG}: failed to finish turn: ${error}`);
+    } else if (failedText !== undefined) {
+      // Provider error bodies and Codex messages can carry content: text only with outputs visible.
+      const message = this.policy.hideOutputs ? failedLabel : truncate(failedText, ERROR_MESSAGE_MAX);
+      turn.setAttribute(C.ERROR_MESSAGE, message);
+      turn.setStatus({ code: SpanStatusCode.ERROR, message });
+    } else {
+      turn.setStatus({ code: SpanStatusCode.OK });
     }
   }
 
@@ -545,9 +564,14 @@ export class TurnTracer {
     if (!state) return;
     state.last = item;
     if (item.type === "agent_message" && typeof item.text === "string") this.finalResponse = item.text;
-    this.applyItemAttributes(state.span, state.type, item);
-    this.applyItemStatus(state.span, state.type, item);
-    state.span.end(toHrTime(Math.max(nowMs, this.lastEventMs)));
+    try {
+      this.applyItemAttributes(state.span, state.type, item);
+      this.applyItemStatus(state.span, state.type, item);
+    } catch (error) {
+      diag.debug(`${LOG}: failed to record item: ${error}`);
+    } finally {
+      endSpan(state.span, Math.max(nowMs, this.lastEventMs));
+    }
   }
 
   private startItemSpan(item: ThreadItemLike, startMs: number, startedEvent: boolean): ItemState | undefined {
@@ -622,12 +646,15 @@ export class TurnTracer {
         if (changes.length) input(safeJson(changes));
         break;
       }
-      case "mcp_tool_call":
+      case "mcp_tool_call": {
         if (typeof item.server === "string") attributes[C.MCP_SERVER] = item.server;
         if (typeof item.tool === "string") attributes[C.MCP_TOOL] = item.tool;
-        if (item.arguments !== undefined) input(safeJson(item.arguments));
-        if (item.result !== undefined) output(safeJson(item.result.content ?? item.result), MimeType.JSON);
+        // `result` is `null` on item.started and on a failed call (see ThreadItemLike).
+        if (item.arguments != null) input(safeJson(item.arguments));
+        const result = item.result;
+        if (result != null) output(safeJson(result.content ?? result), MimeType.JSON);
         break;
+      }
       case "web_search":
         if (typeof item.query === "string") input(item.query);
         break;
@@ -670,6 +697,14 @@ export class TurnTracer {
       return;
     }
     span.setStatus({ code: SpanStatusCode.OK });
+  }
+}
+
+function endSpan(span: Span, endMs: number): void {
+  try {
+    span.end(toHrTime(endMs));
+  } catch (error) {
+    diag.debug(`${LOG}: failed to end span: ${error}`);
   }
 }
 

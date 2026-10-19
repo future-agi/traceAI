@@ -124,6 +124,29 @@ await check("retried stream error then turn.completed: turn OK, retry counted, t
   assertNoLeak(MARKER);
 });
 
+await check("MCP calls with null result (wire shape): turn root exported, failed call ERROR, open call closed", async () => {
+  const thread = codex("mcp").startThread({ skipGitRepoCheck: true });
+  const { events } = await thread.runStreamed(`go ${MARKER}`);
+  for await (const event of events) void event;
+  const spans = exporter.getFinishedSpans();
+  const ids = new Set(spans.map((s) => s.spanContext().spanId));
+  const orphans = spans.filter((s) => {
+    const parent = s.parentSpanContext?.spanId ?? s.parentSpanId;
+    return parent !== undefined && !ids.has(parent);
+  });
+  assert.deepEqual(orphans.map((s) => s.name), [], "every item span has its parent exported");
+  const [turn] = turns();
+  assert.equal(turns().length, 1);
+  assert.equal(turn.status.code, 1, "OK");
+  const mcp = childrenOf(turn).filter((s) => s.name === "codex.mcp_tool_call");
+  assert.equal(mcp.length, 2);
+  const failed = mcp.find((s) => s.attributes["codex.item.id"] === "item_m1");
+  assert.deepEqual(failed.status, { code: 2, message: "mcp_tool_call failed" });
+  const open = mcp.find((s) => s.attributes["codex.item.id"] === "item_m2");
+  assert.equal(open.attributes["codex.item.incomplete"], true);
+  assertNoLeak(MARKER);
+});
+
 hidden.unpatch();
 assert.equal(isPatched(CodexSDK.Thread.prototype), false);
 

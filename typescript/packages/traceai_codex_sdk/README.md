@@ -60,7 +60,7 @@ instrumentation.unpatch();                                      // undo everythi
 - `run()` and `runStreamed()` both drive the SDK's private `Thread.runStreamedInternal()` generator. The wrapper wraps that one method, so both entry points are traced with real per-event timing. It yields the SDK's own event objects, unchanged and in order, and forwards `return()` / `throw()`: `run()` returns exactly what it returned before, and throws the same errors. If a future SDK drops that method, the wrapper falls back to `runStreamed()` and logs a warning that `run()` may be untraced.
 - `Codex` options (`codexPathOverride`, `baseUrl`, `apiKey`, `config`, `env`) and thread options pass through untouched.
 - A tracing error never fails the agent. An exporter or collector failure is logged and does not reject the stream.
-- A turn ends when its event stream ends: read to the end, `break` out of `for await`, `events.return()`, a thrown error or an abort. A `runStreamed()` iterator that is dropped without any of these never ends its turn span, so nothing is exported for that turn.
+- A turn ends when its event stream ends: read to the end, `break` out of `for await`, `events.return()`, a thrown error or an abort. A `runStreamed()` iterator that is dropped without any of these never ends its turn span: items that already finished are exported, but without their `codex.turn` parent. The turn span always ends last, after its open items, even if recording an attribute fails.
 
 ## Spans
 

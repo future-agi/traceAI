@@ -44,6 +44,14 @@ emit({
   type: "item.completed",
   item: { id: "item_1", type: "command_execution", command: "ls", aggregated_output: "README.md\n", exit_code: 0, status: "completed" },
 });
+if (scenario === "mcp") {
+  // Wire shape of codex-rs `McpToolCallItem`: unset `result` / `error` are sent as null.
+  const call = { type: "mcp_tool_call", server: "docs", tool: "search", arguments: { q: prompt.trim() } };
+  emit({ type: "item.started", item: { id: "item_m1", ...call, result: null, error: null, status: "in_progress" } });
+  emit({ type: "item.completed", item: { id: "item_m1", ...call, result: null, error: { message: "tool call failed" }, status: "failed" } });
+  // A call still in progress when the turn completes.
+  emit({ type: "item.started", item: { id: "item_m2", ...call, result: null, error: null, status: "in_progress" } });
+}
 emit({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: `Echo: ${prompt.trim().slice(-24)}` } });
 emit({
   type: "turn.completed",

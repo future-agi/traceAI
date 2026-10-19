@@ -53,7 +53,8 @@ export interface ThreadItemLike {
   /** command_execution */
   command?: string;
   aggregated_output?: string;
-  exit_code?: number;
+  /** `null` while the command runs (the binary sends unset optionals as `null`). */
+  exit_code?: number | null;
   /** command_execution, file_change, mcp_tool_call */
   status?: string;
   /** file_change */
@@ -62,8 +63,12 @@ export interface ThreadItemLike {
   server?: string;
   tool?: string;
   arguments?: unknown;
-  result?: { content?: unknown; structured_content?: unknown };
-  error?: { message?: string };
+  /**
+   * `null` (not missing) on `item.started` and on a failed call: codex-rs
+   * serializes these `Option`s as `null`, unlike the SDK's `result?:` typing.
+   */
+  result?: { content?: unknown; structured_content?: unknown } | null;
+  error?: { message?: string } | null;
   /** web_search */
   query?: string;
   /** todo_list */
