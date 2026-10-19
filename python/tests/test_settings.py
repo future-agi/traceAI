@@ -20,6 +20,12 @@ from fi_instrumentation.settings import (
 class TestEnvironmentVariableGetters:
     """Test environment variable getter functions."""
 
+    def test_collector_urls_point_at_a_closed_local_port_in_every_test(self, request):
+        """conftest.py's autouse fixture keeps every test off the real collector (no clean_env here)."""
+        assert "_collector_at_a_closed_local_port" in request.fixturenames
+        assert os.environ["FI_BASE_URL"] == "http://127.0.0.1:9"
+        assert os.environ["FI_GRPC_URL"] == "http://127.0.0.1:9"
+
     def test_get_env_collector_endpoint_default(self, clean_env, monkeypatch):
         """Test default collector endpoint."""
         monkeypatch.delenv("FI_BASE_URL", raising=False)

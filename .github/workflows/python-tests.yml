@@ -81,7 +81,18 @@ jobs:
 
           case "$EVENT_NAME" in
             pull_request)
-              python3 .github/scripts/python_test_plan.py --diff "$PR_BASE_SHA...$PR_HEAD_SHA" > "$RUNNER_TEMP/plan.json"
+              # The checkout holds every branch's history (fetch-depth 0), so the base commit is
+              # missing only when the base branch was force-pushed or deleted. Fetch it (the repo is
+              # public, no credentials needed); if that fails too, run every package.
+              if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
+                git fetch --no-tags origin "$PR_BASE_SHA" || true
+              fi
+              if ! git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null; then
+                echo "PR base $PR_BASE_SHA is not in the clone: treating every file as changed" >&2
+                plan_all
+              else
+                python3 .github/scripts/python_test_plan.py --diff "$PR_BASE_SHA...$PR_HEAD_SHA" > "$RUNNER_TEMP/plan.json"
+              fi
               ;;
             push)
               if [ "$PUSH_BEFORE_SHA" = "0000000000000000000000000000000000000000" ] \
@@ -213,9 +224,12 @@ jobs:
           venv_python="$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/python"
           status=0
           ran=0
+          expected=0
+          [ "$OWN_TESTS" = "true" ] && expected=$((expected + 1))
+          expected=$((expected + $(echo $CORE_TESTS | wc -w)))
 
           if [ "$OWN_TESTS" = "true" ]; then
-            ran=1
+            ran=$((ran + 1))
             echo "::group::$PKG_NAME: $PKG_DIR/tests"
             (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest tests -p no:cacheprovider) || status=1
             echo "::endgroup::"
@@ -225,12 +239,16 @@ jobs:
           # -P keeps python/ (the repo's fi_instrumentation source) off sys.path, so they import
           # the fi-instrumentation-otel installed in the package's environment.
           for test_file in $CORE_TESTS; do
-            ran=1
+            ran=$((ran + 1))
             echo "::group::$PKG_NAME: $test_file"
             (cd "$GITHUB_WORKSPACE/python" && "$venv_python" -P -m pytest "${test_file#python/}" -p no:cacheprovider) || status=1
             echo "::endgroup::"
           done
 
+          if [ "$ran" != "$expected" ]; then
+            echo "::error::$PKG_NAME: $expected test sets were planned but $ran ran"
+            exit 1
+          fi
           if [ "$ran" = "0" ]; then
             echo "::notice::$PKG_NAME has no tests"
           fi
@@ -262,11 +280,19 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           FI_INSTRUMENTATION: ${{ needs.fi-instrumentation.result }}
           PACKAGE: ${{ needs.package.result }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
         run: |
-          echo "plan=$PLAN fi-instrumentation=$FI_INSTRUMENTATION package=$PACKAGE"
+          echo "plan=$PLAN fi-instrumentation=$FI_INSTRUMENTATION package=$PACKAGE matrix=${MATRIX:0:200}"
           [ "$PLAN" = "success" ] || { echo "::error::plan did not succeed"; exit 1; }
           [ "$FI_INSTRUMENTATION" = "success" ] || { echo "::error::fi_instrumentation tests did not succeed"; exit 1; }
-          if [ "$PACKAGE" != "success" ] && [ "$PACKAGE" != "skipped" ]; then
-            echo "::error::package tests did not succeed ($PACKAGE)"
+          # Judge the package jobs against what Plan planned, not against has_packages or the job's if:
+          # a broken wiring between them would skip every package job, and skipped would read as green.
+          if [ -z "$MATRIX" ]; then
+            echo "::error::Plan produced no package matrix"
+            exit 1
+          elif [ "$MATRIX" = "[]" ]; then
+            [ "$PACKAGE" = "skipped" ] || { echo "::error::no packages were planned, but the package jobs ran ($PACKAGE)"; exit 1; }
+          elif [ "$PACKAGE" != "success" ]; then
+            echo "::error::packages were planned, but the package jobs did not succeed ($PACKAGE)"
             exit 1
           fi

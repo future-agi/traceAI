@@ -18,9 +18,9 @@ The paths come from one of three places (see main):
   one-liner SDK, listed in EXTRA_PACKAGE_DIRS; its name is ``traceai``).
 * A package is touched by any changed path under its directory, or by a changed
   ``python/tests/test_framework_<key>.py`` that maps to it (see FRAMEWORK_TEST_PACKAGES).
-* ``run_all`` is true when the PR changes the CI itself (any path in CI_FILES: the workflow,
-  this script, its tests, the known-broken verdict script or the known-broken list): then every
-  package is listed.
+* ``run_all`` is true when the PR changes the CI itself (the workflow, the known-broken list,
+  or any path under ``.github/scripts/``: this script, its tests, the verdict script, a new
+  helper; see CI_FILES and CI_PREFIXES): then every package is listed.
 * ``core_changed`` is true when ``python/fi_instrumentation/``, ``python/pyproject.toml``
   or ``python/poetry.lock`` changed. Every package is then listed (like ``run_all``): the
   package jobs install the repo's fi_instrumentation over the one their own lock or range
@@ -40,8 +40,15 @@ package fail without failing the check, and fails when a listed package passes.
 
 Paths from git are used exactly as written (stdin lines are stripped). Standard library only,
 plus git for --diff and --all. It fails loudly (non-zero exit, message on stderr) on a
-test_framework file that maps to no package, on a build backend it does not know, and on a
-missing or malformed known-broken list.
+test_framework file that maps to no package, on a build backend it does not know, on a
+missing or malformed known-broken list, and on a plan that cannot be right (a skipped package
+job counts as green, so a plan of 0 packages from a broken input would pass unseen):
+
+* ``--diff RANGE`` with no commits (base == head: the workflow passed the wrong SHAs; commits
+  that net to no change plan nothing, which is fine), or ``--all`` with 0 paths;
+* ``run_all`` or ``core_changed`` with 0 packages (package discovery broke);
+* a changed path under a ``python/frameworks/<dir>/`` that exists but has no ``pyproject.toml``
+  (a package that lost its pyproject.toml would otherwise drop out of the plan).
 """
 
 import argparse
@@ -57,13 +64,15 @@ CORE_TESTS_DIR = "python/tests"
 # Package directories outside python/frameworks/ that are tested like the framework packages.
 EXTRA_PACKAGE_DIRS = ("python/traceai",)
 KNOWN_BROKEN_FILE = ".github/python-tests-known-broken.txt"
+# A change to any of these tests every package: the workflow, the known-broken list, and
+# everything under .github/scripts/ (the planner, its tests, the verdict script, a new helper).
 CI_FILES = (
     ".github/workflows/python-tests.yml",
-    ".github/scripts/python_test_plan.py",
-    ".github/scripts/test_python_test_plan.py",
-    ".github/scripts/known_broken_verdict.sh",
     KNOWN_BROKEN_FILE,
 )
+CI_PREFIXES = (".github/scripts/",)
+# Directories under python/frameworks/ that are not packages and need no pyproject.toml.
+NON_PACKAGE_DIRS = ("tests_e2e",)
 CORE_PATHS = ("python/pyproject.toml", "python/poetry.lock")
 # Shared by every python/tests/test_framework_*.py file.
 CORE_TEST_SHARED = (f"{CORE_TESTS_DIR}/conftest.py", f"{CORE_TESTS_DIR}/pytest.ini")
@@ -105,6 +114,10 @@ _BACKEND = re.compile(r'^\s*build-backend\s*=\s*["\']([^"\']+)["\']', re.MULTILI
 
 class PlanError(Exception):
     pass
+
+
+def is_ci_path(path):
+    return path in CI_FILES or path.startswith(CI_PREFIXES)
 
 
 def discover_packages(root=REPO_ROOT):
@@ -209,7 +222,24 @@ def plan(changed, root=REPO_ROOT):
         packages[name]["known_broken"] = True
         packages[name]["known_broken_reason"] = reason
 
-    run_all = any(path in CI_FILES for path in changed)
+    # A package that lost its pyproject.toml is no longer discovered, so its changes would plan
+    # nothing and the job would stay green. The directory still exists: fail. A directory that
+    # is gone (the package was removed entirely) is fine.
+    for path in changed:
+        parts = path.split("/")
+        if len(parts) > 3 and path.startswith(f"{FRAMEWORKS_DIR}/"):
+            directory = parts[2]
+            if (
+                directory not in NON_PACKAGE_DIRS
+                and directory not in packages
+                and (root / FRAMEWORKS_DIR / directory).is_dir()
+            ):
+                raise PlanError(
+                    f"{FRAMEWORKS_DIR}/{directory}/ changed but has no pyproject.toml; "
+                    "a package must keep its pyproject.toml (or be removed entirely)"
+                )
+
+    run_all = any(is_ci_path(path) for path in changed)
     core_changed = any(
         path.startswith(CORE_PREFIX) or path in CORE_PATHS for path in changed
     )
@@ -230,6 +260,17 @@ def plan(changed, root=REPO_ROOT):
                 touched.add(owner)
             elif _TEST_FILE.match(path):
                 touched.add(package_for_test_file(path, packages))
+
+    # There is no blanket "plans nothing" failure: a change that touches no package is normal
+    # (README, docs/, java/, typescript/, csharp/, python/e2e_tests/, python/frameworks/tests_e2e/,
+    # a core test file that is not test_framework_*; fi_instrumentation's job covers the last).
+    # Only these are impossible: the whole tree (run_all) or the core (core_changed) is a change
+    # to every package, so 0 packages there means discovery broke.
+    if (run_all or core_changed) and not touched:
+        raise PlanError(
+            f"{'run_all' if run_all else 'core_changed'} is set but 0 packages were found; "
+            f"check that {FRAMEWORKS_DIR}/<name>/pyproject.toml files exist and are read"
+        )
 
     return {
         "packages": [packages[name] for name in sorted(touched)],
@@ -258,7 +299,22 @@ def changed_paths(rev_range, root=REPO_ROOT):
     return [item.decode("utf-8", "surrogateescape") for item in done.stdout.split(b"\0") if item]
 
 
-def main(argv=None):
+def commit_count(rev_range, root=REPO_ROOT):
+    """Return the number of commits the head side of an A..B or A...B range adds over its base."""
+    base, sep, head = rev_range.partition("...")
+    if not sep:
+        base, sep, head = rev_range.partition("..")
+    if not sep:
+        raise PlanError(f"{rev_range}: expected a range A..B or A...B")
+    cmd = ["git", "rev-list", "--count", f"{base}..{head}"]
+    try:
+        done = subprocess.run(cmd, cwd=root, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        raise PlanError(f"{' '.join(cmd)} failed (exit {exc.returncode}): {exc.stderr.strip()}") from exc
+    return int(done.stdout.strip())
+
+
+def main(argv=None, root=REPO_ROOT):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--diff", metavar="RANGE", help="plan from the paths `git diff RANGE` changes")
@@ -266,13 +322,26 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.diff is not None:
-            changed = changed_paths(args.diff)
+            changed = changed_paths(args.diff, root)
+            if not changed:
+                # Commits that net to no change (an empty commit, a change and its revert) are a
+                # real, if rare, PR or push: nothing to plan. No commits at all means the workflow
+                # passed the wrong SHAs (base == head), which would plan nothing for every PR.
+                commits = commit_count(args.diff, root)
+                if commits == 0:
+                    raise PlanError(
+                        f"no commits in {args.diff}; a PR or push always has some, "
+                        "so check the base and head SHAs the workflow passes"
+                    )
+                print(f"{args.diff}: {commits} commit(s) but no changed files; nothing to plan", file=sys.stderr)
         elif args.all:
-            changed = changed_paths(None)
+            changed = changed_paths(None, root)
+            if not changed:
+                raise PlanError("--all: git lists 0 tracked files; check that the checkout is a git repository with files")
         else:
             changed = [line.strip() for line in sys.stdin.read().splitlines()]
         print(f"Changed files: {len([path for path in changed if path])}", file=sys.stderr)
-        result = plan(changed)
+        result = plan(changed, root)
     except PlanError as exc:
         print(f"python_test_plan: {exc}", file=sys.stderr)
         return 1

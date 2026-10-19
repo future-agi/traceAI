@@ -5,6 +5,18 @@ import pytest
 from typing import Dict, Any, Generator
 from unittest.mock import patch, MagicMock
 
+@pytest.fixture(autouse=True)
+def _collector_at_a_closed_local_port(monkeypatch):
+    """Point the collector URLs at a closed local port for every test.
+
+    A test that calls register() exports spans at shutdown; with the URLs unset that goes to
+    api.futureagi.com. A test that needs them absent (a default-endpoint test) removes them
+    itself with monkeypatch.delenv.
+    """
+    monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("FI_GRPC_URL", "http://127.0.0.1:9")
+
+
 @pytest.fixture
 def clean_env():
     """Fixture to clean environment variables before each test."""
@@ -32,12 +44,9 @@ def clean_env():
     for var in env_vars_to_clear:
         os.environ.pop(var, None)
 
-    # The collector URLs point at a closed local port, not at the real collector: a test that
-    # calls register() and exports spans at shutdown never reaches the network. A test that
-    # needs them absent (a default-endpoint test) removes them itself.
-    os.environ["FI_BASE_URL"] = "http://127.0.0.1:9"
-    os.environ["FI_GRPC_URL"] = "http://127.0.0.1:9"
-    
+    # FI_BASE_URL and FI_GRPC_URL are left alone: the autouse fixture
+    # _collector_at_a_closed_local_port sets them for every test.
+
     yield
     
     # Restore original environment

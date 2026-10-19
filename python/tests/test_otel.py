@@ -510,7 +510,8 @@ class TestIntegration:
         assert provider is not None
         assert hasattr(provider, 'add_span_processor')
 
-        # clean_env points the collector at a closed local port, so no test reaches the real one.
+        # The autouse fixture in conftest.py (_collector_at_a_closed_local_port) points the collector
+        # at a closed local port, so no test reaches the real one.
         assert os.environ["FI_BASE_URL"] == "http://127.0.0.1:9"
         assert os.environ["FI_GRPC_URL"] == "http://127.0.0.1:9"
         exporters = [
