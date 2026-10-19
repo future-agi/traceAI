@@ -1,6 +1,5 @@
 import {
   Attributes,
-  AttributeValue,
   SpanStatus,
   SpanStatusCode,
 } from "@opentelemetry/api";
@@ -16,10 +15,10 @@ import {
  *
  * When `hideErrorDetails` is on:
  * - the ERROR status has no description;
- * - exception events keep only `exception.type` (and `exception.escaped`);
  * - `exception.message`, `exception.stacktrace`, `error.message` and instrumentor keys ending in
  *   `.error.message` / `.error_message` / `.exception.message` / `.exception.stacktrace` are dropped
- *   (span and event attributes).
+ *   from span attributes, exception events and other events (a denylist, as in the Python core's
+ *   `strip_error_details`: `exception.type`, `exception.escaped` and other attributes are kept).
  */
 
 export const ERROR_TYPE = "error.type";
@@ -52,12 +51,6 @@ const ERROR_DETAIL_ATTRIBUTE_SUFFIXES: readonly string[] = [
   ".error.message",
   ".error_message",
 ];
-
-/** The only exception-event attributes kept when `hideErrorDetails` is on */
-const HIDDEN_EXCEPTION_EVENT_KEYS: ReadonlySet<string> = new Set([
-  EXCEPTION_TYPE,
-  EXCEPTION_ESCAPED,
-]);
 
 /**
  * A provider / system error code that is safe to use as `error.type`: a short identifier such as
@@ -157,19 +150,27 @@ export function getErrorType(exception: unknown): string {
 }
 
 /**
- * The `exception.type` the OpenTelemetry SDK records for the exception (`code`, else `name`), so
- * an exception event has the same type whether error details are hidden or not. Falls back to
- * {@link getErrorType} when that value is missing or is not an identifier.
+ * The value for `exception.type`, the same whether error details are hidden or not.
+ *
+ * Like the OpenTelemetry JS SDK, a string `code` that is an identifier comes first (Node's
+ * `ECONNREFUSED`, OpenAI's `model_not_found`). Otherwise it is the error name / class, as in
+ * Python, where `exception.type` is the exception class: a numeric code such as an HTTP `400`
+ * (which the SDK would record as `"400"`) is not a type. `_OTHER` when nothing is known.
  */
 export function getExceptionType(exception: unknown): string {
   const code = getProperty(exception, "code");
-  const sdkType =
-    typeof code === "string" || typeof code === "number"
-      ? String(code)
-      : getStringProperty(exception, "name");
-  return sdkType != null && ERROR_CODE_PATTERN.test(sdkType)
-    ? sdkType
-    : getErrorType(exception);
+  if (typeof code === "string" && ERROR_CODE_PATTERN.test(code)) {
+    return code;
+  }
+  const name = getStringProperty(exception, "name");
+  if (name != null && ERROR_CODE_PATTERN.test(name)) {
+    return name;
+  }
+  const constructorName = getConstructorName(exception);
+  if (constructorName != null && !GENERIC_NAMES.has(constructorName)) {
+    return constructorName;
+  }
+  return ERROR_TYPE_OTHER;
 }
 
 /**
@@ -188,35 +189,99 @@ export function getErrorMessage(exception: unknown): string | undefined {
  * such as "  at least one item is required" from matching.
  */
 const JS_STACK_FRAME = /^\s+at\s.*(?::\d+:\d+\)?|\(native\)|<anonymous>\)?)\s*$/;
-/** The start of a Python traceback relayed inside an error message */
-const PYTHON_TRACEBACK = /^Traceback \(most recent call last\):/;
-/** The "Name: message" header line that starts a JavaScript stack */
-const STACK_HEADER = /^[A-Za-z_$][\w$.]*(?::\s|:?$)/;
+/** The header of a Python traceback relayed inside an error message */
+const PYTHON_TRACEBACK = "Traceback (most recent call last):";
+/** The lines Python prints between chained tracebacks */
+const PYTHON_CHAINING_LINES: ReadonlySet<string> = new Set([
+  "During handling of the above exception, another exception occurred:",
+  "The above exception was the direct cause of the following exception:",
+]);
+/** An error name on its own, followed by ":" ("Error:"), left in front of a relayed traceback */
+const BARE_ERROR_NAME = /^[A-Za-z_$][\w$.]*:$/;
+/** "<Name>: <rest>": the header line that opens a JavaScript stack */
+const NAMED_HEADER = /^([A-Za-z_$][\w$.]*): ([\s\S]*)$/;
 
 /**
- * Removes a stack trace from a status description, keeping the message.
+ * Removes relayed Python tracebacks: the "Traceback (most recent call last):" header and the
+ * indented frame / source lines under it. The final "Type: message" line is kept, since it is
+ * the error message.
+ */
+function stripPythonTracebacks(lines: string[]): { lines: string[]; stripped: boolean } {
+  const kept: string[] = [];
+  let inTraceback = false;
+  let stripped = false;
+  for (const line of lines) {
+    const header = line.indexOf(PYTHON_TRACEBACK);
+    if (header !== -1) {
+      // e.g. "Error: Traceback (most recent call last):" when the traceback is an Error's message,
+      // or "  + Exception Group Traceback (most recent call last):"
+      const before = line
+        .slice(0, header)
+        .replace(/[\s+|]*Exception Group\s*$/, "")
+        .trim();
+      if (before.length > 0 && !BARE_ERROR_NAME.test(before)) {
+        kept.push(before);
+      }
+      inTraceback = true;
+      stripped = true;
+      continue;
+    }
+    if (inTraceback) {
+      // Frames ("  File ...") and source / caret lines are indented; the exception line is not.
+      if (/^\s/.test(line) || line.trim().length === 0) {
+        continue;
+      }
+      inTraceback = false;
+    }
+    if (stripped && PYTHON_CHAINING_LINES.has(line.trim())) {
+      continue;
+    }
+    kept.push(line);
+  }
+  return { lines: kept, stripped };
+}
+
+/**
+ * LangChain's `run.error` is `message + "\n\n" + stack`, and a stack opens with
+ * `"<Name>: <message>"`. When the text is the message followed by that header, returns the
+ * message, so it is not repeated.
+ */
+function dropRepeatedStackHeader(text: string): string {
+  let separator = text.indexOf("\n\n");
+  while (separator !== -1) {
+    const message = text.slice(0, separator).trim();
+    const rest = text.slice(separator + 2).trim();
+    const header = NAMED_HEADER.exec(rest);
+    if (message.length > 0 && (rest === message || header?.[2].trim() === message)) {
+      return message;
+    }
+    separator = text.indexOf("\n\n", separator + 2);
+  }
+  return text;
+}
+
+/**
+ * Removes a stack trace from a status description, keeping the whole message.
  *
- * Handles a bare `error.stack` ("Error: msg\n    at ..."), LangChain's `run.error`
- * ("msg\n\nError: msg\n    at ...") and relayed Python tracebacks.
+ * Handles a bare `error.stack` ("Error: msg\n    at ..."; the message can span several lines),
+ * LangChain's `run.error` ("msg\n\nError: msg\n    at ...") and relayed Python tracebacks, whose
+ * final "Type: message" line is kept. Text without a stack is returned unchanged.
  */
 export function stripStackTrace(description: string): string {
-  const lines = description.split("\n");
-  const firstFrame = lines.findIndex(
-    (line) => JS_STACK_FRAME.test(line) || PYTHON_TRACEBACK.test(line),
-  );
-  if (firstFrame === -1) {
+  let lines = description.split("\n");
+  // A JS stack: everything from the first frame on is the stack.
+  const firstFrame = lines.findIndex((line) => JS_STACK_FRAME.test(line));
+  let stripped = firstFrame !== -1;
+  if (stripped) {
+    lines = lines.slice(0, firstFrame);
+  }
+  const python = stripPythonTracebacks(lines);
+  stripped = stripped || python.stripped;
+  if (!stripped) {
     return description;
   }
-  const kept = lines.slice(0, firstFrame);
-  // Drop the "Name: message" header that opens a JS stack when the message is already above it.
-  const header = kept.length > 0 ? kept[kept.length - 1] : undefined;
-  if (header != null && STACK_HEADER.test(header)) {
-    const before = kept.slice(0, -1).join("\n").trim();
-    if (before.length > 0) {
-      kept.pop();
-    }
-  }
-  return kept.join("\n").trim();
+  const text = python.lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return dropRepeatedStackHeader(text);
 }
 
 /**
@@ -296,32 +361,39 @@ export function stripErrorDetailAttributes(
 }
 
 /**
- * Applies the error-detail policy to the attributes of an "exception" event.
+ * The attributes of the "exception" event for {@link FISpan.recordException}: the same keys the
+ * OpenTelemetry SDK records (`exception.type`, `exception.message`, `exception.stacktrace`), with
+ * `exception.type` from {@link getExceptionType} so it is the same in both modes. With
+ * `hideErrorDetails` on, the message and stack trace are left out.
  */
-export function sanitizeExceptionEventAttributes(
-  attributes: Attributes | undefined,
+export function getExceptionEventAttributes(
+  exception: unknown,
   hideErrorDetails: boolean,
-): Attributes | undefined {
-  if (!hideErrorDetails || attributes == null) {
+): Attributes {
+  const attributes: Attributes = {};
+  if (exception == null) {
     return attributes;
   }
-  const kept: Attributes = {};
-  for (const [key, value] of Object.entries(attributes)) {
-    if (HIDDEN_EXCEPTION_EVENT_KEYS.has(key) && value != null) {
-      kept[key] = value as AttributeValue;
+  if (typeof exception === "string") {
+    // A thrown string has no type; the SDK records the message only. With the message hidden,
+    // `_OTHER` keeps the event (OTel needs a type or a message on it).
+    if (hideErrorDetails) {
+      attributes[EXCEPTION_TYPE] = ERROR_TYPE_OTHER;
+    } else if (exception.length > 0) {
+      attributes[EXCEPTION_MESSAGE] = exception;
+    }
+    return attributes;
+  }
+  attributes[EXCEPTION_TYPE] = getExceptionType(exception);
+  if (!hideErrorDetails) {
+    const message = getStringProperty(exception, "message");
+    if (message != null) {
+      attributes[EXCEPTION_MESSAGE] = message;
+    }
+    const stack = getStringProperty(exception, "stack");
+    if (stack != null) {
+      attributes[EXCEPTION_STACKTRACE] = stack;
     }
   }
-  if (kept[EXCEPTION_TYPE] == null) {
-    kept[EXCEPTION_TYPE] = ERROR_TYPE_OTHER;
-  }
-  return kept;
-}
-
-/**
- * The attributes of an "exception" event when `hideErrorDetails` is on: the type only.
- */
-export function getHiddenExceptionEventAttributes(
-  exception: unknown,
-): Attributes {
-  return { [EXCEPTION_TYPE]: getExceptionType(exception) };
+  return attributes;
 }

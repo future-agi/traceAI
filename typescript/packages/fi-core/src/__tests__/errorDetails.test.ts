@@ -188,12 +188,24 @@ describe("error detail helpers", () => {
     );
   });
 
-  it("getExceptionType is the type the OpenTelemetry SDK records", () => {
+  it("getExceptionType is the string code or the error name, as the OpenTelemetry SDK records", () => {
     expect(getExceptionType(providerError())).toBe("model_not_found");
     // The SDK records `name` ("Error") for the Anthropic error, not the body type
     expect(getExceptionType(new AnthropicNotFoundError("x"))).toBe("Error");
     expect(getExceptionType(new TypeError("x"))).toBe("TypeError");
+    expect(getExceptionType({ name: "AgentSpanError", message: "x" })).toBe("AgentSpanError");
     expect(getExceptionType("boom")).toBe("_OTHER");
+  });
+
+  it("getExceptionType uses the error name / class for a numeric or non-identifier code", () => {
+    // The SDK alone would record "400"; Python records the class
+    expect(getExceptionType(Object.assign(new Error("x"), { code: 400 }))).toBe("Error");
+    expect(getExceptionType(Object.assign(new RangeError("x"), { code: 400 }))).toBe("RangeError");
+    expect(getExceptionType(Object.assign(new TypeError("x"), { code: "not a code" }))).toBe(
+      "TypeError",
+    );
+    const nameless = Object.assign(new NotFoundError("x"), { code: 404, name: "" });
+    expect(getExceptionType(nameless)).toBe("NotFoundError");
   });
 
   it("getErrorType returns _OTHER when nothing is known", () => {
@@ -221,10 +233,59 @@ describe("error detail helpers", () => {
     expect(stripStackTrace(runError)).toBe("request failed");
   });
 
-  it("stripStackTrace removes a relayed Python traceback", () => {
+  it("stripStackTrace removes a relayed Python traceback and keeps its final line", () => {
     const message =
       'upstream error\nTraceback (most recent call last):\n  File "/private/tmp/app.py", line 1, in <module>\nValueError: x';
-    expect(stripStackTrace(message)).toBe("upstream error");
+    expect(stripStackTrace(message)).toBe("upstream error\nValueError: x");
+  });
+
+  it("stripStackTrace keeps 'Type: msg' when the whole message is a Python traceback", () => {
+    const traceback = [
+      "Traceback (most recent call last):",
+      '  File "/private/tmp/app.py", line 3, in <module>',
+      "    boom()",
+      "    ~~~~^^",
+      '  File "/private/tmp/app.py", line 2, in boom',
+      '    raise ValueError("boom")',
+      "ValueError: boom",
+    ].join("\n");
+    expect(stripStackTrace(traceback)).toBe("ValueError: boom");
+    // The traceback is an Error's message, and the description is that Error's stack
+    const relayed = new Error(traceback);
+    expect(stripStackTrace(relayed.stack as string)).toBe("ValueError: boom");
+    // ... or LangChain's run.error built from it
+    expect(stripStackTrace(`${relayed.message}\n\n${relayed.stack}`)).toBe("ValueError: boom");
+  });
+
+  it("stripStackTrace keeps every exception line of a chained Python traceback", () => {
+    const chained = [
+      "Traceback (most recent call last):",
+      '  File "/private/tmp/app.py", line 2, in <module>',
+      "    d['x']",
+      "KeyError: 'x'",
+      "",
+      "During handling of the above exception, another exception occurred:",
+      "",
+      "Traceback (most recent call last):",
+      '  File "/private/tmp/app.py", line 4, in <module>',
+      "    raise ValueError('boom')",
+      "ValueError: boom",
+      "with a second line",
+    ].join("\n");
+    expect(stripStackTrace(chained)).toBe("KeyError: 'x'\n\nValueError: boom\nwith a second line");
+    expect(stripStackTrace(chained)).not.toContain("/private/tmp");
+  });
+
+  it("stripStackTrace keeps a multi-line message of a full err.stack", () => {
+    const err = new Error("line one\nDETAILS");
+    expect(stripStackTrace(err.stack as string)).toBe("Error: line one\nDETAILS");
+    // LangChain's run.error repeats the message in the stack header; it is kept once
+    expect(stripStackTrace(`${err.message}\n\n${err.stack}`)).toBe("line one\nDETAILS");
+    const paragraphs = new Error("first\n\nsecond\nthird");
+    expect(stripStackTrace(`${paragraphs.message}\n\n${paragraphs.stack}`)).toBe(
+      "first\n\nsecond\nthird",
+    );
+    expect(stripStackTrace(paragraphs.stack as string)).toBe("Error: first\n\nsecond\nthird");
   });
 
   it("stripStackTrace leaves messages without a stack alone", () => {
@@ -322,14 +383,53 @@ describe("FISpan error-detail policy", () => {
       expect(finished.attributes[ERROR_TYPE]).toBe("TypeError");
     });
 
+    it("a full err.stack description keeps the whole multi-line message", () => {
+      const error = new Error("line one\nDETAILS");
+      const span = tracerWith({}).startSpan("s");
+      span.recordException(error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.stack });
+      span.end();
+      expect(onlySpan().status).toEqual({
+        code: SpanStatusCode.ERROR,
+        message: "line one\nDETAILS",
+      });
+    });
+
+    it("a relayed Python traceback keeps its final 'Type: msg' line", () => {
+      const error = new Error(
+        'Traceback (most recent call last):\n  File "/private/tmp/app.py", line 1, in <module>\nValueError: boom',
+      );
+      failLikeAnInstrumentor(tracerWith({}), error);
+      expect(onlySpan().status).toEqual({ code: SpanStatusCode.ERROR, message: "ValueError: boom" });
+    });
+
     it("exception.type matches between the default and hidden modes", () => {
-      for (const traceConfig of [{}, { hideInputs: true }]) {
-        exporter.reset();
-        failLikeAnInstrumentor(tracerWith(traceConfig), new AnthropicNotFoundError("x"));
-        const span = onlySpan();
-        expect(exceptionEvents(span)[0].attributes?.[EXCEPTION_TYPE]).toBe("Error");
-        expect(span.attributes[ERROR_TYPE]).toBe("not_found_error");
+      const cases: [Error, string, string][] = [
+        [new AnthropicNotFoundError("x"), "Error", "not_found_error"],
+        // A numeric code (HTTP status) is not a type: the error class is used in both modes
+        [Object.assign(new Error("x"), { code: 400 }), "Error", "Error"],
+        [Object.assign(new NotFoundError("x"), { code: 404 }) as Error, "Error", "NotFoundError"],
+        [Object.assign(new RangeError("x"), { code: 400 }), "RangeError", "RangeError"],
+        [providerError(), "model_not_found", "model_not_found"],
+      ];
+      for (const [error, exceptionType, errorType] of cases) {
+        for (const traceConfig of [{}, { hideInputs: true }]) {
+          exporter.reset();
+          failLikeAnInstrumentor(tracerWith(traceConfig), error);
+          const span = onlySpan();
+          expect(exceptionEvents(span)[0].attributes?.[EXCEPTION_TYPE]).toBe(exceptionType);
+          expect(span.attributes[ERROR_TYPE]).toBe(errorType);
+        }
       }
+    });
+
+    it("records a thrown string as the SDK does (message only)", () => {
+      const span = tracerWith({}).startSpan("s");
+      span.recordException("plain failure");
+      span.end();
+      expect(exceptionEvents(onlySpan())[0].attributes).toEqual({
+        [EXCEPTION_MESSAGE]: "plain failure",
+      });
     });
 
     it("keeps error detail attributes", () => {
@@ -381,14 +481,17 @@ describe("FISpan error-detail policy", () => {
       expect(finished.attributes[ERROR_TYPE]).toBe("_OTHER");
     });
 
-    it("add_event('exception') keeps exception.type and exception.escaped only", () => {
+    it("add_event('exception') drops the message and stack trace and keeps the rest", () => {
       const span = tracerWith(traceConfig).startSpan("s");
       span.addEvent("exception", {
         [EXCEPTION_TYPE]: "ValueError",
         [EXCEPTION_MESSAGE]: PROMPT,
         [EXCEPTION_STACKTRACE]: "Traceback ... /private/tmp/x.py",
         [EXCEPTION_ESCAPED]: true,
-        "provider.body": PROMPT,
+        [ERROR_MESSAGE]: PROMPT,
+        "provider.error.message": PROMPT,
+        "retry.attempt": 2,
+        "app.component": "planner",
       });
       span.addEvent("exception", [1700000000, 0]);
       span.addEvent("not-an-exception", { note: "kept", [ERROR_MESSAGE]: PROMPT });
@@ -396,11 +499,16 @@ describe("FISpan error-detail policy", () => {
       span.end();
       const finished = onlySpan();
       const [first, second] = exceptionEvents(finished);
+      // A denylist, as Python's strip_error_details: custom attributes are kept
       expect(first.attributes).toEqual({
         [EXCEPTION_TYPE]: "ValueError",
         [EXCEPTION_ESCAPED]: true,
+        "retry.attempt": 2,
+        "app.component": "planner",
       });
-      expect(second.attributes).toEqual({ [EXCEPTION_TYPE]: "_OTHER" });
+      expect(second.attributes).toEqual({});
+      expect(second.time).toEqual([1700000000, 0]);
+      expect(JSON.stringify(finished.events)).not.toContain(PROMPT);
       // Other events keep their attributes, minus error details
       expect(finished.events.find((e) => e.name === "not-an-exception")?.attributes).toEqual({
         note: "kept",
@@ -408,6 +516,13 @@ describe("FISpan error-detail policy", () => {
       // error.type comes from the exception event
       expect(finished.attributes[ERROR_TYPE]).toBe("ValueError");
       expect(finished.status).toEqual({ code: SpanStatusCode.ERROR });
+    });
+
+    it("record_exception of a thrown string keeps a type-only event", () => {
+      const span = tracerWith(traceConfig).startSpan("s");
+      span.recordException(PROMPT);
+      span.end();
+      expect(exceptionEvents(onlySpan())[0].attributes).toEqual({ [EXCEPTION_TYPE]: "_OTHER" });
     });
 
     it("set_attribute(s) drops exception.message, exception.stacktrace and error.message", () => {

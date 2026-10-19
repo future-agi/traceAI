@@ -258,8 +258,9 @@ describe("FITracingProcessor", () => {
       expect(spans[0].status.code).toBe(2); // SpanStatusCode.ERROR
       // The description is the error message only; `data` goes to the exception event
       expect(spans[0].status.message).toBe("Tool failed");
-      expect(spans[0].attributes["error.type"]).toBe("_OTHER");
+      expect(spans[0].attributes["error.type"]).toBe("AgentSpanError");
       const exception = spans[0].events.find((e) => e.name === "exception");
+      expect(exception?.attributes?.["exception.type"]).toBe("AgentSpanError");
       expect(exception?.attributes?.["exception.message"]).toBe(
         "Tool failed: Connection timeout",
       );
@@ -291,9 +292,9 @@ describe("FITracingProcessor", () => {
 
       const [span] = hiddenExporter.getFinishedSpans();
       expect(span.status).toEqual({ code: 2 });
-      expect(span.attributes["error.type"]).toBe("_OTHER");
+      expect(span.attributes["error.type"]).toBe("AgentSpanError");
       expect(span.events.find((e) => e.name === "exception")?.attributes).toEqual({
-        "exception.type": "_OTHER",
+        "exception.type": "AgentSpanError",
       });
       expect(JSON.stringify(span.events)).not.toContain("secret prompt text");
     });

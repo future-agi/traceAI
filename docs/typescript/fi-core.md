@@ -359,10 +359,16 @@ Its status description is the error message only, never a stack trace; the stack
 `exception.stacktrace` on the exception event.
 
 With `hideErrorDetails` on (env `FI_HIDE_ERROR_DETAILS`), the `ERROR` status has no description,
-exception events keep only `exception.type`, and `exception.message`, `exception.stacktrace`,
-`error.message` (and instrumentor keys ending in `.error.message` / `.error_message`) are dropped.
-Error text is content: provider error bodies can quote the prompt back. Set
-`hideErrorDetails: false` to keep error details while hiding content.
+and `exception.message`, `exception.stacktrace`, `error.message` and instrumentor keys ending in
+`.exception.message`, `.exception.stacktrace`, `.error.message` or `.error_message` are dropped from
+span attributes, exception events and other events. Everything else is kept, including
+`exception.type`, `exception.escaped` and `error.type`. Error text is content: provider error
+bodies can quote the prompt back. Set `hideErrorDetails: false` to keep error details while hiding
+content.
+
+Masking applies to the attributes passed when a span is created (`FITracer.startSpan` /
+`startActiveSpan` options) as well as to attributes set later. `hideInputs` also redacts
+`raw.input` and `llm.prompt_template.variables`; `hideOutputs` also redacts `raw.output`.
 
 ## Error Handling
 

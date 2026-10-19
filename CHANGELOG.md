@@ -26,18 +26,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### TypeScript
 
+> **Security fix (all published `@traceai/fi-core` releases, 0.1.0 to 1.0.0):** content hiding did not apply to the attributes an instrumentation passes when it creates a span, and most instrumentations put the prompt there. With `FI_HIDE_INPUTS=true`, `@traceai/openai` still exported the prompt in `input.value`, `gen_ai.input.messages` and `raw.input`. Fixed in `@traceai/fi-core` 1.1.0. Upgrade it, and upgrade `@traceai/openai`, `@traceai/anthropic`, `@traceai/bedrock` and `@traceai/langchain` to the releases below: their published versions depend on `@traceai/fi-core` `^0.1.x` and keep the bug.
+
 #### @traceai/fi-core `v1.1.0`
-- ✨ New `hideErrorDetails` trace config option (`FI_HIDE_ERROR_DETAILS`). Unset, it turns on with any content-hiding flag (`hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`, `hideInputText`, `hideOutputText`); explicit `true` / `false` wins. When on, ERROR statuses have no description and exception events keep only `exception.type`.
-- ✨ Error spans carry `error.type` (provider error code, else error class).
-- 🐛 Status descriptions are the error message only, never a stack trace.
-- 🐛 `FI_HIDE_*` env vars apply even when no `traceConfig` is passed.
-- ⚠️ Behaviour change: users of the hide flags now also get error details hidden.
+- 🔒 Attributes passed to `FITracer.startSpan` / `startActiveSpan` go through the same masking as `setAttribute(s)` (hide flags, PII redaction, error-detail hiding). They were exported unmasked. Samplers still see them, masked.
+- 🔒 `hideInputs` also redacts `raw.input` and `llm.prompt_template.variables`; `hideOutputs` also redacts `raw.output`.
+- ✨ New `hideErrorDetails` trace config option (`FI_HIDE_ERROR_DETAILS`). Unset, it turns on with any content-hiding flag (`hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`, `hideInputText`, `hideOutputText`); explicit `true` / `false` wins. When on, ERROR statuses have no description, and `exception.message`, `exception.stacktrace`, `error.message` and keys ending in `.exception.message` / `.exception.stacktrace` / `.error.message` / `.error_message` are dropped from spans and events. Other attributes, `exception.type` included, are kept.
+- ✨ Error spans carry `error.type` (provider error code, else error class). `exception.type` is the same in both modes and never a numeric code.
+- 🐛 Status descriptions are the error message only, never a stack trace. Multi-line messages are kept whole, and a relayed Python traceback keeps its final `Type: message` line.
+- 🐛 `FI_HIDE_*`, `FI_PII_REDACTION` and `FI_BASE64_IMAGE_MAX_LENGTH` env vars apply even when no `traceConfig` is passed.
+- ⚠️ Behaviour change: users of the hide flags now also get error details hidden, and creation-time content redacted.
+- ⚠️ Behaviour change: inside `FITracer.startActiveSpan`, `trace.getActiveSpan()` is the `FISpan`, not the SDK span. Code that casts it to the SDK `Span` / `ReadableSpan` breaks there.
+
+#### @traceai/openai `v0.1.14`
+- 🔒 Depends on `@traceai/fi-core` 1.1.0, so the prompt passed at span creation is hidden by the hide flags.
+
+#### @traceai/anthropic `v0.1.3`
+- 🔒 Depends on `@traceai/fi-core` 1.1.0, so the prompt passed at span creation is hidden by the hide flags.
+
+#### @traceai/bedrock `v0.1.1`
+- 🐛 Non-`Error` failures (cross-realm errors, thrown strings, plain objects) get an exception event, `error.type` and a message-only description instead of `String(error)`.
+- 🔒 Depends on `@traceai/fi-core` 1.1.0.
 
 #### @traceai/langchain `v0.1.3`
 - 🐛 Status description is the error message, not LangChain's `run.error` (message plus full stack trace).
+- 🔒 Depends on `@traceai/fi-core` 1.1.0 (prompt template variables are hidden with `hideInputs`).
 
 #### @traceai/openai-agents `v0.1.1`
-- 🐛 Status description is the error message only; error `data` moves to the exception event.
+- 🐛 Status description is the error message only; error `data` moves to the exception event, whose type is `AgentSpanError`.
 
 ---
 

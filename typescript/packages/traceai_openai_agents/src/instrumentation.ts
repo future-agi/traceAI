@@ -25,6 +25,12 @@ import {
 } from "@traceai/fi-semantic-conventions";
 import { VERSION } from "./version";
 
+/**
+ * `exception.type` / `error.type` for a span the Agents SDK marked as failed. Its span errors
+ * are plain `{ message, data }` objects with no class or code.
+ */
+export const AGENT_SPAN_ERROR_TYPE = "AgentSpanError";
+
 // Type definitions for @openai/agents (simplified for instrumentation)
 interface AgentTrace {
   traceId: string;
@@ -193,8 +199,10 @@ export class FITracingProcessor implements TracingProcessor {
       const { message, data } = agentSpan.error;
       // The status description is the error message only. `data` (e.g. the tool's
       // error text) can quote content, so it only goes on the exception event, which
-      // FISpan strips when error details are hidden.
+      // FISpan strips when error details are hidden. The SDK error has no class; a
+      // stable name gives exception.type / error.type a value.
       span.recordException({
+        name: AGENT_SPAN_ERROR_TYPE,
         message:
           data == null || data === ""
             ? message

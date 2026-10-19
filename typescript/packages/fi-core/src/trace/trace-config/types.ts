@@ -16,10 +16,11 @@ export type TraceConfigOptions = {
   base64ImageMaxLength?: number;
   piiRedaction?: boolean;
   /**
-   * Hides error details on spans: the ERROR status keeps no description, exception
-   * events keep only `exception.type` (and `exception.escaped`), and
-   * `exception.message`, `exception.stacktrace` and `error.message` attributes are dropped.
-   * `error.type` is always kept.
+   * Hides error details on spans: the ERROR status keeps no description, and
+   * `exception.message`, `exception.stacktrace`, `error.message` and keys ending in
+   * `.exception.message` / `.exception.stacktrace` / `.error.message` / `.error_message` are
+   * dropped from span attributes and events. Everything else (`exception.type`,
+   * `exception.escaped`, `error.type`, custom attributes) is kept.
    *
    * Tri-state. When left unset (and `FI_HIDE_ERROR_DETAILS` is not set), it turns on
    * whenever any of `hideInputs`, `hideOutputs`, `hideInputMessages`,

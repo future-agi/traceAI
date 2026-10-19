@@ -11,16 +11,14 @@ import {
     diag,
   } from "@opentelemetry/api";
   import { TraceConfig } from "./types";
-  import { mask } from "./maskingRules";
+  import { mask, maskAttributes } from "./maskingRules";
   import {
     ERROR_TYPE,
     ERROR_TYPE_OTHER,
     EXCEPTION_EVENT_NAME,
     EXCEPTION_TYPE,
     getErrorType,
-    getHiddenExceptionEventAttributes,
-    isErrorDetailAttribute,
-    sanitizeExceptionEventAttributes,
+    getExceptionEventAttributes,
     sanitizeStatus,
     stripErrorDetailAttributes,
   } from "./errorDetails";
@@ -46,9 +44,14 @@ import {
    * for {@link recordException}, {@link setStatus}, {@link addEvent} and {@link setAttribute(s)}:
    * - always: an ERROR status description is the exception message only, never a stack trace, and a
    *   span that ends in ERROR gets `error.type`;
-   * - with `hideErrorDetails` on: the ERROR status has no description, exception events keep only
-   *   `exception.type` (and `exception.escaped`), and `exception.message`, `exception.stacktrace`,
-   *   `error.message` (and `*.error.message`-style keys) never reach the underlying span.
+   * - with `hideErrorDetails` on: the ERROR status has no description, and `exception.message`,
+   *   `exception.stacktrace`, `error.message` (and `*.error.message`-style keys) never reach the
+   *   underlying span, neither as span attributes nor on events (`exception.type`,
+   *   `exception.escaped` and other attributes are kept).
+   *
+   * The attributes passed when the span is created go through the same masking in
+   * {@link FITracer}; pass them here as `startAttributes` (already masked) so the span knows about
+   * an `error.type` set at creation.
    */
   export class FISpan implements Span {
     private readonly span: Span;
@@ -63,9 +66,21 @@ import {
     /** The last status set on the span is ERROR */
     private hasErrorStatus: boolean = false;
   
-    constructor({ span, config }: { span: Span; config: TraceConfig }) {
+    constructor({
+      span,
+      config,
+      startAttributes,
+    }: {
+      span: Span;
+      config: TraceConfig;
+      /** The (already masked) attributes the span was created with */
+      startAttributes?: Attributes;
+    }) {
       this.span = span;
       this.config = config;
+      if (startAttributes?.[ERROR_TYPE] != null) {
+        this.hasExplicitErrorType = true;
+      }
       const wrappedSpanContext = span.spanContext();
       const isNoOp = wrappedSpanContext.traceFlags === 0 && wrappedSpanContext.spanId === '0000000000000000';
       // diag.debug(
@@ -77,13 +92,11 @@ import {
      * Returns the value to write for the attribute, or undefined when it must be dropped
      */
     private maskAttribute(key: string, value?: AttributeValue): AttributeValue | undefined {
-      if (this.config.hideErrorDetails && isErrorDetailAttribute(key)) {
-        return undefined;
-      }
-      if (key === ERROR_TYPE && value != null) {
+      const maskedValue = mask({ config: this.config, key, value });
+      if (key === ERROR_TYPE && maskedValue != null) {
         this.hasExplicitErrorType = true;
       }
-      return mask({ config: this.config, key, value });
+      return maskedValue;
     }
   
     setAttribute(key: string, value: AttributeValue): this {
@@ -103,16 +116,10 @@ import {
         diag.warn(`FISpan.setAttributes called on ended span ID: ${this.span.spanContext().spanId}`);
         return this;
       }
-      const maskedAttributes = Object.entries(attributes).reduce(
-        (acc, [key, value]) => {
-          const maskedValue = this.maskAttribute(key, value);
-          if (maskedValue != null) {
-            acc[key] = maskedValue;
-          }
-          return acc;
-        },
-        {} as Attributes,
-      );
+      const maskedAttributes = maskAttributes({ config: this.config, attributes });
+      if (maskedAttributes[ERROR_TYPE] != null) {
+        this.hasExplicitErrorType = true;
+      }
       this.span.setAttributes(maskedAttributes);
       return this;
     }
@@ -137,14 +144,8 @@ import {
         this.span.addEvent(name, attributesOrStartTime, startTime);
         return this;
       }
-      this.span.addEvent(
-        name,
-        name === EXCEPTION_EVENT_NAME
-          ? // still record the (type-only) event
-            sanitizeExceptionEventAttributes(attributes ?? {}, true)
-          : stripErrorDetailAttributes(attributes),
-        time,
-      );
+      // A denylist, for "exception" and other events alike (as Python's strip_error_details)
+      this.span.addEvent(name, stripErrorDetailAttributes(attributes), time);
       return this;
     }
   
@@ -183,19 +184,26 @@ import {
       return this.span.isRecording();
     }
   
+    /**
+     * Records the "exception" event the way the OpenTelemetry SDK does (`exception.type`,
+     * `exception.message`, `exception.stacktrace`), with an `exception.type` that is the same in
+     * both modes (see {@link getExceptionEventAttributes}); the message and stack trace are left
+     * out when error details are hidden.
+     */
     recordException(exception: Exception, time?: TimeInput): void {
       if (this.isEnded) return;
       this.recordedErrorType = getErrorType(exception);
       this.lastException = exception;
-      if (this.config.hideErrorDetails) {
-        this.span.addEvent(
-          EXCEPTION_EVENT_NAME,
-          getHiddenExceptionEventAttributes(exception),
-          time,
-        );
+      const attributes = getExceptionEventAttributes(
+        exception,
+        this.config.hideErrorDetails,
+      );
+      if (Object.keys(attributes).length === 0) {
+        // Same as the SDK: an exception event needs a type or a message
+        diag.warn(`FISpan.recordException: nothing to record for ${typeof exception}`);
         return;
       }
-      this.span.recordException(exception, time);
+      this.span.addEvent(EXCEPTION_EVENT_NAME, attributes, time);
     }
   
     spanContext(): SpanContext {

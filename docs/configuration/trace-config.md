@@ -79,12 +79,20 @@ const instrumentation = new OpenAIInstrumentation({
 });
 ```
 
+In TypeScript (`@traceai/fi-core` 1.1.0+), the masking also covers the attributes an instrumentation passes when it creates a span (most instrumentations put the prompt there). Earlier versions exported those unmasked. Besides `input.value` / `output.value` and the input / output messages, `hideInputs` redacts `raw.input` (the raw request body) and `llm.prompt_template.variables`, and `hideOutputs` redacts `raw.output`.
+
 ### Error details (TypeScript)
 
 Error text can quote hidden content: provider error bodies echo prompts, and stack traces carry local file paths. `@traceai/fi-core` 1.1.0+ handles errors like this:
 
 - Always: the span keeps status `ERROR` and gets `error.type` (the provider error code such as `model_not_found` when there is one, otherwise the error class name). The status description is the error message only, never a stack trace. The stack trace stays in `exception.stacktrace` on the exception event.
-- With `hideErrorDetails` on: the `ERROR` status has no description, exception events keep only `exception.type`, and `exception.message`, `exception.stacktrace`, `error.message` and instrumentor keys ending in `.error.message` / `.error_message` are dropped.
+- With `hideErrorDetails` on, the `ERROR` status has no description, and these keys are dropped from span attributes, exception events and other events:
+  - `exception.message`
+  - `exception.stacktrace`
+  - `error.message`
+  - instrumentor-specific keys ending in `.exception.message`, `.exception.stacktrace`, `.error.message` or `.error_message` (for example `autogen.error.message`, `autogen.tool.error_message`)
+
+  Every other attribute is kept, including `exception.type`, `exception.escaped` and `error.type`. This is the same key list as Python.
 
 `hideErrorDetails` (env `FI_HIDE_ERROR_DETAILS`) is tri-state. When you don't set it, it is on if any of `hideInputs`, `hideOutputs`, `hideInputMessages`, `hideOutputMessages`, `hideInputText` or `hideOutputText` is on. Set it to `false` explicitly to keep error details while hiding content.
 
