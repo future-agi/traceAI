@@ -1,5 +1,5 @@
 /**
- * Compile-time contract: the real `@cursor/sdk` types (devDependency, 1.0.37)
+ * Compile-time contract: the real `@cursor/sdk` types (devDependency, 1.0.38)
  * fit the structural types the wrapper reads. `pnpm run typecheck:contract`
  * fails when an SDK release changes a shape this package depends on.
  */

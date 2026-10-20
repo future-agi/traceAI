@@ -54,7 +54,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
-    "@cursor/sdk": "1.0.37",
+    "@cursor/sdk": "1.0.38",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.10",

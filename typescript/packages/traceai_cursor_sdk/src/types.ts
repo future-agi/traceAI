@@ -1,6 +1,6 @@
 /**
  * Structural copies of the `@cursor/sdk` types this package reads
- * (dist/esm/*.d.ts of 1.0.37). The SDK is a peer dependency, so nothing here
+ * (dist/esm/*.d.ts of 1.0.37 and 1.0.38). The SDK is a peer dependency, so nothing here
  * imports it: the package type-checks and runs whether or not it is installed.
  * `contract/sdk_types.ts` checks that the real SDK types fit these shapes.
  *

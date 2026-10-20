@@ -1,5 +1,5 @@
 /**
- * A stand-in for `@cursor/sdk` 1.0.37 with the same public shapes
+ * A stand-in for `@cursor/sdk` 1.0.37 / 1.0.38 with the same public shapes
  * (`dist/esm/stubs.d.ts`, `agent.d.ts`, `run.d.ts`, `messages.d.ts`) and the
  * same control flow as the real local runtime:
  *
@@ -221,7 +221,7 @@ export function makeFakeSdk(script: FakeAgentScript, createError?: Error) {
   class Agent {
     private constructor() {}
 
-    static async create(options: { apiKey?: string; model?: { id: string }; local?: { cwd?: string }; agentId?: string }): Promise<FakeAgent> {
+    static async create(options: { apiKey?: string; model?: FakeRun["model"]; local?: { cwd?: string }; agentId?: string }): Promise<FakeAgent> {
       if (createError) throw createError;
       agentCounter += 1;
       const id = options.agentId ?? `agent-0000000${agentCounter}-aaaa-4bbb-8ccc-000000000000`;

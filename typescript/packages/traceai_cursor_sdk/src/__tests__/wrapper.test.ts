@@ -6,7 +6,12 @@ import { CursorSDKInstrumentation, resolveContentPolicy, shutdown } from "../ins
 import { isPatched } from "../wrappers";
 import {
   AGENT_ID,
+  LIVE_EDIT_ID,
+  LIVE_READ_ID,
+  LIVE_USAGE,
+  PLAN_ERROR,
   PROMPT_MARKER,
+  PROMPT_TOKENS,
   SECRET_ARG,
   SECRET_RESULT,
   THINKING_TEXT,
@@ -14,6 +19,9 @@ import {
   events,
   failedRun,
   fullRun,
+  liveModelUnavailableRun,
+  liveParallelToolsRun,
+  liveRun,
   slowRun,
 } from "./fixtures/events";
 import { FakeAuthenticationError, FakeRun, Step, makeFakeSdk } from "./fixtures/fakeSdk";
@@ -95,7 +103,8 @@ describe("streamed run (documented events)", () => {
     expect(attr(run, C.LAST_STATUS_EVENT)).toBe("FINISHED");
     expect(attr(run, S.MODEL_NAME)).toBe("composer-2");
     expect(attr(run, C.TOOLS)).toEqual(["read", "ls", "shell"]);
-    expect(attr(run, S.INPUT_TOKENS)).toBe(USAGE.inputTokens);
+    expect(attr(run, S.INPUT_TOKENS)).toBe(PROMPT_TOKENS);
+    expect(attr(run, C.USAGE_INPUT_TOKENS)).toBe(USAGE.inputTokens);
     expect(attr(run, S.OUTPUT_TOKENS)).toBe(USAGE.outputTokens);
     expect(attr(run, S.TOTAL_TOKENS)).toBe(USAGE.totalTokens);
     expect(attr(run, S.CACHE_READ_TOKENS)).toBe(USAGE.cacheReadTokens);
@@ -218,6 +227,91 @@ describe("streamed run (documented events)", () => {
     const seen = await drain(run.stream());
     expect(seen).toHaveLength(expected.length);
     seen.forEach((event, i) => expect(event).toBe(expected[i]));
+  });
+});
+
+describe("live-recorded run (@cursor/sdk 1.0.38, 2026-10-20)", () => {
+  async function streamLive(steps: Step[], traceConfig?: { hideInputs?: boolean; hideOutputs?: boolean }) {
+    const { sdk } = instrument({ runs: [steps] }, { traceConfig });
+    const agent = await sdk.Agent.create({ model: { id: "composer-2.5", params: [{ id: "fast", value: "false" }] }, local: { cwd: "/tmp" }, agentId: AGENT_ID });
+    const run = await agent.send(`Read README.md ${PROMPT_MARKER}`);
+    await drain(run.stream());
+    const result = await run.wait();
+    await until(() => runSpans().length === 1);
+    return result;
+  }
+
+  it("maps the real event sequence: thinking blocks, read and edit tools, one answer, request id and tokens", async () => {
+    await streamLive(liveRun());
+    const run = one(spans(), SpanNames.RUN);
+    expect(run.status.code).toBe(SpanStatusCode.OK);
+    // No `request` event in a live run: the id comes from RunResult.requestId.
+    expect(attr(run, C.REQUEST_ID)).toBe("req-1");
+    expect(childrenOf(run).map((s) => s.name)).toEqual([
+      SpanNames.THINKING,
+      `${SpanNames.TOOL_PREFIX}read`,
+      SpanNames.THINKING,
+      `${SpanNames.TOOL_PREFIX}edit`,
+      SpanNames.THINKING,
+      SpanNames.ASSISTANT_MESSAGE,
+    ]);
+    expect(byName(spans(), SpanNames.THINKING).map((s) => attr(s, C.THINKING_DURATION_MS))).toEqual([62, 112, 235]);
+    const tools = toolSpans();
+    expect(tools.map((s) => attr(s, C.TOOL_CALL_ID))).toEqual([LIVE_READ_ID, LIVE_EDIT_ID]);
+    expect(tools.every((s) => s.status.code === SpanStatusCode.OK && attr(s, C.TOOL_STATUS) === "completed")).toBe(true);
+    expect(attr(one(spans(), SpanNames.ASSISTANT_MESSAGE), C.TEXT_LENGTH)).toBe(`Created notes.txt with ${SECRET_RESULT}`.length);
+
+    // Cursor's inputTokens excludes cache reads: 23820 + 19172 + 258 = 43250.
+    expect(attr(run, S.INPUT_TOKENS)).toBe(42992);
+    expect(attr(run, S.OUTPUT_TOKENS)).toBe(258);
+    expect(attr(run, S.TOTAL_TOKENS)).toBe(LIVE_USAGE.totalTokens);
+    expect(attr(run, S.CACHE_READ_TOKENS)).toBe(19172);
+    expect(attr(run, C.USAGE_INPUT_TOKENS)).toBe(LIVE_USAGE.inputTokens);
+    expect(attr(run, S.REASONING_TOKENS)).toBeUndefined();
+
+    const text = exportedText(spans());
+    for (const secret of [PROMPT_MARKER, SECRET_ARG, SECRET_RESULT, "Reading", "notes.txt"]) expect(text).not.toContain(secret);
+  });
+
+  it("puts the real tool args, results, thinking and answer on the spans with content on", async () => {
+    await streamLive(liveRun(), { hideInputs: false, hideOutputs: false });
+    const run = one(spans(), SpanNames.RUN);
+    expect(attr(run, S.INPUT_VALUE)).toContain(PROMPT_MARKER);
+    expect(attr(run, S.OUTPUT_VALUE)).toBe(`Created notes.txt with ${SECRET_RESULT}`);
+    const [read, edit] = toolSpans();
+    expect(attr(read, S.INPUT_VALUE)).toContain(SECRET_ARG);
+    expect(attr(read, S.OUTPUT_VALUE)).toContain(SECRET_RESULT);
+    expect(attr(edit, S.OUTPUT_VALUE)).toContain(SECRET_RESULT);
+    expect(byName(spans(), SpanNames.THINKING).map((s) => attr(s, S.OUTPUT_VALUE))).toEqual(["Reading README.md", "The second line", "Created notes.txt"]);
+  });
+
+  it("keeps parallel tool calls apart by call id; a non-zero shell exit is a completed call", async () => {
+    await streamLive(liveParallelToolsRun());
+    const shell = one(spans(), `${SpanNames.TOOL_PREFIX}shell`);
+    const read = one(spans(), `${SpanNames.TOOL_PREFIX}read`);
+    expect(attr(shell, C.TOOL_CALL_ID)).toBe("tool_shell");
+    expect(attr(read, C.TOOL_CALL_ID)).toBe("tool_read");
+    expect(shell.status.code).toBe(SpanStatusCode.OK);
+    expect(read.status.code).toBe(SpanStatusCode.OK);
+    const ms = (t: [number, number]) => t[0] * 1e3 + t[1] / 1e6;
+    // shell opened before read and closed after it.
+    expect(ms(shell.startTime)).toBeLessThanOrEqual(ms(read.startTime));
+    expect(ms(shell.endTime)).toBeGreaterThan(ms(read.endTime));
+    expect(exportedText(spans())).not.toContain(SECRET_RESULT);
+  });
+
+  it("reports a run the plan rejects as RunError without a code, and Cursor's text only with content on", async () => {
+    const result = await streamLive(liveModelUnavailableRun());
+    expect(result.status).toBe("error");
+    const run = one(spans(), SpanNames.RUN);
+    expect(run.status.code).toBe(SpanStatusCode.ERROR);
+    expect(run.status.message).toBe("RunError");
+    expect(attr(run, C.RUN_ERROR_CODE)).toBeUndefined();
+    expect(exportedText(spans())).not.toContain("Model unavailable");
+
+    exporter.reset();
+    await streamLive(liveModelUnavailableRun(), { hideInputs: false, hideOutputs: false });
+    expect(exportedText(spans())).toContain(PLAN_ERROR);
   });
 });
 
@@ -421,7 +515,7 @@ describe("consumption patterns", () => {
     const span = runSpans()[0];
     expect(span.status.code).toBe(SpanStatusCode.OK);
     expect(attr(span, S.MODEL_NAME)).toBe("composer-2");
-    expect(attr(span, S.INPUT_TOKENS)).toBe(USAGE.inputTokens);
+    expect(attr(span, S.INPUT_TOKENS)).toBe(PROMPT_TOKENS);
   });
 
   it("early break: open tools end incomplete, the run span ends when the run does", async () => {
@@ -489,7 +583,7 @@ describe("consumption patterns", () => {
     await until(() => runSpans().length === 1);
     const span = runSpans()[0];
     expect(attr(span, C.USAGE_SOURCE)).toBe("events");
-    expect(attr(span, S.INPUT_TOKENS)).toBe(USAGE.inputTokens);
+    expect(attr(span, S.INPUT_TOKENS)).toBe(PROMPT_TOKENS);
     expect(typeof attr(span, C.RUN_DURATION_MS)).toBe("number");
   });
 

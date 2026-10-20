@@ -744,8 +744,10 @@ export class RunTracer {
   /**
    * Token counts: the run's cumulative usage from the SDK (`RunResult.usage`
    * / `run.usage`) when present, else the sum of this run's `usage` events.
-   * Promoted with Cursor's own semantics: `totalTokens` as reported (it
-   * excludes `reasoningTokens`, a subset of output).
+   * Cursor's `inputTokens` excludes cache reads and writes (its `totalTokens`
+   * is input + output + cache read + cache write, without `reasoningTokens`,
+   * a subset of output), so the promoted input count adds them back, as the
+   * GenAI semantic conventions ask; `cursor.usage.*` keeps Cursor's numbers.
    */
   private usageAttributes(runUsage: TokenUsageLike | undefined): Attributes {
     let usage: TokenUsageLike | undefined;
@@ -766,8 +768,9 @@ export class RunTracer {
     const cacheRead = finite(usage.cacheReadTokens);
     const cacheWrite = finite(usage.cacheWriteTokens);
     const reasoning = finite(usage.reasoningTokens);
+    const promptTokens = input === undefined ? undefined : input + (cacheRead ?? 0) + (cacheWrite ?? 0);
     if (input !== undefined) {
-      attributes[S.INPUT_TOKENS] = input;
+      attributes[S.INPUT_TOKENS] = promptTokens;
       attributes[C.USAGE_INPUT_TOKENS] = input;
     }
     if (output !== undefined) {
@@ -777,8 +780,8 @@ export class RunTracer {
     if (total !== undefined) {
       attributes[S.TOTAL_TOKENS] = total;
       attributes[C.USAGE_TOTAL_TOKENS] = total;
-    } else if (input !== undefined && output !== undefined) {
-      attributes[S.TOTAL_TOKENS] = input + output;
+    } else if (promptTokens !== undefined && output !== undefined) {
+      attributes[S.TOTAL_TOKENS] = promptTokens + output;
     }
     if (cacheRead !== undefined) {
       attributes[S.CACHE_READ_TOKENS] = cacheRead;

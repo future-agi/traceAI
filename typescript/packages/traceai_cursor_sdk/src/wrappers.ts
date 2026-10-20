@@ -4,7 +4,7 @@
  * - `Agent.create` / `Agent.resume` (static, writable on the SDK's `Agent`
  *   class): the returned `SDKAgent` instance gets a traced `send`; a factory
  *   that throws is recorded as one ERROR span. `Agent.prompt()` calls
- *   `Agent.create()` then `send()` and `wait()` (1.0.37), so it is traced
+ *   `Agent.create()` then `send()` and `wait()` (1.0.37, 1.0.38), so it is traced
  *   through those without a wrapper of its own.
  * - `agent.send()` (instance): opens the run span and patches the returned
  *   `Run` instance's `stream()` and `wait()`, and subscribes to
