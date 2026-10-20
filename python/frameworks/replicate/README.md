@@ -210,3 +210,13 @@ recorded.
   token is not redacted from that span.
 - Do not combine this package with another instrumentor that wraps the same
   Replicate client methods, or spans may be duplicated.
+
+## Live vendor verification (2026-10-20)
+
+Run against the live `api.replicate.com` with `replicate` 1.0.7 and `meta/meta-llama-3-8b-instruct` (`max_tokens` 24), exported to a local Future AGI stack.
+
+- `replicate.run` (sync and `async_run`): succeeded; the span is LLM, OK, with prediction id, status `succeeded`, `predict_time` and the token counts Replicate reports (`input_token_count` / `output_token_count`). The output arrives as a list of text chunks and is recorded as joined text.
+- `replicate.stream`: the real events are `output` x3 then `done`; the span is LLM, OK, with the prediction id and the joined text. A stream carries no status or token counts.
+- Failures: an unknown version answers HTTP 422 ("Invalid version or not permitted"); rate limits answer 429 and an account with no credit answers 402 ("Insufficient credit"). Each ends the span with ERROR and an `exception` event.
+- Official models report the placeholder version `hidden`; it is not recorded as `replicate.prediction.version`.
+- Stored rows were scanned: the API token appears nowhere (0 occurrences, no `Authorization` or `Bearer` text, no file paths or tracebacks).
