@@ -35,13 +35,43 @@ of any traceAI package.
   fi-collector derives from it (span type, model, provider, tokens) was read
   from fi-collector's source by opt-in tests, not observed in a running
   fi-collector.
-- **The LangSmith side of fan-out was not tested.** In fan-out (hybrid) mode
-  the SDK also sends every run to LangSmith's REST API. In the tests those
-  calls went to a loopback stub that answers 200 to everything. No LangSmith
-  key was used (a key is a spend hard stop), so whether LangSmith accepts the
-  runs is not shown here.
+- **The contract tests do not call LangSmith.** In fan-out (hybrid) mode the
+  SDK also sends every run to LangSmith's REST API. In the contract tests those
+  calls go to a loopback stub that answers 200 to everything. The real LangSmith
+  API was exercised separately on 2026-10-19, see the next section.
 
-No call to LangSmith, Future AGI or a model was made.
+The contract tests make no call to LangSmith, Future AGI or a model.
+
+## Live vendor verification (2026-10-19)
+
+Fan-out mode against the real LangSmith API (US, `api.smith.langchain.com`,
+personal access token), spans to a local Future AGI stack, using
+`e2e/real_langchain_run.py`. LangSmith project `th8103-e2e`, Future AGI project
+`th8103-livefill-th8335`.
+
+- Versions: langsmith 0.14.11, langchain 1.4.6, langchain-openai 1.7.2,
+  opentelemetry-sdk and exporter 1.45.1, Python 3.12. The README setup ran unchanged.
+- LangSmith accepted the runs: `GET /info` 200, `POST /runs/multipart` 202, and
+  `POST /api/v1/runs/query` returned the whole run tree with token totals.
+- Success: LangSmith trace `01a15682-3f4a-77ae-8845-0786985be886` = Future AGI
+  trace `40aac0f3-d1cf-e174-f734-f7e572573276` (7 spans, `llm` with
+  `gpt-5.6-terra` and tokens, `tool lookup_policy`). `fi_verify` PASS.
+- Error: LangSmith trace `01a1568c-9cc1-7217-8cfb-0078e9343cfb` (`error`) =
+  Future AGI trace `f8033fac-dd16-c3e0-6ada-af81b58d49af` (5 spans,
+  `broken_lookup` and `tools` in ERROR). LangSmith keeps the error text and
+  traceback; Future AGI stores neither.
+- The OpenTelemetry trace id is not the LangSmith run id. Matching is by start
+  time (identical to the microsecond) or the `lc_run--<run id>` text inside
+  the exported content.
+- `LANGSMITH_HIDE_INPUTS` / `LANGSMITH_HIDE_OUTPUTS` hide the LangSmith copy
+  too (read back `inputs`/`outputs` null). Marker in 5 of 7 stored spans by
+  default, 0 of 7 with the switches; no username, host name, `/Users/` path,
+  `@`, traceback or error text in any stored column.
+- The default 10 s OTLP exporter timeout was hit on a saturated local stack
+  ("Failed to export spans batch due to timeout"), with the batch stored
+  anyway. Set `OTEL_EXPORTER_OTLP_TIMEOUT` (seconds) if your collector is slow.
+- Not proven: EU/self-hosted LangSmith, org-scoped keys
+  (`LANGSMITH_WORKSPACE_ID`), streaming, retriever/parser runs, a Collector fan-out.
 
 ## Live check with a real LangChain agent (opt-in)
 
@@ -61,7 +91,7 @@ single `gen_ai.prompt` / `gen_ai.completion` attributes.
 | Goal | LangSmith variables | LangSmith key | What langsmith 0.14.4 does |
 |---|---|---|---|
 | Future AGI only | `LANGSMITH_TRACING=true`, `LANGSMITH_OTEL_ENABLED=true`, `LANGSMITH_OTEL_ONLY=true` | not needed | Exports OpenTelemetry spans only. Makes no call to LangSmith (tested). |
-| Fan-out: LangSmith and Future AGI | `LANGSMITH_TRACING=true`, `LANGSMITH_OTEL_ENABLED=true` | `LANGSMITH_API_KEY`, for the LangSmith copy | Calls LangSmith's REST API (`GET /info` once, then `POST /runs/multipart` with the runs) and exports the same runs as OpenTelemetry spans to Future AGI (both seen against loopback stand-ins only). |
+| Fan-out: LangSmith and Future AGI | `LANGSMITH_TRACING=true`, `LANGSMITH_OTEL_ENABLED=true` | `LANGSMITH_API_KEY`, for the LangSmith copy | Calls LangSmith's REST API (`GET /info` once, then `POST /runs/multipart` with the runs) and exports the same runs as OpenTelemetry spans to Future AGI (seen against loopback stubs in the contract tests, and against the real LangSmith API on 2026-10-19). |
 
 The fan-out row's two variables are the ones LangSmith's OpenTelemetry page
 names. In 0.14.4 the SDK calls the three modes `langsmith`, `otel` and
@@ -326,6 +356,8 @@ The tests use placeholder Future AGI credentials and set no LangSmith key.
   run's outputs have no `usage_metadata`.
 - **Retriever runs shown as embeddings.** LangSmith exports `retriever` runs
   with `gen_ai.operation.name=embeddings`; see the run-type table.
+- **`Failed to export spans batch due to timeout, max retries or shutdown`.**
+  The exporter's default timeout is 10 s; raise `OTEL_EXPORTER_OTLP_TIMEOUT`.
 - **Spans doubled.** Another instrumentor on the same provider (for example a
   traceAI LangChain instrumentor) records the same calls again. Use one or the
   other (not tested).
