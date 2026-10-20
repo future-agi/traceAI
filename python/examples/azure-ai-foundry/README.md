@@ -114,6 +114,18 @@ the model the response returns (the fixture returns a different model from the
 deployment requested) and usage, including the supplied reasoning and cache
 token counts. Responses streaming is not tested here.
 
+## Live vendor verification (2026-10-19)
+
+Run against a real Azure OpenAI resource (East US, pay-as-you-go subscription, `gpt-4.1-nano` deployment named `th8103-nano`, Global Standard), using the `.openai.azure.com/openai/v1/` form, `openai` 3.24.0, `traceAI-openai` 0.1.10 and `fi-instrumentation-otel` 1.1.0, exactly as in "Run" above, exported to a self-hosted Future AGI stack:
+
+| Call | What Azure and the span showed |
+|---|---|
+| Chat | Succeeded. The `openai` SDK's `Authorization: Bearer <resource key>` is accepted by the v1 endpoint. One `llm` span, `gen_ai.request.model` = `gpt-4.1-nano-2025-04-14` (the underlying model Azure returns, **not** the deployment name `th8103-nano`), 12 input and 119 output tokens, provider `openai`. |
+| Stream | Succeeded. One `llm` span with output text, no model and no token counts (no `stream_options`), provider `openai`. |
+| Error (unknown deployment) | Azure answered `404 DeploymentNotFound`. One `llm` span with status ERROR and the `NotFoundError` text, no model. |
+
+This confirms the model-name, streaming and error statements in "What you see in Future AGI". Not exercised live: the `services.ai.azure.com` form, the Responses API, Entra ID auth, and `traceai-openai` after future-agi/traceAI#249.
+
 ## Provider specifics
 
 Microsoft documents both of these resource-specific base URL forms:
@@ -191,7 +203,7 @@ own logging or data handling.
 - Foundry agents, threads, evaluations and Application Insights export.
 - A bare Azure resource root or the project endpoint as an inference base URL.
 - Responses streaming, async calls and other SDK surfaces in this example's tests.
-- Live Azure calls: not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API.
+- Live Azure calls: chat, stream and one error were run live on 2026-10-19 (see "Live vendor verification"); the automated tests still use a local fake of the OpenAI API.
 
 The recipe does not change the shared instrumentor's `openai` provider label.
 
