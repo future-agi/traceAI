@@ -342,6 +342,7 @@ var tracer = TraceAI.Register(opts =>
 | [`@traceai/instructor`](https://www.npmjs.com/package/@traceai/instructor) | Instructor | [![npm](https://img.shields.io/npm/v/@traceai/instructor)](https://www.npmjs.com/package/@traceai/instructor) |
 | [`@traceai/portkey`](https://www.npmjs.com/package/@traceai/portkey) | Portkey | [![npm](https://img.shields.io/npm/v/@traceai/portkey)](https://www.npmjs.com/package/@traceai/portkey) |
 | [`@traceai/mcp`](https://www.npmjs.com/package/@traceai/mcp) | Model Context Protocol | [![npm](https://img.shields.io/npm/v/@traceai/mcp)](https://www.npmjs.com/package/@traceai/mcp) |
+| [`@traceai/n8n`](typescript/packages/traceai_n8n) | Self-hosted n8n workflow and node execution tracing | Unreleased (source) |
 | [`@traceai/fi-instrumentation-pipecat`](https://www.npmjs.com/package/@traceai/fi-instrumentation-pipecat) | Pipecat (Voice AI) | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-pipecat)](https://www.npmjs.com/package/@traceai/fi-instrumentation-pipecat) |
 | [`@traceai/fi-instrumentation-livekit`](https://www.npmjs.com/package/@traceai/fi-instrumentation-livekit) | LiveKit (Real-time) | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-livekit)](https://www.npmjs.com/package/@traceai/fi-instrumentation-livekit) |
 
