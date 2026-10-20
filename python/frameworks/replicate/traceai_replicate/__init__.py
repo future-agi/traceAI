@@ -29,6 +29,7 @@ from traceai_replicate._wrappers import (
     PendingRegistry,
     RunWrapper,
     drain_released,
+    settle_stream_reads,
 )
 from traceai_replicate.package import _instruments
 from traceai_replicate.version import __version__
@@ -47,9 +48,11 @@ _MISSING = object()
 class _EndPendingFirst:
     """Stands in for ``force_flush`` / ``shutdown`` on one provider instance.
 
-    Ends the create spans still held open on their predictions, then calls
-    the original, so those spans reach the processors before they flush or
-    stop. ``shutdown`` also ends, as a best effort, a span whose
+    Ends the create spans still held open on their predictions, and the
+    spans of completed streams whose read is still running (waiting for that
+    read at most until its ``stream_reload_seconds`` budget runs out), then
+    calls the original, so those spans reach the processors before they
+    flush or stop. ``shutdown`` also ends, as a best effort, a span whose
     ``wait()``/``cancel()`` is still running; ``force_flush`` leaves it to
     that call. ``fi_instrumentation.register()``'s SIGTERM/SIGINT handler
     shuts the provider down and exits; an ``atexit`` hook alone would run
@@ -112,8 +115,12 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
     ``stream_reload_seconds`` is the wall-time budget for reading a streamed
     prediction once more after its ``done`` event (``GET
-    /v1/predictions/{id}``, free) to record its final status, ``predict_time``
-    and token counts; ``0`` turns the read off.
+    /v1/predictions/{id}``: no new prediction and no charge, but it counts
+    toward the account's API rate limit) to record its final status,
+    ``predict_time`` and token counts; ``0`` turns the read off. The read
+    runs on a background thread, so the caller's iteration is never held up;
+    the span ends when the read returns or the budget runs out, as of the
+    stream's end.
 
     ``max_pending_seconds`` is the longest a create span is held open on its
     prediction for a ``wait()``/``cancel()``; an older one is ended, as of
@@ -249,10 +256,13 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         self._hook_provider(tracer_provider)
         # Fallbacks for a provider whose methods could not be hooked; registered
         # after register(), so they run before the provider's own atexit
-        # shutdown. drain_released stays registered after uninstrument() for a
-        # stream that is still open then and released later.
+        # shutdown. drain_released and settle_stream_reads stay registered
+        # after uninstrument() for a stream that is still open then and is
+        # released, or completes, later.
         atexit.unregister(drain_released)
         atexit.register(drain_released)
+        atexit.unregister(settle_stream_reads)
+        atexit.register(settle_stream_reads)
         atexit.register(self._end_pending)
 
     def _wrap(self, module_name: str, class_name: str, method: str, wrapper: Any) -> None:

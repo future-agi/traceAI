@@ -6,7 +6,9 @@ model and deployment routes), get, cancel, the SSE stream URL, model versions
 and trainings. ``RecordingTransport`` is passed to ``replicate.Client`` so the
 real SDK sends every request through it: it records each request, refuses any
 host other than 127.0.0.1 (no live Replicate call, no file download), and can
-open a child span per request to stand in for an HTTP client instrumentation.
+open a child span per request to stand in for an HTTP client instrumentation
+(which, like opentelemetry-instrumentation-httpx, adds none while
+instrumentation is suppressed).
 
 Every token, prompt and output is a placeholder marker.
 """
@@ -23,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import httpx
+from opentelemetry import context as context_api
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -74,6 +77,7 @@ _VERSION_MODELS = {TEXT_VERSION: TEXT_MODEL, ITERATOR_VERSION: TEXT_MODEL}
 
 class _QuietServer(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = 512  # hundreds of concurrent streams connect at once
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         # A closed stream leaves a broken pipe behind; that is expected.
@@ -104,10 +108,12 @@ class FakeReplicate:
         # as on the live API; with ``lag_streams`` the first read after the
         # stream still answers "processing".
         self.lag_streams = False
-        # Seconds GET /v1/predictions/{id} sleeps before answering, and the
-        # status it answers with instead (e.g. 500), for stream predictions.
+        # Seconds GET /v1/predictions/{id} sleeps before answering, the
+        # status it answers with instead (e.g. 500), and that answer's
+        # Retry-After header, for stream predictions.
         self.read_delay = 0.0
         self.read_status: Optional[int] = None
+        self.read_retry_after: Optional[str] = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -133,7 +139,14 @@ class FakeReplicate:
                     if streamed and owner.read_delay:
                         owner._release.wait(owner.read_delay)
                     if streamed and owner.read_status is not None:
-                        self._json(owner.read_status, {"detail": "read refused", "status": owner.read_status})
+                        headers = {}
+                        if owner.read_retry_after is not None:
+                            headers["Retry-After"] = owner.read_retry_after
+                        self._json(
+                            owner.read_status,
+                            {"detail": "read refused", "status": owner.read_status},
+                            headers,
+                        )
                         return
                     self._json(*owner._poll(parts[2]))
                 elif parts[0] == "stream" and len(parts) == 2:
@@ -164,11 +177,13 @@ class FakeReplicate:
                 else:
                     self._json(404, {"detail": "not found", "status": 404})
 
-            def _json(self, status: int, payload: Any) -> None:
+            def _json(self, status: int, payload: Any, headers: Optional[Dict[str, str]] = None) -> None:
                 data = json.dumps(payload).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -372,26 +387,41 @@ def _training_json(parts: List[str]) -> Dict[str, Any]:
     }
 
 
+def instrumentation_suppressed() -> bool:
+    """What an HTTP client instrumentation checks before it opens a span
+    (``opentelemetry.instrumentation.utils.is_http_instrumentation_enabled``)."""
+    keys = [
+        getattr(context_api, name, None)
+        for name in ("_SUPPRESS_INSTRUMENTATION_KEY", "_SUPPRESS_HTTP_INSTRUMENTATION_KEY")
+    ]
+    keys.append("suppress_instrumentation")
+    return any(key is not None and context_api.get_value(key) for key in keys)
+
+
 class RecordingTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
     """Sends only to 127.0.0.1 and records every request the SDK makes.
 
     With ``tracer`` set, each request runs inside a child span named
-    ``HTTP <METHOD>`` so a test can check which span was current.
+    ``HTTP <METHOD>`` so a test can check which span was current; like a real
+    HTTP client instrumentation it opens none while instrumentation is
+    suppressed. ``suppressed`` records, per request, whether it was.
     """
 
     def __init__(self, tracer: Any = None) -> None:
         self.requests: List[Tuple[str, str]] = []
+        self.suppressed: List[Tuple[str, str, bool]] = []
         self._tracer = tracer
         self._sync = httpx.HTTPTransport()
         self._async = httpx.AsyncHTTPTransport()
 
     def _check(self, request: httpx.Request) -> None:
         self.requests.append((request.method, str(request.url)))
+        self.suppressed.append((request.method, request.url.path, instrumentation_suppressed()))
         if request.url.host != "127.0.0.1":
             raise httpx.ConnectError("test transport refuses " + request.url.host, request=request)
 
     def _span(self, request: httpx.Request) -> Any:
-        if self._tracer is None:
+        if self._tracer is None or instrumentation_suppressed():
             return contextlib.nullcontext()
         return self._tracer.start_as_current_span("HTTP " + request.method)
 

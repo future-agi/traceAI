@@ -222,8 +222,9 @@ def test_stream_reads_the_prediction_once_after_done_and_ends_as_of_the_stream()
     assert fake.paths("POST") == ["/v1/models/acme/stream-model/predictions"]
     (read_sent,) = [sent for method, path, sent in transport.sent if path == READ]
     assert span.end_time <= read_sent  # the read does not stretch the span
-    read_span = [s for s in traced.spans() if s.name == "HTTP GET"][-1]
-    assert read_span.parent.span_id == span.context.span_id
+    # The read adds no span: only the create POST and the SSE GET have one.
+    http = [s for s in traced.spans() if s.name.startswith("HTTP ")]
+    assert [s.name for s in http] == ["HTTP POST", "HTTP GET"]
 
 
 def test_async_stream_reads_the_prediction_once_after_done():
@@ -240,6 +241,7 @@ def test_async_stream_reads_the_prediction_once_after_done():
     _final(attrs(span))
     assert fake.paths("GET") == ["/stream/pred0001", READ]
     http = [s for s in traced.spans() if s.name.startswith("HTTP ")]
+    assert [s.name for s in http] == ["HTTP POST", "HTTP GET"]  # none for the read
     assert {s.parent.span_id for s in http} == {span.context.span_id}
 
 
@@ -364,7 +366,9 @@ def test_a_throttled_create_is_one_error_span_and_a_retry_by_the_caller_is_anoth
     assert fake.paths("POST") == ["/v1/models/acme/text-model/predictions"]  # the 429 never reached it
 
 
-def test_a_throttled_read_is_retried_inside_the_client_within_one_span():
+def test_a_throttled_stream_get_is_retried_inside_the_client_within_one_span():
+    # The first GET is the SSE stream's: replicate's RetryTransport retries it.
+    # (The read after ``done`` is never retried; see test_stream_read_offpath.)
     with FakeReplicate() as fake, instrumented() as traced:
         transport = _ThrottleOnce("GET", tracer=traced.tracer())
         client = make_client(fake, transport)

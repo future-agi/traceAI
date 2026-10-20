@@ -5,12 +5,15 @@ Span model (TH-8320):
 * ``replicate.run`` - ``Client.run`` / ``async_run``. The nested create and the
   client's own poll loop run inside it; they add no span.
 * ``replicate.stream`` - ``Client.stream`` / ``async_stream``, open until the
-  stream ends, is closed, or is dropped. The SSE stream carries no status or
-  metrics, so after a completed stream the prediction is read once more
-  (``GET /v1/predictions/{id}``: free, no new prediction; at most two reads
-  within ``stream_reload_seconds`` of wall time) for its final status,
-  ``predict_time`` and token counts. The span ends as of the stream's end,
-  not the read's.
+  stream completes (its ``done`` event, or the end of iteration), is closed
+  before that, or is dropped; a ``close()`` or a drop after ``done`` is not a
+  cancellation. The SSE stream carries no status or metrics, so a completed
+  stream's prediction is read once more (``GET /v1/predictions/{id}``: free,
+  no new prediction) for its final status, ``predict_time`` and token counts.
+  The read is off the caller's path: the caller's iteration returns at once
+  and a daemon thread reads (within ``stream_reload_seconds``, never retried,
+  no HTTP span), then ends the span as of the stream's end. See
+  :func:`complete_stream`.
 * ``replicate.predictions.create`` - every create route. When the returned
   prediction is not terminal yet, the span stays open on that prediction so a
   later ``wait`` / ``cancel`` ends it (one span, not two). If neither is
@@ -35,15 +38,19 @@ import asyncio
 import collections
 import contextvars
 import copy
+import json
 import logging
+import re
 import threading
 import time
+import types
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Tuple, TypeVar
 
 import wrapt
 from fi_instrumentation import REDACTED_VALUE, TraceConfig
 from fi_instrumentation.instrumentation.pii_redaction import redact_pii_in_string
+from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Status, StatusCode
 
@@ -81,11 +88,9 @@ CANCEL = "replicate.predictions.cancel"
 
 # The longest a create span is held open waiting for wait()/cancel().
 DEFAULT_MAX_PENDING_SECONDS = 600.0
-# Wall-time budget for reading a streamed prediction's final status and
-# metrics after its ``done`` event; 0 turns the read off.
+# Wall-time budget for reading a completed stream's prediction (its final
+# status and metrics), counted from the stream's end; 0 turns the read off.
 DEFAULT_STREAM_RELOAD_SECONDS = 2.0
-# Reads per stream: one, and one more if the API has not caught up with ``done``.
-_STREAM_READS = 2
 _monotonic = time.monotonic
 
 # The traced call whose vendor code is running in this context. A wrapped
@@ -152,6 +157,10 @@ class _Call:
         # Set (under the registry lock) when a wait()/cancel() continues this
         # held create span; from then on that call ends it (see expire()).
         self.claimed = False
+        # Set when a stream completed (``done``, or the end of iteration): from
+        # then on complete_stream() owns the end of the span, so a close() or a
+        # drop that follows is not an abandoned stream.
+        self.completed = False
         # Acquired once, by the finish() that ends the span, and never
         # released: a non-blocking acquire is an atomic test-and-set. No
         # finish() ever waits on it, so one run from a signal handler
@@ -202,7 +211,7 @@ class _Call:
         ``cancelled`` is an abandoned stream/iterator, which ends as of now;
         otherwise a held create span, which ends as of create time.
         """
-        if not self.finished:
+        if not self.finished and not self.completed:
             _RELEASED.append((self, cancelled, time.time_ns()))
 
     def finish(
@@ -348,6 +357,8 @@ def drain_released() -> None:
             call, cancelled, released_at = _RELEASED.popleft()
         except IndexError:
             return
+        if call.completed:
+            continue  # complete_stream() ends it
         if cancelled:
             _guard(lambda: call.finish(cancelled=True, end_time=released_at), None)
         else:
@@ -433,9 +444,12 @@ class PendingRegistry:
             call.expire()
 
     def expire_all(self) -> None:
-        """End released spans, then every held span (``force_flush``,
-        ``uninstrument()``). A claimed span is left to its running call."""
+        """End released spans, the spans of completed streams whose read is
+        still running (see :func:`settle_stream_reads`), then every held span
+        (``force_flush``, ``uninstrument()``). A claimed span is left to its
+        running call."""
         drain_released()
+        settle_stream_reads()
         with self._lock:
             calls = [call for call, _ in self._calls.values()]
             self._calls.clear()
@@ -510,11 +524,79 @@ class PendingPrediction(wrapt.ObjectProxy):  # type: ignore[misc]
             _guard(lambda: call.release(cancelled=False), None)
 
 
+# -- a completed stream: the read after it, off the caller's path -------------------------
+#
+# Replicate's SSE stream reports no status, metrics or token counts; the
+# prediction does. A stream is complete at its ``done`` event (without one, at
+# the end of iteration). From then on the span's end time is fixed and the
+# caller's iteration returns at once: complete_stream() hands the end of the
+# span to a daemon "finisher" thread. That thread starts a "reader" thread,
+# waits for it until the read's deadline (the stream's end +
+# ``stream_reload_seconds``), then ends the span, as of the stream's end, with
+# whatever the read found. The read:
+#
+# * is one GET, and one more ``poll_interval`` later only when the API still
+#   answers a non-terminal status (it can lag behind ``done``);
+# * goes to the transport under replicate's RetryTransport, so a 429/5xx is
+#   not retried and Retry-After is never slept on; each phase of the GET
+#   (pool, connect, send, each receive) is given at most the time left before
+#   the deadline, and a body still arriving at the deadline is dropped;
+# * runs with OpenTelemetry instrumentation suppressed, so an HTTP client
+#   instrumentation adds no span for it.
+#
+# At most _MAX_READS reads run at once; a stream that completes while that many
+# are in flight ends at once, without the read. A flush, a provider shutdown,
+# uninstrument() and interpreter exit end these spans first
+# (settle_stream_reads), waiting for reads in flight no longer than their
+# deadlines.
+
+_READ_ATTEMPTS = 2
+# A language model's prediction is tens of KB; at most _MAX_READS of these are held at once.
+_MAX_READ_BYTES = 2 * 1024 * 1024
+_MAX_READS = 256
+_PREDICTION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+# What the span uses from the read; its input, output and logs are not kept.
+_PREDICTION_FIELDS = ("id", "status", "version", "model", "metrics", "error")
+# How long settle_stream_reads() waits past the last deadline for the finishers.
+_SETTLE_GRACE = 0.25
+_FINISHER_NAME = "traceai-replicate-stream-finish"
+_READER_NAME = "traceai-replicate-stream-read"
+
+
+def _suppression_keys() -> Tuple[Any, ...]:
+    keys: List[Any] = []
+    for name in ("_SUPPRESS_INSTRUMENTATION_KEY", "_SUPPRESS_HTTP_INSTRUMENTATION_KEY"):
+        key = getattr(context_api, name, None)
+        if key is not None:
+            keys.append(key)
+    keys.append("suppress_instrumentation")  # the plain key older instrumentations read
+    return tuple(keys)
+
+
+_SUPPRESSION_KEYS = _suppression_keys()
+
+
+def _suppressed() -> Any:
+    """An empty OpenTelemetry context with instrumentation (and HTTP instrumentation) suppressed."""
+    current = context_api.Context()
+    for key in _SUPPRESSION_KEYS:
+        current = context_api.set_value(key, True, current)
+    return current
+
+
+def _is_done(item: Any) -> bool:
+    """The ``done`` server-sent event that ends a completed replicate stream."""
+    event = getattr(item, "event", None)
+    return event is not None and hasattr(item, "data") and getattr(event, "value", event) == "done"
+
+
 def _stream_target(call: _Call) -> Optional[Tuple[Any, str]]:
-    """``(client, prediction id)`` of a stream that may still need its final read."""
+    """``(client, prediction id)`` of a stream that still needs its final read."""
     prediction = call.prediction
     prediction_id = getattr(prediction, "id", None)
-    if call.client is None or not isinstance(prediction_id, str) or not prediction_id:
+    if call.client is None or not isinstance(prediction_id, str):
+        return None
+    if not _PREDICTION_ID.fullmatch(prediction_id):
         return None
     if getattr(prediction, "status", None) in TERMINAL_STATUSES:
         return None  # already final: _write uses it as it is
@@ -526,86 +608,202 @@ def _poll_interval(client: Any) -> float:
     return float(value) if isinstance(value, (int, float)) and value >= 0 else 0.5
 
 
-def _read_terminal(client: Any, prediction_id: str, deadline: float) -> Any:
-    for attempt in range(_STREAM_READS):
-        prediction = client.predictions.get(prediction_id)
-        if getattr(prediction, "status", None) in TERMINAL_STATUSES:
-            return prediction
-        pause = min(_poll_interval(client), deadline - _monotonic())
-        if attempt + 1 >= _STREAM_READS or pause <= 0:
-            return None
-        time.sleep(pause)
-    return None
+def _is_retry_transport(transport: Any) -> bool:
+    return any(
+        kind.__name__ == "RetryTransport" and kind.__module__.startswith("replicate")
+        for kind in type(transport).__mro__
+    ) and hasattr(transport, "_wrapped_transport")
 
 
-def reload_stream(call: _Call, budget: float) -> Any:
-    """The finished prediction of a completed sync stream, or None.
+def _single_attempt_transport(http: Any, url: Any) -> Any:
+    """The transport httpx would send ``url`` to, minus replicate's RetryTransport.
 
-    The read runs on a daemon thread joined for at most ``budget`` seconds:
-    the client's own transport retries 429/503/504 and honours Retry-After,
-    so only a join timeout bounds it. A read still running then is left to
-    finish on its own and is ignored; a daemon thread does not delay exit.
+    replicate wraps every client transport in its RetryTransport (up to 10
+    attempts on 429/503/504, sleeping for any numeric Retry-After, uncapped);
+    the read after a stream must not wait like that, so it goes to the
+    transport inside (inside every layer, when the caller's own transport is
+    one too). A transport mounted for a proxy is not wrapped and is used as
+    it is.
     """
-    target = _stream_target(call)
-    if target is None or budget <= 0:
-        return None
-    client, prediction_id = target
-    deadline = _monotonic() + budget
-    found: List[Any] = []
-    with call.activate():  # the read's HTTP spans nest under this span
-        context = contextvars.copy_context()
+    transport = http._transport_for_url(url)
+    while _is_retry_transport(transport):
+        transport = transport._wrapped_transport
+    return transport
 
-    def read() -> None:
+
+def _get_prediction(client: Any, prediction_id: str, deadline: float) -> Optional[Dict[str, Any]]:
+    """One ``GET /v1/predictions/{id}`` through the client's own sync httpx
+    client (its headers, base URL and transport), never retried. None on an
+    answer other than 200, a body over 2 MiB, or the deadline passing."""
+    remaining = deadline - _monotonic()
+    if remaining <= 0:
+        return None
+    http = client._client  # replicate's sync httpx.Client; built here for an async-only client
+    request = http.build_request("GET", "/v1/predictions/" + prediction_id, timeout=remaining)
+    response = _single_attempt_transport(http, request.url).handle_request(request)
+    try:
+        response.request = request
+        if response.status_code != 200:
+            return None
+        body = bytearray()
+        for chunk in response.iter_bytes():
+            body.extend(chunk)
+            if len(body) > _MAX_READ_BYTES or _monotonic() > deadline:
+                return None
+    finally:
+        response.close()
+    data = json.loads(bytes(body))
+    return data if isinstance(data, dict) else None
+
+
+class _StreamFinish:
+    """A completed stream whose span waits for the read after it."""
+
+    __slots__ = ("call", "collector", "ended", "deadline", "client", "prediction_id", "found", "worker")
+
+    def __init__(
+        self,
+        call: _Call,
+        collector: OutputCollector,
+        ended: int,
+        deadline: float,
+        client: Any,
+        prediction_id: str,
+    ) -> None:
+        self.call = call
+        self.collector = collector
+        self.ended = ended
+        self.deadline = deadline
+        self.client = client
+        self.prediction_id = prediction_id
+        self.found: Any = None
+        self.worker: Optional[threading.Thread] = None
+
+    def read(self) -> None:
+        """The reader thread: at most two GETs, instrumentation suppressed."""
+        token = context_api.attach(_suppressed())
         try:
-            found.append(context.run(_read_terminal, client, prediction_id, deadline))
+            for attempt in range(_READ_ATTEMPTS):
+                data = _get_prediction(self.client, self.prediction_id, self.deadline)
+                if data is None:
+                    return
+                if data.get("status") in TERMINAL_STATUSES:
+                    self.found = types.SimpleNamespace(
+                        **{name: data.get(name) for name in _PREDICTION_FIELDS}
+                    )
+                    return
+                pause = min(_poll_interval(self.client), self.deadline - _monotonic())
+                if attempt + 1 >= _READ_ATTEMPTS or pause <= 0:
+                    return
+                time.sleep(pause)
         except Exception:
             logger.debug("traceai-replicate: could not read the streamed prediction", exc_info=True)
+        finally:
+            context_api.detach(token)
 
-    worker = threading.Thread(target=read, name="traceai-replicate-stream-read", daemon=True)
-    worker.start()
-    worker.join(budget)
-    return found[0] if found else None
+    def run(self) -> None:
+        """The finisher thread: the read, bounded by the deadline, then the span's end."""
+        try:
+            reader = threading.Thread(target=self.read, name=_READER_NAME, daemon=True)
+            reader.start()
+            reader.join(max(0.0, self.deadline - _monotonic()))
+        except Exception:
+            logger.debug("traceai-replicate: the read after a stream did not run", exc_info=True)
+        finally:
+            self.finish()
+
+    def finish(self) -> None:
+        """End the span as of the stream's end with what is known; once."""
+        try:
+            self.call.finish(collector=self.collector, prediction=self.found, end_time=self.ended)
+        finally:
+            with _FINISHING_LOCK:
+                _FINISHING.discard(self)
 
 
-async def _aread_terminal(client: Any, prediction_id: str) -> Any:
-    for attempt in range(_STREAM_READS):
-        prediction = await client.predictions.async_get(prediction_id)
-        if getattr(prediction, "status", None) in TERMINAL_STATUSES:
-            return prediction
-        if attempt + 1 >= _STREAM_READS:
-            return None
-        await asyncio.sleep(_poll_interval(client))
-    return None
+# Completed streams whose span is still waiting for its read. Re-entrant: a
+# signal handler (register()'s shutdown) can run settle_stream_reads() on a
+# thread that is inside complete_stream().
+_FINISHING: "Set[_StreamFinish]" = set()
+_FINISHING_LOCK = threading.RLock()
 
 
-async def areload_stream(call: _Call, budget: float) -> Any:
-    """The async twin of :func:`reload_stream`, bounded by ``asyncio.wait_for``.
+def complete_stream(call: _Call, collector: OutputCollector, budget: float) -> None:
+    """The stream completed: fix the span's end time and give the caller its
+    control back at once.
 
-    A cancellation of the caller's task propagates; any other failure or a
-    timeout returns None.
+    Without a read (``budget`` 0, no prediction id, a prediction already
+    final, or _MAX_READS reads in flight) the span ends here. Otherwise a
+    daemon thread reads the prediction and ends the span (see
+    :class:`_StreamFinish`). Nothing here waits on I/O and no Exception
+    escapes; a BaseException (KeyboardInterrupt) while the thread starts ends
+    the span first, then propagates.
     """
-    target = _stream_target(call)
-    if target is None or budget <= 0:
-        return None
-    client, prediction_id = target
+    ended = time.time_ns()
+    if call.completed or call.finished:
+        return
+    call.completed = True
+    target = _guard(lambda: _stream_target(call), None) if budget > 0 else None
+    if target is None:
+        call.finish(collector=collector, end_time=ended)
+        return
+    entry = _StreamFinish(call, collector, ended, _monotonic() + budget, *target)
     try:
-        with call.activate():
-            return await asyncio.wait_for(_aread_terminal(client, prediction_id), budget)
-    except asyncio.CancelledError:
+        entry.worker = threading.Thread(target=entry.run, name=_FINISHER_NAME, daemon=True)
+        with _FINISHING_LOCK:
+            started = len(_FINISHING) < _MAX_READS
+            if started:
+                _FINISHING.add(entry)
+        if started:
+            entry.worker.start()
+        else:
+            entry.finish()
+    except Exception:  # e.g. no new thread at interpreter shutdown: end it without the read
+        logger.debug("traceai-replicate: could not start the read after a stream", exc_info=True)
+        entry.finish()
+    except BaseException:
+        entry.finish()
         raise
-    except Exception:
-        logger.debug("traceai-replicate: could not read the streamed prediction", exc_info=True)
-        return None
+
+
+def settle_stream_reads() -> None:
+    """End the span of every completed stream whose read is still running.
+
+    For a flush, a provider shutdown, ``uninstrument()`` and interpreter exit:
+    reads in flight are waited for, in all no longer than the last of their
+    deadlines (plus a short grace for the finishers), then each span ends
+    with what is known. A KeyboardInterrupt (or any BaseException) while
+    waiting ends every pending span first, then propagates.
+    """
+    with _FINISHING_LOCK:
+        pending = list(_FINISHING)
+    if not pending:
+        return
+    current = threading.current_thread()
+    until = max(entry.deadline for entry in pending) + _SETTLE_GRACE
+    try:
+        for entry in pending:
+            worker = entry.worker
+            if worker is not None and worker is not current and worker.is_alive():
+                worker.join(max(0.0, until - _monotonic()))
+            entry.finish()
+    except BaseException:
+        for entry in pending:
+            _guard(entry.finish, None)
+        raise
 
 
 class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     """A stream / run output generator whose span ends with the iteration.
 
-    Completed: OK. ``close()`` before the end, or dropping it: ERROR
-    ``cancelled`` with ``replicate.cancelled`` (a drop is queued, see
-    ``_RELEASED``, and keeps the drop time). An exception: ERROR. The span
-    ends exactly once; ``close()`` closes the vendor generator (and its HTTP
-    response) first and ends the span after, even if that close raises.
+    Complete (a stream's ``done`` event, or the end of iteration): OK, ended
+    by :func:`complete_stream` without holding up the caller; a ``close()``,
+    a drop or an exception after ``done`` leaves it so. ``close()`` before
+    that, or dropping it: ERROR ``cancelled`` with ``replicate.cancelled`` (a
+    drop is queued, see ``_RELEASED``, and keeps the drop time). An exception
+    before it: ERROR. The span ends exactly once; ``close()`` closes the
+    vendor generator (and its HTTP response) first and ends the span after,
+    even if that close raises.
     """
 
     def __init__(
@@ -625,14 +823,15 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             with call.activate():
                 item = next(self.__wrapped__)
         except StopIteration:
-            ended = time.time_ns()
-            final = _guard(lambda: reload_stream(call, self._self_reload_seconds), None)
-            call.finish(collector=self._self_collector, prediction=final, end_time=ended)
+            complete_stream(call, self._self_collector, self._self_reload_seconds)
             raise
         except BaseException as error:
-            call.finish(error=error)
+            if not call.completed:
+                call.finish(error=error)
             raise
         _guard(lambda: self._self_collector.add(item), None)
+        if call.stream and _guard(lambda: _is_done(item), False):
+            complete_stream(call, self._self_collector, self._self_reload_seconds)
         return item
 
     def close(self) -> None:
@@ -641,7 +840,8 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             with call.activate():
                 self.__wrapped__.close()
         finally:
-            call.finish(cancelled=True)
+            if not call.completed:
+                call.finish(cancelled=True)
 
     def __del__(self) -> None:
         call = _call_of(self)
@@ -669,23 +869,19 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             with call.activate():
                 item = await self.__wrapped__.__anext__()
         except StopAsyncIteration:
-            ended = time.time_ns()
-            try:
-                final = await areload_stream(call, self._self_reload_seconds)
-            except asyncio.CancelledError:
-                call.finish(collector=self._self_collector, end_time=ended)
-                raise
-            except Exception:  # areload_stream returns None on failure; belt and braces
-                final = None
-            call.finish(collector=self._self_collector, prediction=final, end_time=ended)
+            complete_stream(call, self._self_collector, self._self_reload_seconds)
             raise
         except asyncio.CancelledError:
-            call.finish(cancelled=True)
+            if not call.completed:
+                call.finish(cancelled=True)
             raise
         except BaseException as error:
-            call.finish(error=error)
+            if not call.completed:
+                call.finish(error=error)
             raise
         _guard(lambda: self._self_collector.add(item), None)
+        if call.stream and _guard(lambda: _is_done(item), False):
+            complete_stream(call, self._self_collector, self._self_reload_seconds)
         return item
 
     async def aclose(self) -> None:
@@ -694,7 +890,8 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             with call.activate():
                 await self.__wrapped__.aclose()
         finally:
-            call.finish(cancelled=True)
+            if not call.completed:
+                call.finish(cancelled=True)
 
     def __del__(self) -> None:
         call = _call_of(self)

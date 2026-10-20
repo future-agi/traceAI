@@ -72,9 +72,10 @@ def test_stream_is_one_llm_span_with_the_concatenated_text():
     assert values["replicate.prediction.status"] == "succeeded"
     assert values["gen_ai.usage.input_tokens"] == INPUT_TOKENS
     assert values["gen_ai.usage.output_tokens"] == OUTPUT_TOKENS
-    # The create POST, the SSE GET and that read nest under the stream span.
+    # The create POST and the SSE GET nest under the stream span; the read
+    # runs with instrumentation suppressed and adds no span.
     http = [s for s in traced.spans() if s.name.startswith("HTTP ")]
-    assert [s.name for s in http] == ["HTTP POST", "HTTP GET", "HTTP GET"]
+    assert [s.name for s in http] == ["HTTP POST", "HTTP GET"]
     assert {s.parent.span_id for s in http} == {span.context.span_id}
     assert fake.paths("GET") == ["/stream/pred0001", "/v1/predictions/pred0001"]
 
@@ -86,6 +87,7 @@ def test_stream_span_stays_open_until_the_stream_ends():
         next(stream)
         assert traced.replicate_spans() == []
         list(stream)
+        traced.provider.force_flush()  # waits for the read after ``done``
         assert len(traced.replicate_spans()) == 1
 
 
