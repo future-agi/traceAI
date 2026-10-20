@@ -459,8 +459,12 @@ def _map_span(
             _set_attr(attributes, "call.total_turns", len(turns))
         # The caller's id from ElevenLabs is an input. One that carries an email address,
         # a local path or a host name is never written.
-        if user_id and privacy.scrub_identity(user_id) == user_id:
-            content("user.id", user_id, INPUT)
+        # A live webhook body has no top-level ``user_id`` (2026-10-19): the id is the root
+        # span's ``elevenlabs.user_id`` attribute. The GET export's ``user_id`` still wins.
+        root_user = attrs_in.get("elevenlabs.user_id")
+        caller = user_id or (root_user if isinstance(root_user, str) and root_user else None)
+        if caller and privacy.scrub_identity(caller) == caller:
+            content("user.id", caller, INPUT)
         if transcript and capture.everything:
             rendered = json.dumps(
                 [{k: row[k] for k in ("role", "content", "time") if k in row} for row in transcript],

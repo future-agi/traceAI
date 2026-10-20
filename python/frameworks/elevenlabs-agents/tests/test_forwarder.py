@@ -235,3 +235,51 @@ def test_two_forwarders_bind_two_projects(make_forwarder):
             resources = [map_mod.attributes_to_dict(rs["resource"]["attributes"]) for rs in batch["resourceSpans"]]
             names.append({r["project_name"] for r in resources})
     assert names == [{"project-a"}, {"project-b"}]
+
+
+# --- bodies captured from a live ElevenLabs post-call webhook, 2026-10-19 ---------------------------
+
+LIVE = "live_webhook_post_call_transcription_otel.json"
+LIVE_TIMEOUT = "live_webhook_post_call_transcription_otel_timeout.json"
+
+
+def test_live_webhook_body_is_forwarded_with_hierarchy_model_tokens_and_user(make_forwarder):
+    forwarder = make_forwarder()
+    status, payload = deliver(forwarder, raw(load_fixture(LIVE)))
+    assert (status, payload["status"]) == (200, "forwarded")
+    spans = forwarder.exporter.spans()
+    attrs = {s["spanId"]: map_mod.attributes_to_dict(s["attributes"]) for s in spans}
+    root = [s for s in spans if "parentSpanId" not in s]
+    assert len(root) == 1 and attrs[root[0]["spanId"]]["fi.span.kind"] == "CONVERSATION"
+    r = attrs[root[0]["spanId"]]
+    # the live body has no data.user_id: the id is the root attribute elevenlabs.user_id
+    assert r["user.id"] == "live-user-42"
+    assert r["session.id"].startswith("conv_LIVE")
+    kinds = [a.get("fi.span.kind") for a in attrs.values()]
+    assert kinds.count("TOOL") == 1 and kinds.count("LLM") >= 1
+    llm = [a for a in attrs.values() if a.get("fi.span.kind") == "LLM"]
+    assert all(a["gen_ai.request.model"] == "gpt-4o-mini" for a in llm)
+    assert any(int(a.get("gen_ai.usage.input_tokens", 0)) > 0 for a in llm)
+
+
+def test_live_webhook_without_user_has_no_user_id(make_forwarder):
+    forwarder = make_forwarder()
+    assert deliver(forwarder, raw(load_fixture(LIVE_TIMEOUT)))[0] == 200
+    root = [s for s in forwarder.exporter.spans() if "parentSpanId" not in s][0]
+    assert "user.id" not in map_mod.attributes_to_dict(root["attributes"])
+
+
+def test_live_timeout_call_is_ok_status_and_two_minutes_long(make_forwarder):
+    # ElevenLabs reports status OK even when the call hit the maximum duration (no ERROR in 3 live cases)
+    forwarder = make_forwarder()
+    assert deliver(forwarder, raw(load_fixture(LIVE_TIMEOUT)))[0] == 200
+    root = [s for s in forwarder.exporter.spans() if "parentSpanId" not in s][0]
+    a = map_mod.attributes_to_dict(root["attributes"])
+    assert root["status"]["code"] == 1 and a["call.duration"] == 121.0
+
+
+def test_live_webhook_body_hides_user_id_with_hide_inputs(make_forwarder):
+    forwarder = make_forwarder(trace_config=hide_all())
+    assert deliver(forwarder, raw(load_fixture(LIVE)))[0] == 200
+    blob = json.dumps(forwarder.exporter.batches)
+    assert "live-user-42" not in blob and "Encourage flow" not in blob

@@ -14,8 +14,10 @@ signing secret.
 
 Status: alpha. The `backfill` path (the `GET ...?format=opentelemetry` export) was verified
 on 2026-10-17 against a live ElevenLabs workspace and a local Future AGI. Webhook delivery
-(HMAC header, ElevenLabs retries, the `post_call_transcription_otel` body) has only been
-tested with a documented-shape ElevenLabs stand-in, not yet against a live webhook.
+was verified on 2026-10-19: a real ElevenLabs workspace POSTed signed
+`post_call_transcription_otel` deliveries to this forwarder on Cloud Run, and the traces
+were stored in Future AGI cloud. Not seen live: ElevenLabs retries, a duplicate delivery,
+a span with status ERROR, and a call longer than 2 minutes.
 
 ## Install
 
@@ -173,7 +175,7 @@ the transcript unless you set `FI_PII_REDACTION=true` or hide that side.
 - `examples/run_e2e.sh`: the real `traceai-elevenlabs-agents` process against a local
   Future AGI collector, with ElevenLabs stood in by `examples/standin.py` (docs-shaped
   deliveries signed with a local secret; a GET endpoint the real SDK client parses).
-  This is still a STANDIN for the webhook leg.
+  The webhook leg was also run live on 2026-10-19 (see Live below); this stand-in is for the failure cases a live workspace does not produce.
 - Live, 2026-10-17: a throwaway agent and three short text-only SDK conversations
   (`elevenlabs` 2.73.0), exported with `backfill` against the real ElevenLabs API into a
   local Future AGI (`fi_verify` PASS, privacy scan clean with `FI_HIDE_*` on). The real

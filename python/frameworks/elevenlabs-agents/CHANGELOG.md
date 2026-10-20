@@ -1,5 +1,11 @@
 ## [Unreleased]
+### Fixed
+- A live webhook body carries the caller id only as the root span attribute `elevenlabs.user_id`
+  (there is no `data.user_id`), so `user.id` was missing on webhook deliveries. The root attribute is
+  now used when `data.user_id` is absent.
 ### Verified
+- 2026-10-19: live `post_call_transcription_otel` webhook deliveries (HMAC, ok / abrupt disconnect /
+  2-minute timeout / with user id). Captured bodies added as sanitized fixtures.
 - `backfill` run against the live ElevenLabs API (2026-10-17); attribute names matched. Added a
   sanitized captured body as a test fixture. Webhook delivery is still verified with a stand-in only.
 

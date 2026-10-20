@@ -26,3 +26,8 @@ project-binding tests.
 | `get_conversation_opentelemetry.json` | `GET /v1/convai/conversations/{id}?format=opentelemetry` body |
 | `other_webhook_types.json` | `post_call_transcription`, `post_call_audio`, `call_initiation_failure` bodies |
 | `live_get_conversation_opentelemetry.json` | Captured 2026-10-17 from the live API: user turn, three LLM turns with usage, one webhook tool call |
+
+`live_webhook_post_call_transcription_otel.json` and `live_webhook_post_call_transcription_otel_timeout.json`
+are real `post_call_transcription_otel` webhook bodies captured 2026-10-19 (conversation, agent, branch
+and version ids and trace/span ids replaced; a test user id and agent name renamed). The first has a tool
+call and `elevenlabs.user_id`; the second is a 2-minute call that ended on the time limit.
