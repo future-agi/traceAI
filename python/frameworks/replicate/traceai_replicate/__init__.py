@@ -17,6 +17,7 @@ from traceai_replicate._wrappers import (
     CANCEL,
     CREATE,
     DEFAULT_MAX_PENDING_SECONDS,
+    DEFAULT_STREAM_RELOAD_SECONDS,
     RUN,
     STREAM,
     WAIT,
@@ -35,7 +36,7 @@ from traceai_replicate.version import __version__
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_OPTIONS = frozenset({"tracer_provider", "config", "max_pending_seconds"})
+_OPTIONS = frozenset({"tracer_provider", "config", "max_pending_seconds", "stream_reload_seconds"})
 # replicate/__init__.py binds these to default_client at import time.
 _MODULE_FUNCTIONS = ("run", "async_run", "stream", "async_stream")
 # Provider methods that end held create spans before they run (see _hook_provider).
@@ -85,12 +86,34 @@ def _max_pending_seconds(value: Any) -> float:
     return float(value)
 
 
+def _stream_reload_seconds(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(
+            "stream_reload_seconds must be a number of seconds (int or float), not {0}".format(
+                type(value).__name__
+            )
+        )
+    if not (math.isfinite(value) and value >= 0):
+        raise ValueError(
+            "stream_reload_seconds must be zero or a positive, finite number of seconds, not {0!r}".format(
+                value
+            )
+        )
+    return float(value)
+
+
 class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """Trace ``replicate`` predictions: run, stream, create, wait and cancel.
 
     ``instrument(tracer_provider=..., config=TraceConfig(...),
-    max_pending_seconds=600)``. Trainings, file uploads, and reads
-    (``predictions.get``/``list``, ``reload``) are not wrapped.
+    max_pending_seconds=600, stream_reload_seconds=2.0)``. Trainings, file
+    uploads, and reads (``predictions.get``/``list``, ``reload``) are not
+    wrapped.
+
+    ``stream_reload_seconds`` is the wall-time budget for reading a streamed
+    prediction once more after its ``done`` event (``GET
+    /v1/predictions/{id}``, free) to record its final status, ``predict_time``
+    and token counts; ``0`` turns the read off.
 
     ``max_pending_seconds`` is the longest a create span is held open on its
     prediction for a ``wait()``/``cancel()``; an older one is ended, as of
@@ -121,6 +144,9 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         max_pending_seconds = _max_pending_seconds(
             kwargs.get("max_pending_seconds", DEFAULT_MAX_PENDING_SECONDS)
         )
+        reload_seconds = _stream_reload_seconds(
+            kwargs.get("stream_reload_seconds", DEFAULT_STREAM_RELOAD_SECONDS)
+        )
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
@@ -135,12 +161,17 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         targets = [
             ("replicate.client", "Client", "run", make(RunWrapper, RUN, "run")),
             ("replicate.client", "Client", "async_run", make(AsyncRunWrapper, RUN, "run")),
-            ("replicate.client", "Client", "stream", make(RunWrapper, STREAM, "stream", stream=True)),
+            (
+                "replicate.client",
+                "Client",
+                "stream",
+                make(RunWrapper, STREAM, "stream", stream=True, reload_seconds=reload_seconds),
+            ),
             (
                 "replicate.client",
                 "Client",
                 "async_stream",
-                make(AsyncRunWrapper, STREAM, "stream", stream=True),
+                make(AsyncRunWrapper, STREAM, "stream", stream=True, reload_seconds=reload_seconds),
             ),
             ("replicate.prediction", "Predictions", "create", make(CreateWrapper, CREATE, "create")),
             (

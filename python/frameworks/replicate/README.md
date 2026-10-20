@@ -39,19 +39,21 @@ attributes. Instrument before you use the client. A function imported with
 `replicate.Client` method, are traced.
 
 `instrument()` accepts `tracer_provider`, `config` (a
-`fi_instrumentation.TraceConfig`) and `max_pending_seconds` (a positive
-number, default `600`; see [create, wait and cancel](#create-wait-and-cancel)).
-Any other option, a `config` that is not a `TraceConfig`, or a
-`max_pending_seconds` that is not an `int` or `float` raises `TypeError`; a
-`max_pending_seconds` that is not a positive, finite number raises
-`ValueError`.
+`fi_instrumentation.TraceConfig`), `max_pending_seconds` (a positive
+number, default `600`; see [create, wait and cancel](#create-wait-and-cancel))
+and `stream_reload_seconds` (zero or a positive number, default `2`; see
+[streams](#instrumented-calls)). Any other option, a `config` that is not a
+`TraceConfig`, or a `max_pending_seconds` / `stream_reload_seconds` that is
+not an `int` or `float` raises `TypeError`; a `max_pending_seconds` that is
+not a positive, finite number, or a `stream_reload_seconds` that is negative
+or not finite, raises `ValueError`.
 
 ## Instrumented calls
 
 | Call | Span |
 |---|---|
 | `Client.run`, `async_run` (and `replicate.run`) | One `replicate.run` span. The create request and the client's own polling run inside it and add no span. If the client returns an iterator, the span stays open until the iterator is exhausted, closed, or dropped. |
-| `Client.stream`, `async_stream` (and `replicate.stream`) | One `replicate.stream` span for the whole stream, not one per event. |
+| `Client.stream`, `async_stream` (and `replicate.stream`) | One `replicate.stream` span for the whole stream, not one per event. The event stream reports no status or metrics, so once it has ended with `done` the prediction is read once more (`GET /v1/predictions/{id}`, free, no new prediction; a second read `poll_interval` later if the API still answers `processing`), within `stream_reload_seconds` of wall time (default 2; `0` turns it off). That read records the final status, `predict_time` and token counts; it runs inside the span but does not extend it (the span ends as of the stream's end). A read that fails or runs out of time leaves the span without them. A stream that raises, is closed or is dropped makes no read. |
 | `predictions.create`, `async_create`, also `models.predictions.create` and `deployments.predictions.create` | One `replicate.predictions.create` span. See [create, wait and cancel](#create-wait-and-cancel). |
 | `Prediction.wait`, `async_wait` | Ends the open create span of that prediction, or opens one `replicate.prediction.wait` span. A `wait()` on a prediction that is already finished makes no request and adds no span. |
 | `Prediction.cancel`, `async_cancel`, `predictions.cancel(id)`, `async_cancel(id)` | Ends the open create span of that prediction, or opens one `replicate.predictions.cancel` span. |
@@ -128,10 +130,10 @@ an object a traced `create` returned while it was not yet finished.
 |---|---|
 | `gen_ai.provider.name` | `replicate` |
 | `gen_ai.request.model` | `owner/name` from the model ref; for a version-only or deployment call, the `model` the prediction reports. |
-| `replicate.prediction.version` | The version id, when the ref or the prediction has one. |
+| `replicate.prediction.version` | The version id, when the ref or the prediction has one. The placeholder `hidden` that official models (for example `meta/meta-llama-3-8b-instruct`) report is not a version and is not recorded. |
 | `replicate.deployment` | `owner/name` of the deployment, for deployment calls. |
 | `replicate.prediction.id` | The prediction id. `run` and `stream` record the id of the prediction the client created for them. Absent when the client never got one (for example an invalid ref). |
-| `replicate.prediction.status` | The status string the client returns (`starting`, `processing`, `succeeded`, `failed`, `canceled`), never normalised. Stream spans have none: the event stream does not report one. A `replicate.run` span can show `processing` on an OK span with output: with `Prefer: wait` (the default `wait=True` in replicate 1.0.7, an explicit `wait=` in 1.0.0) the client's `run()` returns without polling once the create response is no longer `starting`, and the server can answer `processing` for a prediction that has finished (the client's `run.py` behaviour). |
+| `replicate.prediction.status` | The status string the client returns (`starting`, `processing`, `succeeded`, `failed`, `canceled`), never normalised. Stream spans have the status of the read after `done` (see `Client.stream` above), or none when that read is off, failed or ran out of time: the event stream does not report one. A `replicate.run` span can show `processing` on an OK span with output: with `Prefer: wait` (the default `wait=True` in replicate 1.0.7, an explicit `wait=` in 1.0.0) the client's `run()` returns without polling once the create response is no longer `starting`, and the server can answer `processing` for a prediction that has finished (the client's `run.py` behaviour). |
 | `replicate.metrics.predict_time` | `metrics.predict_time` in seconds, when present. A duration, not a price. |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens` | `metrics.input_token_count` and `metrics.output_token_count`, and their sum, when the prediction reports them (Replicate's language models do). Never estimated. |
 | `replicate.output.type` | `text`, `url` (one file URL), `list`, `object` or `other`. |
@@ -178,7 +180,12 @@ recorded.
 - An exception from the client (`ModelError` for a failed `run`,
   `ReplicateError` for an HTTP error, `ValueError` for a bad ref) sets the
   span to ERROR, records one exception event (type and message, no stack
-  trace), and is re-raised unchanged.
+  trace), and is re-raised unchanged. The span kind follows the output, so a
+  failed call (no output) is `CHAIN` even for a language model: count failed
+  calls by status, not by kind.
+- The client does not retry a create (POST) answered 429; the span ends
+  ERROR and a retry by the caller is a second span. Reads (GET) answered 429,
+  503 or 504 are retried inside the client, within the same span.
 - A prediction that ends `failed` (for example after `wait()`, which does not
   raise) sets the span to ERROR with the prediction's `error` string.
 - A prediction that ends `canceled` is a terminal state, not a failure: the
@@ -213,10 +220,47 @@ recorded.
 
 ## Live vendor verification (2026-10-20)
 
-Run against the live `api.replicate.com` with `replicate` 1.0.7 and `meta/meta-llama-3-8b-instruct` (`max_tokens` 24), exported to a local Future AGI stack.
+Two sessions against the live `api.replicate.com`, with `replicate` 1.0.7 on
+Python 3.12 and `meta/meta-llama-3-8b-instruct` (`max_tokens` 24), exported to
+a local Future AGI stack. Nine predictions were made in total, seven in the
+first session and two in the second; the account's prediction list for that
+day shows exactly those nine. The second session ran the code in this
+release (the read after `done`, no `hidden` version).
 
-- `replicate.run` (sync and `async_run`): succeeded; the span is LLM, OK, with prediction id, status `succeeded`, `predict_time` and the token counts Replicate reports (`input_token_count` / `output_token_count`). The output arrives as a list of text chunks and is recorded as joined text.
-- `replicate.stream`: the real events are `output` x3 then `done`; the span is LLM, OK, with the prediction id and the joined text. A stream carries no status or token counts.
-- Failures: an unknown version answers HTTP 422 ("Invalid version or not permitted"); rate limits answer 429 and an account with no credit answers 402 ("Insufficient credit"). Each ends the span with ERROR and an `exception` event.
-- Official models report the placeholder version `hidden`; it is not recorded as `replicate.prediction.version`.
-- Stored rows were scanned: the API token appears nowhere (0 occurrences, no `Authorization` or `Bearer` text, no file paths or tracebacks).
+Stored in Future AGI and read back, one trace each:
+
+- `replicate.run`, sync (first session): LLM, OK, with prediction id, status
+  `succeeded`, `predict_time` and the token counts Replicate reports
+  (`input_token_count` / `output_token_count`, 33 / 9). The output arrives as
+  a list of text chunks and is recorded as joined text. This row was written
+  before the fix below and still carries version `hidden`.
+- `async_run` (second session): the same `replicate.run` span (LLM, OK,
+  prediction id, `succeeded`, `predict_time`, 34 / 17 tokens), with no
+  version attribute.
+- `replicate.stream` (second session): the events were `output` (5 of them;
+  3 in the first session) and then `done`, with no status or usage in the
+  stream. The span is LLM, OK, with the prediction id and the joined text,
+  and, from the read after `done`, status `succeeded`, `predict_time` and
+  34 / 19 tokens; no version attribute. The first session's stream row, from
+  before that read existed, has only the prediction id, the text and the
+  `hidden` version.
+- An unknown version (second session): HTTP 422 "Invalid version or not
+  permitted". The span is ERROR, kind `CHAIN` (no output), with the 422
+  detail as its status message and one `exception` event (type and message,
+  no stack trace). No prediction is created; the requested version id is
+  recorded.
+- A rate limit (first session): HTTP 429 "Request was throttled" on a
+  create. The span is ERROR with Replicate's message, which states the
+  account's rate limit and credit threshold; vendor error text is stored as
+  the vendor wrote it.
+
+Not live-verified, stand-in only: `async_stream`, `predictions.create`
+followed by `wait()` (the held create span), `cancel`, deployments, run
+iterators, and image and file outputs. Trainings are not traced (checked with
+the stand-in).
+
+The stored rows of that project (spans, traces, rollups, the attribute
+catalog and the project row: 142 rows) were scanned: the API token appears
+0 times (whole or its last 12 characters), and there is no `r8_`, `Bearer`,
+`Authorization`, `/Users/` path, login or host name, `Traceback`,
+`site-packages` or `exception.stacktrace`.

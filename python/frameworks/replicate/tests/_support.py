@@ -42,6 +42,10 @@ STREAM_FILE_MODEL = "acme/stream-file-model"  # urls.stream: file URL events
 STREAM_ERROR_MODEL = "acme/stream-error-model"  # urls.stream: text, then error
 STREAM_SLOW_MODEL = "acme/stream-slow-model"  # urls.stream: one event, then stalls
 DEPLOYMENT = "acme/text-deployment"  # runs TEXT_MODEL
+# An official model: version "hidden", text output, token counts in metrics,
+# streams like the live meta/meta-llama-3-8b-instruct (output x3, then done {}).
+OFFICIAL_MODEL = "acme/official-llm"
+HIDDEN_VERSION = "hidden"
 
 TEXT_VERSION = "5c7d5dc6dd8bf75c1acaa8565735e7986bc5b66206b55cca93cb72c9bf15ccaa"
 ITERATOR_VERSION = "iter0000000000000000000000000000000000000000000000000000000000ab"
@@ -96,6 +100,14 @@ class FakeReplicate:
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
         self._release = threading.Event()
+        # Stream predictions become terminal when their stream sends ``done``,
+        # as on the live API; with ``lag_streams`` the first read after the
+        # stream still answers "processing".
+        self.lag_streams = False
+        # Seconds GET /v1/predictions/{id} sleeps before answering, and the
+        # status it answers with instead (e.g. 500), for stream predictions.
+        self.read_delay = 0.0
+        self.read_status: Optional[int] = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -117,6 +129,12 @@ class FakeReplicate:
                 path = self._record(None)
                 parts = path.strip("/").split("/")
                 if parts[:2] == ["v1", "predictions"] and len(parts) == 3:
+                    streamed = getattr(owner.predictions.get(parts[2]), "stream", False)
+                    if streamed and owner.read_delay:
+                        owner._release.wait(owner.read_delay)
+                    if streamed and owner.read_status is not None:
+                        self._json(owner.read_status, {"detail": "read refused", "status": owner.read_status})
+                        return
                     self._json(*owner._poll(parts[2]))
                 elif parts[0] == "stream" and len(parts) == 2:
                     self._stream(owner.predictions[parts[1]])
@@ -165,6 +183,8 @@ class FakeReplicate:
                     if event is None:  # stall marker
                         owner._release.wait(30)
                         return
+                    if event.startswith("event: done"):
+                        owner._streamed(prediction)  # finished before the client sees done
                     self.wfile.write(event.encode("utf-8"))
                     self.wfile.flush()
                 self.close_connection = True
@@ -184,7 +204,9 @@ class FakeReplicate:
     def _create(self, model: str, body: Dict[str, Any], prefer_wait: bool) -> Dict[str, Any]:
         with self._lock:
             prediction_id = "pred{0:04d}".format(next(self._ids))
-            version = body.get("version") or "v-" + model.replace("/", "-")
+            version = body.get("version") or (
+                HIDDEN_VERSION if model == OFFICIAL_MODEL else "v-" + model.replace("/", "-")
+            )
             prediction = _Prediction(
                 id=prediction_id,
                 model=model,
@@ -209,6 +231,13 @@ class FakeReplicate:
                 else:
                     prediction.status = "failed" if prediction.model == FAIL_MODEL else "succeeded"
             return 200, self._json_for(prediction)
+
+    def _streamed(self, prediction: _Prediction) -> None:
+        """The stream is about to send ``done``: the prediction is finished (unless lagging)."""
+        with self._lock:
+            if self.lag_streams or prediction.status in TERMINAL:
+                return
+            prediction.status = "failed" if prediction.model == STREAM_ERROR_MODEL else "succeeded"
 
     def _cancel(self, prediction_id: str) -> Tuple[int, Dict[str, Any]]:
         with self._lock:
@@ -240,7 +269,7 @@ class FakeReplicate:
         if prediction.status != "succeeded":
             return {}
         metrics: Dict[str, Any] = {"predict_time": PREDICT_TIME}
-        if prediction.model in (TEXT_MODEL, ECHO_MODEL):
+        if prediction.model in (TEXT_MODEL, ECHO_MODEL, STREAM_MODEL, OFFICIAL_MODEL):
             # Replicate's language models report token counts here.
             metrics.update(input_token_count=INPUT_TOKENS, output_token_count=OUTPUT_TOKENS)
         return metrics

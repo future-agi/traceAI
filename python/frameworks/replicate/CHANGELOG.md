@@ -16,3 +16,6 @@ All notable changes to `traceAI-replicate` will be documented here.
   the error status and the exception event.
 - Exception events carry `exception.type` and `exception.message` only: no stack trace, so no local
   file path or user name leaves the process.
+- A completed stream reads its prediction once after `done` (free `GET /v1/predictions/{id}`, bounded by
+  `stream_reload_seconds`, default 2) for the final status, `predict_time` and token counts.
+- The placeholder version `hidden` that official models report is not recorded.

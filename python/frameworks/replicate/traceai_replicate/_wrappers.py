@@ -5,7 +5,12 @@ Span model (TH-8320):
 * ``replicate.run`` - ``Client.run`` / ``async_run``. The nested create and the
   client's own poll loop run inside it; they add no span.
 * ``replicate.stream`` - ``Client.stream`` / ``async_stream``, open until the
-  stream ends, is closed, or is dropped.
+  stream ends, is closed, or is dropped. The SSE stream carries no status or
+  metrics, so after a completed stream the prediction is read once more
+  (``GET /v1/predictions/{id}``: free, no new prediction; at most two reads
+  within ``stream_reload_seconds`` of wall time) for its final status,
+  ``predict_time`` and token counts. The span ends as of the stream's end,
+  not the read's.
 * ``replicate.predictions.create`` - every create route. When the returned
   prediction is not terminal yet, the span stays open on that prediction so a
   later ``wait`` / ``cancel`` ends it (one span, not two). If neither is
@@ -76,6 +81,11 @@ CANCEL = "replicate.predictions.cancel"
 
 # The longest a create span is held open waiting for wait()/cancel().
 DEFAULT_MAX_PENDING_SECONDS = 600.0
+# Wall-time budget for reading a streamed prediction's final status and
+# metrics after its ``done`` event; 0 turns the read off.
+DEFAULT_STREAM_RELOAD_SECONDS = 2.0
+# Reads per stream: one, and one more if the API has not caught up with ``done``.
+_STREAM_READS = 2
 _monotonic = time.monotonic
 
 # The traced call whose vendor code is running in this context. A wrapped
@@ -250,9 +260,10 @@ class _Call:
     ) -> None:
         tokens = _guard(lambda: api_tokens(self.client), ())
         details = _guard(lambda: self._details(prediction, use_snapshot), {})
-        if self.stream:
-            # An SSE stream does not report a terminal status; the create-time
-            # status would be misleading, so stream spans carry none.
+        if self.stream and details.get(PREDICTION_STATUS) not in TERMINAL_STATUSES:
+            # An SSE stream does not report a status. Without the read after
+            # ``done`` the only one known is the create-time status, which
+            # would mislead, so the span carries none.
             details.pop(PREDICTION_STATUS, None)
         produced = {} if error is not None or cancelled else _guard(
             lambda: self._output(prediction, output, collector, use_snapshot), {}
@@ -499,6 +510,94 @@ class PendingPrediction(wrapt.ObjectProxy):  # type: ignore[misc]
             _guard(lambda: call.release(cancelled=False), None)
 
 
+def _stream_target(call: _Call) -> Optional[Tuple[Any, str]]:
+    """``(client, prediction id)`` of a stream that may still need its final read."""
+    prediction = call.prediction
+    prediction_id = getattr(prediction, "id", None)
+    if call.client is None or not isinstance(prediction_id, str) or not prediction_id:
+        return None
+    if getattr(prediction, "status", None) in TERMINAL_STATUSES:
+        return None  # already final: _write uses it as it is
+    return call.client, prediction_id
+
+
+def _poll_interval(client: Any) -> float:
+    value = getattr(client, "poll_interval", 0.5)
+    return float(value) if isinstance(value, (int, float)) and value >= 0 else 0.5
+
+
+def _read_terminal(client: Any, prediction_id: str, deadline: float) -> Any:
+    for attempt in range(_STREAM_READS):
+        prediction = client.predictions.get(prediction_id)
+        if getattr(prediction, "status", None) in TERMINAL_STATUSES:
+            return prediction
+        pause = min(_poll_interval(client), deadline - _monotonic())
+        if attempt + 1 >= _STREAM_READS or pause <= 0:
+            return None
+        time.sleep(pause)
+    return None
+
+
+def reload_stream(call: _Call, budget: float) -> Any:
+    """The finished prediction of a completed sync stream, or None.
+
+    The read runs on a daemon thread joined for at most ``budget`` seconds:
+    the client's own transport retries 429/503/504 and honours Retry-After,
+    so only a join timeout bounds it. A read still running then is left to
+    finish on its own and is ignored; a daemon thread does not delay exit.
+    """
+    target = _stream_target(call)
+    if target is None or budget <= 0:
+        return None
+    client, prediction_id = target
+    deadline = _monotonic() + budget
+    found: List[Any] = []
+    with call.activate():  # the read's HTTP spans nest under this span
+        context = contextvars.copy_context()
+
+    def read() -> None:
+        try:
+            found.append(context.run(_read_terminal, client, prediction_id, deadline))
+        except Exception:
+            logger.debug("traceai-replicate: could not read the streamed prediction", exc_info=True)
+
+    worker = threading.Thread(target=read, name="traceai-replicate-stream-read", daemon=True)
+    worker.start()
+    worker.join(budget)
+    return found[0] if found else None
+
+
+async def _aread_terminal(client: Any, prediction_id: str) -> Any:
+    for attempt in range(_STREAM_READS):
+        prediction = await client.predictions.async_get(prediction_id)
+        if getattr(prediction, "status", None) in TERMINAL_STATUSES:
+            return prediction
+        if attempt + 1 >= _STREAM_READS:
+            return None
+        await asyncio.sleep(_poll_interval(client))
+    return None
+
+
+async def areload_stream(call: _Call, budget: float) -> Any:
+    """The async twin of :func:`reload_stream`, bounded by ``asyncio.wait_for``.
+
+    A cancellation of the caller's task propagates; any other failure or a
+    timeout returns None.
+    """
+    target = _stream_target(call)
+    if target is None or budget <= 0:
+        return None
+    client, prediction_id = target
+    try:
+        with call.activate():
+            return await asyncio.wait_for(_aread_terminal(client, prediction_id), budget)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug("traceai-replicate: could not read the streamed prediction", exc_info=True)
+        return None
+
+
 class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     """A stream / run output generator whose span ends with the iteration.
 
@@ -509,10 +608,13 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     response) first and ends the span after, even if that close raises.
     """
 
-    def __init__(self, iterator: Any, call: _Call, collector: OutputCollector) -> None:
+    def __init__(
+        self, iterator: Any, call: _Call, collector: OutputCollector, reload_seconds: float = 0.0
+    ) -> None:
         super().__init__(iterator)
         self._self_call = call
         self._self_collector = collector
+        self._self_reload_seconds = reload_seconds
 
     def __iter__(self) -> "TracedIterator":
         return self
@@ -523,7 +625,9 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             with call.activate():
                 item = next(self.__wrapped__)
         except StopIteration:
-            call.finish(collector=self._self_collector)
+            ended = time.time_ns()
+            final = _guard(lambda: reload_stream(call, self._self_reload_seconds), None)
+            call.finish(collector=self._self_collector, prediction=final, end_time=ended)
             raise
         except BaseException as error:
             call.finish(error=error)
@@ -548,10 +652,13 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
 class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     """The async twin of :class:`TracedIterator`; ``aclose()`` ends the span."""
 
-    def __init__(self, iterator: Any, call: _Call, collector: OutputCollector) -> None:
+    def __init__(
+        self, iterator: Any, call: _Call, collector: OutputCollector, reload_seconds: float = 0.0
+    ) -> None:
         super().__init__(iterator)
         self._self_call = call
         self._self_collector = collector
+        self._self_reload_seconds = reload_seconds
 
     def __aiter__(self) -> "TracedAsyncIterator":
         return self
@@ -562,7 +669,15 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             with call.activate():
                 item = await self.__wrapped__.__anext__()
         except StopAsyncIteration:
-            call.finish(collector=self._self_collector)
+            ended = time.time_ns()
+            try:
+                final = await areload_stream(call, self._self_reload_seconds)
+            except asyncio.CancelledError:
+                call.finish(collector=self._self_collector, end_time=ended)
+                raise
+            except Exception:  # areload_stream returns None on failure; belt and braces
+                final = None
+            call.finish(collector=self._self_collector, prediction=final, end_time=ended)
             raise
         except asyncio.CancelledError:
             call.finish(cancelled=True)
@@ -587,13 +702,13 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             _guard(lambda: call.release(cancelled=True), None)
 
 
-def _finish_or_wrap(call: _Call, result: Any, count_files: bool) -> Any:
+def _finish_or_wrap(call: _Call, result: Any, count_files: bool, reload_seconds: float = 0.0) -> Any:
     """End the span now, or hand it to the iterator the client returned."""
     try:
         if is_sync_iterator(result):
-            return TracedIterator(result, call, OutputCollector(count_files))
+            return TracedIterator(result, call, OutputCollector(count_files), reload_seconds)
         if is_async_iterator(result):
-            return TracedAsyncIterator(result, call, OutputCollector(count_files))
+            return TracedAsyncIterator(result, call, OutputCollector(count_files), reload_seconds)
     except Exception:
         logger.debug("traceai-replicate: could not wrap the returned iterator", exc_info=True)
     call.finish(output=result)
@@ -665,9 +780,12 @@ class _Wrapper:
 class RunWrapper(_Wrapper):
     """``Client.run``, and ``Client.stream`` with ``stream=True``."""
 
-    def __init__(self, *args: Any, stream: bool = False) -> None:
+    def __init__(self, *args: Any, stream: bool = False, reload_seconds: float = 0.0) -> None:
         super().__init__(*args)
         self._stream = stream
+        # Only a stream reads its prediction after the end: a run() iterator
+        # polls the same Prediction object to the end itself.
+        self._reload_seconds = reload_seconds if stream else 0.0
 
     def __call__(self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]) -> Any:
         if _ACTIVE.get() is not None:
@@ -682,7 +800,9 @@ class RunWrapper(_Wrapper):
         except BaseException as error:
             call.finish(error=error)
             raise
-        return _finish_or_wrap(call, result, count_files=self._stream)
+        return _finish_or_wrap(
+            call, result, count_files=self._stream, reload_seconds=self._reload_seconds
+        )
 
 
 class AsyncRunWrapper(RunWrapper):
@@ -706,7 +826,9 @@ class AsyncRunWrapper(RunWrapper):
         except BaseException as error:
             call.finish(error=error)
             raise
-        return _finish_or_wrap(call, result, count_files=self._stream)
+        return _finish_or_wrap(
+            call, result, count_files=self._stream, reload_seconds=self._reload_seconds
+        )
 
 
 class CreateWrapper(_Wrapper):

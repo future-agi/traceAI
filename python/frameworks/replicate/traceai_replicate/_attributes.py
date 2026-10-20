@@ -43,6 +43,9 @@ TOKEN_REDACTED = "[redacted]"
 
 # Statuses on which Prediction.wait() stops polling (replicate/prediction.py).
 TERMINAL_STATUSES = ("succeeded", "failed", "canceled")
+# Replicate's official models (e.g. meta/meta-llama-3-8b-instruct) report this
+# placeholder instead of a version id (live run 2026-10-20); it is not a version.
+_PLACEHOLDER_VERSIONS = frozenset({"hidden"})
 
 # Invocation parameters recorded by value, and ones recorded only as present:
 # a webhook URL is the customer's endpoint and can carry a secret.
@@ -159,25 +162,31 @@ def _model_ref(ref: Any) -> Tuple[Optional[str], Optional[str]]:
     if isinstance(ref, str):
         match = _REF.match(ref)
         if match:
-            return "{0}/{1}".format(match["owner"], match["name"]), match["version"]
+            return "{0}/{1}".format(match["owner"], match["name"]), real_version(match["version"])
         return None, None
     if isinstance(ref, tuple) and len(ref) >= 2 and all(isinstance(p, str) for p in ref[:2]):
-        version = ref[2] if len(ref) > 2 and isinstance(ref[2], str) else None
+        version = real_version(ref[2]) if len(ref) > 2 else None
         return "{0}/{1}".format(ref[0], ref[1]), version
     owner, name = getattr(ref, "owner", None), getattr(ref, "name", None)
     if isinstance(owner, str) and isinstance(name, str):
         return "{0}/{1}".format(owner, name), None
     if hasattr(ref, "openapi_schema"):  # replicate.version.Version
-        version_id = getattr(ref, "id", None)
-        return None, version_id if isinstance(version_id, str) else None
+        return None, real_version(getattr(ref, "id", None))
     return None, None
+
+
+def real_version(value: Any) -> Optional[str]:
+    """``value`` when it is a version id; None when it is empty, not a string,
+    or the placeholder official models report instead of one."""
+    if isinstance(value, str) and value and value not in _PLACEHOLDER_VERSIONS:
+        return value
+    return None
 
 
 def _version_id(version: Any) -> Optional[str]:
     if isinstance(version, str):
-        return version
-    version_id = getattr(version, "id", None)
-    return version_id if isinstance(version_id, str) else None
+        return real_version(version)
+    return real_version(getattr(version, "id", None))
 
 
 def _deployment_ref(deployment: Any) -> Optional[str]:
@@ -287,10 +296,13 @@ def _token_count(metrics: Mapping, name: str) -> Optional[int]:
 def prediction_attributes(prediction: Any) -> Dict[str, Any]:
     """Identity, status, timing and reported token usage of a prediction, as the client returned it."""
     attributes: Dict[str, Any] = {}
-    for key, name in ((PREDICTION_ID, "id"), (PREDICTION_STATUS, "status"), (PREDICTION_VERSION, "version")):
+    for key, name in ((PREDICTION_ID, "id"), (PREDICTION_STATUS, "status")):
         value = getattr(prediction, name, None)
         if isinstance(value, str) and value:
             attributes[key] = value
+    version = real_version(getattr(prediction, "version", None))
+    if version:
+        attributes[PREDICTION_VERSION] = version
     model = getattr(prediction, "model", None)
     if isinstance(model, str) and _REF.match(model):
         attributes[REQUEST_MODEL] = model
