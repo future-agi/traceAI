@@ -574,10 +574,23 @@ class TestTracerHelperFunctions:
         error = ValueError("Test error")
         
         _record_exception(mock_span, error)
-        
-        # Should record exception - the exact status setting behavior may vary
-        mock_span.record_exception.assert_called_once_with(error)
-        # Note: set_status may or may not be called depending on implementation
+
+        # The exception event is built by hand: Span.record_exception would add
+        # exception.stacktrace (local file paths), so it must not be called.
+        mock_span.record_exception.assert_not_called()
+        mock_span.add_event.assert_called_once()
+        assert mock_span.add_event.call_args.kwargs["name"] == "exception"
+        attributes = mock_span.add_event.call_args.kwargs["attributes"]
+        assert attributes["exception.type"] == "ValueError"
+        assert attributes["exception.message"] == "Test error"
+        assert "exception.stacktrace" not in attributes
+
+        # With error text hidden only the exception type is kept.
+        hidden_span = MagicMock()
+        _record_exception(hidden_span, error, hide_error_text=True)
+        hidden = hidden_span.add_event.call_args.kwargs["attributes"]
+        assert hidden["exception.type"] == "ValueError"
+        assert "exception.message" not in hidden
 
     def test_convert_io_basic(self):
         """Test basic IO conversion."""
