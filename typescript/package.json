@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pnpm run build:ordered",
     "build:deps": "pnpm --filter @traceai/fi-core --filter @traceai/fi-semantic-conventions run build",
-    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain --filter @traceai/bedrock --filter @traceai/vercel --filter @traceai/chromadb --filter @traceai/pinecone --filter @traceai/qdrant --filter @traceai/weaviate --filter @traceai/milvus --filter @traceai/lancedb --filter @traceai/mongodb --filter @traceai/pgvector --filter @traceai/redis --filter @traceai/together --filter @traceai/huggingface --filter @traceai/vllm --filter @traceai/deepseek --filter @traceai/fireworks --filter @traceai/cerebras --filter @traceai/xai run build",
+    "build:consumers": "pnpm --filter @traceai/openai --filter @traceai/anthropic --filter @traceai/langchain --filter @traceai/bedrock --filter @traceai/vercel --filter @traceai/chromadb --filter @traceai/pinecone --filter @traceai/qdrant --filter @traceai/weaviate --filter @traceai/milvus --filter @traceai/lancedb --filter @traceai/mongodb --filter @traceai/pgvector --filter @traceai/redis --filter @traceai/together --filter @traceai/huggingface --filter @traceai/vllm --filter @traceai/deepseek --filter @traceai/fireworks --filter @traceai/cerebras --filter @traceai/xai --filter @traceai/n8n run build",
     "build:ordered": "pnpm run build:deps && pnpm run build:consumers",
     "test": "pnpm run -r test",
     "test:coverage": "pnpm run -r test:coverage",
