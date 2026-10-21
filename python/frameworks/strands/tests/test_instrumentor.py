@@ -1,6 +1,9 @@
 """Tests for the instrumentor module."""
 
 import os
+import sys
+from types import SimpleNamespace
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -182,3 +185,142 @@ class TestCreateTracedAgent:
             call_kwargs = mock_agent_class.call_args[1]
             assert call_kwargs["trace_attributes"]["session.id"] == "sess-123"
             assert call_kwargs["trace_attributes"]["custom"] == "value"
+
+
+class _RecordingStrandsTelemetry:
+    """Stands in for strands.telemetry.StrandsTelemetry and records which exporters were set up."""
+
+    calls: list = []
+
+    def __init__(self, tracer_provider=None):
+        self.tracer_provider = tracer_provider
+
+    def setup_otlp_exporter(self, **kwargs):
+        self.calls.append("otlp")
+        return self
+
+    def setup_console_exporter(self, **kwargs):
+        self.calls.append("console")
+        return self
+
+    def setup_meter(self, **kwargs):
+        self.calls.append("meter")
+        return self
+
+
+def _provider_exporting_to(endpoint, batch=False):
+    """A tracer provider shaped like the SDK's, with one processor exporting to `endpoint`."""
+    exporter = SimpleNamespace(_endpoint=endpoint)
+    if batch:
+        # Recent OTel SDKs keep a BatchSpanProcessor's exporter on an inner _batch_processor.
+        processor = SimpleNamespace(_batch_processor=SimpleNamespace(_exporter=exporter))
+    else:
+        processor = SimpleNamespace(span_exporter=exporter)
+    return SimpleNamespace(
+        _active_span_processor=SimpleNamespace(_span_processors=(processor,))
+    )
+
+
+_FUTURE_AGI = "http://127.0.0.1:5999/tracer/v1/traces"
+
+
+class TestStrandsOtlpExporterIsNotDoubled:
+    """Strands' OTLP exporter is not added for a collector the provider already exports to.
+
+    With register()'s provider, the Future AGI exporter already sends every span. Pointing
+    OTEL_EXPORTER_OTLP_* at Future AGI as well used to add a second exporter for the same
+    collector, so every span arrived twice once fi-instrumentation-otel stopped dropping
+    register()'s exporter on add_span_processor() (TH-8727).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _recording_telemetry(self, monkeypatch):
+        StrandsInstrumentor._instance = None
+        StrandsInstrumentor._is_instrumented = False
+        _RecordingStrandsTelemetry.calls = []
+        monkeypatch.setattr(
+            sys.modules["strands.telemetry"], "StrandsTelemetry", _RecordingStrandsTelemetry
+        )
+        for name in ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+            monkeypatch.delenv(name, raising=False)
+        yield
+        StrandsInstrumentor._instance = None
+        StrandsInstrumentor._is_instrumented = False
+
+    @pytest.mark.parametrize("batch", [False, True], ids=["simple", "batch"])
+    def test_not_added_when_the_traces_endpoint_is_the_providers_collector(
+        self, monkeypatch, batch
+    ):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", _FUTURE_AGI)
+
+        configure_strands_tracing(
+            tracer_provider=_provider_exporting_to(_FUTURE_AGI, batch=batch),
+            enable_metrics=False,
+        )
+
+        assert _RecordingStrandsTelemetry.calls == []
+
+    def test_not_added_when_the_base_endpoint_is_the_providers_collector(self, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:5999/")
+
+        configure_strands_tracing(
+            tracer_provider=_provider_exporting_to(_FUTURE_AGI), enable_metrics=False
+        )
+
+        assert _RecordingStrandsTelemetry.calls == []
+
+    def test_not_added_when_otlp_endpoint_is_the_providers_collector(self, monkeypatch):
+        # configure_strands_tracing() stores otlp_endpoint in OTEL_EXPORTER_OTLP_ENDPOINT;
+        # monkeypatch puts the variable back afterwards.
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+        configure_strands_tracing(
+            tracer_provider=_provider_exporting_to("https://api.futureagi.com/tracer/v1/traces"),
+            otlp_endpoint="https://API.futureagi.com:443",
+            enable_metrics=False,
+        )
+
+        assert _RecordingStrandsTelemetry.calls == []
+
+    def test_console_exporter_and_meter_are_still_set_up(self, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", _FUTURE_AGI)
+
+        configure_strands_tracing(
+            tracer_provider=_provider_exporting_to(_FUTURE_AGI),
+            enable_console_exporter=True,
+            enable_metrics=True,
+        )
+
+        assert _RecordingStrandsTelemetry.calls == ["console", "meter"]
+
+    @pytest.mark.parametrize(
+        "traces_endpoint",
+        [
+            "http://127.0.0.1:6000/v1/traces",  # another port
+            "http://collector.internal:5999/v1/traces",  # another host
+        ],
+    )
+    def test_added_for_another_collector(self, monkeypatch, traces_endpoint):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", traces_endpoint)
+
+        configure_strands_tracing(
+            tracer_provider=_provider_exporting_to(_FUTURE_AGI), enable_metrics=False
+        )
+
+        assert _RecordingStrandsTelemetry.calls == ["otlp"]
+
+    def test_added_for_the_default_endpoint_when_nothing_is_set(self):
+        configure_strands_tracing(
+            tracer_provider=_provider_exporting_to(_FUTURE_AGI), enable_metrics=False
+        )
+
+        assert _RecordingStrandsTelemetry.calls == ["otlp"]
+
+    def test_added_when_the_provider_has_no_span_processors(
+        self, monkeypatch, mock_tracer_provider
+    ):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", _FUTURE_AGI)
+
+        configure_strands_tracing(tracer_provider=mock_tracer_provider, enable_metrics=False)
+
+        assert _RecordingStrandsTelemetry.calls == ["otlp"]

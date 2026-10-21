@@ -54,6 +54,8 @@ agent = Agent(
 response = agent("Hello!")
 ```
 
+`register()`'s exporter sends the spans to Future AGI, so Option 1 needs no `OTEL_EXPORTER_OTLP_*` setting. Set `OTEL_EXPORTER_OTLP_*` only to send a second copy to another collector: Strands' own OTLP exporter is added for it. When those variables point at a collector the provider already exports to, such as Future AGI, that exporter is not added, so spans are not sent twice. On fi-instrumentation-otel 1.1.0 and earlier, Strands adding its own exporter replaced `register()`'s, so spans stopped reaching Future AGI: upgrade fi-instrumentation-otel as well.
+
 ### Option 2: Direct OTLP Configuration
 
 ```python
@@ -223,7 +225,7 @@ The integration captures these OpenTelemetry GenAI semantic attributes:
 
 ## Environment Variables
 
-Strands respects standard OpenTelemetry environment variables:
+Strands respects standard OpenTelemetry environment variables. With Option 1 they are optional and configure a second destination; see Option 1 above.
 
 ```bash
 # OTLP endpoint

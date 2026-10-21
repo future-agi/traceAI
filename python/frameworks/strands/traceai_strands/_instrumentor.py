@@ -5,8 +5,10 @@ support to send traces to TraceAI, along with optional method wrapping for
 additional instrumentation.
 """
 
+import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from opentelemetry import trace
 from opentelemetry.trace import TracerProvider
@@ -18,6 +20,69 @@ from traceai_strands._attributes import (
     get_model_attributes,
     get_trace_attributes_from_config,
 )
+
+
+logger = logging.getLogger(__name__)
+
+# Where the upstream OTLP/HTTP span exporter, which Strands' setup_otlp_exporter() builds, sends
+# traces when neither OTEL_EXPORTER_OTLP_TRACES_ENDPOINT nor OTEL_EXPORTER_OTLP_ENDPOINT is set.
+_DEFAULT_OTLP_TRACES_ENDPOINT = "http://localhost:4318/v1/traces"
+
+
+def _strands_otlp_traces_endpoint() -> str:
+    """The URL Strands' OTLP exporter will send traces to, resolved as the upstream exporter does."""
+    traces_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+    if traces_endpoint:
+        return traces_endpoint
+    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if endpoint:
+        return endpoint.rstrip("/") + "/v1/traces"
+    return _DEFAULT_OTLP_TRACES_ENDPOINT
+
+
+def _collector(url: Any) -> Optional[Tuple[str, int]]:
+    """(host, port) of an http(s) URL, or None for anything else."""
+    if not isinstance(url, str):
+        return None
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return None
+        return parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
+def _span_exporters(tracer_provider: Any) -> List[Any]:
+    """The exporters behind the span processors already on an SDK tracer provider."""
+    active = getattr(tracer_provider, "_active_span_processor", None)
+    processors = getattr(active, "_span_processors", None)
+    if not isinstance(processors, (tuple, list)):
+        return []
+    exporters = []
+    for processor in processors:
+        exporter = getattr(processor, "span_exporter", None)
+        if exporter is None:
+            # Recent OTel SDKs keep a BatchSpanProcessor's exporter on an inner _batch_processor.
+            exporter = getattr(getattr(processor, "_batch_processor", None), "_exporter", None)
+        if exporter is not None:
+            exporters.append(exporter)
+    return exporters
+
+
+def _already_exports_to(tracer_provider: Any, url: str) -> bool:
+    """True when a span processor on the provider already exports to the collector at `url`.
+
+    The provider `fi_instrumentation.register()` returns carries the Future AGI exporter. Adding
+    Strands' OTLP exporter for the same collector would send every span there twice.
+    """
+    target = _collector(url)
+    if target is None:
+        return False
+    return any(
+        _collector(getattr(exporter, "_endpoint", None)) == target
+        for exporter in _span_exporters(tracer_provider)
+    )
 
 
 class StrandsInstrumentor:
@@ -103,6 +168,10 @@ class StrandsInstrumentor:
     ) -> None:
         """Configure Strands' StrandsTelemetry class.
 
+        Strands' OTLP span exporter is added unless the tracer provider already exports to the
+        collector it would send to (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, else
+        OTEL_EXPORTER_OTLP_ENDPOINT, else localhost:4318).
+
         Args:
             enable_console_exporter: Whether to enable console export.
             enable_metrics: Whether to enable metrics.
@@ -112,8 +181,21 @@ class StrandsInstrumentor:
         # Create telemetry instance with our tracer provider
         telemetry = StrandsTelemetry(tracer_provider=self._tracer_provider)
 
-        # Set up exporters
-        telemetry.setup_otlp_exporter()
+        # Set up exporters. Skip Strands' OTLP exporter when the provider already exports to the
+        # same collector, such as the Future AGI exporter of the provider register() returns:
+        # a second exporter there would send every span twice.
+        otlp_traces_endpoint = _strands_otlp_traces_endpoint()
+        if _already_exports_to(self._tracer_provider, otlp_traces_endpoint):
+            host, port = _collector(otlp_traces_endpoint)
+            logger.info(
+                "traceai-strands: the tracer provider already exports spans to %s:%s; "
+                "not adding Strands' OTLP exporter for the same collector, which would send "
+                "every span twice.",
+                host,
+                port,
+            )
+        else:
+            telemetry.setup_otlp_exporter()
 
         if enable_console_exporter:
             telemetry.setup_console_exporter()
@@ -165,7 +247,8 @@ def configure_strands_tracing(
         from fi_instrumentation.fi_types import ProjectType
         from traceai_strands import configure_strands_tracing
 
-        # Option 1: Use with fi_instrumentation
+        # Option 1: Use with fi_instrumentation. Spans go to Future AGI through
+        # register()'s exporter; no OTEL_EXPORTER_OTLP_* setting is needed.
         trace_provider = register(
             project_type=ProjectType.OBSERVE,
             project_name="strands-agent",
@@ -191,7 +274,10 @@ def configure_strands_tracing(
         tracer_provider: Optional OpenTelemetry tracer provider. If not
             provided, uses the global tracer provider.
         otlp_endpoint: OTLP endpoint URL for trace export. If not provided,
-            uses the OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
+            uses the OTEL_EXPORTER_OTLP_ENDPOINT environment variable. When the
+            tracer provider already exports to that collector (for example
+            register()'s Future AGI exporter), Strands' OTLP exporter is not
+            added, so spans are not sent twice.
         otlp_headers: Headers for OTLP export (e.g., authentication).
         project_name: Optional project name for trace attributes.
         enable_console_exporter: Whether to also export traces to console.

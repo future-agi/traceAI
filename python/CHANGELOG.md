@@ -9,7 +9,10 @@
   added later now run next to it, as in upstream OpenTelemetry.
   **Behaviour change:** code that relied on `add_span_processor()` to swap out
   `register()`'s exporter now exports to both; pass `register(span_exporter=...)`
-  to export somewhere else instead.
+  to export somewhere else instead. If you pointed a second OTLP exporter at
+  Future AGI to work around this (for example traceai-strands with
+  `OTEL_EXPORTER_OTLP_*` set to the Future AGI endpoint), remove it or upgrade
+  traceai-strands to 0.1.1, or every span arrives twice.
 - A `TracerProvider()` constructed directly is unchanged: its first
   `add_span_processor()` call still replaces the default `SimpleSpanProcessor`
   added on construction.
