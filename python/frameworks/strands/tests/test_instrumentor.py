@@ -309,8 +309,8 @@ class TestStrandsOtlpExporterIsNotDoubled:
         "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
         "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
         "OTEL_EXPORTER_OTLP_CLIENT_KEY",
-        "_OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
-        "_OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
+        "OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
+        "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
     )
 
     @pytest.fixture(autouse=True)
@@ -332,6 +332,9 @@ class TestStrandsOtlpExporterIsNotDoubled:
             # configure_strands_tracing() writes it (otlp_endpoint=, otlp_headers=).
             monkeypatch.setenv(name, "")
             monkeypatch.delenv(name)
+        # Model README Option 1: Strands' exporter and the provider both carry the Future AGI keys.
+        # Tests that need absent/different headers set their own signal-specific override.
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", _future_agi_keys_header())
         yield
         StrandsInstrumentor._instance = None
         StrandsInstrumentor._is_instrumented = False
@@ -442,7 +445,7 @@ class TestStrandsOtlpExporterIsNotDoubled:
 
         assert _RecordingStrandsTelemetry.calls == ["otlp"]
 
-    # Headers: Strands' exporter is skipped only when it sends nothing the provider's does not.
+    # Headers: skip only when both exporters send the exact same set of names and values.
 
     def test_not_added_when_it_sends_the_same_keys(self, monkeypatch):
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", _FUTURE_AGI)
@@ -466,15 +469,32 @@ class TestStrandsOtlpExporterIsNotDoubled:
 
         assert _RecordingStrandsTelemetry.calls == ["otlp"]
 
-    def test_added_when_it_carries_other_keys(self, monkeypatch):
-        # Other keys at the same URL send the spans to another account or project.
+    @pytest.mark.parametrize(
+        "provider_headers,env_headers",
+        [
+            pytest.param(
+                {**_FI_KEYS, "X-Provider-Route": "provider-only"},
+                _future_agi_keys_header(),
+                id="provider-extra",
+            ),
+            pytest.param(
+                _FI_KEYS,
+                f"{_future_agi_keys_header()},X-Strands-Route=strands-only",
+                id="strands-extra",
+            ),
+        ],
+    )
+    def test_added_when_either_side_has_an_extra_header(
+        self, monkeypatch, provider_headers, env_headers
+    ):
+        # An extra routing header on either exporter can change where the collector routes the
+        # spans. A subset check would wrongly skip Strands' exporter in the provider-extra case.
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", _FUTURE_AGI)
-        monkeypatch.setenv(
-            "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "X-Api-Key=other-key,X-Secret-Key=other-secret"
-        )
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", env_headers)
 
         configure_strands_tracing(
-            tracer_provider=_provider_exporting_to(_FUTURE_AGI), enable_metrics=False
+            tracer_provider=_provider_exporting_to(_FUTURE_AGI, headers=provider_headers),
+            enable_metrics=False,
         )
 
         assert _RecordingStrandsTelemetry.calls == ["otlp"]
@@ -506,7 +526,8 @@ class TestStrandsOtlpExporterIsNotDoubled:
         [
             "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
             "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
-            "_OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
+            "OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
+            "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
         ],
     )
     def test_added_when_it_would_authenticate_outside_its_headers(self, monkeypatch, variable):

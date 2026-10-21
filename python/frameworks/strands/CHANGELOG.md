@@ -7,8 +7,9 @@
   only when all of these hold:
   - a span processor on the provider already exports to the same traces URL (scheme, host, port, path and query,
     normalised; credentials in the URL must match too);
-  - that exporter already sends every header Strands' exporter would send, with the same value, and no client
-    certificate or credential provider is set for Strands' exporter;
+  - that exporter sends exactly the same header set as Strands' exporter: the same names (case-insensitively) and
+    values, with no header missing on either side. An extra routing header on either exporter keeps Strands' exporter;
+    a client certificate or credential provider set for it does too;
   - the provider keeps that exporter when another span processor is added. On fi-instrumentation-otel 1.1.0 and
     earlier it does not, so there Strands' exporter is added exactly as in 0.1.0.
 

@@ -38,15 +38,27 @@ def _run(mode: str, *options: str) -> Dict[str, Any]:
     return json.loads(lines[0][len(_RESULT_PREFIX):])
 
 
-def test_spans_reach_future_agi_once_when_strands_otlp_points_there_too() -> None:
-    # The README's environment section points OTEL_EXPORTER_OTLP_* at the backend. The provider
-    # already exports to Future AGI, so Strands' own OTLP exporter is not added: without that,
-    # every span arrived twice on fi-instrumentation-otel releases with the TH-8727 fix.
-    got = _run("future-agi")
+def test_spans_reach_future_agi_once_when_strands_otlp_points_there_with_the_same_keys() -> None:
+    # The provider and Strands' exporter both send the Future AGI keys, so the exact URL+headers
+    # match means Strands' exporter would only send a duplicate.
+    got = _run("future-agi", "--keys", "both")
 
     assert got["span_processors"] == 1
     assert got["future_agi"] == _SPANS
     assert got["other"] == []
+
+
+def test_strands_exporter_is_kept_when_it_omits_provider_auth_headers() -> None:
+    # The provider carries Future AGI's keys but Strands' exporter does not. Even at the same URL,
+    # the header sets differ, so the exporter must stay (its copy is rejected by the collector).
+    got = _run("future-agi", "--keys", "fi")
+
+    if got["register_marks_its_exporter"]:
+        pytest.skip("the installed fi-instrumentation-otel replaces register()'s exporter")
+
+    assert got["span_processors"] == 2
+    assert sorted(got["future_agi"]) == sorted(_SPANS * 2)
+    assert got["future_agi_with_keys"] == _SPANS
 
 
 def test_a_base_endpoint_resolving_to_future_agi_is_recognised() -> None:
