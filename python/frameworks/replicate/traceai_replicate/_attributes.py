@@ -361,12 +361,20 @@ def shorten_data_uri(value: str) -> str:
 
 
 def _output_item(item: Any) -> Tuple[str, Any]:
+    """(kind, value): ``text``, ``url`` (a URL-like string or a FileOutput's
+    URL) or ``other``. A ``data:`` URI is shortened only if the completed
+    output is files (see :func:`_files`), so a text chunk is kept verbatim."""
     url = _file_url(item)
     if url is not None:
-        return "url", shorten_data_uri(url)
+        return "url", url
     if isinstance(item, str):
-        return ("url", shorten_data_uri(item)) if is_url(item) else ("text", item)
+        return ("url", item) if is_url(item) else ("text", item)
     return "other", _jsonable(item)
+
+
+def _files(items: List[Tuple[str, Any]]) -> List[Any]:
+    """The values of a files (or mixed) output, ``data:`` payloads dropped."""
+    return [shorten_data_uri(value) if kind == "url" else value for kind, value in items]
 
 
 def _is_text(items: List[Tuple[str, Any]]) -> bool:
@@ -389,12 +397,14 @@ def output_attributes(output: Any) -> Dict[str, Any]:
         items = [_output_item(item) for item in output]
         if _is_text(items):
             return _output("text", "".join(value for _, value in items), TEXT)
-        return _output("list", json.dumps([value for _, value in items], ensure_ascii=False), JSON)
+        return _output("list", json.dumps(_files(items), ensure_ascii=False), JSON)
     if isinstance(output, Mapping):
         return _output("object", _dumps(output), JSON)
     kind, value = _output_item(output)
-    if kind in ("text", "url"):
+    if kind == "text":
         return _output(kind, value, TEXT)
+    if kind == "url":
+        return _output(kind, shorten_data_uri(value), TEXT)
     return _output("other", json.dumps(value, ensure_ascii=False), JSON)
 
 
@@ -412,11 +422,12 @@ class OutputCollector:
 
     Every text or URL chunk is kept, in order. When any of them is text, the
     output is text: all of them joined in order, a URL-like chunk (or a
-    ``FileOutput``, as its URL) included, since a language model can emit a
-    chunk that starts with ``https://`` or ``data:``. Only when every chunk is
-    a URL or a file is the output files: with ``count_files`` (SSE streams,
-    PRD J4.3) they are counted, not inlined; otherwise their URLs are listed,
-    as for a non-iterator ``run``.
+    ``FileOutput``, as its URL) included as it came, since a language model
+    can emit a chunk that starts with ``https://`` or ``data:``. Only when
+    every chunk is a URL or a file is the output files; a ``data:`` payload
+    is shortened then. With ``count_files`` (SSE streams, PRD J4.3) they are
+    counted, not inlined; otherwise their URLs are listed, as for a
+    non-iterator ``run``.
     """
 
     __slots__ = ("_items", "_count_files")
@@ -445,7 +456,7 @@ class OutputCollector:
         if self._count_files:
             attributes[STREAM_FILE_COUNT] = len(items)
         else:
-            urls = [value for _, value in items]
+            urls = _files(items)
             attributes[OUTPUT_VALUE] = urls[0] if len(urls) == 1 else json.dumps(urls)
             attributes[OUTPUT_MIME_TYPE] = TEXT if len(urls) == 1 else JSON
         return attributes

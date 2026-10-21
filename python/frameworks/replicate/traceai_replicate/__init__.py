@@ -42,6 +42,7 @@ from traceai_replicate._wrappers import (
     PendingRegistry,
     RunWrapper,
     drain_released,
+    end_open_iterators,
 )
 from traceai_replicate.package import _instruments
 from traceai_replicate.version import __version__
@@ -217,9 +218,10 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     (any other transport, a subclass, one changed on the instance, or a
     client with a proxy: no read, ``replicate.stream.skip_reason`` =
     ``custom_transport``), and not while an HTTP mock has replaced httpx's
-    or httpcore's send path (``patched_http``); the span ends when the read
-    returns or the budget runs out, as of the stream's end. No read is made
-    for a span that is not recording.
+    or httpcore's send path (``patched_http``) or the socket layer
+    (``patched_socket``: mocket, httpretty, gevent); the span ends when the
+    read returns or the budget runs out, as of the stream's end. No read is
+    made for a span that is not recording.
 
     ``stream_flush_wait_seconds`` and ``stream_shutdown_wait_seconds`` (0 to
     10, default 0) are how long ``force_flush()`` (at most half its timeout)
@@ -375,13 +377,13 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             start_workers()
         # Fallbacks for a provider whose methods could not be hooked; registered
         # after register(), so they run before the provider's own atexit
-        # shutdown. drain_released and end_stream_reads_at_exit stay
-        # registered after uninstrument() for a stream that is still open then
-        # and is released, or completes, later; neither waits.
-        atexit.unregister(drain_released)
-        atexit.register(drain_released)
-        atexit.unregister(end_stream_reads_at_exit)
-        atexit.register(end_stream_reads_at_exit)
+        # shutdown. drain_released, end_open_iterators and
+        # end_stream_reads_at_exit stay registered after uninstrument() for a
+        # stream that is still open then and is released, still open at exit,
+        # or completes, later; none waits.
+        for fallback in (drain_released, end_open_iterators, end_stream_reads_at_exit):
+            atexit.unregister(fallback)
+            atexit.register(fallback)
         atexit.register(self._at_exit)
 
     def _wrap(self, module_name: str, class_name: str, method: str, wrapper: Any) -> None:
@@ -488,11 +490,13 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     def _end_pending(self, until: Optional[float] = None) -> None:
         """Provider shutdown and exit: every held span, the streams whose read
         is still running (waited for no later than ``until``, by default not
-        at all, then ended as ``shutdown``), and the spans whose
-        wait()/cancel() is still running."""
+        at all, then ended as ``shutdown``), the spans whose wait()/cancel()
+        is still running, and the streams and run iterators still open
+        (ended as cancelled, see :func:`end_open_iterators`)."""
         registry = getattr(self, "_registry", None)
         if registry is not None:
             registry.end_all(time.monotonic() if until is None else until, outcome=SHUTDOWN)
+        end_open_iterators()
 
     def _at_exit(self) -> None:
         """Interpreter exit: as shutdown, waiting ``stream_shutdown_wait_seconds`` at most."""

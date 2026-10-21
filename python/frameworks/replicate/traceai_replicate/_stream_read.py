@@ -22,26 +22,38 @@ never the start of a read.
 
 The read goes only through a connection pool this package owns, on the read
 loop, with the caller's base URL and headers, and only when the transport the
-caller's client uses for the API URL is exactly replicate's own
-``RetryTransport`` layers over exactly a plain ``httpx.HTTPTransport`` /
-``AsyncHTTPTransport`` with a plain connection pool: no proxy, no subclass,
-nothing set on an instance (see :func:`_read_routing`). The package's pool
-is then built with the client's options (replicate built the transport) or
-with that transport's TLS context, HTTP versions, local address, socket
-options and connect retries (see :func:`_plain_settings`); the caller's pool
-itself is not used.
+caller's client uses for the API URL is a plain ``httpx.HTTPTransport`` /
+``AsyncHTTPTransport`` (exactly that class), under replicate's own
+``RetryTransport`` layers if any (exactly that class), mounted with
+``mounts=`` or not, whose pool is a plain connection pool on httpcore's
+default network backend: no proxy, no subclass, and none of
+``handle_request`` / ``handle_async_request`` (on the transport or pool),
+``connect_tcp`` / ``connect_unix_socket`` (on the backend) or
+``_transport_for_url`` (on the client) set on the instance (see
+:func:`_read_routing`). The package's pool is then built with the client's
+options (replicate built the transport) or with that transport's TLS
+context, HTTP versions, local address, socket options and connect retries
+(see :func:`_plain_settings`); the caller's pool itself is not used.
 
 Any other transport (a custom, mock, recording, stateful, proxied or
 subclassed one, or one changed on the instance) is never called for the
 read: the read is skipped and the span says so (``replicate.stream.read`` =
 ``skipped``, ``replicate.stream.skip_reason`` = ``custom_transport``). The
-read is skipped too (``patched_http``) while httpx's or httpcore's send path
-is replaced on the class (respx, pytest-httpx, VCR.py, ``mock.patch``; see
-:func:`send_path_patched`), since such a mock would see the package's own
-request and could answer it with a response the app scripted for itself.
-opentelemetry-instrumentation-httpx's wrappers are the one change allowed.
-So the read never runs on the caller's thread or event loop, never calls the
-caller's transport and never goes through an HTTP mock. The budget is an absolute deadline: at
+read is skipped too while an HTTP mock is active, since it would see the
+package's own request and could answer it with a response the app scripted
+for itself: ``patched_http`` while httpx's or httpcore's send path (clients,
+transports, pools, connections, network backends) is replaced on the class
+(respx, pytest-httpx, VCR.py, ``mock.patch``; see :func:`send_path_patched`),
+and ``patched_socket`` while the socket layer is (``socket.socket``,
+``socket.getaddrinfo``, ``socket.create_connection``, ``ssl.SSLContext`` or
+its ``wrap_socket`` / ``wrap_bio``: mocket, httpretty, gevent's and
+eventlet's monkey-patching; see :func:`socket_layer_patched`). Both are
+checked when a stream completes and again just before each request.
+opentelemetry-instrumentation-httpx's wrappers are the one change allowed. A
+mock that replaces something else (an instance the package does not look
+at, or a layer below the socket module) is not detected. So the read never
+runs on the caller's thread or event loop and never calls the caller's
+transport. The budget is an absolute deadline: at
 the deadline the task is cancelled (an anyio cancel scope, see
 :func:`_within`), which closes its connection. Name lookups run on at most
 ``_MAX_RESOLVERS`` daemon threads, with at most ``_MAX_RESOLVE_JOBS``
@@ -49,6 +61,15 @@ lookups queued; concurrent lookups of one name share one, a result is kept
 for ``_DNS_CACHE_SECONDS``, and a lookup waits for a free resolver within the
 read's deadline (it fails at once only while every resolver has been stuck
 for ``_RESOLVER_STUCK_SECONDS``, or the queue is full).
+
+``instrument()`` imports the modules the read uses (anyio loads its asyncio
+backend lazily) on the caller's thread before it starts the workers, so a
+package thread is never inside an import of them. At a fork, the read loop
+is paused between two steps and the finisher between two span ends (see
+:func:`_before_fork`), so a child never inherits a lock either of them held;
+the dispatcher and resolver threads are not paused, and a resolver inside a
+name lookup at that moment holds whatever the C library's ``getaddrinfo``
+holds.
 
 At most ``_MAX_PENDING_SPANS`` stream spans wait at once (reads in flight,
 and spans whose read has returned and wait to be ended), and at most
@@ -59,15 +80,20 @@ caller's thread, without a read (``skipped``, reason ``at_capacity``).
 ``force_flush()``, ``shutdown()``, interpreter exit and ``uninstrument()``
 do not wait for reads by default: each ends the spans still waiting at once,
 with what is known (``flushed``, ``shutdown``, ``shutdown``,
-``uninstrumented``). ``stream_flush_wait_seconds`` and
-``stream_shutdown_wait_seconds`` opt into a bounded wait.
+``uninstrumented``), and cancels their reads still in flight, which closes
+their connections. ``stream_flush_wait_seconds`` and
+``stream_shutdown_wait_seconds`` opt into a bounded wait; ``uninstrument()``
+never waits. The worker threads, once started, stay (idle) until the process
+exits, also after ``uninstrument()``.
 """
 
 from __future__ import annotations
 
+import _socket
 import asyncio
 import collections
 import contextvars
+import importlib
 import inspect
 import ipaddress
 import json
@@ -149,11 +175,38 @@ _MAX_OWN_CLIENTS = 4
 # How long a wait for reads (an opt-in flush or shutdown wait, or a test's
 # settle) goes on past the last deadline, for the finisher.
 _SETTLE_GRACE = 0.25
-# How long a fork, and a flush, shutdown, exit or uninstrument() that ended
-# pending spans, wait for the finisher to finish ending (exporting) the one span
-# it is on: that span has ended and is being exported, so it is not cut off.
+# How long a fork waits, in all, for the read loop to pause between two steps
+# and for the finisher to finish ending (exporting) the one span it is on; and
+# how long a flush, shutdown, exit or uninstrument() that ended pending spans
+# waits for that one export (that span has ended, so it is not cut off). A
+# finisher that did not finish in time is not waited for again until it has.
 _FORK_WAIT_SECONDS = 5.0
 _FINISHING_WAIT_SECONDS = _FORK_WAIT_SECONDS
+# What the read imports on first use (anyio loads its asyncio backend, its
+# streams and its exceptions lazily): instrument() imports them on the
+# caller's thread, before it starts the workers. A module missing from an
+# install (sniffio, h2) or a layout that has changed is skipped.
+_READ_PATH_MODULES = (
+    "certifi",
+    "sniffio",
+    "anyio._backends._asyncio",
+    "anyio._core._eventloop",
+    "anyio._core._exceptions",
+    "anyio._core._resources",
+    "anyio._core._sockets",
+    "anyio._core._streams",
+    "anyio._core._synchronization",
+    "anyio._core._tasks",
+    "anyio._core._typedattr",
+    "anyio.abc",
+    "anyio.streams.memory",
+    "anyio.streams.stapled",
+    "anyio.streams.tls",
+    "anyio.to_thread",
+    "httpcore._backends.anyio",
+    "httpcore._backends.auto",
+    "httpcore._async.http2",
+)
 _PREDICTION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 # What the span uses from the read; its input, output and logs are not kept.
 _PREDICTION_FIELDS = ("id", "status", "version", "model", "metrics", "error")
@@ -191,6 +244,7 @@ UNINSTRUMENTED = "uninstrumented"  # uninstrument() ended it before the read ret
 # replicate.stream.skip_reason values (with replicate.stream.read = skipped).
 CUSTOM_TRANSPORT = "custom_transport"  # a transport other than replicate's own or a plain httpx one
 PATCHED_HTTP = "patched_http"  # httpx's or httpcore's send path is replaced on the class (an HTTP mock)
+PATCHED_SOCKET = "patched_socket"  # socket's or ssl's connect path is replaced (mocket, httpretty, gevent)
 AT_CAPACITY = "at_capacity"  # 64 stream spans waiting, or 64 reads live
 NO_PROVIDER_HOOK = "no_provider_hook"  # the provider's force_flush/shutdown could not be hooked
 AFTER_UNINSTRUMENT = "after_uninstrument"  # the stream completed after uninstrument()
@@ -202,6 +256,7 @@ INTERRUPTED = "interrupted"  # a KeyboardInterrupt (any BaseException) while it 
 SKIP_REASONS = (
     CUSTOM_TRANSPORT,
     PATCHED_HTTP,
+    PATCHED_SOCKET,
     AT_CAPACITY,
     NO_PROVIDER_HOOK,
     AFTER_UNINSTRUMENT,
@@ -317,6 +372,12 @@ class _State:
         self.start_lock = threading.Lock()  # never waited on: see _ensure_workers
         # Held by the finisher while it ends a span, and by a fork (see _before_fork).
         self.finishing = threading.RLock()
+        # Cleared while a fork waits: the finisher takes no new span until it is set.
+        self.fork_clear = threading.Event()
+        self.fork_clear.set()
+        # A wait for the finisher's export ran out: the next one does not wait
+        # until the finisher has ended a span again (an export stuck on a lock).
+        self.finishing_timed_out = False
         self.own_live = 0
         self.own_tasks: Set[Any] = set()
         self.own_clients: "collections.OrderedDict[Tuple[Any, ...], _OwnClient]" = collections.OrderedDict()
@@ -336,24 +397,54 @@ _WORKER = threading.local()
 _FORK = threading.local()
 
 
+def _pause_for_fork(paused: threading.Event, resume: threading.Event) -> None:
+    """On the read loop, between two steps: hold the loop until the fork is done."""
+    paused.set()
+    resume.wait(_FORK_WAIT_SECONDS)
+
+
 def _before_fork() -> None:
-    """Hold the finisher between two span ends while the process forks, so a
-    child never inherits an exporter lock the finisher held mid-export (the
-    child has no finisher to release it). Bounded by _FORK_WAIT_SECONDS; with
-    the read off there is no finisher and this returns at once. Only the
-    finisher is coordinated: span processors' and exporters' own threads and
-    locks are theirs to make fork-safe."""
+    """While the process forks, hold the read loop between two steps and the
+    finisher between two span ends, so a child never inherits a lock either
+    held mid-step: an import lock (the child's own imports of that module
+    would hang), or an exporter's lock taken mid-export (the child has no
+    finisher to release it). The finisher takes no new span once a fork
+    waits, so the fork waits for at most the one export in progress. All of
+    it is bounded by _FORK_WAIT_SECONDS in total; past that the fork goes
+    ahead. With the read off nothing runs and this returns at once. The
+    dispatcher and resolver threads are not held (neither imports; a
+    resolver may be inside the C library's getaddrinfo), and span
+    processors' and exporters' own threads and locks are theirs to make
+    fork-safe."""
+    state = _STATE
+    _FORK.state = state
+    _FORK.held = False
+    _FORK.resume = None
     try:
-        _FORK.held = _STATE.finishing.acquire(timeout=_FORK_WAIT_SECONDS)
-        _FORK.state = _STATE
+        deadline = _monotonic() + _FORK_WAIT_SECONDS
+        state.fork_clear.clear()
+        loop = state.loop
+        if state.loop_running and loop is not None:
+            paused, resume = threading.Event(), threading.Event()
+            _FORK.resume = resume
+            loop.call_soon_threadsafe(_pause_for_fork, paused, resume)
+            paused.wait(max(0.0, deadline - _monotonic()))
+        _FORK.held = state.finishing.acquire(timeout=max(0.0, deadline - _monotonic()))
     except Exception:  # pragma: no cover
-        _FORK.held = False
+        logger.debug("traceai-replicate: could not hold the workers for a fork", exc_info=True)
 
 
 def _after_fork_in_parent() -> None:
+    state = getattr(_FORK, "state", None)
+    resume = getattr(_FORK, "resume", None)
+    _FORK.resume = None
+    if resume is not None:
+        resume.set()
+    if state is not None:
+        state.fork_clear.set()
     if getattr(_FORK, "held", False):
         _FORK.held = False
-        _guard(_FORK.state.finishing.release, None)
+        _guard(state.finishing.release, None)
 
 
 def _after_fork_in_child() -> None:
@@ -362,6 +453,7 @@ def _after_fork_in_child() -> None:
     parent's to end (their spans are skipped here, see ``_Call.finish``)."""
     global _STATE
     _FORK.held = False
+    _FORK.resume = None
     _STATE = _State()
 
 
@@ -442,15 +534,36 @@ class _Body:
 # -- transports ---------------------------------------------------------------------------
 
 
-def _overridden(instance: Any) -> bool:
-    """``handle_request`` / ``handle_async_request`` set on the instance itself
+_SEND_METHODS = ("handle_request", "handle_async_request")
+_CONNECT_METHODS = ("connect_tcp", "connect_unix_socket")
+
+
+def _overridden(instance: Any, names: Tuple[str, ...] = _SEND_METHODS) -> bool:
+    """One of ``names`` (by default ``handle_request`` /
+    ``handle_async_request``) set on the instance itself
     (``mock.patch.object(transport, "handle_request")``, a recording wrapper):
     what it sends is no longer the class's."""
     try:
         own = vars(instance)
     except TypeError:
         return False
-    return "handle_request" in own or "handle_async_request" in own
+    return any(name in own for name in names)
+
+
+def _default_backends() -> Dict[Any, Any]:
+    """The network backend httpcore gives each plain pool when none is passed."""
+    try:
+        from httpcore._backends.auto import AutoBackend
+        from httpcore._backends.sync import SyncBackend
+    except ImportError:  # pragma: no cover - another httpcore layout: no pool counts as plain
+        return {}
+    return {
+        getattr(httpcore, "ConnectionPool", None): SyncBackend,
+        getattr(httpcore, "AsyncConnectionPool", None): AutoBackend,
+    }
+
+
+_DEFAULT_BACKENDS = _default_backends() if httpcore is not None else {}
 
 
 def _is_retry_transport(transport: Any) -> bool:
@@ -480,11 +593,13 @@ def _unwrap_retries(transport: Any) -> Any:
 
 def _plain_settings(transport: Any) -> Optional[Tuple[Tuple[str, Any], ...]]:
     """What to build the package's own transport with, for a plain
-    ``httpx.HTTPTransport`` / ``AsyncHTTPTransport`` (exactly that class, and
-    nothing set on the instance, so nothing overrides how it sends) whose pool
-    is a plain connection pool (no proxy, nothing set on it): its TLS
-    context, HTTP versions, connect retries, local address, Unix socket and
-    socket options. None for any other transport."""
+    ``httpx.HTTPTransport`` / ``AsyncHTTPTransport`` (exactly that class,
+    without ``handle_request`` / ``handle_async_request`` set on the instance)
+    whose pool is a plain connection pool (no proxy, no send method set on
+    it) on httpcore's default network backend (exactly that class, without
+    ``connect_tcp`` / ``connect_unix_socket`` set on it): its TLS context,
+    HTTP versions, connect retries, local address, Unix socket and socket
+    options. None for any other transport."""
     if httpcore is None or type(transport) not in (httpx.HTTPTransport, httpx.AsyncHTTPTransport):
         return None
     pool = getattr(transport, "_pool", None)
@@ -497,6 +612,10 @@ def _plain_settings(transport: Any) -> Optional[Tuple[Tuple[str, Any], ...]]:
         return None  # HTTPProxy and SOCKSProxy pools subclass the plain ones
     if _overridden(transport) or _overridden(pool):
         return None
+    backend = getattr(pool, "_network_backend", None)
+    default = _DEFAULT_BACKENDS.get(type(pool))
+    if default is None or type(backend) is not default or _overridden(backend, _CONNECT_METHODS):
+        return None  # a mock or custom network backend: the read would go around it
     if not all(name in _ASYNC_TRANSPORT_PARAMETERS for name, _ in _PLAIN_SETTINGS):
         return None  # an httpx too old to build the same transport
     try:
@@ -524,15 +643,19 @@ def _read_routing(client: Any, http: Any, url: httpx.URL) -> Optional[Tuple[str,
     """How the package's own pool reaches the API for this client, or None
     when it cannot be built the way the caller's is: then no read is made.
 
-    The transport the caller's client uses for the API URL must be
-    replicate's own ``RetryTransport`` layers over a plain httpx transport
-    without a proxy (see :func:`_plain_settings`). So a ``transport=`` or
-    ``mounts=`` of the caller's own, a subclass, a transport changed on the
-    instance, and a proxy (``replicate.Client(proxy=...)`` mounts a proxy
-    transport for every URL) all get no read. When replicate built the
-    transport itself, the package's pool is built with the same client
-    options; otherwise with that transport's settings.
+    The transport the caller's client uses for the API URL must be a plain
+    httpx transport without a proxy (see :func:`_plain_settings`), under
+    replicate's own ``RetryTransport`` layers if any, whether replicate
+    built it or it came with ``transport=`` or ``mounts=``. So a transport of
+    the caller's own class, a subclass, a transport, pool or backend changed
+    on the instance, a client whose ``_transport_for_url`` is set on the
+    instance (it is not called), and a proxy (``replicate.Client(proxy=...)``
+    mounts a proxy transport for every URL) all get no read. When replicate
+    built the transport itself, the package's pool is built with the same
+    client options; otherwise with that transport's settings.
     """
+    if _overridden(http, ("_transport_for_url",)):
+        return None
     settings = _plain_settings(_unwrap_retries(http._transport_for_url(url)))
     if settings is None:
         return None
@@ -558,6 +681,13 @@ _SEND_PATH = (
     ("httpcore", "ConnectionPool", ("handle_request",)),
     ("httpcore", "AsyncHTTPConnection", ("handle_async_request",)),
     ("httpcore", "HTTPConnection", ("handle_request",)),
+    ("httpcore", "AsyncHTTP11Connection", ("handle_async_request",)),
+    ("httpcore", "HTTP11Connection", ("handle_request",)),
+    ("httpcore", "AsyncHTTP2Connection", ("handle_async_request",)),  # a placeholder without h2
+    ("httpcore", "HTTP2Connection", ("handle_request",)),
+    ("httpcore._backends.auto", "AutoBackend", _CONNECT_METHODS),
+    ("httpcore", "AnyIOBackend", _CONNECT_METHODS),
+    ("httpcore", "SyncBackend", _CONNECT_METHODS),
 )
 # opentelemetry-instrumentation-httpx wraps the transports' send on the class
 # with wrapt; it opens no span while instrumentation is suppressed, as it is
@@ -573,9 +703,13 @@ def _package_root(module: Any) -> Optional[str]:
 
 def _send_path_slots() -> Tuple[Tuple[Any, str, str], ...]:
     slots = []
-    for package_name, class_name, names in _SEND_PATH:
-        package = httpx if package_name == "httpx" else httpcore
-        owner = getattr(package, class_name, None)
+    for module_name, class_name, names in _SEND_PATH:
+        package = httpx if module_name.split(".")[0] == "httpx" else httpcore
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:  # pragma: no cover - another layout
+            continue
+        owner = getattr(module, class_name, None)
         root = _package_root(package)
         if owner is None or root is None:
             continue
@@ -632,6 +766,85 @@ def send_path_patched() -> bool:
         return True
 
 
+# -- the socket layer as the standard library ships it ------------------------------------------------
+
+# What the read's connection goes through below httpx and httpcore: asyncio
+# makes its socket with socket.socket, the read loop looks names up with
+# socket.getaddrinfo, and TLS runs on an ssl.SSLContext (wrap_bio). Socket-level
+# HTTP mocks (mocket, httpretty) and monkey-patching (gevent, eventlet)
+# replace these on the modules; create_connection is checked too, since they
+# replace it together.
+_SOCKET_CLASSES = ((socket, "socket", _socket.socket), (ssl, "SSLContext", getattr(ssl, "_SSLContext", None)))
+_SOCKET_FUNCTIONS = ((socket, "getaddrinfo"), (socket, "create_connection"))
+_SSL_METHODS = ("wrap_socket", "wrap_bio")
+_SOCKET_CACHE: List[Any] = [None]  # the objects last found as shipped
+
+
+def _socket_layer() -> Tuple[Any, ...]:
+    objects: List[Any] = [getattr(module, name, _MISSING) for module, name, _ in _SOCKET_CLASSES]
+    objects += [getattr(module, name, _MISSING) for module, name in _SOCKET_FUNCTIONS]
+    context = getattr(ssl, "SSLContext", None)
+    objects += [_class_attribute(context, name) if isinstance(context, type) else _MISSING for name in _SSL_METHODS]
+    return tuple(objects)
+
+
+def _stdlib_function(function: Any, module: Any, name: str) -> bool:
+    """A function defined in ``module`` itself under ``name`` (a mock's, or a
+    ``functools.wraps`` copy, has the patcher's globals)."""
+    return (
+        type(function) is types.FunctionType
+        and function.__globals__ is vars(module)
+        and function.__code__.co_name == name
+    )
+
+
+def _stdlib_class(kind: Any, module: Any, name: str, base: Any) -> bool:
+    """The class ``module`` defines as ``name`` right on top of the C one."""
+    return (
+        isinstance(kind, type)
+        and kind.__module__ == module.__name__
+        and kind.__qualname__ == name
+        and kind.__mro__[1:2] == (base,)
+    )
+
+
+def socket_layer_patched() -> bool:
+    """True when ``socket.socket``, ``socket.getaddrinfo``,
+    ``socket.create_connection``, ``ssl.SSLContext`` or its ``wrap_socket``
+    / ``wrap_bio`` is not the standard library's own (mocket, httpretty,
+    gevent's or eventlet's monkey-patching, ``mock.patch``): then the read
+    is not made. Checked with :func:`send_path_patched`."""
+    try:
+        current = _socket_layer()
+        cached = _SOCKET_CACHE[0]
+        if cached is not None and all(a is b for a, b in zip(cached, current)):
+            return False
+        for (module, name, base), kind in zip(_SOCKET_CLASSES, current):
+            if not _stdlib_class(kind, module, name, base):
+                return True
+        functions = current[len(_SOCKET_CLASSES) :]
+        for (module, name), function in zip(_SOCKET_FUNCTIONS, functions):
+            if not _stdlib_function(function, module, name):
+                return True
+        for name, method in zip(_SSL_METHODS, functions[len(_SOCKET_FUNCTIONS) :]):
+            if not _stdlib_function(method, ssl, name):
+                return True
+        _SOCKET_CACHE[0] = current
+        return False
+    except Exception:  # pragma: no cover - unknown: no read
+        logger.debug("traceai-replicate: could not check the socket layer", exc_info=True)
+        return True
+
+
+def http_patched() -> Optional[str]:
+    """``patched_http`` or ``patched_socket`` while an HTTP mock is active, else None."""
+    if send_path_patched():
+        return PATCHED_HTTP
+    if socket_layer_patched():
+        return PATCHED_SOCKET
+    return None
+
+
 # -- one read ------------------------------------------------------------------------------
 
 
@@ -656,6 +869,7 @@ class _Read:
         "skip_reason",
         "attempts",
         "timer",
+        "scope",
         "_slot",
         "_over",
     )
@@ -691,6 +905,7 @@ class _Read:
         self.skip_reason: Optional[str] = None
         self.attempts = 0  # GETs made (or started) so far
         self.timer: Any = None  # the deadline timer on the read loop
+        self.scope: Any = None  # the read's cancel scope on the read loop, once it runs
         self._slot = False
         self._over = False
 
@@ -719,6 +934,7 @@ class _Read:
         """The read's I/O has returned: free its slot and what only it needed."""
         self.release()
         self.http = None
+        self.scope = None
 
     # -- the end of the span -------------------------------------------------------------
 
@@ -814,10 +1030,12 @@ class _Read:
 
 async def _send_own(entry: _Read, request: httpx.Request) -> Optional[Dict[str, Any]]:
     """Through the package's own pool, on the package's loop; not sent when
-    an HTTP mock has replaced httpx's send path since the stream completed."""
-    if send_path_patched():
+    an HTTP mock has replaced httpx's send path or the socket layer since the
+    stream completed."""
+    patched = http_patched()
+    if patched is not None:
         entry.outcome = entry.outcome or SKIPPED
-        entry.skip_reason = entry.skip_reason or PATCHED_HTTP
+        entry.skip_reason = entry.skip_reason or patched
         return None
     own = _own_client(entry.state, entry.routing)
     own.reads += 1
@@ -851,6 +1069,9 @@ async def _within(entry: _Read, read: Any, seconds: float) -> None:
         await asyncio.wait_for(read, seconds)
         return
     with anyio.move_on_after(seconds) as scope:
+        entry.scope = scope  # a flush, shutdown or uninstrument() that ends the span cancels it
+        if entry._over:
+            scope.cancel()
         await read
     if scope.cancelled_caught:
         entry.outcome = entry.outcome or TIMEOUT
@@ -862,7 +1083,7 @@ async def _read_within_deadline(entry: _Read) -> None:
     token = context_api.attach(_suppressed())
     try:
         remaining = entry.deadline - _monotonic()
-        if remaining <= 0:
+        if remaining <= 0 or entry._over:
             entry.outcome = entry.outcome or TIMEOUT
             return
         await _within(entry, entry.aread(), remaining)
@@ -971,6 +1192,11 @@ def _settle_lookup(state: _State, query: Tuple[Any, ...], lookup: _Lookup, ok: b
             future.set_exception(value)
 
 
+def _lookup(host: Any, port: Any, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0) -> Any:
+    """One name lookup on a resolver thread, by the system resolver."""
+    return socket.getaddrinfo(host, port, family, type, proto, flags)
+
+
 def _resolver_main(state: _State) -> None:
     ident = threading.get_ident()
     while True:
@@ -983,7 +1209,7 @@ def _resolver_main(state: _State) -> None:
             state.resolver_busy[ident] = _monotonic()
         try:
             try:
-                ok, value = True, socket.getaddrinfo(*query)
+                ok, value = True, _lookup(*query)
             except Exception as error:
                 ok, value = False, error
         finally:
@@ -1045,8 +1271,28 @@ def _ensure_workers(state: _State) -> None:
         state.start_lock.release()
 
 
+def import_read_path() -> None:
+    """Import what the read uses on first use, on this (the caller's) thread.
+
+    A package thread is then never inside an import of these: a fork at that
+    moment would leave the child that module's import lock held by a thread
+    the child does not have, and the child's own imports of the module (its
+    own async httpx code) would hang on it."""
+    for name in _READ_PATH_MODULES:
+        try:
+            importlib.import_module(name)
+        except Exception:  # missing from this install (sniffio, h2), or another layout
+            pass
+    for name in ("anyio", "anyio.abc"):  # resolve anyio's lazy attributes now, not on the loop
+        module = sys.modules.get(name)
+        for attribute in _guard(lambda: dir(module), []) if module is not None else []:
+            _guard(lambda: getattr(module, attribute), None)
+
+
 def start_workers() -> None:
-    """Start the worker threads now (``instrument()`` with the read on), not on a caller's path."""
+    """Start the worker threads now (``instrument()`` with the read on), not
+    on a caller's path, after importing what the read uses."""
+    _guard(import_read_path, None)
     _guard(lambda: _ensure_workers(_STATE), None)
 
 
@@ -1149,8 +1395,10 @@ def _finisher_main(state: _State) -> None:
     while True:
         try:
             entry, outcome = state.inbox.get()
+            state.fork_clear.wait(_FORK_WAIT_SECONDS)  # a fork waiting goes first
             with state.finishing:
                 entry.end(outcome)
+            state.finishing_timed_out = False
         except Exception:  # pragma: no cover - never let the finisher die
             logger.debug("traceai-replicate: stream finisher step failed", exc_info=True)
 
@@ -1219,8 +1467,9 @@ def _plan(
     http = vars(client).get(_ASYNC_HTTP if is_async else _SYNC_HTTP) if client is not None else None
     if http is None or http.is_closed:
         return CLIENT_CLOSED
-    if send_path_patched():
-        return PATCHED_HTTP
+    patched = http_patched()
+    if patched is not None:
+        return patched
     url = _read_url(http, prediction_id)
     routing = _read_routing(client, http, url)
     if routing is None:
@@ -1306,6 +1555,27 @@ def _wait(cond: threading.Condition, timeout: float) -> None:
     cond.wait(timeout)
 
 
+def _cancel_on_loop(entries: List[_Read]) -> None:
+    """On the read loop: cancel the reads of spans that have already ended."""
+    for entry in entries:
+        scope = entry.scope
+        if scope is not None:
+            _guard(scope.cancel, None)
+
+
+def _cancel_reads(state: _State, entries: List[_Read]) -> None:
+    """Cancel, on the read loop, the reads still in flight for ``entries``
+    (their spans have ended), which closes their connections at once; a read
+    not started yet is never sent (see :meth:`_Read._request`)."""
+    loop = state.loop
+    if loop is None or not entries:
+        return
+    try:
+        loop.call_soon_threadsafe(_cancel_on_loop, entries, context=contextvars.Context())
+    except RuntimeError:  # pragma: no cover - the loop is closed (interpreter exit)
+        pass
+
+
 def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -> bool:
     """End the span of every completed stream whose read is still running.
 
@@ -1313,14 +1583,16 @@ def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -
     time) and never past the last of their deadlines plus a short grace for
     the finisher; with ``until`` None (tests) up to that last deadline. Each
     span still waiting then ends with what is known
-    (``replicate.stream.read`` = ``outcome``). Flush, shutdown, exit and
+    (``replicate.stream.read`` = ``outcome``), and its read, if still in
+    flight, is cancelled (its connection closed). Flush, shutdown, exit and
     ``uninstrument()`` pass the time they may wait (by default none). A span
     the finisher thread is exporting at that moment has already ended; that
-    one export is waited for (at most _FINISHING_WAIT_SECONDS), so a shutdown
-    or a process exit right after does not cut it off. Returns False when
-    ``until`` cut a read short. On the package's own threads nothing is
-    waited for. A KeyboardInterrupt (or any BaseException) while waiting ends
-    every pending span first, then propagates.
+    one export is waited for (at most _FINISHING_WAIT_SECONDS, and not again
+    after such a wait ran out until the finisher has ended a span), so a
+    shutdown or a process exit right after does not cut it off. Returns
+    False when ``until`` cut a read short. On the package's own threads
+    nothing is waited for. A KeyboardInterrupt (or any BaseException) while
+    waiting ends every pending span first, then propagates.
     """
     state = _STATE
     with state.lock:
@@ -1341,16 +1613,26 @@ def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -
     except BaseException:
         for entry in pending:
             _guard(lambda: entry.end(outcome), None)
+        _guard(lambda: _cancel_reads(state, pending), None)
         raise
     in_time = True
+    cut_short = []
     for entry in pending:
         if entry in state.pending:
             in_time = in_time and cut >= limit
+            cut_short.append(entry)
             _guard(lambda: entry.end(outcome), None)
-    if not getattr(_WORKER, "active", False) and any(entry in state.pending for entry in pending):
+    _guard(lambda: _cancel_reads(state, cut_short), None)
+    if (
+        not getattr(_WORKER, "active", False)
+        and not state.finishing_timed_out
+        and any(entry in state.pending for entry in pending)
+    ):
         # Still pending although ended: the finisher is exporting it now.
         if state.finishing.acquire(timeout=_FINISHING_WAIT_SECONDS):
             state.finishing.release()
+        else:
+            state.finishing_timed_out = True
     return in_time
 
 

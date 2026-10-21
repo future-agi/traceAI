@@ -874,18 +874,16 @@ def test_with_the_read_on_the_name_lookup_queue_is_bounded(monkeypatch):
     """Round-3 concurrency probe ``dns_queue.py``: with both resolver threads
     hung, queued lookups grew without bound (713 after 12 waves). Past
     _MAX_RESOLVE_JOBS a new lookup fails at once."""
-    import socket
-
     monkeypatch.setattr(_stream_read, "_MAX_RESOLVE_JOBS", 1, raising=False)
     release = threading.Event()
-    original = socket.getaddrinfo
+    original = _stream_read._lookup  # the resolver threads' lookup (socket.getaddrinfo replaced is a socket-level mock)
 
     def hung(host, *args, **kwargs):
         if threading.current_thread().name == _stream_read.RESOLVER_NAME:
             release.wait(10)
         return original(host, *args, **kwargs)
 
-    monkeypatch.setattr(socket, "getaddrinfo", hung)
+    monkeypatch.setattr(_stream_read, "_lookup", hung)
     fakes = [FakeReplicate() for _ in range(4)]
     try:
         with instrumented(stream_reload_seconds=3.0) as traced:

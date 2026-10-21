@@ -8,8 +8,11 @@ Span model (TH-8320):
   stream is a lazy generator, so the span starts at the first ``next()``
   (in the context of the ``stream()`` call); a stream never iterated sends no
   request and has no span. It is open until the stream completes (its
-  ``done`` event, or the end of iteration), is closed before that, or is
-  dropped; a ``close()`` or a drop after ``done`` is not a cancellation. The
+  ``done`` event, or the end of iteration), is closed before that, is
+  dropped, or is still open at a provider shutdown or interpreter exit (then
+  it ends as cancelled); a ``close()`` or a drop after ``done`` is not a
+  cancellation. The span is ended by the process that started it (a stream
+  first iterated in a forked child is the child's). The
   SSE stream carries no status or metrics. By default the span ends at
   ``done`` with what the stream gave (no status, ``predict_time`` or token
   counts). With ``stream_reload_seconds`` > 0 a completed stream's prediction
@@ -187,21 +190,29 @@ class _Call:
         # (register()'s shutdown) that interrupted this thread inside another
         # finish() returns instead of deadlocking.
         self._done = threading.Lock()
-        # A forked child inherits this object; only this process ends the span.
+        # A forked child inherits this object; only the process that started
+        # the span ends it (a stream's span starts at its first next(), see begin()).
         self._pid = os.getpid()
 
     @property
     def finished(self) -> bool:
         return self._done.locked()
 
+    @property
+    def started(self) -> bool:
+        """The span has started (a stream's starts at its first ``next()``)."""
+        return self._begin is None
+
     def begin(self) -> None:
-        """Start a stream's span, once (on its first ``next()``)."""
+        """Start a stream's span, once (on its first ``next()``), in this process."""
         begin = self._begin
         if begin is not None:
             self._begin = None
+            self._pid = os.getpid()
             span = _guard(begin, None)
             if span is not None:
                 self.span = span
+                _guard(lambda: _OPEN.add(self), None)
 
     @contextmanager
     def activate(self) -> Iterator[None]:
@@ -261,6 +272,7 @@ class _Call:
             return  # ended, or being ended, by another finish()
         if self._pid != os.getpid():
             return  # inherited by a forked child: the parent process ends it
+        _OPEN.discard(self)
         try:
             self._write(prediction, output, collector, error, cancelled, use_snapshot, extra)
         except Exception:
@@ -367,7 +379,9 @@ class _Call:
         elif hide:
             description = REDACTED_VALUE
         else:
-            description = self._clean("{0}: {1}".format(type(error).__name__, _text(error)), tokens)
+            message = _text(error)
+            name = type(error).__name__
+            description = self._clean("{0}: {1}".format(name, message) if message else name, tokens)
         # Not span.record_exception(): it always adds exception.stacktrace, and
         # a Python traceback carries local file paths and the user name, which
         # traceAI never exports. The event keeps the type and the message.
@@ -392,12 +406,38 @@ _RELEASED: "collections.deque[Tuple[_Call, bool, int]]" = collections.deque()
 # Registries alive in this process; a forked child gets fresh locks and empty
 # registries (the spans they held are the parent's to end).
 _REGISTRIES: "weakref.WeakSet[PendingRegistry]" = weakref.WeakSet()
+# The calls of streams and run iterators handed to the caller and not
+# finished: one still open (referenced, neither completed nor dropped) at a
+# provider shutdown or interpreter exit ends then (see end_open_iterators).
+_OPEN: "weakref.WeakSet[_Call]" = weakref.WeakSet()
 
 
 def _after_fork_in_child() -> None:
     _RELEASED.clear()
+    _OPEN.clear()
     for registry in list(_REGISTRIES):
         _guard(registry._reset_after_fork, None)
+
+
+def end_open_iterators() -> None:
+    """Provider shutdown and interpreter exit: end, as cancelled (as a drop
+    would), the span of every stream or run iterator whose iteration has
+    started and is still open, so it is exported before the processors stop.
+    A stream not iterated yet has no span and is left alone; a completed one
+    is its read's (see complete_stream). Iterating such a stream afterwards
+    works as before; its span has ended."""
+    drain_released()
+    for _ in range(3):  # another thread may add one while this copies the set
+        try:
+            calls = list(_OPEN)
+            break
+        except RuntimeError:
+            continue
+    else:  # pragma: no cover
+        return
+    for call in calls:
+        if call.started and not call.completed and not call.finished:
+            _guard(lambda: call.finish(cancelled=True), None)
 
 
 if hasattr(os, "register_at_fork"):
@@ -737,10 +777,15 @@ def _finish_or_wrap(
 ) -> Any:
     """End the span now, or hand it to the iterator the client returned."""
     try:
+        wrapped: Any = None
         if is_sync_iterator(result):
-            return TracedIterator(result, call, OutputCollector(count_files), reads)
-        if is_async_iterator(result):
-            return TracedAsyncIterator(result, call, OutputCollector(count_files), reads)
+            wrapped = TracedIterator(result, call, OutputCollector(count_files), reads)
+        elif is_async_iterator(result):
+            wrapped = TracedAsyncIterator(result, call, OutputCollector(count_files), reads)
+        if wrapped is not None:
+            if call.started:  # a run() iterator: its span is open already (a stream's opens at next())
+                _OPEN.add(call)
+            return wrapped
     except Exception:
         logger.debug("traceai-replicate: could not wrap the returned iterator", exc_info=True)
     call.begin()

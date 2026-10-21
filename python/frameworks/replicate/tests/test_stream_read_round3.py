@@ -33,7 +33,6 @@ import gc
 import inspect
 import os
 import signal
-import socket
 import ssl
 import subprocess
 import sys
@@ -453,7 +452,7 @@ def test_a_flush_wrapped_before_instrument_still_gets_only_the_time_left(own_pro
 def _slow_lookups(monkeypatch, seconds):
     """Lookups of ``localhost`` on the package's resolver threads take ``seconds``
     (a real resolver's latency); everything else resolves as usual."""
-    original = socket.getaddrinfo
+    original = _stream_read._lookup  # the resolver threads' lookup (socket.getaddrinfo replaced is a socket-level mock)
     calls = []
 
     def slow(host, *args, **kwargs):
@@ -463,7 +462,7 @@ def _slow_lookups(monkeypatch, seconds):
             time.sleep(seconds)
         return original(host, *args, **kwargs)
 
-    monkeypatch.setattr(socket, "getaddrinfo", slow)
+    monkeypatch.setattr(_stream_read, "_lookup", slow)
     return calls
 
 
@@ -530,7 +529,7 @@ def test_lookups_of_different_names_wait_for_a_free_resolver(monkeypatch):
 def test_while_every_resolver_is_stuck_a_new_lookup_fails_at_once(monkeypatch):
     monkeypatch.setattr(_stream_read, "_RESOLVER_STUCK_SECONDS", 0.2, raising=False)
     release = threading.Event()
-    original = socket.getaddrinfo
+    original = _stream_read._lookup  # the resolver threads' lookup (socket.getaddrinfo replaced is a socket-level mock)
     fakes = [FakeReplicate() for _ in range(3)]
     hung_ports = {int(fake.origin.rsplit(":", 1)[1]) for fake in fakes[:2]}
 
@@ -539,7 +538,7 @@ def test_while_every_resolver_is_stuck_a_new_lookup_fails_at_once(monkeypatch):
             release.wait(10)
         return original(host, port, *args, **kwargs)
 
-    monkeypatch.setattr(socket, "getaddrinfo", hung)
+    monkeypatch.setattr(_stream_read, "_lookup", hung)
     try:
         with instrumented(stream_reload_seconds=2.0) as traced:
             for fake in fakes[:2]:

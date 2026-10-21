@@ -57,26 +57,32 @@ streams dropped since the last traced call). `replicate.run` and create +
 `wait()` spans have status and token counts either way (the client polls
 those predictions to the end itself).
 
-To get them on stream spans, opt in to one read of the prediction after
-`done`:
+To get them on stream spans, opt in to a read of the prediction after
+`done` (one lookup, and a second only if the API still reports a non-final
+status):
 
 ```python
 ReplicateInstrumentor().instrument(tracer_provider=tracer_provider, stream_reload_seconds=2)
 ```
 
 The opt-in has limits. Each read is one more API request against your rate
-limit. It runs only through the package's own connection pool, for
-replicate's default transport or a plain `httpx` transport without a proxy:
-with any other transport you pass to `replicate.Client` (or a subclass, a
-transport changed on the instance, or `proxy=`) there is no read
-(`replicate.stream.skip_reason=custom_transport`), and there is none while an
-HTTP mock such as respx, pytest-httpx or VCR.py has patched `httpx` or
-`httpcore` (`patched_http`). Past 64 waiting stream spans, a stream ends
-without one. A flush, shutdown, exit or `uninstrument()` does not wait for a
-read in flight unless you opt in to that too: the span ends without the
-read's data. The opt-in in its current form has been checked against a local
-stand-in only, not the live API (see "Live vendor verification" below). See
-[the opt-in read after a stream](#the-opt-in-read-after-a-stream).
+limit. It runs only through the package's own connection pool, for a plain
+`httpx` transport (replicate's default, one passed with `transport=`, or one
+mounted with `mounts=`) on httpcore's default network backend. A custom
+transport, subclass, transport or pool with `handle_request` /
+`handle_async_request` set on the instance, custom network backend, client
+with `_transport_for_url` set on the instance, or proxy is skipped
+(`custom_transport`). A detected class-level HTTP mock such as respx,
+pytest-httpx or VCR.py is skipped (`patched_http`); a detected socket-level
+mock such as mocket, httpretty, gevent or eventlet is skipped
+(`patched_socket`). Past 64 waiting stream spans, a stream ends without a
+read. A flush, shutdown or exit does not wait for a read by default (optional
+bounded wait settings exist); `uninstrument()` never waits. All four end the
+span with the data known and cancel any read still in flight. The package
+workers stay idle until process exit after `uninstrument()`. The opt-in in
+its current form has been checked against a local stand-in only, not the live
+API (see "Live vendor verification" below). See [the opt-in read after a
+stream](#the-opt-in-read-after-a-stream).
 
 ### Options
 
@@ -123,9 +129,10 @@ stream and no thread is started. A `done` whose data says
 `{"reason": "canceled"}` still records status `canceled`.
 
 **On.** With `stream_reload_seconds` from `0` (exclusive) to `10`, after
-`done` the package reads the prediction once (`GET /v1/predictions/{id}`)
-and records its final status, `predict_time` and token counts on the stream
-span. Its limits:
+`done` the package looks up the prediction once (`GET /v1/predictions/{id}`),
+and a non-final answer is looked up one more time after `poll_interval`, to
+record its final status, `predict_time` and token counts on the stream span.
+Its limits:
 
 - **Cost and rate limit.** The read creates no prediction and is not billed,
   but it is an API request: it counts toward your account's rate limit for
@@ -135,41 +142,40 @@ span. Its limits:
   prediction that has just sent `done`.
 - **Only through the package's own connection pool.** The read uses a pool
   this package owns, on a background event loop, with your client's base URL
-  and headers, and only when the transport your client uses for the API URL
-  is replicate's own `RetryTransport` (exactly that class, not a subclass)
-  over exactly a plain `httpx.HTTPTransport` / `httpx.AsyncHTTPTransport`
-  without a proxy, with nothing set on either instance. That is the
-  transport `replicate.Client` builds itself (the package's pool then gets
-  the same client options), or a plain one you pass, such as
-  `transport=httpx.AsyncHTTPTransport(retries=2)` (its TLS context, HTTP
-  versions, local address, socket options and connect retries are copied).
-  **Any other transport is never called for the read**: a custom, mock or
-  scripted transport, a recording, logging or auth wrapper, a subclass of an
-  `httpx` transport or of replicate's `RetryTransport`, a transport (or its
-  pool) whose `handle_request` / `handle_async_request` was set on the
-  instance (`mock.patch.object`), a transport with a proxy or a client with
-  `proxy=`, or one that is only async. The stream span then has no read
-  data, with `replicate.stream.read` = `skipped` and
-  `replicate.stream.skip_reason` = `custom_transport`. So the read never
-  runs on your thread or event loop, never calls your transport and never
-  takes a connection from your pool.
-- **Not through an HTTP mock.** A test double that replaces `httpx`'s or
-  `httpcore`'s send methods on the class (respx, pytest-httpx, VCR.py,
-  `mock.patch("httpx.AsyncClient.send")`) would see the package's own
-  request and could answer it with a response your test scripted for your
-  own code. While any of `httpx.Client` / `AsyncClient` `send`,
-  `_send_handling_auth`, `_send_handling_redirects`, `_send_single_request`
-  and `_transport_for_url`, `HTTPTransport.handle_request`,
-  `AsyncHTTPTransport.handle_async_request`, and `httpcore`'s
-  `ConnectionPool` / `HTTPConnection` `handle_request` and their async
-  twins is not the library's own function, no read is made
-  (`replicate.stream.skip_reason` = `patched_http`). It is checked when the
-  stream completes and again just before the request is sent, so a mock
-  started while a read is already being sent can still see that one read.
-  opentelemetry-instrumentation-httpx's wrappers are the one change allowed
-  (they add no span for the read). Another library that replaces those
-  methods itself, as some APM agents' `httpx` integrations do, also turns
-  the read off.
+  and headers. The client transport for the API URL must be exactly a plain
+  `httpx.HTTPTransport` / `httpx.AsyncHTTPTransport` over a plain connection
+  pool on httpcore's default network backend, under replicate's own
+  `RetryTransport` layers (exactly that class) if any. It can be replicate's
+  default, a plain `transport=` you pass, or a plain transport mounted with
+  `mounts=`; for example `transport=httpx.AsyncHTTPTransport(retries=2)`
+  (its TLS context, HTTP versions, local address, socket options and connect
+  retries are copied). It is not called by the read. **Any other transport
+  is skipped** (`custom_transport`): a custom, mock, scripted, recording,
+  logging or auth wrapper; a subclass of an `httpx` transport or of
+  replicate's `RetryTransport`; a transport or pool with
+  `handle_request` / `handle_async_request` set on the instance; a pool on a
+  custom network backend, or a backend with `connect_tcp` /
+  `connect_unix_socket` set on its instance; a client with
+  `_transport_for_url` set on the instance; a transport with a proxy or a
+  client with `proxy=`; or one that is only async. It does not use your
+  transport, backend, resolver or connection pool for the read.
+- **Not through a detected HTTP or socket mock.** A test double that replaces
+  `httpx`'s or `httpcore`'s send path on the class (respx, pytest-httpx,
+  VCR.py, `mock.patch`) would see the package's own request and could answer
+  it with a response your test scripted for your own code. While a checked
+  `httpx` / `httpcore` client, transport, pool, connection or network-backend
+  send method is not the library's own function, no read is made
+  (`replicate.stream.skip_reason=patched_http`). This also checks
+  `socket.socket`, `socket.getaddrinfo`, `socket.create_connection`,
+  `ssl.SSLContext` and its `wrap_socket` / `wrap_bio`; when one is replaced
+  (mocket, httpretty, gevent and eventlet monkey-patching), no read is made
+  (`patched_socket`). Both checks run when the stream completes and again
+  just before each request, so a mock started while a read is already being
+  sent can still see that one request. opentelemetry-instrumentation-httpx's
+  wrappers are the one change allowed (they add no span for the read).
+  Another library that replaces those HTTP methods itself, as some APM
+  agents' `httpx` integrations do, turns the read off. A mock below the
+  checked HTTP and socket methods is not detected.
 - **Only for a span that is exported.** No read is made for a span that is
   not recording (a trace your sampler dropped, `NoOpTracerProvider`), after
   the provider is shut down, or when no flush/shutdown hook could be
@@ -181,17 +187,23 @@ span. Its limits:
   resolver threads on the first host-name lookup; a forked child starts its
   own on its first completed stream. **Past the cap** (64 stream spans
   already waiting, or 64 reads live) a stream that completes ends at once
-  **on your thread**, without a read (`skipped`, `at_capacity`); with an
-  exporter that runs inline (`SimpleSpanProcessor`, `register(batch=False)`)
-  that end includes its export, as it would with the read off. The read's
-  own work still runs in your process and competes for the GIL. With 200
-  async streams finishing at once against a stand-in API in another process,
-  with replicate's default transport, on a shared machine (load average 26
-  to 31), the median time from `done` to the end of each loop was 31.5 to
-  56.3 ms with the read on and one shared client, and 48.5 to 190.2 ms with a
-  client per stream, against 17.9 to 29.3 ms with it off and 13.2 to 20.5 ms
-  uninstrumented, over 3 and 2 runs (code `f1866eb`). That cost is CPU time, so it grows with
-  CPU contention.
+  **on your thread**, without a read (`skipped`, `at_capacity`); that inline
+  end can run an exporter, as it would with the read off. The inline-export
+  cost of such a stream past the cap is not bounded by the read's deadline. The read's
+  own work still runs in your process and competes for the GIL. Re-measured
+  on the round-6 worktree (Python 3.12, replicate 1.0.7; 200 async streams to
+  a stand-in API in another process, default transport; 3 runs with one
+  shared client and 2 with a client per stream): the median time from `done`
+  to the end of each loop was 33.2–65.1 ms with the read on and one shared
+  client, 49.8–72.2 ms with one client per stream, versus 22.6–27.7 ms and
+  17.4–32.1 ms with the read off, and 16.3–23.3 ms and 25.7–32.6 ms
+  uninstrumented. The corresponding `asyncio.run(call())` probe (10 calls,
+  0.2 s read, plain `httpx.AsyncHTTPTransport`) had p50 7 ms both with the
+  read on and off (read-on maximum 10 ms); all 10 reads completed. The
+  500-stream completion probe (5 x 500) measured `complete_stream()` p50
+  0.10–0.12 ms, p99 0.18–0.55 ms, max 2.7 ms. Outputs are in `ev/r6/`;
+  load varied, so these are measurements, not a latency guarantee. CPU
+  contention changes the cost.
 - **Bounded.** `stream_reload_seconds` is a wall-time budget from the
   stream's end. The read is one request, and one more `poll_interval` later
   only when the prediction is not finished yet. It is never retried: a `429`
@@ -208,11 +220,12 @@ span. Its limits:
 - **At most 64 stream spans waiting at once.** That counts reads in flight
   and spans whose read has returned and that wait to be ended and exported;
   there is one connection for each. A read counts until its I/O has
-  returned. In a burst, only the first 64 get the read's data: 64 of 500 sync
-  streams finishing at once, in each of 5 bursts (measured at `f1866eb`);
-  and 145 of 160 streams arriving at 20 a second for 8 s while an inline
-  exporter took 0.1 s per span (the other 15 were skipped, `at_capacity`,
-  with 64 pending at the peak), measured at `4767825`.
+  returned. The limit is on how many are waiting at once, not the total
+  number of reads that finish over a burst. In a sustained probe at the
+  round-6 worktree, 145 of 160 streams arriving at 20 a second for 8 s got
+  read data while an inline exporter took 0.1 s per span; the other 15 were
+  skipped, `at_capacity`, with 64 pending at peak. The probe was rerun and
+  saved in `ev/r6/probes-out/caller-exporter.txt`.
 - **When the span ends.** When the read returns, or when the budget runs
   out, whichever is first; either way its end time is the stream's end, not
   the read's. A read that is not made, fails or runs out of time leaves the
@@ -220,50 +233,59 @@ span. Its limits:
   counts, and with `replicate.stream.read` saying why. A background thread
   ends stream spans, one at a time; with an exporter that runs inline their
   exports queue there, so spans arrive later, but no read waits behind them.
-- **Flush, shutdown, exit and `uninstrument()` do not wait by default.**
+- **Flush, shutdown, exit and `uninstrument()` do not wait for a read by default.**
   Each ends every stream span still waiting for its read at once, with what
-  is known, so it is exported: `replicate.stream.read` = `flushed` for
+  is known, so it is exported: `replicate.stream.read=flushed` for
   `force_flush()`, `shutdown` for `shutdown()` (including the SIGTERM/SIGINT
   handler `register()` installs) and interpreter exit, `uninstrumented` for
-  `uninstrument()` (a `shutdown()` right after it still exports those spans).
-  The one span the package's finisher thread may be exporting at that moment
-  has already ended; that export is waited for (at most 5 s), so a shutdown or
-  a process exit right after does not cut it off. A stream that completes
-  after `uninstrument()` or `shutdown()` makes no read (`after_uninstrument`,
-  `after_shutdown`). A flush after every request
-  therefore costs nothing extra, but its stream spans carry no status or
-  token counts unless the read had already returned. To wait, pass
-  `stream_flush_wait_seconds` (for example in a serverless handler that
-  freezes after it returns): `force_flush(timeout_millis)` then waits that
-  long for reads in flight, never more than half of `timeout_millis`
-  (default `30000`), and the provider's own flush gets only the time left, so
-  with a batch span processor (`register()`'s default) the call never takes
-  longer than you asked; with one that exports inline, each span it ends is
-  exported inside the call, which can take longer. Its result is what
-  `force_flush` returns. `stream_shutdown_wait_seconds` does the same for
-  `shutdown()` and interpreter exit (no timeout of their own: they wait that
-  long at most). The provider is shared: a flush ends (or, with the wait,
-  waits for) every request's stream spans, not only its own. With an exporter
-  that runs inline, ending a span exports it inside the call, so a shutdown,
-  an exit or a flush still takes the export time of the stream spans waiting
-  at that moment: **up to 64 times your exporter's per-span export time**
-  (shared between the exiting thread and the finisher). Measured at
-  `4767825`, with every stream's read still in flight when the script's last
-  line returned: 30 streams and 1.5 s per export, exit 23.6 s later; 20
-  streams and 0.2 s per export, 4.1 s; the same 20 with a batch span
-  processor, 0.24 s, and with an exporter that takes no time, 0.04 s. That is
-  export, not a wait for a read; an OTLP exporter that waits out its timeout
-  against a collector that is down makes it minutes. A batch span processor
-  (`register()`'s default) only queues the spans there.
-- **Forks.** The package coordinates one thing with `os.fork()`: the fork
-  waits (at most 5 s) until its finisher thread is between two span ends, so
-  a child does not inherit a lock that thread held while exporting. A child
-  starts its own worker threads when it needs them, and neither ends nor
-  exports a stream span its parent was waiting on; the parent does. Whether
-  a span processor or exporter works in a forked child (for example a
+  `uninstrument()`. Each also cancels that span's read in flight, which closes
+  its connection. `uninstrument()` never waits. The one span the package's
+  finisher thread may be exporting at that moment has already ended; that
+  export is waited for (at most 5 s, and not waited for a second time after a
+  timeout until the finisher ends a span), so a shutdown or a process exit
+  right after does not cut it off. A stream that completes after
+  `uninstrument()` or `shutdown()` makes no read (`after_uninstrument`,
+  `after_shutdown`). A flush after every request therefore costs nothing
+  extra, but its stream spans carry no status or token counts unless the read
+  had already returned. To wait, pass `stream_flush_wait_seconds` (for
+  example in a serverless handler that freezes after it returns):
+  `force_flush(timeout_millis)` then waits that long for reads in flight,
+  never more than half of `timeout_millis` (default `30000`), and the
+  provider's own flush gets only the time left, so with a batch span
+  processor (`register()`'s default) the call never takes longer than you
+  asked; with one that exports inline, each span it ends is exported inside
+  the call, which can take longer. `stream_shutdown_wait_seconds` does the
+  same for `shutdown()` and interpreter exit (no timeout of their own: they
+  wait that long at most); `uninstrument()` does not wait. The provider is
+  shared: a flush ends (or, with the wait, waits for) every request's stream
+  spans, not only its own. With an exporter that runs inline, ending a span
+  exports it inside the call, so a shutdown, an exit or a flush still takes
+  the export time of the stream spans waiting at that moment: **up to 64
+  times your exporter's per-span export time** (shared between the exiting
+  thread and the finisher). Measured at `4767825`, with every stream's read
+  still in flight when the script's last line returned: 30 streams and 1.5 s
+  per export, exit 23.6 s later; 20 streams and 0.2 s per export, 4.1 s; the
+  same 20 with a batch span processor, 0.24 s, and with an exporter that
+  takes no time, 0.04 s. That is export, not a wait for a read; an OTLP
+  exporter that waits out its timeout against a collector that is down makes
+  it minutes. A batch span processor (`register()`'s default) only queues the
+  spans there. A stream or run iterator still open at provider shutdown or
+  process exit also ends then as cancelled; one held open after
+  `uninstrument()` is not ended until it is dropped, the next traced call,
+  or exit.
+- **Forks.** Before starting its workers, `instrument()` imports AnyIO's
+  lazily loaded asyncio backend on your thread, so a package thread is never
+  inside that import when a fork happens (which would leave the child its
+  import lock and hang both the read and the app's own async httpx). At
+  `os.fork()`, the package pauses its read loop between steps and its finisher
+  between span ends, giving the fork up to 5 s total to wait for one export;
+  after that it proceeds, and a child could inherit an exporter lock held
+  mid-export. The dispatcher and resolver threads are not paused. Neither
+  ends nor exports a stream span its parent was waiting on; the parent does.
+  Whether a span processor or exporter works in a forked child (for example a
   `BatchSpanProcessor` whose worker thread was running) is up to that
-  processor; the package makes no claim about it. With the read off there is
-  no finisher and the fork waits for nothing.
+  processor; the package makes no claim about it. With the read off the fork
+  waits for nothing.
 - **What is kept.** Only the prediction's id, status, version, model,
   metrics and error string. Its input, output and logs are read with it and
   dropped.
@@ -272,8 +294,9 @@ span. Its limits:
 
 | Reason | No read because |
 |---|---|
-| `custom_transport` | The client's transport for the API URL is not replicate's own `RetryTransport` over a plain `httpx` transport without a proxy: a transport of your own, a subclass, a transport or pool changed on the instance, or a client with `proxy=`. |
-| `patched_http` | `httpx`'s or `httpcore`'s send path was replaced on the class (an HTTP mock such as respx, pytest-httpx or VCR.py, or `mock.patch`) when the stream completed or when the read was about to be sent. |
+| `custom_transport` | The API-URL transport is not a plain `httpx` transport (under replicate's `RetryTransport` layers, if any): a custom transport or subclass, a transport or pool with `handle_request` / `handle_async_request` set on the instance, a custom network backend, a client with `_transport_for_url` set on the instance, or a proxy. A plain transport mounted with `mounts=` is supported. |
+| `patched_http` | A checked `httpx` / `httpcore` client, transport, pool, connection or network-backend send method was replaced on the class (respx, pytest-httpx, VCR.py, `mock.patch`) when the stream completed or when the read was about to be sent. |
+| `patched_socket` | `socket.socket`, `socket.getaddrinfo`, `socket.create_connection`, `ssl.SSLContext` or its `wrap_socket` / `wrap_bio` was replaced (mocket, httpretty, gevent or eventlet monkey-patching). |
 | `at_capacity` | 64 stream spans were already waiting, or 64 reads were live. |
 | `no_provider_hook` | The provider's `force_flush` / `shutdown` could not be hooked (for example `instrument()` before `register()`). |
 | `after_uninstrument` | The stream completed after `uninstrument()`. |
@@ -362,7 +385,7 @@ an object a traced `create` returned while it was not yet finished.
 | `replicate.output.type` | `text`, `url` (one file URL), `list`, `object` or `other`. |
 | `replicate.stream.file_count` | The number of file outputs in a stream whose every output event was a URL or a file. A text stream has none, even when some of its chunks start like a URL. |
 | `replicate.stream.read` | Only with the opt-in read: why a stream span has no final status from it. `skipped` (not made; `replicate.stream.skip_reason` says why), `timeout` (the budget ran out), `failed` (refused, for example HTTP 429; unreadable; over 2 MiB; or no name lookup), `unfinished` (the API still answered a non-final status twice), `flushed` / `shutdown` / `uninstrumented` (a `force_flush()`, a `shutdown()` or interpreter exit, or `uninstrument()` ended the span before the read returned). Absent when the read found the final status, and always absent with the read off (the default). |
-| `replicate.stream.skip_reason` | With `replicate.stream.read` = `skipped`: `custom_transport`, `patched_http`, `at_capacity`, `no_provider_hook`, `after_uninstrument`, `after_shutdown`, `client_closed`, `no_prediction_id`, `start_failed` or `interrupted` (see [the opt-in read after a stream](#the-opt-in-read-after-a-stream)). |
+| `replicate.stream.skip_reason` | With `replicate.stream.read` = `skipped`: `custom_transport`, `patched_http`, `patched_socket`, `at_capacity`, `no_provider_hook`, `after_uninstrument`, `after_shutdown`, `client_closed`, `no_prediction_id`, `start_failed` or `interrupted` (see [the opt-in read after a stream](#the-opt-in-read-after-a-stream)). |
 | `replicate.stream.done_reason` | The `reason` in the data of the stream's `done` event, when there is one (`canceled`). |
 | `replicate.stream.truncated` | `true` when the event stream ended without a `done` event. The span is OK with the output received, and its status is what the API answered for the prediction. |
 | `gen_ai.span.kind` | `LLM` when the output is text, `CHAIN` otherwise (files, no output yet, errors). |
@@ -396,9 +419,11 @@ recorded.
   mode; the Python traceback (your file paths, user name and virtualenv) is
   never recorded.
 - **Files are never fetched.** File outputs are recorded as URL strings; the
-  package never reads a `FileOutput`. A `data:` URI keeps only its media type
-  (`data:image/png;base64,<N characters omitted>`), because its payload is the
-  file. In inputs, file handles, paths and bytes are described, not read.
+  package never reads a `FileOutput`. A `data:` URI in a file output keeps
+  only its media type (`data:image/png;base64,<N characters omitted>`),
+  because its payload is the file. A `data:` chunk in text output is kept
+  verbatim, like the other text chunks. In inputs, file handles, paths and
+  bytes are described, not read.
 - **Webhooks stay yours.** A webhook URL is recorded only as present. This
   package hosts no webhook receiver and never sets `webhook=`.
 
@@ -452,9 +477,10 @@ recorded.
 - Do not combine this package with another instrumentor that wraps the same
   Replicate client methods, or spans may be duplicated.
 - Stream spans have no status, `predict_time` or token counts unless you opt
-  in to the read after a stream, and even then not with a transport of your
-  own other than a plain `httpx` one, nor while an HTTP mock patches `httpx`
-  (see [the opt-in read after a stream](#the-opt-in-read-after-a-stream)).
+  in to the read after a stream; even then, the read uses its own pool only
+  for a plain `httpx` transport, including one mounted with `mounts=`, and is
+  skipped for unsupported HTTP/socket mocks (see [the opt-in read after a
+  stream](#the-opt-in-read-after-a-stream)).
 
 ## Live vendor verification (2026-10-20 to 2026-10-21 UTC)
 
@@ -573,7 +599,7 @@ now (round 4 on), including its `custom_transport` and `patched_http`
 skips. Trainings are not traced (checked with the stand-in).
 
 The stored rows of that project (spans, traces, rollups, the attribute
-catalog and the project row: 137 rows after the seventh session) were scanned:
+catalog and the project row: 125 distinct rows after the seventh session, counting spans once) were scanned:
 the API token appears 0 times (whole or its last 12 characters), and there is
 no `r8_`, `Bearer`, `Authorization`, `/Users/` path, login or host name,
 `Traceback`, `site-packages` or `exception.stacktrace`.
