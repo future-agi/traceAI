@@ -15,8 +15,9 @@
 * ``_read_routing`` never calls a ``_transport_for_url`` that a subclass of
   httpx's client overrides: no read, ``custom_transport``.
 * With the opt-in read, many threads sharing one client: see
-  ``test_stream_read_bounds`` (the caller's own pool has an httpcore race
-  under that load, so that test now gives each thread its own client).
+  ``test_stream_read_bounds`` (the caller's own pool most likely has an
+  httpcore race under that load, so that test now gives each thread its own
+  client).
 """
 
 from __future__ import annotations

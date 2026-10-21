@@ -388,12 +388,16 @@ def test_a_hundred_concurrent_trickling_reads_are_all_over_soon_after_their_dead
     budget = 0.5
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=budget) as traced:
         fake.read_trickle = 8.0
-        # One client per thread. A hundred threads on one client's own sync
-        # pool can hit an httpcore 1.0.9 race (an idle connection already
-        # handed to another request is closed while that request uses it:
-        # "ReadError: [Errno 9] Bad file descriptor" on the caller's create);
-        # it happens without this package too, and the reads tested here use
-        # the package's own pool either way.
+        # One client per thread. This test once failed with "ReadError:
+        # [Errno 9] Bad file descriptor" on the caller's own create, with a
+        # hundred threads on one client's sync pool; most likely an httpcore
+        # 1.0.9 pool race (an idle connection already handed to another
+        # request is closed while that request uses it). With no traceai or
+        # replicate code loaded, a plain httpx reproducer hit the same error
+        # in 2 of 12 runs that widen that race by 2 ms (2 of the 10 at 200
+        # threads, one of the two captured by hand) and in none of the
+        # stock runs; the original test passed 50 of 50 reruns. The reads
+        # tested here use the package's own pool either way.
         clients = [_default_client(fake) for _ in range(100)]
         workers = [
             threading.Thread(target=lambda client=client: list(client.stream(STREAM_MODEL, input={})))

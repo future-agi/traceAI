@@ -34,6 +34,11 @@ mocket = ">=3.15.0"
 # Integrations whose skip reasons the README names (round 7 review tests).
 sentry-sdk = ">=2.0.0"
 truststore = ">=0.10.0"
+# The global HTTPXClientInstrumentor the opt-in read allows and the per-client
+# instrument_client() it skips (round 5 and 7 review tests); without it CI skipped them.
+opentelemetry-instrumentation-httpx = ">=0.48b0"
+# A trio cancellation of an async stream (round 8 review test).
+trio = ">=0.22.0"
 
 [build-system]
 requires = ["poetry-core"]

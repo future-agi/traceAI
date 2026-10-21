@@ -92,8 +92,9 @@ class _EndPendingFirst:
     the opt-in read after a stream) the spans of completed streams whose read
     is still running, then calls the original, so those spans reach the
     processors before they flush or stop. ``shutdown`` also ends, as a best
-    effort, a span whose ``wait()``/``cancel()`` is still running;
-    ``force_flush`` leaves it to that call. ``fi_instrumentation.register()``'s
+    effort and as cancelled, the span of every traced call still running
+    (``run``, a create, a ``wait()``/``cancel()``) and of every stream or run
+    iterator still open; ``force_flush`` leaves them to their calls. ``fi_instrumentation.register()``'s
     SIGTERM/SIGINT handler shuts the provider down and exits; an ``atexit``
     hook alone would run after the processors had stopped and every held span
     would be dropped.
@@ -497,9 +498,10 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     def _end_pending(self, until: Optional[float] = None) -> None:
         """Provider shutdown and exit: every held span, the streams whose read
         is still running (waited for no later than ``until``, by default not
-        at all, then ended as ``shutdown``), the spans whose wait()/cancel()
-        is still running, and the streams and run iterators still open
-        (ended as cancelled, see :func:`end_open_iterators`)."""
+        at all, then ended as ``shutdown``), then, as cancelled, the spans of
+        the traced calls still running (a wait()/cancel() that claimed a
+        held span among them) and of the streams and run iterators still
+        open (see :func:`end_open_iterators`)."""
         registry = getattr(self, "_registry", None)
         if registry is not None:
             registry.end_all(time.monotonic() if until is None else until, outcome=SHUTDOWN)

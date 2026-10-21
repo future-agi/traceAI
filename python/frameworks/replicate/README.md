@@ -51,14 +51,16 @@ with status OK, the prediction id, the output and what the stream itself
 said, and **without `replicate.prediction.status`, `predict_time` or
 `gen_ai.usage.*`**. Nothing is requested after the stream and the package
 never starts a thread, so `force_flush()`, `shutdown()`, `uninstrument()`,
-interpreter exit and `fork()` wait for no read and no package thread. They
-still end, inside the call, the spans that are due: held create spans (see
+interpreter exit and `fork()` wait for no read and no package thread (a fork
+ends no span). `force_flush()`, `shutdown()`, `uninstrument()` and exit still
+end, inside the call, the spans that are due: held create spans (see
 [create, wait and cancel](#create-wait-and-cancel)) and those of streams
-dropped since the last traced call; with an exporter that runs inline
-(`SimpleSpanProcessor`) those spans are exported there, even by
-`force_flush(timeout_millis=0)`. A stream that stops before `done` (closed,
-dropped, cancelled, interrupted or failing) keeps the output it had received;
-see [errors and cancellation](#errors-and-cancellation). `replicate.run` and
+dropped since the last traced call, and `shutdown()` and exit also, as
+cancelled, the calls still running and the streams still open; with an
+exporter that runs inline (`SimpleSpanProcessor`) those spans are exported
+there, even by `force_flush(timeout_millis=0)`. A stream that stops before
+`done` (closed, dropped, cancelled, interrupted or failing) keeps the output
+it had received; see [errors and cancellation](#errors-and-cancellation). `replicate.run` and
 create + `wait()` spans have status and token counts either way (the client
 polls those predictions to the end itself).
 
@@ -121,7 +123,7 @@ caller's context (`_SUPPRESS_INSTRUMENTATION_KEY`) is not traced at all.
 | Call | Span |
 |---|---|
 | `Client.run`, `async_run` (and `replicate.run`) | One `replicate.run` span. The create request and the client's own polling run inside it and add no span. If the client returns an iterator, the span stays open until the iterator is exhausted, closed, or dropped. |
-| `Client.stream`, `async_stream` (and `replicate.stream`) | One `replicate.stream` span for the whole stream, not one per event. The client's stream is lazy: it sends nothing until it is first iterated, so the span starts at the first `next()` (as a child of the span that was current when you called `stream()`; `send()` / `asend()` step it as `next()` does, and `throw()` / `athrow()` end it with that error), and a stream that is never iterated has no span. The stream is complete at its `done` event; breaking out of the loop there and closing or dropping the stream is a completed stream (OK, with its output), not a cancellation. By default the span ends there, inside the `next()` / `__anext__()` that returns `done`, without status, `predict_time` or token counts (the event stream reports none). With `stream_reload_seconds` > 0 the prediction is then read once more in the background; see [the opt-in read after a stream](#the-opt-in-read-after-a-stream). A stream that raises, or is closed or dropped before `done`, makes no read. |
+| `Client.stream`, `async_stream` (and `replicate.stream`) | One `replicate.stream` span for the whole stream, not one per event. The client's stream is lazy: it sends nothing until it is first iterated, so the span starts at the first `next()` (as a child of the span that was current when you called `stream()`; `send()` / `asend()` step it as `next()` does, and `throw()` / `athrow()` end it with that error, except that `GeneratorExit`, `KeyboardInterrupt`, `SystemExit` and an asyncio or trio cancellation end it as cancelled), and a stream that is never iterated has no span. The stream is complete at its `done` event; breaking out of the loop there and closing or dropping the stream is a completed stream (OK, with its output), not a cancellation. By default the span ends there, inside the `next()` / `__anext__()` that returns `done`, without status, `predict_time` or token counts (the event stream reports none). With `stream_reload_seconds` > 0 the prediction is then read once more in the background; see [the opt-in read after a stream](#the-opt-in-read-after-a-stream). A stream that raises, or is closed or dropped before `done`, makes no read. |
 | `predictions.create`, `async_create`, also `models.predictions.create` and `deployments.predictions.create` | One `replicate.predictions.create` span. See [create, wait and cancel](#create-wait-and-cancel). |
 | `Prediction.wait`, `async_wait` | Ends the open create span of that prediction, or opens one `replicate.prediction.wait` span. A `wait()` on a prediction that is already finished makes no request and adds no span. |
 | `Prediction.cancel`, `async_cancel`, `predictions.cancel(id)`, `async_cancel(id)` | Ends the open create span of that prediction, or opens one `replicate.predictions.cancel` span. |
@@ -216,8 +218,12 @@ Its limits:
   Measured figures (the completion cost, loop latency with the read on, off
   and uninstrumented, `asyncio.run()` per call, a sustained rate with a slow
   inline exporter, and a fork with reads in flight), with the commit they
-  were measured at, are on the [Replicate integration page](https://docs.futureagi.com/docs/integrations/traceai/replicate);
-  they are measurements, not a latency guarantee.
+  were measured at, are in the Verification section of
+  [future-agi/traceAI#219](https://github.com/future-agi/traceAI/pull/219),
+  the pull request that adds this package, and will be on the Replicate page
+  of the Future AGI docs once
+  [future-agi/docs#1015](https://github.com/future-agi/docs/pull/1015) is
+  published; they are measurements, not a latency guarantee.
 - **Bounded.** `stream_reload_seconds` is a wall-time budget from the
   stream's end. The read is one request, and one more `poll_interval` later
   only when the prediction is not finished yet. It is never retried: a `429`
@@ -282,10 +288,10 @@ Its limits:
   thread and the finisher). That is export, not a wait for a read; an OTLP
   exporter that waits out its timeout against a collector that is down makes
   it minutes. A batch span processor (`register()`'s default) only queues the
-  spans there. A stream or run iterator still open at provider shutdown or
-  process exit also ends then as cancelled; one held open after
-  `uninstrument()` is not ended until it is dropped, the next traced call,
-  or exit.
+  spans there. A stream or run iterator still open, or a traced call still
+  running, at provider shutdown or process exit also ends then as
+  cancelled; a stream held open after `uninstrument()` is not ended until it
+  is dropped, the next traced call, or exit.
 - **Forks.** Before starting its workers, `instrument()` imports AnyIO's
   lazily loaded asyncio backend on your thread, so a package thread is never
   inside that import when a fork happens (which would leave the child its
@@ -349,9 +355,11 @@ The span stays open on the returned prediction:
   final status, output and duration are recorded however long the prediction
   runs. Only `shutdown()` on the provider (including the SIGTERM/SIGINT
   handler `register()` installs) or interpreter exit ends it earlier, as a
-  best effort: as of that moment, with the last status the client polled and
-  no output, so the span is exported before the processors stop. The call
-  still returns its result to you; it ends no second span.
+  best effort: as of that moment, as cancelled (ERROR `cancelled`,
+  `replicate.cancelled`, as every call still running then is), with the last
+  status the client polled and no output, so the span is exported before the
+  processors stop. The call still returns its result to you; it ends no
+  second span.
 - If neither is called, the span ends with the status the create response
   carried (`starting` or `processing`) and the time `create` returned. That
   happens at the first of: the next traced call after the prediction object
@@ -423,7 +431,7 @@ an object a traced `create` returned while it was not yet finished.
 | `input.value`, `input.mime_type` | The prediction `input` as JSON. |
 | `output.value`, `output.mime_type` | Text output: a list of text tokens is joined, and stream and iterator text events are concatenated, in order, including chunks that start like a URL (`https://`, `http://`, `data:`) and, in replicate 1.0.7, the `FileOutput` it makes of such a chunk (as its URL). Only when every element or event is a URL or a file is the output the file URL(s), as strings (a stream records only their count). A stream or iterator that stops before it completes (closed, dropped, cancelled, interrupted, an exception, or still open at shutdown or exit) records what it had yielded so far, under the same `TraceConfig` rules. |
 | `gen_ai.request.parameters` | JSON of the call options that were passed: `wait`, `stream`, `use_file_output`, `file_encoding_strategy`, `webhook_events_filter`; `webhook` / `webhook_completed` only as `true`. |
-| `replicate.cancelled` | `true` when the caller abandoned the call (closed or dropped an iterator, cancelled a task, Ctrl-C or `SystemExit` while iterating, or an iterator still open at shutdown or exit); an explicit `cancel()` is recorded as status `canceled`. See [errors and cancellation](#errors-and-cancellation). |
+| `replicate.cancelled` | `true` when the caller stopped the call (closed, dropped or `throw(GeneratorExit)` into an iterator, cancelled an asyncio task or trio scope, Ctrl-C or `SystemExit` during the call or while iterating) or the call was still running, or its iterator still open, at shutdown or exit; an explicit `cancel()` is recorded as status `canceled`. See [errors and cancellation](#errors-and-cancellation). |
 
 Token counts are recorded only as the prediction reports them; no cost is
 recorded.
@@ -476,18 +484,30 @@ recorded.
 - A prediction that ends `canceled` is a terminal state, not a failure: the
   span status is OK, with `replicate.prediction.status` = `canceled` and no
   exception event.
-- When the caller abandons the call — an `asyncio` task is cancelled, or a
-  stream/iterator is closed (`close()` / `aclose()`) or dropped before its
-  end (for a stream, before its `done` event) — the span ends once with
-  status ERROR, description `cancelled`, and `replicate.cancelled` = `true`,
-  without an exception event. Ctrl-C is recorded the same way wherever it
-  lands: a `KeyboardInterrupt` (or `SystemExit`) raised inside `next()` /
-  `__anext__()` ends the span as cancelled there, and one raised in your loop
-  body leaves the stream open, so it ends as cancelled when it is dropped or
-  at shutdown or exit. (Under `register()`, SIGINT runs its handler instead:
-  the provider shuts down, which ends a stream still open as cancelled.) A
-  stream closed or dropped before its first `next()` sent no request and has
-  no span.
+- When the caller stops the call — Ctrl-C (`KeyboardInterrupt`) or a
+  `SystemExit` while `run()`, a create, `wait()` or `cancel()` runs or inside
+  a stream's `next()` / `__anext__()`; a cancelled `asyncio` task or trio
+  cancel scope (`trio.Cancelled`, which anyio also raises under trio); a
+  stream/iterator closed (`close()` / `aclose()`, or `throw(GeneratorExit)`)
+  or dropped before its end (for a stream, before its `done` event) — the
+  span ends once with status ERROR, description `cancelled`, and
+  `replicate.cancelled` = `true`, without an exception event. Ctrl-C is
+  recorded the same way wherever it lands: one raised in your loop body
+  leaves the stream open, so it ends as cancelled when it is dropped or at
+  shutdown or exit. Only asyncio's and trio's cancellations are recognised;
+  another library's is recorded as an error. A stream closed or dropped
+  before its first `next()` sent no request and has no span. A `close()`
+  from another thread while one is inside `next()` is refused by the
+  generator (`ValueError: generator already executing`) and ends nothing:
+  the stream goes on in that thread, and so does its span.
+- A call still running, or a stream or run iterator still open, when the
+  provider shuts down (`shutdown()`, including the SIGTERM/SIGINT handler
+  `register()` installs) or the interpreter exits ends then, as cancelled,
+  so it is exported before the processors stop: a `run()` / `async_run()`
+  with the prediction it polled, a create with no prediction yet, a
+  `wait()` / `cancel()` with the last status the client polled, a stream with
+  the output it had received. When that call or iteration goes on (another
+  thread, or after a shutdown that does not exit), it ends no second span.
 - A stream or iterator that stops before it completes, for any of these
   reasons or an exception, keeps the output it had yielded so far
   (`output.value`, still subject to `hide_outputs`), so a text stream stays
@@ -549,8 +569,9 @@ async) ran with the read off (the default since round 4), on code from
 before rounds 6 and 7, which changed the default path too (open iterators at
 shutdown, streams first iterated in a forked child, and what a stream that
 stops early records). The eighth ran the package code of round 7 (commit
-`f0376ad`, imported from a `git archive` of it; the commits after it change
-this README only) with the read off, the default.
+`f0376ad`, imported from a `git archive` of it) with the read off, the
+default; round 8 changed the code after it (calls still running at shutdown
+or exit, and what a caller stop records).
 
 Stored in Future AGI and read back, one trace each:
 
@@ -667,7 +688,8 @@ including its skips. Trainings are not traced (checked with the stand-in).
 After the eighth session, what the stack stores for that project was
 scanned: every ClickHouse table found through `system.columns` (49 tables;
 read by project id, by trace id, or whole when small; spans with and without
-`FINAL`; views and dictionaries read those tables) and every Postgres
+`FINAL`; the 17 views, materialized views and dictionaries were listed, not
+read) and every Postgres
 `tracer_*` table. 154 rows were read from the 10 sources that had rows for
 the project. The API token appears 0 times (whole or its last 12
 characters), and there is no `r8_`, `Bearer`, `Authorization`, `/Users/`

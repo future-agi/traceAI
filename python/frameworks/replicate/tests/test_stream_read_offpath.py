@@ -501,7 +501,10 @@ def _assert_all_completed(traced, count):
 
 
 def test_200_concurrent_streams_on_threads_end_every_span_and_leave_no_read_running():
-    budget = 1.0
+    # Every read outlives this budget (CONCURRENT_READ_DELAY > budget +
+    # CONCURRENT_SLACK), so a loop that waited for its read would exit at
+    # least the budget after its last event.
+    budget = 2.0
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=budget) as traced:
         fake.read_delay = CONCURRENT_READ_DELAY  # every read outlives its budget
         clients = [_default_client(fake) for _ in range(CONCURRENT)]
@@ -526,7 +529,14 @@ def test_200_concurrent_streams_on_threads_end_every_span_and_leave_no_read_runn
             worker.join(60)
         streamed = time.monotonic()
         assert errors == []
-        assert max(tails) < 0.5, max(tails)
+        # No loop waited for its read: every tail is below the budget, and
+        # the typical one far below it. The bound is not tighter because 200
+        # threads contend for the GIL: on a shared 2-vCPU CI runner one loop
+        # exited 0.54 s after its last event (run 39587088349, when the
+        # budget here was 1 s and the bound 0.5 s) with no read on its path.
+        tails.sort()
+        assert tails[-1] < budget, tails[-1]
+        assert tails[len(tails) // 2] < budget / 4, tails[len(tails) // 2]
         # No flush: each span ends when its budget runs out, and each read is
         # cancelled at its deadline (its connection closed), not left running.
         assert _wait_for(lambda: len(traced.replicate_spans()) == CONCURRENT, budget + CONCURRENT_SLACK)

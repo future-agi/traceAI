@@ -33,6 +33,13 @@ Span model (TH-8320):
 * ``replicate.prediction.wait`` / ``replicate.predictions.cancel`` - wait or
   cancel on a prediction that has no open create span.
 
+A call the caller stops (Ctrl-C, a signal handler's ``sys.exit()``, a
+cancelled asyncio task or trio scope) ends as cancelled
+(``replicate.cancelled``), wherever that lands. A call still running when the
+provider shuts down or the interpreter exits (for example under the
+SIGTERM/SIGINT handler ``register()`` installs) is ended then, as cancelled
+and with what it knows, so it is exported before the processors stop.
+
 A call made while the caller has suppressed instrumentation
 (``_SUPPRESS_INSTRUMENTATION_KEY``) passes through untraced.
 
@@ -48,6 +55,7 @@ import contextvars
 import copy
 import logging
 import os
+import sys
 import threading
 import time
 import weakref
@@ -249,9 +257,11 @@ class _Call:
 
     def interrupt(self) -> None:
         """Shutdown or exit while the wait()/cancel() that claimed this span
-        still runs: end it now, with the prediction's last polled status and
-        no output. That call ends nothing when it returns later."""
-        self.finish()
+        still runs: end it now, as cancelled (as any call still running then
+        is, see :func:`end_open_iterators`), with the prediction's last
+        polled status and no output. That call ends nothing when it returns
+        later."""
+        self.finish(cancelled=True)
 
     def release(self, cancelled: bool) -> None:
         """For ``__del__``: queue the finish; never run span processors here.
@@ -420,9 +430,13 @@ _RELEASED: "collections.deque[Tuple[_Call, bool, int]]" = collections.deque()
 # Registries alive in this process; a forked child gets fresh locks and empty
 # registries (the spans they held are the parent's to end).
 _REGISTRIES: "weakref.WeakSet[PendingRegistry]" = weakref.WeakSet()
-# The calls of streams and run iterators handed to the caller and not
-# finished: one still open (referenced, neither completed nor dropped) at a
-# provider shutdown or interpreter exit ends then (see end_open_iterators).
+# The calls whose span is open and not held by a registry: a traced call
+# whose vendor code is still running (run, async_run, a create, a wait or a
+# cancel), and the streams and run iterators handed to the caller and not
+# finished. One still open at a provider shutdown or interpreter exit (a
+# call interrupted by register()'s SIGTERM/SIGINT handler, one running on
+# another thread, a referenced iterator neither completed nor dropped) ends
+# then, as cancelled (see end_open_iterators).
 _OPEN: "weakref.WeakSet[_Call]" = weakref.WeakSet()
 
 
@@ -433,25 +447,47 @@ def _after_fork_in_child() -> None:
         _guard(registry._reset_after_fork, None)
 
 
-def end_open_iterators() -> None:
-    """Provider shutdown and interpreter exit: end, as cancelled (as a drop
-    would), the span of every stream or run iterator whose iteration has
-    started and is still open, so it is exported before the processors stop.
-    A stream not iterated yet has no span and is left alone; a completed one
-    is its read's (see complete_stream). Iterating such a stream afterwards
-    works as before; its span has ended."""
-    drain_released()
-    for _ in range(3):  # another thread may add one while this copies the set
+def _open_calls() -> List[_Call]:
+    """The calls in ``_OPEN``. The weak references are copied with one
+    C-level ``list()`` of the underlying set, which no other Python thread
+    can interleave with; a garbage-collector callback that removes one
+    during the copy makes it retry."""
+    for _ in range(10):
         try:
-            calls = list(_OPEN)
+            references = list(_OPEN.data)
             break
         except RuntimeError:
             continue
     else:  # pragma: no cover
-        return
-    for call in calls:
+        return []
+    calls = []
+    for reference in references:
+        call = reference()
+        if call is not None:
+            calls.append(call)
+    return calls
+
+
+def end_open_iterators() -> None:
+    """Provider shutdown and interpreter exit: end, as cancelled (as a drop
+    would), the span of every call that is still running and of every stream
+    or run iterator whose iteration has started and is still open, so it is
+    exported before the processors stop. A call or iterator ended this way
+    keeps what it had (the prediction it polled, the output yielded so far).
+    A stream not iterated yet has no span and is left alone; a completed one
+    is its read's (see complete_stream). The call or the iteration goes on
+    as before when it resumes; its span has ended."""
+    drain_released()
+    for call in _open_calls():
         if call.started and not call.completed and not call.finished:
             _guard(lambda: call.finish(cancelled=True), None)
+
+
+def _running(call: _Call) -> None:
+    """While the vendor code of a traced call runs, a shutdown or an exit
+    ends its span (see end_open_iterators)."""
+    if call.started:
+        _guard(lambda: _OPEN.add(call), None)
 
 
 if hasattr(os, "register_at_fork"):
@@ -649,11 +685,42 @@ class PendingPrediction(wrapt.ObjectProxy):  # type: ignore[misc]
             _guard(lambda: call.release(cancelled=False), None)
 
 
-# Raised into the caller's own iteration by the caller's side (Ctrl-C, or a
-# signal handler's sys.exit()): recorded as the caller stopping the stream, as
-# when it lands in the loop body and the stream is then dropped or still open
-# at exit (replicate.cancelled), not as an error of the call.
-_CALLER_STOPS = (KeyboardInterrupt, SystemExit)
+# Raised into the caller's own call or iteration by the caller's side: Ctrl-C
+# (KeyboardInterrupt), a signal handler's sys.exit() (SystemExit), a close
+# delivered with throw(GeneratorExit), and the cancellation of the asyncio
+# task (CancelledError) or trio scope (trio.Cancelled, also what anyio raises
+# under trio) running it. Recorded as the caller stopping the call, as when
+# Ctrl-C lands in a loop body and the stream is then dropped or still open at
+# exit (replicate.cancelled), not as an error of the call.
+_CALLER_STOPS = (KeyboardInterrupt, SystemExit, GeneratorExit, asyncio.CancelledError)
+
+
+def _caller_stopped(error: BaseException) -> bool:
+    if isinstance(error, _CALLER_STOPS):
+        return True
+    trio = sys.modules.get("trio")  # only when the caller runs on trio
+    cancelled = getattr(trio, "Cancelled", None) if trio is not None else None
+    return isinstance(cancelled, type) and isinstance(error, cancelled)
+
+
+def _stopped(call: _Call, error: BaseException, **details: Any) -> None:
+    """End a call that raised: as cancelled when the caller stopped it,
+    otherwise with the error."""
+    if _caller_stopped(error):
+        call.finish(cancelled=True, **details)
+    else:
+        call.finish(error=error, **details)
+
+
+def _busy_elsewhere(iterator: Any, error: BaseException) -> bool:
+    """The vendor generator refused a close because another thread (or
+    task) is inside its ``next()`` / ``__anext__()`` at that moment; the
+    stream goes on there, and so does its span."""
+    if isinstance(error, ValueError) and "already executing" in _text(error):
+        return True
+    if isinstance(error, RuntimeError) and "already running" in _text(error):
+        return True
+    return bool(_guard(lambda: getattr(iterator, "gi_running", False), False))
 
 
 def _is_done(item: Any) -> bool:
@@ -670,16 +737,18 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     :func:`complete_stream` (at once, by default; with the opt-in read, when
     it returns, without holding up the caller); a ``close()``, a
     drop or an exception after ``done`` leaves it so. ``close()`` before that,
-    dropping it, or a ``KeyboardInterrupt`` / ``SystemExit`` inside ``next()``
-    (Ctrl-C lands there or in the loop body; both are the caller stopping):
-    ERROR ``cancelled`` with ``replicate.cancelled`` (a drop is queued, see
-    ``_RELEASED``, and keeps the drop time); a stream closed or dropped before
-    its first ``next()`` made no request and has no span. Another exception
-    before it: ERROR. Either way the span keeps the output yielded so far.
-    The span ends exactly once; ``close()``
-    closes the vendor generator (and its HTTP response) first and ends the
-    span after, even if that close raises. ``send()`` and ``throw()`` step
-    the stream as ``next()`` does.
+    dropping it, or a caller stop inside ``next()`` (``KeyboardInterrupt``,
+    ``SystemExit``, ``GeneratorExit`` from ``throw()``; Ctrl-C lands there or
+    in the loop body, and both are the caller stopping): ERROR ``cancelled``
+    with ``replicate.cancelled`` (a drop is queued, see ``_RELEASED``, and
+    keeps the drop time); a stream closed or dropped before its first
+    ``next()`` made no request and has no span. Another exception before it:
+    ERROR. Either way the span keeps the output yielded so far. The span
+    ends exactly once; ``close()`` closes the vendor generator (and its HTTP
+    response) first and ends the span after, even if that close raises,
+    except when the generator refused the close because another thread is
+    inside its ``next()``: the stream goes on there, and so does its span.
+    ``send()`` and ``throw()`` step the stream as ``next()`` does.
     """
 
     def __init__(
@@ -711,13 +780,9 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
         except StopIteration:
             complete_stream(call, self._self_collector, self._self_reads)
             raise
-        except _CALLER_STOPS:
-            if not call.completed:
-                call.finish(cancelled=True)
-            raise
         except BaseException as error:
             if not call.completed:
-                call.finish(error=error)
+                _stopped(call, error)
             raise
         _guard(lambda: self._self_collector.add(item), None)
         if call.stream and _guard(lambda: _is_done(item), False):
@@ -729,9 +794,12 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
         try:
             with call.activate():
                 self.__wrapped__.close()
-        finally:
-            if not call.completed:
+        except BaseException as error:
+            if not call.completed and not _busy_elsewhere(self.__wrapped__, error):
                 call.finish(cancelled=True)
+            raise
+        if not call.completed:
+            call.finish(cancelled=True)
 
     def __del__(self) -> None:
         call = _call_of(self)
@@ -772,13 +840,9 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
         except StopAsyncIteration:
             complete_stream(call, self._self_collector, self._self_reads, is_async=True)
             raise
-        except (asyncio.CancelledError,) + _CALLER_STOPS:
-            if not call.completed:
-                call.finish(cancelled=True)
-            raise
         except BaseException as error:
             if not call.completed:
-                call.finish(error=error)
+                _stopped(call, error)
             raise
         _guard(lambda: self._self_collector.add(item), None)
         if call.stream and _guard(lambda: _is_done(item), False):
@@ -790,9 +854,12 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
         try:
             with call.activate():
                 await self.__wrapped__.aclose()
-        finally:
-            if not call.completed:
+        except BaseException as error:
+            if not call.completed and not _busy_elsewhere(self.__wrapped__, error):
                 call.finish(cancelled=True)
+            raise
+        if not call.completed:
+            call.finish(cancelled=True)
 
     def __del__(self) -> None:
         call = _call_of(self)
@@ -889,6 +956,8 @@ class _Wrapper:
         """Finish a create span, or keep it open on the returned prediction."""
         try:
             call.observe(prediction)
+            if call.finished:
+                return prediction  # a shutdown or exit ended it while the create ran
             status = getattr(prediction, "status", None)
             prediction_id = getattr(prediction, "id", None)
             if status in TERMINAL_STATUSES or not isinstance(prediction_id, str) or not prediction_id:
@@ -897,6 +966,9 @@ class _Wrapper:
             call.snapshot = _guard(lambda: prediction_attributes(prediction), {})
             call.create_end = time.time_ns()
             self._registry.add(prediction_id, call)
+            # Held from here on: the registry ends it (as of create time) at a
+            # flush, a shutdown or an exit, not as a call still running.
+            _guard(lambda: _OPEN.discard(call), None)
             return PendingPrediction(prediction, call)
         except Exception:
             logger.debug("traceai-replicate: could not hold the create span", exc_info=True)
@@ -921,12 +993,13 @@ class RunWrapper(_Wrapper):
         call = self._start(wrapped, instance, args, kwargs, stream=self._stream, lazy=self._stream)
         if call is None:
             return wrapped(*args, **kwargs)
+        _running(call)  # a stream's call starts at its first next(), and is tracked from there
         try:
             with call.activate():
                 result = wrapped(*args, **kwargs)
         except BaseException as error:
             call.begin()
-            call.finish(error=error)
+            _stopped(call, error)
             raise
         return _finish_or_wrap(call, result, count_files=self._stream, reads=self._reads)
 
@@ -943,16 +1016,13 @@ class AsyncRunWrapper(RunWrapper):
         call = self._start(wrapped, instance, args, kwargs, stream=self._stream, lazy=self._stream)
         if call is None:
             return await wrapped(*args, **kwargs)
+        _running(call)
         try:
             with call.activate():
                 result = await wrapped(*args, **kwargs)
-        except asyncio.CancelledError:
-            call.begin()
-            call.finish(cancelled=True)
-            raise
         except BaseException as error:
             call.begin()
-            call.finish(error=error)
+            _stopped(call, error)
             raise
         return _finish_or_wrap(call, result, count_files=self._stream, reads=self._reads)
 
@@ -972,11 +1042,12 @@ class CreateWrapper(_Wrapper):
         call = self._start(wrapped, instance, args, kwargs)
         if call is None:
             return wrapped(*args, **kwargs)
+        _running(call)
         try:
             with call.activate():
                 prediction = wrapped(*args, **kwargs)
         except BaseException as error:
-            call.finish(error=error)
+            _stopped(call, error)
             raise
         return self._created(call, prediction)
 
@@ -996,14 +1067,12 @@ class AsyncCreateWrapper(_Wrapper):
         call = self._start(wrapped, instance, args, kwargs)
         if call is None:
             return await wrapped(*args, **kwargs)
+        _running(call)
         try:
             with call.activate():
                 prediction = await wrapped(*args, **kwargs)
-        except asyncio.CancelledError:
-            call.finish(cancelled=True)
-            raise
         except BaseException as error:
-            call.finish(error=error)
+            _stopped(call, error)
             raise
         return self._created(call, prediction)
 
@@ -1050,11 +1119,12 @@ class LifecycleWrapper(_LifecycleWrapper):
             call = self._start(wrapped, instance, args, kwargs)
             if call is None:
                 return wrapped(*args, **kwargs)
+        _running(call)
         try:
             with call.activate():
                 result = wrapped(*args, **kwargs)
         except BaseException as error:
-            call.finish(error=error, prediction=None if self._by_id else instance)
+            _stopped(call, error, prediction=None if self._by_id else instance)
             raise
         call.finish(prediction=self._after(instance, result))
         return result
@@ -1074,14 +1144,12 @@ class AsyncLifecycleWrapper(_LifecycleWrapper):
             call = self._start(wrapped, instance, args, kwargs)
             if call is None:
                 return await wrapped(*args, **kwargs)
+        _running(call)
         try:
             with call.activate():
                 result = await wrapped(*args, **kwargs)
-        except asyncio.CancelledError:
-            call.finish(cancelled=True, prediction=None if self._by_id else instance)
-            raise
         except BaseException as error:
-            call.finish(error=error, prediction=None if self._by_id else instance)
+            _stopped(call, error, prediction=None if self._by_id else instance)
             raise
         call.finish(prediction=self._after(instance, result))
         return result

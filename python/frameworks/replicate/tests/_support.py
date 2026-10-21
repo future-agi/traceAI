@@ -137,6 +137,9 @@ class FakeReplicate:
         self.read_trickle = 0.0
         self.read_disconnected: List[float] = []
         self.read_completed: List[float] = []
+        # Seconds a create (POST to a predictions route) waits before it
+        # answers, so a test can act while the create is in flight.
+        self.create_delay = 0.0
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -189,6 +192,8 @@ class FakeReplicate:
                 path = self._record(body)
                 parts = path.strip("/").split("/")
                 prefer_wait = "wait" in self.headers.get("Prefer", "")
+                if owner.create_delay and parts[-1] == "predictions":
+                    owner._release.wait(owner.create_delay)
                 if parts == ["v1", "predictions"]:
                     model = _VERSION_MODELS.get(body.get("version"), TEXT_MODEL)
                     self._json(201, owner._create(model, body, prefer_wait))

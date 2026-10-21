@@ -7,9 +7,11 @@ neither does a release of the prediction object: the call ends it once, when
 it returns or raises, with the final status, output and end time.
 
 Provider shutdown and interpreter exit (including the SIGTERM/SIGINT handler
-``register()`` installs) still end it as a best effort: as of then, with the
-prediction's last polled status and no output. The call returning later
-neither ends it again nor opens a wait span.
+``register()`` installs) still end it as a best effort: as of then, as
+cancelled (ERROR ``cancelled``, ``replicate.cancelled``; round 8: as every
+call still running then is), with the prediction's last polled status and
+no output. The call returning later neither ends it again nor opens a wait
+span.
 """
 
 from __future__ import annotations
@@ -334,7 +336,10 @@ def _assert_ended_once_at_shutdown(traced, ends, prediction_id, stopping, caplog
     values = attrs(span)
     assert values["replicate.prediction.status"] == "processing"  # the last polled status
     assert "output.value" not in values
-    assert span.status.status_code is StatusCode.OK
+    # Cut short by the shutdown, as every call still running then is.
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "cancelled"
+    assert values["replicate.cancelled"] is True
     assert span.end_time >= stopping  # as of the shutdown, not as of create
     # The call returning later neither ended the span again nor opened a
     # wait span (the processor sees ends even after the provider stopped).
@@ -518,5 +523,8 @@ def test_a_wait_still_running_at_sigterm_or_exit_is_exported_once(tmp_path, mode
     assert values["replicate.prediction.status"] == "processing"  # last polled, not "starting"
     assert "output.value" not in values
     assert "gen_ai.span.leaked" not in values
-    assert span["status"]["code"] == "STATUS_CODE_OK"
+    # Cut short by the shutdown or the exit, as every call still running then is.
+    assert span["status"]["code"] == "STATUS_CODE_ERROR"
+    assert span["status"]["message"] == "cancelled"
+    assert values["replicate.cancelled"] is True
     assert int(span["endTimeUnixNano"]) >= waiting_since  # as of the signal/exit

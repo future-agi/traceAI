@@ -11,16 +11,26 @@ All notable changes to `traceAI-replicate` will be documented here.
   id, the output and what the stream says (`replicate.stream.done_reason`: a `done` with reason `canceled` records
   status `canceled`; `replicate.stream.truncated` for a stream that ended without `done`). No request is made after
   a stream and no thread is ever started, so `force_flush()`, `shutdown()`, `uninstrument()`, interpreter exit and
-  `os.fork()` wait for no read and no package thread; they still end, inside the call, held create spans and the
-  spans of streams dropped since the last traced call (with an exporter that runs inline, exported there, also by
-  `force_flush(timeout_millis=0)`). A referenced stream or run iterator still open at provider shutdown or exit ends
-  then as cancelled. `replicate.run` and create + `wait()` spans have status and token counts either way.
+  `os.fork()` wait for no read and no package thread (a fork ends no span); `force_flush()`, `shutdown()`,
+  `uninstrument()` and exit still end, inside the call, held create spans and the spans of streams dropped since the
+  last traced call (with an exporter that runs inline, exported there, also by `force_flush(timeout_millis=0)`).
+  `replicate.run` and create + `wait()` spans have status and token counts either way.
+- A traced call still running (`run`, `async_run`, a create, `wait()` or `cancel()`), or a referenced stream or run
+  iterator still open, at provider shutdown (including the SIGTERM/SIGINT handler `register()` installs) or
+  interpreter exit ends then as cancelled (ERROR `cancelled`, `replicate.cancelled`), with what it knows, so it is
+  exported before the processors stop. Before, an in-flight `run()` / `async_run()` or create span was lost there, and
+  a running `wait()` ended OK with its last polled status.
 - A stream or run iterator that stops before it completes (closed, dropped, a cancelled task, Ctrl-C, an exception,
   or still open at shutdown or exit) keeps the output it had yielded (`output.value`, subject to `TraceConfig`), so a
   text stream stays `LLM`; its status is unchanged (ERROR `cancelled` with `replicate.cancelled` when the caller
   stopped it, ERROR with the error otherwise), as the OpenTelemetry GenAI conventions ask for partial streamed
-  output. A `KeyboardInterrupt` or `SystemExit` raised inside `next()` / `__anext__()` is recorded as the caller
-  stopping the stream (`replicate.cancelled`, no exception event), as one raised in the loop body is.
+  output.
+- The caller stopping a call is recorded the same way wherever it lands (ERROR `cancelled`, `replicate.cancelled`,
+  no exception event): a `KeyboardInterrupt` or `SystemExit` while `run()`, `async_run()`, a create, `wait()` or
+  `cancel()` runs or inside a stream's `next()` / `__anext__()` (as one raised in the loop body is), a cancelled
+  asyncio task or trio cancel scope (`trio.Cancelled`, also what anyio raises under trio), and
+  `throw(GeneratorExit)`. Other libraries' cancellations are recorded as errors. A `close()` the generator refuses
+  because another thread is inside its `next()` ends nothing; that stream ends its span.
 - Opt-in, `stream_reload_seconds` (above 0 to 10): the prediction is looked up once after `done`
   (`GET /v1/predictions/{id}`: no new prediction and no charge, but it counts toward the account's API rate limit;
   a non-final answer is looked up once more after `poll_interval`) for the final status, `predict_time` and token
@@ -90,7 +100,8 @@ All notable changes to `traceAI-replicate` will be documented here.
   ends or exports a span its parent holds.
 - Breaking out of a stream at `done` and then closing or dropping it is a completed stream (OK, with
   its output, and the read when it is on), not a cancellation. `send()` / `asend()` step a stream as
-  `next()` / `__anext__()` do, and `throw()` / `athrow()` end its span with that error. A
+  `next()` / `__anext__()` do, and `throw()` / `athrow()` end its span with that error (as cancelled for
+  `GeneratorExit`, `KeyboardInterrupt`, `SystemExit` and an asyncio or trio cancellation). A
   `KeyboardInterrupt` while a stream's span is completed at `done` still ends the span.
 - Output text keeps every chunk in order, including chunks that start like a URL (`https://`,
   `http://`, `data:`, or the `FileOutput` replicate 1.0.7 makes of them); output is file URLs (and a
