@@ -103,7 +103,7 @@ retrieval, tools, database work and response publishing between `inlet` and
 
 ## Live model verification (2026-10-19)
 
-Re-run against the real OpenAI API (`https://api.openai.com/v1`, `gpt-4o-mini`) as the Open WebUI model connection, instead of a local stand-in. Open WebUI 0.11.4 (`pip install open-webui==0.11.4`, Python 3.12), filter `futureagi_filter.py` version 0.3.0 installed through the Open WebUI API as in the install steps, local Future AGI as project `th8103-livefill-TH-8232`. 0.12.3 was not re-run.
+Re-run against the real OpenAI API (`https://api.openai.com/v1`, `gpt-4o-mini`) as the Open WebUI model connection, instead of a local stand-in. Open WebUI 0.11.4 (`pip install open-webui==0.11.4`, Python 3.12), filter `futureagi_filter.py` version 0.3.0 installed through the Open WebUI API as in the install steps, exporting to a project on a local Future AGI. 0.12.3 was not re-run.
 
 | Turn | Trace id in Observe | Result |
 | --- | --- | --- |
