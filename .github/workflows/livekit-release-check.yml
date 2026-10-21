@@ -1,0 +1,73 @@
+name: LiveKit release validation
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/livekit/**'
+      - '.github/workflows/livekit-release-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
+    defaults:
+      run:
+        working-directory: python/frameworks/livekit
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+      POETRY_INSTALLER_RE_RESOLVE: 'false'
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install release tools and locked package dependencies
+        run: |
+          python -m pip install poetry==2.1.2 twine
+          poetry install --no-interaction
+          poetry run pip install pytest==8.4.2 pytest-asyncio==0.24.0 pytest-mock==3.14.0
+      - name: Validate metadata and test LiveKit including real forkserver jobs
+        run: |
+          poetry check
+          poetry run pytest tests -ra --junitxml=release-tests.xml
+      - name: Build and check distributions
+        run: |
+          echo "PACKAGE_VERSION=$(poetry version -s)" >> "$GITHUB_ENV"
+          poetry build
+          python -m twine check --strict dist/*
+      - name: Install wheel in a clean environment and verify public API
+        run: |
+          python -m venv /tmp/livekit-wheel-smoke
+          /tmp/livekit-wheel-smoke/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/livekit-wheel-smoke/bin/python - <<'PY'
+          import os
+          from importlib.metadata import version
+          import traceai_livekit
+          from traceai_livekit import flush_on_job_shutdown
+          assert version('traceAI-livekit') == traceai_livekit.__version__ == os.environ['PACKAGE_VERSION']
+          assert callable(flush_on_job_shutdown)
+          print('Installed wheel version and public API verified')
+          PY
+          /tmp/livekit-wheel-smoke/bin/pip check
+      - name: Upload distributions and test results for review (no publishing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: traceai-livekit-python-${{ matrix.python }}
+          path: |
+            python/frameworks/livekit/dist/*
+            python/frameworks/livekit/release-tests.xml
+          if-no-files-found: error
