@@ -290,8 +290,10 @@ Its limits:
   it minutes. A batch span processor (`register()`'s default) only queues the
   spans there. A stream or run iterator still open, or a traced call still
   running, at provider shutdown or process exit also ends then as
-  cancelled; a stream held open after `uninstrument()` is not ended until it
-  is dropped, the next traced call, or exit.
+  cancelled. A stream still open at `uninstrument()` ends when it is closed
+  or completes; once dropped, it ends at the next traced call (only after
+  `instrument()` is called again) or at interpreter exit, and `force_flush()`
+  and `shutdown()` no longer end it.
 - **Forks.** Before starting its workers, `instrument()` imports AnyIO's
   lazily loaded asyncio backend on your thread, so a package thread is never
   inside that import when a fork happens (which would leave the child its
@@ -522,8 +524,10 @@ recorded.
   prediction), at the next traced call, the provider's `force_flush()` or
   `shutdown()`, `uninstrument()`, or interpreter exit. After
   `uninstrument()` the provider's methods are no longer hooked, so a stream
-  still open then and dropped later is ended only at interpreter exit; if
-  the provider was shut down before that, its span is not exported. Close
+  still open then and dropped later is not ended by `force_flush()` or
+  `shutdown()`: it ends at the next traced call (only after `instrument()` is
+  called again) or at interpreter exit; if the provider was shut down before
+  that, its span is not exported. Close
   such a stream (or run it to `done`) before `uninstrument()`.
 - An error inside this instrumentation is logged at DEBUG and never changes
   the client's result or exception.
