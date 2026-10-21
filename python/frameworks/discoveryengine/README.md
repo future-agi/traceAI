@@ -35,8 +35,7 @@ transport spans, which carry no query, result count or retriever kind.
 pip install traceAI-discoveryengine
 ```
 
-Until the first release reaches PyPI, install it from a checkout of this
-repository:
+To install from a checkout of this repository instead:
 
 ```bash
 pip install "fi-instrumentation-otel>=1.1.0" "google-cloud-discoveryengine>=0.20.5,<1" \
