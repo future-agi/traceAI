@@ -976,6 +976,7 @@ class FiLLMProviderValues(Enum):
     VERTEXAI = "vertexai"
     XAI = "xai"
     DEEPSEEK = "deepseek"
+    MINIMAX = "minimax"
 
 
 class ProjectType(Enum):
