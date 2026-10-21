@@ -369,13 +369,25 @@ def _output_item(item: Any) -> Tuple[str, Any]:
     return "other", _jsonable(item)
 
 
+def _is_text(items: List[Tuple[str, Any]]) -> bool:
+    """Text output: text and URL-like chunks only, at least one of them text.
+
+    A language model can emit a chunk that starts with ``https://``,
+    ``http://`` or ``data:`` (and replicate 1.0.7 turns such a chunk into a
+    ``FileOutput``): it is part of the text. Output is files only when every
+    chunk is a URL or a file.
+    """
+    kinds = {kind for kind, _ in items}
+    return "text" in kinds and kinds <= {"text", "url"}
+
+
 def output_attributes(output: Any) -> Dict[str, Any]:
     """Output type and value. Text is LLM output; URLs are kept as strings."""
     if output is None:
         return {}
     if isinstance(output, (list, tuple)):
         items = [_output_item(item) for item in output]
-        if items and all(kind == "text" for kind, _ in items):
+        if _is_text(items):
             return _output("text", "".join(value for _, value in items), TEXT)
         return _output("list", json.dumps([value for _, value in items], ensure_ascii=False), JSON)
     if isinstance(output, Mapping):
@@ -398,17 +410,19 @@ def span_kind(output: Dict[str, Any]) -> str:
 class OutputCollector:
     """Collects what a stream or an iterator yields, for one span.
 
-    Text is concatenated. With ``count_files`` (SSE streams, PRD J4.3) file
-    outputs are counted, not inlined; otherwise their URLs are listed, as for
-    a non-iterator ``run``.
+    Every text or URL chunk is kept, in order. When any of them is text, the
+    output is text: all of them joined in order, a URL-like chunk (or a
+    ``FileOutput``, as its URL) included, since a language model can emit a
+    chunk that starts with ``https://`` or ``data:``. Only when every chunk is
+    a URL or a file is the output files: with ``count_files`` (SSE streams,
+    PRD J4.3) they are counted, not inlined; otherwise their URLs are listed,
+    as for a non-iterator ``run``.
     """
 
-    __slots__ = ("_text", "_urls", "_files", "_count_files")
+    __slots__ = ("_items", "_count_files")
 
     def __init__(self, count_files: bool) -> None:
-        self._text: List[str] = []
-        self._urls: List[str] = []
-        self._files = 0
+        self._items: List[Tuple[str, Any]] = []
         self._count_files = count_files
 
     def add(self, item: Any) -> None:
@@ -418,25 +432,22 @@ class OutputCollector:
                 return
             item = item.data
         kind, value = _output_item(item)
-        if kind == "text":
-            self._text.append(value)
-        elif kind == "url":
-            self._files += 1
-            if not self._count_files:
-                self._urls.append(value)
+        if kind in ("text", "url"):
+            self._items.append((kind, value))
 
     def attributes(self) -> Dict[str, Any]:
-        attributes: Dict[str, Any] = {}
-        if self._text:
-            attributes.update(_output("text", "".join(self._text), TEXT))
-        elif self._files:
-            attributes[OUTPUT_TYPE] = "url" if self._files == 1 else "list"
-            if self._urls:
-                value = self._urls[0] if len(self._urls) == 1 else json.dumps(self._urls)
-                attributes[OUTPUT_VALUE] = value
-                attributes[OUTPUT_MIME_TYPE] = TEXT if len(self._urls) == 1 else JSON
-        if self._count_files and self._files:
-            attributes[STREAM_FILE_COUNT] = self._files
+        items = self._items
+        if not items:
+            return {}
+        if _is_text(items):
+            return _output("text", "".join(value for _, value in items), TEXT)
+        attributes: Dict[str, Any] = {OUTPUT_TYPE: "url" if len(items) == 1 else "list"}
+        if self._count_files:
+            attributes[STREAM_FILE_COUNT] = len(items)
+        else:
+            urls = [value for _, value in items]
+            attributes[OUTPUT_VALUE] = urls[0] if len(urls) == 1 else json.dumps(urls)
+            attributes[OUTPUT_MIME_TYPE] = TEXT if len(urls) == 1 else JSON
         return attributes
 
 

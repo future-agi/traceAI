@@ -74,6 +74,7 @@ from _support import (  # noqa: E402
     default_client,
     instrumented,
     make_client,
+    own_sends,
 )
 
 READ = "/v1/predictions/pred0001"
@@ -240,17 +241,9 @@ def test_a_plain_httpx_async_transport_is_read_through_the_package_pool():
         marks["main"] = time.monotonic()
         return events
 
-    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced, own_sends() as sent:
         fake.read_delay = 0.5
         transport = httpx.AsyncHTTPTransport(retries=2)
-        seen = []
-        original = transport.handle_async_request
-
-        async def recording(request):
-            seen.append((request.method, request.url.path))
-            return await original(request)
-
-        transport.handle_async_request = recording
         client = replicate.Client(api_token=API_TOKEN, base_url=fake.origin, transport=transport)
         events = asyncio.run(main(client))
         returned = time.monotonic() - marks["main"]
@@ -260,7 +253,7 @@ def test_a_plain_httpx_async_transport_is_read_through_the_package_pool():
     assert _texts(events) == STREAM_CHUNKS
     assert returned < 0.25, returned
     assert reads == [READ]
-    assert ("GET", READ) not in seen  # not through the caller's transport or pool
+    assert sent == [("GET", READ)]  # the one read went through the package's pool, not the caller's
     _final(_completed(traced.one()))
 
 

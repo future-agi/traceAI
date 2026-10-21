@@ -265,13 +265,16 @@ class _Call:
             self._write(prediction, output, collector, error, cancelled, use_snapshot, extra)
         except Exception:
             logger.debug("traceai-replicate: could not complete the span", exc_info=True)
-        try:
-            self.span.end(end_time=end_time)
-        except Exception:
-            logger.debug("traceai-replicate: could not end the span", exc_info=True)
-        callback = self.on_finish
-        if callback is not None:
-            _guard(lambda: callback(self), None)
+        finally:
+            # Also when a KeyboardInterrupt lands while the attributes are
+            # written: this finish() owns the end, and no later one ends it.
+            try:
+                self.span.end(end_time=end_time)
+            except Exception:
+                logger.debug("traceai-replicate: could not end the span", exc_info=True)
+            callback = self.on_finish
+            if callback is not None:
+                _guard(lambda: callback(self), None)
 
     # -- attribute writing -----------------------------------------------------------
 
@@ -611,7 +614,8 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     dropped before its first ``next()`` made no request and has no span. An
     exception before it: ERROR. The span ends exactly once; ``close()``
     closes the vendor generator (and its HTTP response) first and ends the
-    span after, even if that close raises.
+    span after, even if that close raises. ``send()`` and ``throw()`` step
+    the stream as ``next()`` does.
     """
 
     def __init__(
@@ -626,11 +630,20 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
         return self
 
     def __next__(self) -> Any:
+        return self._step(next, self.__wrapped__)
+
+    def send(self, value: Any) -> Any:
+        return self._step(self.__wrapped__.send, value)
+
+    def throw(self, *args: Any) -> Any:
+        return self._step(self.__wrapped__.throw, *args)
+
+    def _step(self, advance: Callable[..., Any], *args: Any) -> Any:
         call = self._self_call
         call.begin()
         try:
             with call.activate():
-                item = next(self.__wrapped__)
+                item = advance(*args)
         except StopIteration:
             complete_stream(call, self._self_collector, self._self_reads)
             raise
@@ -659,7 +672,8 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
 
 
 class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
-    """The async twin of :class:`TracedIterator`; ``aclose()`` ends the span."""
+    """The async twin of :class:`TracedIterator`; ``aclose()`` ends the span,
+    and ``asend()`` / ``athrow()`` step the stream as ``__anext__()`` does."""
 
     def __init__(
         self, iterator: Any, call: _Call, collector: OutputCollector, reads: Optional[StreamReads] = None
@@ -673,11 +687,20 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
         return self
 
     async def __anext__(self) -> Any:
+        return await self._step(self.__wrapped__.__anext__)
+
+    async def asend(self, value: Any) -> Any:
+        return await self._step(self.__wrapped__.asend, value)
+
+    async def athrow(self, *args: Any) -> Any:
+        return await self._step(self.__wrapped__.athrow, *args)
+
+    async def _step(self, advance: Callable[..., Any], *args: Any) -> Any:
         call = self._self_call
         call.begin()
         try:
             with call.activate():
-                item = await self.__wrapped__.__anext__()
+                item = await advance(*args)
         except StopAsyncIteration:
             complete_stream(call, self._self_collector, self._self_reads, is_async=True)
             raise

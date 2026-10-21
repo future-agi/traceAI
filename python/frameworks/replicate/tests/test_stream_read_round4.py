@@ -78,6 +78,7 @@ from _support import (  # noqa: E402
     default_client,
     instrumented,
     make_client,
+    own_sends,
 )
 
 READ = "/v1/predictions/pred0001"
@@ -666,7 +667,6 @@ def test_with_the_read_on_a_proxied_transport_is_not_read_through():
 
 @pytest.mark.parametrize("kind", ["default", "HTTPTransport", "HTTPTransport-retries", "AsyncHTTPTransport-retries"])
 def test_with_the_read_on_plain_transports_are_read_through_the_package_pool(kind):
-    seen = []
     transport = None
     if kind == "HTTPTransport":
         transport = httpx.HTTPTransport()
@@ -674,27 +674,11 @@ def test_with_the_read_on_plain_transports_are_read_through_the_package_pool(kin
         transport = httpx.HTTPTransport(retries=1)
     elif kind == "AsyncHTTPTransport-retries":
         transport = httpx.AsyncHTTPTransport(retries=2)
-    if isinstance(transport, httpx.HTTPTransport):
-        original = transport.handle_request
-
-        def recording(request):
-            seen.append((request.method, request.url.path))
-            return original(request)
-
-        transport.handle_request = recording  # on the instance: still a plain HTTPTransport
-    elif transport is not None:
-        original_async = transport.handle_async_request
-
-        async def arecording(request):
-            seen.append((request.method, request.url.path))
-            return await original_async(request)
-
-        transport.handle_async_request = arecording
 
     async def consume(client):
         return [event async for event in await client.async_stream(STREAM_MODEL, input={})]
 
-    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced, own_sends() as sent:
         options = {} if transport is None else {"transport": transport}
         client = default_client(fake, **options)
         if kind.startswith("Async"):
@@ -706,7 +690,7 @@ def test_with_the_read_on_plain_transports_are_read_through_the_package_pool(kin
 
     assert _texts(events) == STREAM_CHUNKS
     assert _reads(fake) == [READ]  # the read reached the API
-    assert ("GET", READ) not in seen  # through the package's pool, never the caller's transport
+    assert sent == [("GET", READ)]  # through the package's pool, never the caller's transport
     values = _completed(span)
     _final(values)
     assert "replicate.stream.read" not in values

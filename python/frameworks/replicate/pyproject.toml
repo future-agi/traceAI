@@ -28,6 +28,8 @@ wrapt = ">=1.15.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
+# An HTTP mock the opt-in read after a stream must not go through (tests/test_review_round5.py).
+respx = ">=0.21.1"
 
 [build-system]
 requires = ["poetry-core"]

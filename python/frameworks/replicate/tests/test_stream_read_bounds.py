@@ -67,6 +67,7 @@ from _support import (  # noqa: E402
     default_client,
     instrumented,
     make_client,
+    own_sends,
 )
 
 READ = "/v1/predictions/pred0001"
@@ -412,25 +413,14 @@ def test_a_hundred_concurrent_trickling_reads_are_all_over_soon_after_their_dead
 
 
 def test_with_replicates_own_transport_the_read_does_not_use_the_callers_pool():
-    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced, own_sends() as sent:
         client = _default_client(fake)
-        events = iter(client.stream(STREAM_MODEL, input={}))
-        first = next(events)  # the client has built its sync httpx client now
-        inner = client._client._transport._wrapped_transport
-        seen = []
-        original = inner.handle_request
-
-        def recording(request):
-            seen.append((request.method, request.url.path))
-            return original(request)
-
-        inner.handle_request = recording
-        rest = list(events)
+        events = list(client.stream(STREAM_MODEL, input={}))
         traced.settle()
 
-    assert _texts([first] + rest) == STREAM_CHUNKS
-    assert READ in fake.paths("GET")  # the read happened
-    assert ("GET", READ) not in seen  # through the package's pool, not the caller's
+    assert _texts(events) == STREAM_CHUNKS
+    assert [path for path in fake.paths("GET") if path == READ] == [READ]  # one read reached the API
+    assert sent == [("GET", READ)]  # sent through the package's pool, not the caller's
     _final(attrs(traced.one()))
 
 

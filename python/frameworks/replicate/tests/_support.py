@@ -52,6 +52,10 @@ STREAM_TRUNCATED_MODEL = "acme/stream-truncated-model"
 STREAM_CANCELED_MODEL = "acme/stream-canceled-model"
 # urls.stream: ``done``; the prediction is then "aborted".
 STREAM_ABORTED_MODEL = "acme/stream-aborted-model"
+# urls.stream: text events, some of which start like a URL, then done.
+STREAM_URL_TEXT_MODEL = "acme/stream-url-text-model"
+# output: URL_TEXT_CHUNKS (an iterator with URL_TEXT_VERSION).
+URL_TEXT_MODEL = "acme/url-text-model"
 DEPLOYMENT = "acme/text-deployment"  # runs TEXT_MODEL
 # An official model: version "hidden", text output, token counts in metrics,
 # streams like the live meta/meta-llama-3-8b-instruct (output x3, then done {}).
@@ -60,6 +64,7 @@ HIDDEN_VERSION = "hidden"
 
 TEXT_VERSION = "5c7d5dc6dd8bf75c1acaa8565735e7986bc5b66206b55cca93cb72c9bf15ccaa"
 ITERATOR_VERSION = "iter0000000000000000000000000000000000000000000000000000000000ab"
+URL_TEXT_VERSION = "urlt0000000000000000000000000000000000000000000000000000000000cd"
 
 PROMPT = "PROMPT-CONTENT-MARKER"
 TEXT_TOKENS = ["OUTPUT-", "TEXT-", "MARKER"]
@@ -69,6 +74,9 @@ FILE_URLS = [FILE_URL, "https://files.example.invalid/OUTPUT-FILE-MARKER-2.png"]
 MODEL_ERROR = "MODEL-ERROR-MARKER: CUDA out of memory; contact ops@example.com"
 STREAM_CHUNKS = ["STREAM-", "TEXT-", "MARKER"]
 STREAM_TEXT = "".join(STREAM_CHUNKS)
+# A language model's text whose chunks start like URLs: text, not files.
+URL_TEXT_CHUNKS = ["See ", "https://", "example.com", " and ", "data:", "x", " end"]
+URL_TEXT = "".join(URL_TEXT_CHUNKS)
 STREAM_ERROR = "STREAM-ERROR-MARKER"
 DATA_PAYLOAD = base64.b64encode(b"DATA-URI-BYTES-MARKER" * 8).decode("ascii")
 DATA_URI = "data:image/png;base64," + DATA_PAYLOAD
@@ -80,7 +88,7 @@ CONTENT_MARKERS = (PROMPT, TEXT_OUTPUT, "OUTPUT-FILE-MARKER", MODEL_ERROR, STREA
 
 TERMINAL = ("succeeded", "failed", "canceled", "aborted")
 
-_VERSION_MODELS = {TEXT_VERSION: TEXT_MODEL, ITERATOR_VERSION: TEXT_MODEL}
+_VERSION_MODELS = {TEXT_VERSION: TEXT_MODEL, ITERATOR_VERSION: TEXT_MODEL, URL_TEXT_VERSION: URL_TEXT_MODEL}
 
 
 class _QuietServer(ThreadingHTTPServer):
@@ -325,6 +333,8 @@ class FakeReplicate:
             return DATA_URI if done else None
         if prediction.model == FAIL_MODEL:
             return None
+        if prediction.model == URL_TEXT_MODEL:
+            return list(URL_TEXT_CHUNKS) if done else URL_TEXT_CHUNKS[:1]
         return list(TEXT_TOKENS) if done else TEXT_TOKENS[:1]
 
     @staticmethod
@@ -371,6 +381,9 @@ class FakeReplicate:
         if prediction.model == STREAM_FILE_MODEL:
             outputs = [event("output", i, url) for i, url in enumerate(FILE_URLS)]
             return outputs + [event("done", 9, "{}")]
+        if prediction.model == STREAM_URL_TEXT_MODEL:
+            outputs = [event("output", i, chunk) for i, chunk in enumerate(URL_TEXT_CHUNKS)]
+            return outputs + [event("done", 9, "{}")]
         outputs = [event("output", i, chunk) for i, chunk in enumerate(STREAM_CHUNKS)]
         if prediction.model == STREAM_ERROR_MODEL:
             return outputs[:1] + [event("error", 8, STREAM_ERROR)]
@@ -411,7 +424,7 @@ class FakeReplicate:
 
 
 def _version_json(version_id: str) -> Dict[str, Any]:
-    if version_id == ITERATOR_VERSION:
+    if version_id in (ITERATOR_VERSION, URL_TEXT_VERSION):
         output = {"type": "array", "items": {"type": "string"}, "x-cog-array-type": "iterator"}
     else:
         output = {"type": "array", "items": {"type": "string"}}
@@ -593,6 +606,29 @@ def instrumented(**options: Any) -> Iterator[Traced]:
             settle_stream_reads()
         finally:
             instrumentor.uninstrument()
+
+
+@contextlib.contextmanager
+def own_sends() -> Iterator[List[Tuple[str, str]]]:
+    """Record each request the opt-in read sends through the package's own
+    pool (its only way out). With the stand-in counting what it receives, a
+    read the stand-in got and this recorded was not sent by the caller's
+    transport, which a test leaves exactly as it is (a transport changed on
+    the instance gets no read)."""
+    from traceai_replicate import _stream_read
+
+    original = _stream_read._send_own
+    sent: List[Tuple[str, str]] = []
+
+    async def recording(entry: Any, request: httpx.Request) -> Any:
+        sent.append((request.method, request.url.path))
+        return await original(entry, request)
+
+    _stream_read._send_own = recording
+    try:
+        yield sent
+    finally:
+        _stream_read._send_own = original
 
 
 def attrs(span: ReadableSpan) -> Dict[str, Any]:

@@ -21,23 +21,27 @@ finisher only ends spans, so an exporter that runs inline delays span ends,
 never the start of a read.
 
 The read goes only through a connection pool this package owns, on the read
-loop, with the caller's base URL and headers, and only when that pool can be
-built the way the caller's would be:
-
-* the client built its transport itself (no ``transport=`` or ``mounts=``
-  passed to ``replicate.Client``): with the client's proxy options;
-* the transport for the API URL is a plain ``httpx.HTTPTransport`` /
-  ``AsyncHTTPTransport`` without a proxy (below replicate's own
-  ``RetryTransport`` layers): with that transport's TLS context, HTTP
-  versions, local address, socket options and connect retries (see
-  :func:`_plain_settings`); the caller's pool itself is not used.
+loop, with the caller's base URL and headers, and only when the transport the
+caller's client uses for the API URL is exactly replicate's own
+``RetryTransport`` layers over exactly a plain ``httpx.HTTPTransport`` /
+``AsyncHTTPTransport`` with a plain connection pool: no proxy, no subclass,
+nothing set on an instance (see :func:`_read_routing`). The package's pool
+is then built with the client's options (replicate built the transport) or
+with that transport's TLS context, HTTP versions, local address, socket
+options and connect retries (see :func:`_plain_settings`); the caller's pool
+itself is not used.
 
 Any other transport (a custom, mock, recording, stateful, proxied or
-subclassed one) is never called for the read: the read is skipped and the
-span says so (``replicate.stream.read`` = ``skipped``,
-``replicate.stream.skip_reason`` = ``custom_transport``). So the read never
-runs on the caller's thread or event loop and never takes or consumes
-anything of the caller's transport. The budget is an absolute deadline: at
+subclassed one, or one changed on the instance) is never called for the
+read: the read is skipped and the span says so (``replicate.stream.read`` =
+``skipped``, ``replicate.stream.skip_reason`` = ``custom_transport``). The
+read is skipped too (``patched_http``) while httpx's or httpcore's send path
+is replaced on the class (respx, pytest-httpx, VCR.py, ``mock.patch``; see
+:func:`send_path_patched`), since such a mock would see the package's own
+request and could answer it with a response the app scripted for itself.
+opentelemetry-instrumentation-httpx's wrappers are the one change allowed.
+So the read never runs on the caller's thread or event loop, never calls the
+caller's transport and never goes through an HTTP mock. The budget is an absolute deadline: at
 the deadline the task is cancelled (an anyio cancel scope, see
 :func:`_within`), which closes its connection. Name lookups run on at most
 ``_MAX_RESOLVERS`` daemon threads, with at most ``_MAX_RESOLVE_JOBS``
@@ -73,6 +77,7 @@ import queue
 import re
 import socket
 import ssl
+import sys
 import threading
 import time
 import types
@@ -80,6 +85,7 @@ import zlib
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
 
 import httpx
+import wrapt
 from opentelemetry import context as context_api
 
 try:  # httpcore's asyncio backend is anyio, so httpx's async side always has it
@@ -151,9 +157,10 @@ _FINISHING_WAIT_SECONDS = _FORK_WAIT_SECONDS
 _PREDICTION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 # What the span uses from the read; its input, output and logs are not kept.
 _PREDICTION_FIELDS = ("id", "status", "version", "model", "metrics", "error")
-# replicate.Client options that change where a request is sent (proxies, and
-# the TLS settings of a proxy transport); the package's own client copies them.
-_ROUTING_OPTIONS = ("proxy", "proxies", "trust_env", "verify", "cert", "http1", "http2")
+# replicate.Client options its httpx client is built with besides the
+# transport (a client with a proxy gets no read, see _read_routing); the
+# package's own client copies them.
+_ROUTING_OPTIONS = ("trust_env", "verify", "cert", "http1", "http2")
 # What a plain httpx transport is built with, copied into the package's own.
 _PLAIN_SETTINGS = (
     ("verify", "_ssl_context"),
@@ -183,6 +190,7 @@ UNINSTRUMENTED = "uninstrumented"  # uninstrument() ended it before the read ret
 
 # replicate.stream.skip_reason values (with replicate.stream.read = skipped).
 CUSTOM_TRANSPORT = "custom_transport"  # a transport other than replicate's own or a plain httpx one
+PATCHED_HTTP = "patched_http"  # httpx's or httpcore's send path is replaced on the class (an HTTP mock)
 AT_CAPACITY = "at_capacity"  # 64 stream spans waiting, or 64 reads live
 NO_PROVIDER_HOOK = "no_provider_hook"  # the provider's force_flush/shutdown could not be hooked
 AFTER_UNINSTRUMENT = "after_uninstrument"  # the stream completed after uninstrument()
@@ -193,6 +201,7 @@ START_FAILED = "start_failed"  # planning or starting the read raised
 INTERRUPTED = "interrupted"  # a KeyboardInterrupt (any BaseException) while it was planned
 SKIP_REASONS = (
     CUSTOM_TRANSPORT,
+    PATCHED_HTTP,
     AT_CAPACITY,
     NO_PROVIDER_HOOK,
     AFTER_UNINSTRUMENT,
@@ -433,11 +442,28 @@ class _Body:
 # -- transports ---------------------------------------------------------------------------
 
 
+def _overridden(instance: Any) -> bool:
+    """``handle_request`` / ``handle_async_request`` set on the instance itself
+    (``mock.patch.object(transport, "handle_request")``, a recording wrapper):
+    what it sends is no longer the class's."""
+    try:
+        own = vars(instance)
+    except TypeError:
+        return False
+    return "handle_request" in own or "handle_async_request" in own
+
+
 def _is_retry_transport(transport: Any) -> bool:
-    return any(
-        kind.__name__ == "RetryTransport" and kind.__module__.startswith("replicate")
-        for kind in type(transport).__mro__
-    ) and hasattr(transport, "_wrapped_transport")
+    """Exactly replicate's own ``RetryTransport`` (not a subclass of it, whose
+    code is the caller's), unchanged on the instance."""
+    module = sys.modules.get("replicate.client")
+    kind = getattr(module, "RetryTransport", None)
+    return (
+        kind is not None
+        and type(transport) is kind
+        and hasattr(transport, "_wrapped_transport")
+        and not _overridden(transport)
+    )
 
 
 def _unwrap_retries(transport: Any) -> Any:
@@ -454,10 +480,11 @@ def _unwrap_retries(transport: Any) -> Any:
 
 def _plain_settings(transport: Any) -> Optional[Tuple[Tuple[str, Any], ...]]:
     """What to build the package's own transport with, for a plain
-    ``httpx.HTTPTransport`` / ``AsyncHTTPTransport`` (exactly that class, so
-    nothing overrides how it sends) whose pool is a plain connection pool (no
-    proxy): its TLS context, HTTP versions, connect retries, local address,
-    Unix socket and socket options. None for any other transport."""
+    ``httpx.HTTPTransport`` / ``AsyncHTTPTransport`` (exactly that class, and
+    nothing set on the instance, so nothing overrides how it sends) whose pool
+    is a plain connection pool (no proxy, nothing set on it): its TLS
+    context, HTTP versions, connect retries, local address, Unix socket and
+    socket options. None for any other transport."""
     if httpcore is None or type(transport) not in (httpx.HTTPTransport, httpx.AsyncHTTPTransport):
         return None
     pool = getattr(transport, "_pool", None)
@@ -468,6 +495,8 @@ def _plain_settings(transport: Any) -> Optional[Tuple[Tuple[str, Any], ...]]:
     )
     if type(pool) not in plain_pools or getattr(pool, "_proxy", None) is not None:
         return None  # HTTPProxy and SOCKSProxy pools subclass the plain ones
+    if _overridden(transport) or _overridden(pool):
+        return None
     if not all(name in _ASYNC_TRANSPORT_PARAMETERS for name, _ in _PLAIN_SETTINGS):
         return None  # an httpx too old to build the same transport
     try:
@@ -493,15 +522,114 @@ def _routing(client: Any) -> Tuple[Tuple[str, Any], ...]:
 
 def _read_routing(client: Any, http: Any, url: httpx.URL) -> Optional[Tuple[str, Tuple[Tuple[str, Any], ...]]]:
     """How the package's own pool reaches the API for this client, or None
-    when it cannot be built the way the caller's is (any transport other than
-    replicate's own or a plain httpx one): then no read is made."""
-    options = getattr(client, "_client_kwargs", None) or {}
-    if options.get("transport") is None and not options.get("mounts"):
-        return ("client", _routing(client))
+    when it cannot be built the way the caller's is: then no read is made.
+
+    The transport the caller's client uses for the API URL must be
+    replicate's own ``RetryTransport`` layers over a plain httpx transport
+    without a proxy (see :func:`_plain_settings`). So a ``transport=`` or
+    ``mounts=`` of the caller's own, a subclass, a transport changed on the
+    instance, and a proxy (``replicate.Client(proxy=...)`` mounts a proxy
+    transport for every URL) all get no read. When replicate built the
+    transport itself, the package's pool is built with the same client
+    options; otherwise with that transport's settings.
+    """
     settings = _plain_settings(_unwrap_retries(http._transport_for_url(url)))
     if settings is None:
         return None
+    options = getattr(client, "_client_kwargs", None) or {}
+    if options.get("transport") is None and not options.get("mounts"):
+        return ("client", _routing(client))
     return ("transport", settings)
+
+
+# -- httpx and httpcore as they ship ---------------------------------------------------------------
+
+# What the read's own send runs through (and the sync twins, which an app's
+# HTTP mock patches together with them). A test double that replaces one of
+# these on the class (respx, pytest-httpx, VCR.py, ``mock.patch``) would see
+# the package's read and could answer it with a response the app scripted
+# for its own code, so then no read is made.
+_SEND_PATH = (
+    ("httpx", "AsyncClient", ("send", "_send_handling_auth", "_send_handling_redirects", "_send_single_request", "_transport_for_url")),
+    ("httpx", "Client", ("send", "_send_handling_auth", "_send_handling_redirects", "_send_single_request", "_transport_for_url")),
+    ("httpx", "AsyncHTTPTransport", ("handle_async_request",)),
+    ("httpx", "HTTPTransport", ("handle_request",)),
+    ("httpcore", "AsyncConnectionPool", ("handle_async_request",)),
+    ("httpcore", "ConnectionPool", ("handle_request",)),
+    ("httpcore", "AsyncHTTPConnection", ("handle_async_request",)),
+    ("httpcore", "HTTPConnection", ("handle_request",)),
+)
+# opentelemetry-instrumentation-httpx wraps the transports' send on the class
+# with wrapt; it opens no span while instrumentation is suppressed, as it is
+# for the read.
+_ALLOWED_WRAPPERS = ("opentelemetry.instrumentation.httpx",)
+_MISSING = object()
+
+
+def _package_root(module: Any) -> Optional[str]:
+    path = getattr(module, "__file__", None)
+    return os.path.dirname(os.path.abspath(path)) + os.sep if isinstance(path, str) else None
+
+
+def _send_path_slots() -> Tuple[Tuple[Any, str, str], ...]:
+    slots = []
+    for package_name, class_name, names in _SEND_PATH:
+        package = httpx if package_name == "httpx" else httpcore
+        owner = getattr(package, class_name, None)
+        root = _package_root(package)
+        if owner is None or root is None:
+            continue
+        slots.extend((owner, name, root) for name in names)
+    return tuple(slots)
+
+
+_SEND_SLOTS = _send_path_slots()
+
+
+def _class_attribute(owner: Any, name: str) -> Any:
+    """``name`` as the class has it, unbound (as a patch leaves it)."""
+    for kind in owner.__mro__:
+        if name in kind.__dict__:
+            return kind.__dict__[name]
+    return _MISSING
+
+
+def _as_shipped(function: Any, name: str, root: str, depth: int = 0) -> bool:
+    """``function`` is the library's own ``name``: a plain function compiled
+    from a file of that package (a ``functools.wraps`` copy is not: its code
+    is the patcher's), or opentelemetry-instrumentation-httpx's wrapt wrapper
+    around one."""
+    if type(function) is types.FunctionType:
+        code = function.__code__
+        return code.co_name == name and os.path.abspath(code.co_filename).startswith(root)
+    if depth < 4 and isinstance(function, wrapt.FunctionWrapper):
+        wrapper = getattr(function, "_self_wrapper", None)
+        module = getattr(getattr(wrapper, "func", wrapper), "__module__", None) or ""
+        if module.startswith(_ALLOWED_WRAPPERS):
+            return _as_shipped(function.__wrapped__, name, root, depth + 1)
+    return False
+
+
+_SHIPPED_CACHE: List[Any] = [None]  # the attributes last found as shipped
+
+
+def send_path_patched() -> bool:
+    """True when httpx's or httpcore's send path has been replaced on the
+    class (an HTTP mock is active): then the read is not made. Checked when a
+    stream completes and again on the read loop just before each request."""
+    try:
+        current = tuple(_class_attribute(owner, name) for owner, name, _ in _SEND_SLOTS)
+        cached = _SHIPPED_CACHE[0]
+        if cached is not None and len(cached) == len(current) and all(a is b for a, b in zip(cached, current)):
+            return False
+        for (_, name, root), function in zip(_SEND_SLOTS, current):
+            if function is not _MISSING and not _as_shipped(function, name, root):
+                return True
+        _SHIPPED_CACHE[0] = current
+        return False
+    except Exception:  # pragma: no cover - unknown: no read
+        logger.debug("traceai-replicate: could not check httpx's send path", exc_info=True)
+        return True
 
 
 # -- one read ------------------------------------------------------------------------------
@@ -685,7 +813,12 @@ class _Read:
 
 
 async def _send_own(entry: _Read, request: httpx.Request) -> Optional[Dict[str, Any]]:
-    """Through the package's own pool, on the package's loop."""
+    """Through the package's own pool, on the package's loop; not sent when
+    an HTTP mock has replaced httpx's send path since the stream completed."""
+    if send_path_patched():
+        entry.outcome = entry.outcome or SKIPPED
+        entry.skip_reason = entry.skip_reason or PATCHED_HTTP
+        return None
     own = _own_client(entry.state, entry.routing)
     own.reads += 1
     try:
@@ -1086,6 +1219,8 @@ def _plan(
     http = vars(client).get(_ASYNC_HTTP if is_async else _SYNC_HTTP) if client is not None else None
     if http is None or http.is_closed:
         return CLIENT_CLOSED
+    if send_path_patched():
+        return PATCHED_HTTP
     url = _read_url(http, prediction_id)
     routing = _read_routing(client, http, url)
     if routing is None:
@@ -1125,8 +1260,7 @@ def complete_stream(
     ended = time.time_ns()
     if call.completed or call.finished:
         return
-    call.completed = True
-    extra = stream_attributes(done) if call.stream else {}
+    extra: Dict[str, Any] = {}
     entry: Optional[_Read] = None
 
     def end_without_read(reason: str) -> None:
@@ -1141,6 +1275,11 @@ def complete_stream(
             call.finish(collector=collector, end_time=ended, extra=dict(marked, **_status_from_stream(extra, None)))
 
     try:
+        # Inside the try: from here on close() and a drop leave the span to
+        # this call, so an interrupt at any step below still ends it.
+        call.completed = True
+        if call.stream:
+            extra = stream_attributes(done)
         planned = _guard(lambda: _plan(call, collector, reads, ended, extra, is_async), START_FAILED)
         if isinstance(planned, _Read):
             entry = planned  # held before admission, so an interrupt in admit() frees its slot

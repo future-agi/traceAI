@@ -213,11 +213,13 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     stream span ends at ``done`` (or the end of iteration) on the caller's
     thread with what the stream gave, and no thread is started. On, the read
     runs on background workers through the package's own connection pool,
-    only for replicate's own transport or a plain httpx one (any other
-    transport: no read, ``replicate.stream.skip_reason`` =
-    ``custom_transport``); the span ends when the read returns or the budget
-    runs out, as of the stream's end. No read is made for a span that is not
-    recording.
+    only for replicate's own transport or a plain httpx one without a proxy
+    (any other transport, a subclass, one changed on the instance, or a
+    client with a proxy: no read, ``replicate.stream.skip_reason`` =
+    ``custom_transport``), and not while an HTTP mock has replaced httpx's
+    or httpcore's send path (``patched_http``); the span ends when the read
+    returns or the budget runs out, as of the stream's end. No read is made
+    for a span that is not recording.
 
     ``stream_flush_wait_seconds`` and ``stream_shutdown_wait_seconds`` (0 to
     10, default 0) are how long ``force_flush()`` (at most half its timeout)
