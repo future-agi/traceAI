@@ -10,7 +10,6 @@ names of the spans they receive.
 """
 
 import gzip
-import logging
 import signal
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -140,10 +139,6 @@ def _processors(provider: Any) -> List[Any]:
     return list(provider._active_span_processor._span_processors)
 
 
-def _ours(caplog: pytest.LogCaptureFixture) -> List[logging.LogRecord]:
-    return [r for r in caplog.records if r.name == "fi_instrumentation.otel"]
-
-
 def _end_one_span(provider: Any, name: str) -> None:
     provider.get_tracer(__name__).start_span(name).end()
     provider.force_flush()
@@ -215,18 +210,16 @@ def test_register_with_span_exporter_uses_it_and_keeps_it(
     assert http_collector == []
 
 
-def test_register_says_nothing_about_a_default_processor(
+def test_register_verbose_no_longer_says_add_span_processor_overwrites_a_default(
     http_collector: List[str],
     make_provider: Any,
-    caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    with caplog.at_level(logging.INFO, logger="fi_instrumentation.otel"):
-        provider = make_provider(verbose=True)
-        provider.add_span_processor(_OTelSimpleSpanProcessor(InMemorySpanExporter()))
+    make_provider(verbose=True)
 
-    assert "replaces the default" not in caplog.text
-    assert "will overwrite this default" not in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "OpenTelemetry Tracing Details" in printed
+    assert "will overwrite this default" not in printed
 
 
 def test_a_tracer_provider_constructed_directly_still_replaces_its_default(
@@ -253,26 +246,5 @@ def test_a_tracer_provider_constructed_directly_still_replaces_its_default(
         assert [s.name for s in second.get_finished_spans()] == ["direct"]
         # The default exporter was shut down and removed: nothing reached the collector.
         assert http_collector == []
-    finally:
-        provider.shutdown()
-
-
-def test_replacing_the_default_is_logged_once(
-    http_collector: List[str], caplog: pytest.LogCaptureFixture
-) -> None:
-    provider = TracerProvider(verbose=False)
-    try:
-        with caplog.at_level(logging.INFO, logger="fi_instrumentation.otel"):
-            provider.add_span_processor(_OTelSimpleSpanProcessor(InMemorySpanExporter()))
-        assert [r.getMessage() for r in _ours(caplog)] == [
-            "TracerProvider: add_span_processor() replaces the default SimpleSpanProcessor "
-            "added on construction; spans no longer go to that default exporter."
-        ]
-        assert _ours(caplog)[0].levelno == logging.INFO
-
-        caplog.clear()
-        with caplog.at_level(logging.INFO, logger="fi_instrumentation.otel"):
-            provider.add_span_processor(_OTelSimpleSpanProcessor(InMemorySpanExporter()))
-        assert _ours(caplog) == []
     finally:
         provider.shutdown()

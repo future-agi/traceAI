@@ -5,13 +5,14 @@
   provider `register()` returns (a console exporter, a second backend, or a
   framework's own processor, such as LiveKit's privacy filter) shut the Future AGI
   exporter down and removed it, so traces silently stopped reaching Future AGI.
-  Processors added later now run next to it, as in upstream OpenTelemetry.
+  The same happened to a custom `register(span_exporter=...)` exporter. Processors
+  added later now run next to it, as in upstream OpenTelemetry.
   **Behaviour change:** code that relied on `add_span_processor()` to swap out
   `register()`'s exporter now exports to both; pass `register(span_exporter=...)`
   to export somewhere else instead.
 - A `TracerProvider()` constructed directly is unchanged: its first
   `add_span_processor()` call still replaces the default `SimpleSpanProcessor`
-  added on construction, and now logs that at INFO.
+  added on construction.
 
 ## [1.1.0] - 2026-08-11
 ### Feature

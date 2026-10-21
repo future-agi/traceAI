@@ -243,10 +243,8 @@ def register(
             transport=transport,
             timeout=timeout,
         )
-    # The processor built here takes the place of the default the provider adds on construction.
-    # It is not a default itself: a later add_span_processor() call adds a processor next to it,
-    # as in upstream OpenTelemetry, so spans keep reaching Future AGI.
-    tracer_provider._remove_default_processor()
+    # Replaces the default the provider added on construction. This processor is not marked as a
+    # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
 
     if set_global_tracer_provider:
@@ -344,20 +342,10 @@ class TracerProvider(_TracerProvider):
         """
 
         if self._default_processor:
-            logger.info(
-                "TracerProvider: add_span_processor() replaces the default SimpleSpanProcessor "
-                "added on construction; spans no longer go to that default exporter."
-            )
-            self._remove_default_processor()
+            self._active_span_processor.shutdown()
+            self._active_span_processor._span_processors = tuple()
+            self._default_processor = False
         return super().add_span_processor(*args, **kwargs)
-
-    def _remove_default_processor(self) -> None:
-        """Shut down and remove the default processor added on construction, if still attached."""
-        if not self._default_processor:
-            return
-        self._active_span_processor.shutdown()
-        self._active_span_processor._span_processors = tuple()
-        self._default_processor = False
 
     def _tracing_details(self) -> str:
         project = self.resource.attributes.get(PROJECT_NAME)
