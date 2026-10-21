@@ -265,15 +265,16 @@ def test_circular_imports():
         pytest.fail(f"Circular import detected: {e}")
 
 
-def test_lazy_imports():
+def test_lazy_imports(monkeypatch):
     """Test that imports don't cause expensive operations at import time."""
     import time
     import importlib
     import sys
-    
-    # Remove the module if already imported
+
+    # Remove the module if already imported. monkeypatch restores it afterwards,
+    # so later tests patch the fi_instrumentation whose otel submodule is loaded.
     if 'fi_instrumentation' in sys.modules:
-        del sys.modules['fi_instrumentation']
+        monkeypatch.delitem(sys.modules, 'fi_instrumentation')
     
     # Time the import
     start_time = time.time()
