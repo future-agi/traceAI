@@ -117,12 +117,9 @@ class _ResponseAccumulator:
             candidates=_IndexedAccumulator(
                 lambda: _ValuesAccumulator(
                     content=_ValuesAccumulator(
-                        parts=_IndexedAccumulator(
-                            lambda: _ValuesAccumulator(
-                                text=_StringAccumulator(),
-                                function_call=_DictReplace(),
-                            ),
-                        ),
+                        # Parts have no index: retain each streamed part rather
+                        # than merging unrelated text, tool calls, or media.
+                        parts=[],
                         role=_SimpleStringReplace(),
                     ),
                     finish_reason=_SimpleStringReplace(),
