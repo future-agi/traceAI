@@ -530,13 +530,13 @@ recorded.
 
 ## Live vendor verification (2026-10-20 to 2026-10-21 UTC)
 
-Seven sessions against the live `api.replicate.com`, with `replicate` 1.0.7
+Eight sessions against the live `api.replicate.com`, with `replicate` 1.0.7
 on Python 3.12 and `meta/meta-llama-3-8b-instruct` (`max_tokens` 24), exported
-to a local Future AGI stack. Fourteen predictions were made in total: seven
+to a local Future AGI stack. Fifteen predictions were made in total: seven
 in the first session, two in the second, and one each in the third, the
 fourth (00:32 UTC on 2026-10-21), the fifth (02:37 UTC), the sixth (05:15
-UTC) and the seventh (06:27 UTC); the account's prediction list since
-2026-10-20 shows exactly those fourteen. The
+UTC), the seventh (06:27 UTC) and the eighth (10:23 UTC); the account's
+prediction list since 2026-10-20 shows exactly those fifteen. The
 second session ran the read after `done` as it was then, on the caller's
 path; the third (code `ab5f5c4`) on a background thread started per stream,
 through the client's own transport; the fourth (code `22832fd`) through the
@@ -548,9 +548,26 @@ live**. The sixth (code `f1866eb`, sync) and the seventh (code `4767825`,
 async) ran with the read off (the default since round 4), on code from
 before rounds 6 and 7, which changed the default path too (open iterators at
 shutdown, streams first iterated in a forked child, and what a stream that
-stops early records).
+stops early records). The eighth ran the package code of round 7 (commit
+`f0376ad`, imported from a `git archive` of it; the commits after it change
+this README only) with the read off, the default.
 
 Stored in Future AGI and read back, one trace each:
+
+- `replicate.stream` with the read off (eighth session, round 7, code
+  `f0376ad`): the module function `replicate.stream`, sync, after
+  `instrument(tracer_provider=...)` with no other option. The events were
+  `output` x5 and `done`. The span ended on the caller's thread inside the
+  `next()` that returned `done` (that `next()` took 3.8 ms, reading the event
+  included; the span's end time is 1.7 ms before it returned), and the loop
+  exited 0.56 ms after `done`. Counted at httpx's transport classes, the
+  stream sent the create and the event stream, and nothing was sent after
+  it, during `shutdown()` or in the 0.5 s after it. The thread names were
+  the same before and after `instrument()`, after the stream and after the
+  flush, none of them the package's; `shutdown()` took 0.3 ms. The stored
+  span is LLM, OK, with the prediction id and the joined text, and no
+  status, `predict_time`, token counts (stored as 0) or `replicate.stream.*`
+  attribute. It is the only span in its trace.
 
 - `replicate.async_stream` with the read off (seventh session, code
   `4767825`): the module function inside `asyncio.run()`, after
@@ -643,12 +660,16 @@ Stored in Future AGI and read back, one trace each:
 
 Not live-verified, stand-in only: `predictions.create` followed by `wait()`
 (the held create span), `cancel`, deployments, run iterators, image and file
-outputs, text chunks that start like a URL, and the opt-in read as it is
-now (round 4 on), including its `custom_transport` and `patched_http`
-skips. Trainings are not traced (checked with the stand-in).
+outputs, text chunks that start like a URL, a stream stopped before `done`
+(the output kept, Ctrl-C), and the opt-in read as it is now (round 4 on),
+including its skips. Trainings are not traced (checked with the stand-in).
 
-The stored rows of that project (spans, traces, rollups, the attribute
-catalog and the project row: 125 distinct rows after the seventh session, counting spans once) were scanned:
-the API token appears 0 times (whole or its last 12 characters), and there is
-no `r8_`, `Bearer`, `Authorization`, `/Users/` path, login or host name,
-`Traceback`, `site-packages` or `exception.stacktrace`.
+After the eighth session, what the stack stores for that project was
+scanned: every ClickHouse table found through `system.columns` (49 tables;
+read by project id, by trace id, or whole when small; spans with and without
+`FINAL`; views and dictionaries read those tables) and every Postgres
+`tracer_*` table. 154 rows were read from the 10 sources that had rows for
+the project. The API token appears 0 times (whole or its last 12
+characters), and there is no `r8_`, `Bearer`, `Authorization`, `/Users/`
+path, login or host name, `Traceback`, `site-packages`,
+`exception.stacktrace` or `api.replicate.com`.
