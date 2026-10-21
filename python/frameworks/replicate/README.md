@@ -8,6 +8,10 @@ instrumentor does not trace this client: pointing `openai.OpenAI` at
 `api.replicate.com` traces nothing. This package wraps the Replicate client
 itself. It does not set or rewrite the client's base URL.
 
+**Stream spans carry no status, `predict_time` or token counts by default**
+(the event stream reports none, and the package does not read the
+prediction after it unless you opt in); see [streams](#streams-no-status-or-token-counts-by-default).
+
 ## Installation
 
 ```bash
@@ -45,9 +49,9 @@ Replicate's event stream carries no status, `predict_time` or token counts.
 a `replicate.stream` span ends at the stream's `done` event, on your thread,
 with status OK, the prediction id, the output and what the stream itself
 said, and **without `replicate.prediction.status`, `predict_time` or
-`gen_ai.usage.*`**. Nothing is requested after the stream, no thread is ever
-started, and `force_flush()`, `shutdown()`, `uninstrument()`, interpreter
-exit and `fork()` wait for nothing. `replicate.run` and create + `wait()`
+`gen_ai.usage.*`**. Nothing is requested after the stream, the package never
+starts a thread, and `force_flush()`, `shutdown()`, `uninstrument()`,
+interpreter exit and `fork()` wait for nothing. `replicate.run` and create + `wait()`
 spans have status and token counts either way (the client polls those
 predictions to the end itself).
 
@@ -153,8 +157,14 @@ span. Its limits:
   **on your thread**, without a read (`skipped`, `at_capacity`); with an
   exporter that runs inline (`SimpleSpanProcessor`, `register(batch=False)`)
   that end includes its export, as it would with the read off. The read's
-  own work still runs in your process and competes for the GIL, so it costs
-  CPU time and grows with CPU contention.
+  own work still runs in your process and competes for the GIL. With 200
+  async streams finishing at once against a stand-in API in another process,
+  with replicate's default transport, on a shared machine (load average 26
+  to 31), the median time from `done` to the end of each loop was 31.5 to
+  56.3 ms with the read on and one shared client, and 48.5 to 190.2 ms with a
+  client per stream, against 17.9 to 29.3 ms with it off and 13.2 to 20.5 ms
+  uninstrumented, over 3 and 2 runs (code `f1866eb`). That cost is CPU time, so it grows with
+  CPU contention.
 - **Bounded.** `stream_reload_seconds` is a wall-time budget from the
   stream's end. The read is one request, and one more `poll_interval` later
   only when the prediction is not finished yet. It is never retried: a `429`
@@ -171,7 +181,10 @@ span. Its limits:
 - **At most 64 stream spans waiting at once.** That counts reads in flight
   and spans whose read has returned and that wait to be ended and exported;
   there is one connection for each. A read counts until its I/O has
-  returned. In a burst, only the first 64 get the read's data.
+  returned. In a burst, only the first 64 get the read's data: 64 of 500 sync
+  streams finishing at once, in each of 5 bursts; and 146 of 160 streams
+  arriving at 20 a second for 8 s while an inline exporter took 0.1 s per span
+  (the other 14 were `at_capacity`), measured at `f1866eb`.
 - **When the span ends.** When the read returns, or when the budget runs
   out, whichever is first; either way its end time is the stream's end, not
   the read's. A read that is not made, fails or runs out of time leaves the
@@ -202,7 +215,12 @@ span. Its limits:
   `force_flush` returns. `stream_shutdown_wait_seconds` does the same for
   `shutdown()` and interpreter exit (no timeout of their own: they wait that
   long at most). The provider is shared: a flush ends (or, with the wait,
-  waits for) every request's stream spans, not only its own.
+  waits for) every request's stream spans, not only its own. With an exporter
+  that runs inline, ending a span exports it inside the call, so a shutdown,
+  an exit or a flush still takes the export time of the stream spans waiting
+  at that moment (at most 64): exit came 5.9 s after the script's last line
+  with 0.2 s exports and the finisher behind, against 0.06 s with the read
+  off, measured at `f1866eb`. That is export, not a wait for a read.
 - **Forks.** The package coordinates one thing with `os.fork()`: the fork
   waits (at most 5 s) until its finisher thread is between two span ends, so
   a child does not inherit a lock that thread held while exporting. A child
@@ -401,21 +419,36 @@ recorded.
 
 ## Live vendor verification (2026-10-20 to 2026-10-21 UTC)
 
-Five sessions against the live `api.replicate.com`, with `replicate` 1.0.7
+Six sessions against the live `api.replicate.com`, with `replicate` 1.0.7
 on Python 3.12 and `meta/meta-llama-3-8b-instruct` (`max_tokens` 24), exported
-to a local Future AGI stack. Twelve predictions were made in total: seven in
-the first session, two in the second, and one each in the third, the fourth
-(00:32 UTC on 2026-10-21) and the fifth (02:37 UTC on 2026-10-21); the
-account's prediction list since 2026-10-20 shows exactly those twelve. The
+to a local Future AGI stack. Thirteen predictions were made in total: seven
+in the first session, two in the second, and one each in the third, the
+fourth (00:32 UTC on 2026-10-21), the fifth (02:37 UTC) and the sixth (05:15
+UTC); the account's prediction list since 2026-10-20 shows exactly those
+thirteen. The
 second session ran the read after `done` as it was then, on the caller's
 path; the third (code `ab5f5c4`) on a background thread started per stream,
 through the client's own transport; the fourth (code `22832fd`) through the
 package's own connection pool; the fifth (code `b5df956`) through that pool
 for a plain `httpx` transport. Sessions 2 to 5 ran with the read after `done`
-on, which was the default until round 4 of the review.
+on, which was the default until round 4 of the review; the sixth (code
+`f1866eb`) ran the current default, with no read.
 
 Stored in Future AGI and read back, one trace each:
 
+- `replicate.stream` with the default settings (sixth session, code
+  `f1866eb`): the module function `replicate.stream`, sync, after
+  `instrument(tracer_provider=...)` with no other option. The events were
+  `output` x5 and `done`. The span ended on the caller's thread inside the
+  `next()` that returned `done` (that `next()` took 2.4 ms, reading the event
+  included; the span's end time is 0.27 ms before it returned), and the loop
+  exited 1.7 ms after `done`. Counted at httpx's transport classes, the
+  stream sent the create and the event stream, and nothing was sent after it;
+  the thread names were the same before and after `instrument()` and after
+  the stream, none of them the package's. `shutdown()` took 0.15 ms. The
+  stored span is LLM, OK, with the prediction id and the joined text, and no
+  status, `predict_time`, token counts (stored as 0) or `replicate.stream.*`
+  attribute. It is the only span in its trace.
 - `replicate.run`, sync (first session): LLM, OK, with prediction id, status
   `succeeded`, `predict_time` and the token counts Replicate reports
   (`input_token_count` / `output_token_count`, 33 / 9). The output arrives as
@@ -477,12 +510,11 @@ Stored in Future AGI and read back, one trace each:
 
 Not live-verified, stand-in only: `predictions.create` followed by `wait()`
 (the held create span), `cancel`, deployments, run iterators, image and file
-outputs, and the read after a stream through a transport of yours other than
-a plain `httpx` one (on a reader thread, or as a task on your loop). Trainings
-are not traced (checked with the stand-in).
+outputs, and the opt-in read's `custom_transport` skip. Trainings are not
+traced (checked with the stand-in).
 
 The stored rows of that project (spans, traces, rollups, the attribute
-catalog and the project row: 137 rows after the fifth session) were scanned:
+catalog and the project row: 145 rows after the sixth session) were scanned:
 the API token appears 0 times (whole or its last 12 characters), and there is
 no `r8_`, `Bearer`, `Authorization`, `/Users/` path, login or host name,
 `Traceback`, `site-packages` or `exception.stacktrace`.

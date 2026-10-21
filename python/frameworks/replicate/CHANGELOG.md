@@ -42,11 +42,11 @@ All notable changes to `traceAI-replicate` will be documented here.
   - `force_flush()`, `shutdown()`, interpreter exit and `uninstrument()` do not wait for reads in flight: each ends
     their spans at once with what is known (`replicate.stream.read` = `flushed`, `shutdown`, `shutdown`,
     `uninstrumented`), so they are exported (a `shutdown()` right after `uninstrument()` still exports them); the
-    one span the finisher thread may be exporting then has ended, and that export is waited for (at most 5 s).
-    `stream_flush_wait_seconds` (0 to 10, default 0) opts into a wait in `force_flush()`, never more than half of
-    `timeout_millis`, after which the provider's own flush gets the time left (with an inline exporter, the spans it
-    ends are exported inside the call). `stream_shutdown_wait_seconds` (0 to 10, default 0) opts into a wait in
-    `shutdown()` and at exit.
+    one span the finisher thread may be exporting then has ended, and that export is waited for (at most 5 s). With
+    an inline exporter, ending those spans exports them inside that call, so exit still takes the export time of the
+    spans waiting (at most 64). `stream_flush_wait_seconds` (0 to 10, default 0) opts into a wait in `force_flush()`,
+    never more than half of `timeout_millis`, after which the provider's own flush gets the time left.
+    `stream_shutdown_wait_seconds` (0 to 10, default 0) opts into a wait in `shutdown()` and at exit.
   - A fork waits (at most 5 s) for the package's finisher thread to be between two span ends; that is the only
     thread the package coordinates with a fork. Span processors' and exporters' behaviour in a forked child is
     theirs.
