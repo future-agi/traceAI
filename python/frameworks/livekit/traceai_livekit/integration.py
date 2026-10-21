@@ -7,9 +7,11 @@ by updating existing span exporters in the tracer provider.
 
 import asyncio
 import logging
+import multiprocessing.util
+import os
 import threading
 import weakref
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fi_instrumentation.otel import Transport
 from opentelemetry import trace as trace_api
@@ -18,12 +20,66 @@ from .exporters import MappedGRPCSpanExporter, MappedHTTPSpanExporter
 
 logger = logging.getLogger(__name__)
 
-# How long job shutdown waits for the flush. OpenTelemetry's batch processor ignores the timeout
-# it is given, so a collector that hangs would otherwise keep the job process from exiting.
-_SHUTDOWN_FLUSH_TIMEOUT_S = 10.0
+# How long job shutdown waits for the flush, and the process-exit flush after it. OpenTelemetry's
+# batch processor ignores the timeout it is given, so a collector that hangs would otherwise keep the
+# job process from exiting. Together they stay well inside the 10 seconds LiveKit gives a job
+# process to exit (`shutdown_process_timeout`), so LiveKit's own clean-up still runs.
+_SHUTDOWN_FLUSH_TIMEOUT_S = 3.0
+_EXIT_FLUSH_TIMEOUT_S = 3.0
 
-# Job contexts that already carry the flush, so enabling twice in one job registers it once.
-_jobs_with_flush: "weakref.WeakSet[Any]" = weakref.WeakSet()
+# The providers each job already flushes at shutdown, so enabling twice registers one flush per
+# provider.
+_jobs_with_flush: "weakref.WeakKeyDictionary[Any, List[Any]]" = weakref.WeakKeyDictionary()
+
+# The providers this process flushes when it exits, and the process they belong to: a forked child
+# starts with its parent's list, which is not its own.
+_exit_flush_providers: List[Any] = []
+_exit_flush_pid: Optional[int] = None
+
+
+def _flush_at_process_exit(provider: Any) -> None:
+    """Flush `provider` when this process exits, after everything LiveKit does at job end.
+
+    A LiveKit job process on Linux is a forkserver child, which ends with `os._exit()`: `atexit`
+    never runs. multiprocessing still runs its own exit finalizers just before that, after the job
+    has ended LiveKit's job spans and cleaned up, so the flush goes there.
+    """
+    global _exit_flush_pid
+    if not callable(getattr(provider, "force_flush", None)):
+        return
+    if _exit_flush_pid != os.getpid():
+        _exit_flush_pid = os.getpid()
+        _exit_flush_providers.clear()
+        multiprocessing.util.Finalize(None, _run_exit_flush, exitpriority=10)
+    if not any(p is provider for p in _exit_flush_providers):
+        _exit_flush_providers.append(provider)
+
+
+def _run_exit_flush() -> None:
+    """Flush every provider registered for this process, waiting at most `_EXIT_FLUSH_TIMEOUT_S`."""
+
+    def _run() -> None:
+        for provider in list(_exit_flush_providers):
+            try:
+                provider.force_flush()
+            except Exception as e:
+                logger.warning(
+                    f"Flushing traces at process exit failed ({type(e).__name__}), so spans still "
+                    "queued may be lost. Check that the Future AGI endpoint is reachable."
+                )
+
+    flusher = threading.Thread(target=_run, name="traceai-livekit-exit-flush", daemon=True)
+    try:
+        flusher.start()
+    except RuntimeError:
+        return
+    flusher.join(_EXIT_FLUSH_TIMEOUT_S)
+    if flusher.is_alive():
+        logger.warning(
+            f"Flushing traces at process exit took longer than {_EXIT_FLUSH_TIMEOUT_S:g} seconds, "
+            "so the process exited without waiting. Check that the Future AGI endpoint is "
+            "reachable; spans still queued may be lost."
+        )
 
 
 def flush_on_job_shutdown(provider: Optional[trace_api.TracerProvider] = None) -> bool:
@@ -32,9 +88,11 @@ def flush_on_job_shutdown(provider: Optional[trace_api.TracerProvider] = None) -
 
     A job process on Linux ends without running `atexit`, and LiveKit flushes only its own
     processors, so spans still queued in the batch processor, the root `agent_session` span among
-    them, would be lost. `enable_fi_attribute_mapping` calls this for you when it runs inside a
-    job. Call it yourself in each job entrypoint when you set up tracing outside a job (for
-    example at process start).
+    them, would be lost. This sends them as soon as the job shuts down, and the provider is also
+    flushed once more when the process exits, for the spans LiveKit ends after that.
+    `enable_fi_attribute_mapping` calls this for you. When you set up tracing outside a job (for
+    example at process start), the process-exit flush still covers you; calling this in each job
+    entrypoint sends the trace earlier, before the process is at risk of being stopped.
 
     Do not pass `provider.force_flush` to `ctx.add_shutdown_callback`: LiveKit calls it with the
     shutdown reason, which `force_flush` takes as its timeout.
@@ -44,29 +102,33 @@ def flush_on_job_shutdown(provider: Optional[trace_api.TracerProvider] = None) -
 
     Returns:
         True if the provider will be flushed when this job shuts down; False if it will not (no
-        job is running, or the provider or the LiveKit version cannot do it).
+        job is running, or the provider or the LiveKit version cannot do it). The process-exit
+        flush is registered either way.
     """
     try:
         if provider is None:
             provider = trace_api.get_tracer_provider()
+        if not callable(getattr(provider, "force_flush", None)):
+            logger.debug("The tracer provider has no force_flush, so it is not flushed at job end")
+            return False
+        _flush_at_process_exit(provider)
 
         from livekit.agents import get_job_context
 
-        # Called without arguments: `required=` only exists from livekit-agents 1.6, and every
+        # Called without arguments: `required=` only exists from livekit-agents 1.5.3, and every
         # version raises RuntimeError when there is no job.
         try:
             job_ctx = get_job_context()
         except RuntimeError:
-            logger.warning(
-                "No LiveKit job is running, so traces will not be flushed when a job ends and "
-                "spans still queued can be lost. Call traceai_livekit.flush_on_job_shutdown() "
-                "inside each job entrypoint."
+            logger.debug(
+                "No LiveKit job is running: traces are flushed when the process exits. Call "
+                "traceai_livekit.flush_on_job_shutdown() inside each job entrypoint to send them "
+                "when the job ends."
             )
             return False
 
-        if not callable(getattr(provider, "force_flush", None)):
-            return False
-        if job_ctx in _jobs_with_flush:
+        flushed = _jobs_with_flush.setdefault(job_ctx, [])
+        if any(p is provider for p in flushed):
             return True
 
         # A second, non-primary AgentSession can still be closing when the shutdown callbacks
@@ -75,7 +137,7 @@ def flush_on_job_shutdown(provider: Optional[trace_api.TracerProvider] = None) -
             await _flush_provider(provider)
 
         job_ctx.add_shutdown_callback(_flush_traceai)
-        _jobs_with_flush.add(job_ctx)
+        flushed.append(provider)
         return True
     except Exception as e:
         logger.debug(f"Could not register the flush for job shutdown: {type(e).__name__}")
@@ -141,8 +203,8 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
     1. Finds existing span exporters in the global tracer provider
     2. Replaces them with mapped exporters that convert LiveKit attributes to Future AGI conventions.
     3. Automatically registers the global tracer provider with `livekit.agents.telemetry`.
-    4. Inside a LiveKit job, flushes the provider when the job shuts down (see
-       `flush_on_job_shutdown`); outside a job, logs a warning saying how to do that.
+    4. Flushes the provider when the LiveKit job shuts down, if it runs inside one, and when the
+       process exits (see `flush_on_job_shutdown`).
 
     Args:
         transport: The transport protocol to match existing exporters (Transport enum)

@@ -49,11 +49,20 @@ ignored. To keep conversation content out of your traces, set `LIVEKIT_TELEMETRY
 
 ### Flushing at the end of a job
 
-Inside a job, `enable_*` also makes sure the spans still queued are sent when the job shuts down. On Linux a job process ends
-without running `atexit`, and LiveKit flushes only its own processors, so without this the spans that end last, such as the
-root `agent_session` span, never reach Future AGI.
+On Linux a LiveKit job process ends without running `atexit`, and LiveKit flushes only its own processors, so the spans
+still queued when a job ends, such as the root `agent_session` span, used to never reach Future AGI. `enable_*` now sends
+them twice over:
 
-If you set tracing up outside a job (for example at process start), call `flush_on_job_shutdown()` in each job entrypoint:
+- **When the job shuts down**, if `enable_*` runs inside a job (the usual place, the entrypoint): this sends the voice
+  trace, `agent_session` included, as soon as the call ends.
+- **When the process exits**, just before it stops: this sends what LiveKit ends after the shutdown callbacks, its own
+  job spans (`job_shutdown` and the job's root span), so LiveKit's job trace arrives with its root too.
+
+Each waits at most 3 seconds for the collector, well inside the 10 seconds LiveKit gives a job process to exit, so its own
+clean-up still runs when the collector is slow.
+
+If you set tracing up outside a job (for example at process start), the process-exit flush still covers you. To send the
+trace as soon as each call ends, call `flush_on_job_shutdown()` in each job entrypoint:
 
 ```python
 from traceai_livekit import flush_on_job_shutdown
@@ -65,11 +74,16 @@ async def entrypoint(ctx: JobContext):
 ```
 
 Do not pass `provider.force_flush` to `ctx.add_shutdown_callback`: LiveKit calls it with the shutdown reason, which
-`force_flush` takes as its timeout, so it fails and nothing is flushed. The flush waits at most 10 seconds for the collector.
-It covers the root span from livekit-agents 1.3, which closes the session before the shutdown callbacks run; earlier
-versions close the session at the same time as the flush, so the root span can still be missed there. Not covered: spans
-LiveKit ends after the shutdown callbacks (its own job spans), and LiveKit Cloud observability mode, where the session's
-parent span is recorded on LiveKit's own provider and never reaches Future AGI.
+`force_flush` takes as its timeout, so it fails and nothing is flushed.
+
+Limits:
+- A process LiveKit kills (for example when a worker drains and the job overruns its exit time) sends nothing more.
+- Before livekit-agents 1.3, LiveKit closes the session at the same time as the job-shutdown flush, so that flush can miss
+  `agent_session`; the process-exit flush still sends it.
+- A second `AgentSession` in one job that is still closing when the shutdown callbacks run is sent by the process-exit
+  flush, not the job-shutdown one.
+- In LiveKit Cloud observability mode the session's parent span is recorded on LiveKit's own provider and never reaches
+  Future AGI, so the trace has no stored root there.
 
 ## Compatibility
 
