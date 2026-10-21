@@ -5,9 +5,10 @@ reference; the process imports this module as `tests._job_process_entrypoint`.
 """
 
 import asyncio
+import importlib
 import multiprocessing.context
 import os
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from fi_instrumentation.otel import ProjectType, Transport, register
 from livekit.agents import Agent, AgentSession, JobContext
@@ -70,13 +71,48 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.shutdown("call ended")
 
 
+_SET_UP_AT_IMPORT_MODULE = f"{__package__}._job_process_setup_at_import"
+
+
+def _import_the_set_up_module() -> Callable[[Any], None]:
+    importlib.import_module(_SET_UP_AT_IMPORT_MODULE)
+    return init_process
+
+
+class _SetUpAtImport:
+    """Turns into `init_process` when unpickled, after importing the module that sets tracing up.
+
+    The job process unpickles its arguments before multiprocessing clears its exit finalizers,
+    which is when an agent module imported there would run its set-up.
+    """
+
+    def __reduce__(self) -> Any:
+        return (_import_the_set_up_module, ())
+
+
+# Pass as `initialize_process_fnc`, with `entrypoint_after_set_up_at_import` as the entrypoint.
+SET_UP_AT_IMPORT: Any = _SetUpAtImport()
+
+
+async def entrypoint_after_set_up_at_import(ctx: JobContext) -> None:
+    """Start a session and end the job, with tracing already set up when the process started."""
+    importlib.import_module(_SET_UP_AT_IMPORT_MODULE).out_path = ctx.job.metadata
+    session = AgentSession()
+    await session.start(agent=Agent(instructions="Answer briefly."))
+    ctx.shutdown("call ended")
+
+
 async def run_job_process(
-    mp_ctx: multiprocessing.context.BaseContext, out_path: str, timeout_s: float = 60.0
+    mp_ctx: multiprocessing.context.BaseContext,
+    out_path: str,
+    timeout_s: float = 60.0,
+    initialize_process_fnc: Callable[[Any], None] = init_process,
+    job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]] = entrypoint,
 ) -> bool:
     """Run one job in a job process and wait for it to exit; False if it did not exit in time."""
     executor = ProcJobExecutor(
-        initialize_process_fnc=init_process,
-        job_entrypoint_fnc=entrypoint,
+        initialize_process_fnc=initialize_process_fnc,
+        job_entrypoint_fnc=job_entrypoint_fnc,
         session_end_fnc=None,
         simulation_end_fnc=None,
         inference_executor=None,

@@ -21,7 +21,7 @@ import multiprocessing.util
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, Iterator, List
 
 import pytest
 
@@ -37,8 +37,10 @@ from traceai_livekit import (  # noqa: E402
 
 from ._job_process_entrypoint import (  # noqa: E402
     NEVER_MS,
+    SET_UP_AT_IMPORT,
     UNREACHABLE_URL,
     URL_VARIABLES,
+    entrypoint_after_set_up_at_import,
     run_job_process,
 )
 
@@ -51,11 +53,24 @@ def _nothing_leaves_the_machine(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(name, UNREACHABLE_URL)
 
 
+def _cancel_exit_finalizers() -> None:
+    for finalizer in list(multiprocessing.util._finalizer_registry.values()):
+        if getattr(finalizer, "_callback", None) is integration._run_exit_flush:
+            finalizer.cancel()
+
+
 @pytest.fixture(autouse=True)
-def _a_fresh_exit_flush(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Each test starts as a new process would: nothing registered to flush at exit.
+def _a_fresh_exit_flush(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # Each test starts as a new process would: nothing registered to flush at exit, including what
+    # tests in other files registered by enabling outside this fixture.
+    _cancel_exit_finalizers()
     monkeypatch.setattr(integration, "_exit_flush_providers", [])
+    monkeypatch.setattr(integration, "_exit_flush_finalizer", None)
     monkeypatch.setattr(integration, "_exit_flush_pid", None)
+    monkeypatch.setattr(integration, "_exit_flush_lock", threading.Lock())
+    yield
+    # And leaves nothing behind for the test process's own exit.
+    _cancel_exit_finalizers()
 
 
 def _exit_finalizers() -> int:
@@ -224,11 +239,16 @@ def test_enabling_outside_a_job_flushes_at_process_exit_without_a_warning(
 
 
 def test_the_flush_waits_stay_inside_livekits_exit_budget() -> None:
-    # LiveKit gives a job process 10 seconds to exit (`shutdown_process_timeout`, from 1.3). Room
-    # disconnect and LiveKit's own clean-up share them with both flushes; a flush that used them
-    # up would get the process killed before that clean-up ran.
-    assert integration._SHUTDOWN_FLUSH_TIMEOUT_S <= 3
-    assert integration._EXIT_FLUSH_TIMEOUT_S <= 3
+    # LiveKit gives a job process `shutdown_process_timeout` to exit (10 seconds, from 1.3). Room
+    # disconnect and LiveKit's own clean-up share it with both flushes; flushes that used it up
+    # would get the process killed before that clean-up ran.
+    from dataclasses import fields
+
+    from livekit.agents.worker import ServerOptions
+
+    (budget,) = [f.default for f in fields(ServerOptions) if f.name == "shutdown_process_timeout"]
+    flushes = integration._SHUTDOWN_FLUSH_TIMEOUT_S + integration._EXIT_FLUSH_TIMEOUT_S
+    assert flushes + 4 <= budget
 
 
 def test_a_second_provider_in_one_job_is_flushed_too(make_provider: Any) -> None:
@@ -241,6 +261,7 @@ def test_a_second_provider_in_one_job_is_flushed_too(make_provider: Any) -> None
             assert flush_on_job_shutdown(first) is True
             assert flush_on_job_shutdown(second) is True
             assert flush_on_job_shutdown(first) is True
+            assert flush_on_job_shutdown(second) is True
             return len(ctx._shutdown_callbacks) - before
 
     assert asyncio.run(job()) == 2
@@ -257,6 +278,75 @@ def test_the_process_exit_flush_is_registered_once_per_process(make_provider: An
 
     assert _exit_finalizers() - before == 1
     assert integration._exit_flush_providers == [first, second]
+
+
+def test_the_process_exit_flush_is_registered_once_under_concurrent_set_up(
+    monkeypatch: pytest.MonkeyPatch, make_provider: Any
+) -> None:
+    # LiveKit's thread executor runs several jobs in one process, which can enable at once.
+    providers = [make_provider() for _ in range(4)]
+    real_finalize = multiprocessing.util.Finalize
+
+    def slow_finalize(*args: Any, **kwargs: Any) -> Any:
+        # Widens the window between the check and the registration, so a race shows every time.
+        time.sleep(0.05)
+        return real_finalize(*args, **kwargs)
+
+    monkeypatch.setattr(multiprocessing.util, "Finalize", slow_finalize)
+    start = threading.Barrier(len(providers))
+
+    def set_up(provider: Any) -> None:
+        start.wait()
+        flush_on_job_shutdown(provider)
+
+    before = _exit_finalizers()
+    threads = [threading.Thread(target=set_up, args=(p,)) for p in providers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert _exit_finalizers() - before == 1
+    assert len(integration._exit_flush_providers) == len(providers)
+
+
+def test_a_child_process_gets_its_own_exit_flush_and_keeps_the_providers(
+    make_provider: Any,
+) -> None:
+    # A finalizer runs only in the process that made it, so a forked child needs a new one; the
+    # providers it inherited are copies its own spans go to, so it still flushes them.
+    inherited, own = make_provider(), make_provider()
+    flush_on_job_shutdown(inherited)
+    integration._exit_flush_pid = -1
+    before = _exit_finalizers()
+
+    flush_on_job_shutdown(own)
+
+    assert _exit_finalizers() - before == 1
+    assert integration._exit_flush_providers == [inherited, own]
+
+
+def test_the_exit_flush_is_made_again_after_a_child_clears_its_finalizers(
+    make_provider: Any,
+) -> None:
+    provider = make_provider()
+    flush_on_job_shutdown(provider)
+    # What multiprocessing does in a fork or forkserver child just before its target runs: clear
+    # the finalizers, then run the after-fork hooks. Ours must be among them.
+    integration._exit_flush_finalizer.cancel()
+    assert _exit_finalizers() == 0
+    hooks = [
+        (func, obj)
+        for (_, _, func), obj in list(multiprocessing.util._afterfork_registry.items())
+        if func is integration._arm_exit_flush_after_fork
+    ]
+    assert len(hooks) == 1
+
+    for func, obj in hooks:
+        func(obj)
+
+    assert _exit_finalizers() == 1
+    assert integration._exit_flush_providers == [provider]
 
 
 def test_the_process_exit_flush_flushes_every_registered_provider(make_provider: Any) -> None:
@@ -293,6 +383,49 @@ def test_a_blocked_exit_flush_does_not_hold_up_the_process_exit(
 
     assert elapsed < 2
     assert len(_warnings(caplog)) == 1
+
+
+def test_a_blocked_provider_does_not_stop_the_others_flushing_at_exit(
+    monkeypatch: pytest.MonkeyPatch, make_provider: Any
+) -> None:
+    blocked, other = make_provider(), make_provider()
+    monkeypatch.setattr(integration, "_EXIT_FLUSH_TIMEOUT_S", 0.5)
+    release = threading.Event()
+    flushed: List[Any] = []
+    for provider in (blocked, other):
+        flush_on_job_shutdown(provider)
+    monkeypatch.setattr(blocked, "force_flush", lambda *a, **k: release.wait(timeout=3))
+    monkeypatch.setattr(other, "force_flush", lambda *a, **k: flushed.append(other) or True)
+
+    try:
+        integration._run_exit_flush()
+        # Read before the blocked flush is released, which would let a flush queued behind it run.
+        flushed_in_time = list(flushed)
+    finally:
+        release.set()
+
+    assert flushed_in_time == [other]
+
+
+def test_a_failing_exit_flush_logs_a_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    make_provider: Any,
+) -> None:
+    provider = make_provider()
+    flush_on_job_shutdown(provider)
+
+    def fail(*args: Any, **kwargs: Any) -> bool:
+        raise ConnectionError("collector at http://collector.invalid refused the connection")
+
+    monkeypatch.setattr(provider, "force_flush", fail)
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
+
+    integration._run_exit_flush()
+
+    (record,) = _warnings(caplog)
+    assert "failed" in record.getMessage()
+    assert "collector.invalid" not in record.getMessage()
 
 
 def test_flush_on_job_shutdown_registers_only_inside_a_job(
@@ -392,5 +525,36 @@ def test_agent_session_reaches_the_exporter_when_a_real_job_process_exits(
     names = exported.read_text().splitlines()
     assert "agent_session" in names, f"spans the exporter received: {names}"
     # LiveKit ends its job_shutdown span after the shutdown callbacks; only the process-exit flush
-    # can send it, so the job's own trace keeps its root.
+    # can send it. With set-up inside the entrypoint it is the job trace's root: LiveKit starts
+    # job_entrypoint before tracing is on, so that span is never recorded.
     assert "job_shutdown" in names, f"spans the exporter received: {names}"
+
+
+def test_set_up_at_import_is_flushed_when_a_real_job_process_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # An agent module that sets tracing up at its top runs that set-up while the job process
+    # imports it, before multiprocessing clears the exit finalizers the process started with.
+    try:
+        mp_ctx = multiprocessing.get_context("forkserver")
+    except ValueError:
+        pytest.skip("the forkserver start method is not available here")
+    monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", str(NEVER_MS))
+    exported = tmp_path / "exported-span-names.txt"
+    exported.write_text("")
+
+    exited = asyncio.run(
+        run_job_process(
+            mp_ctx,
+            str(exported),
+            initialize_process_fnc=SET_UP_AT_IMPORT,
+            job_entrypoint_fnc=entrypoint_after_set_up_at_import,
+        )
+    )
+
+    assert exited, "the job process did not exit within the time allowed"
+    names = exported.read_text().splitlines()
+    # No job-shutdown flush is registered in this set-up: the process-exit flush sends them all,
+    # and job_entrypoint, recorded because tracing was on before the job started, is the root.
+    for name in ("agent_session", "job_shutdown", "job_entrypoint"):
+        assert name in names, f"spans the exporter received: {names}"

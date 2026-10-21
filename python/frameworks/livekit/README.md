@@ -56,13 +56,15 @@ them twice over:
 - **When the job shuts down**, if `enable_*` runs inside a job (the usual place, the entrypoint): this sends the voice
   trace, `agent_session` included, as soon as the call ends.
 - **When the process exits**, just before it stops: this sends what LiveKit ends after the shutdown callbacks, its own
-  job spans (`job_shutdown` and the job's root span), so LiveKit's job trace arrives with its root too.
+  `job_shutdown` span, and the job's root `job_entrypoint` span when tracing is set up before the job starts. With
+  set-up inside the entrypoint, LiveKit starts `job_entrypoint` before tracing is on, so it is never recorded and the
+  job trace arrives rooted at `job_shutdown`.
 
 Each waits at most 3 seconds for the collector, well inside the 10 seconds LiveKit gives a job process to exit, so its own
 clean-up still runs when the collector is slow.
 
-If you set tracing up outside a job (for example at process start), the process-exit flush still covers you. To send the
-trace as soon as each call ends, call `flush_on_job_shutdown()` in each job entrypoint:
+If you set tracing up outside a job (for example at import time, in the job process), only the process-exit flush runs.
+To also send each call's trace as soon as the call ends, call `flush_on_job_shutdown()` in each job entrypoint:
 
 ```python
 from traceai_livekit import flush_on_job_shutdown

@@ -10,6 +10,7 @@ import logging
 import multiprocessing.util
 import os
 import threading
+import time
 import weakref
 from typing import Any, List, Optional
 
@@ -31,10 +32,17 @@ _EXIT_FLUSH_TIMEOUT_S = 3.0
 # provider.
 _jobs_with_flush: "weakref.WeakKeyDictionary[Any, List[Any]]" = weakref.WeakKeyDictionary()
 
-# The providers this process flushes when it exits, and the process they belong to: a forked child
-# starts with its parent's list, which is not its own.
+# The providers this process flushes when it exits. A forked child keeps its parent's list: the
+# copies it inherits are the providers its own spans go to.
 _exit_flush_providers: List[Any] = []
+
+# The exit finalizer, and the process it was made in. A multiprocessing child drops the finalizers
+# it was started with (forkserver and fork children clear them just before the target runs, after
+# a module imported while unpickling the target has already registered one), and a finalizer runs
+# only in the process that made it. So it is made again whenever it is gone or not this process's.
+_exit_flush_finalizer: Optional[Any] = None
 _exit_flush_pid: Optional[int] = None
+_exit_flush_lock = threading.Lock()
 
 
 def _flush_at_process_exit(provider: Any) -> None:
@@ -44,37 +52,75 @@ def _flush_at_process_exit(provider: Any) -> None:
     never runs. multiprocessing still runs its own exit finalizers just before that, after the job
     has ended LiveKit's job spans and cleaned up, so the flush goes there.
     """
-    global _exit_flush_pid
     if not callable(getattr(provider, "force_flush", None)):
         return
-    if _exit_flush_pid != os.getpid():
-        _exit_flush_pid = os.getpid()
-        _exit_flush_providers.clear()
-        multiprocessing.util.Finalize(None, _run_exit_flush, exitpriority=10)
-    if not any(p is provider for p in _exit_flush_providers):
-        _exit_flush_providers.append(provider)
+    with _exit_flush_lock:
+        _arm_exit_flush()
+        if not any(p is provider for p in _exit_flush_providers):
+            _exit_flush_providers.append(provider)
+
+
+def _arm_exit_flush() -> None:
+    """Make sure this process has its exit finalizer. The caller holds `_exit_flush_lock`."""
+    global _exit_flush_finalizer, _exit_flush_pid
+    if (
+        _exit_flush_finalizer is not None
+        and _exit_flush_pid == os.getpid()
+        and _exit_flush_finalizer.still_active()
+    ):
+        return
+    _exit_flush_pid = os.getpid()
+    _exit_flush_finalizer = multiprocessing.util.Finalize(
+        None, _run_exit_flush, exitpriority=10
+    )
+
+
+def _arm_exit_flush_after_fork(_: Any) -> None:
+    """Re-make the exit finalizer in a multiprocessing child, once its inherited ones are cleared."""
+    global _exit_flush_lock
+    # A lock another thread held at the fork would stay held in the child for good.
+    _exit_flush_lock = threading.Lock()
+    with _exit_flush_lock:
+        if _exit_flush_providers:
+            _arm_exit_flush()
+
+
+# multiprocessing runs this in each child it starts by fork or forkserver, right after it clears
+# the child's finalizers; set-up done at import, before that, would otherwise lose its exit flush.
+multiprocessing.util.register_after_fork(_arm_exit_flush, _arm_exit_flush_after_fork)
 
 
 def _run_exit_flush() -> None:
-    """Flush every provider registered for this process, waiting at most `_EXIT_FLUSH_TIMEOUT_S`."""
+    """Flush every provider registered for this process, waiting at most `_EXIT_FLUSH_TIMEOUT_S`.
 
-    def _run() -> None:
-        for provider in list(_exit_flush_providers):
-            try:
-                provider.force_flush()
-            except Exception as e:
-                logger.warning(
-                    f"Flushing traces at process exit failed ({type(e).__name__}), so spans still "
-                    "queued may be lost. Check that the Future AGI endpoint is reachable."
-                )
+    Each provider flushes in its own thread, so one that hangs does not hold up the others.
+    """
 
-    flusher = threading.Thread(target=_run, name="traceai-livekit-exit-flush", daemon=True)
-    try:
-        flusher.start()
-    except RuntimeError:
-        return
-    flusher.join(_EXIT_FLUSH_TIMEOUT_S)
-    if flusher.is_alive():
+    def _run(provider: Any) -> None:
+        try:
+            provider.force_flush()
+        except Exception as e:
+            logger.warning(
+                f"Flushing traces at process exit failed ({type(e).__name__}), so spans still "
+                "queued may be lost. Check that the Future AGI endpoint is reachable."
+            )
+
+    deadline = time.monotonic() + _EXIT_FLUSH_TIMEOUT_S
+    flushers = []
+    for provider in list(_exit_flush_providers):
+        flusher = threading.Thread(
+            target=_run, args=(provider,), name="traceai-livekit-exit-flush", daemon=True
+        )
+        try:
+            flusher.start()
+        except RuntimeError:
+            # No thread to spare: flush it here rather than not at all.
+            _run(provider)
+            continue
+        flushers.append(flusher)
+    for flusher in flushers:
+        flusher.join(max(0.0, deadline - time.monotonic()))
+    if any(flusher.is_alive() for flusher in flushers):
         logger.warning(
             f"Flushing traces at process exit took longer than {_EXIT_FLUSH_TIMEOUT_S:g} seconds, "
             "so the process exited without waiting. Check that the Future AGI endpoint is "
@@ -91,8 +137,8 @@ def flush_on_job_shutdown(provider: Optional[trace_api.TracerProvider] = None) -
     them, would be lost. This sends them as soon as the job shuts down, and the provider is also
     flushed once more when the process exits, for the spans LiveKit ends after that.
     `enable_fi_attribute_mapping` calls this for you. When you set up tracing outside a job (for
-    example at process start), the process-exit flush still covers you; calling this in each job
-    entrypoint sends the trace earlier, before the process is at risk of being stopped.
+    example at process start, in the job process), only the process-exit flush runs; calling this
+    in each job entrypoint also sends each call's trace as soon as the call ends.
 
     Do not pass `provider.force_flush` to `ctx.add_shutdown_callback`: LiveKit calls it with the
     shutdown reason, which `force_flush` takes as its timeout.
