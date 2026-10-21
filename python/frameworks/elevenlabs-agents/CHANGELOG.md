@@ -1,15 +1,4 @@
-## [Unreleased]
-### Fixed
-- A live webhook body carries the caller id only as the root span attribute `elevenlabs.user_id`
-  (there is no `data.user_id`), so `user.id` was missing on webhook deliveries. The root attribute is
-  now used when `data.user_id` is absent.
-### Verified
-- 2026-10-19: live `post_call_transcription_otel` webhook deliveries (HMAC, ok / abrupt disconnect /
-  2-minute timeout / with user id). Captured bodies added as sanitized fixtures.
-- `backfill` run against the live ElevenLabs API (2026-10-17); attribute names matched. Added a
-  sanitized captured body as a test fixture. Webhook delivery is still verified with a stand-in only.
-
-## [0.1.0] - 2026-10-15
+## [0.1.0] - unreleased
 ### Feature
 - ElevenLabs Agents post-call OpenTelemetry forwarder: HMAC-verified `post_call_transcription_otel`
   webhook receiver, Voice-tab mapping (`fi.span.kind=CONVERSATION` root, `call.duration`,
@@ -21,3 +10,12 @@
 - Never exported in any mode: resource attributes outside an allowlist (no host, process or
   OS details), environment and identity span attributes, stack traces, and emails, local
   paths and private host names in metadata and error text.
+### Fixed
+- A live webhook body carries the caller id only as the root span attribute `elevenlabs.user_id`
+  (there is no `data.user_id`), so `user.id` was missing on webhook deliveries. The root attribute is
+  now used when `data.user_id` is absent.
+### Verified
+- 2026-10-19: live `post_call_transcription_otel` webhook deliveries (HMAC, ok / abrupt disconnect /
+  2-minute timeout / with user id). Captured bodies added as sanitized fixtures.
+- `backfill` run against the live ElevenLabs API (2026-10-17); attribute names matched. Added a
+  sanitized captured body as a test fixture.
