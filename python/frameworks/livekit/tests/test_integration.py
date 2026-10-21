@@ -19,6 +19,8 @@ on the provider it held before each test.
 
 import asyncio
 import gzip
+import importlib.metadata
+import re
 import signal
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -113,6 +115,19 @@ def _processors(provider: Any) -> List[Any]:
     return list(provider._active_span_processor._span_processors)
 
 
+# The last fi-instrumentation-otel release whose register() marks its exporter as a default the next
+# add_span_processor() call replaces. Later releases, and this repository's source, have the TH-8727
+# fix. Raise this only if a release with the mark is published after 1.1.0.
+_LAST_RELEASE_WITH_THE_MARK = (1, 1, 0)
+
+
+def _installed_core_marks_the_exporter() -> bool:
+    """What the installed fi-instrumentation-otel release's register() should do, by its version."""
+    installed = importlib.metadata.version("fi-instrumentation-otel")
+    release = tuple(int(part) for part in re.findall(r"\d+", installed)[:3])
+    return release <= _LAST_RELEASE_WITH_THE_MARK
+
+
 def _future_agi_processors(provider: Any, exporter_type: type) -> List[Any]:
     return [
         p
@@ -195,20 +210,21 @@ def test_a_processor_added_after_enabling_runs_alongside_the_exporter(
     assert [s.name for s in other.get_finished_spans()] == ["after-add"]
 
 
-def test_add_span_processor_after_register_alone_follows_the_mark_enable_clears(
+def test_add_span_processor_after_register_alone_matches_the_installed_core(
     make_provider: Any,
 ) -> None:
+    # Expected from the installed release, not read from the provider: a mark reintroduced in
+    # register() fails here against this repository's fi_instrumentation.
+    expect_the_mark = _installed_core_marks_the_exporter()
     provider = make_provider()
-    # Set by register() on fi-instrumentation-otel 1.1.0 and earlier, not on releases with the
-    # TH-8727 fix. Read from the provider, not from a version number, so the test follows the
-    # installed release whatever version the fix ships in.
-    register_marks_its_exporter = getattr(provider, "_default_processor", False)
     future_agi_processor = _processors(provider)[0]
     other_processor = SimpleSpanProcessor(InMemorySpanExporter())
 
+    assert bool(getattr(provider, "_default_processor", False)) is expect_the_mark
+
     provider.add_span_processor(other_processor)
 
-    if register_marks_its_exporter:
+    if expect_the_mark:
         # Without enable_*, the processor replaces the exporter: why enable_* clears the mark.
         assert _processors(provider) == [other_processor]
     else:
