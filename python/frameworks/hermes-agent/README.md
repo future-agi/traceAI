@@ -23,10 +23,6 @@ the test suite also passes on Python 3.14 against Hermes v0.22.0, which runs on 
 
 ## Install
 
-Available after the next traceAI release (this package on PyPI, and the
-directory below on traceAI's default branch). Until then, install from a
-traceAI checkout: `pip install /path/to/traceAI/python/frameworks/hermes-agent`.
-
 The plugin is enabled per Hermes home and stays off until you enable it.
 
 **Managed Hermes installs** (the `install.sh` installer, Hermes Desktop): install
@@ -47,6 +43,9 @@ image): install the package into the environment Hermes runs in. It declares the
 pip install traceAI-hermes-agent
 hermes plugins enable futureagi
 ```
+
+To try an unreleased change, install from a traceAI checkout instead:
+`pip install /path/to/traceAI/python/frameworks/hermes-agent`.
 
 ## Configure
 
