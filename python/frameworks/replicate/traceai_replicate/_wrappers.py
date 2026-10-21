@@ -499,14 +499,22 @@ class PendingRegistry:
         for call in stale:
             call.expire()
 
-    def expire_all(self, settle: bool = True, until: Optional[float] = None) -> bool:
+    def expire_all(
+        self, settle: bool = True, until: Optional[float] = None, outcome: Optional[str] = None
+    ) -> bool:
         """End released spans, then (with ``settle``) the spans of completed
         streams whose read is still running, waiting for those reads no later
-        than ``until`` (see :func:`settle_stream_reads`), then every held span
-        (``force_flush``; ``uninstrument()`` without ``settle``). A claimed
-        span is left to its running call. False when ``until`` cut a read short."""
+        than ``until`` and ending the rest as ``outcome`` (see
+        :func:`settle_stream_reads`), then every held span (``force_flush``;
+        ``uninstrument()`` without ``settle``). A claimed span is left to its
+        running call. False when ``until`` cut a read short."""
         drain_released()
-        in_time = settle_stream_reads(until) if settle else True
+        if not settle:
+            in_time = True
+        elif outcome is None:
+            in_time = settle_stream_reads(until)
+        else:
+            in_time = settle_stream_reads(until, outcome)
         with self._lock:
             calls = [call for call, _ in self._calls.values()]
             self._calls.clear()

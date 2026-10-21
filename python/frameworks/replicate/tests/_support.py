@@ -532,6 +532,16 @@ class Traced:
         """Everything an exporter could send: names, attributes, events, status."""
         return "".join(span.to_json() for span in self.spans())
 
+    def settle(self) -> None:
+        """Wait for the reads after streams to end their spans, at most until
+        their budget runs out (as ``shutdown()`` and exit do; ``force_flush()``
+        does not wait for them by default)."""
+        try:
+            from traceai_replicate._stream_read import settle_stream_reads
+        except ImportError:  # releases before the read had its own module
+            from traceai_replicate._wrappers import settle_stream_reads
+        settle_stream_reads()
+
 
 @contextlib.contextmanager
 def instrumented(**options: Any) -> Iterator[Traced]:

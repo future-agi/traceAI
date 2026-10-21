@@ -87,7 +87,7 @@ def test_stream_span_stays_open_until_the_stream_ends():
         next(stream)
         assert traced.replicate_spans() == []
         list(stream)
-        traced.provider.force_flush()  # waits for the read after ``done``
+        traced.settle()  # waits for the read after ``done``
         assert len(traced.replicate_spans()) == 1
 
 

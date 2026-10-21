@@ -156,7 +156,7 @@ def test_a_slow_read_adds_no_latency_to_the_callers_loop():
         assert tail < CALLER_LATENCY, tail
         assert total < 1.0, total
         assert traced.replicate_spans() == []  # the read is still running
-        traced.provider.force_flush()  # waits for it
+        traced.settle()  # waits for it
 
     assert _texts(events) == STREAM_CHUNKS
     _final(_completed(traced.one()))
@@ -171,7 +171,7 @@ def test_a_slow_read_adds_no_latency_to_the_callers_async_loop():
         events, total, tail = asyncio.run(consume(make_client(fake)))
         assert tail < CALLER_LATENCY, tail
         assert total < 1.0, total
-        traced.provider.force_flush()
+        traced.settle()
 
     assert _texts(events) == STREAM_CHUNKS
     _final(_completed(traced.one()))
@@ -214,7 +214,7 @@ def test_breaking_at_done_is_a_completed_stream_with_its_output_and_the_read(aft
             del stream
             gc.collect()
             drain_released()
-        traced.provider.force_flush()
+        traced.settle()
         spans = traced.replicate_spans()  # "keep" still holds the open stream here
 
     assert _texts(events) == STREAM_CHUNKS
@@ -236,7 +236,7 @@ def test_breaking_at_done_then_aclose_is_a_completed_async_stream():
 
     with FakeReplicate() as fake, instrumented() as traced:
         events = asyncio.run(consume(make_client(fake)))
-        traced.provider.force_flush()
+        traced.settle()
         spans = traced.replicate_spans()
 
     assert _texts(events) == STREAM_CHUNKS
@@ -305,7 +305,7 @@ def test_a_callers_own_retry_transport_does_not_retry_the_read_either():
         fake.read_status = 503
         transport = RetryTransport(RecordingTransport(), max_attempts=5, backoff_factor=0.5)
         list(make_client(fake, transport).stream(STREAM_MODEL, input={}))
-        traced.provider.force_flush()
+        traced.settle()
 
     assert fake.paths("GET").count(READ) == 1
     _no_final(_completed(traced.one()))
@@ -319,7 +319,7 @@ def test_past_the_cap_on_reads_in_flight_a_stream_ends_at_once_without_one(monke
         list(client.stream(STREAM_MODEL, input={}))  # its read is in flight
         list(client.stream(STREAM_MODEL, input={}))
         (capped,) = traced.replicate_spans()  # ended at once, no flush
-        traced.provider.force_flush()
+        traced.settle()
         spans = traced.replicate_spans()
 
     assert attrs(capped)["replicate.prediction.id"] == "pred0002"
@@ -366,7 +366,7 @@ def test_with_the_real_httpx_instrumentation_the_read_adds_no_span(route):
                 list(_default_client(fake).stream(STREAM_MODEL, input={}))
             else:
                 asyncio.run(consume(_default_client(fake)))
-            traced.provider.force_flush()
+            traced.settle()
         finally:
             instrumentor.uninstrument()
 
@@ -402,7 +402,7 @@ def test_no_thread_is_joined_on_the_callers_path(monkeypatch):
             pytest.fail("the caller's loop joined {0}".format(joined))
         finally:
             monkeypatch.undo()
-        traced.provider.force_flush()
+        traced.settle()
 
     assert joined == []
     assert _texts(events) == STREAM_CHUNKS
@@ -410,16 +410,12 @@ def test_no_thread_is_joined_on_the_callers_path(monkeypatch):
 
 
 def test_a_keyboard_interrupt_as_the_read_starts_ends_the_span_then_propagates(monkeypatch):
-    original = _stream_read._post
-
-    def post(state, message):
-        if message[0] == "start":
-            raise KeyboardInterrupt  # what a Ctrl-C while the stream is handed over would do
-        return original(state, message)
+    def hand_over(entry):
+        raise KeyboardInterrupt  # what a Ctrl-C while the stream is handed over would do
 
     with FakeReplicate() as fake, instrumented() as traced:
         stream = make_client(fake).stream(STREAM_MODEL, input={})
-        monkeypatch.setattr(_stream_read, "_post", post)
+        monkeypatch.setattr(_stream_read, "_hand_over", hand_over)
         with pytest.raises(KeyboardInterrupt):
             for _ in stream:
                 pass
@@ -436,7 +432,7 @@ def test_a_keyboard_interrupt_while_a_flush_waits_for_the_read_ends_the_span_the
     def wait(cond, timeout):
         raise KeyboardInterrupt  # a Ctrl-C while force_flush waits
 
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(stream_flush_wait_seconds=5) as traced:
         fake.read_delay = 5.0
         list(make_client(fake).stream(STREAM_MODEL, input={}))
         monkeypatch.setattr(_stream_read, "_wait", wait)

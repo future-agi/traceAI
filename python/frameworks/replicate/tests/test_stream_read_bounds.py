@@ -6,8 +6,10 @@ Each test is a verifier probe turned into a regression test:
   the provider is shut down, or where the provider cannot wait for it;
 * async streams read through the async side (an async-only transport works,
   and no sync httpx client is built on the caller's ``Client``);
-* ``force_flush(timeout_millis)`` never blocks longer than asked,
-  ``uninstrument()`` does not wait, and the budget is capped at 10 s;
+* ``force_flush(timeout_millis)`` never blocks longer than asked (round 3:
+  by default it does not wait for reads at all, see
+  ``test_stream_read_round3.py``), ``uninstrument()`` does not wait, and the
+  budget is capped at 10 s;
 * the budget is an absolute deadline for the read's connection, and the cap
   counts reads whose I/O is still running, not spans waiting for them;
 * the read never borrows the caller's connection pool when replicate built
@@ -274,7 +276,7 @@ def test_async_streams_on_a_default_client_build_no_sync_http_client():
     with FakeReplicate() as fake, instrumented() as traced:
         client = _default_client(fake)
         results = asyncio.run(main(client))
-        traced.provider.force_flush()
+        traced.settle()
         built = vars(client).get("_Client__client")
 
     assert all(_texts(events) == STREAM_CHUNKS for events in results)
@@ -287,8 +289,8 @@ def test_async_streams_on_a_default_client_build_no_sync_http_client():
 # -- flush, shutdown and uninstrument honour their time ----------------------------------------
 
 
-def test_force_flush_never_waits_longer_than_its_timeout_and_still_exports_the_span():
-    with FakeReplicate() as fake, instrumented() as traced:
+def test_force_flush_with_an_opt_in_wait_never_waits_longer_than_half_its_timeout():
+    with FakeReplicate() as fake, instrumented(stream_flush_wait_seconds=5) as traced:
         fake.read_delay = 1.5
         list(make_client(fake).stream(STREAM_MODEL, input={}))
         started = time.monotonic()
@@ -296,17 +298,17 @@ def test_force_flush_never_waits_longer_than_its_timeout_and_still_exports_the_s
         took = time.monotonic() - started
         spans = traced.replicate_spans()
 
-    assert took < 0.1 + 0.25, took
+    assert 0.05 - 0.01 <= took < 0.1 + 0.25, took
     assert result is True  # the provider's own flush had the time left
     (span,) = spans
     values = attrs(span)
     _no_final(values)
-    assert values["replicate.stream.read"] == "timeout"
+    assert values["replicate.stream.read"] == "flushed"
     assert span.status.status_code is StatusCode.OK
 
 
-def test_force_flush_with_its_default_timeout_waits_for_the_read():
-    with FakeReplicate() as fake, instrumented() as traced:
+def test_force_flush_with_an_opt_in_wait_waits_for_the_read():
+    with FakeReplicate() as fake, instrumented(stream_flush_wait_seconds=2) as traced:
         fake.read_delay = 0.5
         list(make_client(fake).stream(STREAM_MODEL, input={}))
         assert traced.provider.force_flush() is True
@@ -468,7 +470,7 @@ def test_with_replicates_own_transport_the_read_does_not_use_the_callers_pool():
 
         inner.handle_request = recording
         rest = list(events)
-        traced.provider.force_flush()
+        traced.settle()
 
     assert _texts([first] + rest) == STREAM_CHUNKS
     assert READ in fake.paths("GET")  # the read happened
@@ -476,16 +478,20 @@ def test_with_replicates_own_transport_the_read_does_not_use_the_callers_pool():
     _final(attrs(traced.one()))
 
 
+class _SubclassedTransport(httpx.HTTPTransport):
+    """An httpx transport of the caller's own kind: its pool is used as it is."""
+
+
 def test_a_small_caller_pool_is_not_lent_to_the_read():
     with FakeReplicate() as fake, instrumented() as traced:
         fake.read_delay = 1.5
-        transport = httpx.HTTPTransport(limits=httpx.Limits(max_connections=1))
+        transport = _SubclassedTransport(limits=httpx.Limits(max_connections=1))
         client = make_client(fake, transport)
         list(client.stream(STREAM_MODEL, input={}))
         started = time.monotonic()
         list(client.stream(STREAM_MODEL, input={}))  # the caller's next request
         took = time.monotonic() - started
-        traced.provider.force_flush()
+        traced.settle()
         reads = _reads(fake)
 
     assert took < 0.75, took
@@ -507,13 +513,13 @@ def test_completing_a_stream_starts_no_thread_on_the_callers_path(monkeypatch):
 
     with FakeReplicate() as fake, instrumented() as traced:
         list(_default_client(fake).stream(STREAM_MODEL, input={}))  # the workers exist now
-        traced.provider.force_flush()
+        traced.settle()
         monkeypatch.setattr(threading.Thread, "start", start)
         for _ in range(5):
             list(_default_client(fake).stream(STREAM_MODEL, input={}))
             list(make_client(fake).stream(STREAM_MODEL, input={}))
         monkeypatch.undo()
-        traced.provider.force_flush()
+        traced.settle()
 
     assert [name for name in starts if name.startswith("traceai-replicate")] == []
     assert len(traced.replicate_spans()) == 11
@@ -527,7 +533,7 @@ def test_completing_a_stream_starts_no_thread_on_the_callers_path(monkeypatch):
 def test_a_stream_that_ends_without_done_is_marked_and_keeps_the_status_the_api_reports():
     with FakeReplicate() as fake, instrumented() as traced:
         events = list(make_client(fake).stream(STREAM_TRUNCATED_MODEL, input={}))
-        traced.provider.force_flush()
+        traced.settle()
     assert _texts(events) == STREAM_CHUNKS
     values = attrs(traced.one())
     assert values["replicate.stream.truncated"] is True
@@ -541,7 +547,7 @@ def test_a_stream_that_ends_without_done_is_marked_and_keeps_the_status_the_api_
 def test_done_with_reason_canceled_is_a_canceled_prediction(budget):
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=budget) as traced:
         list(make_client(fake).stream(STREAM_CANCELED_MODEL, input={}))
-        traced.provider.force_flush()
+        traced.settle()
     span = traced.one()
     values = attrs(span)
     assert values["replicate.stream.done_reason"] == "canceled"
@@ -553,7 +559,7 @@ def test_done_with_reason_canceled_is_a_canceled_prediction(budget):
 def test_aborted_is_a_final_status_read_once():
     with FakeReplicate() as fake, instrumented() as traced:
         list(make_client(fake).stream(STREAM_ABORTED_MODEL, input={}))
-        traced.provider.force_flush()
+        traced.settle()
     values = attrs(traced.one())
     assert values[STATUS] == "aborted"
     assert fake.paths("GET").count(READ) == 1
@@ -566,7 +572,7 @@ def test_the_read_asks_for_an_uncompressed_body():
     with FakeReplicate() as fake, instrumented() as traced:
         list(_default_client(fake).stream(STREAM_MODEL, input={}))
         list(make_client(fake).stream(STREAM_MODEL, input={}))
-        traced.provider.force_flush()
+        traced.settle()
         for path in (READ, "/v1/predictions/pred0002"):
             assert fake.request_headers("GET", path)["accept-encoding"] == "identity"
 
@@ -616,7 +622,7 @@ def test_a_forked_child_does_not_export_its_parents_pending_span():
         child_exported = int(os.read(read_end, 16).decode() or "-1")
         os.close(read_end)
         _, status = os.waitpid(pid, 0)
-        traced.provider.force_flush()
+        traced.settle()
         parent_exported = len(traced.replicate_spans())
 
     assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
@@ -637,7 +643,7 @@ def test_a_stream_never_iterated_sends_nothing_and_has_no_span(how):
             del stream
             gc.collect()
             drain_released()
-        traced.provider.force_flush()
+        traced.settle()
         assert fake.paths() == []
         assert traced.replicate_spans() == []
 
@@ -650,7 +656,7 @@ def test_a_stream_span_starts_at_its_first_next_under_the_callers_parent():
         created = time.time_ns()
         time.sleep(0.05)
         events = list(stream)  # iterated outside the parent's block
-        traced.provider.force_flush()
+        traced.settle()
     assert _texts(events) == STREAM_CHUNKS
     span = traced.one()
     assert span.parent.span_id == parent.get_span_context().span_id

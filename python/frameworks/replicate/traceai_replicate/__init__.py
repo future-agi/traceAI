@@ -16,9 +16,12 @@ from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
 
 from traceai_replicate._stream_read import (
+    DEFAULT_STREAM_FLUSH_WAIT_SECONDS,
     DEFAULT_STREAM_RELOAD_SECONDS,
+    FLUSHED,
     MAX_STREAM_RELOAD_SECONDS,
     StreamReads,
+    start_workers,
 )
 from traceai_replicate._wrappers import (
     CANCEL,
@@ -43,7 +46,9 @@ from traceai_replicate.version import __version__
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_OPTIONS = frozenset({"tracer_provider", "config", "max_pending_seconds", "stream_reload_seconds"})
+_OPTIONS = frozenset(
+    {"tracer_provider", "config", "max_pending_seconds", "stream_reload_seconds", "stream_flush_wait_seconds"}
+)
 # replicate/__init__.py binds these to default_client at import time.
 _MODULE_FUNCTIONS = ("run", "async_run", "stream", "async_stream")
 # Provider methods that end held create spans before they run (see _hook_provider).
@@ -60,15 +65,13 @@ def _timeout_parameter(original: Any) -> Tuple[bool, Optional[float]]:
     parameter = parameters.get("timeout_millis")
     if parameter is None:
         return False, None
-    default = parameter.default
-    usable = isinstance(default, (int, float)) and not isinstance(default, bool)
-    return True, float(default) if usable else None
+    return True, _milliseconds(parameter.default)
 
 
 def _milliseconds(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value) if math.isfinite(value) and value >= 0 else None
+    return value if math.isfinite(value) and value >= 0 else None
 
 
 class _EndPendingFirst:
@@ -83,45 +86,75 @@ class _EndPendingFirst:
     shuts the provider down and exits; an ``atexit`` hook alone would run
     after the processors had stopped and every held span would be dropped.
 
-    The caller's timeout is honoured. With ``timeout_millis`` (passed, or the
-    original's default, 30000 for the SDK's ``force_flush``), reads in flight
-    are waited for at most half of it, never past their own budget; a read
-    still running then is cut short (its span ends with what is known), and
-    the original gets the time that is left, so the whole call never takes
-    longer than asked. Without one (the SDK's ``shutdown()``), the wait is
-    bounded by the reads' budgets (``stream_reload_seconds``, at most 10 s).
+    ``force_flush`` does not wait for reads in flight: like the SDK's own
+    processors, it exports what has ended, so each such span ends at once
+    with what is known (``replicate.stream.read`` = ``flushed``). With
+    ``stream_flush_wait_seconds`` it first waits that long for them, and
+    never more than half of ``timeout_millis`` (passed, or the original's
+    default, 30000 for the SDK's ``force_flush``). Whenever there is a
+    timeout, the original gets only the time that is left, so the call
+    never takes longer than asked, unless ending those spans itself takes
+    longer (an exporter that runs inline, such as SimpleSpanProcessor's).
+    ``shutdown`` (no timeout in the SDK) waits for reads in flight at most
+    until their budget runs out (``stream_reload_seconds``, at most 10 s).
     The original's result is returned.
     """
 
-    def __init__(self, original: Any, end_pending: Callable[[Optional[float]], Any]) -> None:
+    def __init__(
+        self,
+        original: Any,
+        end_pending: Callable[[Optional[float]], Any],
+        flush_wait: Optional[Callable[[], float]] = None,
+    ) -> None:
         self.original = original
         self.end_pending = end_pending
+        # force_flush: how long to wait for reads in flight; None (shutdown):
+        # until their budget runs out, or half the timeout when there is one.
+        self.flush_wait = flush_wait
         self.enabled = True
         self.takes_timeout, self.default_timeout = _timeout_parameter(original)
+        # Whatever is layered on top sees the original's name and signature.
+        self.__wrapped__ = original
+        for name in ("__name__", "__qualname__", "__doc__"):
+            try:
+                setattr(self, name, getattr(original, name))
+            except (AttributeError, TypeError):
+                pass
 
-    def _timeout(self, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Optional[float]:
+    def _timeout(self, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Tuple[bool, Optional[float]]:
+        """(whether the caller passed ``timeout_millis``, the timeout in effect)."""
         if "timeout_millis" in kwargs:
-            return _milliseconds(kwargs["timeout_millis"])
+            return True, _milliseconds(kwargs["timeout_millis"])
         if args:
-            return _milliseconds(args[0])
-        return self.default_timeout
+            return True, _milliseconds(args[0])
+        return False, self.default_timeout
+
+    def _until(self, started: float, timeout: Optional[float]) -> Optional[float]:
+        half = None if timeout is None else timeout / 2000.0
+        if self.flush_wait is None:
+            return None if half is None else started + half
+        wait = self.flush_wait()
+        return started + (wait if half is None else min(wait, half))
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if not self.enabled:
             return self.original(*args, **kwargs)
         started = time.monotonic()
-        timeout = self._timeout(args, kwargs)
-        until = None if timeout is None else started + timeout / 2000.0
+        passed, timeout = self._timeout(args, kwargs)
         try:
-            self.end_pending(until)
+            self.end_pending(self._until(started, timeout))
         except Exception:
             logger.debug("traceai-replicate: could not end held spans", exc_info=True)
-        if timeout is not None and self.takes_timeout:
-            left = max(0, int(timeout - (time.monotonic() - started) * 1000.0))
-            if "timeout_millis" in kwargs or not args:
-                kwargs["timeout_millis"] = left
+        if timeout is not None and (passed or self.takes_timeout):
+            # The time left, in whole milliseconds rounded up (so a short
+            # timeout is not cut to 0, which the SDK treats as already over),
+            # never more than the caller's.
+            left = timeout - (time.monotonic() - started) * 1000.0
+            remaining = min(timeout, math.ceil(left)) if left > 0 else 0
+            if args and "timeout_millis" not in kwargs:
+                args = (remaining,) + tuple(args[1:])
             else:
-                args = (left,) + tuple(args[1:])
+                kwargs["timeout_millis"] = remaining
         return self.original(*args, **kwargs)
 
 
@@ -141,17 +174,15 @@ def _max_pending_seconds(value: Any) -> float:
     return float(value)
 
 
-def _stream_reload_seconds(value: Any) -> float:
+def _seconds_up_to_max(name: str, value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(
-            "stream_reload_seconds must be a number of seconds (int or float), not {0}".format(
-                type(value).__name__
-            )
+            "{0} must be a number of seconds (int or float), not {1}".format(name, type(value).__name__)
         )
     if not (math.isfinite(value) and 0 <= value <= MAX_STREAM_RELOAD_SECONDS):
         raise ValueError(
-            "stream_reload_seconds must be a number of seconds from 0 to {0:g}, not {1!r}".format(
-                MAX_STREAM_RELOAD_SECONDS, value
+            "{0} must be a number of seconds from 0 to {1:g}, not {2!r}".format(
+                name, MAX_STREAM_RELOAD_SECONDS, value
             )
         )
     return float(value)
@@ -161,7 +192,8 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """Trace ``replicate`` predictions: run, stream, create, wait and cancel.
 
     ``instrument(tracer_provider=..., config=TraceConfig(...),
-    max_pending_seconds=600, stream_reload_seconds=2.0)``. Trainings, file
+    max_pending_seconds=600, stream_reload_seconds=2.0,
+    stream_flush_wait_seconds=0)``. Trainings, file
     uploads, and reads (``predictions.get``/``list``, ``reload``) are not
     wrapped.
 
@@ -173,6 +205,11 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     runs on background workers, so the caller's iteration is never held up;
     the span ends when the read returns or the budget runs out, as of the
     stream's end. No read is made for a span that is not recording.
+
+    ``stream_flush_wait_seconds`` (0 to 10, default 0) is how long
+    ``force_flush()`` waits for those reads (at most half its timeout)
+    before it ends their spans with what is known; by default it waits for
+    none. ``shutdown()`` and interpreter exit wait up to the budget.
 
     ``max_pending_seconds`` is the longest a create span is held open on its
     prediction for a ``wait()``/``cancel()``; an older one is ended, as of
@@ -203,15 +240,19 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         max_pending_seconds = _max_pending_seconds(
             kwargs.get("max_pending_seconds", DEFAULT_MAX_PENDING_SECONDS)
         )
-        reload_seconds = _stream_reload_seconds(
-            kwargs.get("stream_reload_seconds", DEFAULT_STREAM_RELOAD_SECONDS)
+        reload_seconds = _seconds_up_to_max(
+            "stream_reload_seconds", kwargs.get("stream_reload_seconds", DEFAULT_STREAM_RELOAD_SECONDS)
+        )
+        flush_wait = _seconds_up_to_max(
+            "stream_flush_wait_seconds",
+            kwargs.get("stream_flush_wait_seconds", DEFAULT_STREAM_FLUSH_WAIT_SECONDS),
         )
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
         )
         self._registry = PendingRegistry(max_pending_seconds)
-        self._reads = StreamReads(reload_seconds)
+        self._reads = StreamReads(reload_seconds, flush_wait)
         self._originals: List[Tuple[Any, str, Any]] = []
         self._module_functions: List[Tuple[Any, str, Any, Any]] = []
 
@@ -307,6 +348,10 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             self._wrap(module_name, class_name, method, wrapper)
         self._rebind_module_functions()
         self._hook_provider(tracer_provider)
+        if self._reads.budget > 0 and self._reads.hooked:
+            # The read loop and the finisher start here, so completing a
+            # stream never starts a thread on the caller's path.
+            start_workers()
         # Fallbacks for a provider whose methods could not be hooked; registered
         # after register(), so they run before the provider's own atexit
         # shutdown. drain_released and settle_stream_reads stay registered
@@ -376,6 +421,8 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         # A flush leaves a span whose wait()/cancel() is running to that call;
         # shutdown ends it too, or it would be dropped once the processors stop.
         ends = {"force_flush": self._expire_held, "shutdown": self._shut_down}
+        reads = self._reads
+        waits = {"force_flush": lambda: reads.flush_wait, "shutdown": None}
         for name in _PROVIDER_METHODS:
             try:
                 original = getattr(provider, name, None)
@@ -385,7 +432,7 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                     previous = vars(provider).get(name, _MISSING)
                 except TypeError:  # no __dict__: setattr below fails as well
                     previous = _MISSING
-                hook = _EndPendingFirst(original, ends[name])
+                hook = _EndPendingFirst(original, ends[name], waits[name])
                 setattr(provider, name, hook)
             except Exception:
                 logger.debug(
@@ -433,11 +480,11 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
     def _expire_held(self, until: Optional[float] = None) -> None:
         """Flush: every held span, and the streams whose read is still running
-        (waited for no later than ``until``). A running wait()/cancel() keeps
-        its span and ends it when it returns."""
+        (waited for no later than ``until``, then ended as ``flushed``). A
+        running wait()/cancel() keeps its span and ends it when it returns."""
         registry = getattr(self, "_registry", None)
         if registry is not None:
-            registry.expire_all(until=until)
+            registry.expire_all(until=until, outcome=FLUSHED)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         for package, name, original, rebound in reversed(getattr(self, "_module_functions", [])):
