@@ -276,8 +276,8 @@ def test_a_client_per_call_with_its_own_transport_still_gets_every_read():
         return [event async for event in await client.async_stream(STREAM_MODEL, input={})]
 
     count = 10
-    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
-        fake.read_delay = 1.0
+    with FakeReplicate() as fake, instrumented(stream_reload_seconds=5.0) as traced:
+        fake.read_delay = 2.5
         took = []
         for _ in range(count):
             started = time.monotonic()
@@ -286,9 +286,11 @@ def test_a_client_per_call_with_its_own_transport_still_gets_every_read():
         traced.settle()
         spans = traced.replicate_spans()
 
-    # No asyncio.run() waits for its read (1 s each); building a client and a
-    # TLS context per call is the rest, and grows with the machine's load.
-    assert max(took) < 0.75, took
+    # No asyncio.run() waits for its read (2.5 s each); building a client and
+    # a TLS context per call is the rest, and grows with the machine's load.
+    took.sort()
+    assert took[len(took) // 2] < 0.5, took
+    assert took[-1] < 1.5, took
     assert len(spans) == count
     for span in spans:
         _final(_completed(span))

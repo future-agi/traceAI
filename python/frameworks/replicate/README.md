@@ -185,8 +185,11 @@ span. Its limits:
   `force_flush()`, `shutdown` for `shutdown()` (including the SIGTERM/SIGINT
   handler `register()` installs) and interpreter exit, `uninstrumented` for
   `uninstrument()` (a `shutdown()` right after it still exports those spans).
-  A stream that completes after `uninstrument()` or `shutdown()` makes no
-  read (`after_uninstrument`, `after_shutdown`). A flush after every request
+  The one span the package's finisher thread may be exporting at that moment
+  has already ended; that export is waited for (at most 5 s), so a shutdown or
+  a process exit right after does not cut it off. A stream that completes
+  after `uninstrument()` or `shutdown()` makes no read (`after_uninstrument`,
+  `after_shutdown`). A flush after every request
   therefore costs nothing extra, but its stream spans carry no status or
   token counts unless the read had already returned. To wait, pass
   `stream_flush_wait_seconds` (for example in a serverless handler that

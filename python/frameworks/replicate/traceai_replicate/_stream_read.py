@@ -143,8 +143,11 @@ _MAX_OWN_CLIENTS = 4
 # How long a wait for reads (an opt-in flush or shutdown wait, or a test's
 # settle) goes on past the last deadline, for the finisher.
 _SETTLE_GRACE = 0.25
-# How long a fork waits for the finisher to finish ending (exporting) a span.
+# How long a fork, and a flush, shutdown, exit or uninstrument() that ended
+# pending spans, wait for the finisher to finish ending (exporting) the one span
+# it is on: that span has ended and is being exported, so it is not cut off.
 _FORK_WAIT_SECONDS = 5.0
+_FINISHING_WAIT_SECONDS = _FORK_WAIT_SECONDS
 _PREDICTION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 # What the span uses from the read; its input, output and logs are not kept.
 _PREDICTION_FIELDS = ("id", "status", "version", "model", "metrics", "error")
@@ -1172,10 +1175,13 @@ def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -
     the finisher; with ``until`` None (tests) up to that last deadline. Each
     span still waiting then ends with what is known
     (``replicate.stream.read`` = ``outcome``). Flush, shutdown, exit and
-    ``uninstrument()`` pass the time they may wait (by default none). Returns
-    False when ``until`` cut a read short. On the package's own threads
-    nothing is waited for. A KeyboardInterrupt (or any BaseException) while
-    waiting ends every pending span first, then propagates.
+    ``uninstrument()`` pass the time they may wait (by default none). A span
+    the finisher thread is exporting at that moment has already ended; that
+    one export is waited for (at most _FINISHING_WAIT_SECONDS), so a shutdown
+    or a process exit right after does not cut it off. Returns False when
+    ``until`` cut a read short. On the package's own threads nothing is
+    waited for. A KeyboardInterrupt (or any BaseException) while waiting ends
+    every pending span first, then propagates.
     """
     state = _STATE
     with state.lock:
@@ -1202,6 +1208,10 @@ def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -
         if entry in state.pending:
             in_time = in_time and cut >= limit
             _guard(lambda: entry.end(outcome), None)
+    if not getattr(_WORKER, "active", False) and any(entry in state.pending for entry in pending):
+        # Still pending although ended: the finisher is exporting it now.
+        if state.finishing.acquire(timeout=_FINISHING_WAIT_SECONDS):
+            state.finishing.release()
     return in_time
 
 

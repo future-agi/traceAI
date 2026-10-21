@@ -22,7 +22,8 @@ Opt-in (``stream_reload_seconds`` > 0):
   ``replicate.stream.skip_reason`` = ``custom_transport``;
 * plain transports are read through the package's own pool;
 * ``shutdown()`` and ``uninstrument()`` end pending stream spans at once, and
-  a shutdown after ``uninstrument()`` still exports them;
+  a shutdown after ``uninstrument()`` still exports them; a span the finisher
+  is exporting at that moment is not cut off;
 * ``asyncio.run()`` with an async-only transport adds no wait and leaves no
   task on its loop;
 * the name-lookup queue is bounded.
@@ -51,7 +52,12 @@ pytest.importorskip("replicate", reason="replicate must be installed to test its
 
 import replicate  # noqa: E402
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider  # noqa: E402
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export import (  # noqa: E402
+    BatchSpanProcessor,
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 from opentelemetry.trace import StatusCode  # noqa: E402
 from replicate.client import RetryTransport  # noqa: E402
@@ -763,6 +769,53 @@ def test_with_the_read_on_uninstrument_ends_pending_spans_at_once_so_a_later_shu
     _no_final(values)
     assert values["replicate.stream.read"] == "uninstrumented"
     assert _stream_read.pending_spans() == 0
+
+
+class _SlowExporter(SpanExporter):
+    """Exports inline, slowly, holding a lock (as an HTTP exporter holds its pool's)."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+        self.lock = threading.Lock()
+        self.spans = []
+
+    def export(self, spans):
+        with self.lock:
+            time.sleep(self.seconds)
+            self.spans.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self):
+        pass
+
+
+@pytest.mark.parametrize("call", ["shutdown", "force_flush", "uninstrument"])
+def test_with_the_read_on_a_span_the_finisher_is_exporting_is_not_cut_off(call):
+    """Round-4 probe ``fork_single.py``: a child that flushed and called
+    os._exit() right away lost 2 of 100 spans, because the flush returned
+    while the finisher was still exporting one. That one export is waited for."""
+    exporter = _SlowExporter(0.4)
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = ReplicateInstrumentor()
+    instrumentor.instrument(tracer_provider=provider, **READ_ON)
+    try:
+        with FakeReplicate() as fake:
+            list(default_client(fake).stream(STREAM_MODEL, input={}))
+            # The read returns at once; the finisher is now exporting its span.
+            assert _wait_for(exporter.lock.locked, 2.0)
+            started = time.monotonic()
+            if call == "uninstrument":
+                instrumentor.uninstrument()
+            else:
+                getattr(provider, call)()
+            took = time.monotonic() - started
+            exported = list(exporter.spans)  # as the call returned
+    finally:
+        instrumentor.uninstrument()
+    assert [span.name for span in exported] == ["replicate.stream"]
+    _final(_completed(exported[0]))
+    assert took < 0.4 + 1.0, took  # that one export, nothing more
 
 
 def test_with_the_read_on_a_stream_completing_after_uninstrument_makes_no_read():

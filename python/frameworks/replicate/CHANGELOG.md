@@ -41,7 +41,8 @@ All notable changes to `traceAI-replicate` will be documented here.
     arrives, and runs with instrumentation suppressed (no HTTP span).
   - `force_flush()`, `shutdown()`, interpreter exit and `uninstrument()` do not wait for reads in flight: each ends
     their spans at once with what is known (`replicate.stream.read` = `flushed`, `shutdown`, `shutdown`,
-    `uninstrumented`), so they are exported (a `shutdown()` right after `uninstrument()` still exports them).
+    `uninstrumented`), so they are exported (a `shutdown()` right after `uninstrument()` still exports them); the
+    one span the finisher thread may be exporting then has ended, and that export is waited for (at most 5 s).
     `stream_flush_wait_seconds` (0 to 10, default 0) opts into a wait in `force_flush()`, never more than half of
     `timeout_millis`, after which the provider's own flush gets the time left (with an inline exporter, the spans it
     ends are exported inside the call). `stream_shutdown_wait_seconds` (0 to 10, default 0) opts into a wait in
