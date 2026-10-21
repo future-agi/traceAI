@@ -2,9 +2,11 @@
 Tests for traceai-livekit: enabling the Future AGI attribute mapping.
 
 livekit-agents 1.8 adds a privacy filter to the tracer provider it is handed, through
-`add_span_processor`. `fi_instrumentation.register()` marks its own exporter as a default that the
-next `add_span_processor` call replaces, so the filter used to shut the exporter down and no trace
-was sent. These tests pin that the exporter stays next to LiveKit's filter.
+`add_span_processor`. Before fi-instrumentation-otel 1.1.1, `fi_instrumentation.register()` marked
+its own exporter as a default that the next `add_span_processor` call replaces, so the filter used
+to shut the exporter down and no trace was sent. traceAI-livekit allows fi-instrumentation-otel
+1.1.0, so `enable_*` still clears that mark itself. These tests pin that the exporter stays next to
+LiveKit's filter, on either release.
 
 Two end-to-end tests send one agent turn through the real mapping and the real HTTP exporter to
 a collector on 127.0.0.1, and read back what arrived: LiveKit 1.8's conversation content must reach
@@ -17,6 +19,7 @@ on the provider it held before each test.
 
 import asyncio
 import gzip
+import importlib.metadata
 import signal
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +28,7 @@ from typing import Any, Dict, Iterator, List
 import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from packaging.version import Version
 
 pytest.importorskip("livekit.agents", minversion="1.8")
 
@@ -193,15 +197,26 @@ def test_a_processor_added_after_enabling_runs_alongside_the_exporter(
     assert [s.name for s in other.get_finished_spans()] == ["after-add"]
 
 
-def test_register_alone_still_lets_add_span_processor_replace_its_default(
+# fi-instrumentation-otel 1.1.1 stopped marking register()'s exporter as a replaceable default
+# (TH-8727). The earlier releases this package allows still mark it.
+_FI_INSTRUMENTATION_VERSION = Version(importlib.metadata.version("fi-instrumentation-otel"))
+_REGISTER_KEEPS_ITS_EXPORTER = _FI_INSTRUMENTATION_VERSION >= Version("1.1.1")
+
+
+def test_add_span_processor_after_register_alone_matches_the_fi_instrumentation_release(
     make_provider: Any,
 ) -> None:
     provider = make_provider()
+    future_agi_processor = _processors(provider)[0]
     other_processor = SimpleSpanProcessor(InMemorySpanExporter())
 
     provider.add_span_processor(other_processor)
 
-    assert _processors(provider) == [other_processor]
+    if _REGISTER_KEEPS_ITS_EXPORTER:
+        assert _processors(provider) == [future_agi_processor, other_processor]
+    else:
+        # Without enable_*, the processor replaces the exporter: why enable_* clears the mark.
+        assert _processors(provider) == [other_processor]
 
 
 def test_livekit_cloud_never_receives_our_copies_of_redacted_content(
