@@ -5,17 +5,24 @@
   provider `register()` returns (a console exporter, a second backend, or a
   framework's own processor, such as LiveKit's privacy filter) shut the Future AGI
   exporter down and removed it, so traces silently stopped reaching Future AGI.
-  The same happened to a custom `register(span_exporter=...)` exporter. Processors
-  added later now run next to it, as in upstream OpenTelemetry.
-  **Behaviour change:** code that relied on `add_span_processor()` to swap out
-  `register()`'s exporter now exports to both; pass `register(span_exporter=...)`
-  to export somewhere else instead. If you pointed a second OTLP exporter at
-  Future AGI to work around this (for example traceai-strands with
-  `OTEL_EXPORTER_OTLP_*` set to the Future AGI endpoint), remove it or upgrade
-  traceai-strands to 0.1.1, or every span arrives twice.
-- A `TracerProvider()` constructed directly is unchanged: its first
-  `add_span_processor()` call still replaces the default `SimpleSpanProcessor`
-  added on construction.
+  The same happened to a custom `register(span_exporter=...)` exporter.
+
+### Changed
+- `add_span_processor()` on the provider `register()` returns adds the processor
+  next to `register()`'s exporter, as in upstream OpenTelemetry, instead of
+  replacing it. Code that relied on it to swap out `register()`'s exporter now
+  exports to both; pass `register(span_exporter=...)` to export somewhere else
+  instead.
+- `register(span_exporter=...)` followed by `add_span_processor()` keeps the custom
+  exporter, which used to be dropped, so spans go to both.
+- If you pointed a second OTLP exporter at Future AGI to work around the old
+  behaviour (for example traceai-strands with `OTEL_EXPORTER_OTLP_*` set to the
+  Future AGI endpoint), remove it, or every span arrives twice. traceai-strands
+  0.1.1 does not add its exporter when it would send the same spans to the same
+  traces URL with no header `register()`'s exporter does not already send.
+- Not changed: a `TracerProvider()` constructed directly still replaces the default
+  `SimpleSpanProcessor` added on construction on its first `add_span_processor()`
+  call.
 
 ## [1.1.0] - 2026-08-11
 ### Feature
