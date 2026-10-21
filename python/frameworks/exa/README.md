@@ -127,12 +127,12 @@ Closing a stream before its last chunk (`close()` or `aclose()`), dropping it
 mid-iteration, or cancelling an `AsyncExa` call or stream ends the span with
 status ERROR, description `cancelled`, and `exa.cancelled` = `true`.
 
-A traced `AsyncExa` stream also has `aclose()`, which ends the span and closes
-the HTTP response. exa-py 2.25.0's own async streams have no `aclose()`, and
-their `close()` raises `RuntimeError` from httpx (traced or not; the span is
-ended first). Code that must also run without this instrumentor can call
-`aclose()` only when it exists, for example
-`aclose = getattr(stream, "aclose", None)`.
+A traced `AsyncExa` stream always has `aclose()`, which ends the span and closes
+the HTTP response. exa-py's own async streams have `aclose()` from 2.26.0 only;
+2.25.0's have none. On both versions their `close()` raises `RuntimeError`
+(traced or not; the span is ended first). Code that must also run on exa-py
+2.25.0 without this instrumentor can call `aclose()` only when it exists, for
+example `aclose = getattr(stream, "aclose", None)`.
 
 A missing API key raises `ValueError` in `Exa()` or `AsyncExa()` itself,
 before any traced method runs, so no span is recorded for it.

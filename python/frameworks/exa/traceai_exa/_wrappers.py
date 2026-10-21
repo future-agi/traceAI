@@ -495,8 +495,9 @@ class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
     def close(self) -> None:
         """End the span as cancelled, then delegate to the vendor's close().
 
-        exa-py 2.25.0's async close() calls httpx's sync close, which raises on
-        an async response; that outcome is the vendor's and is not changed.
+        exa-py's async close() raises RuntimeError (2.25.0: httpx's sync close on an
+        async response; 2.26.0: a pointer to aclose()); that outcome is the vendor's
+        and is not changed.
         """
         self._self_state.cancelled()
         self.__wrapped__.close()
@@ -509,7 +510,7 @@ class _TracedAsyncStream(wrapt.ObjectProxy):  # type: ignore[misc]
             if close is not None:
                 await close()
         finally:
-            # exa-py 2.25.0 has no aclose(); its httpx response does.
+            # exa-py 2.26.0 has aclose(); 2.25.0 has none, but its httpx response does.
             response_close = getattr(self.__wrapped__, "aclose", None)
             if response_close is None:
                 raw_response = getattr(self.__wrapped__, "_raw_response", None)

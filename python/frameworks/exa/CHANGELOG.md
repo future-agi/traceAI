@@ -22,3 +22,5 @@ All notable changes to `traceAI-exa` will be documented here.
 
 ### Verified
 - 2026-10-17: live run against api.exa.ai with exa-py 2.25.0; response shapes matched, no code change needed.
+- 2026-10-21: the test suite also passes on exa-py 2.26.0, which adds its own async `aclose()`; a traced
+  stream's `aclose()` delegates to it (no live run on 2.26.0).

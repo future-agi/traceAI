@@ -64,9 +64,14 @@ def test_python_range_starts_at_the_lowest_tested_version():
     assert not spec.contains("3.14.0")
 
 
-def test_vendor_async_streams_have_no_aclose():
-    # The README says aclose() comes from traceAI-exa, not exa-py; keep that true.
-    from exa_py.api import AsyncStreamAnswerResponse, AsyncStreamSearchResponse
+def test_vendor_async_streams_have_aclose_only_from_2_26():
+    # The README says exa-py's own async streams gained aclose() in 2.26.0 and have none
+    # before; a traced stream has aclose() either way (the stream tests call it).
+    from importlib.metadata import version
 
-    assert not hasattr(AsyncStreamSearchResponse, "aclose")
-    assert not hasattr(AsyncStreamAnswerResponse, "aclose")
+    from exa_py.api import AsyncStreamAnswerResponse, AsyncStreamSearchResponse
+    from packaging.version import Version
+
+    vendor_has_aclose = Version(version("exa-py")) >= Version("2.26.0")
+    assert hasattr(AsyncStreamSearchResponse, "aclose") is vendor_has_aclose
+    assert hasattr(AsyncStreamAnswerResponse, "aclose") is vendor_has_aclose
