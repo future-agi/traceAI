@@ -29,6 +29,12 @@ PREDICT_TIME = "replicate.metrics.predict_time"
 DEPLOYMENT = "replicate.deployment"
 OUTPUT_TYPE = "replicate.output.type"
 STREAM_FILE_COUNT = "replicate.stream.file_count"
+# Why a stream span has no final status: skipped, timeout, failed, unfinished.
+STREAM_READ = "replicate.stream.read"
+# The ``reason`` in a stream's ``done`` event data (``canceled``, ``error``).
+STREAM_DONE_REASON = "replicate.stream.done_reason"
+# True when the event stream ended without a ``done`` event.
+STREAM_TRUNCATED = "replicate.stream.truncated"
 CANCELLED = "replicate.cancelled"
 INPUT_TOKENS = "gen_ai.usage.input_tokens"
 OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
@@ -41,8 +47,11 @@ JSON = "application/json"
 TEXT = "text/plain"
 TOKEN_REDACTED = "[redacted]"
 
-# Statuses on which Prediction.wait() stops polling (replicate/prediction.py).
-TERMINAL_STATUSES = ("succeeded", "failed", "canceled")
+# Statuses a prediction does not leave: the three on which Prediction.wait()
+# stops polling (replicate/prediction.py), and ``aborted`` (its deadline passed
+# before it started; replicate 1.x's Prediction model does not list it, so only
+# the read after a stream, which parses the JSON itself, can see it).
+TERMINAL_STATUSES = ("succeeded", "failed", "canceled", "aborted")
 # Replicate's official models (e.g. meta/meta-llama-3-8b-instruct) report this
 # placeholder instead of a version id (live run 2026-10-20); it is not a version.
 _PLACEHOLDER_VERSIONS = frozenset({"hidden"})

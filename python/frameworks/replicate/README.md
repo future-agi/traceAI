@@ -41,19 +41,22 @@ attributes. Instrument before you use the client. A function imported with
 `instrument()` accepts `tracer_provider`, `config` (a
 `fi_instrumentation.TraceConfig`), `max_pending_seconds` (a positive
 number, default `600`; see [create, wait and cancel](#create-wait-and-cancel))
-and `stream_reload_seconds` (zero or a positive number, default `2`; see
-[streams](#instrumented-calls)). Any other option, a `config` that is not a
-`TraceConfig`, or a `max_pending_seconds` / `stream_reload_seconds` that is
-not an `int` or `float` raises `TypeError`; a `max_pending_seconds` that is
-not a positive, finite number, or a `stream_reload_seconds` that is negative
-or not finite, raises `ValueError`.
+and `stream_reload_seconds` (from `0` to `10` seconds, default `2`; see
+[the read after a stream](#the-read-after-a-stream)). Any other option, a
+`config` that is not a `TraceConfig`, or a `max_pending_seconds` /
+`stream_reload_seconds` that is not an `int` or `float` raises `TypeError`; a
+`max_pending_seconds` that is not a positive, finite number, or a
+`stream_reload_seconds` outside 0 to 10, raises `ValueError`.
+
+A call made while OpenTelemetry instrumentation is suppressed in the
+caller's context (`_SUPPRESS_INSTRUMENTATION_KEY`) is not traced at all.
 
 ## Instrumented calls
 
 | Call | Span |
 |---|---|
 | `Client.run`, `async_run` (and `replicate.run`) | One `replicate.run` span. The create request and the client's own polling run inside it and add no span. If the client returns an iterator, the span stays open until the iterator is exhausted, closed, or dropped. |
-| `Client.stream`, `async_stream` (and `replicate.stream`) | One `replicate.stream` span for the whole stream, not one per event. The stream is complete at its `done` event; breaking out of the loop there and closing or dropping the stream is a completed stream (OK, with its output), not a cancellation. The event stream reports no status or metrics, so the prediction is then read once more on a background thread; see [the read after a stream](#the-read-after-a-stream). Your loop gets each event, `done` included, without waiting for that read. A stream that raises, or is closed or dropped before `done`, makes no read. |
+| `Client.stream`, `async_stream` (and `replicate.stream`) | One `replicate.stream` span for the whole stream, not one per event. The client's stream is lazy: it sends nothing until it is first iterated, so the span starts at the first `next()` (as a child of the span that was current when you called `stream()`), and a stream that is never iterated has no span. The stream is complete at its `done` event; breaking out of the loop there and closing or dropping the stream is a completed stream (OK, with its output), not a cancellation. The event stream reports no status or metrics, so the prediction is then read once more in the background; see [the read after a stream](#the-read-after-a-stream). Your loop gets each event, `done` included, without waiting for that read. A stream that raises, or is closed or dropped before `done`, makes no read. |
 | `predictions.create`, `async_create`, also `models.predictions.create` and `deployments.predictions.create` | One `replicate.predictions.create` span. See [create, wait and cancel](#create-wait-and-cancel). |
 | `Prediction.wait`, `async_wait` | Ends the open create span of that prediction, or opens one `replicate.prediction.wait` span. A `wait()` on a prediction that is already finished makes no request and adds no span. |
 | `Prediction.cancel`, `async_cancel`, `predictions.cancel(id)`, `async_cancel(id)` | Ends the open create span of that prediction, or opens one `replicate.predictions.cancel` span. |
@@ -68,7 +71,7 @@ runs with OpenTelemetry instrumentation suppressed and adds no span.
 
 The event stream carries no status, `predict_time` or token counts; the
 prediction does. After `done`, the package reads the prediction once
-(`GET /v1/predictions/{id}`) and records those on the stream span:
+(`GET /v1/predictions/{id}`) and records those on the stream span.
 
 - **Cost and rate limit.** The read creates no prediction and is not billed,
   but it is an API request: it counts toward your account's rate limit for
@@ -77,28 +80,80 @@ prediction does. After `done`, the package reads the prediction once
   one per stream, two when the API still answers `processing` for a
   prediction that has just sent `done`. To turn it off, pass
   `stream_reload_seconds=0` to `instrument()`; stream spans then carry no
-  status, `predict_time` or token counts.
-- **Off your path.** Your iteration returns as soon as the client yields
-  each event; the read runs on a daemon thread. It adds no latency to your
-  loop and cannot trip a timeout you put around the stream (for example
-  `asyncio.timeout`).
-- **Bounded.** `stream_reload_seconds` (default `2`) is a wall-time budget
-  from the stream's end. The read is one request, and one more
-  `poll_interval` later only when the prediction is not finished yet. It is
-  never retried: a `429` or `5xx` ends it, and `Retry-After` is not waited
-  on (it bypasses the client's `RetryTransport`). Each phase of the request
-  (connect, send, each receive) gets at most the time left in the budget, and
-  a body still arriving when the budget runs out, or over 2 MiB, is dropped.
+  status (unless `done` said `canceled`), `predict_time` or token counts.
+- **Only for a span that is exported.** No read is made for a span that is
+  not recording (a trace your sampler dropped, `NoOpTracerProvider`), after
+  the provider is shut down, or when no flush/shutdown hook could be
+  installed on the provider (see [which provider](#which-provider)): there
+  the stream span ends at once, without it.
+- **Off your path.** Completing a stream hands it to a background worker
+  through a queue. Your `next()` / `__anext__()` does not wait for the read,
+  does no I/O for it and starts no thread (the first completed stream in a
+  process starts the worker thread once), and a timeout you put around the
+  stream (for example `asyncio.timeout`) is not affected. The read's own work
+  still runs in your process and competes for the GIL: with 200 streams
+  finishing at once against a local stand-in, the time from `done` to the
+  end of each loop was 10 to 35 ms longer at the median than without the
+  read.
+- **Where it goes.** When `replicate.Client` built its own transport (you
+  passed no `transport=` or `mounts=`), the read goes through a connection
+  pool this package owns (at most 16 connections), with your client's base
+  URL, headers and proxy settings, on a background event loop. It never uses
+  your client's connection pool and never creates an HTTP client on your
+  `Client`: an app that only calls `async_stream` keeps only its async
+  client. When you passed a transport, the read has to go through it: on a
+  background thread when it can send synchronously (also for
+  `async_stream`), or, for a transport that is only async, as a task on your
+  running event loop. At most 4 such reads run at once, and when your
+  transport is an `httpx` transport the package can see, at most one per 8
+  of its connections (none below 8), so a read never takes a connection your
+  own requests need.
+- **Bounded.** `stream_reload_seconds` (default `2`, at most `10`) is a
+  wall-time budget from the stream's end. The read is one request, and one
+  more `poll_interval` later only when the prediction is not finished yet.
+  The package never retries it: a `429` or `5xx` ends it, and `Retry-After`
+  is not waited on. Replicate's `RetryTransport` layers on top are bypassed;
+  a transport of yours that retries by itself (or wraps a `RetryTransport`)
+  is used as it is. Through the package's own pool the budget is an absolute
+  deadline: when it runs out the request is cancelled and its connection
+  closed, in whatever phase it is (name lookup, connect, headers, body), and
+  name lookups run on at most 2 background threads. Through your transport,
+  each phase gets at most the time left, but a server that sends bytes slowly
+  can keep that read, one of its 4 slots and one of your transport's
+  connections until your transport's own timeouts end it; the span still
+  ends at the deadline. The body is limited to 2 MiB as it arrives; the read
+  asks for an uncompressed body, and a compressed one is inflated in bounded
+  steps.
+- **At most 64 reads at once** through the package's pool (4 through your
+  transport). A read counts until its I/O has returned, also past its
+  deadline. A stream that completes while that many are running ends at
+  once without one, with `replicate.stream.read` = `skipped`.
 - **When the span ends.** When the read returns, or when the budget runs
   out, whichever is first; either way its end time is the stream's end, not
-  the read's. A read that fails or runs out of time leaves the span OK with
-  its output and without the status, `predict_time` and token counts.
-- **Flush, shutdown and exit.** `force_flush()`, `shutdown()`,
-  `uninstrument()` and interpreter exit wait for a read in flight, at most
-  until its budget runs out, then end its span, so it is exported. A
-  Ctrl-C during that wait ends the pending spans first.
-- **At most 256 reads at once.** A stream that completes while 256 reads are
-  in flight ends at once, without one.
+  the read's. A read that is not made, fails or runs out of time leaves the
+  span OK with its output, without the status, `predict_time` and token
+  counts, and with `replicate.stream.read` saying why.
+- **Flush.** `force_flush(timeout_millis)` waits for reads in flight for at
+  most half of `timeout_millis` (default `30000`), never past their budget.
+  A read still running then is cut short, and its span ends with what is
+  known (`replicate.stream.read` = `timeout`), so that flush exports it. The
+  provider's own flush gets the rest of the timeout, so the call never takes
+  longer than you asked, and its result is what `force_flush` returns. The
+  provider is shared: a flush waits for every request's reads in flight, not
+  only its own. With a transport of yours that is only async, a
+  `force_flush()` called on the event loop that runs the read cannot wait
+  for it and ends its span at once.
+- **Shutdown, exit and `uninstrument()`.** `shutdown()` and interpreter exit
+  wait for reads in flight at most until their budget runs out (default 2 s),
+  then end their spans, so they are exported: a script that streams exits
+  about one read later (0.26 s for a 0.2 s read, 2.05 s when the API does
+  not answer, measured). `uninstrument()` does not wait: the worker ends each
+  span when its read returns or its budget runs out, on the provider, which
+  is still running. A Ctrl-C during a wait ends the pending spans first.
+  When `asyncio.run()` ends, a read already running on that loop (an
+  async-only transport of yours) gets the rest of its budget.
+- **Forks.** A child forked while a read is in flight neither ends nor
+  exports that span; the parent does.
 - **What is kept.** Only the prediction's id, status, version, model,
   metrics and error string. Its input, output and logs are read with it and
   dropped.
@@ -156,7 +211,9 @@ global provider) **before** `instrument()`: until a provider is set, the
 global one is OpenTelemetry's placeholder, which has no `force_flush` or
 `shutdown`, so no hook is installed and held spans then depend on the exit
 hook alone, which runs after `register()`'s shutdown has stopped the
-processors.
+processors. Without a hook the read after a stream is not made either
+(nothing could wait for it at a flush or at exit): stream spans end at once,
+without status or token counts, with `replicate.stream.read` = `skipped`.
 
 The prediction you get back is the client's `Prediction` behind a thin
 `wrapt.ObjectProxy`: `isinstance(p, Prediction)` holds, and fields, methods,
@@ -173,11 +230,14 @@ an object a traced `create` returned while it was not yet finished.
 | `replicate.prediction.version` | The version id, when the ref or the prediction has one. The placeholder `hidden` that official models (for example `meta/meta-llama-3-8b-instruct`) report is not a version and is not recorded. |
 | `replicate.deployment` | `owner/name` of the deployment, for deployment calls. |
 | `replicate.prediction.id` | The prediction id. `run` and `stream` record the id of the prediction the client created for them. Absent when the client never got one (for example an invalid ref). |
-| `replicate.prediction.status` | The status string the client returns (`starting`, `processing`, `succeeded`, `failed`, `canceled`), never normalised. Stream spans have the status of the read after `done` (see [the read after a stream](#the-read-after-a-stream)), or none when that read is off, failed or ran out of time: the event stream does not report one. A `replicate.run` span can show `processing` on an OK span with output: with `Prefer: wait` (the default `wait=True` in replicate 1.0.7, an explicit `wait=` in 1.0.0) the client's `run()` returns without polling once the create response is no longer `starting`, and the server can answer `processing` for a prediction that has finished (the client's `run.py` behaviour). |
+| `replicate.prediction.status` | The status string the client returns (`starting`, `processing`, `succeeded`, `failed`, `canceled`), never normalised; the read after a stream also knows `aborted` (the prediction's deadline passed before it started). Stream spans have the status of the read after `done` (see [the read after a stream](#the-read-after-a-stream)), or none when that read is off, failed or ran out of time: the event stream does not report one. Two exceptions: a `done` event whose data says `{"reason": "canceled"}` records `canceled` even without the read, and a stream that ended without `done` records the non-final status the API answered (for example `processing`). A `replicate.run` span can show `processing` on an OK span with output: with `Prefer: wait` (the default `wait=True` in replicate 1.0.7, an explicit `wait=` in 1.0.0) the client's `run()` returns without polling once the create response is no longer `starting`, and the server can answer `processing` for a prediction that has finished (the client's `run.py` behaviour). |
 | `replicate.metrics.predict_time` | `metrics.predict_time` in seconds, when present. A duration, not a price. |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens` | `metrics.input_token_count` and `metrics.output_token_count`, and their sum, when the prediction reports them (Replicate's language models do). Never estimated. |
 | `replicate.output.type` | `text`, `url` (one file URL), `list`, `object` or `other`. |
 | `replicate.stream.file_count` | File outputs seen in a stream, when there were any. |
+| `replicate.stream.read` | Why a stream span has no final status from the read after `done`: `skipped` (not made: 64 reads were already running, the client was closed, or the provider has no hook), `timeout` (the budget, a flush or the end of your event loop came first), `failed` (refused, for example HTTP 429; unreadable; or over 2 MiB), `unfinished` (the API still answered a non-final status twice). Absent when the read found the final status, or is off. |
+| `replicate.stream.done_reason` | The `reason` in the data of the stream's `done` event, when there is one (`canceled`). |
+| `replicate.stream.truncated` | `true` when the event stream ended without a `done` event. The span is OK with the output received, and its status is what the API answered for the prediction. |
 | `gen_ai.span.kind` | `LLM` when the output is text, `CHAIN` otherwise (files, no output yet, errors). |
 | `input.value`, `input.mime_type` | The prediction `input` as JSON. |
 | `output.value`, `output.mime_type` | Text output (a list of text tokens is joined; stream text events are concatenated), or the file URL(s) as strings. |
@@ -226,7 +286,8 @@ recorded.
 - The client does not retry a create (POST) answered 429; the span ends
   ERROR and a retry by the caller is a second span. Reads (GET) answered 429,
   503 or 504 are retried inside the client, within the same span, except the
-  package's own read after a stream, which is never retried.
+  package's own read after a stream, which the package never retries (a
+  transport of yours that retries by itself is used as it is).
 - A prediction that ends `failed` (for example after `wait()`, which does not
   raise) sets the span to ERROR with the prediction's `error` string.
 - A prediction that ends `canceled` is a terminal state, not a failure: the
@@ -236,7 +297,8 @@ recorded.
   stream/iterator is closed (`close()` / `aclose()`) or dropped before its
   end (for a stream, before its `done` event) — the span ends once with
   status ERROR, description `cancelled`, and `replicate.cancelled` = `true`,
-  without an exception event.
+  without an exception event. A stream closed or dropped before its first
+  `next()` sent no request and has no span.
 - Nothing is exported from a finaliser. The garbage collector can release a
   dropped stream, iterator or held prediction on any thread, even while that
   thread holds an exporter's lock, so its span end is only queued then. It is
@@ -259,11 +321,13 @@ recorded.
   token is not redacted from that span.
 - Do not combine this package with another instrumentor that wraps the same
   Replicate client methods, or spans may be duplicated.
-- The read after a stream goes through the client's sync HTTP client, also
-  for `async_stream`. On a `Client` used only from async code, the first read
-  makes the client build its sync httpx client (as any sync call would), with
-  the same headers and transport. A transport you passed that is async-only
-  cannot send it, and those streams get no read.
+- The read after a stream through a transport you passed (see
+  [where it goes](#the-read-after-a-stream)) cannot be cancelled from outside
+  when it sends synchronously: a server that trickles bytes keeps it, and one
+  of your transport's connections, until your transport's own timeouts end
+  it. At most 4 are live at once, and the span always ends at the deadline.
+  If such a transport wraps an `httpx` pool of fewer than 8 connections that
+  the package cannot see, keep `stream_reload_seconds` low or `0`.
 
 ## Live vendor verification (2026-10-20)
 

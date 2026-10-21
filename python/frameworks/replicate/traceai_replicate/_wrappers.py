@@ -4,16 +4,16 @@ Span model (TH-8320):
 
 * ``replicate.run`` - ``Client.run`` / ``async_run``. The nested create and the
   client's own poll loop run inside it; they add no span.
-* ``replicate.stream`` - ``Client.stream`` / ``async_stream``, open until the
-  stream completes (its ``done`` event, or the end of iteration), is closed
-  before that, or is dropped; a ``close()`` or a drop after ``done`` is not a
-  cancellation. The SSE stream carries no status or metrics, so a completed
-  stream's prediction is read once more (``GET /v1/predictions/{id}``: free,
-  no new prediction) for its final status, ``predict_time`` and token counts.
-  The read is off the caller's path: the caller's iteration returns at once
-  and a daemon thread reads (within ``stream_reload_seconds``, never retried,
-  no HTTP span), then ends the span as of the stream's end. See
-  :func:`complete_stream`.
+* ``replicate.stream`` - ``Client.stream`` / ``async_stream``. The client's
+  stream is a lazy generator, so the span starts at the first ``next()``
+  (in the context of the ``stream()`` call); a stream never iterated sends no
+  request and has no span. It is open until the stream completes (its
+  ``done`` event, or the end of iteration), is closed before that, or is
+  dropped; a ``close()`` or a drop after ``done`` is not a cancellation. The
+  SSE stream carries no status or metrics, so a completed stream's prediction
+  is read once more (``GET /v1/predictions/{id}``: free, no new prediction)
+  for its final status, ``predict_time`` and token counts, off the caller's
+  path; see :mod:`traceai_replicate._stream_read`.
 * ``replicate.predictions.create`` - every create route. When the returned
   prediction is not terminal yet, the span stays open on that prediction so a
   later ``wait`` / ``cancel`` ends it (one span, not two). If neither is
@@ -28,6 +28,9 @@ Span model (TH-8320):
 * ``replicate.prediction.wait`` / ``replicate.predictions.cancel`` - wait or
   cancel on a prediction that has no open create span.
 
+A call made while the caller has suppressed instrumentation
+(``_SUPPRESS_INSTRUMENTATION_KEY``) passes through untraced.
+
 Instrumentation code is isolated: a failure while building attributes is
 logged at DEBUG and never replaces the vendor's result or exception.
 """
@@ -38,14 +41,13 @@ import asyncio
 import collections
 import contextvars
 import copy
-import json
 import logging
-import re
+import os
 import threading
 import time
-import types
+import weakref
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple, TypeVar
 
 import wrapt
 from fi_instrumentation import REDACTED_VALUE, TraceConfig
@@ -76,6 +78,12 @@ from traceai_replicate._attributes import (
     request_attributes,
     span_kind,
 )
+from traceai_replicate._stream_read import (
+    DEFAULT_STREAM_RELOAD_SECONDS,
+    StreamReads,
+    complete_stream,
+    settle_stream_reads,
+)
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -88,10 +96,10 @@ CANCEL = "replicate.predictions.cancel"
 
 # The longest a create span is held open waiting for wait()/cancel().
 DEFAULT_MAX_PENDING_SECONDS = 600.0
-# Wall-time budget for reading a completed stream's prediction (its final
-# status and metrics), counted from the stream's end; 0 turns the read off.
-DEFAULT_STREAM_RELOAD_SECONDS = 2.0
 _monotonic = time.monotonic
+_SUPPRESS_INSTRUMENTATION_KEY = getattr(
+    context_api, "_SUPPRESS_INSTRUMENTATION_KEY", "suppress_instrumentation"
+)
 
 # The traced call whose vendor code is running in this context. A wrapped
 # method reached from inside it (run -> predictions.create -> Prediction.wait,
@@ -106,6 +114,14 @@ _ACTIVE: "contextvars.ContextVar[Optional[_Call]]" = contextvars.ContextVar(
 _DEFERRED_KEYS = (INPUT_VALUE, INPUT_MIME_TYPE, REQUEST_PARAMETERS)
 _UNSET = object()
 _T = TypeVar("_T")
+
+
+def _caller_suppressed() -> bool:
+    """The caller suppressed instrumentation (FITracer would start no span)."""
+    try:
+        return bool(context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY))
+    except Exception:
+        return False
 
 
 def _guard(function: Callable[[], _T], default: _T) -> _T:
@@ -144,8 +160,12 @@ class _Call:
         client: Any,
         request: Dict[str, Any],
         stream: bool,
+        begin: Optional[Callable[[], Any]] = None,
     ) -> None:
+        # A stream's span starts at its first next() (see begin()); until then
+        # this is the invalid span, on which every write is a no-op.
         self.span = span
+        self._begin = begin
         self.config = config
         self.client = client
         self.request = request
@@ -167,10 +187,21 @@ class _Call:
         # (register()'s shutdown) that interrupted this thread inside another
         # finish() returns instead of deadlocking.
         self._done = threading.Lock()
+        # A forked child inherits this object; only this process ends the span.
+        self._pid = os.getpid()
 
     @property
     def finished(self) -> bool:
         return self._done.locked()
+
+    def begin(self) -> None:
+        """Start a stream's span, once (on its first ``next()``)."""
+        begin = self._begin
+        if begin is not None:
+            self._begin = None
+            span = _guard(begin, None)
+            if span is not None:
+                self.span = span
 
     @contextmanager
     def activate(self) -> Iterator[None]:
@@ -224,11 +255,14 @@ class _Call:
         cancelled: bool = False,
         use_snapshot: bool = False,
         end_time: Optional[int] = None,
+        extra: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if not self._done.acquire(blocking=False):
             return  # ended, or being ended, by another finish()
+        if self._pid != os.getpid():
+            return  # inherited by a forked child: the parent process ends it
         try:
-            self._write(prediction, output, collector, error, cancelled, use_snapshot)
+            self._write(prediction, output, collector, error, cancelled, use_snapshot, extra)
         except Exception:
             logger.debug("traceai-replicate: could not complete the span", exc_info=True)
         try:
@@ -266,14 +300,18 @@ class _Call:
         error: Optional[BaseException],
         cancelled: bool,
         use_snapshot: bool,
+        extra: Optional[Mapping[str, Any]] = None,
     ) -> None:
         tokens = _guard(lambda: api_tokens(self.client), ())
         details = _guard(lambda: self._details(prediction, use_snapshot), {})
         if self.stream and details.get(PREDICTION_STATUS) not in TERMINAL_STATUSES:
             # An SSE stream does not report a status. Without the read after
             # ``done`` the only one known is the create-time status, which
-            # would mislead, so the span carries none.
+            # would mislead, so the span carries none (unless the stream
+            # itself said, in ``extra``: a ``done`` reason ``canceled``).
             details.pop(PREDICTION_STATUS, None)
+        if extra:
+            details.update(extra)
         produced = {} if error is not None or cancelled else _guard(
             lambda: self._output(prediction, output, collector, use_snapshot), {}
         )
@@ -348,6 +386,19 @@ class _Call:
 # later, at a safe point: the next traced call, a registry operation, the
 # provider's force_flush/shutdown, uninstrument() or exit.
 _RELEASED: "collections.deque[Tuple[_Call, bool, int]]" = collections.deque()
+# Registries alive in this process; a forked child gets fresh locks and empty
+# registries (the spans they held are the parent's to end).
+_REGISTRIES: "weakref.WeakSet[PendingRegistry]" = weakref.WeakSet()
+
+
+def _after_fork_in_child() -> None:
+    _RELEASED.clear()
+    for registry in list(_REGISTRIES):
+        _guard(registry._reset_after_fork, None)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork_in_child)
 
 
 def drain_released() -> None:
@@ -388,6 +439,12 @@ class PendingRegistry:
         # Re-entrant as a safeguard. No span ends while it is held: expiry runs
         # outside it, and __del__ only queues (see _RELEASED).
         self._lock = threading.RLock()
+        _REGISTRIES.add(self)
+
+    def _reset_after_fork(self) -> None:
+        self._lock = threading.RLock()
+        self._calls = {}
+        self._claimed = {}
 
     def add(self, prediction_id: str, call: _Call) -> None:
         call.on_finish = lambda finished: self.discard(prediction_id, finished)
@@ -443,30 +500,33 @@ class PendingRegistry:
         for call in stale:
             call.expire()
 
-    def expire_all(self) -> None:
-        """End released spans, the spans of completed streams whose read is
-        still running (see :func:`settle_stream_reads`), then every held span
-        (``force_flush``, ``uninstrument()``). A claimed span is left to its
-        running call."""
+    def expire_all(self, settle: bool = True, until: Optional[float] = None) -> bool:
+        """End released spans, then (with ``settle``) the spans of completed
+        streams whose read is still running, waiting for those reads no later
+        than ``until`` (see :func:`settle_stream_reads`), then every held span
+        (``force_flush``; ``uninstrument()`` without ``settle``). A claimed
+        span is left to its running call. False when ``until`` cut a read short."""
         drain_released()
-        settle_stream_reads()
+        in_time = settle_stream_reads(until) if settle else True
         with self._lock:
             calls = [call for call, _ in self._calls.values()]
             self._calls.clear()
         for call in calls:
             call.expire()
+        return in_time
 
-    def end_all(self) -> None:
+    def end_all(self, until: Optional[float] = None) -> bool:
         """Provider shutdown and interpreter exit: :meth:`expire_all`, then
         end the claimed spans whose wait()/cancel() is still running, as of
         now (see :meth:`_Call.interrupt`), so they are not lost when the
         processors stop."""
-        self.expire_all()
+        in_time = self.expire_all(until=until)
         with self._lock:
             running = list(self._claimed)
             self._claimed.clear()
         for call in running:
             _guard(call.interrupt, None)
+        return in_time
 
 
 def _call_of(proxy: Any) -> Optional[_Call]:
@@ -524,306 +584,46 @@ class PendingPrediction(wrapt.ObjectProxy):  # type: ignore[misc]
             _guard(lambda: call.release(cancelled=False), None)
 
 
-# -- a completed stream: the read after it, off the caller's path -------------------------
-#
-# Replicate's SSE stream reports no status, metrics or token counts; the
-# prediction does. A stream is complete at its ``done`` event (without one, at
-# the end of iteration). From then on the span's end time is fixed and the
-# caller's iteration returns at once: complete_stream() hands the end of the
-# span to a daemon "finisher" thread. That thread starts a "reader" thread,
-# waits for it until the read's deadline (the stream's end +
-# ``stream_reload_seconds``), then ends the span, as of the stream's end, with
-# whatever the read found. The read:
-#
-# * is one GET, and one more ``poll_interval`` later only when the API still
-#   answers a non-terminal status (it can lag behind ``done``);
-# * goes to the transport under replicate's RetryTransport, so a 429/5xx is
-#   not retried and Retry-After is never slept on; each phase of the GET
-#   (pool, connect, send, each receive) is given at most the time left before
-#   the deadline, and a body still arriving at the deadline is dropped;
-# * runs with OpenTelemetry instrumentation suppressed, so an HTTP client
-#   instrumentation adds no span for it.
-#
-# At most _MAX_READS reads run at once; a stream that completes while that many
-# are in flight ends at once, without the read. A flush, a provider shutdown,
-# uninstrument() and interpreter exit end these spans first
-# (settle_stream_reads), waiting for reads in flight no longer than their
-# deadlines.
-
-_READ_ATTEMPTS = 2
-# A language model's prediction is tens of KB; at most _MAX_READS of these are held at once.
-_MAX_READ_BYTES = 2 * 1024 * 1024
-_MAX_READS = 256
-_PREDICTION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
-# What the span uses from the read; its input, output and logs are not kept.
-_PREDICTION_FIELDS = ("id", "status", "version", "model", "metrics", "error")
-# How long settle_stream_reads() waits past the last deadline for the finishers.
-_SETTLE_GRACE = 0.25
-_FINISHER_NAME = "traceai-replicate-stream-finish"
-_READER_NAME = "traceai-replicate-stream-read"
-
-
-def _suppression_keys() -> Tuple[Any, ...]:
-    keys: List[Any] = []
-    for name in ("_SUPPRESS_INSTRUMENTATION_KEY", "_SUPPRESS_HTTP_INSTRUMENTATION_KEY"):
-        key = getattr(context_api, name, None)
-        if key is not None:
-            keys.append(key)
-    keys.append("suppress_instrumentation")  # the plain key older instrumentations read
-    return tuple(keys)
-
-
-_SUPPRESSION_KEYS = _suppression_keys()
-
-
-def _suppressed() -> Any:
-    """An empty OpenTelemetry context with instrumentation (and HTTP instrumentation) suppressed."""
-    current = context_api.Context()
-    for key in _SUPPRESSION_KEYS:
-        current = context_api.set_value(key, True, current)
-    return current
-
-
 def _is_done(item: Any) -> bool:
     """The ``done`` server-sent event that ends a completed replicate stream."""
     event = getattr(item, "event", None)
     return event is not None and hasattr(item, "data") and getattr(event, "value", event) == "done"
 
 
-def _stream_target(call: _Call) -> Optional[Tuple[Any, str]]:
-    """``(client, prediction id)`` of a stream that still needs its final read."""
-    prediction = call.prediction
-    prediction_id = getattr(prediction, "id", None)
-    if call.client is None or not isinstance(prediction_id, str):
-        return None
-    if not _PREDICTION_ID.fullmatch(prediction_id):
-        return None
-    if getattr(prediction, "status", None) in TERMINAL_STATUSES:
-        return None  # already final: _write uses it as it is
-    return call.client, prediction_id
-
-
-def _poll_interval(client: Any) -> float:
-    value = getattr(client, "poll_interval", 0.5)
-    return float(value) if isinstance(value, (int, float)) and value >= 0 else 0.5
-
-
-def _is_retry_transport(transport: Any) -> bool:
-    return any(
-        kind.__name__ == "RetryTransport" and kind.__module__.startswith("replicate")
-        for kind in type(transport).__mro__
-    ) and hasattr(transport, "_wrapped_transport")
-
-
-def _single_attempt_transport(http: Any, url: Any) -> Any:
-    """The transport httpx would send ``url`` to, minus replicate's RetryTransport.
-
-    replicate wraps every client transport in its RetryTransport (up to 10
-    attempts on 429/503/504, sleeping for any numeric Retry-After, uncapped);
-    the read after a stream must not wait like that, so it goes to the
-    transport inside (inside every layer, when the caller's own transport is
-    one too). A transport mounted for a proxy is not wrapped and is used as
-    it is.
-    """
-    transport = http._transport_for_url(url)
-    while _is_retry_transport(transport):
-        transport = transport._wrapped_transport
-    return transport
-
-
-def _get_prediction(client: Any, prediction_id: str, deadline: float) -> Optional[Dict[str, Any]]:
-    """One ``GET /v1/predictions/{id}`` through the client's own sync httpx
-    client (its headers, base URL and transport), never retried. None on an
-    answer other than 200, a body over 2 MiB, or the deadline passing."""
-    remaining = deadline - _monotonic()
-    if remaining <= 0:
-        return None
-    http = client._client  # replicate's sync httpx.Client; built here for an async-only client
-    request = http.build_request("GET", "/v1/predictions/" + prediction_id, timeout=remaining)
-    response = _single_attempt_transport(http, request.url).handle_request(request)
-    try:
-        response.request = request
-        if response.status_code != 200:
-            return None
-        body = bytearray()
-        for chunk in response.iter_bytes():
-            body.extend(chunk)
-            if len(body) > _MAX_READ_BYTES or _monotonic() > deadline:
-                return None
-    finally:
-        response.close()
-    data = json.loads(bytes(body))
-    return data if isinstance(data, dict) else None
-
-
-class _StreamFinish:
-    """A completed stream whose span waits for the read after it."""
-
-    __slots__ = ("call", "collector", "ended", "deadline", "client", "prediction_id", "found", "worker")
-
-    def __init__(
-        self,
-        call: _Call,
-        collector: OutputCollector,
-        ended: int,
-        deadline: float,
-        client: Any,
-        prediction_id: str,
-    ) -> None:
-        self.call = call
-        self.collector = collector
-        self.ended = ended
-        self.deadline = deadline
-        self.client = client
-        self.prediction_id = prediction_id
-        self.found: Any = None
-        self.worker: Optional[threading.Thread] = None
-
-    def read(self) -> None:
-        """The reader thread: at most two GETs, instrumentation suppressed."""
-        token = context_api.attach(_suppressed())
-        try:
-            for attempt in range(_READ_ATTEMPTS):
-                data = _get_prediction(self.client, self.prediction_id, self.deadline)
-                if data is None:
-                    return
-                if data.get("status") in TERMINAL_STATUSES:
-                    self.found = types.SimpleNamespace(
-                        **{name: data.get(name) for name in _PREDICTION_FIELDS}
-                    )
-                    return
-                pause = min(_poll_interval(self.client), self.deadline - _monotonic())
-                if attempt + 1 >= _READ_ATTEMPTS or pause <= 0:
-                    return
-                time.sleep(pause)
-        except Exception:
-            logger.debug("traceai-replicate: could not read the streamed prediction", exc_info=True)
-        finally:
-            context_api.detach(token)
-
-    def run(self) -> None:
-        """The finisher thread: the read, bounded by the deadline, then the span's end."""
-        try:
-            reader = threading.Thread(target=self.read, name=_READER_NAME, daemon=True)
-            reader.start()
-            reader.join(max(0.0, self.deadline - _monotonic()))
-        except Exception:
-            logger.debug("traceai-replicate: the read after a stream did not run", exc_info=True)
-        finally:
-            self.finish()
-
-    def finish(self) -> None:
-        """End the span as of the stream's end with what is known; once."""
-        try:
-            self.call.finish(collector=self.collector, prediction=self.found, end_time=self.ended)
-        finally:
-            with _FINISHING_LOCK:
-                _FINISHING.discard(self)
-
-
-# Completed streams whose span is still waiting for its read. Re-entrant: a
-# signal handler (register()'s shutdown) can run settle_stream_reads() on a
-# thread that is inside complete_stream().
-_FINISHING: "Set[_StreamFinish]" = set()
-_FINISHING_LOCK = threading.RLock()
-
-
-def complete_stream(call: _Call, collector: OutputCollector, budget: float) -> None:
-    """The stream completed: fix the span's end time and give the caller its
-    control back at once.
-
-    Without a read (``budget`` 0, no prediction id, a prediction already
-    final, or _MAX_READS reads in flight) the span ends here. Otherwise a
-    daemon thread reads the prediction and ends the span (see
-    :class:`_StreamFinish`). Nothing here waits on I/O and no Exception
-    escapes; a BaseException (KeyboardInterrupt) while the thread starts ends
-    the span first, then propagates.
-    """
-    ended = time.time_ns()
-    if call.completed or call.finished:
-        return
-    call.completed = True
-    target = _guard(lambda: _stream_target(call), None) if budget > 0 else None
-    if target is None:
-        call.finish(collector=collector, end_time=ended)
-        return
-    entry = _StreamFinish(call, collector, ended, _monotonic() + budget, *target)
-    try:
-        entry.worker = threading.Thread(target=entry.run, name=_FINISHER_NAME, daemon=True)
-        with _FINISHING_LOCK:
-            started = len(_FINISHING) < _MAX_READS
-            if started:
-                _FINISHING.add(entry)
-        if started:
-            entry.worker.start()
-        else:
-            entry.finish()
-    except Exception:  # e.g. no new thread at interpreter shutdown: end it without the read
-        logger.debug("traceai-replicate: could not start the read after a stream", exc_info=True)
-        entry.finish()
-    except BaseException:
-        entry.finish()
-        raise
-
-
-def settle_stream_reads() -> None:
-    """End the span of every completed stream whose read is still running.
-
-    For a flush, a provider shutdown, ``uninstrument()`` and interpreter exit:
-    reads in flight are waited for, in all no longer than the last of their
-    deadlines (plus a short grace for the finishers), then each span ends
-    with what is known. A KeyboardInterrupt (or any BaseException) while
-    waiting ends every pending span first, then propagates.
-    """
-    with _FINISHING_LOCK:
-        pending = list(_FINISHING)
-    if not pending:
-        return
-    current = threading.current_thread()
-    until = max(entry.deadline for entry in pending) + _SETTLE_GRACE
-    try:
-        for entry in pending:
-            worker = entry.worker
-            if worker is not None and worker is not current and worker.is_alive():
-                worker.join(max(0.0, until - _monotonic()))
-            entry.finish()
-    except BaseException:
-        for entry in pending:
-            _guard(entry.finish, None)
-        raise
-
-
 class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     """A stream / run output generator whose span ends with the iteration.
 
-    Complete (a stream's ``done`` event, or the end of iteration): OK, ended
-    by :func:`complete_stream` without holding up the caller; a ``close()``,
-    a drop or an exception after ``done`` leaves it so. ``close()`` before
-    that, or dropping it: ERROR ``cancelled`` with ``replicate.cancelled`` (a
-    drop is queued, see ``_RELEASED``, and keeps the drop time). An exception
-    before it: ERROR. The span ends exactly once; ``close()`` closes the
-    vendor generator (and its HTTP response) first and ends the span after,
-    even if that close raises.
+    A stream's span starts at the first ``next()``. Complete (a stream's
+    ``done`` event, or the end of iteration): OK, ended by
+    :func:`complete_stream` without holding up the caller; a ``close()``, a
+    drop or an exception after ``done`` leaves it so. ``close()`` before that,
+    or dropping it: ERROR ``cancelled`` with ``replicate.cancelled`` (a drop is
+    queued, see ``_RELEASED``, and keeps the drop time); a stream closed or
+    dropped before its first ``next()`` made no request and has no span. An
+    exception before it: ERROR. The span ends exactly once; ``close()``
+    closes the vendor generator (and its HTTP response) first and ends the
+    span after, even if that close raises.
     """
 
     def __init__(
-        self, iterator: Any, call: _Call, collector: OutputCollector, reload_seconds: float = 0.0
+        self, iterator: Any, call: _Call, collector: OutputCollector, reads: Optional[StreamReads] = None
     ) -> None:
         super().__init__(iterator)
         self._self_call = call
         self._self_collector = collector
-        self._self_reload_seconds = reload_seconds
+        self._self_reads = reads
 
     def __iter__(self) -> "TracedIterator":
         return self
 
     def __next__(self) -> Any:
         call = self._self_call
+        call.begin()
         try:
             with call.activate():
                 item = next(self.__wrapped__)
         except StopIteration:
-            complete_stream(call, self._self_collector, self._self_reload_seconds)
+            complete_stream(call, self._self_collector, self._self_reads)
             raise
         except BaseException as error:
             if not call.completed:
@@ -831,7 +631,7 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             raise
         _guard(lambda: self._self_collector.add(item), None)
         if call.stream and _guard(lambda: _is_done(item), False):
-            complete_stream(call, self._self_collector, self._self_reload_seconds)
+            complete_stream(call, self._self_collector, self._self_reads, done=item)
         return item
 
     def close(self) -> None:
@@ -853,23 +653,24 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     """The async twin of :class:`TracedIterator`; ``aclose()`` ends the span."""
 
     def __init__(
-        self, iterator: Any, call: _Call, collector: OutputCollector, reload_seconds: float = 0.0
+        self, iterator: Any, call: _Call, collector: OutputCollector, reads: Optional[StreamReads] = None
     ) -> None:
         super().__init__(iterator)
         self._self_call = call
         self._self_collector = collector
-        self._self_reload_seconds = reload_seconds
+        self._self_reads = reads
 
     def __aiter__(self) -> "TracedAsyncIterator":
         return self
 
     async def __anext__(self) -> Any:
         call = self._self_call
+        call.begin()
         try:
             with call.activate():
                 item = await self.__wrapped__.__anext__()
         except StopAsyncIteration:
-            complete_stream(call, self._self_collector, self._self_reload_seconds)
+            complete_stream(call, self._self_collector, self._self_reads, is_async=True)
             raise
         except asyncio.CancelledError:
             if not call.completed:
@@ -881,7 +682,7 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             raise
         _guard(lambda: self._self_collector.add(item), None)
         if call.stream and _guard(lambda: _is_done(item), False):
-            complete_stream(call, self._self_collector, self._self_reload_seconds)
+            complete_stream(call, self._self_collector, self._self_reads, is_async=True, done=item)
         return item
 
     async def aclose(self) -> None:
@@ -899,15 +700,18 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
             _guard(lambda: call.release(cancelled=True), None)
 
 
-def _finish_or_wrap(call: _Call, result: Any, count_files: bool, reload_seconds: float = 0.0) -> Any:
+def _finish_or_wrap(
+    call: _Call, result: Any, count_files: bool, reads: Optional[StreamReads] = None
+) -> Any:
     """End the span now, or hand it to the iterator the client returned."""
     try:
         if is_sync_iterator(result):
-            return TracedIterator(result, call, OutputCollector(count_files), reload_seconds)
+            return TracedIterator(result, call, OutputCollector(count_files), reads)
         if is_async_iterator(result):
-            return TracedAsyncIterator(result, call, OutputCollector(count_files), reload_seconds)
+            return TracedAsyncIterator(result, call, OutputCollector(count_files), reads)
     except Exception:
         logger.debug("traceai-replicate: could not wrap the returned iterator", exc_info=True)
+    call.begin()
     call.finish(output=result)
     return result
 
@@ -928,8 +732,16 @@ class _Wrapper:
         self._operation = operation
 
     def _start(
-        self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any], stream: bool = False
+        self,
+        wrapped: Any,
+        instance: Any,
+        args: tuple,
+        kwargs: Mapping[str, Any],
+        stream: bool = False,
+        lazy: bool = False,
     ) -> Optional[_Call]:
+        """A call and its span; with ``lazy`` the span starts at
+        :meth:`_Call.begin`, in the context current now."""
         try:
             client = _guard(lambda: replicate_client(instance), None)
             request = _guard(
@@ -942,8 +754,19 @@ class _Wrapper:
                 for key, value in request.items()
                 if key not in _DEFERRED_KEYS
             }
-            span = self._tracer.start_span(self._span_name, attributes=initial)
-            return _Call(span, self._config, client, request, stream)
+            if not lazy:
+                span = self._tracer.start_span(self._span_name, attributes=initial)
+                return _Call(span, self._config, client, request, stream)
+            tracer, name, context = self._tracer, self._span_name, context_api.get_current()
+
+            def begin() -> Any:
+                token = context_api.attach(context)
+                try:
+                    return tracer.start_span(name, attributes=initial)
+                finally:
+                    context_api.detach(token)
+
+            return _Call(trace_api.INVALID_SPAN, self._config, client, request, stream, begin=begin)
         except Exception:
             logger.debug("traceai-replicate: could not start a span", exc_info=True)
             return None
@@ -977,29 +800,28 @@ class _Wrapper:
 class RunWrapper(_Wrapper):
     """``Client.run``, and ``Client.stream`` with ``stream=True``."""
 
-    def __init__(self, *args: Any, stream: bool = False, reload_seconds: float = 0.0) -> None:
+    def __init__(self, *args: Any, stream: bool = False, reads: Optional[StreamReads] = None) -> None:
         super().__init__(*args)
         self._stream = stream
         # Only a stream reads its prediction after the end: a run() iterator
         # polls the same Prediction object to the end itself.
-        self._reload_seconds = reload_seconds if stream else 0.0
+        self._reads = reads if stream else None
 
     def __call__(self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]) -> Any:
-        if _ACTIVE.get() is not None:
+        if _ACTIVE.get() is not None or _caller_suppressed():
             return wrapped(*args, **kwargs)
         self._touch()
-        call = self._start(wrapped, instance, args, kwargs, stream=self._stream)
+        call = self._start(wrapped, instance, args, kwargs, stream=self._stream, lazy=self._stream)
         if call is None:
             return wrapped(*args, **kwargs)
         try:
             with call.activate():
                 result = wrapped(*args, **kwargs)
         except BaseException as error:
+            call.begin()
             call.finish(error=error)
             raise
-        return _finish_or_wrap(
-            call, result, count_files=self._stream, reload_seconds=self._reload_seconds
-        )
+        return _finish_or_wrap(call, result, count_files=self._stream, reads=self._reads)
 
 
 class AsyncRunWrapper(RunWrapper):
@@ -1008,30 +830,32 @@ class AsyncRunWrapper(RunWrapper):
     async def __call__(  # type: ignore[override]
         self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]
     ) -> Any:
-        if _ACTIVE.get() is not None:
+        if _ACTIVE.get() is not None or _caller_suppressed():
             return await wrapped(*args, **kwargs)
         self._touch()
-        call = self._start(wrapped, instance, args, kwargs, stream=self._stream)
+        call = self._start(wrapped, instance, args, kwargs, stream=self._stream, lazy=self._stream)
         if call is None:
             return await wrapped(*args, **kwargs)
         try:
             with call.activate():
                 result = await wrapped(*args, **kwargs)
         except asyncio.CancelledError:
+            call.begin()
             call.finish(cancelled=True)
             raise
         except BaseException as error:
+            call.begin()
             call.finish(error=error)
             raise
-        return _finish_or_wrap(
-            call, result, count_files=self._stream, reload_seconds=self._reload_seconds
-        )
+        return _finish_or_wrap(call, result, count_files=self._stream, reads=self._reads)
 
 
 class CreateWrapper(_Wrapper):
     """Every prediction create route (version, official model, deployment)."""
 
     def __call__(self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]) -> Any:
+        if _caller_suppressed():
+            return wrapped(*args, **kwargs)
         outer = _ACTIVE.get()
         if outer is not None:
             prediction = wrapped(*args, **kwargs)
@@ -1054,6 +878,8 @@ class AsyncCreateWrapper(_Wrapper):
     async def __call__(
         self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]
     ) -> Any:
+        if _caller_suppressed():
+            return await wrapped(*args, **kwargs)
         outer = _ACTIVE.get()
         if outer is not None:
             prediction = await wrapped(*args, **kwargs)
@@ -1107,7 +933,7 @@ class _LifecycleWrapper(_Wrapper):
 
 class LifecycleWrapper(_LifecycleWrapper):
     def __call__(self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]) -> Any:
-        if _ACTIVE.get() is not None:
+        if _ACTIVE.get() is not None or _caller_suppressed():
             return wrapped(*args, **kwargs)
         self._touch()
         call = self._claim(_guard(lambda: self._prediction_id(instance, args, kwargs), None))
@@ -1131,7 +957,7 @@ class AsyncLifecycleWrapper(_LifecycleWrapper):
     async def __call__(
         self, wrapped: Any, instance: Any, args: tuple, kwargs: Mapping[str, Any]
     ) -> Any:
-        if _ACTIVE.get() is not None:
+        if _ACTIVE.get() is not None or _caller_suppressed():
             return await wrapped(*args, **kwargs)
         self._touch()
         call = self._claim(_guard(lambda: self._prediction_id(instance, args, kwargs), None))

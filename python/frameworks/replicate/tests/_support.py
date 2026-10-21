@@ -20,6 +20,7 @@ import contextlib
 import itertools
 import json
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -44,6 +45,13 @@ STREAM_MODEL = "acme/stream-model"  # urls.stream: text events, then done
 STREAM_FILE_MODEL = "acme/stream-file-model"  # urls.stream: file URL events
 STREAM_ERROR_MODEL = "acme/stream-error-model"  # urls.stream: text, then error
 STREAM_SLOW_MODEL = "acme/stream-slow-model"  # urls.stream: one event, then stalls
+# urls.stream: text events, then the response ends without ``done``; the
+# prediction stays "processing".
+STREAM_TRUNCATED_MODEL = "acme/stream-truncated-model"
+# urls.stream: one event, then ``done`` with {"reason": "canceled"}; status canceled.
+STREAM_CANCELED_MODEL = "acme/stream-canceled-model"
+# urls.stream: ``done``; the prediction is then "aborted".
+STREAM_ABORTED_MODEL = "acme/stream-aborted-model"
 DEPLOYMENT = "acme/text-deployment"  # runs TEXT_MODEL
 # An official model: version "hidden", text output, token counts in metrics,
 # streams like the live meta/meta-llama-3-8b-instruct (output x3, then done {}).
@@ -70,7 +78,7 @@ INPUT_TOKENS = 12
 OUTPUT_TOKENS = 3
 CONTENT_MARKERS = (PROMPT, TEXT_OUTPUT, "OUTPUT-FILE-MARKER", MODEL_ERROR, STREAM_TEXT)
 
-TERMINAL = ("succeeded", "failed", "canceled")
+TERMINAL = ("succeeded", "failed", "canceled", "aborted")
 
 _VERSION_MODELS = {TEXT_VERSION: TEXT_MODEL, ITERATOR_VERSION: TEXT_MODEL}
 
@@ -114,6 +122,13 @@ class FakeReplicate:
         self.read_delay = 0.0
         self.read_status: Optional[int] = None
         self.read_retry_after: Optional[str] = None
+        # Seconds over which GET /v1/predictions/{id} of a stream prediction
+        # trickles its response headers (one line every 0.1 s), and the
+        # monotonic times at which the server saw such a read's client
+        # disconnect, or finished sending.
+        self.read_trickle = 0.0
+        self.read_disconnected: List[float] = []
+        self.read_completed: List[float] = []
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -136,6 +151,9 @@ class FakeReplicate:
                 parts = path.strip("/").split("/")
                 if parts[:2] == ["v1", "predictions"] and len(parts) == 3:
                     streamed = getattr(owner.predictions.get(parts[2]), "stream", False)
+                    if streamed and owner.read_trickle:
+                        self._trickle(*owner._poll(parts[2]))
+                        return
                     if streamed and owner.read_delay:
                         owner._release.wait(owner.read_delay)
                     if streamed and owner.read_status is not None:
@@ -187,6 +205,25 @@ class FakeReplicate:
                 self.end_headers()
                 self.wfile.write(data)
 
+            def _trickle(self, status: int, payload: Any) -> None:
+                data = json.dumps(payload).encode("utf-8")
+                lines = [b"HTTP/1.1 %d OK\r\n" % status]
+                steps = max(1, int(owner.read_trickle / 0.1))
+                lines += [b"X-Pad-%d: x\r\n" % index for index in range(steps)]
+                lines += [b"Content-Type: application/json\r\n"]
+                lines += [b"Content-Length: %d\r\n\r\n" % len(data) + data]
+                try:
+                    for line in lines:
+                        self.wfile.write(line)
+                        self.wfile.flush()
+                        if owner._release.wait(0.1):
+                            return
+                except OSError:
+                    owner.read_disconnected.append(time.monotonic())
+                    self.close_connection = True
+                    return
+                owner.read_completed.append(time.monotonic())
+
             def _stream(self, prediction: _Prediction) -> None:
                 events = owner._stream_events(prediction)
                 self.send_response(200)
@@ -200,6 +237,8 @@ class FakeReplicate:
                         return
                     if event.startswith("event: done"):
                         owner._streamed(prediction)  # finished before the client sees done
+                    elif event == "":  # the response ends without done
+                        break
                     self.wfile.write(event.encode("utf-8"))
                     self.wfile.flush()
                 self.close_connection = True
@@ -240,7 +279,12 @@ class FakeReplicate:
             if prediction is None:
                 return 404, {"detail": "prediction not found", "status": 404}
             prediction.polls += 1
-            if prediction.status not in TERMINAL and prediction.model != SLOW_MODEL:
+            if prediction.model == STREAM_TRUNCATED_MODEL and prediction.status == "starting":
+                prediction.status = "processing"  # still running: its stream was cut
+            if prediction.status not in TERMINAL and prediction.model not in (
+                SLOW_MODEL,
+                STREAM_TRUNCATED_MODEL,
+            ):
                 if prediction.polls == 1:
                     prediction.status = "processing"
                 else:
@@ -252,7 +296,11 @@ class FakeReplicate:
         with self._lock:
             if self.lag_streams or prediction.status in TERMINAL:
                 return
-            prediction.status = "failed" if prediction.model == STREAM_ERROR_MODEL else "succeeded"
+            prediction.status = {
+                STREAM_ERROR_MODEL: "failed",
+                STREAM_CANCELED_MODEL: "canceled",
+                STREAM_ABORTED_MODEL: "aborted",
+            }.get(prediction.model, "succeeded")
 
     def _cancel(self, prediction_id: str) -> Tuple[int, Dict[str, Any]]:
         with self._lock:
@@ -328,6 +376,12 @@ class FakeReplicate:
             return outputs[:1] + [event("error", 8, STREAM_ERROR)]
         if prediction.model == STREAM_SLOW_MODEL:
             return outputs[:1] + [None]
+        if prediction.model == STREAM_TRUNCATED_MODEL:
+            return outputs + [""]
+        if prediction.model == STREAM_CANCELED_MODEL:
+            return outputs[:1] + [event("done", 9, '{"reason": "canceled"}')]
+        if prediction.model == STREAM_ABORTED_MODEL:
+            return [event("done", 9, "{}")]
         return outputs + [event("done", 9, "{}")]
 
     # -- inspection ---------------------------------------------------------------
@@ -481,8 +535,18 @@ class Traced:
 
 @contextlib.contextmanager
 def instrumented(**options: Any) -> Iterator[Traced]:
-    """Instrument replicate against a fresh in-memory provider; uninstrument after."""
+    """Instrument replicate against a fresh in-memory provider; uninstrument after.
+
+    ``uninstrument()`` does not wait for a read after a stream that is still
+    in flight, so the block's end first waits for those (as an app's flush
+    would), leaving held create spans to ``uninstrument()``.
+    """
     from traceai_replicate import ReplicateInstrumentor
+
+    try:
+        from traceai_replicate._stream_read import settle_stream_reads
+    except ImportError:  # releases before the read had its own module
+        from traceai_replicate._wrappers import settle_stream_reads
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider(resource=Resource.create({"service.name": "test-replicate"}))
@@ -492,7 +556,10 @@ def instrumented(**options: Any) -> Iterator[Traced]:
     try:
         yield Traced(exporter, provider, instrumentor)
     finally:
-        instrumentor.uninstrument()
+        try:
+            settle_stream_reads()
+        finally:
+            instrumentor.uninstrument()
 
 
 def attrs(span: ReadableSpan) -> Dict[str, Any]:

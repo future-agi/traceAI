@@ -28,10 +28,11 @@ pytest.importorskip("replicate", reason="replicate must be installed to test its
 from opentelemetry.trace import StatusCode  # noqa: E402
 from replicate.client import RetryTransport  # noqa: E402
 from replicate.stream import ServerSentEvent  # noqa: E402
-from traceai_replicate import _wrappers  # noqa: E402
+from traceai_replicate import _stream_read  # noqa: E402
 from traceai_replicate._wrappers import drain_released  # noqa: E402
 
 from _support import (  # noqa: E402
+    API_TOKEN,
     INPUT_TOKENS,
     OUTPUT_TOKENS,
     PREDICT_TIME,
@@ -71,6 +72,20 @@ def _is_done(event):
 
 def _traceai_threads():
     return [thread for thread in threading.enumerate() if thread.name.startswith("traceai-replicate")]
+
+
+def _settled():
+    """No read's I/O is still running and no stream span waits for one."""
+    return _stream_read.live_reads() == 0 and _stream_read.pending_spans() == 0
+
+
+def _default_client(fake):
+    """A client whose transport replicate builds itself: reads go through the package's own pool."""
+    import replicate
+
+    client = replicate.Client(api_token=API_TOKEN, base_url=fake.origin)
+    client.poll_interval = 0.01
+    return client
 
 
 def _wait_for(predicate, timeout):
@@ -262,23 +277,27 @@ def test_when_the_budget_runs_out_the_span_ends_then_as_of_the_stream_end():
     _no_final(_completed(span))
 
 
+@pytest.mark.parametrize("route", ["caller-transport", "own-pool"])
 @pytest.mark.parametrize(
     "status, retry_after", [(429, "30"), (503, None)], ids=["429-retry-after-30", "503"]
 )
-def test_a_refused_read_is_not_retried_and_its_threads_are_gone_within_the_budget(status, retry_after):
+def test_a_refused_read_is_not_retried_and_is_over_within_the_budget(status, retry_after, route):
     budget = 1.0
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=budget) as traced:
         fake.read_status = status
         fake.read_retry_after = retry_after
-        _, _, tail = _timed(make_client(fake).stream(STREAM_MODEL, input={}))
+        client = make_client(fake) if route == "caller-transport" else _default_client(fake)
+        _, _, tail = _timed(client.stream(STREAM_MODEL, input={}))
         exited = time.monotonic()
         assert tail < CALLER_LATENCY, tail
-        assert _wait_for(lambda: not _traceai_threads(), budget + EPSILON), _traceai_threads()
+        assert _wait_for(_settled, budget + EPSILON)
         assert time.monotonic() - exited < budget + EPSILON
         assert len(traced.replicate_spans()) == 1  # ended with the refusal, no flush
 
     assert fake.paths("GET").count(READ) == 1  # one attempt; Retry-After is not slept on
-    _no_final(_completed(traced.one()))
+    values = _completed(traced.one())
+    _no_final(values)
+    assert values["replicate.stream.read"] == "failed"
 
 
 def test_a_callers_own_retry_transport_does_not_retry_the_read_either():
@@ -293,7 +312,7 @@ def test_a_callers_own_retry_transport_does_not_retry_the_read_either():
 
 
 def test_past_the_cap_on_reads_in_flight_a_stream_ends_at_once_without_one(monkeypatch):
-    monkeypatch.setattr(_wrappers, "_MAX_READS", 1)
+    monkeypatch.setattr(_stream_read, "_MAX_CALLER_READS", 1)
     with FakeReplicate() as fake, instrumented() as traced:
         fake.read_delay = 1.0
         client = make_client(fake)
@@ -305,6 +324,7 @@ def test_past_the_cap_on_reads_in_flight_a_stream_ends_at_once_without_one(monke
 
     assert attrs(capped)["replicate.prediction.id"] == "pred0002"
     _no_final(_completed(capped))
+    assert attrs(capped)["replicate.stream.read"] == "skipped"
     _final(_completed(spans[1]))
     assert fake.paths("GET").count("/v1/predictions/pred0002") == 0
 
@@ -327,15 +347,25 @@ def test_the_read_adds_no_span_and_runs_with_instrumentation_suppressed():
     assert [flag for _, path, flag in transport.suppressed if path != READ] == [False, False]
 
 
-def test_with_the_real_httpx_instrumentation_the_read_adds_no_span():
+@pytest.mark.parametrize("route", ["caller-transport", "own-pool", "own-pool-async"])
+def test_with_the_real_httpx_instrumentation_the_read_adds_no_span(route):
     httpx_instrumentation = pytest.importorskip(
         "opentelemetry.instrumentation.httpx", reason="opentelemetry-instrumentation-httpx is optional"
     )
     instrumentor = httpx_instrumentation.HTTPXClientInstrumentor()
+
+    async def consume(client):
+        return [event async for event in await client.async_stream(STREAM_MODEL, input={})]
+
     with FakeReplicate() as fake, instrumented() as traced:
         instrumentor.instrument(tracer_provider=traced.provider)
         try:
-            list(make_client(fake).stream(STREAM_MODEL, input={}))
+            if route == "caller-transport":
+                list(make_client(fake).stream(STREAM_MODEL, input={}))
+            elif route == "own-pool":
+                list(_default_client(fake).stream(STREAM_MODEL, input={}))
+            else:
+                asyncio.run(consume(_default_client(fake)))
             traced.provider.force_flush()
         finally:
             instrumentor.uninstrument()
@@ -380,16 +410,16 @@ def test_no_thread_is_joined_on_the_callers_path(monkeypatch):
 
 
 def test_a_keyboard_interrupt_as_the_read_starts_ends_the_span_then_propagates(monkeypatch):
-    original = threading.Thread.start
+    original = _stream_read._post
 
-    def start(self):
-        if self.name.startswith("traceai-replicate"):
-            raise KeyboardInterrupt
-        return original(self)
+    def post(state, message):
+        if message[0] == "start":
+            raise KeyboardInterrupt  # what a Ctrl-C while the stream is handed over would do
+        return original(state, message)
 
     with FakeReplicate() as fake, instrumented() as traced:
         stream = make_client(fake).stream(STREAM_MODEL, input={})
-        monkeypatch.setattr(threading.Thread, "start", start)
+        monkeypatch.setattr(_stream_read, "_post", post)
         with pytest.raises(KeyboardInterrupt):
             for _ in stream:
                 pass
@@ -399,20 +429,17 @@ def test_a_keyboard_interrupt_as_the_read_starts_ends_the_span_then_propagates(m
     assert len(spans) == 1
     _no_final(_completed(spans[0]))
     assert READ not in fake.paths("GET")
+    assert _stream_read.live_reads() == 0  # its slot was given back
 
 
 def test_a_keyboard_interrupt_while_a_flush_waits_for_the_read_ends_the_span_then_propagates(monkeypatch):
-    original = threading.Thread.join
-
-    def join(self, timeout=None):
-        if self.name == "traceai-replicate-stream-finish":
-            raise KeyboardInterrupt
-        return original(self, timeout)
+    def wait(cond, timeout):
+        raise KeyboardInterrupt  # a Ctrl-C while force_flush waits
 
     with FakeReplicate() as fake, instrumented() as traced:
         fake.read_delay = 5.0
         list(make_client(fake).stream(STREAM_MODEL, input={}))
-        monkeypatch.setattr(threading.Thread, "join", join)
+        monkeypatch.setattr(_stream_read, "_wait", wait)
         with pytest.raises(KeyboardInterrupt):
             traced.provider.force_flush()
         monkeypatch.undo()
@@ -433,13 +460,14 @@ def _assert_all_completed(traced, count):
         _no_final(_completed(span))
 
 
-def test_200_concurrent_streams_on_threads_end_every_span_and_leave_no_thread():
+def test_200_concurrent_streams_on_threads_end_every_span_and_leave_no_read_running():
     budget = 1.0
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=budget) as traced:
         fake.read_delay = CONCURRENT_READ_DELAY  # every read outlives its budget
-        clients = [make_client(fake) for _ in range(CONCURRENT)]
+        clients = [_default_client(fake) for _ in range(CONCURRENT)]
         barrier = threading.Barrier(CONCURRENT)
         tails, errors = [], []
+        peak = [0]
 
         def consume(client):
             try:
@@ -447,6 +475,7 @@ def test_200_concurrent_streams_on_threads_end_every_span_and_leave_no_thread():
                 events, _, tail = _timed(client.stream(STREAM_MODEL, input={}))
                 assert _texts(events) == STREAM_CHUNKS
                 tails.append(tail)
+                peak[0] = max(peak[0], _stream_read.live_reads())
             except BaseException as error:  # noqa: BLE001 - reported below
                 errors.append(error)
 
@@ -458,15 +487,17 @@ def test_200_concurrent_streams_on_threads_end_every_span_and_leave_no_thread():
         streamed = time.monotonic()
         assert errors == []
         assert max(tails) < 0.5, max(tails)
-        # No flush: each span ends when its budget runs out, and its threads go.
+        # No flush: each span ends when its budget runs out, and each read is
+        # cancelled at its deadline (its connection closed), not left running.
         assert _wait_for(lambda: len(traced.replicate_spans()) == CONCURRENT, budget + CONCURRENT_SLACK)
-        assert _wait_for(lambda: not _traceai_threads(), budget + CONCURRENT_SLACK), len(_traceai_threads())
+        assert _wait_for(_settled, budget + CONCURRENT_SLACK), _stream_read.live_reads()
         assert time.monotonic() - streamed < budget + CONCURRENT_SLACK
+        assert peak[0] <= _stream_read._MAX_READS
 
     _assert_all_completed(traced, CONCURRENT)
 
 
-def test_200_concurrent_async_streams_end_every_span_and_leave_no_thread():
+def test_200_concurrent_async_streams_end_every_span_and_leave_no_read_running():
     budget = 1.0
 
     async def consume(client):
@@ -479,15 +510,22 @@ def test_200_concurrent_async_streams_end_every_span_and_leave_no_thread():
 
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=budget) as traced:
         fake.read_delay = CONCURRENT_READ_DELAY
-        clients = [make_client(fake) for _ in range(CONCURRENT)]
-        tails = asyncio.run(main(clients))
+        # One client, as an app has: 200 clients would each build an httpx
+        # client and TLS context on this one event loop, and that set-up (not
+        # the instrumentation) would dominate the tails measured here.
+        shared = _default_client(fake)
+        tails = asyncio.run(main([shared] * CONCURRENT))
         streamed = time.monotonic()
         assert max(tails) < 0.5, max(tails)
         assert _wait_for(lambda: len(traced.replicate_spans()) == CONCURRENT, budget + CONCURRENT_SLACK)
-        assert _wait_for(lambda: not _traceai_threads(), budget + CONCURRENT_SLACK), len(_traceai_threads())
+        assert _wait_for(_settled, budget + CONCURRENT_SLACK), _stream_read.live_reads()
         assert time.monotonic() - streamed < budget + CONCURRENT_SLACK
 
     _assert_all_completed(traced, CONCURRENT)
+    # Past the cap a stream ends without a read, and says so.
+    reads = [attrs(span).get("replicate.stream.read") for span in traced.replicate_spans()]
+    assert set(reads) <= {"timeout", "skipped"}
+    assert reads.count("timeout") <= _stream_read._MAX_READS
 
 
 # -- interpreter exit ---------------------------------------------------------------------
