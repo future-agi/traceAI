@@ -331,13 +331,15 @@ recorded.
 
 ## Live vendor verification (2026-10-20)
 
-Three sessions against the live `api.replicate.com`, with `replicate` 1.0.7
+Four sessions against the live `api.replicate.com`, with `replicate` 1.0.7
 on Python 3.12 and `meta/meta-llama-3-8b-instruct` (`max_tokens` 24), exported
-to a local Future AGI stack. Ten predictions were made in total: seven in the
-first session, two in the second and one in the third; the account's
-prediction list for that day shows exactly those ten. The second session ran
-the read after `done` as it was then, on the caller's path; the third ran
-this release, with the read on a background thread.
+to a local Future AGI stack. Eleven predictions were made in total: seven in
+the first session, two in the second, one in the third and one in the fourth
+(00:32 UTC on 2026-10-21); the account's prediction list since 2026-10-20
+shows exactly those eleven. The second session ran the read after `done` as
+it was then, on the caller's path; the third ran it on a background thread
+started per stream, through the client's own transport; the fourth ran this
+release, through the package's own connection pool.
 
 Stored in Future AGI and read back, one trace each:
 
@@ -365,6 +367,17 @@ Stored in Future AGI and read back, one trace each:
   joined text and, from the read, status `succeeded`, `predict_time` and
   39 / 15 tokens; no version attribute. It is the only span in its trace:
   the read added none.
+- `replicate.async_stream` on a client whose transport replicate built itself
+  (fourth session, this release): the read after `done` went through the
+  package's own connection pool on its background event loop. The
+  `__anext__()` that returned `done` took 0.42 ms; the span ended on the
+  package's finisher thread 104 ms after the loop had exited, with the
+  stream's end as its end time, and no sync HTTP client was built on the
+  `Client`. Replicate answered the read's `Accept-Encoding: identity`
+  request. The stored span is LLM, OK, with the joined text and, from the
+  read, status `succeeded`, `predict_time` and 39 / 17 tokens, no
+  `replicate.stream.read` (the read found the final status) and no version
+  attribute. It is the only span in its trace.
 - An unknown version (second session): HTTP 422 "Invalid version or not
   permitted". The span is ERROR, kind `CHAIN` (no output), with the 422
   detail as its status message and one `exception` event (type and message,
@@ -375,13 +388,14 @@ Stored in Future AGI and read back, one trace each:
   account's rate limit and credit threshold; vendor error text is stored as
   the vendor wrote it.
 
-Not live-verified, stand-in only: `async_stream`, `predictions.create`
-followed by `wait()` (the held create span), `cancel`, deployments, run
-iterators, and image and file outputs. Trainings are not traced (checked with
-the stand-in).
+Not live-verified, stand-in only: `predictions.create` followed by `wait()`
+(the held create span), `cancel`, deployments, run iterators, image and file
+outputs, and, in this release, the read after a stream through a transport
+you passed (the third session ran the previous way of doing that). Trainings
+are not traced (checked with the stand-in).
 
 The stored rows of that project (spans, traces, rollups, the attribute
-catalog and the project row: 121 rows after the third session) were scanned:
+catalog and the project row: 137 rows after the fourth session) were scanned:
 the API token appears 0 times (whole or its last 12 characters), and there is
 no `r8_`, `Bearer`, `Authorization`, `/Users/` path, login or host name,
 `Traceback`, `site-packages` or `exception.stacktrace`.
