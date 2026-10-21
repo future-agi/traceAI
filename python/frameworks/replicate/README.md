@@ -74,8 +74,9 @@ HTTP mock such as respx, pytest-httpx or VCR.py has patched `httpx` or
 `httpcore` (`patched_http`). Past 64 waiting stream spans, a stream ends
 without one. A flush, shutdown, exit or `uninstrument()` does not wait for a
 read in flight unless you opt in to that too: the span ends without the
-read's data. See [the opt-in read after a
-stream](#the-opt-in-read-after-a-stream).
+read's data. The opt-in in its current form has been checked against a local
+stand-in only, not the live API (see "Live vendor verification" below). See
+[the opt-in read after a stream](#the-opt-in-read-after-a-stream).
 
 ### Options
 
@@ -209,9 +210,9 @@ span. Its limits:
   there is one connection for each. A read counts until its I/O has
   returned. In a burst, only the first 64 get the read's data: 64 of 500 sync
   streams finishing at once, in each of 5 bursts (measured at `f1866eb`);
-  and 146 of 160 streams arriving at 20 a second for 8 s while an inline
-  exporter took 0.1 s per span (the other 14 were skipped, with peak pending
-  at 64), measured at `f1866eb`.
+  and 145 of 160 streams arriving at 20 a second for 8 s while an inline
+  exporter took 0.1 s per span (the other 15 were skipped, `at_capacity`,
+  with 64 pending at the peak), measured at `4767825`.
 - **When the span ends.** When the read returns, or when the budget runs
   out, whichever is first; either way its end time is the stream's end, not
   the read's. A read that is not made, fails or runs out of time leaves the
@@ -246,9 +247,11 @@ span. Its limits:
   that runs inline, ending a span exports it inside the call, so a shutdown,
   an exit or a flush still takes the export time of the stream spans waiting
   at that moment: **up to 64 times your exporter's per-span export time**
-  (shared between the exiting thread and the finisher). Exit came 5.9 s
-  after the script's last line with 0.2 s exports and the finisher behind,
-  against 0.06 s with the read off, measured at `f1866eb`. That is
+  (shared between the exiting thread and the finisher). Measured at
+  `4767825`, with every stream's read still in flight when the script's last
+  line returned: 30 streams and 1.5 s per export, exit 23.6 s later; 20
+  streams and 0.2 s per export, 4.1 s; the same 20 with a batch span
+  processor, 0.24 s, and with an exporter that takes no time, 0.04 s. That is
   export, not a wait for a read; an OTLP exporter that waits out its timeout
   against a collector that is down makes it minutes. A batch span processor
   (`register()`'s default) only queues the spans there.
@@ -455,23 +458,40 @@ recorded.
 
 ## Live vendor verification (2026-10-20 to 2026-10-21 UTC)
 
-Six sessions against the live `api.replicate.com`, with `replicate` 1.0.7
+Seven sessions against the live `api.replicate.com`, with `replicate` 1.0.7
 on Python 3.12 and `meta/meta-llama-3-8b-instruct` (`max_tokens` 24), exported
-to a local Future AGI stack. Thirteen predictions were made in total: seven
+to a local Future AGI stack. Fourteen predictions were made in total: seven
 in the first session, two in the second, and one each in the third, the
-fourth (00:32 UTC on 2026-10-21), the fifth (02:37 UTC) and the sixth (05:15
-UTC); the account's prediction list since 2026-10-20 shows exactly those
-thirteen. The
+fourth (00:32 UTC on 2026-10-21), the fifth (02:37 UTC), the sixth (05:15
+UTC) and the seventh (06:27 UTC); the account's prediction list since
+2026-10-20 shows exactly those fourteen. The
 second session ran the read after `done` as it was then, on the caller's
 path; the third (code `ab5f5c4`) on a background thread started per stream,
 through the client's own transport; the fourth (code `22832fd`) through the
 package's own connection pool; the fifth (code `b5df956`) through that pool
 for a plain `httpx` transport. Sessions 2 to 5 ran with the read after `done`
-on, which was the default until round 4 of the review; the sixth (code
-`f1866eb`) ran the current default, with no read.
+on, which was the default until round 4 of the review, on code from before
+round 4; **the current opt-in read (round 4 on) has not been run live**. The
+sixth (code `f1866eb`, sync) and the seventh (code `4767825`, async) ran the
+current default, with no read.
 
 Stored in Future AGI and read back, one trace each:
 
+- `replicate.async_stream` with the default settings (seventh session, code
+  `4767825`): the module function inside `asyncio.run()`, after
+  `instrument(tracer_provider=...)` with no other option. The events were
+  `output` x6 and `done`. The span ended on the caller's thread inside the
+  `__anext__()` that returned `done` (it took 1.4 ms, reading the event
+  included; the span's end time is 0.15 ms before it returned), the loop
+  exited 0.45 ms after `done`, and `asyncio.run()` returned 0.58 ms after
+  the main coroutine had finished. Counted at httpx's transport classes, the
+  stream sent the create and the event stream, and nothing was sent after
+  it, during `shutdown()` or in the 0.5 s after it. The thread names were the
+  same before and after `instrument()`, after `asyncio.run()` and after the
+  flush, none of them the package's. The stored span is LLM, OK, with the
+  prediction id and the joined text, and no status, `predict_time`, token
+  counts (stored as 0) or `replicate.stream.*` attribute. It is the only span
+  in its trace.
 - `replicate.stream` with the default settings (sixth session, code
   `f1866eb`): the module function `replicate.stream`, sync, after
   `instrument(tracer_provider=...)` with no other option. The events were
@@ -479,9 +499,11 @@ Stored in Future AGI and read back, one trace each:
   `next()` that returned `done` (that `next()` took 2.4 ms, reading the event
   included; the span's end time is 0.27 ms before it returned), and the loop
   exited 1.7 ms after `done`. Counted at httpx's transport classes, the
-  stream sent the create and the event stream, and nothing was sent after it;
-  the thread names were the same before and after `instrument()` and after
-  the stream, none of them the package's. `shutdown()` took 0.15 ms. The
+  stream sent the create and the event stream, and nothing was sent after it
+  up to the flush (that run did not count requests during `shutdown()`; the
+  seventh did); the thread names were the same before and after
+  `instrument()` and after the stream, none of them the package's.
+  `shutdown()` took 0.15 ms. The
   stored span is LLM, OK, with the prediction id and the joined text, and no
   status, `predict_time`, token counts (stored as 0) or `replicate.stream.*`
   attribute. It is the only span in its trace.
@@ -546,11 +568,12 @@ Stored in Future AGI and read back, one trace each:
 
 Not live-verified, stand-in only: `predictions.create` followed by `wait()`
 (the held create span), `cancel`, deployments, run iterators, image and file
-outputs, and the opt-in read's `custom_transport` skip. Trainings are not
-traced (checked with the stand-in).
+outputs, text chunks that start like a URL, and the opt-in read as it is
+now (round 4 on), including its `custom_transport` and `patched_http`
+skips. Trainings are not traced (checked with the stand-in).
 
 The stored rows of that project (spans, traces, rollups, the attribute
-catalog and the project row: 145 rows after the sixth session) were scanned:
+catalog and the project row: 137 rows after the seventh session) were scanned:
 the API token appears 0 times (whole or its last 12 characters), and there is
 no `r8_`, `Bearer`, `Authorization`, `/Users/` path, login or host name,
 `Traceback`, `site-packages` or `exception.stacktrace`.
