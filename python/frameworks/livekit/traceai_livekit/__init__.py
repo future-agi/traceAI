@@ -16,9 +16,10 @@ from .integration import (
     enable_fi_attribute_mapping,
     enable_grpc_attribute_mapping,
     enable_http_attribute_mapping,
+    flush_on_job_shutdown,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 __all__ = [
     "enable_fi_attribute_mapping",
@@ -26,6 +27,7 @@ __all__ = [
     "enable_grpc_attribute_mapping",
     "create_mapped_http_exporter",
     "create_mapped_grpc_exporter",
+    "flush_on_job_shutdown",
     # Exporters
     "MappedHTTPSpanExporter",
     "MappedGRPCSpanExporter",
