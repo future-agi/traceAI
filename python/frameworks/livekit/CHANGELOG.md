@@ -1,4 +1,4 @@
-## [0.1.2] - 2026-10-19
+## [0.1.2] - 2026-10-21
 ### Fixed
 - Spans that end last in a LiveKit job, the root `agent_session` span among them, are no longer lost (a job process on Linux
   exits without running `atexit`, so they used to stay queued). `enable_*` flushes the tracer provider when the job shuts
