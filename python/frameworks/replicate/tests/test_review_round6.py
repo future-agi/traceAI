@@ -199,7 +199,9 @@ def test_provider_shutdown_ends_a_referenced_stream_still_open():
 
     assert span.status.status_code is StatusCode.ERROR
     assert attrs(span)["replicate.cancelled"] is True
-    assert "output.value" not in attrs(span)
+    # Round 7: a stream stopped before done keeps the output it had received.
+    assert attrs(span)["output.value"] == "STREAM-"
+    assert attrs(span)["gen_ai.span.kind"] == "LLM"
 
 
 @pytest.mark.parametrize("action", ["shutdown", "uninstrument"])

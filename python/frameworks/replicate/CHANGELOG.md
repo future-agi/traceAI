@@ -10,10 +10,17 @@ All notable changes to `traceAI-replicate` will be documented here.
   iteration), on the caller's thread, inside the `next()` / `__anext__()` that returns it, OK, with the prediction
   id, the output and what the stream says (`replicate.stream.done_reason`: a `done` with reason `canceled` records
   status `canceled`; `replicate.stream.truncated` for a stream that ended without `done`). No request is made after
-  a stream, no thread is ever started, and `force_flush()`, `shutdown()`, `uninstrument()`, interpreter exit and
-  `os.fork()` wait for nothing (with an exporter that runs inline, a flush or shutdown still exports the spans of
-  streams dropped since the last traced call). A referenced stream or run iterator still open at provider shutdown
-  or exit ends then as cancelled. `replicate.run` and create + `wait()` spans have status and token counts either way.
+  a stream and no thread is ever started, so `force_flush()`, `shutdown()`, `uninstrument()`, interpreter exit and
+  `os.fork()` wait for no read and no package thread; they still end, inside the call, held create spans and the
+  spans of streams dropped since the last traced call (with an exporter that runs inline, exported there, also by
+  `force_flush(timeout_millis=0)`). A referenced stream or run iterator still open at provider shutdown or exit ends
+  then as cancelled. `replicate.run` and create + `wait()` spans have status and token counts either way.
+- A stream or run iterator that stops before it completes (closed, dropped, a cancelled task, Ctrl-C, an exception,
+  or still open at shutdown or exit) keeps the output it had yielded (`output.value`, subject to `TraceConfig`), so a
+  text stream stays `LLM`; its status is unchanged (ERROR `cancelled` with `replicate.cancelled` when the caller
+  stopped it, ERROR with the error otherwise), as the OpenTelemetry GenAI conventions ask for partial streamed
+  output. A `KeyboardInterrupt` or `SystemExit` raised inside `next()` / `__anext__()` is recorded as the caller
+  stopping the stream (`replicate.cancelled`, no exception event), as one raised in the loop body is.
 - Opt-in, `stream_reload_seconds` (above 0 to 10): the prediction is looked up once after `done`
   (`GET /v1/predictions/{id}`: no new prediction and no charge, but it counts toward the account's API rate limit;
   a non-final answer is looked up once more after `poll_interval`) for the final status, `predict_time` and token
@@ -25,15 +32,21 @@ All notable changes to `traceAI-replicate` will be documented here.
     `mounts=` (TLS context, HTTP versions, local address, socket options and connect retries are copied). Any other
     transport (custom, mock, scripted, recording or logging wrapper, a subclass, a transport or pool with
     `handle_request` / `handle_async_request` set on the instance, custom network backend or backend with
-    `connect_tcp` / `connect_unix_socket` set on the instance, an instance-level `_transport_for_url`, a proxy or
-    `proxy=`, async-only) is skipped: `replicate.stream.read=skipped`, `replicate.stream.skip_reason=custom_transport`.
+    `connect_tcp` / `connect_unix_socket` set on the instance, an instance-level `_transport_for_url` or one a subclass
+    of `httpx.Client` / `AsyncClient` overrides (never called for the read), `HTTPXClientInstrumentor.instrument_client()`
+    on the client, a proxy or `proxy=`, async-only) is skipped: `replicate.stream.read=skipped`,
+    `replicate.stream.skip_reason=custom_transport`.
   - No read while a checked `httpx` / `httpcore` client, transport, pool, connection or network-backend send path is
-    replaced on the class (respx, pytest-httpx, VCR.py, `mock.patch`): such a mock could answer the package's
-    request with a response the app scripted for itself (`patched_http`). It also skips when a checked socket layer
-    is replaced (`socket.socket`, `socket.getaddrinfo`, `socket.create_connection`, `ssl.SSLContext` or its
-    `wrap_socket` / `wrap_bio`: mocket, httpretty, gevent and eventlet; `patched_socket`). Both checks run at stream
-    completion and again before each request. `opentelemetry-instrumentation-httpx` wrappers are allowed.
-  - Completing a stream is one queue put on the caller's thread; the worker threads start in `instrument()` (a forked
+    replaced on the class (respx, pytest-httpx, VCR.py, `mock.patch`, Sentry's `HttpxIntegration`): such a mock could
+    answer the package's request with a response the app scripted for itself (`patched_http`). It also skips when a
+    checked socket layer is replaced (`socket.socket`, `socket.getaddrinfo`, `socket.create_connection`,
+    `ssl.SSLContext` or its `wrap_socket` / `wrap_bio`: mocket, httpretty, gevent, eventlet and
+    `truststore.inject_into_ssl()`; `patched_socket`). Both checks run at stream completion and again before each
+    request. `opentelemetry-instrumentation-httpx` wrappers are allowed. A stub server (pytest-httpserver, WireMock,
+    Prism) is a real server and receives the read like any request to `base_url`: keep `stream_reload_seconds=0` in
+    tests that use one.
+  - Completing a stream runs the read's checks and admission on the caller's thread (no I/O) and one queue put; the
+    worker threads start in `instrument()` (a forked
     child starts its own on its first completed stream). Past 64 waiting stream spans (or 64 live reads) a stream ends
     at once on the caller's thread without a read (`at_capacity`); an inline export of that span is not bounded by
     the read's deadline.
@@ -41,19 +54,21 @@ All notable changes to `traceAI-replicate` will be documented here.
     at most 64 queued; reads of one name share a lookup, results are kept 5 s, and a lookup waits for a free thread
     within the budget. The read is never retried, asks for an uncompressed body, caps the body at 2 MiB as it
     arrives, and runs with instrumentation suppressed (no HTTP span).
-  - `force_flush()`, `shutdown()`, interpreter exit and `uninstrument()` do not wait for reads in flight: each ends
-    their spans at once with what is known (`replicate.stream.read` = `flushed`, `shutdown`, `shutdown`,
-    `uninstrumented`) and cancels reads in flight (closing their connections); `uninstrument()` never waits. The
-    one span the finisher thread may be exporting then has ended, and that export is waited for at most 5 s (not
-    waited for a second time after the wait times out until the finisher ends another span). An inline exporter can
-    still make the call export spans synchronously, up to 64 times its per-span export time. `stream_flush_wait_seconds`
-    (0 to 10, default 0) opts into a bounded wait in `force_flush()`, never more than half of `timeout_millis`,
-    after which the provider's own flush gets the time left. `stream_shutdown_wait_seconds` (0 to 10, default 0)
-    opts into a bounded wait in `shutdown()` and at exit; no wait option applies to `uninstrument()`.
+  - `force_flush()`, `shutdown()`, interpreter exit and `uninstrument()` do not wait for reads in flight by default:
+    each ends their spans at once with what is known (`replicate.stream.read` = `flushed`, `shutdown`, `shutdown`,
+    `uninstrumented`) and cancels reads in flight (closing their connections). `uninstrument()` never waits for a
+    read; like a flush, shutdown or exit, it waits up to 5 s for the one span the finisher is exporting (that span
+    has ended; the wait is not repeated after a timeout until the finisher ends another span, and `timeout_millis`
+    does not shorten it). An inline exporter can still make the call export spans synchronously, up to 64 times its
+    per-span export time. `stream_flush_wait_seconds` (0 to 10, default 0) opts into a bounded wait for reads in
+    `force_flush()`, never more than half of `timeout_millis`, after which the provider's own flush gets the time
+    left. `stream_shutdown_wait_seconds` (0 to 10, default 0) opts into a bounded wait in `shutdown()` and also at
+    interpreter exit; no wait option applies to `uninstrument()`.
   - Before starting workers, `instrument()` imports AnyIO's lazy asyncio backend on the caller's thread. At a fork,
     the package pauses its read loop between steps and finisher between span ends, giving the fork up to 5 s total
-    to wait for one export; after the cap a child can inherit an exporter lock held mid-export. The dispatcher and
-    resolver threads are not paused. A `BatchSpanProcessor` and exporters are not coordinated; their fork safety
+    to wait for one export; after the cap a child can inherit an exporter lock held mid-export, and later forks do
+    not wait for that thread again until it has moved on (so a stuck export costs one fork the wait, not every
+    fork). The dispatcher and resolver threads are not paused. A `BatchSpanProcessor` and exporters are not coordinated; their fork safety
     is theirs, not this package's.
   - `replicate.stream.read`: `skipped`, `timeout`, `failed`, `unfinished`, `flushed`, `shutdown`, `uninstrumented`.
     `replicate.stream.skip_reason`: `custom_transport`, `patched_http`, `patched_socket`, `at_capacity`, `no_provider_hook`,

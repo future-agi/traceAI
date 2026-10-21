@@ -107,7 +107,10 @@ class _EndPendingFirst:
     or the original's default, 30000 for the SDK's ``force_flush``). Whenever
     there is a timeout, the original gets only the time that is left, so the
     call never takes longer than asked, unless ending those spans itself
-    takes longer (an exporter that runs inline, such as SimpleSpanProcessor's).
+    takes longer (an exporter that runs inline, such as SimpleSpanProcessor's,
+    exports each span it ends inside this call, also with ``timeout_millis``
+    0), or the package's finisher thread is exporting a span at that moment
+    (that export is waited for, up to 5 s, see ``settle_stream_reads``).
     The original's result is returned.
     """
 
@@ -214,10 +217,12 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     stream span ends at ``done`` (or the end of iteration) on the caller's
     thread with what the stream gave, and no thread is started. On, the read
     runs on background workers through the package's own connection pool,
-    only for replicate's own transport or a plain httpx one without a proxy
-    (any other transport, a subclass, one changed on the instance, or a
-    client with a proxy: no read, ``replicate.stream.skip_reason`` =
-    ``custom_transport``), and not while an HTTP mock has replaced httpx's
+    only for replicate's own transport or a plain httpx one without a proxy,
+    picked by httpx's own ``_transport_for_url`` (any other transport, a
+    subclass, one changed on the instance, a subclass of httpx's client that
+    overrides ``_transport_for_url``, or a client with a proxy: no read,
+    ``replicate.stream.skip_reason`` = ``custom_transport``), and not while
+    an HTTP mock or integration has replaced httpx's
     or httpcore's send path (``patched_http``) or the socket layer
     (``patched_socket``: mocket, httpretty, gevent); the span ends when the
     read returns or the budget runs out, as of the stream's end. No read is
@@ -227,7 +232,9 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     10, default 0) are how long ``force_flush()`` (at most half its timeout)
     and ``shutdown()`` / interpreter exit wait for those reads before they end
     their spans with what is known; by default they wait for none.
-    ``uninstrument()`` never waits.
+    ``uninstrument()`` never waits for a read. With the read on, each of the
+    four still waits, up to 5 s, for the one span the package's finisher
+    thread is exporting at that moment. With the read off nothing waits.
 
     ``max_pending_seconds`` is the longest a create span is held open on its
     prediction for a ``wait()``/``cancel()``; an older one is ended, as of
@@ -535,7 +542,8 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         atexit.unregister(self._at_exit)
         # Held create spans end now, and so does every stream span whose read
         # is still running, at once and with what is known
-        # (``uninstrumented``): nothing waits, and a shutdown right after
+        # (``uninstrumented``): no read is waited for (only, up to 5 s, the
+        # one span the finisher may be exporting), and a shutdown right after
         # exports them.
         registry = getattr(self, "_registry", None)
         if registry is not None:

@@ -31,6 +31,9 @@ pytest = ">=7.0.0"
 # HTTP/socket mocks the opt-in read after a stream must not go through (round 5 and 6 review tests).
 respx = ">=0.21.1"
 mocket = ">=3.15.0"
+# Integrations whose skip reasons the README names (round 7 review tests).
+sentry-sdk = ">=2.0.0"
+truststore = ">=0.10.0"
 
 [build-system]
 requires = ["poetry-core"]

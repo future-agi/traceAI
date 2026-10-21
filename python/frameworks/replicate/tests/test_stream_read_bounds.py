@@ -388,9 +388,16 @@ def test_a_hundred_concurrent_trickling_reads_are_all_over_soon_after_their_dead
     budget = 0.5
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=budget) as traced:
         fake.read_trickle = 8.0
-        client = _default_client(fake)
+        # One client per thread. A hundred threads on one client's own sync
+        # pool can hit an httpcore 1.0.9 race (an idle connection already
+        # handed to another request is closed while that request uses it:
+        # "ReadError: [Errno 9] Bad file descriptor" on the caller's create);
+        # it happens without this package too, and the reads tested here use
+        # the package's own pool either way.
+        clients = [_default_client(fake) for _ in range(100)]
         workers = [
-            threading.Thread(target=lambda: list(client.stream(STREAM_MODEL, input={}))) for _ in range(100)
+            threading.Thread(target=lambda client=client: list(client.stream(STREAM_MODEL, input={})))
+            for client in clients
         ]
         for worker in workers:
             worker.start()

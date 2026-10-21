@@ -10,8 +10,9 @@ Span model (TH-8320):
   request and has no span. It is open until the stream completes (its
   ``done`` event, or the end of iteration), is closed before that, is
   dropped, or is still open at a provider shutdown or interpreter exit (then
-  it ends as cancelled); a ``close()`` or a drop after ``done`` is not a
-  cancellation. The span is ended by the process that started it (a stream
+  it ends as cancelled, with the output received so far); a ``close()`` or a
+  drop after ``done`` is not a cancellation. The span is ended by the process
+  that started it (a stream
   first iterated in a forked child is the child's). The
   SSE stream carries no status or metrics. By default the span ends at
   ``done`` with what the stream gave (no status, ``predict_time`` or token
@@ -177,6 +178,11 @@ class _Call:
         self.snapshot: Dict[str, Any] = {}
         self.create_end: Optional[int] = None
         self.on_finish: Optional[Callable[["_Call"], None]] = None
+        # What a stream or run iterator has yielded so far (set when the
+        # iterator is wrapped): a span that ends before the iteration
+        # completes (closed, dropped, cancelled, an exception, a shutdown)
+        # keeps that output, as one that completes does.
+        self.collector: Optional[OutputCollector] = None
         # Set (under the registry lock) when a wait()/cancel() continues this
         # held create span; from then on that call ends it (see expire()).
         self.claimed = False
@@ -284,6 +290,7 @@ class _Call:
                 self.span.end(end_time=end_time)
             except Exception:
                 logger.debug("traceai-replicate: could not end the span", exc_info=True)
+            self.collector = None  # the output is on the span now
             callback = self.on_finish
             if callback is not None:
                 _guard(lambda: callback(self), None)
@@ -327,9 +334,16 @@ class _Call:
             details.pop(PREDICTION_STATUS, None)
         if extra:
             details.update(extra)
-        produced = {} if error is not None or cancelled else _guard(
-            lambda: self._output(prediction, output, collector, use_snapshot), {}
-        )
+        if collector is None:
+            collector = self.collector
+        if (error is not None or cancelled) and collector is None:
+            produced: Dict[str, Any] = {}  # a call that stopped: no output of its own
+        else:
+            # A stream or iterator that stopped before it completed keeps
+            # what it had yielded (what the caller received), as the
+            # OpenTelemetry GenAI conventions ask for partial streamed output;
+            # TraceConfig still hides it.
+            produced = _guard(lambda: self._output(prediction, output, collector, use_snapshot), {})
 
         attributes = dict(self.request)
         for key, value in details.items():
@@ -635,6 +649,13 @@ class PendingPrediction(wrapt.ObjectProxy):  # type: ignore[misc]
             _guard(lambda: call.release(cancelled=False), None)
 
 
+# Raised into the caller's own iteration by the caller's side (Ctrl-C, or a
+# signal handler's sys.exit()): recorded as the caller stopping the stream, as
+# when it lands in the loop body and the stream is then dropped or still open
+# at exit (replicate.cancelled), not as an error of the call.
+_CALLER_STOPS = (KeyboardInterrupt, SystemExit)
+
+
 def _is_done(item: Any) -> bool:
     """The ``done`` server-sent event that ends a completed replicate stream."""
     event = getattr(item, "event", None)
@@ -649,10 +670,13 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
     :func:`complete_stream` (at once, by default; with the opt-in read, when
     it returns, without holding up the caller); a ``close()``, a
     drop or an exception after ``done`` leaves it so. ``close()`` before that,
-    or dropping it: ERROR ``cancelled`` with ``replicate.cancelled`` (a drop is
-    queued, see ``_RELEASED``, and keeps the drop time); a stream closed or
-    dropped before its first ``next()`` made no request and has no span. An
-    exception before it: ERROR. The span ends exactly once; ``close()``
+    dropping it, or a ``KeyboardInterrupt`` / ``SystemExit`` inside ``next()``
+    (Ctrl-C lands there or in the loop body; both are the caller stopping):
+    ERROR ``cancelled`` with ``replicate.cancelled`` (a drop is queued, see
+    ``_RELEASED``, and keeps the drop time); a stream closed or dropped before
+    its first ``next()`` made no request and has no span. Another exception
+    before it: ERROR. Either way the span keeps the output yielded so far.
+    The span ends exactly once; ``close()``
     closes the vendor generator (and its HTTP response) first and ends the
     span after, even if that close raises. ``send()`` and ``throw()`` step
     the stream as ``next()`` does.
@@ -686,6 +710,10 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
                 item = advance(*args)
         except StopIteration:
             complete_stream(call, self._self_collector, self._self_reads)
+            raise
+        except _CALLER_STOPS:
+            if not call.completed:
+                call.finish(cancelled=True)
             raise
         except BaseException as error:
             if not call.completed:
@@ -744,7 +772,7 @@ class TracedAsyncIterator(wrapt.ObjectProxy):  # type: ignore[misc]
         except StopAsyncIteration:
             complete_stream(call, self._self_collector, self._self_reads, is_async=True)
             raise
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError,) + _CALLER_STOPS:
             if not call.completed:
                 call.finish(cancelled=True)
             raise
@@ -778,11 +806,13 @@ def _finish_or_wrap(
     """End the span now, or hand it to the iterator the client returned."""
     try:
         wrapped: Any = None
+        collector = OutputCollector(count_files)
         if is_sync_iterator(result):
-            wrapped = TracedIterator(result, call, OutputCollector(count_files), reads)
+            wrapped = TracedIterator(result, call, collector, reads)
         elif is_async_iterator(result):
-            wrapped = TracedAsyncIterator(result, call, OutputCollector(count_files), reads)
+            wrapped = TracedAsyncIterator(result, call, collector, reads)
         if wrapped is not None:
+            call.collector = collector
             if call.started:  # a run() iterator: its span is open already (a stream's opens at next())
                 _OPEN.add(call)
             return wrapped

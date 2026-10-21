@@ -7,9 +7,11 @@ thread at the stream's ``done`` event (or the end of iteration) with what the
 stream gave, no request is made for it, and no thread is ever started.
 
 With ``stream_reload_seconds`` > 0, when a stream completes and its span is
-recording, :func:`complete_stream` fixes the span's end time and hands the
-stream to the workers with one ``SimpleQueue.put`` (which neither blocks nor
-releases the GIL). The worker threads start in ``instrument()`` (a forked
+recording, :func:`complete_stream`, on the caller's thread, fixes the span's
+end time, runs the checks below (no I/O: the transport, HTTP-mock and
+socket-mock checks, and admission against the caps) and hands the stream to
+the workers with one ``SimpleQueue.put`` (which neither blocks nor releases
+the GIL). The worker threads start in ``instrument()`` (a forked
 child starts its own once, on its first completed stream, and a completer
 never waits for another to do it). A dispatcher thread passes the queued
 streams, in batches, to the package's read loop, which starts each read,
@@ -29,7 +31,8 @@ caller's client uses for the API URL is a plain ``httpx.HTTPTransport`` /
 default network backend: no proxy, no subclass, and none of
 ``handle_request`` / ``handle_async_request`` (on the transport or pool),
 ``connect_tcp`` / ``connect_unix_socket`` (on the backend) or
-``_transport_for_url`` (on the client) set on the instance (see
+``_transport_for_url`` (on the client) set on the instance, and no
+``_transport_for_url`` from a subclass of httpx's client (see
 :func:`_read_routing`). The package's pool is then built with the client's
 options (replicate built the transport) or with that transport's TLS
 context, HTTP versions, local address, socket options and connect retries
@@ -66,10 +69,11 @@ for ``_RESOLVER_STUCK_SECONDS``, or the queue is full).
 backend lazily) on the caller's thread before it starts the workers, so a
 package thread is never inside an import of them. At a fork, the read loop
 is paused between two steps and the finisher between two span ends (see
-:func:`_before_fork`), so a child never inherits a lock either of them held;
-the dispatcher and resolver threads are not paused, and a resolver inside a
-name lookup at that moment holds whatever the C library's ``getaddrinfo``
-holds.
+:func:`_before_fork`), so a child never inherits a lock either of them held,
+for up to _FORK_WAIT_SECONDS in all; after a fork's wait for one of them ran
+out, later forks do not wait for it until it has moved on. The dispatcher
+and resolver threads are not paused, and a resolver inside a name lookup at
+that moment holds whatever the C library's ``getaddrinfo`` holds.
 
 At most ``_MAX_PENDING_SPANS`` stream spans wait at once (reads in flight,
 and spans whose read has returned and wait to be ended), and at most
@@ -81,10 +85,13 @@ caller's thread, without a read (``skipped``, reason ``at_capacity``).
 do not wait for reads by default: each ends the spans still waiting at once,
 with what is known (``flushed``, ``shutdown``, ``shutdown``,
 ``uninstrumented``), and cancels their reads still in flight, which closes
-their connections. ``stream_flush_wait_seconds`` and
-``stream_shutdown_wait_seconds`` opt into a bounded wait; ``uninstrument()``
-never waits. The worker threads, once started, stay (idle) until the process
-exits, also after ``uninstrument()``.
+their connections. ``stream_flush_wait_seconds`` (flush) and
+``stream_shutdown_wait_seconds`` (shutdown and interpreter exit) opt into a
+bounded wait for reads; ``uninstrument()`` never waits for a read. Each of
+the four does wait, up to _FINISHING_WAIT_SECONDS, for the one span the
+finisher is exporting at that moment (see :func:`settle_stream_reads`). The
+worker threads, once started, stay (idle) until the process exits, also
+after ``uninstrument()``.
 """
 
 from __future__ import annotations
@@ -375,9 +382,13 @@ class _State:
         # Cleared while a fork waits: the finisher takes no new span until it is set.
         self.fork_clear = threading.Event()
         self.fork_clear.set()
-        # A wait for the finisher's export ran out: the next one does not wait
-        # until the finisher has ended a span again (an export stuck on a lock).
+        # A wait for the finisher's export (a flush, shutdown, exit or
+        # uninstrument(), or a fork) ran out: the next one does not wait until
+        # the finisher has ended a span again (an export stuck on a lock).
         self.finishing_timed_out = False
+        # A fork's wait for the read loop to pause ran out: later forks do not
+        # wait for it until the loop has run again (see _pause_for_fork).
+        self.fork_loop_timed_out = False
         self.own_live = 0
         self.own_tasks: Set[Any] = set()
         self.own_clients: "collections.OrderedDict[Tuple[Any, ...], _OwnClient]" = collections.OrderedDict()
@@ -397,8 +408,11 @@ _WORKER = threading.local()
 _FORK = threading.local()
 
 
-def _pause_for_fork(paused: threading.Event, resume: threading.Event) -> None:
-    """On the read loop, between two steps: hold the loop until the fork is done."""
+def _pause_for_fork(state: _State, paused: threading.Event, resume: threading.Event) -> None:
+    """On the read loop, between two steps: hold the loop until the fork is
+    done. Running at all shows the loop is taking steps again, so the next
+    fork waits for it again."""
+    state.fork_loop_timed_out = False
     paused.set()
     resume.wait(_FORK_WAIT_SECONDS)
 
@@ -411,7 +425,10 @@ def _before_fork() -> None:
     finisher to release it). The finisher takes no new span once a fork
     waits, so the fork waits for at most the one export in progress. All of
     it is bounded by _FORK_WAIT_SECONDS in total; past that the fork goes
-    ahead. With the read off nothing runs and this returns at once. The
+    ahead, and later forks do not wait for that thread again until it has
+    moved on (the loop has taken a step, or the finisher has ended a span),
+    so a finisher stuck in an export costs one fork the wait, not every
+    fork. With the read off nothing runs and this returns at once. The
     dispatcher and resolver threads are not held (neither imports; a
     resolver may be inside the C library's getaddrinfo), and span
     processors' and exporters' own threads and locks are theirs to make
@@ -424,12 +441,18 @@ def _before_fork() -> None:
         deadline = _monotonic() + _FORK_WAIT_SECONDS
         state.fork_clear.clear()
         loop = state.loop
-        if state.loop_running and loop is not None:
+        if state.loop_running and loop is not None and not state.fork_loop_timed_out:
             paused, resume = threading.Event(), threading.Event()
             _FORK.resume = resume
-            loop.call_soon_threadsafe(_pause_for_fork, paused, resume)
-            paused.wait(max(0.0, deadline - _monotonic()))
-        _FORK.held = state.finishing.acquire(timeout=max(0.0, deadline - _monotonic()))
+            loop.call_soon_threadsafe(_pause_for_fork, state, paused, resume)
+            if not paused.wait(max(0.0, deadline - _monotonic())):
+                state.fork_loop_timed_out = True
+        if state.finishing_timed_out:
+            _FORK.held = state.finishing.acquire(blocking=False)
+        else:
+            _FORK.held = state.finishing.acquire(timeout=max(0.0, deadline - _monotonic()))
+            if not _FORK.held:
+                state.finishing_timed_out = True
     except Exception:  # pragma: no cover
         logger.debug("traceai-replicate: could not hold the workers for a fork", exc_info=True)
 
@@ -639,6 +662,24 @@ def _routing(client: Any) -> Tuple[Tuple[str, Any], ...]:
     return tuple((name, options[name]) for name in _ROUTING_OPTIONS if name in options)
 
 
+def _own_resolver(http: Any) -> bool:
+    """``http`` is an httpx ``Client`` / ``AsyncClient`` whose
+    ``_transport_for_url`` is httpx's own: not set on the instance, and not
+    overridden by a subclass (whose code is the caller's, and is not called
+    for the read). httpx's own being replaced on its class is an HTTP mock
+    (see :func:`send_path_patched`)."""
+    if isinstance(http, httpx.AsyncClient):
+        base: Any = httpx.AsyncClient
+    elif isinstance(http, httpx.Client):
+        base = httpx.Client
+    else:
+        return False
+    if _overridden(http, ("_transport_for_url",)):
+        return False
+    resolver = _class_attribute(type(http), "_transport_for_url")
+    return resolver is not _MISSING and resolver is _class_attribute(base, "_transport_for_url")
+
+
 def _read_routing(client: Any, http: Any, url: httpx.URL) -> Optional[Tuple[str, Tuple[Tuple[str, Any], ...]]]:
     """How the package's own pool reaches the API for this client, or None
     when it cannot be built the way the caller's is: then no read is made.
@@ -649,12 +690,14 @@ def _read_routing(client: Any, http: Any, url: httpx.URL) -> Optional[Tuple[str,
     built it or it came with ``transport=`` or ``mounts=``. So a transport of
     the caller's own class, a subclass, a transport, pool or backend changed
     on the instance, a client whose ``_transport_for_url`` is set on the
-    instance (it is not called), and a proxy (``replicate.Client(proxy=...)``
-    mounts a proxy transport for every URL) all get no read. When replicate
+    instance or overridden by a subclass of httpx's client (neither is
+    called; see :func:`_own_resolver`), and a proxy
+    (``replicate.Client(proxy=...)`` mounts a proxy transport for every URL)
+    all get no read. When replicate
     built the transport itself, the package's pool is built with the same
     client options; otherwise with that transport's settings.
     """
-    if _overridden(http, ("_transport_for_url",)):
+    if not _own_resolver(http):
         return None
     settings = _plain_settings(_unwrap_retries(http._transport_for_url(url)))
     if settings is None:
