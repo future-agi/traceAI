@@ -79,7 +79,6 @@ from traceai_replicate._attributes import (
     span_kind,
 )
 from traceai_replicate._stream_read import (
-    DEFAULT_STREAM_RELOAD_SECONDS,
     StreamReads,
     complete_stream,
     settle_stream_reads,
