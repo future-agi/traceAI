@@ -11,7 +11,7 @@ pip install traceAI-exa
 ```
 
 It accepts `exa-py>=2.25.0,<3` and is tested with `exa-py` 2.25.0 on Python
-3.10, 3.11, 3.12 and 3.13.
+3.10, 3.11, 3.12 and 3.13. The test suite also passes on `exa-py` 2.26.0.
 
 Live vendor verification (2026-10-17): a real run against `api.exa.ai` with
 `exa-py` 2.25.0 (`search`, `get_contents`, `answer`, both streams, `AsyncExa.search`
