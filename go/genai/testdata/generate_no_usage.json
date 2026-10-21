@@ -1,0 +1,19 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Red",
+            "thoughtSignature": "c2lnbmF0dXJlLWZpeHR1cmU="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "modelVersion": "gemini-3.8-flash",
+  "responseId": "kBTSavOhL6jV-8YPt4GzgQE"
+}

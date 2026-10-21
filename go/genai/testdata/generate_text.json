@@ -1,0 +1,32 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Red",
+            "thoughtSignature": "c2lnbmF0dXJlLWZpeHR1cmU="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 13,
+    "candidatesTokenCount": 1,
+    "totalTokenCount": 116,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 13
+      }
+    ],
+    "thoughtsTokenCount": 102,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.8-flash",
+  "responseId": "kBTSavOhL6jV-8YPt4GzgQE"
+}
