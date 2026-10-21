@@ -88,7 +88,7 @@ LangGraph-specific setup. You get:
 - **Per-node spans** named after the graph node (`agent`, `tools`, `ask_human`, …)
 - **Tool and LLM spans** nested under their node
 - **Graph-node enrichment** — the node's own span carries `gen_ai.agent.graph.node_name` and `gen_ai.agent.graph.node_id`
-- **Session grouping** — LangGraph's `configurable.thread_id` becomes `session.id` on every span (an explicit `using_session(...)` or `metadata={"session_id": ...}` wins). *Unreleased:* this is in the repository after 0.2.0, not in the published 0.2.0; with 0.2.0, wrap the call in `using_session(thread_id)`.
+- **Session grouping** — LangGraph's `configurable.thread_id` becomes `session.id` on every span (an explicit `using_session(...)` or `metadata={"session_id": ...}` wins). New in 0.2.1; with 0.2.0 or earlier, wrap the call in `using_session(thread_id)`.
 - **HITL interrupts** traced correctly — an interrupted node/tool span stays `OK` (not `ERROR`) and is marked with `langgraph.interrupt`
 
 > **`LangGraphInstrumentor` is a deprecated no-op** kept for backwards compatibility.
@@ -137,7 +137,7 @@ Node, tool and LLM runs are standard LangChain spans (`gen_ai.span.kind` =
 
 - `gen_ai.agent.graph.node_name`, `gen_ai.agent.graph.node_id` — the graph node (on the node's own span)
 - `langgraph_node`, `langgraph_step`, `langgraph_triggers`, `langgraph_path`, `langgraph_checkpoint_ns` — LangGraph's raw callback metadata
-- `session.id` — from `config={"metadata": {"session_id": ...}}`, else `using_session(...)`, else LangGraph's `configurable.thread_id` (unreleased; a blank `thread_id` sets nothing). The choice is made per run: set an explicit session around the whole `invoke`/`stream`, because a session set for only part of a run (inside a node, or in an inner `with_config`) covers only the runs inside it, and the outer spans fall back to `thread_id`.
+- `session.id` — from `config={"metadata": {"session_id": ...}}`, else `using_session(...)`, else LangGraph's `configurable.thread_id` (0.2.1 and later; a blank `thread_id` sets nothing). The choice is made per run: set an explicit session around the whole `invoke`/`stream`, because a session set for only part of a run (inside a node, or in an inner `with_config`) covers only the runs inside it, and the outer spans fall back to `thread_id`.
 - `langgraph.interrupt` (attribute + event) on a HITL pause; a `langgraph.resume` event on resume
 
 ---
@@ -161,17 +161,17 @@ Tested versions, as printed by the compatibility test:
 | `langchain-core` | 1.6.6 (the floor `deepagents` 0.7.21 requires); 1.6.9 and 1.6.12 (latest) also pass |
 | `langgraph` | 1.2.12; 1.2.14 and 1.2.16 (latest) also pass |
 | `langgraph-prebuilt` | as resolved with `langgraph` 1.2.12 (printed by the test), and 1.1.0 with `langgraph` 1.2.14; its `ToolNode` re-raises tool errors |
-| `traceAI-langchain` | this repository after 0.2.0 (unreleased): the `thread_id` → `session.id` change is **not** in the published 0.2.0, whose version string is the same |
+| `traceAI-langchain` | 0.2.1 (tested from this repository before release): the `thread_id` → `session.id` change is **not** in 0.2.0 |
 | Python | 3.11.12 and 3.13.7; 3.13.15 with deepagents 0.7.28; 3.12 with deepagents 0.7.23 |
 
 `traceAI-langchain`'s own lower bound (`langchain-core>=0.2.43`) is unchanged.
 Deep Agents itself needs `langchain-core>=1.6.6` and `langgraph`.
 
 ```bash
-pip install traceAI-langchain "deepagents==0.7.21" langgraph
+pip install "traceAI-langchain>=0.2.1" "deepagents==0.7.21" langgraph
 ```
 
-With the published `traceAI-langchain` 0.2.0, `thread_id` is not yet copied to `session.id`: wrap the call in `using_session(thread_id)` until the next release.
+With `traceAI-langchain` 0.2.0 or earlier, `thread_id` is not copied to `session.id`: upgrade, or wrap the call in `using_session(thread_id)`.
 
 ```python
 from deepagents import create_deep_agent
@@ -192,7 +192,7 @@ LangChainInstrumentor().instrument(
 agent = create_deep_agent(model=model, tools=[my_tool], backend=StateBackend())
 result = agent.invoke(
     {"messages": [{"role": "user", "content": "..."}]},
-    config={"configurable": {"thread_id": "t-1"}},  # becomes session.id (unreleased; with 0.2.0 use using_session)
+    config={"configurable": {"thread_id": "t-1"}},  # becomes session.id (0.2.1+; with 0.2.0 use using_session)
 )
 trace_provider.force_flush()
 ```
@@ -214,11 +214,11 @@ What you get (all from `traceAI-langchain`; Deep Agents adds no keys):
   name contains "agent" (e.g. `PatchToolCallsMiddleware.before_agent`) is reported as
   `AGENT` by the existing name heuristic.
 - **Session**: `configurable.thread_id` → `session.id` on every span, subagents included
-  (unreleased; see the session note above).
+  (0.2.1 and later; see the session note above).
 - **Errors**: a tool that raises ends its TOOL span `ERROR` with an `exception`
   event (LangGraph's default tool error handler re-raises, so `invoke` raises too).
   The status description and the event carry the exception type and message, never a
-  stack trace (a traceback holds local file paths; unreleased, 0.2.0 exports it). With
+  stack trace (a traceback holds local file paths; 0.2.0 and earlier export it). With
   `TraceConfig(hide_inputs=True)` or `hide_outputs=True` only the exception type
   name is kept, because an error message can echo prompt or tool content.
   Cancelling an `astream` early closes every span; the root span ends `ERROR`

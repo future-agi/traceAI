@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.2.1] - 2026-10-21
 ### Fixed
 - LangGraph's `configurable.thread_id` is now copied to `session.id` on every span of the run (LangGraph puts it in run metadata). Before, it landed only in `thread_id`/`gen_ai.conversation.id`, so LangGraph and Deep Agents runs had no session unless wrapped in `using_session(...)`. An explicit `using_session(...)` or `metadata={"session_id": ...}` still wins.
 - Token counts on chat model spans now come from the message's `usage_metadata` first, and the provider's raw `llm_output` usage only when it is missing. Anthropic's raw `input_tokens` leaves out cached prompt tokens, so with prompt caching (on by default in Deep Agents) an LLM span reported 4 input tokens for a 4018-token prompt.
