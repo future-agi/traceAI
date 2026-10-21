@@ -296,8 +296,8 @@ class TestStrandsOtlpExporterIsNotDoubled:
     OTEL_EXPORTER_OTLP_* at Future AGI as well used to add a second exporter for the same
     collector, so every span arrived twice once fi-instrumentation-otel stopped dropping
     register()'s exporter on add_span_processor() (TH-8727). The exporter is skipped only for the
-    same traces URL, with no header the provider's exporter does not already send, and only when
-    the provider keeps its exporter on the next add_span_processor() call.
+    same traces URL, with exactly the same header names and values on both exporters, and only
+    when the provider keeps its exporter on the next add_span_processor() call.
     """
 
     _ENV = (
@@ -495,6 +495,20 @@ class TestStrandsOtlpExporterIsNotDoubled:
         configure_strands_tracing(
             tracer_provider=_provider_exporting_to(_FUTURE_AGI, headers=provider_headers),
             enable_metrics=False,
+        )
+
+        assert _RecordingStrandsTelemetry.calls == ["otlp"]
+
+    def test_added_when_it_sends_other_values_for_the_same_names(self, monkeypatch):
+        # Same header names, other keys: the two exporters authenticate as different projects or
+        # tenants, so Strands' exporter is not a duplicate. Comparing names alone would skip it.
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", _FUTURE_AGI)
+        monkeypatch.setenv(
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "X-Api-Key=other-key,X-Secret-Key=other-secret"
+        )
+
+        configure_strands_tracing(
+            tracer_provider=_provider_exporting_to(_FUTURE_AGI), enable_metrics=False
         )
 
         assert _RecordingStrandsTelemetry.calls == ["otlp"]

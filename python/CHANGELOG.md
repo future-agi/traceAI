@@ -19,7 +19,8 @@
   behaviour (for example traceai-strands with `OTEL_EXPORTER_OTLP_*` set to the
   Future AGI endpoint), remove it, or every span arrives twice. traceai-strands
   0.1.1 does not add its exporter when it would send the same spans to the same
-  traces URL with no header `register()`'s exporter does not already send.
+  traces URL with exactly the same header names and values as `register()`'s
+  exporter; an extra or different header on either side keeps it.
 - Not changed: a `TracerProvider()` constructed directly still replaces the default
   `SimpleSpanProcessor` added on construction on its first `add_span_processor()`
   call.
