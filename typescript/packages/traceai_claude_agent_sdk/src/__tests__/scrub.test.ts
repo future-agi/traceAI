@@ -35,7 +35,7 @@ describe("scrubContent", () => {
       "POST /v1/messages?beta=true",
       "https://example.com/Users/docs",
       "src/index.ts and ./README.md",
-      "http://127.0.0.1:8317/v1/messages",
+      "http://127.0.0.1:8080/v1/messages",
     ]) {
       expect(scrubContent(value, ctx)).toBe(value);
     }
