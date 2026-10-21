@@ -92,7 +92,7 @@ describe("scrubContent (paths and stack traces, either mode)", () => {
   });
 
   it("leaves URLs, routes and relative paths alone", () => {
-    const text = "POST http://127.0.0.1:8317/v1/chat/completions then src/a.ts and /v1/messages";
+    const text = "POST http://127.0.0.1:8080/v1/chat/completions then src/a.ts and /v1/messages";
     expect(scrubContent(text, ctx)).toBe(text);
   });
 
