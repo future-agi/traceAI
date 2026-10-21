@@ -8,7 +8,7 @@ packages = [{ include = "traceai_mongodb" }]
 keywords = ["opentelemetry", "mongodb", "atlas", "vector-search", "tracing", "observability", "rag"]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.14"
+python = ">3.9,<3.14"
 fi-instrumentation-otel = ">=0.1.11"
 pymongo = ">=4.6.0"
 wrapt = ">=1.0.0"
