@@ -10,10 +10,11 @@ Span model (TH-8320):
   request and has no span. It is open until the stream completes (its
   ``done`` event, or the end of iteration), is closed before that, or is
   dropped; a ``close()`` or a drop after ``done`` is not a cancellation. The
-  SSE stream carries no status or metrics, so a completed stream's prediction
+  SSE stream carries no status or metrics. By default the span ends at
+  ``done`` with what the stream gave (no status, ``predict_time`` or token
+  counts). With ``stream_reload_seconds`` > 0 a completed stream's prediction
   is read once more (``GET /v1/predictions/{id}``: free, no new prediction)
-  for its final status, ``predict_time`` and token counts, off the caller's
-  path; see :mod:`traceai_replicate._stream_read`.
+  for them, off the caller's path; see :mod:`traceai_replicate._stream_read`.
 * ``replicate.predictions.create`` - every create route. When the returned
   prediction is not terminal yet, the span stays open on that prediction so a
   later ``wait`` / ``cancel`` ends it (one span, not two). If neither is
@@ -505,9 +506,9 @@ class PendingRegistry:
         """End released spans, then (with ``settle``) the spans of completed
         streams whose read is still running, waiting for those reads no later
         than ``until`` and ending the rest as ``outcome`` (see
-        :func:`settle_stream_reads`), then every held span (``force_flush``;
-        ``uninstrument()`` without ``settle``). A claimed span is left to its
-        running call. False when ``until`` cut a read short."""
+        :func:`settle_stream_reads`), then every held span (``force_flush``,
+        ``uninstrument()``). A claimed span is left to its running call.
+        False when ``until`` cut a read short."""
         drain_released()
         if not settle:
             in_time = True
@@ -522,12 +523,12 @@ class PendingRegistry:
             call.expire()
         return in_time
 
-    def end_all(self, until: Optional[float] = None) -> bool:
+    def end_all(self, until: Optional[float] = None, outcome: Optional[str] = None) -> bool:
         """Provider shutdown and interpreter exit: :meth:`expire_all`, then
         end the claimed spans whose wait()/cancel() is still running, as of
         now (see :meth:`_Call.interrupt`), so they are not lost when the
         processors stop."""
-        in_time = self.expire_all(until=until)
+        in_time = self.expire_all(until=until, outcome=outcome)
         with self._lock:
             running = list(self._claimed)
             self._claimed.clear()
@@ -602,7 +603,8 @@ class TracedIterator(wrapt.ObjectProxy):  # type: ignore[misc]
 
     A stream's span starts at the first ``next()``. Complete (a stream's
     ``done`` event, or the end of iteration): OK, ended by
-    :func:`complete_stream` without holding up the caller; a ``close()``, a
+    :func:`complete_stream` (at once, by default; with the opt-in read, when
+    it returns, without holding up the caller); a ``close()``, a
     drop or an exception after ``done`` leaves it so. ``close()`` before that,
     or dropping it: ERROR ``cancelled`` with ``replicate.cancelled`` (a drop is
     queued, see ``_RELEASED``, and keeps the drop time); a stream closed or

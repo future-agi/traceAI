@@ -496,14 +496,36 @@ class RecordingTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
         await self._async.aclose()
 
 
+# The opt-in read after a stream, as most read tests turn it on (the default is off).
+READ_ON: Dict[str, Any] = {"stream_reload_seconds": 2.0}
+
+
 def make_client(fake: FakeReplicate, transport: Optional[RecordingTransport] = None, **options: Any):
-    """A real ``replicate.Client`` pointed at the fake, polling every 10 ms."""
+    """A real ``replicate.Client`` pointed at the fake, polling every 10 ms.
+
+    Its transport is a ``RecordingTransport`` (a custom transport): with the
+    read after a stream turned on, the package never reads through it
+    (``replicate.stream.skip_reason`` = ``custom_transport``). Use
+    :func:`default_client` for a client the read can serve.
+    """
     import replicate
 
     options.setdefault("api_token", API_TOKEN)
     client = replicate.Client(
         base_url=fake.origin, transport=transport or RecordingTransport(), **options
     )
+    client.poll_interval = 0.01
+    return client
+
+
+def default_client(fake: FakeReplicate, base_url: Optional[str] = None, **options: Any):
+    """A real ``replicate.Client`` whose transport replicate builds itself
+    (the usual case), pointed at the fake: the opt-in read after a stream goes
+    through the package's own pool. The fake records every request it gets."""
+    import replicate
+
+    options.setdefault("api_token", API_TOKEN)
+    client = replicate.Client(base_url=base_url or fake.origin, **options)
     client.poll_interval = 0.01
     return client
 
@@ -533,9 +555,9 @@ class Traced:
         return "".join(span.to_json() for span in self.spans())
 
     def settle(self) -> None:
-        """Wait for the reads after streams to end their spans, at most until
-        their budget runs out (as ``shutdown()`` and exit do; ``force_flush()``
-        does not wait for them by default)."""
+        """Wait for the opt-in reads after streams to end their spans, at most
+        until their budget runs out (``force_flush()``, ``shutdown()``, exit
+        and ``uninstrument()`` do not wait for them by default)."""
         try:
             from traceai_replicate._stream_read import settle_stream_reads
         except ImportError:  # releases before the read had its own module
@@ -547,9 +569,10 @@ class Traced:
 def instrumented(**options: Any) -> Iterator[Traced]:
     """Instrument replicate against a fresh in-memory provider; uninstrument after.
 
-    ``uninstrument()`` does not wait for a read after a stream that is still
-    in flight, so the block's end first waits for those (as an app's flush
-    would), leaving held create spans to ``uninstrument()``.
+    ``uninstrument()`` ends a stream span whose opt-in read is still in
+    flight at once, without the read's data, so the block's end first waits
+    for those reads (as :meth:`Traced.settle` does), leaving held create
+    spans to ``uninstrument()``.
     """
     from traceai_replicate import ReplicateInstrumentor
 

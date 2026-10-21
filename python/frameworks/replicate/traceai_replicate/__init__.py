@@ -18,9 +18,13 @@ from wrapt import wrap_function_wrapper
 from traceai_replicate._stream_read import (
     DEFAULT_STREAM_FLUSH_WAIT_SECONDS,
     DEFAULT_STREAM_RELOAD_SECONDS,
+    DEFAULT_STREAM_SHUTDOWN_WAIT_SECONDS,
     FLUSHED,
     MAX_STREAM_RELOAD_SECONDS,
+    SHUTDOWN,
+    UNINSTRUMENTED,
     StreamReads,
+    end_stream_reads_at_exit,
     start_workers,
 )
 from traceai_replicate._wrappers import (
@@ -38,7 +42,6 @@ from traceai_replicate._wrappers import (
     PendingRegistry,
     RunWrapper,
     drain_released,
-    settle_stream_reads,
 )
 from traceai_replicate.package import _instruments
 from traceai_replicate.version import __version__
@@ -47,7 +50,14 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 _OPTIONS = frozenset(
-    {"tracer_provider", "config", "max_pending_seconds", "stream_reload_seconds", "stream_flush_wait_seconds"}
+    {
+        "tracer_provider",
+        "config",
+        "max_pending_seconds",
+        "stream_reload_seconds",
+        "stream_flush_wait_seconds",
+        "stream_shutdown_wait_seconds",
+    }
 )
 # replicate/__init__.py binds these to default_client at import time.
 _MODULE_FUNCTIONS = ("run", "async_run", "stream", "async_stream")
@@ -77,26 +87,26 @@ def _milliseconds(value: Any) -> Optional[float]:
 class _EndPendingFirst:
     """Stands in for ``force_flush`` / ``shutdown`` on one provider instance.
 
-    Ends the create spans still held open on their predictions, and the
-    spans of completed streams whose read is still running, then calls the
-    original, so those spans reach the processors before they flush or stop.
-    ``shutdown`` also ends, as a best effort, a span whose
-    ``wait()``/``cancel()`` is still running; ``force_flush`` leaves it to
-    that call. ``fi_instrumentation.register()``'s SIGTERM/SIGINT handler
-    shuts the provider down and exits; an ``atexit`` hook alone would run
-    after the processors had stopped and every held span would be dropped.
+    Ends the create spans still held open on their predictions, and (with
+    the opt-in read after a stream) the spans of completed streams whose read
+    is still running, then calls the original, so those spans reach the
+    processors before they flush or stop. ``shutdown`` also ends, as a best
+    effort, a span whose ``wait()``/``cancel()`` is still running;
+    ``force_flush`` leaves it to that call. ``fi_instrumentation.register()``'s
+    SIGTERM/SIGINT handler shuts the provider down and exits; an ``atexit``
+    hook alone would run after the processors had stopped and every held span
+    would be dropped.
 
-    ``force_flush`` does not wait for reads in flight: like the SDK's own
-    processors, it exports what has ended, so each such span ends at once
-    with what is known (``replicate.stream.read`` = ``flushed``). With
-    ``stream_flush_wait_seconds`` it first waits that long for them, and
-    never more than half of ``timeout_millis`` (passed, or the original's
-    default, 30000 for the SDK's ``force_flush``). Whenever there is a
-    timeout, the original gets only the time that is left, so the call
-    never takes longer than asked, unless ending those spans itself takes
-    longer (an exporter that runs inline, such as SimpleSpanProcessor's).
-    ``shutdown`` (no timeout in the SDK) waits for reads in flight at most
-    until their budget runs out (``stream_reload_seconds``, at most 10 s).
+    Neither waits for reads in flight by default: like the SDK's own
+    processors, they export what has ended, so each such span ends at once
+    with what is known (``replicate.stream.read`` = ``flushed`` or
+    ``shutdown``). With ``stream_flush_wait_seconds`` /
+    ``stream_shutdown_wait_seconds`` each first waits that long for them,
+    and never more than half of ``timeout_millis`` when there is one (passed,
+    or the original's default, 30000 for the SDK's ``force_flush``). Whenever
+    there is a timeout, the original gets only the time that is left, so the
+    call never takes longer than asked, unless ending those spans itself
+    takes longer (an exporter that runs inline, such as SimpleSpanProcessor's).
     The original's result is returned.
     """
 
@@ -104,12 +114,12 @@ class _EndPendingFirst:
         self,
         original: Any,
         end_pending: Callable[[Optional[float]], Any],
-        flush_wait: Optional[Callable[[], float]] = None,
+        flush_wait: Callable[[], float],
     ) -> None:
         self.original = original
         self.end_pending = end_pending
-        # force_flush: how long to wait for reads in flight; None (shutdown):
-        # until their budget runs out, or half the timeout when there is one.
+        # How long to wait for reads in flight (0 by default), never more
+        # than half the timeout when there is one.
         self.flush_wait = flush_wait
         self.enabled = True
         self.takes_timeout, self.default_timeout = _timeout_parameter(original)
@@ -129,10 +139,8 @@ class _EndPendingFirst:
             return True, _milliseconds(args[0])
         return False, self.default_timeout
 
-    def _until(self, started: float, timeout: Optional[float]) -> Optional[float]:
+    def _until(self, started: float, timeout: Optional[float]) -> float:
         half = None if timeout is None else timeout / 2000.0
-        if self.flush_wait is None:
-            return None if half is None else started + half
         wait = self.flush_wait()
         return started + (wait if half is None else min(wait, half))
 
@@ -192,24 +200,30 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
     """Trace ``replicate`` predictions: run, stream, create, wait and cancel.
 
     ``instrument(tracer_provider=..., config=TraceConfig(...),
-    max_pending_seconds=600, stream_reload_seconds=2.0,
-    stream_flush_wait_seconds=0)``. Trainings, file
-    uploads, and reads (``predictions.get``/``list``, ``reload``) are not
-    wrapped.
+    max_pending_seconds=600, stream_reload_seconds=0,
+    stream_flush_wait_seconds=0, stream_shutdown_wait_seconds=0)``.
+    Trainings, file uploads, and reads (``predictions.get``/``list``,
+    ``reload``) are not wrapped.
 
-    ``stream_reload_seconds`` (0 to 10) is the wall-time budget for reading a
+    ``stream_reload_seconds`` (0 to 10, default 0: off) opts into reading a
     streamed prediction once more after its ``done`` event (``GET
     /v1/predictions/{id}``: no new prediction and no charge, but it counts
     toward the account's API rate limit) to record its final status,
-    ``predict_time`` and token counts; ``0`` turns the read off. The read
-    runs on background workers, so the caller's iteration is never held up;
-    the span ends when the read returns or the budget runs out, as of the
-    stream's end. No read is made for a span that is not recording.
+    ``predict_time`` and token counts, within that wall-time budget. Off, a
+    stream span ends at ``done`` (or the end of iteration) on the caller's
+    thread with what the stream gave, and no thread is started. On, the read
+    runs on background workers through the package's own connection pool,
+    only for replicate's own transport or a plain httpx one (any other
+    transport: no read, ``replicate.stream.skip_reason`` =
+    ``custom_transport``); the span ends when the read returns or the budget
+    runs out, as of the stream's end. No read is made for a span that is not
+    recording.
 
-    ``stream_flush_wait_seconds`` (0 to 10, default 0) is how long
-    ``force_flush()`` waits for those reads (at most half its timeout)
-    before it ends their spans with what is known; by default it waits for
-    none. ``shutdown()`` and interpreter exit wait up to the budget.
+    ``stream_flush_wait_seconds`` and ``stream_shutdown_wait_seconds`` (0 to
+    10, default 0) are how long ``force_flush()`` (at most half its timeout)
+    and ``shutdown()`` / interpreter exit wait for those reads before they end
+    their spans with what is known; by default they wait for none.
+    ``uninstrument()`` never waits.
 
     ``max_pending_seconds`` is the longest a create span is held open on its
     prediction for a ``wait()``/``cancel()``; an older one is ended, as of
@@ -247,12 +261,16 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             "stream_flush_wait_seconds",
             kwargs.get("stream_flush_wait_seconds", DEFAULT_STREAM_FLUSH_WAIT_SECONDS),
         )
+        shutdown_wait = _seconds_up_to_max(
+            "stream_shutdown_wait_seconds",
+            kwargs.get("stream_shutdown_wait_seconds", DEFAULT_STREAM_SHUTDOWN_WAIT_SECONDS),
+        )
         tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
         tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
         )
         self._registry = PendingRegistry(max_pending_seconds)
-        self._reads = StreamReads(reload_seconds, flush_wait)
+        self._reads = StreamReads(reload_seconds, flush_wait, shutdown_wait)
         self._originals: List[Tuple[Any, str, Any]] = []
         self._module_functions: List[Tuple[Any, str, Any, Any]] = []
 
@@ -349,19 +367,20 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         self._rebind_module_functions()
         self._hook_provider(tracer_provider)
         if self._reads.budget > 0 and self._reads.hooked:
-            # The read loop and the finisher start here, so completing a
-            # stream never starts a thread on the caller's path.
+            # Only with the opt-in read: the read loop and the finisher start
+            # here, so completing a stream never starts a thread on the
+            # caller's path. With the read off (the default) no thread starts.
             start_workers()
         # Fallbacks for a provider whose methods could not be hooked; registered
         # after register(), so they run before the provider's own atexit
-        # shutdown. drain_released and settle_stream_reads stay registered
-        # after uninstrument() for a stream that is still open then and is
-        # released, or completes, later.
+        # shutdown. drain_released and end_stream_reads_at_exit stay
+        # registered after uninstrument() for a stream that is still open then
+        # and is released, or completes, later; neither waits.
         atexit.unregister(drain_released)
         atexit.register(drain_released)
-        atexit.unregister(settle_stream_reads)
-        atexit.register(settle_stream_reads)
-        atexit.register(self._end_pending)
+        atexit.unregister(end_stream_reads_at_exit)
+        atexit.register(end_stream_reads_at_exit)
+        atexit.register(self._at_exit)
 
     def _wrap(self, module_name: str, class_name: str, method: str, wrapper: Any) -> None:
         try:
@@ -422,7 +441,7 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         # shutdown ends it too, or it would be dropped once the processors stop.
         ends = {"force_flush": self._expire_held, "shutdown": self._shut_down}
         reads = self._reads
-        waits = {"force_flush": lambda: reads.flush_wait, "shutdown": None}
+        waits = {"force_flush": lambda: reads.flush_wait, "shutdown": lambda: reads.shutdown_wait}
         for name in _PROVIDER_METHODS:
             try:
                 original = getattr(provider, name, None)
@@ -443,7 +462,8 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
                 )
                 continue
             self._provider_hooks.append((provider, name, previous, hook))
-        # Reads after a stream only where a flush and a shutdown wait for them.
+        # The opt-in read after a stream only where a flush and a shutdown can
+        # end its span; otherwise a read could end it after the processors stopped.
         self._reads.hooked = bool(self._provider_hooks)
 
     def _unhook_provider(self) -> None:
@@ -465,10 +485,18 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
 
     def _end_pending(self, until: Optional[float] = None) -> None:
         """Provider shutdown and exit: every held span, the streams whose read
-        is still running, and the spans whose wait()/cancel() is still running."""
+        is still running (waited for no later than ``until``, by default not
+        at all, then ended as ``shutdown``), and the spans whose
+        wait()/cancel() is still running."""
         registry = getattr(self, "_registry", None)
         if registry is not None:
-            registry.end_all(until)
+            registry.end_all(time.monotonic() if until is None else until, outcome=SHUTDOWN)
+
+    def _at_exit(self) -> None:
+        """Interpreter exit: as shutdown, waiting ``stream_shutdown_wait_seconds`` at most."""
+        reads = getattr(self, "_reads", None)
+        wait = reads.shutdown_wait if reads is not None else 0.0
+        self._end_pending(time.monotonic() + wait)
 
     def _shut_down(self, until: Optional[float] = None) -> None:
         """Provider shutdown: no new read (nothing would be exported), then
@@ -494,14 +522,18 @@ class ReplicateInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             setattr(owner, method, original)
         self._module_functions = []
         self._originals = []
+        reads = getattr(self, "_reads", None)
+        if reads is not None:
+            reads.active = False  # a stream that completes from now on makes no read
         self._unhook_provider()
-        atexit.unregister(self._end_pending)
-        # Held create spans end now. A stream whose read is still running is
-        # not waited for: the read's worker ends its span on the provider,
-        # which is still live, when the read returns or its budget runs out.
+        atexit.unregister(self._at_exit)
+        # Held create spans end now, and so does every stream span whose read
+        # is still running, at once and with what is known
+        # (``uninstrumented``): nothing waits, and a shutdown right after
+        # exports them.
         registry = getattr(self, "_registry", None)
         if registry is not None:
-            registry.expire_all(settle=False)
+            registry.expire_all(until=time.monotonic(), outcome=UNINSTRUMENTED)
 
 
 __all__ = ["ReplicateInstrumentor", "__version__"]

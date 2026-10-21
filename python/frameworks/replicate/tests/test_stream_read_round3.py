@@ -1,11 +1,12 @@
-"""The read after a stream, TH-8320 review round 3.
+"""The opt-in read after a stream, TH-8320 review round 3.
 
-Each test is a verifier probe turned into a regression test:
+Each test is a verifier probe turned into a regression test (round 4: the
+read is off by default, so each one turns it on with ``stream_reload_seconds``):
 
 * ``asyncio.run()`` (any loop teardown that cancels its tasks) does not wait
-  for a read running on that loop, and a plain ``httpx`` transport is read
-  through the package's own pool (with its TLS settings), not the caller's
-  loop or pool;
+  for a read (round 4: none ever runs on the caller's loop), and a plain
+  ``httpx`` transport is read through the package's own pool (with its TLS
+  settings), not the caller's loop or pool;
 * ``force_flush()`` does not wait for reads by default (a per-request flush
   pays nothing); ``stream_flush_wait_seconds`` opts in, and the time passed
   to the provider's own flush is what is left of the caller's timeout;
@@ -19,7 +20,8 @@ Each test is a verifier probe turned into a regression test:
   path;
 * a fork right after a stream never copies a lock the finisher holds;
 * an ended span is not kept alive until its read's deadline;
-* one stuck caller transport does not turn off reads through another.
+* a custom transport of the caller's is never used for the read, so it can
+  neither hold read slots nor turn off reads through another client.
 
 Everything runs against the loopback ``FakeReplicate``; no live call is made.
 """
@@ -65,9 +67,11 @@ from _support import (  # noqa: E402
     STREAM_CHUNKS,
     STREAM_MODEL,
     STREAM_TEXT,
+    READ_ON,
     FakeReplicate,
     RecordingTransport,
     attrs,
+    default_client,
     instrumented,
     make_client,
 )
@@ -92,9 +96,7 @@ def _wait_for(predicate, timeout):
 
 
 def _default_client(fake, base_url=None):
-    client = replicate.Client(api_token=API_TOKEN, base_url=base_url or fake.origin)
-    client.poll_interval = 0.01
-    return client
+    return default_client(fake, base_url)
 
 
 def _final(values):
@@ -199,9 +201,9 @@ def own_provider():
 
 
 def test_asyncio_run_does_not_wait_for_a_read_on_its_loop():
-    """An async-only transport of the caller's runs the read on the caller's
-    loop. asyncio.run() cancels it when main returns; that cancel ends the
-    read (no second GET), and the span says why it has no status."""
+    """Round 4: an async-only transport of the caller's is a custom transport,
+    so no read runs on the caller's loop at all: asyncio.run() has nothing to
+    wait for, and the span says why it has no status."""
     marks = {}
 
     async def main(client):
@@ -210,21 +212,20 @@ def test_asyncio_run_does_not_wait_for_a_read_on_its_loop():
         marks["main"] = time.monotonic()
         return events
 
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.read_delay = 1.5
         transport = _AsyncOnly()
         events = asyncio.run(main(make_client(fake, transport)))
         returned = time.monotonic() - marks["main"]
-        assert _wait_for(traced.replicate_spans, 1.0)
-        span = traced.one()
+        span = traced.one()  # ended at done, before asyncio.run() returned
 
     assert _texts(events) == STREAM_CHUNKS
     assert returned < 0.3, returned
-    assert transport.calls.count(("GET", READ)) <= 1
+    assert ("GET", READ) not in transport.calls
+    assert READ not in fake.paths("GET")
     values = _completed(span)
     _no_final(values)
-    reason = "skipped" if ("GET", READ) not in transport.calls else "timeout"
-    assert values["replicate.stream.read"] == reason
+    assert (values["replicate.stream.read"], values["replicate.stream.skip_reason"]) == ("skipped", "custom_transport")
 
 
 def test_a_plain_httpx_async_transport_is_read_through_the_package_pool():
@@ -239,7 +240,7 @@ def test_a_plain_httpx_async_transport_is_read_through_the_package_pool():
         marks["main"] = time.monotonic()
         return events
 
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.read_delay = 0.5
         transport = httpx.AsyncHTTPTransport(retries=2)
         seen = []
@@ -275,8 +276,8 @@ def test_a_client_per_call_with_its_own_transport_still_gets_every_read():
         return [event async for event in await client.async_stream(STREAM_MODEL, input={})]
 
     count = 10
-    with FakeReplicate() as fake, instrumented() as traced:
-        fake.read_delay = 0.2
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+        fake.read_delay = 1.0
         took = []
         for _ in range(count):
             started = time.monotonic()
@@ -285,14 +286,16 @@ def test_a_client_per_call_with_its_own_transport_still_gets_every_read():
         traced.settle()
         spans = traced.replicate_spans()
 
-    assert max(took) < 0.2, took  # no asyncio.run() waits for its read
+    # No asyncio.run() waits for its read (1 s each); building a client and a
+    # TLS context per call is the rest, and grows with the machine's load.
+    assert max(took) < 0.75, took
     assert len(spans) == count
     for span in spans:
         _final(_completed(span))
 
 
 def test_a_plain_httpx_transport_with_a_small_pool_is_read_through_the_package_pool():
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.read_delay = 1.0
         transport = httpx.HTTPTransport(limits=httpx.Limits(max_connections=1))
         client = make_client(fake, transport)
@@ -330,9 +333,9 @@ def test_the_package_pool_copies_a_plain_transports_tls_context_and_settings():
 
 
 def test_force_flush_does_not_wait_for_a_read_by_default():
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.read_delay = 1.0
-        list(make_client(fake).stream(STREAM_MODEL, input={}))
+        list(_default_client(fake).stream(STREAM_MODEL, input={}))
         started = time.monotonic()
         assert traced.provider.force_flush() is True
         took = time.monotonic() - started
@@ -347,7 +350,7 @@ def test_force_flush_does_not_wait_for_a_read_by_default():
 
 def test_a_flush_after_every_request_pays_no_read_round_trip():
     workers, rounds = 4, 5
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.read_delay = 0.2
         client = _default_client(fake)
         flushes, errors = [], []
@@ -374,10 +377,10 @@ def test_a_flush_after_every_request_pays_no_read_round_trip():
     assert max(flushes) < 0.1, max(flushes)
 
 
-def test_shutdown_still_waits_for_a_read_within_the_budget():
-    with FakeReplicate() as fake, instrumented() as traced:
+def test_an_opt_in_shutdown_wait_waits_for_a_read_within_the_budget():
+    with FakeReplicate() as fake, instrumented(stream_shutdown_wait_seconds=2, **READ_ON) as traced:
         fake.read_delay = 0.3
-        list(make_client(fake).stream(STREAM_MODEL, input={}))
+        list(_default_client(fake).stream(STREAM_MODEL, input={}))
         traced.provider.shutdown()
         spans = traced.replicate_spans()
     (span,) = spans
@@ -438,10 +441,10 @@ def test_a_flush_wrapped_before_instrument_still_gets_only_the_time_left(own_pro
     provider.add_span_processor(recording)
     original = provider.force_flush
     provider.force_flush = lambda *args, **kwargs: original(*args, **kwargs)  # someone else's wrapper
-    own_provider(provider)
+    own_provider(provider, **READ_ON)
     with FakeReplicate() as fake:
         fake.read_delay = 1.5
-        list(make_client(fake).stream(STREAM_MODEL, input={}))
+        list(_default_client(fake).stream(STREAM_MODEL, input={}))
         started = time.monotonic()
         provider.force_flush(timeout_millis=400)
     called_at, given = recording.calls[-1]
@@ -472,7 +475,7 @@ def _slow_lookups(monkeypatch, seconds):
 def test_thirty_concurrent_reads_against_a_host_name_all_carry_tokens(monkeypatch):
     lookups = _slow_lookups(monkeypatch, 0.05)
     count = 30
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         base = fake.origin.replace("127.0.0.1", "localhost")
         clients = [_default_client(fake, base) for _ in range(count)]
         barrier = threading.Barrier(count)
@@ -509,7 +512,7 @@ def test_lookups_of_different_names_wait_for_a_free_resolver(monkeypatch):
     _slow_lookups(monkeypatch, 0.2)
     fakes = [FakeReplicate() for _ in range(4)]
     try:
-        with instrumented() as traced:
+        with instrumented(**READ_ON) as traced:
             clients = [_default_client(fake, fake.origin.replace("127.0.0.1", "localhost")) for fake in fakes]
             threads = [
                 threading.Thread(target=lambda client=client: list(client.stream(STREAM_MODEL, input={})))
@@ -582,8 +585,8 @@ def test_a_keyboard_interrupt_while_the_read_is_planned_ends_the_span_and_frees_
 
         monkeypatch.setattr(_stream_read._Read, "admit", admit)
 
-    with FakeReplicate() as fake, instrumented() as traced:
-        stream = make_client(fake).stream(STREAM_MODEL, input={})
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+        stream = _default_client(fake).stream(STREAM_MODEL, input={})
         with pytest.raises(KeyboardInterrupt):
             for _ in stream:
                 pass
@@ -594,7 +597,7 @@ def test_a_keyboard_interrupt_while_the_read_is_planned_ends_the_span_and_frees_
     assert len(spans) == 1
     values = _completed(spans[0])
     _no_final(values)
-    assert values["replicate.stream.read"] == "skipped"
+    assert (values["replicate.stream.read"], values["replicate.stream.skip_reason"]) == ("skipped", "interrupted")
     assert (live, pending) == (0, 0)
 
 
@@ -625,7 +628,7 @@ def test_spans_waiting_for_a_slow_exporter_are_capped(own_provider, monkeypatch)
     exporter = _SlowExporter(0.3)
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    own_provider(provider)
+    own_provider(provider, **READ_ON)
     with FakeReplicate() as fake:
         client = _default_client(fake)
         for _ in range(6):
@@ -634,10 +637,12 @@ def test_spans_waiting_for_a_slow_exporter_are_capped(own_provider, monkeypatch)
         assert _wait_for(lambda: len(exporter.spans) == 6, 10.0)
     reads = sorted(str(attrs(span).get("replicate.stream.read")) for span in exporter.spans)
     assert reads.count("skipped") >= 1, reads  # past the cap: ended on the caller's thread
+    reasons = {attrs(span).get("replicate.stream.skip_reason") for span in exporter.spans} - {None}
+    assert reasons == {"at_capacity"}, reasons
 
 
 def test_every_admitted_read_has_a_connection():
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.read_delay = 1.2
         client = _default_client(fake)
         for _ in range(20):
@@ -658,7 +663,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from traceai_replicate import ReplicateInstrumentor
 
 provider = TracerProvider()
-ReplicateInstrumentor().instrument(tracer_provider=provider)
+ReplicateInstrumentor().instrument(tracer_provider=provider, stream_reload_seconds=2.0)
 starts = []
 original = threading.Thread.start
 
@@ -695,7 +700,7 @@ def test_a_fork_right_after_a_stream_never_copies_a_lock_the_finisher_holds(own_
     exporter = _SlowExporter(0.3)
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    own_provider(provider)
+    own_provider(provider, **READ_ON)
     stuck = 0
     with FakeReplicate() as fake:
         client = _default_client(fake)
@@ -724,7 +729,7 @@ def test_a_fork_right_after_a_stream_never_copies_a_lock_the_finisher_holds(own_
 
 def test_an_ended_span_is_not_kept_alive_until_its_reads_deadline():
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=10) as traced:
-        stream = make_client(fake).stream(STREAM_MODEL, input={})
+        stream = _default_client(fake).stream(STREAM_MODEL, input={})
         call = weakref.ref(stream._self_call)
         list(stream)
         assert _wait_for(traced.replicate_spans, 2.0)  # the read returned; its deadline is 10 s away
@@ -735,19 +740,24 @@ def test_an_ended_span_is_not_kept_alive_until_its_reads_deadline():
     assert not alive
 
 
-def test_one_stuck_caller_transport_does_not_turn_off_reads_through_another():
+def test_a_stuck_custom_transport_is_never_used_for_the_read_and_holds_no_slot():
+    """Round 3 gave each caller transport its own read slots; round 4 never
+    reads through a custom transport, so one that would block holds nothing."""
     gate = _Gate()
     try:
         with FakeReplicate() as fake, instrumented(stream_reload_seconds=0.5) as traced:
             stuck = make_client(fake, gate)
             for _ in range(4):
                 list(stuck.stream(STREAM_MODEL, input={}))
-            _wait_for(lambda: gate.blocked == 4, 2.0)  # its reads hold their slots
-            assert gate.blocked >= 3, gate.blocked
-            list(make_client(fake).stream(STREAM_MODEL, input={}))  # another transport of the caller's
+            assert gate.blocked == 0
+            assert _stream_read.live_reads() == 0
+            list(_default_client(fake).stream(STREAM_MODEL, input={}))
             traced.settle()
             spans = traced.replicate_spans()
     finally:
         gate.gate.set()
     assert len(spans) == 5
+    for number in range(1, 5):
+        values = attrs(_by_id(spans, "pred000{0}".format(number)))
+        assert (values["replicate.stream.read"], values["replicate.stream.skip_reason"]) == ("skipped", "custom_transport")
     _final(_completed(_by_id(spans, "pred0005")))

@@ -1,60 +1,62 @@
-"""The read after a completed stream, off the caller's path (TH-8320).
+"""The opt-in read after a completed stream (TH-8320).
 
 Replicate's SSE stream reports no status, metrics or token counts; the
-prediction does. When a stream completes (its ``done`` event, or the end of
-iteration) and its span is recording, :func:`complete_stream` fixes the span's
-end time and hands the stream to the workers with one ``SimpleQueue.put``
-(which neither blocks nor releases the GIL, so a caller among hundreds of
-threads is not made to wait for it again). Nothing waits on the caller's
-thread or event loop, and no thread starts there: the worker threads start in
-``instrument()`` (a forked child starts its own once, on its first completed
-stream, and a completer never waits for another to do it). A dispatcher thread
-passes the queued streams, in batches, to the package's read loop, which
-starts each read, ``GET /v1/predictions/{id}`` once (twice when the API still
-answers a non-final status), within ``stream_reload_seconds``, and arms a
-timer at the read's deadline. A finisher thread ends the span, as of the
-stream's end, with what the read found, when the read returns or at the
-deadline. The finisher only ends spans, so an exporter that runs inline delays
-span ends, never the start of a read.
+prediction does. **By default this package does not read it**
+(``stream_reload_seconds`` defaults to 0): a stream span ends on the caller's
+thread at the stream's ``done`` event (or the end of iteration) with what the
+stream gave, no request is made for it, and no thread is ever started.
 
-Where the read goes:
+With ``stream_reload_seconds`` > 0, when a stream completes and its span is
+recording, :func:`complete_stream` fixes the span's end time and hands the
+stream to the workers with one ``SimpleQueue.put`` (which neither blocks nor
+releases the GIL). The worker threads start in ``instrument()`` (a forked
+child starts its own once, on its first completed stream, and a completer
+never waits for another to do it). A dispatcher thread passes the queued
+streams, in batches, to the package's read loop, which starts each read,
+``GET /v1/predictions/{id}`` once (twice when the API still answers a
+non-final status), within ``stream_reload_seconds``, and arms a timer at the
+read's deadline. A finisher thread ends the span, as of the stream's end,
+with what the read found, when the read returns or at the deadline. The
+finisher only ends spans, so an exporter that runs inline delays span ends,
+never the start of a read.
 
-* ``own``, through a connection pool this package owns, on the read loop,
-  with the caller's base URL and headers:
+The read goes only through a connection pool this package owns, on the read
+loop, with the caller's base URL and headers, and only when that pool can be
+built the way the caller's would be:
 
-  - the client built its transport itself (no ``transport=`` or ``mounts=``
-    passed to ``replicate.Client``): with the client's proxy options;
-  - the caller passed a plain ``httpx.HTTPTransport`` / ``AsyncHTTPTransport``
-    without a proxy: with that transport's TLS context, HTTP versions, local
-    address, socket options and connect retries (see :func:`_plain_settings`);
-    the caller's pool itself is not used.
+* the client built its transport itself (no ``transport=`` or ``mounts=``
+  passed to ``replicate.Client``): with the client's proxy options;
+* the transport for the API URL is a plain ``httpx.HTTPTransport`` /
+  ``AsyncHTTPTransport`` without a proxy (below replicate's own
+  ``RetryTransport`` layers): with that transport's TLS context, HTTP
+  versions, local address, socket options and connect retries (see
+  :func:`_plain_settings`); the caller's pool itself is not used.
 
-  It never touches the caller's pools and never builds an httpx client on the
-  caller's ``Client``. The budget is an absolute deadline: at the deadline the
-  task is cancelled (an anyio cancel scope, see :func:`_within`), which closes
-  its connection. Name lookups run on at most ``_MAX_RESOLVERS`` daemon
-  threads; concurrent lookups of one name share one, a result is kept for
-  ``_DNS_CACHE_SECONDS``, and a lookup waits for a free resolver within the
-  read's deadline (it fails at once only while every resolver has been stuck
-  for ``_RESOLVER_STUCK_SECONDS``).
-* ``sync`` / ``async``, through any other transport the caller passed, the
-  only thing that knows how to reach the API. When it can send synchronously
-  (``handle_request``) the read runs on a daemon reader thread, for a sync or
-  an async stream; each phase gets at most the time left, but a server that
-  trickles bytes can keep that thread (and one of the caller's connections)
-  until the transport's own timeouts end it. An async-only transport is used
-  from the caller's own event loop, as a task (its connections belong to that
-  loop), cancelled at the deadline; a cancel from the caller's loop (for
-  example ``asyncio.run()`` ending) ends it at once. Replicate's
-  ``RetryTransport`` layers on top are skipped; a transport of the caller's
-  that retries by itself is used as it is.
+Any other transport (a custom, mock, recording, stateful, proxied or
+subclassed one) is never called for the read: the read is skipped and the
+span says so (``replicate.stream.read`` = ``skipped``,
+``replicate.stream.skip_reason`` = ``custom_transport``). So the read never
+runs on the caller's thread or event loop and never takes or consumes
+anything of the caller's transport. The budget is an absolute deadline: at
+the deadline the task is cancelled (an anyio cancel scope, see
+:func:`_within`), which closes its connection. Name lookups run on at most
+``_MAX_RESOLVERS`` daemon threads, with at most ``_MAX_RESOLVE_JOBS``
+lookups queued; concurrent lookups of one name share one, a result is kept
+for ``_DNS_CACHE_SECONDS``, and a lookup waits for a free resolver within the
+read's deadline (it fails at once only while every resolver has been stuck
+for ``_RESOLVER_STUCK_SECONDS``, or the queue is full).
 
-Every read counts as live from admission until its I/O has actually returned
-(a read past its deadline still counts until then): at most ``_MAX_READS``
-``own`` reads, and ``_MAX_CALLER_READS`` per caller transport (fewer for a
-small pool, see :func:`_caller_limit`) and ``_MAX_CALLER_READS_TOTAL`` over
-all of them. A stream that completes beyond that ends at once without one
-(``replicate.stream.read`` = ``skipped``).
+At most ``_MAX_PENDING_SPANS`` stream spans wait at once (reads in flight,
+and spans whose read has returned and wait to be ended), and at most
+``_MAX_READS`` reads are live, counted until their I/O has returned (also
+past the deadline). A stream that completes beyond that ends at once, on the
+caller's thread, without a read (``skipped``, reason ``at_capacity``).
+
+``force_flush()``, ``shutdown()``, interpreter exit and ``uninstrument()``
+do not wait for reads by default: each ends the spans still waiting at once,
+with what is known (``flushed``, ``shutdown``, ``shutdown``,
+``uninstrumented``). ``stream_flush_wait_seconds`` and
+``stream_shutdown_wait_seconds`` opt into a bounded wait.
 """
 
 from __future__ import annotations
@@ -75,7 +77,7 @@ import threading
 import time
 import types
 import zlib
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union
 
 import httpx
 from opentelemetry import context as context_api
@@ -94,6 +96,7 @@ from traceai_replicate._attributes import (
     PREDICTION_STATUS,
     STREAM_DONE_REASON,
     STREAM_READ,
+    STREAM_SKIP_REASON,
     STREAM_TRUNCATED,
     TERMINAL_STATUSES,
 )
@@ -101,14 +104,15 @@ from traceai_replicate._attributes import (
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-# Wall-time budget for the read after a stream, counted from the stream's end;
-# 0 turns the read off. It bounds how long a shutdown and interpreter exit wait
-# for reads in flight, so it is capped.
-DEFAULT_STREAM_RELOAD_SECONDS = 2.0
+# Wall-time budget for the read after a stream, counted from the stream's end.
+# 0, the default, turns the read off: no request, no thread, no wait.
+DEFAULT_STREAM_RELOAD_SECONDS = 0.0
 MAX_STREAM_RELOAD_SECONDS = 10.0
-# How long force_flush() waits for reads in flight (never more than half its
-# timeout); 0, the default, waits for none: their spans end at once.
+# How long force_flush() (never more than half its timeout) and shutdown() /
+# interpreter exit wait for reads in flight; 0, the default, waits for none:
+# their spans end at once with what is known.
 DEFAULT_STREAM_FLUSH_WAIT_SECONDS = 0.0
+DEFAULT_STREAM_SHUTDOWN_WAIT_SECONDS = 0.0
 
 _READ_ATTEMPTS = 2
 # A language model's prediction is tens of KB; bodies are counted as received
@@ -120,27 +124,24 @@ _MAX_READ_BYTES = 2 * 1024 * 1024
 _MAX_READS = 64
 _POOL_CONNECTIONS = _MAX_READS
 _POOL_KEEPALIVE = 8
-# Live reads through one transport the caller passed to replicate.Client, and
-# through all of them (each is a reader thread or a task on the caller's loop).
-_MAX_CALLER_READS = 4
-_MAX_CALLER_READS_TOTAL = 16
 # Stream spans admitted and not yet ended (their read in flight, or returned
 # and waiting for the finisher to export them) count against the same cap. A
 # slow inline exporter can fall behind; past the cap, a stream ends on the
 # caller's thread without a read, as it would without the read at all. That
-# bounds memory, and what shutdown and exit have left to export.
+# bounds memory, and what a shutdown has left to end.
 _MAX_PENDING_SPANS = _MAX_READS
-# A caller pool of N connections lends the read at most N // _CALLER_POOL_SHARE.
-_CALLER_POOL_SHARE = 8
-# Name lookups: resolver threads, how long a lookup may run before its thread
-# counts as stuck, and how long a result is kept.
+# Name lookups: resolver threads, lookups queued for them (a new one fails at
+# once beyond that), how long a lookup may run before its thread counts as
+# stuck, and how long a result is kept.
 _MAX_RESOLVERS = 2
+_MAX_RESOLVE_JOBS = _MAX_READS
 _RESOLVER_STUCK_SECONDS = 5.0
 _DNS_CACHE_SECONDS = 5.0
 _DNS_CACHE_ENTRIES = 32
 # Package-owned httpx clients kept, one per set of routing options.
 _MAX_OWN_CLIENTS = 4
-# How long a shutdown or exit waits past the last deadline, for the finisher.
+# How long a wait for reads (an opt-in flush or shutdown wait, or a test's
+# settle) goes on past the last deadline, for the finisher.
 _SETTLE_GRACE = 0.25
 # How long a fork waits for the finisher to finish ending (exporting) a span.
 _FORK_WAIT_SECONDS = 5.0
@@ -166,15 +167,38 @@ _ASYNC_HTTP = "_Client__async_client"
 FINISHER_NAME = "traceai-replicate-stream-finish"
 DISPATCHER_NAME = "traceai-replicate-stream-dispatch"
 LOOP_NAME = "traceai-replicate-stream-read"
-SYNC_READER_NAME = "traceai-replicate-stream-read-sync"
 RESOLVER_NAME = "traceai-replicate-resolve"
 
 # replicate.stream.read values: why a stream span has no final status.
-SKIPPED = "skipped"  # no read was made (a cap, a closed client, no provider hook)
-TIMEOUT = "timeout"  # the read did not return within its budget, or its loop ended
-FAILED = "failed"  # refused (not 200), unreadable or over 2 MiB
+SKIPPED = "skipped"  # no read was made; replicate.stream.skip_reason says why
+TIMEOUT = "timeout"  # the read did not return within its budget
+FAILED = "failed"  # refused (not 200), unreadable, over 2 MiB, or no name lookup
 UNFINISHED = "unfinished"  # the API still answered a non-final status
 FLUSHED = "flushed"  # a force_flush() ended the span before the read returned
+SHUTDOWN = "shutdown"  # shutdown() or interpreter exit ended it before the read returned
+UNINSTRUMENTED = "uninstrumented"  # uninstrument() ended it before the read returned
+
+# replicate.stream.skip_reason values (with replicate.stream.read = skipped).
+CUSTOM_TRANSPORT = "custom_transport"  # a transport other than replicate's own or a plain httpx one
+AT_CAPACITY = "at_capacity"  # 64 stream spans waiting, or 64 reads live
+NO_PROVIDER_HOOK = "no_provider_hook"  # the provider's force_flush/shutdown could not be hooked
+AFTER_UNINSTRUMENT = "after_uninstrument"  # the stream completed after uninstrument()
+AFTER_SHUTDOWN = "after_shutdown"  # the stream completed after the provider's shutdown()
+CLIENT_CLOSED = "client_closed"  # the client's httpx client was closed (or never built)
+NO_PREDICTION_ID = "no_prediction_id"  # the stream's prediction has no usable id
+START_FAILED = "start_failed"  # planning or starting the read raised
+INTERRUPTED = "interrupted"  # a KeyboardInterrupt (any BaseException) while it was planned
+SKIP_REASONS = (
+    CUSTOM_TRANSPORT,
+    AT_CAPACITY,
+    NO_PROVIDER_HOOK,
+    AFTER_UNINSTRUMENT,
+    AFTER_SHUTDOWN,
+    CLIENT_CLOSED,
+    NO_PREDICTION_ID,
+    START_FAILED,
+    INTERRUPTED,
+)
 
 _monotonic = time.monotonic
 _T = TypeVar("_T")
@@ -228,16 +252,23 @@ def _suppressed() -> Any:
 class StreamReads:
     """What one ``instrument()`` decided about the read after a stream."""
 
-    __slots__ = ("budget", "flush_wait", "hooked", "shut_down")
+    __slots__ = ("budget", "flush_wait", "shutdown_wait", "hooked", "active", "shut_down")
 
-    def __init__(self, budget: float, flush_wait: float = DEFAULT_STREAM_FLUSH_WAIT_SECONDS) -> None:
+    def __init__(
+        self,
+        budget: float = DEFAULT_STREAM_RELOAD_SECONDS,
+        flush_wait: float = DEFAULT_STREAM_FLUSH_WAIT_SECONDS,
+        shutdown_wait: float = DEFAULT_STREAM_SHUTDOWN_WAIT_SECONDS,
+    ) -> None:
         self.budget = budget
         self.flush_wait = flush_wait
+        self.shutdown_wait = shutdown_wait
         # The provider's force_flush/shutdown end the spans of reads in flight.
-        # Without that (no provider hook could be installed, or after
-        # uninstrument()) a read could end its span after the processors
-        # stopped, so none is made.
+        # Without that (no provider hook could be installed) a read could end
+        # its span after the processors stopped, so none is made.
         self.hooked = False
+        # False once uninstrument() has run: a stream completing later makes no read.
+        self.active = True
         # The provider was shut down: its spans are no longer exported.
         self.shut_down = False
 
@@ -275,15 +306,10 @@ class _State:
         # Held by the finisher while it ends a span, and by a fork (see _before_fork).
         self.finishing = threading.RLock()
         self.own_live = 0
-        self.caller_live = 0
-        self.caller_by: Dict[int, int] = {}  # live reads per caller transport
-        self.caller_tasks: Dict[Any, "_Read"] = {}  # read tasks on a caller's loop
         self.own_tasks: Set[Any] = set()
         self.own_clients: "collections.OrderedDict[Tuple[Any, ...], _OwnClient]" = collections.OrderedDict()
-        self.sync_jobs: "queue.SimpleQueue[_Read]" = queue.SimpleQueue()
-        self.sync_threads = 0
-        self.sync_idle = 0  # reader threads waiting for a job and not yet promised one
         self.resolve_jobs: "queue.SimpleQueue[Any]" = queue.SimpleQueue()
+        self.resolve_queued = 0  # jobs put on resolve_jobs and not yet taken by a resolver
         self.resolver_threads = 0
         self.resolver_busy: Dict[int, float] = {}  # resolver thread -> when its lookup started
         self.lookups: Dict[Tuple[Any, ...], _Lookup] = {}
@@ -301,7 +327,10 @@ _FORK = threading.local()
 def _before_fork() -> None:
     """Hold the finisher between two span ends while the process forks, so a
     child never inherits an exporter lock the finisher held mid-export (the
-    child has no finisher to release it). Bounded by _FORK_WAIT_SECONDS."""
+    child has no finisher to release it). Bounded by _FORK_WAIT_SECONDS; with
+    the read off there is no finisher and this returns at once. Only the
+    finisher is coordinated: span processors' and exporters' own threads and
+    locks are theirs to make fork-safe."""
     try:
         _FORK.held = _STATE.finishing.acquire(timeout=_FORK_WAIT_SECONDS)
         _FORK.state = _STATE
@@ -334,7 +363,7 @@ def live_reads() -> int:
     """Reads whose I/O has not returned yet (for tests and diagnostics)."""
     state = _STATE
     with state.lock:
-        return state.own_live + state.caller_live
+        return state.own_live
 
 
 def pending_spans() -> int:
@@ -398,16 +427,6 @@ class _Body:
         return data if isinstance(data, dict) else None
 
 
-def _loaded_body(response: Any) -> Optional[Dict[str, Any]]:
-    """A response a transport built with its content already read (the
-    transport has already held all of it in memory; it is checked here)."""
-    content = response.content
-    if len(content) > _MAX_READ_BYTES:
-        return None
-    data = json.loads(content)
-    return data if isinstance(data, dict) else None
-
-
 # -- transports ---------------------------------------------------------------------------
 
 
@@ -421,10 +440,9 @@ def _is_retry_transport(transport: Any) -> bool:
 def _unwrap_retries(transport: Any) -> Any:
     """``transport`` without the replicate RetryTransport layers on top of it.
 
-    replicate wraps every client transport in its RetryTransport (up to 10
-    attempts on 429/503/504, sleeping for any numeric Retry-After, uncapped);
-    the read after a stream must not wait like that. A retrying transport
-    *inside* the caller's own transport is the caller's and is used as it is.
+    replicate wraps every client transport in its RetryTransport; what is
+    below decides whether the package can build the same pool itself. The
+    transport is only looked at, never called.
     """
     while _is_retry_transport(transport):
         transport = transport._wrapped_transport
@@ -458,26 +476,6 @@ def _plain_settings(transport: Any) -> Optional[Tuple[Tuple[str, Any], ...]]:
     return settings
 
 
-def _caller_limit(transport: Any) -> int:
-    """How many reads may borrow one of the caller's transports at once.
-
-    For an httpx transport whose pool size is known, at most one in
-    _CALLER_POOL_SHARE of its connections (none for a pool of fewer than
-    that), so a read cannot starve the caller's own requests.
-    """
-    if isinstance(transport, (httpx.HTTPTransport, httpx.AsyncHTTPTransport)):
-        size = getattr(getattr(transport, "_pool", None), "_max_connections", None)
-        if isinstance(size, int):
-            return min(_MAX_CALLER_READS, size // _CALLER_POOL_SHARE)
-    return _MAX_CALLER_READS
-
-
-def _sends_sync(transport: Any) -> bool:
-    """The transport implements ``handle_request`` (httpx's base class only raises)."""
-    handle = getattr(type(transport), "handle_request", None)
-    return handle is not None and handle is not getattr(httpx.BaseTransport, "handle_request", None)
-
-
 def _read_url(http: Any, prediction_id: str) -> httpx.URL:
     """``{base_url}v1/predictions/{id}``, joined as the client would join it."""
     base = http.base_url
@@ -488,6 +486,19 @@ def _read_url(http: Any, prediction_id: str) -> httpx.URL:
 def _routing(client: Any) -> Tuple[Tuple[str, Any], ...]:
     options = getattr(client, "_client_kwargs", None) or {}
     return tuple((name, options[name]) for name in _ROUTING_OPTIONS if name in options)
+
+
+def _read_routing(client: Any, http: Any, url: httpx.URL) -> Optional[Tuple[str, Tuple[Tuple[str, Any], ...]]]:
+    """How the package's own pool reaches the API for this client, or None
+    when it cannot be built the way the caller's is (any transport other than
+    replicate's own or a plain httpx one): then no read is made."""
+    options = getattr(client, "_client_kwargs", None) or {}
+    if options.get("transport") is None and not options.get("mounts"):
+        return ("client", _routing(client))
+    settings = _plain_settings(_unwrap_retries(http._transport_for_url(url)))
+    if settings is None:
+        return None
+    return ("transport", settings)
 
 
 # -- one read ------------------------------------------------------------------------------
@@ -505,17 +516,13 @@ class _Read:
         "prediction_id",
         "http",
         "url",
-        "transport",
-        "transport_key",
-        "route",
         "routing",
-        "limit",
         "extra",
         "poll_interval",
         "found",
         "last_status",
         "outcome",
-        "loop",
+        "skip_reason",
         "attempts",
         "timer",
         "_slot",
@@ -533,6 +540,7 @@ class _Read:
         client: Any,
         http: Any,
         url: httpx.URL,
+        routing: Tuple[str, Tuple[Tuple[str, Any], ...]],
         extra: Dict[str, Any],
     ) -> None:
         self.state = state
@@ -543,17 +551,13 @@ class _Read:
         self.prediction_id = prediction_id
         self.http = http
         self.url = url
+        self.routing = routing
         self.extra = extra
         self.poll_interval = _poll_interval(client)
-        self.transport: Any = None  # the caller's (sync and async routes)
-        self.transport_key = 0
-        self.route = "own"
-        self.routing: Tuple[str, Tuple[Tuple[str, Any], ...]] = ("client", ())
-        self.limit = _MAX_READS
         self.found: Any = None
         self.last_status: Optional[str] = None
         self.outcome: Optional[str] = None
-        self.loop: Any = None  # the caller's loop, for an "async" read
+        self.skip_reason: Optional[str] = None
         self.attempts = 0  # GETs made (or started) so far
         self.timer: Any = None  # the deadline timer on the read loop
         self._slot = False
@@ -564,22 +568,9 @@ class _Read:
     def admit(self) -> bool:
         state = self.state
         with state.lock:
-            if len(state.pending) >= _MAX_PENDING_SPANS:
+            if len(state.pending) >= _MAX_PENDING_SPANS or state.own_live >= _MAX_READS:
                 return False
-            if self.route == "own":
-                if state.own_live >= self.limit:
-                    return False
-                state.own_live += 1
-            else:
-                for task, entry in list(state.caller_tasks.items()):
-                    if _guard(entry.loop.is_closed, False):  # its loop ended with the read pending
-                        del state.caller_tasks[task]
-                        entry.release()
-                key = self.transport_key
-                if state.caller_live >= _MAX_CALLER_READS_TOTAL or state.caller_by.get(key, 0) >= self.limit:
-                    return False
-                state.caller_live += 1
-                state.caller_by[key] = state.caller_by.get(key, 0) + 1
+            state.own_live += 1
             self._slot = True
             state.pending.add(self)
         return True
@@ -591,21 +582,12 @@ class _Read:
             if not self._slot:
                 return
             self._slot = False
-            if self.route == "own":
-                state.own_live -= 1
-            else:
-                state.caller_live -= 1
-                left = state.caller_by.get(self.transport_key, 1) - 1
-                if left > 0:
-                    state.caller_by[self.transport_key] = left
-                else:
-                    state.caller_by.pop(self.transport_key, None)
+            state.own_live -= 1
 
     def io_over(self) -> None:
         """The read's I/O has returned: free its slot and what only it needed."""
         self.release()
         self.http = None
-        self.transport = None
 
     # -- the end of the span -------------------------------------------------------------
 
@@ -615,6 +597,8 @@ class _Read:
             reason = self.outcome or outcome
             if reason:
                 extra[STREAM_READ] = reason
+                if reason == SKIPPED and self.skip_reason:
+                    extra[STREAM_SKIP_REASON] = self.skip_reason
             extra.update(_status_from_stream(self.extra, self.last_status))
         return extra
 
@@ -667,6 +651,8 @@ class _Read:
         return pause
 
     def _request(self) -> Optional[httpx.Request]:
+        """The next GET, or None when the budget is spent or the span has
+        already ended (a flush, shutdown or uninstrument() ended it)."""
         remaining = self.deadline - _monotonic()
         if remaining <= 0 or self._over:
             self.outcome = self.outcome or TIMEOUT
@@ -677,13 +663,13 @@ class _Read:
             "GET", self.url, headers=headers, extensions={"timeout": httpx.Timeout(remaining).as_dict()}
         )
 
-    async def aread(self, send: Callable[["_Read", httpx.Request], Any]) -> None:
+    async def aread(self) -> None:
         while self.attempts < _READ_ATTEMPTS:
             request = self._request()
             if request is None:
                 return
             self.attempts += 1
-            data = await send(self, request)
+            data = await _send_own(self, request)
             if data is None:
                 self.outcome = self.outcome or FAILED
                 return
@@ -693,45 +679,6 @@ class _Read:
             if pause is None:
                 return
             await asyncio.sleep(pause)
-
-    def read_sync(self) -> None:
-        while self.attempts < _READ_ATTEMPTS:
-            request = self._request()
-            if request is None:
-                return
-            self.attempts += 1
-            data = self._send_sync(request)
-            if data is None:
-                self.outcome = self.outcome or FAILED
-                return
-            if self._take(data):
-                return
-            pause = self._pause()
-            if pause is None:
-                return
-            time.sleep(pause)
-
-    def _send_sync(self, request: httpx.Request) -> Optional[Dict[str, Any]]:
-        """Through the caller's transport, below replicate's RetryTransport
-        layers. Each phase gets at most the time left; the body is checked per
-        chunk."""
-        if self.http.is_closed:
-            self.outcome = SKIPPED
-            return None
-        response = self.transport.handle_request(request)
-        try:
-            response.request = request
-            if response.status_code != 200:
-                return None
-            if response.is_stream_consumed:
-                return _loaded_body(response)
-            body = _Body(response.headers.get("content-encoding"))
-            for chunk in response.iter_raw():
-                if not body.add(chunk) or _monotonic() > self.deadline:
-                    return None
-        finally:
-            response.close()
-        return body.prediction()
 
 
 async def _send_own(entry: _Read, request: httpx.Request) -> Optional[Dict[str, Any]]:
@@ -755,27 +702,6 @@ async def _send_own(entry: _Read, request: httpx.Request) -> Optional[Dict[str, 
         _close_if_idle(entry.state, own)
 
 
-async def _send_caller_async(entry: _Read, request: httpx.Request) -> Optional[Dict[str, Any]]:
-    """Through the caller's async transport, on the caller's loop."""
-    if entry.http.is_closed:
-        entry.outcome = SKIPPED
-        return None
-    response = await entry.transport.handle_async_request(request)
-    try:
-        response.request = request
-        if response.status_code != 200:
-            return None
-        if response.is_stream_consumed:
-            return _loaded_body(response)
-        body = _Body(response.headers.get("content-encoding"))
-        async for chunk in response.aiter_raw():
-            if not body.add(chunk):
-                return None
-    finally:
-        await response.aclose()
-    return body.prediction()
-
-
 async def _within(entry: _Read, read: Any, seconds: float) -> None:
     """Run ``read``, cancelled after ``seconds``.
 
@@ -794,22 +720,16 @@ async def _within(entry: _Read, read: Any, seconds: float) -> None:
         entry.outcome = entry.outcome or TIMEOUT
 
 
-async def _read_within_deadline(entry: _Read, send: Callable[[_Read, httpx.Request], Any]) -> None:
-    """One read on an event loop, cancelled at its deadline (which closes its
-    connection), then handed to the finisher. Instrumentation is suppressed.
-
-    A cancel from outside (on a caller's loop, ``asyncio.run()`` cancelling
-    the tasks left when its main coroutine returns) is never swallowed: the
-    read ends there (``timeout``) and the cancel propagates, so the end of
-    that loop does not wait for it.
-    """
+async def _read_within_deadline(entry: _Read) -> None:
+    """One read on the package's loop, cancelled at its deadline (which closes
+    its connection), then handed to the finisher. Instrumentation is suppressed."""
     token = context_api.attach(_suppressed())
     try:
         remaining = entry.deadline - _monotonic()
         if remaining <= 0:
             entry.outcome = entry.outcome or TIMEOUT
             return
-        await _within(entry, entry.aread(send), remaining)
+        await _within(entry, entry.aread(), remaining)
     except asyncio.CancelledError:
         entry.outcome = entry.outcome or TIMEOUT
         raise
@@ -820,7 +740,7 @@ async def _read_within_deadline(entry: _Read, send: Callable[[_Read, httpx.Reque
         logger.debug("traceai-replicate: could not read the streamed prediction", exc_info=True)
     finally:
         context_api.detach(token)
-        if entry.route == "own" and entry.timer is not None:
+        if entry.timer is not None:
             entry.timer.cancel()  # on the read loop, which owns the timer
         entry.io_over()
         _guard(lambda: _post(entry.state, entry), None)
@@ -849,9 +769,9 @@ async def _resolve(loop: asyncio.AbstractEventLoop, query: Tuple[Any, ...]) -> A
 
     A result is kept for _DNS_CACHE_SECONDS. Reads that need the same name at
     the same time share one lookup. A lookup waits for a free resolver thread
-    (the read's own deadline bounds that wait); only while every resolver
-    thread has been stuck on one lookup for _RESOLVER_STUCK_SECONDS does a new
-    one fail at once.
+    (the read's own deadline bounds that wait). A new one fails at once only
+    while every resolver thread has been stuck on one lookup for
+    _RESOLVER_STUCK_SECONDS, or while _MAX_RESOLVE_JOBS lookups are queued.
     """
     state = _STATE
     start = False
@@ -867,11 +787,14 @@ async def _resolve(loop: asyncio.AbstractEventLoop, query: Tuple[Any, ...]) -> A
             busy = state.resolver_busy
             if len(busy) >= _MAX_RESOLVERS and all(now - since > _RESOLVER_STUCK_SECONDS for since in busy.values()):
                 raise OSError("traceai-replicate: name resolution is not answering")
+            if state.resolve_queued >= _MAX_RESOLVE_JOBS:
+                raise OSError("traceai-replicate: too many name lookups queued")
             lookup = _Lookup(loop.create_future())
             state.lookups[query] = lookup
             start = state.resolver_threads < _MAX_RESOLVERS
             if start:
                 state.resolver_threads += 1
+            state.resolve_queued += 1
             state.resolve_jobs.put((loop, lookup, query))
         lookup.waiters += 1
     try:
@@ -916,6 +839,8 @@ def _resolver_main(state: _State) -> None:
     ident = threading.get_ident()
     while True:
         loop, lookup, query = state.resolve_jobs.get()
+        with state.lock:
+            state.resolve_queued -= 1
         if lookup.future.done():  # every read that wanted it has gone
             continue
         with state.lock:
@@ -957,10 +882,10 @@ def _loop(state: _State) -> asyncio.AbstractEventLoop:
 def _ensure_workers(state: _State) -> None:
     """Start the read loop's thread, the dispatcher and the finisher, once.
 
-    ``instrument()`` does it, off the caller's path. In a forked child the
-    first completed stream does; a stream completing meanwhile on another
-    thread does not wait for that (its hand-off is already queued) and is
-    served once the threads run.
+    ``instrument()`` does it, off the caller's path, and only when the read
+    is on. In a forked child the first completed stream does; a stream
+    completing meanwhile on another thread does not wait for that (its
+    hand-off is already queued) and is served once the threads run.
     """
     if state.started:
         return
@@ -985,7 +910,7 @@ def _ensure_workers(state: _State) -> None:
 
 
 def start_workers() -> None:
-    """Start the worker threads now (``instrument()``), not on a caller's path."""
+    """Start the worker threads now (``instrument()`` with the read on), not on a caller's path."""
     _guard(lambda: _ensure_workers(_STATE), None)
 
 
@@ -1048,12 +973,7 @@ def _on_read_loop(entries: List[_Read]) -> None:
         state = entry.state
         try:
             entry.timer = loop.call_at(entry.deadline, _deadline_passed, entry)
-            if entry.route == "own":
-                _keep(state.own_tasks, loop.create_task(_read_within_deadline(entry, _send_own)))
-            elif entry.route == "sync":
-                _ensure_sync_reader(state)
-                state.sync_jobs.put(entry)
-            # "async" runs on the caller's loop already.
+            _keep(state.own_tasks, loop.create_task(_read_within_deadline(entry)))
         except Exception:
             logger.debug("traceai-replicate: could not start the read", exc_info=True)
             entry.outcome = entry.outcome or FAILED
@@ -1083,49 +1003,6 @@ def _dispatcher_main(state: _State) -> None:
                 _post(state, entry)
 
 
-# -- reader threads (a caller's sync transport) -----------------------------------------------
-
-
-def _sync_reader_main(state: _State) -> None:
-    _WORKER.active = True
-    while True:
-        entry = state.sync_jobs.get()
-        token = context_api.attach(_suppressed())
-        try:
-            entry.read_sync()
-        except Exception as error:
-            entry.outcome = entry.outcome or _failure(error)
-            logger.debug("traceai-replicate: could not read the streamed prediction", exc_info=True)
-        finally:
-            context_api.detach(token)
-            entry.io_over()
-            _guard(lambda: _post(state, entry), None)
-            with state.lock:
-                state.sync_idle += 1
-
-
-def _ensure_sync_reader(state: _State) -> None:
-    """On the read loop: promise the next job an idle reader thread, or start
-    one, at most _MAX_CALLER_READS_TOTAL of them (admission keeps live reads
-    under that, so a job never waits behind another)."""
-    with state.lock:
-        if state.sync_idle > 0:
-            state.sync_idle -= 1
-            return
-        start = state.sync_threads < _MAX_CALLER_READS_TOTAL
-        if start:
-            state.sync_threads += 1
-    if start:
-        try:
-            threading.Thread(
-                target=_sync_reader_main, args=(state,), name=SYNC_READER_NAME, daemon=True
-            ).start()
-        except BaseException:
-            with state.lock:
-                state.sync_threads -= 1
-            raise
-
-
 # -- the finisher -----------------------------------------------------------------------------
 
 
@@ -1140,35 +1017,6 @@ def _finisher_main(state: _State) -> None:
                 entry.end(outcome)
         except Exception:  # pragma: no cover - never let the finisher die
             logger.debug("traceai-replicate: stream finisher step failed", exc_info=True)
-
-
-def _start_on_callers_loop(entry: _Read) -> None:
-    """An async stream through the caller's own async-only transport: a task
-    on the caller's running loop (its transport's connections belong to it),
-    in a fresh context."""
-    loop = asyncio.get_running_loop()
-    entry.loop = loop
-    task = contextvars.Context().run(loop.create_task, _read_within_deadline(entry, _send_caller_async))
-    try:
-        task._log_destroy_pending = False  # a loop closed without cancelling it
-    except Exception:
-        pass
-    state = entry.state
-    with state.lock:
-        state.caller_tasks[task] = entry
-
-    def forget(done: Any) -> None:
-        # Also for a task cancelled before it ran (asyncio.run ending right
-        # after the stream): its body never ran, so free its slot, say why
-        # there is no read, and end it here.
-        with state.lock:
-            state.caller_tasks.pop(done, None)
-        if entry.found is None and entry.outcome is None:
-            entry.outcome = SKIPPED if entry.attempts == 0 else TIMEOUT
-        entry.io_over()
-        _guard(lambda: _post(state, entry), None)
-
-    task.add_done_callback(forget)
 
 
 # -- completing a stream ----------------------------------------------------------------------
@@ -1206,59 +1054,49 @@ def _status_from_stream(extra: Dict[str, Any], last_status: Optional[str]) -> Di
     return {}
 
 
+def _skipped(reason: str) -> Dict[str, Any]:
+    return {STREAM_READ: SKIPPED, STREAM_SKIP_REASON: reason}
+
+
 def _plan(
     call: Any, collector: Any, reads: Optional[StreamReads], ended: int, extra: Dict[str, Any], is_async: bool
-) -> Any:
-    """A read to admit, SKIPPED, or None when no read is wanted."""
+) -> Union["_Read", str, None]:
+    """A read to admit, a skip reason, or None when no read is wanted (the
+    read is off, the span is not recording, or the prediction is final)."""
     if reads is None or reads.budget <= 0 or not call.stream:
         return None
-    if not call.span.is_recording() or reads.shut_down:
+    if not call.span.is_recording():
         return None  # nothing would be exported: no request is spent on it
     prediction = call.prediction
-    prediction_id = getattr(prediction, "id", None)
-    if not isinstance(prediction_id, str) or not _PREDICTION_ID.fullmatch(prediction_id):
-        return None
     if getattr(prediction, "status", None) in TERMINAL_STATUSES:
         return None  # already final: the span uses it as it is
+    prediction_id = getattr(prediction, "id", None)
+    if not isinstance(prediction_id, str) or not _PREDICTION_ID.fullmatch(prediction_id):
+        return NO_PREDICTION_ID
+    if reads.shut_down:
+        return AFTER_SHUTDOWN
+    if not reads.active:
+        return AFTER_UNINSTRUMENT
     if not reads.hooked:
-        return SKIPPED
+        return NO_PROVIDER_HOOK
     client = call.client
     http = vars(client).get(_ASYNC_HTTP if is_async else _SYNC_HTTP) if client is not None else None
     if http is None or http.is_closed:
-        return SKIPPED
+        return CLIENT_CLOSED
     url = _read_url(http, prediction_id)
-    entry = _Read(
-        _STATE, call, collector, ended, _monotonic() + reads.budget, prediction_id, client, http, url, extra
+    routing = _read_routing(client, http, url)
+    if routing is None:
+        return CUSTOM_TRANSPORT
+    return _Read(
+        _STATE, call, collector, ended, _monotonic() + reads.budget, prediction_id, client, http, url, routing, extra
     )
-    options = getattr(client, "_client_kwargs", None) or {}
-    if options.get("transport") is None and not options.get("mounts"):
-        entry.routing = ("client", _routing(client))
-        return entry
-    transport = _unwrap_retries(http._transport_for_url(url))
-    settings = _plain_settings(transport)
-    if settings is not None:
-        entry.routing = ("transport", settings)
-        return entry
-    # Any other transport of the caller's: sent synchronously on a reader
-    # thread when it can be (also for an async stream), else on the caller's
-    # running loop.
-    entry.transport = transport
-    entry.transport_key = id(transport)
-    entry.route = "sync" if _sends_sync(transport) else "async"
-    entry.limit = _caller_limit(transport)
-    if entry.route == "async":
-        asyncio.get_running_loop()  # RuntimeError under another event loop library: no read
-    return entry
 
 
 def _hand_over(entry: _Read) -> None:
-    """Give an admitted read to the workers: one ``SimpleQueue.put`` (plus,
-    for an async-only caller transport, a task on the caller's loop). Never
+    """Give an admitted read to the workers: one ``SimpleQueue.put``. Never
     waits and never releases the GIL; starts no thread unless the workers
     have not been started in this process (a forked child)."""
     state = entry.state
-    if entry.route == "async":
-        _start_on_callers_loop(entry)
     state.starts.put(entry)
     _ensure_workers(state)
 
@@ -1275,11 +1113,11 @@ def complete_stream(
     control back at once.
 
     ``done`` is the stream's ``done`` event, or None when iteration ended
-    without one. Without a read the span ends here; otherwise the stream is
-    handed to the read loop (see :func:`_hand_over`) and the finisher ends
-    the span. Nothing here waits on I/O. No Exception escapes; a
-    BaseException (KeyboardInterrupt) at any step ends the span (and frees
-    the read's slot) first, then propagates.
+    without one. Without a read (the default) the span ends here, on the
+    caller's thread; otherwise the stream is handed to the read loop (see
+    :func:`_hand_over`) and the finisher ends the span. Nothing here waits on
+    I/O. No Exception escapes; a BaseException (KeyboardInterrupt) at any
+    step ends the span (and frees the read's slot) first, then propagates.
     """
     ended = time.time_ns()
     if call.completed or call.finished:
@@ -1288,37 +1126,38 @@ def complete_stream(
     extra = stream_attributes(done) if call.stream else {}
     entry: Optional[_Read] = None
 
-    def end_without_read() -> None:
+    def end_without_read(reason: str) -> None:
         if entry is not None:
             entry.outcome = entry.outcome or SKIPPED
+            entry.skip_reason = entry.skip_reason or reason
             entry.release()
             entry.end()
         else:
             wanted = reads is not None and reads.budget > 0 and call.stream
-            reason = dict(extra, **{STREAM_READ: SKIPPED}) if wanted else extra
-            call.finish(collector=collector, end_time=ended, extra=dict(reason, **_status_from_stream(extra, None)))
+            marked = dict(extra, **_skipped(reason)) if wanted else extra
+            call.finish(collector=collector, end_time=ended, extra=dict(marked, **_status_from_stream(extra, None)))
 
     try:
-        planned = _guard(lambda: _plan(call, collector, reads, ended, extra, is_async), SKIPPED)
+        planned = _guard(lambda: _plan(call, collector, reads, ended, extra, is_async), START_FAILED)
         if isinstance(planned, _Read):
             entry = planned  # held before admission, so an interrupt in admit() frees its slot
             if not entry.admit():
-                entry, planned = None, SKIPPED
+                entry, planned = None, AT_CAPACITY
         if entry is None:
             if planned is not None:
-                extra = dict(extra, **{STREAM_READ: planned})
+                extra = dict(extra, **_skipped(planned))
             call.finish(collector=collector, end_time=ended, extra=dict(extra, **_status_from_stream(extra, None)))
             return
         _hand_over(entry)
     except Exception:  # e.g. no new thread at interpreter shutdown: end it without the read
         logger.debug("traceai-replicate: could not start the read after a stream", exc_info=True)
-        _guard(end_without_read, None)
+        _guard(lambda: end_without_read(START_FAILED), None)
     except BaseException:  # KeyboardInterrupt at any step: the span ends first
-        _guard(end_without_read, None)
+        _guard(lambda: end_without_read(INTERRUPTED), None)
         raise
 
 
-# -- flush, shutdown and exit ----------------------------------------------------------------
+# -- flush, shutdown, uninstrument and exit -----------------------------------------------------
 
 
 def _wait(cond: threading.Condition, timeout: float) -> None:
@@ -1328,14 +1167,15 @@ def _wait(cond: threading.Condition, timeout: float) -> None:
 def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -> bool:
     """End the span of every completed stream whose read is still running.
 
-    Reads in flight are waited for, no longer than the last of their deadlines
-    (plus a short grace for the finisher) and, when ``until`` (a monotonic
-    time) is given, no later than that; then each span still waiting ends
-    with what is known (``replicate.stream.read`` = ``outcome``: ``timeout``
-    at shutdown and exit, ``flushed`` for a flush). Returns False when
-    ``until`` cut a read short. On the finisher's or the read loop's own
-    thread nothing is waited for. A KeyboardInterrupt (or any BaseException)
-    while waiting ends every pending span first, then propagates.
+    Reads in flight are waited for no later than ``until`` (a monotonic
+    time) and never past the last of their deadlines plus a short grace for
+    the finisher; with ``until`` None (tests) up to that last deadline. Each
+    span still waiting then ends with what is known
+    (``replicate.stream.read`` = ``outcome``). Flush, shutdown, exit and
+    ``uninstrument()`` pass the time they may wait (by default none). Returns
+    False when ``until`` cut a read short. On the package's own threads
+    nothing is waited for. A KeyboardInterrupt (or any BaseException) while
+    waiting ends every pending span first, then propagates.
     """
     state = _STATE
     with state.lock:
@@ -1346,16 +1186,6 @@ def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -
     cut = limit if until is None else min(limit, until)
     if getattr(_WORKER, "active", False):
         cut = _monotonic()
-    try:
-        running = asyncio.get_running_loop()
-    except RuntimeError:
-        running = None
-    if running is not None:
-        # A flush on the event loop that runs some of these reads: they cannot
-        # progress while it waits, so their spans end now with what is known.
-        for entry in pending:
-            if entry.loop is running:
-                _guard(lambda: entry.end(outcome), None)
     try:
         with state.lock:
             while any(entry in state.pending for entry in pending):
@@ -1373,3 +1203,8 @@ def settle_stream_reads(until: Optional[float] = None, outcome: str = TIMEOUT) -
             in_time = in_time and cut >= limit
             _guard(lambda: entry.end(outcome), None)
     return in_time
+
+
+def end_stream_reads_at_exit() -> None:
+    """Interpreter exit after ``uninstrument()``: end whatever still waits, without waiting."""
+    settle_stream_reads(until=_monotonic(), outcome=SHUTDOWN)

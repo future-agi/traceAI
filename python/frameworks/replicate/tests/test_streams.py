@@ -16,8 +16,6 @@ from opentelemetry.trace import StatusCode  # noqa: E402
 from traceai_replicate._wrappers import drain_released  # noqa: E402
 
 from _support import (  # noqa: E402
-    INPUT_TOKENS,
-    OUTPUT_TOKENS,
     PROMPT,
     STREAM_CHUNKS,
     STREAM_ERROR,
@@ -68,16 +66,16 @@ def test_stream_is_one_llm_span_with_the_concatenated_text():
     assert values["output.value"] == STREAM_TEXT
     assert values["replicate.output.type"] == "text"
     assert span.status.status_code is StatusCode.OK
-    # The read after ``done`` records the final status and the token counts.
-    assert values["replicate.prediction.status"] == "succeeded"
-    assert values["gen_ai.usage.input_tokens"] == INPUT_TOKENS
-    assert values["gen_ai.usage.output_tokens"] == OUTPUT_TOKENS
-    # The create POST and the SSE GET nest under the stream span; the read
-    # runs with instrumentation suppressed and adds no span.
+    # The event stream reports no status or token counts, and by default the
+    # prediction is not read again after ``done``: the span carries none.
+    for key in ("replicate.prediction.status", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"):
+        assert key not in values, key
+    assert "replicate.stream.read" not in values
+    # The create POST and the SSE GET nest under the stream span.
     http = [s for s in traced.spans() if s.name.startswith("HTTP ")]
     assert [s.name for s in http] == ["HTTP POST", "HTTP GET"]
     assert {s.parent.span_id for s in http} == {span.context.span_id}
-    assert fake.paths("GET") == ["/stream/pred0001", "/v1/predictions/pred0001"]
+    assert fake.paths("GET") == ["/stream/pred0001"]
 
 
 def test_stream_span_stays_open_until_the_stream_ends():
@@ -87,8 +85,7 @@ def test_stream_span_stays_open_until_the_stream_ends():
         next(stream)
         assert traced.replicate_spans() == []
         list(stream)
-        traced.settle()  # waits for the read after ``done``
-        assert len(traced.replicate_spans()) == 1
+        assert len(traced.replicate_spans()) == 1  # ended at done, on this thread
 
 
 def test_closing_a_stream_early_ends_its_span_once_as_cancelled():

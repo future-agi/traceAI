@@ -40,9 +40,11 @@ from _support import (  # noqa: E402
     TEXT_OUTPUT,
     TEXT_TOKENS,
     TEXT_VERSION,
+    READ_ON,
     FakeReplicate,
     RecordingTransport,
     attrs,
+    default_client,
     instrumented,
     make_client,
 )
@@ -70,18 +72,6 @@ def _no_final(values):
         "gen_ai.usage.output_tokens",
     ):
         assert key not in values, key
-
-
-class _TimedTransport(RecordingTransport):
-    """Records when each request was sent."""
-
-    def __init__(self, tracer=None):
-        super().__init__(tracer)
-        self.sent = []
-
-    def handle_request(self, request):
-        self.sent.append((request.method, request.url.path, time.time_ns()))
-        return super().handle_request(request)
 
 
 class _ThrottleOnce(RecordingTransport):
@@ -114,9 +104,10 @@ class _ThrottleOnce(RecordingTransport):
 # -- version "hidden" -----------------------------------------------------------------
 
 
-def test_official_model_placeholder_version_is_not_recorded():
-    with FakeReplicate() as fake, instrumented() as traced:
-        client = make_client(fake)
+@pytest.mark.parametrize("options", [{}, READ_ON], ids=["default", "read-on"])
+def test_official_model_placeholder_version_is_not_recorded(options):
+    with FakeReplicate() as fake, instrumented(**options) as traced:
+        client = default_client(fake)
         assert client.run(OFFICIAL_MODEL, input={}) == TEXT_TOKENS
         assert _texts(client.stream(OFFICIAL_MODEL, input={})) == STREAM_CHUNKS
 
@@ -125,7 +116,11 @@ def test_official_model_placeholder_version_is_not_recorded():
         values = attrs(span)
         assert "replicate.prediction.version" not in values
         assert "hidden" not in values.values()
-        _final(values)
+    _final(attrs(run))  # run() polls the prediction to its end itself
+    if options:
+        _final(attrs(stream))  # from the opt-in read after done
+    else:
+        _no_final(attrs(stream))  # the event stream reports no status or tokens
 
 
 def test_a_real_version_id_is_still_recorded():
@@ -206,25 +201,41 @@ def test_a_version_object_with_the_placeholder_id_is_not_recorded():
     assert "replicate.prediction.version" not in request_attributes("create", create, None, (Version(),), {})
 
 
-# -- the read after ``done`` ------------------------------------------------------------
+# -- the read after ``done`` (opt-in) -----------------------------------------------------
+
+
+def test_by_default_a_stream_is_not_read_after_done():
+    with FakeReplicate() as fake, instrumented() as traced:
+        transport = RecordingTransport(tracer=traced.tracer())
+        assert _texts(make_client(fake, transport).stream(STREAM_MODEL, input={})) == STREAM_CHUNKS
+        assert _texts(default_client(fake).stream(STREAM_MODEL, input={})) == STREAM_CHUNKS
+
+    for span in traced.replicate_spans():
+        values = attrs(span)
+        assert span.status.status_code is StatusCode.OK
+        assert values["output.value"] == STREAM_TEXT
+        _no_final(values)
+        assert "replicate.stream.read" not in values
+    assert fake.paths("GET") == ["/stream/pred0001", "/stream/pred0002"]  # no read
+    assert [method for method, _ in transport.requests] == ["POST", "GET"]  # create, event stream
+    # Each span's own HTTP child spans are the create and the event stream; none for a read.
+    assert [s.name for s in traced.spans() if s.name.startswith("HTTP ")] == ["HTTP POST", "HTTP GET"]
 
 
 def test_stream_reads_the_prediction_once_after_done_and_ends_as_of_the_stream():
-    with FakeReplicate() as fake, instrumented() as traced:
-        transport = _TimedTransport(tracer=traced.tracer())
-        client = make_client(fake, transport)
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+        fake.read_delay = 0.3
+        client = default_client(fake)
         assert _texts(client.stream(STREAM_MODEL, input={})) == STREAM_CHUNKS
+        exited = time.time_ns()  # before the read returns
+        traced.settle()
 
     span = traced.one()
     _final(attrs(span))
     assert span.status.status_code is StatusCode.OK
     assert fake.paths("GET") == ["/stream/pred0001", READ]  # one read, no new prediction
     assert fake.paths("POST") == ["/v1/models/acme/stream-model/predictions"]
-    (read_sent,) = [sent for method, path, sent in transport.sent if path == READ]
-    assert span.end_time <= read_sent  # the read does not stretch the span
-    # The read adds no span: only the create POST and the SSE GET have one.
-    http = [s for s in traced.spans() if s.name.startswith("HTTP ")]
-    assert [s.name for s in http] == ["HTTP POST", "HTTP GET"]
+    assert span.end_time <= exited  # the read does not stretch the span
 
 
 def test_async_stream_reads_the_prediction_once_after_done():
@@ -232,23 +243,20 @@ def test_async_stream_reads_the_prediction_once_after_done():
         stream = await client.async_stream(STREAM_MODEL, input={})
         return [event async for event in stream]
 
-    with FakeReplicate() as fake, instrumented() as traced:
-        transport = RecordingTransport(tracer=traced.tracer())
-        events = asyncio.run(consume(make_client(fake, transport)))
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+        events = asyncio.run(consume(default_client(fake)))
+        traced.settle()
 
     assert _texts(events) == STREAM_CHUNKS
-    span = traced.one()
-    _final(attrs(span))
+    _final(attrs(traced.one()))
     assert fake.paths("GET") == ["/stream/pred0001", READ]
-    http = [s for s in traced.spans() if s.name.startswith("HTTP ")]
-    assert [s.name for s in http] == ["HTTP POST", "HTTP GET"]  # none for the read
-    assert {s.parent.span_id for s in http} == {span.context.span_id}
 
 
 def test_a_second_read_covers_an_api_that_lags_behind_done():
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.lag_streams = True  # first read: "processing", second: "succeeded"
-        list(make_client(fake).stream(STREAM_MODEL, input={}))
+        list(default_client(fake).stream(STREAM_MODEL, input={}))
+        traced.settle()
 
     _final(attrs(traced.one()))
     assert fake.paths("GET") == ["/stream/pred0001", READ, READ]
@@ -258,7 +266,7 @@ def test_the_read_is_bounded_by_its_budget():
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=0.3) as traced:
         fake.read_delay = 5.0
         started = time.monotonic()
-        assert _texts(make_client(fake).stream(STREAM_MODEL, input={})) == STREAM_CHUNKS
+        assert _texts(default_client(fake).stream(STREAM_MODEL, input={})) == STREAM_CHUNKS
         elapsed = time.monotonic() - started
 
     assert elapsed < 2.0, elapsed
@@ -266,6 +274,8 @@ def test_the_read_is_bounded_by_its_budget():
     assert span.status.status_code is StatusCode.OK
     _no_final(attrs(span))
     assert attrs(span)["output.value"] == STREAM_TEXT
+    assert attrs(span)["replicate.stream.read"] == "timeout"
+    assert READ in fake.paths("GET")  # the read was made, and cut
 
 
 def test_the_async_read_is_bounded_by_its_budget():
@@ -276,7 +286,7 @@ def test_the_async_read_is_bounded_by_its_budget():
     with FakeReplicate() as fake, instrumented(stream_reload_seconds=0.3) as traced:
         fake.read_delay = 5.0
         started = time.monotonic()
-        assert _texts(asyncio.run(consume(make_client(fake)))) == STREAM_CHUNKS
+        assert _texts(asyncio.run(consume(default_client(fake)))) == STREAM_CHUNKS
         elapsed = time.monotonic() - started
 
     assert elapsed < 2.0, elapsed
@@ -287,14 +297,16 @@ def test_the_async_read_is_bounded_by_its_budget():
 
 @pytest.mark.parametrize("status", [404, 500])
 def test_a_failed_read_leaves_the_span_as_before(status):
-    with FakeReplicate() as fake, instrumented() as traced:
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
         fake.read_status = status
-        assert _texts(make_client(fake).stream(STREAM_MODEL, input={})) == STREAM_CHUNKS
+        assert _texts(default_client(fake).stream(STREAM_MODEL, input={})) == STREAM_CHUNKS
+        traced.settle()
 
     span = traced.one()
     assert span.status.status_code is StatusCode.OK
     _no_final(attrs(span))
     assert attrs(span)["replicate.prediction.id"] == "pred0001"
+    assert attrs(span)["replicate.stream.read"] == "failed"
 
 
 def test_the_read_can_be_turned_off():
@@ -306,8 +318,8 @@ def test_the_read_can_be_turned_off():
 
 
 def test_no_read_after_a_stream_error_or_an_early_close():
-    with FakeReplicate() as fake, instrumented() as traced:
-        client = make_client(fake)
+    with FakeReplicate() as fake, instrumented(**READ_ON) as traced:
+        client = default_client(fake)
         with pytest.raises(RuntimeError, match=STREAM_ERROR):
             list(client.stream(STREAM_ERROR_MODEL, input={}))
         stream = client.stream(STREAM_MODEL, input={})
@@ -320,8 +332,9 @@ def test_no_read_after_a_stream_error_or_an_early_close():
 
 def test_hidden_outputs_stay_hidden_after_the_read():
     config = TraceConfig(hide_outputs=True)
-    with FakeReplicate() as fake, instrumented(config=config) as traced:
-        list(make_client(fake).stream(STREAM_MODEL, input={}))
+    with FakeReplicate() as fake, instrumented(config=config, **READ_ON) as traced:
+        list(default_client(fake).stream(STREAM_MODEL, input={}))
+        traced.settle()
 
     values = attrs(traced.one())
     _final(values)
@@ -368,7 +381,7 @@ def test_a_throttled_create_is_one_error_span_and_a_retry_by_the_caller_is_anoth
 
 def test_a_throttled_stream_get_is_retried_inside_the_client_within_one_span():
     # The first GET is the SSE stream's: replicate's RetryTransport retries it.
-    # (The read after ``done`` is never retried; see test_stream_read_offpath.)
+    # (The opt-in read after ``done`` is never retried; see test_stream_read_offpath.)
     with FakeReplicate() as fake, instrumented() as traced:
         transport = _ThrottleOnce("GET", tracer=traced.tracer())
         client = make_client(fake, transport)
@@ -377,4 +390,5 @@ def test_a_throttled_stream_get_is_retried_inside_the_client_within_one_span():
     assert transport.throttled == 1
     span = traced.one()
     assert span.status.status_code is StatusCode.OK
-    _final(attrs(span))
+    _no_final(attrs(span))  # the read after done is off by default
+    assert fake.paths("GET") == ["/stream/pred0001"]

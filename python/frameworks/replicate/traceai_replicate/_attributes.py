@@ -29,8 +29,11 @@ PREDICT_TIME = "replicate.metrics.predict_time"
 DEPLOYMENT = "replicate.deployment"
 OUTPUT_TYPE = "replicate.output.type"
 STREAM_FILE_COUNT = "replicate.stream.file_count"
-# Why a stream span has no final status: skipped, timeout, failed, unfinished.
+# Why a stream span has no final status from the opt-in read after ``done``:
+# skipped, timeout, failed, unfinished, flushed, shutdown, uninstrumented.
 STREAM_READ = "replicate.stream.read"
+# Why that read was not made, when ``replicate.stream.read`` is ``skipped``.
+STREAM_SKIP_REASON = "replicate.stream.skip_reason"
 # The ``reason`` in a stream's ``done`` event data (``canceled``, ``error``).
 STREAM_DONE_REASON = "replicate.stream.done_reason"
 # True when the event stream ended without a ``done`` event.

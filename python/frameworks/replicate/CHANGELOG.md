@@ -16,42 +16,45 @@ All notable changes to `traceAI-replicate` will be documented here.
   the error status and the exception event.
 - Exception events carry `exception.type` and `exception.message` only: no stack trace, so no local
   file path or user name leaves the process.
-- A completed stream reads its prediction once after `done` (`GET /v1/predictions/{id}`: no new
-  prediction and no charge, but it counts toward the account's API rate limit) for the final status,
-  `predict_time` and token counts, within `stream_reload_seconds` (default 2, at most 10, `0` turns it
-  off). Completing a stream is one queue put on the caller's thread: it waits for nothing, does no I/O
-  and starts no thread (the worker threads start in `instrument()`; a forked child starts its own on
-  its first completed stream). The one exception is an async-only transport of the caller's, whose
-  read runs as a task on the caller's loop. No read is made for a span that is not recording, after
-  the provider is shut down, or where no flush/shutdown hook could be installed.
-- The read goes through a connection pool the package owns (one connection per admitted read, on a
-  background event loop, with the client's base URL and headers) when replicate built the client's
-  transport (its proxy options are copied) or the caller passed a plain `httpx.HTTPTransport` /
-  `AsyncHTTPTransport` without a proxy (its TLS context, HTTP versions, local address, socket options
-  and connect retries are copied). The budget is then an absolute deadline that closes the read's
-  connection. Name lookups run on at most 2 threads; reads of one name share a lookup, results are
-  kept 5 s, and a lookup waits for a free thread within the budget. Through any other transport of
-  the caller's it runs on a reader thread (or, for an async-only transport, as a task on the caller's
-  loop, ended at once when that loop cancels it), at most 4 per transport and 16 in all, and never on
-  an `httpx` pool the package can see that has fewer than 8 connections. At most 64 stream spans wait
-  for their read at once (reads in flight, and spans waiting to be exported), counted until the read's
-  I/O returns. It is never retried by the package, asks for an uncompressed body, caps the body at
-  2 MiB (as it arrives, when the transport streams it), and runs with instrumentation suppressed (no
-  HTTP span).
-- `force_flush()` does not wait for reads in flight: their spans end at once with what is known
-  (`replicate.stream.read` = `flushed`) and that flush exports them. `stream_flush_wait_seconds`
-  (0 to 10, default 0) opts into a wait, never more than half of `timeout_millis`. The provider's own
-  flush gets the time left, so with a batch span processor the call never takes longer than asked
-  (with an inline exporter, the spans it ends are exported inside the call). `shutdown()` and exit
-  wait at most the budget (plus, with an inline exporter, exporting at most 64 waiting spans);
-  `uninstrument()` does not wait. A fork waits for a span export in progress on the package's thread.
-- Stream spans record `replicate.stream.read` (`skipped`, `timeout`, `flushed`, `failed`, `unfinished`)
-  when the read gave no final status, `replicate.stream.done_reason` (a `done` with reason `canceled`
-  records status `canceled`), and `replicate.stream.truncated` for a stream that ended without `done`.
-  `aborted` is a final status.
+- **Stream spans carry no status, `predict_time` or token counts by default.** Replicate's event stream reports
+  none, and `stream_reload_seconds` defaults to `0`: a stream span ends at the stream's `done` event (or the end of
+  iteration), on the caller's thread, inside the `next()` / `__anext__()` that returns it, OK, with the prediction
+  id, the output and what the stream says (`replicate.stream.done_reason`: a `done` with reason `canceled` records
+  status `canceled`; `replicate.stream.truncated` for a stream that ended without `done`). No request is made after
+  a stream, no thread is ever started, and `force_flush()`, `shutdown()`, `uninstrument()`, interpreter exit and
+  `os.fork()` wait for nothing. `replicate.run` and create + `wait()` spans have status and token counts either way.
+- Opt-in, `stream_reload_seconds` (up to 10): the prediction is read once after `done` (`GET /v1/predictions/{id}`:
+  no new prediction and no charge, but it counts toward the account's API rate limit; twice when the API still
+  answers a non-final status) for the final status, `predict_time` and token counts, within that budget. Its limits:
+  - It goes only through a connection pool the package owns (on a background event loop, with the client's base URL
+    and headers): when replicate built the client's transport (its proxy options are copied) or the transport for the
+    API URL is a plain `httpx.HTTPTransport` / `AsyncHTTPTransport` without a proxy (its TLS context, HTTP versions,
+    local address, socket options and connect retries are copied). Any other transport the caller passes (custom,
+    mock, scripted, recording or logging wrapper, subclass, proxied, async-only) is never called for it: no read,
+    `replicate.stream.read` = `skipped`, `replicate.stream.skip_reason` = `custom_transport`.
+  - Completing a stream is one queue put on the caller's thread; the worker threads start in `instrument()` (a forked
+    child starts its own on its first completed stream). Past 64 waiting stream spans (or 64 live reads) a stream ends
+    at once on the caller's thread without a read (`at_capacity`), with an inline exporter including its export.
+  - The budget is an absolute deadline that closes the read's connection. Name lookups run on at most 2 threads with
+    at most 64 queued; reads of one name share a lookup, results are kept 5 s, and a lookup waits for a free thread
+    within the budget. The read is never retried, asks for an uncompressed body, caps the body at 2 MiB as it
+    arrives, and runs with instrumentation suppressed (no HTTP span).
+  - `force_flush()`, `shutdown()`, interpreter exit and `uninstrument()` do not wait for reads in flight: each ends
+    their spans at once with what is known (`replicate.stream.read` = `flushed`, `shutdown`, `shutdown`,
+    `uninstrumented`), so they are exported (a `shutdown()` right after `uninstrument()` still exports them).
+    `stream_flush_wait_seconds` (0 to 10, default 0) opts into a wait in `force_flush()`, never more than half of
+    `timeout_millis`, after which the provider's own flush gets the time left (with an inline exporter, the spans it
+    ends are exported inside the call). `stream_shutdown_wait_seconds` (0 to 10, default 0) opts into a wait in
+    `shutdown()` and at exit.
+  - A fork waits (at most 5 s) for the package's finisher thread to be between two span ends; that is the only
+    thread the package coordinates with a fork. Span processors' and exporters' behaviour in a forked child is
+    theirs.
+  - `replicate.stream.read`: `skipped`, `timeout`, `failed`, `unfinished`, `flushed`, `shutdown`, `uninstrumented`.
+    `replicate.stream.skip_reason`: `custom_transport`, `at_capacity`, `no_provider_hook`, `after_uninstrument`,
+    `after_shutdown`, `client_closed`, `no_prediction_id`, `start_failed`, `interrupted`. `aborted` is a final status.
 - A stream's span starts at its first `next()`; a stream never iterated sends no request and has no
   span. A call under the caller's suppress-instrumentation context is not traced. A forked child never
   ends or exports a span its parent holds.
 - Breaking out of a stream at `done` and then closing or dropping it is a completed stream (OK, with
-  its output and the read), not a cancellation.
+  its output, and the read when it is on), not a cancellation.
 - The placeholder version `hidden` that official models report is not recorded.
