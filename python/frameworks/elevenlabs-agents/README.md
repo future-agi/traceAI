@@ -21,13 +21,9 @@ a span with status ERROR, and a call longer than 2 minutes.
 
 ## Install
 
-Not on PyPI yet. Until it is released, install from this branch:
-
 ```bash
-pip install "git+https://github.com/future-agi/traceAI.git@feat/th-8231-elevenlabs-agents#subdirectory=python/frameworks/elevenlabs-agents"
+pip install traceAI-elevenlabs-agents
 ```
-
-After the release: `pip install traceAI-elevenlabs-agents`.
 
 Python 3.10 to 3.13. One runtime dependency, `fi-instrumentation-otel`, for
 `TraceConfig` (the privacy switch every traceAI package shares). No ElevenLabs SDK.
