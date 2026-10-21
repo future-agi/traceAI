@@ -1,5 +1,8 @@
 ## [0.1.2] - 2026-10-19
 ### Fixed
+- Spans that end last in a LiveKit job, the root `agent_session` span among them, are no longer lost: `enable_*` flushes the
+  tracer provider when the job shuts down (a job process on Linux exits without running `atexit`, so they used to stay
+  queued). Outside a job, call the new `flush_on_job_shutdown()` in each entrypoint.
 - `enable_http_attribute_mapping()` / `enable_grpc_attribute_mapping()` no longer drop the Future AGI exporter when LiveKit
   adds a span processor of its own (livekit-agents 1.8 adds a privacy filter), so traces are sent again. A processor added
   after `enable_*` now runs alongside the exporter instead of replacing it.

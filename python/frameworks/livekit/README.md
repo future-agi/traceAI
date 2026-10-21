@@ -47,6 +47,30 @@ drops the Future AGI exporter. LiveKit installs its privacy filter once per prov
 ignored. To keep conversation content out of your traces, set `LIVEKIT_TELEMETRY_ALLOW_PII=false` before calling `enable_*`
 (livekit-agents 1.8 and later).
 
+### Flushing at the end of a job
+
+Inside a job, `enable_*` also makes sure the spans still queued are sent when the job shuts down. On Linux a job process ends
+without running `atexit`, and LiveKit flushes only its own processors, so without this the spans that end last, such as the
+root `agent_session` span, never reach Future AGI.
+
+If you set tracing up outside a job (for example at process start), call `flush_on_job_shutdown()` in each job entrypoint:
+
+```python
+from traceai_livekit import flush_on_job_shutdown
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
+    flush_on_job_shutdown()
+    ...
+```
+
+Do not pass `provider.force_flush` to `ctx.add_shutdown_callback`: LiveKit calls it with the shutdown reason, which
+`force_flush` takes as its timeout, so it fails and nothing is flushed. The flush waits at most 10 seconds for the collector.
+It covers the root span from livekit-agents 1.3, which closes the session before the shutdown callbacks run; earlier
+versions close the session at the same time as the flush, so the root span can still be missed there. Not covered: spans
+LiveKit ends after the shutdown callbacks (its own job spans), and LiveKit Cloud observability mode, where the session's
+parent span is recorded on LiveKit's own provider and never reaches Future AGI.
+
 ## Compatibility
 
 *   **livekit-agents**: 1.x. 1.8 is the tested version (it needs Python 3.10 or later). Since 1.7, LiveKit names its content
