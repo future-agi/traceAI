@@ -150,8 +150,6 @@ class _Wrapper:
                 span.set_attribute(INPUT_IMAGES, safe_json_dumps(input_images))
             if eval_input := extracted_data.get("eval_input"):
                 span.set_attribute(INPUT_VALUE, safe_json_dumps(eval_input))
-            if query := extracted_data.get("query"):
-                span.set_attribute(INPUT_VALUE, safe_json_dumps(query))
 
         else:
             span.set_attribute(INPUT_VALUE, safe_json_dumps(request))
@@ -641,7 +639,6 @@ def _extract_image_data(messages):
         input_images = []
         filtered_messages = []
         eval_input = []
-        query = ""
 
         if isinstance(messages, list):
             for message in messages:
@@ -678,14 +675,11 @@ def _extract_image_data(messages):
                     }
                     filtered_messages.append(filtered_message)
 
-        if eval_input and len(eval_input) > 0:
-            query = eval_input[0]
 
         return {
             "input_images": input_images if input_images else None,
             "filtered_messages": filtered_messages if filtered_messages else None,
             "eval_input": " | ".join(eval_input),
-            "query": query,
         }
     except Exception as e:
         print(f"Error in _extract_image_data: {e}")
@@ -693,7 +687,6 @@ def _extract_image_data(messages):
             "input_images": input_images,
             "filtered_messages": messages,
             "eval_input": "",
-            "query": query,
         }
 
 

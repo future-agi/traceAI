@@ -122,7 +122,7 @@ class TestLangChainInstrumentor:
         
         assert isinstance(dependencies, tuple)
         assert "langchain_core >= 0.1.0" in dependencies
-        assert len(dependencies) == 2
+        assert len(dependencies) == 1
 
     def test_instrument_basic(self, tracer_provider, config):
         """Test basic instrumentation setup."""
@@ -430,16 +430,13 @@ class TestFiTracer:
         tracer = FiTracer(fi_tracer_instance)
         mock_span = MagicMock()
         mock_span.context.span_id = 12345
-        
+
         input_data = {"content": "Input text"}
         output_data = {"content": "Output text"}
-        
+
+        # Intentional no-op: input/output are captured via gen_ai.*.messages
         tracer._send_span_data_to_api(mock_span, input_data, output_data)
-        
-        # Should set output attribute on span
-        mock_span.set_attributes.assert_called_once()
-        call_args = mock_span.set_attributes.call_args[0][0]
-        assert "fi.llm.output" in call_args
+        mock_span.set_attributes.assert_not_called()
 
     def test_error_handlers(self, fi_tracer_instance):
         """Test error handlers for different run types."""
@@ -760,6 +757,23 @@ class TestIntegrationScenarios:
         
         # Should not raise exception
         tracer._send_span_data_to_api(mock_span, {"input": "test"}, {"output": "test"})
+
+
+class TestInputValueMultiMessage:
+    """Regression: eval_input must keep every message; no query (#151 family)."""
+
+    def test_filter_images_joins_all_messages(self):
+        from traceai_langchain._tracer import _filter_images
+
+        messages = [
+            [
+                {"kwargs": {"content": "first"}},
+                {"kwargs": {"content": "second"}},
+            ]
+        ]
+        filtered_data, images, eval_input = _filter_images(messages)
+        assert "first" in eval_input
+        assert "second" in eval_input
 
 
 if __name__ == "__main__":
