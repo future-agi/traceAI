@@ -428,3 +428,59 @@ class TestIntegrationScenarios:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"]) 
+
+class TestMCPSdkV2Compat:
+    """Regression: mcp>=2.x renamed `streamablehttp_client` to
+    `streamable_http_client` and the client factory yields a 2-tuple
+    (no session-id callback). The instrumentor must handle both."""
+
+    def test_wrap_transport_with_callback_two_tuple(self):
+        """v2 client factory yields (read, write) — wrapper must not unpack 3."""
+        instrumentor = MCPInstrumentor()
+
+        async def test_wrapper():
+            mock_read_stream = AsyncMock()
+            mock_write_stream = AsyncMock()
+
+            class MockContextManager:
+                async def __aenter__(self):
+                    return (mock_read_stream, mock_write_stream)
+
+                async def __aexit__(self, exc_type, exc_val, exc_tb):
+                    return None
+
+            def mock_wrapped(*args, **kwargs):
+                return MockContextManager()
+
+            async with instrumentor._wrap_transport_with_callback(
+                mock_wrapped, None, (), {}
+            ) as (reader, writer):
+                assert isinstance(reader, InstrumentedStreamReader)
+                assert isinstance(writer, InstrumentedStreamWriter)
+
+        asyncio.run(test_wrapper())
+
+    def test_streamable_http_hook_wraps_v2_name(self):
+        """When only `streamable_http_client` exists (mcp>=2), the hook must
+        wrap that name — not the removed v1 `streamablehttp_client`."""
+        instrumentor = MCPInstrumentor()
+
+        captured = {}
+
+        def capture_hook(fn, module_name):
+            captured[module_name] = fn
+
+        fake_module = MagicMock()
+        fake_module.streamable_http_client = MagicMock()
+        del fake_module.streamablehttp_client  # v2 has no legacy name
+
+        with patch("traceai_mcp.register_post_import_hook", capture_hook), patch(
+            "traceai_mcp.wrap_function_wrapper"
+        ) as mock_wrap:
+            instrumentor._instrument()
+            hook = captured["mcp.client.streamable_http"]
+            hook(fake_module)
+
+            args, _kwargs = mock_wrap.call_args
+            assert args[0] is fake_module
+            assert args[1] == "streamable_http_client"

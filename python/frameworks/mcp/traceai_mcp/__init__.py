@@ -19,9 +19,13 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
 
     def _instrument(self, **kwargs: Any) -> None:
         register_post_import_hook(
-            lambda _: wrap_function_wrapper(
-                "mcp.client.streamable_http",
-                "streamablehttp_client",
+            lambda module: wrap_function_wrapper(
+                module,
+                (
+                    "streamable_http_client"
+                    if hasattr(module, "streamable_http_client")
+                    else "streamablehttp_client"
+                ),
                 self._wrap_transport_with_callback,
             ),
             "mcp.client.streamable_http",
@@ -89,16 +93,20 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
     ) -> AsyncGenerator[
         Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter", Any], None
     ]:
-        async with wrapped(*args, **kwargs) as (
-            read_stream,
-            write_stream,
-            get_session_id_callback,
-        ):
-            yield (
-                InstrumentedStreamReader(read_stream),
-                InstrumentedStreamWriter(write_stream),
-                get_session_id_callback,
-            )
+        async with wrapped(*args, **kwargs) as streams:
+            if len(streams) == 3:
+                read_stream, write_stream, get_session_id_callback = streams
+                yield (
+                    InstrumentedStreamReader(read_stream),
+                    InstrumentedStreamWriter(write_stream),
+                    get_session_id_callback,
+                )
+            else:
+                read_stream, write_stream = streams
+                yield (
+                    InstrumentedStreamReader(read_stream),
+                    InstrumentedStreamWriter(write_stream),
+                )
 
     @asynccontextmanager
     async def _wrap_plain_transport(
