@@ -75,33 +75,24 @@ class GoogleADKInstrumentor(BaseInstrumentor):  # type: ignore
 
     def _patch_trace_call_llm(self) -> None:
         """Patch the LLM call tracing functionality to use our tracer."""
-        from google.adk.flows.llm_flows import base_llm_flow
-
         from traceai_google_adk._wrappers import _TraceCallLlm
 
-        setattr(base_llm_flow, "tracer", self._tracer)
+        target = _resolve_trace_call_llm_module()
+        self._llm_trace_module = target
+        self._llm_original_tracer = target.tracer
+        self._llm_original_trace = target.trace_call_llm
+        setattr(target, "tracer", self._tracer)
         setattr(
-            base_llm_flow,
+            target,
             "trace_call_llm",
-            _TraceCallLlm(self._tracer)(base_llm_flow.trace_call_llm),  # type: ignore[attr-defined]
+            _TraceCallLlm(self._tracer)(target.trace_call_llm),
         )
 
     def _unpatch_trace_call_llm(self) -> None:
         """Restore the original LLM call tracing functionality."""
-        from google.adk.flows.llm_flows import base_llm_flow
-
-        if callable(
-            original := getattr(base_llm_flow.trace_call_llm, "__wrapped__"),  # type: ignore[attr-defined]
-        ):
-            from google.adk.flows.llm_flows import (
-                base_llm_flow,
-            )
-
-            setattr(base_llm_flow, "trace_call_llm", original)
-
-        from google.adk.telemetry import tracer
-
-        setattr(base_llm_flow, "tracer", tracer)
+        if target := getattr(self, "_llm_trace_module", None):
+            setattr(target, "trace_call_llm", self._llm_original_trace)
+            setattr(target, "tracer", self._llm_original_tracer)
 
     def _patch_trace_tool_call(self) -> None:
         """Patch tool call tracing to use our tracer."""
@@ -160,7 +151,6 @@ class GoogleADKInstrumentor(BaseInstrumentor):  # type: ignore
             # through one shared tracer. The selective proxy lets the tool
             # family produce real spans; the rest is handled by our outer
             # wrappers, so it's passed through.
-            from google.adk.flows.llm_flows import functions
             from google.adk.telemetry import (  # type: ignore[attr-defined,import-not-found,unused-ignore]
                 tracing as adk_tracing,  # type: ignore[attr-defined,unused-ignore]
             )
@@ -171,13 +161,12 @@ class GoogleADKInstrumentor(BaseInstrumentor):  # type: ignore
                     "tracer",
                     _SelectiveExecuteToolTracer(adk_tracing.tracer, self._tracer),
                 )
-            # functions.py captures `tracer` at import, so the swap above
-            # doesn't reach the parallel-call (`merged`) span path. Patch
-            # this binding independently.
-            functions_tracer = getattr(functions, "tracer", None)
+            # Parallel-call spans capture their tracer at import as well.
+            target = _resolve_merged_tool_calls_module()
+            functions_tracer = getattr(target, "tracer", None)
             if isinstance(functions_tracer, Tracer):
                 setattr(
-                    functions,
+                    target,
                     "tracer",
                     _SelectiveExecuteToolTracer(functions_tracer, self._tracer),
                 )
@@ -205,7 +194,9 @@ class GoogleADKInstrumentor(BaseInstrumentor):  # type: ignore
                 tracer as base_agent_tracer,  # pyright: ignore[reportPrivateImportUsage]
             )
 
-            if isinstance(original := getattr(base_agent_tracer, "__wrapped__"), Tracer):
+            if isinstance(
+                original := getattr(base_agent_tracer, "__wrapped__"), Tracer
+            ):
                 from google.adk.agents import base_agent
 
                 setattr(base_agent, "tracer", original)
@@ -215,15 +206,18 @@ class GoogleADKInstrumentor(BaseInstrumentor):  # type: ignore
                 tracing as adk_tracing,  # type: ignore[attr-defined,unused-ignore]
             )
 
-            if isinstance(original := getattr(adk_tracing.tracer, "__wrapped__", None), Tracer):
+            if isinstance(
+                original := getattr(adk_tracing.tracer, "__wrapped__", None), Tracer
+            ):
                 setattr(adk_tracing, "tracer", original)
 
         if _adk_version() >= (1, 32, 0):
-            from google.adk.flows.llm_flows import functions
-
-            functions_tracer = getattr(functions, "tracer", None)
-            if isinstance(original := getattr(functions_tracer, "__wrapped__", None), Tracer):
-                setattr(functions, "tracer", original)
+            target = _resolve_merged_tool_calls_module()
+            functions_tracer = getattr(target, "tracer", None)
+            if isinstance(
+                original := getattr(functions_tracer, "__wrapped__", None), Tracer
+            ):
+                setattr(target, "tracer", original)
 
 
 class _PassthroughTracer(wrapt.ObjectProxy):  # type: ignore[misc]
@@ -236,6 +230,11 @@ class _PassthroughTracer(wrapt.ObjectProxy):  # type: ignore[misc]
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
         yield get_current_span()
+
+    def start_span(self, *args: Any, **kwargs: Any) -> Span:
+        # A caller owns and ends a span returned by start_span. Do not give it
+        # the outer wrapper's recording span to end.
+        return trace_api.NonRecordingSpan(get_current_span().get_span_context())
 
 
 class _SelectiveExecuteToolTracer(wrapt.ObjectProxy):  # type: ignore[misc]
@@ -252,12 +251,44 @@ class _SelectiveExecuteToolTracer(wrapt.ObjectProxy):  # type: ignore[misc]
         self._self_fi_tracer = fi_tracer
 
     @_agnosticcontextmanager
-    def start_as_current_span(self, name: str, *args: Any, **kwargs: Any) -> Iterator[Span]:
+    def start_as_current_span(
+        self, name: str, *args: Any, **kwargs: Any
+    ) -> Iterator[Span]:
         if isinstance(name, str) and name.startswith("execute_tool"):
-            with self._self_fi_tracer.start_as_current_span(name, *args, **kwargs) as span:
+            with self._self_fi_tracer.start_as_current_span(
+                name, *args, **kwargs
+            ) as span:
                 yield span
             return
         yield get_current_span()
+
+    def start_span(self, name: str, *args: Any, **kwargs: Any) -> Span:
+        if isinstance(name, str) and name.startswith("execute_tool"):
+            return self._self_fi_tracer.start_span(name, *args, **kwargs)
+        return trace_api.NonRecordingSpan(get_current_span().get_span_context())
+
+
+def _resolve_trace_call_llm_module() -> Any:
+    """Find the binding used by ADK's model-call implementation."""
+    from google.adk.flows.llm_flows import base_llm_flow
+
+    if hasattr(base_llm_flow, "trace_call_llm"):
+        return base_llm_flow
+    # ADK's modular flow layout moved the imported function and tracer here.
+    from google.adk.flows.llm_flows.core import _model_call
+
+    return _model_call
+
+
+def _resolve_merged_tool_calls_module() -> Any:
+    """Find the captured tracer used for parallel tool-call spans."""
+    from google.adk.flows.llm_flows import functions
+
+    if hasattr(functions, "tracer"):
+        return functions
+    from google.adk.flows.llm_flows.tools import _batch_executor
+
+    return _batch_executor
 
 
 def _adk_version() -> Tuple[int, int, int]:

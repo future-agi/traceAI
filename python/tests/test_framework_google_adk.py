@@ -50,16 +50,16 @@ class TestGoogleADKInstrumentor:
         deps = self.instrumentor.instrumentation_dependencies()
         assert ("google-adk >= 1.2.1",) == deps
 
-    def test_instrument_basic(self):
+    def test_instrument_basic(self, monkeypatch):
         """Test basic instrumentation setup without complex patches."""
         # Mock tracer setup
         mock_tracer = Mock()
-        self.instrumentor._tracer = mock_tracer
+        monkeypatch.setattr(self.instrumentor, "_tracer", mock_tracer, raising=False)
         
         # Mock the helper methods to avoid complex patching
-        self.instrumentor._patch_trace_call_llm = Mock()
-        self.instrumentor._patch_trace_tool_call = Mock()
-        self.instrumentor._disable_existing_tracers = Mock()
+        monkeypatch.setattr(self.instrumentor, "_patch_trace_call_llm", Mock())
+        monkeypatch.setattr(self.instrumentor, "_patch_trace_tool_call", Mock())
+        monkeypatch.setattr(self.instrumentor, "_disable_existing_tracers", Mock())
         
         # Test that the helper methods would be called
         self.instrumentor._patch_trace_call_llm()
@@ -71,13 +71,13 @@ class TestGoogleADKInstrumentor:
         self.instrumentor._patch_trace_tool_call.assert_called_once()
         self.instrumentor._disable_existing_tracers.assert_called_once()
 
-    def test_uninstrument(self):
+    def test_uninstrument(self, monkeypatch):
         """Test uninstrumentation."""
         # Mock the cleanup methods
-        self.instrumentor._unpatch_trace_call_llm = Mock()
-        self.instrumentor._unpatch_trace_tool_call = Mock()
-        self.instrumentor._restore_existing_tracers = Mock()
-        self.instrumentor._originals = []
+        monkeypatch.setattr(self.instrumentor, "_unpatch_trace_call_llm", Mock())
+        monkeypatch.setattr(self.instrumentor, "_unpatch_trace_tool_call", Mock())
+        monkeypatch.setattr(self.instrumentor, "_restore_existing_tracers", Mock())
+        monkeypatch.setattr(self.instrumentor, "_originals", [], raising=False)
         
         self.instrumentor._uninstrument()
         

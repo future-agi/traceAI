@@ -4,6 +4,26 @@
 
 Python auto-instrumentation library for Google ADK.
 
+## Google GenAI compatibility
+
+The instrumentor accepts Google GenAI 1.x and 2.x, including ADK's modular
+model/tool flow layout. The dependency resolver
+selects a compatible version for your Google ADK installation; there is no
+need to bypass dependency checks with `--no-deps`.
+
+For example, to install with Google ADK 2.7.1:
+
+```shell
+pip install traceai-google-adk "google-adk==2.7.1"
+pip check
+```
+
+Offline integration tests exercise a real ADK `LlmAgent` and `InMemoryRunner`
+with a scripted local model: a function call executes a Python tool, its result
+returns to the model, and tracing captures the response and token usage. These
+tests also cover parallel calls, model failures and restoring patched methods.
+They do not call a live Gemini endpoint.
+
 
 ## Quickstart
 
