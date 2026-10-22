@@ -632,8 +632,8 @@ class TestInstrumentationFunctions:
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         attribute_names = [args[0] for args in call_args_list]
         
-        assert SpanAttributes.FI_SPAN_KIND in attribute_names
-        assert SpanAttributes.LLM_MODEL_NAME in attribute_names
+        assert SpanAttributes.GEN_AI_SPAN_KIND in attribute_names
+        assert SpanAttributes.GEN_AI_REQUEST_MODEL in attribute_names
 
     def test_instrument_func_type_embedding(self):
         """Test _instrument_func_type_embedding function."""
@@ -652,7 +652,7 @@ class TestInstrumentationFunctions:
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         attribute_names = [args[0] for args in call_args_list]
         
-        assert SpanAttributes.FI_SPAN_KIND in attribute_names
+        assert SpanAttributes.GEN_AI_SPAN_KIND in attribute_names
         assert SpanAttributes.EMBEDDING_MODEL_NAME in attribute_names
 
     def test_instrument_func_type_image_generation(self):
@@ -672,8 +672,8 @@ class TestInstrumentationFunctions:
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         attribute_names = [args[0] for args in call_args_list]
         
-        assert SpanAttributes.FI_SPAN_KIND in attribute_names
-        assert SpanAttributes.LLM_MODEL_NAME in attribute_names
+        assert SpanAttributes.GEN_AI_SPAN_KIND in attribute_names
+        assert SpanAttributes.GEN_AI_REQUEST_MODEL in attribute_names
 
     def test_finalize_span(self, sample_completion_response):
         """Test _finalize_span function."""
@@ -696,7 +696,7 @@ class TestInstrumentationFunctions:
         assert result is not None
         assert "filtered_messages" in result
         assert "eval_input" in result
-        assert "query" in result
+        assert "query" not in result
         assert result["filtered_messages"] == messages
         assert "Hello world" in result["eval_input"]
 
@@ -896,5 +896,74 @@ class TestIntegrationScenarios:
             mock_context.assert_called()
 
 
+class TestInputValueMultiMessage:
+    """Regression: INPUT_VALUE must keep every message, not just the first.
+
+    Same defect as traceAI#151 (openai handler): a final write overwrote the
+    joined eval_input with query = eval_input[0].
+    """
+
+    def _final_input_value(self, mock_span):
+        values = [
+            c.args[1]
+            for c in mock_span.set_attribute.call_args_list
+            if c.args[0] == SpanAttributes.INPUT_VALUE
+        ]
+        assert values, "INPUT_VALUE was never set"
+        return values[-1]
+
+    def test_completion_keeps_all_message_texts(self):
+        mock_span = MagicMock()
+        _instrument_func_type_completion(
+            mock_span,
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": "What is 2+2?"},
+                    {"role": "assistant", "content": "4"},
+                    {"role": "user", "content": "And 3+3?"},
+                ],
+            },
+        )
+        final = self._final_input_value(mock_span)
+        for text in ("You are helpful.", "What is 2+2?", "4", "And 3+3?"):
+            assert text in final
+
+    def test_completion_multimodal_text_and_image_placeholder(self):
+        mock_span = MagicMock()
+        _instrument_func_type_completion(
+            mock_span,
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe this"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/a.png"},
+                            },
+                            {"type": "text", "text": "in detail"},
+                        ],
+                    }
+                ],
+            },
+        )
+        attrs = {c.args[0]: c.args[1] for c in mock_span.set_attribute.call_args_list}
+        final = attrs[SpanAttributes.INPUT_VALUE]
+        assert "describe this" in final
+        assert "in detail" in final
+        assert f"{{{SpanAttributes.INPUT_IMAGES}.0}}" in final
+        assert "https://example.com/a.png" in attrs[SpanAttributes.INPUT_IMAGES]
+
+    def test_process_messages_returns_no_query_key(self):
+        result = _process_messages([{"role": "user", "content": "hi"}])
+        assert "query" not in result
+        assert result["eval_input"] == "hi"
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"]) 
+    pytest.main([__file__, "-v"])
+ 
