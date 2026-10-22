@@ -17,7 +17,10 @@ A real-instrumentor round trip against a live collector is in `../openinference-
 (see [Tests](#tests)). They post only to the
 harness `Receiver` on 127.0.0.1: no fi-collector, no Arize account, no live
 instrumentor. Sections marked "source reading" come from future-agi `main`
-4af5338 and are not exercised by the always-on tests.
+4af5338 and are not exercised by the always-on tests. The opt-in tests also
+pass on `main` b3737c4 (2026-10-21), where `handleHTTPTraces` routes
+simulation spans before stamping `project_name` and writes its 200 through
+`writeExportResponse`; the `project_name` rules below are unchanged.
 
 ## The Django route is retired and is not proof
 

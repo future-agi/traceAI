@@ -389,6 +389,23 @@ def _go_func(source: str, name: str) -> str:
     return _go_code(source[start : source.index("\n}\n", start)])
 
 
+def _go_block(code: str, opener: str) -> str:
+    """The body of the block that ``opener`` (ending in ``{``) opens in ``_go_code``
+    text, braces matched. String literals are blanked before counting."""
+    blanked = re.sub(r'"(?:\\.|[^"\\])*"|`[^`]*`', lambda m: "_" * len(m.group()), code)
+    assert opener in code, opener
+    start = code.index(opener) + len(opener)
+    depth = 1
+    for i in range(start, len(blanked)):
+        if blanked[i] == "{":
+            depth += 1
+        elif blanked[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return code[start:i].strip()
+    raise AssertionError("unclosed block: " + opener)
+
+
 def _has_statements(code: str, *statements: str) -> None:
     for statement in statements:
         assert statement in code, statement
@@ -510,15 +527,22 @@ def test_collector_project_name_rules() -> None:
     handler = _go_func(source["server"], "handleHTTPTraces")
     assert handler.count("auth.StampResourceAttrs(") == 1
     # Stamping runs only inside the authenticated branch. Its error is the
-    # 400; a drop is only logged, and the handler goes on to its 200.
+    # 400; a drop is only logged, and the handler goes on to its 200. Since
+    # future-agi main b3737c4 the branch first routes simulation (sandbox-key)
+    # spans, so the stamp is no longer the branch's first statement.
+    auth_branch = _go_block(handler, "if result := auth.FromContext(r.Context()); result != nil {")
     assert re.search(
-        r"if result := auth\.FromContext\(r\.Context\(\)\); result != nil \{[^}]*"
         r"dropped, err := auth\.StampResourceAttrs\(.*?\) "
         r'if err != nil \{ http\.Error\(w, "auth stamp: "\+err\.Error\(\), http\.StatusBadRequest\) return \} '
         r"if dropped > 0 \{ s\.log\.Warn\([^{}]*\) \}",
-        handler,
+        auth_branch,
     )
-    assert handler.endswith("w.WriteHeader(http.StatusOK) _, _ = w.Write(out)")
+    ok = "w.WriteHeader(http.StatusOK) _, _ = w.Write(out)"
+    if handler.endswith("writeExportResponse(w, ct, ptraceotlp.NewExportResponse())"):
+        # b3737c4 and later write the 200 through a helper.
+        assert _go_func(source["server"], "writeExportResponse").endswith(ok)
+    else:
+        assert handler.endswith(ok)
     _has_statements(
         _go_func(source["stamp"], "StampResourceAttrs"),
         "if result == nil { return 0, nil }",
