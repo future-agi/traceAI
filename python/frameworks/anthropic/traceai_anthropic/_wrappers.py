@@ -117,7 +117,6 @@ class _CompletionsWrapper(_BaseWrapper):
         llm_filtered_input_messages = extracted_data["filtered_messages"]
         input_images = extracted_data["input_images"]
         eval_input = extracted_data["eval_input"]
-        query = extracted_data["query"]
 
         with self._start_as_current_span(
             span_name="Completions",
@@ -133,9 +132,8 @@ class _CompletionsWrapper(_BaseWrapper):
                     _get_llm_invocation_parameters(llm_invocation_parameters),
                     _get_llm_tools(llm_invocation_parameters),
                     _get_image_inputs(input_images),
-                    _get_eval_input(eval_input),
                     _get_raw_input(arguments),
-                    _get_query(query),
+                    _get_eval_input(eval_input),
                 )
             ),
         ) as span:
@@ -194,7 +192,6 @@ class _AsyncCompletionsWrapper(_WithTracer):
         filtered_llm_input_messages = extracted_data["filtered_messages"]
         input_images = extracted_data["input_images"]
         eval_input = extracted_data["eval_input"]
-        query = extracted_data["query"]
 
         with self._start_as_current_span(
             span_name="AsyncCompletions",
@@ -210,9 +207,8 @@ class _AsyncCompletionsWrapper(_WithTracer):
                     _get_llm_invocation_parameters(invocation_parameters),
                     _get_llm_tools(invocation_parameters),
                     _get_image_inputs(input_images),
-                    _get_eval_input(eval_input),
                     _get_raw_input(arguments),
-                    _get_query(query),
+                    _get_eval_input(eval_input),
                 )
             ),
         ) as span:
@@ -261,7 +257,6 @@ class _MessagesWrapper(_BaseWrapper):
         llm_filtered_input_messages = extracted_data["filtered_messages"]
         input_images = extracted_data["input_images"]
         eval_input = extracted_data["eval_input"]
-        query = extracted_data["query"]
 
         with self._start_as_current_span(
             span_name="Messages",
@@ -278,9 +273,8 @@ class _MessagesWrapper(_BaseWrapper):
                     _get_llm_tools(invocation_parameters),
                     _get_inputs(llm_filtered_input_messages),
                     _get_image_inputs(input_images),
-                    _get_eval_input(eval_input),
                     _get_raw_input(arguments),
-                    _get_query(query),
+                    _get_eval_input(eval_input),
                 )
             ),
         ) as span:
@@ -356,7 +350,6 @@ class _AsyncMessagesWrapper(_WithTracer):
         llm_filtered_input_messages = extracted_data["filtered_messages"]
         input_images = extracted_data["input_images"]
         eval_input = extracted_data["eval_input"]
-        query = extracted_data["query"]
 
         with self._start_as_current_span(
             span_name="AsyncMessages",
@@ -373,9 +366,8 @@ class _AsyncMessagesWrapper(_WithTracer):
                     _get_llm_tools(invocation_parameters),
                     _get_inputs(llm_filtered_input_messages),
                     _get_image_inputs(input_images),
-                    _get_eval_input(eval_input),
                     _get_raw_input(arguments),
-                    _get_query(query),
+                    _get_eval_input(eval_input),
                 )
             ),
         ) as span:
@@ -430,7 +422,6 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
         llm_filtered_input_messages = extracted_data["filtered_messages"]
         input_images = extracted_data["input_images"]
         eval_input = extracted_data["eval_input"]
-        query = extracted_data["query"]
 
         with self._start_as_current_span(
             span_name="MessagesCountTokens",
@@ -445,9 +436,8 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
                     _get_llm_input_messages(llm_input_messages),
                     _get_inputs(llm_filtered_input_messages),
                     _get_image_inputs(input_images),
-                    _get_eval_input(eval_input),
                     _get_raw_input(arguments),
-                    _get_query(query),
+                    _get_eval_input(eval_input),
                 )
             ),
         ) as span:
@@ -489,10 +479,6 @@ def _get_raw_output(response) -> Iterator[Tuple[str, Any]]:
         yield OUTPUT_VALUE, safe_json_dumps(response.to_dict())
     else:
         yield OUTPUT_VALUE, safe_json_dumps(response)
-
-
-def _get_query(query: str) -> Iterator[Tuple[str, Any]]:
-    yield INPUT_VALUE, query
 
 
 def _get_response(response: Any) -> Iterator[Tuple[str, Any]]:
@@ -566,7 +552,6 @@ def _extract_image_data(messages):
             "input_images": input_images if input_images else None,
             "filtered_messages": filtered_messages if filtered_messages else None,
             "eval_input": "\n".join(eval_input),
-            "query": str(eval_input[0]) if eval_input else None,
         }
     except Exception as e:
         logger.exception(f"Error in _extract_image_data: {e}")
@@ -574,7 +559,6 @@ def _extract_image_data(messages):
             "input_images": None,
             "filtered_messages": messages,
             "eval_input": None,
-            "query": None,
         }
 
 
