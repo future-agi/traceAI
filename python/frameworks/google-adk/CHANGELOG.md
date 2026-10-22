@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Preserve the async-generator protocol for Runner and BaseAgent streams,
+  including direct iteration, `asend()`, `athrow()` and `aclose()`. Finish spans
+  and close the underlying stream on early exit, errors and cancellation.
+- Keep stream tracing context active only while executing the stream, so
+  consumer work and interleaved runs retain their own span and session context.
+
 ## [0.1.5] - 2026-05-15
 
 - Fix `instrument()` crash on `google-adk >= 1.32`. Patch targets and

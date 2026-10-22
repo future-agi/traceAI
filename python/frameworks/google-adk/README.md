@@ -4,6 +4,32 @@
 
 Python auto-instrumentation library for Google ADK.
 
+## Stream lifecycle
+
+Instrumented `Runner.run_async()` and `BaseAgent.run_async()` streams preserve
+the async-generator protocol. You can use `async for`, direct `__anext__()` calls,
+`asend()`, `athrow()` and `aclose()`. The stream's tracing context is active while
+the agent executes; your event-processing code retains its own context.
+
+If you stop reading before exhaustion, close the stream so the agent can release
+resources and its spans can finish. For example:
+
+```python
+events = runner.run_async(
+    user_id=user_id, session_id=session_id, new_message=message
+)
+try:
+    async for event in events:
+        if should_stop(event):
+            break
+finally:
+    await events.aclose()
+```
+
+Normal exhaustion sets the span status to OK. Unhandled exceptions are recorded
+as errors. Explicit close and cancellation end spans without marking an
+incomplete stream as successful.
+
 
 ## Quickstart
 
