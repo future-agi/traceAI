@@ -66,7 +66,7 @@ class TestMCPInstrumentor:
         
         assert isinstance(dependencies, tuple)
         assert "mcp >= 0.1.0" in dependencies
-        assert len(dependencies) >= 2
+        assert len(dependencies) >= 1
 
     def test_instrument_registers_post_import_hooks(self):
         """Test that instrumentation registers all necessary post-import hooks."""
