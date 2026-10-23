@@ -163,10 +163,15 @@ class _ResponseAttributesExtractor:
         # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/embedding_create_params.py#L23  # noqa: E501
         if model := getattr(response, "model"):
             yield f"{SpanAttributes.EMBEDDING_MODEL_NAME}", model
+            # Also the span's model, so trace views and cost lookup see it.
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         if (data := getattr(response, "data", None)) and isinstance(data, Iterable):
-            for embedding in data:
-                if (index := getattr(embedding, "index", None)) is None:
-                    continue
+            for position, embedding in enumerate(data):
+                # Some OpenAI-compatible servers (e.g. Gemini's) omit `index`;
+                # fall back to the item's position instead of dropping it.
+                index = getattr(embedding, "index", None)
+                if index is None:
+                    index = position
                 for key, value in self._get_attributes_from_embedding(embedding):
                     yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{key}", value
 
