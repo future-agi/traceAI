@@ -54,14 +54,24 @@ agent = Agent(
 response = agent("Hello!")
 ```
 
+`register()`'s exporter sends the spans to Future AGI, so Option 1 needs no `OTEL_EXPORTER_OTLP_*` setting for that. `configure_strands_tracing()` still adds Strands' own OTLP exporter, for the traces URL the `OTEL_EXPORTER_OTLP_*` variables resolve to: `http://localhost:4318/v1/traces` when none is set, which logs export errors when no collector listens there. Point the variables at another collector to send it a second copy.
+
+Strands' exporter is not added, so spans do not reach Future AGI twice, only when all of these hold:
+
+- The variables resolve to the traces URL `register()` exports to, `<FI_BASE_URL>/tracer/v1/traces`, for example `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://api.futureagi.com/tracer/v1/traces`. `OTEL_EXPORTER_OTLP_ENDPOINT=https://api.futureagi.com` resolves to `https://api.futureagi.com/v1/traces`, another URL.
+- Strands' exporter would send exactly the headers `register()`'s exporter sends: the same names and values, none missing on either side. In practice that means your Future AGI keys in `OTEL_EXPORTER_OTLP_HEADERS` (or `otlp_headers=`) and nothing else. A header only one of them sends keeps Strands' exporter: keys on one side only, other keys, the `x-project-name` header `project_name=` adds, or a routing header only `register()`'s exporter sends. So does a client certificate or credential provider set for Strands' exporter.
+- The provider keeps its exporter when another span processor is added.
+
+On fi-instrumentation-otel 1.1.0 and earlier, the first span processor added to the provider `register()` returns replaces its exporter. Strands' exporter is then always added and is the only one left, so spans reach Future AGI only when the variables point there, with your keys in `OTEL_EXPORTER_OTLP_HEADERS`. Upgrade fi-instrumentation-otel.
+
 ### Option 2: Direct OTLP Configuration
 
 ```python
 from traceai_strands import configure_strands_tracing
 
-# Configure with OTLP endpoint directly
+# Configure with OTLP endpoint directly. otlp_endpoint is a base URL that /v1/traces is appended to.
 configure_strands_tracing(
-    otlp_endpoint="https://api.traceai.com/v1/traces",
+    otlp_endpoint="https://api.traceai.com",
     otlp_headers={"Authorization": "Bearer YOUR_API_KEY"},
     project_name="my-strands-agent",
 )
@@ -223,11 +233,11 @@ The integration captures these OpenTelemetry GenAI semantic attributes:
 
 ## Environment Variables
 
-Strands respects standard OpenTelemetry environment variables:
+Strands respects standard OpenTelemetry environment variables. With Option 1 they only set where Strands' own OTLP exporter sends; see Option 1 above.
 
 ```bash
-# OTLP endpoint
-export OTEL_EXPORTER_OTLP_ENDPOINT="https://api.traceai.com/v1/traces"
+# OTLP base URL: the exporter appends /v1/traces (use OTEL_EXPORTER_OTLP_TRACES_ENDPOINT for a full traces URL)
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://api.traceai.com"
 
 # OTLP headers (authentication)
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer YOUR_API_KEY"
