@@ -1,0 +1,103 @@
+[
+  {
+    "name": "execute_tool get_weather",
+    "scope": "agent_framework",
+    "kind": "INTERNAL",
+    "status": "UNSET",
+    "attributes": {
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": "get_weather",
+      "gen_ai.tool.call.id": "call-123",
+      "gen_ai.tool.type": "function",
+      "gen_ai.tool.description": "Get the current weather for a city.",
+      "gen_ai.tool.call.result": "The weather in Paris is sunny, 22 degrees.",
+      "gen_ai.tool.call.arguments": "{\"city\": \"Paris\"}"
+    }
+  },
+  {
+    "name": "invoke_agent weather_agent",
+    "scope": "agent_framework",
+    "kind": "INTERNAL",
+    "status": "UNSET",
+    "attributes": {
+      "gen_ai.input.messages": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What's the weather in Paris?\"}]}]",
+      "gen_ai.system_instructions": "[{\"type\": \"text\", \"content\": \"You are a helpful weather assistant.\"}]",
+      "gen_ai.request.choice.count": 1,
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.provider.name": "microsoft.agent_framework",
+      "gen_ai.agent.id": "396693c8-ed0d-44b1-9ad9-ae5b0f9b4ad5",
+      "gen_ai.agent.name": "weather_agent",
+      "gen_ai.agent.description": "Tells you the weather",
+      "gen_ai.tool.definitions": "[{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"parameters\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}}, \"required\": [\"city\"], \"title\": \"get_weather_input\", \"type\": \"object\"}}}]",
+      "gen_ai.response.id": "resp-abc",
+      "gen_ai.output.messages": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"The weather in Paris is sunny.\"}]}]"
+    }
+  },
+  {
+    "name": "workflow.build",
+    "scope": "agent_framework",
+    "kind": "INTERNAL",
+    "status": "UNSET",
+    "attributes": {
+      "workflow_builder.name": "WorkflowBuilder-d9fed0bb-2d5e-4a93-a5c3-e116d5ed366f",
+      "workflow.id": "a86ba8e4-0a04-49fd-915a-902f18b83605",
+      "workflow.definition": "{\"name\": \"WorkflowBuilder-d9fed0bb-2d5e-4a93-a5c3-e116d5ed366f\", \"id\": \"a86ba8e4-0a04-49fd-915a-902f18b83605\", \"start_executor_id\": \"upper\", \"max_iterations\": 100, \"edge_groups\": [{\"id\": \"InternalEdgeGroup/1d68d9bb-9f75-496e-ad64-a1215e304d96\", \"type\": \"InternalEdgeGroup\", \"edges\": [{\"source_id\": \"internal:upper\", \"target_id\": \"upper\"}]}, {\"id\": \"InternalEdgeGroup/481bb9d6-475e-444f-ac05-a0a0739dcc90\", \"type\": \"InternalEdgeGroup\", \"edges\": [{\"source_id\": \"internal:exclaim\", \"target_id\": \"exclaim\"}]}, {\"id\": \"SingleEdgeGroup/9d7bd9c3-be19-4bf8-9589-4e331c7c02ce\", \"type\": \"SingleEdgeGroup\", \"edges\": [{\"source_id\": \"upper\", \"target_id\": \"exclaim\"}]}], \"executors\": {\"upper\": {\"id\": \"upper\", \"type\": \"FunctionExecutor\"}, \"exclaim\": {\"id\": \"exclaim\", \"type\": \"FunctionExecutor\"}}, \"output_executors\": null, \"intermediate_executors\": null}"
+    }
+  },
+  {
+    "name": "message.send",
+    "scope": "agent_framework",
+    "kind": "PRODUCER",
+    "status": "UNSET",
+    "attributes": {
+      "message.type": "str"
+    }
+  },
+  {
+    "name": "executor.process upper",
+    "scope": "agent_framework",
+    "kind": "INTERNAL",
+    "status": "UNSET",
+    "attributes": {
+      "executor.id": "upper",
+      "executor.type": "FunctionExecutor",
+      "message.type": "MessageType.STANDARD",
+      "message.payload_type": "str"
+    }
+  },
+  {
+    "name": "edge_group.process SingleEdgeGroup",
+    "scope": "agent_framework",
+    "kind": "INTERNAL",
+    "status": "UNSET",
+    "attributes": {
+      "edge_group.type": "SingleEdgeGroup",
+      "edge_group.id": "SingleEdgeGroup/9d7bd9c3-be19-4bf8-9589-4e331c7c02ce",
+      "message.source_id": "upper",
+      "edge_group.delivered": true,
+      "edge_group.delivery_status": "delivered"
+    }
+  },
+  {
+    "name": "executor.process exclaim",
+    "scope": "agent_framework",
+    "kind": "INTERNAL",
+    "status": "UNSET",
+    "attributes": {
+      "executor.id": "exclaim",
+      "executor.type": "FunctionExecutor",
+      "message.type": "MessageType.STANDARD",
+      "message.payload_type": "WorkflowMessage"
+    }
+  },
+  {
+    "name": "workflow.run",
+    "scope": "agent_framework",
+    "kind": "INTERNAL",
+    "status": "UNSET",
+    "attributes": {
+      "workflow.id": "a86ba8e4-0a04-49fd-915a-902f18b83605",
+      "workflow.name": "WorkflowBuilder-d9fed0bb-2d5e-4a93-a5c3-e116d5ed366f"
+    }
+  }
+]
