@@ -370,13 +370,22 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
     );
     this._traceConfig = config.traceConfig;
     this._exclusiveProcessor = config.exclusiveProcessor ?? true;
+    // InstrumentationBase calls enable() from its constructor, before
+    // _traceConfig is set. Build the tracer again so the config applies.
+    this.fiTracer = this._createFITracer();
   }
 
   override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({
+    this.fiTracer = this._createFITracer();
+  }
+
+  private _createFITracer(): FITracer {
+    // Always pass an options object: given undefined, fi-core returns the
+    // defaults without reading FI_HIDE_INPUTS / FI_HIDE_OUTPUTS.
+    return new FITracer({
       tracer: this.tracer,
-      traceConfig: this._traceConfig,
+      traceConfig: this._traceConfig ?? {},
     });
   }
 
@@ -406,7 +415,9 @@ export class OpenAIAgentsInstrumentation extends InstrumentationBase {
       return agentsModule;
     }
 
-    // Create the processor
+    // Create the processor. Rebuild the tracer first so it uses the provider
+    // from setTracerProvider() when that was called after construction.
+    this.fiTracer = this._createFITracer();
     this._processor = new FITracingProcessor(this.fiTracer);
 
     // Register our processor with the agents SDK. By default it replaces the

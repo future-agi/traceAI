@@ -352,4 +352,58 @@ describe("@openai/agents real SDK compatibility", () => {
     expect(exported.length).toBeGreaterThanOrEqual(7);
     expect(exported.filter((s) => !s.parentSpanId)).toHaveLength(1);
   });
+  // Rebuild the instrumentation the way the README shows it: construct it,
+  // call setTracerProvider(), then manuallyInstrument(), with no enable() call.
+  function reinstrument(config: ConstructorParameters<typeof OpenAIAgentsInstrumentation>[0] = {}) {
+    instrumentation.disable();
+    _resetPatchedStateForTesting();
+    instrumentation = new OpenAIAgentsInstrumentation(config);
+    instrumentation.setTracerProvider(provider);
+    instrumentation.manuallyInstrument(
+      { ...agents } as unknown as Parameters<OpenAIAgentsInstrumentation["manuallyInstrument"]>[0]
+    );
+  }
+
+  function expectContentHidden(spans: ReadableSpan[]) {
+    expect(spans.length).toBeGreaterThanOrEqual(7);
+    let redacted = 0;
+    for (const span of spans) {
+      for (const key of ["input.value", "output.value"]) {
+        const value = span.attributes[key];
+        if (value === undefined) continue;
+        expect(value).toBe("__REDACTED__");
+        redacted += 1;
+      }
+    }
+    // The root, response and tool spans all carried input or output.
+    expect(redacted).toBeGreaterThanOrEqual(4);
+  }
+
+  it("exports to the provider set with setTracerProvider() after construction", async () => {
+    reinstrument();
+    await runWorkflow("responses");
+    await provider.forceFlush();
+    assertSharedTree(exporter.getFinishedSpans());
+  });
+
+  it("hides span input and output with traceConfig", async () => {
+    reinstrument({ traceConfig: { hideInputs: true, hideOutputs: true } });
+    await runWorkflow("responses");
+    await provider.forceFlush();
+    expectContentHidden(exporter.getFinishedSpans());
+  });
+
+  it("hides span input and output with FI_HIDE_INPUTS / FI_HIDE_OUTPUTS", async () => {
+    process.env.FI_HIDE_INPUTS = "true";
+    process.env.FI_HIDE_OUTPUTS = "true";
+    try {
+      reinstrument();
+    } finally {
+      delete process.env.FI_HIDE_INPUTS;
+      delete process.env.FI_HIDE_OUTPUTS;
+    }
+    await runWorkflow("responses");
+    await provider.forceFlush();
+    expectContentHidden(exporter.getFinishedSpans());
+  });
 });

@@ -45,7 +45,7 @@ console.log(result.finalOutput);
 await tracerProvider.forceFlush();
 ```
 
-`manuallyInstrument` works for both module systems. In CommonJS you can instead pass the instrumentation to `registerInstrumentations` before the first `require("@openai/agents")`.
+Call `setTracerProvider` before `manuallyInstrument`. `manuallyInstrument` works for both module systems. In CommonJS you can instead pass the instrumentation to `registerInstrumentations` before the first `require("@openai/agents")`.
 
 ## The SDK's default exporter
 
@@ -70,7 +70,7 @@ One trace per run, rooted at a span named after the workflow. Child spans follow
 | `handoff` | TOOL | named `handoff to <agent>` |
 | `task`, `turn`, `guardrail`, `custom`, `mcp_tools` | CHAIN | raw span data |
 
-`traceConfig` (for example `{ hideInputs: true, hideOutputs: true }`) and the `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` environment variables redact `input.value`, `output.value` and the message attributes. They do not yet cover the raw request and response bodies (`raw.input`, `raw.output`): `@traceai/fi-core` 1.0.0 exports those even when hiding is on. The fix is in the next `@traceai/fi-core` release (1.1.0, future-agi/traceAI#271).
+`traceConfig` (for example `{ hideInputs: true, hideOutputs: true }`) and the `FI_HIDE_INPUTS` / `FI_HIDE_OUTPUTS` environment variables replace `input.value` and `output.value` with `__REDACTED__`. They do not yet cover the raw request and response bodies (`raw.input`, `raw.output`): `@traceai/fi-core` 1.0.0 exports those even when hiding is on. The fix is in the next `@traceai/fi-core` release (1.1.0, future-agi/traceAI#271).
 
 ## License
 
