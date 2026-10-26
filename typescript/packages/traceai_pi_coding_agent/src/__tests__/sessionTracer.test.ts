@@ -47,7 +47,7 @@ function run(
   return { spans: exporter.getFinishedSpans(), session };
 }
 
-const CONTENT_ON = { traceConfig: { hideInputs: false, hideOutputs: false } };
+const CONTENT_ON = { traceConfig: { hideInputs: false, hideOutputs: false, hideErrorDetails: false } };
 
 describe("span tree", () => {
   it("builds one agent run with turns, LLM calls and tools, all in one trace", () => {
@@ -216,8 +216,8 @@ describe("errors", () => {
     expect(agent.status.code).toBe(SpanStatusCode.OK);
 
     const failedLlm = byName(spans, "chat example-model").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
-    // The provider's error text is content: by default only the HTTP status leaves the process.
-    expect(failedLlm.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 429" });
+    // Status code and error type remain; the independent error-detail policy strips status text.
+    expect(failedLlm.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(failedLlm.attributes[Attr.ERROR_TYPE]).toBe("429");
     const failedTurn = byName(spans, "pi.turn").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
     expect(failedTurn.status.code).toBe(SpanStatusCode.ERROR);
@@ -226,11 +226,11 @@ describe("errors", () => {
     expect(tool.status.code).toBe(SpanStatusCode.ERROR);
     expect(tool.attributes[Attr.PI_TOOL_IS_ERROR]).toBe(true);
     // Tool error text is tool output: hidden by default.
-    expect(tool.status.message).toBe(TOOL_ERROR_HIDDEN);
+    expect(tool.status.message).toBeUndefined();
     expect(tool.attributes[Attr.ERROR_TYPE]).toBe("tool_error");
   });
 
-  it("puts the tool and provider error text in the status only when outputs are on", () => {
+  it("puts the tool and provider error text in the status only when outputs and error details are on", () => {
     const { spans } = run(retryAndToolError(), CONTENT_ON);
     expect(one(spans, "execute_tool read").status.message).toBe(TOOL_ERROR_SECRET);
     const failedLlm = byName(spans, "chat example-model").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
@@ -244,19 +244,19 @@ describe("errors", () => {
     expect(text).not.toContain("/Users/");
     expect(text).not.toContain("PROVIDER_ERROR_SECRET");
     expect(text).not.toContain("TOOL_PATH_SECRET");
-    // Status: stop reason, HTTP status and the provider's error type only.
+    // Status code and provider error type remain, without status text.
     const llm = byName(spans, "chat example-model").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
-    expect(llm.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 400 invalid_request_error" });
+    expect(llm.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(llm.attributes[Attr.ERROR_TYPE]).toBe("invalid_request_error");
     const turn = byName(spans, "pi.turn").find((s) => s.attributes[Attr.PI_STOP_REASON] === "error")!;
-    expect(turn.status.message).toBe("error: HTTP 400 invalid_request_error");
+    expect(turn.status.message).toBeUndefined();
     const agent = one(spans, SpanNames.AGENT_RUN);
-    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 400 invalid_request_error" });
-    expect(one(spans, "execute_tool read").status).toEqual({ code: SpanStatusCode.ERROR, message: TOOL_ERROR_HIDDEN });
+    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR });
+    expect(one(spans, "execute_tool read").status).toEqual({ code: SpanStatusCode.ERROR });
   });
 
-  it("exports the raw provider and tool error text, paths included, only with outputs on", () => {
-    const text = exportedText(run(providerAndToolPathErrors(), { traceConfig: { hideOutputs: false } }).spans);
+  it("exports the raw provider and tool error text, paths included, only with outputs and error details on", () => {
+    const text = exportedText(run(providerAndToolPathErrors(), { traceConfig: { hideOutputs: false, hideErrorDetails: false } }).spans);
     expect(text).toContain(JSON.stringify(PROVIDER_ERROR_TEXT).slice(1, -1));
     expect(text).toContain(JSON.stringify(TOOL_PATH_ERROR).slice(1, -1));
     // Inputs alone do not reveal error text.
@@ -268,10 +268,10 @@ describe("errors", () => {
   it("marks an aborted run and its model call ERROR", () => {
     const { spans } = run(aborted());
     const agent = one(spans, SpanNames.AGENT_RUN);
-    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
+    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(agent.attributes[Attr.PI_ABORTED]).toBe(true);
     const llm = one(spans, "chat example-model");
-    expect(llm.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
+    expect(llm.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(llm.attributes[Attr.PI_ABORTED]).toBe(true);
     expect(llm.attributes[Attr.ERROR_TYPE]).toBe("aborted");
   });
@@ -359,7 +359,7 @@ describe("Pi versions without agent_settled (before 0.80.5)", () => {
     session.emit(cancelledRetry()); // session.abort() / abortRetry() during the retry sleep
     // Ended before the next prompt and without dispose: complete, ERROR with the failed call's status.
     const failed = one(exporter.getFinishedSpans(), SpanNames.AGENT_RUN);
-    expect(failed.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 503 overloaded_error" });
+    expect(failed.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(failed.attributes[Attr.ERROR_TYPE]).toBe("overloaded_error");
     expect(failed.attributes[Attr.PI_INCOMPLETE]).toBeUndefined();
     expect(failed.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(1);
@@ -389,7 +389,7 @@ describe("Pi versions without agent_settled (before 0.80.5)", () => {
     const agent = one(spans, SpanNames.AGENT_RUN);
     expect(agent.attributes[Attr.PI_RUN_ATTEMPTS]).toBe(2);
     expect(agent.attributes[Attr.PI_RUN_RETRY_COUNT]).toBe(1);
-    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "error: HTTP 503 overloaded_error" });
+    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(spans).toHaveLength(5); // run, 2 turns, 2 model calls
     expect(new Set(spans.map((s) => s.spanContext().traceId)).size).toBe(1);
   });
@@ -422,7 +422,7 @@ describe("Pi versions without agent_settled (before 0.80.5)", () => {
     expect(byName(exporter.getFinishedSpans(), SpanNames.AGENT_RUN)).toHaveLength(0);
     session.emit([{ type: "agent_settled", aborted: true }]);
     const agent = one(exporter.getFinishedSpans(), SpanNames.AGENT_RUN);
-    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR, message: "aborted" });
+    expect(agent.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(agent.events.map((e) => e.name)).toEqual(["pi.auto_retry.start", "pi.auto_retry.end"]);
   });
 });
@@ -467,7 +467,7 @@ describe("compaction", () => {
   it("marks a failed compaction ERROR without its error text by default", () => {
     const failure = `summarization failed reading ${LOCAL_PATH}`;
     const hidden = one(run(manualCompaction(failure)).spans, SpanNames.COMPACTION);
-    expect(hidden.status).toEqual({ code: SpanStatusCode.ERROR, message: "compaction failed" });
+    expect(hidden.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(exportedText([hidden])).not.toContain(LOCAL_USER);
     const shown = one(run(manualCompaction(failure), CONTENT_ON).spans, SpanNames.COMPACTION);
     expect(shown.status.message).toBe(failure);
@@ -531,7 +531,7 @@ describe("content policy", () => {
     expect(inputsOnly).not.toContain(RESULT_SECRET);
     expect(inputsOnly).not.toContain(OUTPUT_SECRET);
 
-    const outputsOnly = exportedText(run(happyPath(), { traceConfig: { hideOutputs: false } }).spans);
+    const outputsOnly = exportedText(run(happyPath(), { traceConfig: { hideOutputs: false, hideErrorDetails: false } }).spans);
     expect(outputsOnly).not.toContain(PROMPT_SECRET);
     expect(outputsOnly).not.toContain(ARG_SECRET);
     expect(outputsOnly).toContain(RESULT_SECRET);

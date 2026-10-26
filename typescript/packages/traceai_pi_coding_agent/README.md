@@ -90,7 +90,7 @@ Not available from the SDK's session events, so not recorded: the provider reque
 
 Prompts, tool arguments, tool results and assistant text of a coding agent contain source code, file contents and command output. They are **not** recorded unless you opt in.
 
-Always exported: session id, model, provider and API, token counts and cost, stop and finish reasons, tool names and call ids, durations, turn/call counts, compaction reason and token counts, and error statuses built from the stop reason, HTTP status and provider error type or error class name. The Pi working directory is never added as an attribute.
+Always exported: session id, model, provider and API, token counts and cost, stop and finish reasons, tool names and call ids, durations, turn/call counts, compaction reason and token counts, and error status codes and provider error types or error class names. The Pi working directory is never added as an attribute.
 
 To opt in:
 
@@ -102,9 +102,17 @@ new PiCodingAgentInstrumentation({ tracerProvider, traceConfig: { hideInputs: fa
 | Setting | Adds |
 |---|---|
 | `hideInputs: false` | the user prompt (`input.value` on the run span), tool arguments (`input.value` on tool spans), tool-call arguments inside the LLM output, the session name (`pi.session.name`) |
-| `hideOutputs: false` | assistant text (`output.value` on LLM and run spans), tool results (`output.value` on tool spans), the compaction summary (`output.value` on `pi.compaction`), and the raw error text in the status: provider errors (up to 1000 characters), tool errors, compaction errors |
+| `hideOutputs: false` | assistant text (`output.value` on LLM and run spans), tool results (`output.value` on tool spans), the compaction summary (`output.value` on `pi.compaction`) |
 
-With content on, tool arguments, tool results and error text usually contain absolute file paths, which include your username.
+Error details are independently hidden by `hideErrorDetails: true` (the default)
+or `FI_HIDE_ERROR_DETAILS=true`. Status codes and error types remain; status
+messages, failed tool results, failed model output and compaction error text do
+not. `hideOutputs: false` alone does not reveal them. To include error text, set
+both `hideOutputs: false` and `hideErrorDetails: false` (or both
+`FI_HIDE_OUTPUTS=false` and `FI_HIDE_ERROR_DETAILS=false`).
+
+With content and error details on, tool arguments, tool results and error text
+usually contain absolute file paths, which include your username.
 
 Precedence: `traceConfig` option, then the env var, then hidden. The env vars fail closed: only `false` (any case, surrounding spaces ignored) turns capture on. Values are cut at `maxContentLength` characters (default 16384). The system prompt is never exported.
 

@@ -9,6 +9,8 @@ export interface ContentPolicy {
   hideInputs: boolean;
   /** Drop assistant text and tool results. Tool-call arguments follow `hideInputs`. */
   hideOutputs: boolean;
+  /** Drop error text independently of ordinary output capture. */
+  hideErrorDetails: boolean;
   /** Longest exported text value, in characters. Longer values are cut and marked. */
   maxContentLength: number;
 }

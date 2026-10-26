@@ -297,7 +297,7 @@ export class PiSessionTracer {
 
   private setError(span: Span, details: { type: string; message: string }): void {
     span.setAttribute(Attr.ERROR_TYPE, details.type);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: details.message });
+    span.setStatus({ code: SpanStatusCode.ERROR, ...(this.policy.hideErrorDetails ? {} : { message: details.message }) });
   }
 
   private ensureRun(): RunState {
@@ -349,7 +349,8 @@ export class PiSessionTracer {
       span.setAttribute(Attr.INPUT_MIME_TYPE, MimeType.TEXT);
     }
     const last = run.lastAssistant;
-    if (last && !this.policy.hideOutputs) {
+    if (last && !this.policy.hideOutputs &&
+        (!this.policy.hideErrorDetails || !["error", "aborted"].includes(last.stopReason ?? ""))) {
       span.setAttribute(Attr.OUTPUT_VALUE, truncate(messageText(last.content), this.policy.maxContentLength));
       span.setAttribute(Attr.OUTPUT_MIME_TYPE, MimeType.TEXT);
     }
@@ -371,7 +372,7 @@ export class PiSessionTracer {
     if (aborted) {
       this.setError(span, { type: "aborted", message: "aborted" });
     } else if (failed) {
-      this.setError(span, errorDetails(last, !this.policy.hideOutputs));
+      this.setError(span, errorDetails(last, !this.policy.hideOutputs && !this.policy.hideErrorDetails));
     } else if (!incomplete) {
       span.setStatus({ code: SpanStatusCode.OK });
     }
@@ -404,7 +405,7 @@ export class PiSessionTracer {
       [Attr.PI_INCOMPLETE]: incomplete || undefined,
     });
     if (message?.stopReason === "error" || message?.stopReason === "aborted") {
-      this.setError(turn.span, errorDetails(message, !this.policy.hideOutputs));
+      this.setError(turn.span, errorDetails(message, !this.policy.hideOutputs && !this.policy.hideErrorDetails));
     } else if (!incomplete) {
       turn.span.setStatus({ code: SpanStatusCode.OK });
     }
@@ -477,7 +478,8 @@ export class PiSessionTracer {
     if (!incomplete) {
       const output = num(usage.output);
       setUsage(span, usage);
-      if (!this.policy.hideOutputs) {
+      if (!this.policy.hideOutputs &&
+          (!this.policy.hideErrorDetails || !["error", "aborted"].includes(final.stopReason ?? ""))) {
         const text = messageText(final.content);
         // Tool-call arguments are the tool's input, so they follow hideInputs.
         const value = calls.length
@@ -504,7 +506,7 @@ export class PiSessionTracer {
       }
     }
     if (final.stopReason === "error" || final.stopReason === "aborted") {
-      this.setError(span, errorDetails(final, !this.policy.hideOutputs));
+      this.setError(span, errorDetails(final, !this.policy.hideOutputs && !this.policy.hideErrorDetails));
       if (final.stopReason === "aborted") span.setAttribute(Attr.PI_ABORTED, true);
     } else if (!incomplete) {
       span.setStatus({ code: SpanStatusCode.OK });
@@ -558,7 +560,8 @@ export class PiSessionTracer {
       [Attr.PI_TOOL_DURATION_MS]: num(event.durationMs),
       [Attr.PI_TOOL_IS_ERROR]: isError,
     });
-    const resultText = this.policy.hideOutputs ? undefined : toolResultText(event.result);
+    const resultText = this.policy.hideOutputs || (isError && this.policy.hideErrorDetails)
+      ? undefined : toolResultText(event.result);
     if (resultText !== undefined) {
       span.setAttribute(Attr.OUTPUT_VALUE, truncate(resultText, this.policy.maxContentLength));
       span.setAttribute(Attr.OUTPUT_MIME_TYPE, MimeType.TEXT);
@@ -620,7 +623,8 @@ export class PiSessionTracer {
         run.cost += num(usage.cost?.total) ?? 0;
       }
     }
-    if (!this.policy.hideOutputs && str(result?.summary)) {
+    if (!this.policy.hideOutputs && str(result?.summary) &&
+        (!this.policy.hideErrorDetails || (!event.errorMessage && event.aborted !== true))) {
       span.setAttribute(Attr.OUTPUT_VALUE, truncate(result!.summary as string, this.policy.maxContentLength));
       span.setAttribute(Attr.OUTPUT_MIME_TYPE, MimeType.TEXT);
     }
@@ -630,7 +634,7 @@ export class PiSessionTracer {
     } else if (errorMessage) {
       this.setError(span, {
         type: "compaction_error",
-        message: this.policy.hideOutputs ? "compaction failed" : truncate(errorMessage, ERROR_TEXT_LIMIT),
+        message: this.policy.hideOutputs || this.policy.hideErrorDetails ? "compaction failed" : truncate(errorMessage, ERROR_TEXT_LIMIT),
       });
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
