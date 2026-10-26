@@ -255,4 +255,4 @@ class TestPublicExports:
         import traceai_claude_agent_sdk
 
         assert hasattr(traceai_claude_agent_sdk, "__version__")
-        assert traceai_claude_agent_sdk.__version__ == "0.1.0"
+        assert traceai_claude_agent_sdk.__version__ == "0.1.1"
