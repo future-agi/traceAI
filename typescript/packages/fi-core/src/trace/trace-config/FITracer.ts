@@ -1,8 +1,7 @@
 import {
     context as apiContext,
-    context,
+    Attributes,
     Context,
-    Span,
     SpanOptions,
     Tracer,
     diag,
@@ -14,6 +13,7 @@ import {
     TraceConfigOptions,
   } from "./types";
   import { FISpan } from "./FISpan";
+  import { maskAttributes } from "./maskingRules";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext } from "../contextAttributes";
   
@@ -102,52 +102,69 @@ import {
       const { opts, ctx, fn } = formattedArgs;
       const { attributes } = opts ?? {};
       const contextAttributes = getAttributesFromContext(ctx);
-      const mergedAttributes = { ...contextAttributes, ...attributes };
-      return this.tracer.startActiveSpan(
+      const fiSpan = this.startFISpan(
+        this.tracer,
         name,
-        { ...opts, attributes: undefined },
+        opts,
+        { ...contextAttributes, ...attributes },
         ctx,
-        (span: Span) => {
-          const fiSpan = new FISpan({
-            span,
-            config: this.config,
-          });
-          fiSpan.setAttributes(mergedAttributes);
-          return fn(fiSpan);
-        },
       );
+      // Same steps as the SDK's Tracer.startActiveSpan, but the FISpan (not the raw span) becomes
+      // the active span, so code that reaches the span through the context
+      // (trace.getActiveSpan()?.recordException(...), setStatus(...)) still goes through the
+      // FISpan masking and error-detail policy.
+      return apiContext.with(
+        trace.setSpan(ctx, fiSpan),
+        fn,
+        undefined,
+        fiSpan,
+      ) as ReturnType<F>;
     }
-  
-    startSpan(name: string, options?: SpanOptions, context?: Context): FISpan {
-      // ADDED LOG
-        // diag.debug(
-        //     `FITracer.startSpan CALLED for name: "${name}". Internal this.tracer type: ${this.tracer?.constructor?.name}`
-        // );
 
-      if (!this.tracer || this.tracer.constructor.name === "NoopTracer") {
+    startSpan(name: string, options?: SpanOptions, context?: Context): FISpan {
+      let tracer = this.tracer;
+      if (!tracer || tracer.constructor.name === "NoopTracer") {
         diag.warn(
-          `FITracer.startSpan: Internal tracer is NoopTracer or null. Returning NoopSpan for "${name}".`
+          `FITracer.startSpan: Internal tracer is NoopTracer or null. Returning NoopSpan for "${name}".`,
         );
         // Return an actual NoopSpan from the API to avoid downstream errors if this path is taken.
-        const noopOtelSpan = trace.getTracer("fi-noop-tracer-internal").startSpan(name, options, context);
-        return new FISpan({ span: noopOtelSpan, config: this.config });
+        // The global tracer can be a real one, so its span gets the masked attributes too.
+        tracer = trace.getTracer("fi-noop-tracer-internal");
       }
-      
-      const { attributes: originalAttributes, ...otherOptions } = options ?? {};
+      return this.startFISpan(tracer, name, options, options?.attributes, context);
+    }
 
-      const span = this.tracer.startSpan(
+    /**
+     * Creates the span and wraps it in an {@link FISpan}.
+     *
+     * The creation-time attributes go through the same masking as {@link FISpan.setAttributes}
+     * (content hiding, error-detail hiding, PII redaction) before they reach the SDK. They are
+     * still passed at creation, masked, so a sampler sees the same attributes that are exported.
+     */
+    private startFISpan(
+      tracer: Tracer,
+      name: string,
+      options: SpanOptions | undefined,
+      attributes: Attributes | undefined,
+      context: Context | undefined,
+    ): FISpan {
+      const startAttributes =
+        attributes != null
+          ? maskAttributes({ config: this.config, attributes })
+          : undefined;
+      // Link attributes are span attributes too: same masking
+      const links = options?.links?.map((link) =>
+        link.attributes != null
+          ? { ...link, attributes: maskAttributes({ config: this.config, attributes: link.attributes }) }
+          : link,
+      );
+      const span = tracer.startSpan(
         name,
-        { ...otherOptions, attributes: originalAttributes },
+        links != null
+          ? { ...options, attributes: startAttributes, links }
+          : { ...options, attributes: startAttributes },
         context,
       );
-
-      // ADDED LOGS - CRITICAL
-      const spanContext = span.spanContext();
-      const isNoOp = spanContext.traceFlags === 0 && spanContext.spanId === '0000000000000000';
-      // diag.debug(
-      //   `FITracer.startSpan: OTel tracer (${this.tracer?.constructor?.name}) created span. ID: ${spanContext.spanId}, TraceID: ${spanContext.traceId}, TraceFlags: ${spanContext.traceFlags}, Is NoOp: ${isNoOp}`
-      // );
-      
-      return new FISpan({ span, config: this.config });
+      return new FISpan({ span, config: this.config, startAttributes });
     }
   }

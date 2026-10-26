@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import uuid
 import warnings
 from enum import Enum
@@ -114,6 +115,9 @@ def register(
     span_limits: Optional[SpanLimits] = None,
 ) -> _TracerProvider:
     """Configure and return a Future AGI `TracerProvider`.
+
+    Span processors added later with `add_span_processor` run next to the Future AGI
+    exporter, never in place of it. To export somewhere else instead, pass `span_exporter`.
 
     All tuning args below default to `None`, meaning the corresponding OpenTelemetry
     environment variable / upstream default applies (no behavior change when unset).
@@ -239,8 +243,9 @@ def register(
             transport=transport,
             timeout=timeout,
         )
+    # Replaces the default the provider added on construction. This processor is not marked as a
+    # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
-    tracer_provider._default_processor = True
 
     if set_global_tracer_provider:
         trace_api.set_tracer_provider(tracer_provider)
@@ -270,10 +275,11 @@ class TracerProvider(_TracerProvider):
 
     On construction a default `SimpleSpanProcessor` is added, exporting over `transport`.
     The collector endpoint is inferred from `transport` and the `FI_BASE_URL`/`FI_GRPC_URL`
-    environment variables. Call `add_span_processor` to replace the default. In addition to
-    the arguments below, all upstream `opentelemetry.sdk.trace.TracerProvider` keyword
-    arguments (`sampler`, `resource`, `span_limits`, `id_generator`, ...) are accepted and
-    forwarded.
+    environment variables. The first `add_span_processor` call replaces the default; later calls
+    add processors next to it. The provider `register()` returns has no such default: processors
+    added to it run next to its exporter. In addition to the arguments below, all upstream
+    `opentelemetry.sdk.trace.TracerProvider` keyword arguments (`sampler`, `resource`,
+    `span_limits`, `id_generator`, ...) are accepted and forwarded.
 
     Args:
         transport (Transport): Transport (HTTP or gRPC) used for the default exporter.
@@ -330,7 +336,9 @@ class TracerProvider(_TracerProvider):
         """
         Registers a new `SpanProcessor` for this `TracerProvider`.
 
-        If this `TracerProvider` has a default processor, it will be removed.
+        On a `TracerProvider` constructed directly, the first call replaces the default
+        `SimpleSpanProcessor` added on construction. Any other processor is kept, including the
+        one `register()` adds: the new processor runs next to it, as in upstream OpenTelemetry.
         """
 
         if self._default_processor:
@@ -489,6 +497,7 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
         timeout: Optional[float] = None,
     ):
         self._active_spans = {}
+        self._shutdown_lock = threading.Lock()
 
         if span_exporter is None:
             span_exporter = _build_default_exporter(transport, headers, timeout)
@@ -519,27 +528,21 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
     def shutdown(self) -> None:
         """Override shutdown to ensure all active spans get exported"""
         try:
-            # Process any spans that haven't been ended
-            if self._active_spans:
-                print(f"Ending {len(self._active_spans)} active spans during shutdown")
+            with self._shutdown_lock:
+                if self._active_spans:
+                    logger.warning("Ending %d active spans during shutdown", len(self._active_spans))
+                    active_spans = list(self._active_spans.values())
 
-                # Create a copy to avoid modification during iteration
-                active_spans = list(self._active_spans.values())
+                    for span in active_spans:
+                        if hasattr(span, "is_recording") and span.is_recording():
+                            try:
+                                span.set_attribute("gen_ai.span.leaked", True)
+                                span.end()
+                            except Exception:
+                                pass
 
-                # End all active spans and mark them as leaked
-                for span in active_spans:
-                    if hasattr(span, "is_recording") and span.is_recording():
-                        try:
-                            # Mark the span as leaked
-                            span.set_attribute("gen_ai.span.leaked", True)
-                            span.end()
-                        except Exception as e:
-                            pass
-
-                # Clear the tracking dictionary
-                self._active_spans.clear()
+                    self._active_spans.clear()
         finally:
-            # Call the parent shutdown method
             super().shutdown()
 
 
@@ -654,7 +657,9 @@ class GRPCSpanExporter(_GRPCSpanExporter):
             if hasattr(self, "_session") and self._session:
                 self._session.close()
         except Exception as e:
-            print(f"Error during shutdown: {e}")
+            logger.error("Error during gRPC exporter shutdown: %s", e)
+        finally:
+            super().shutdown()
 
 
 class HTTPSpanExporter(_HTTPSpanExporter):
@@ -695,7 +700,9 @@ class HTTPSpanExporter(_HTTPSpanExporter):
             if hasattr(self, "_session") and self._session:
                 self._session.close()
         except Exception as e:
-            print(f"Error during shutdown: {e}")
+            logger.error("Error during HTTP exporter shutdown: %s", e)
+        finally:
+            super().shutdown()
 
 
 def _exporter_transport(exporter: SpanExporter) -> str:
