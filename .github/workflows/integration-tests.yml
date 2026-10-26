@@ -182,7 +182,7 @@ jobs:
       - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
-          java-version: '21.0.8+9'
+          java-version: '21.0.8'
       - name: Install checksum-pinned Maven 3.9.9
         run: bash .github/integration-ci/install_maven.sh
       - name: Build packaged application and run OTLP integration tests
