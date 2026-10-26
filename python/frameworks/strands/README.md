@@ -34,10 +34,12 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_strands import configure_strands_tracing
 
-# Setup TraceAI
+# Setup TraceAI. set_global_tracer_provider=True is required: Strands creates
+# its spans from OpenTelemetry's global tracer provider.
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
     project_name="my-strands-agent",
+    set_global_tracer_provider=True,
 )
 
 # Configure Strands to use TraceAI
@@ -53,6 +55,8 @@ agent = Agent(
 
 response = agent("Hello!")
 ```
+
+Pass `set_global_tracer_provider=True` to `register()`. Strands' tracer always creates spans from OpenTelemetry's global tracer provider (`opentelemetry.trace.get_tracer_provider()`), and `configure_strands_tracing(tracer_provider=...)` only adds exporters to the provider you pass; it does not make it the global one. `register()` defaults to `set_global_tracer_provider=False`, so without the flag the agent's spans go to OpenTelemetry's no-op default provider and none reach Future AGI, with no error.
 
 `register()`'s exporter sends the spans to Future AGI, so Option 1 needs no `OTEL_EXPORTER_OTLP_*` setting for that. `configure_strands_tracing()` still adds Strands' own OTLP exporter, for the traces URL the `OTEL_EXPORTER_OTLP_*` variables resolve to: `http://localhost:4318/v1/traces` when none is set, which logs export errors when no collector listens there. Point the variables at another collector to send it a second copy.
 

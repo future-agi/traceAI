@@ -16,6 +16,10 @@
   Strands' OTLP exporter is still added in every other case, including the default `localhost:4318`, and the console
   exporter and meter are set up as before.
 
+- README Option 1 and the examples now pass `set_global_tracer_provider=True` to `register()`. Strands creates its
+  spans from OpenTelemetry's global tracer provider and `configure_strands_tracing(tracer_provider=...)` does not
+  make the provider global, so with `register()`'s default (`False`) a Strands agent sent no spans to Future AGI.
+
 ## [0.1.0]
 ### Feature
 - Added support for AWS Strands Agents instrumentation.
