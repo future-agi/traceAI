@@ -346,6 +346,12 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     ):
         _surface_messages_io(mapped)
         _derive_total_tokens(mapped)
+        if kind == FiSpanKindValues.AGENT.value:
+            # Native agent usage is a rollup of descendant model calls. Keep it
+            # for diagnostics, but not under keys the collector adds per span.
+            for key in list(mapped):
+                if key.startswith("gen_ai.usage."):
+                    mapped[f"agent_framework.usage.{key[len('gen_ai.usage.'):]}"] = mapped.pop(key)
         _bundle_request_parameters(mapped)
     elif kind == FiSpanKindValues.TOOL.value:
         _enrich_tool(mapped)

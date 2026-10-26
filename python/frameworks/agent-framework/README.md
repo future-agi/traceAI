@@ -84,6 +84,10 @@ async def main():
 asyncio.run(main())
 ```
 
+### Token usage
+
+Model-call spans keep `gen_ai.usage.*`. Native agent totals summarize those calls and are retained as `agent_framework.usage.*` diagnostics, not additional billable tokens. This prevents trace totals from counting the same usage twice.
+
 ### Sessions
 All spans of one run get the same `session.id`, which Observe groups sessions on. It comes from, in order:
 
