@@ -217,14 +217,18 @@ What you get (all from `traceAI-langchain`; Deep Agents adds no keys):
   (0.2.1 and later; see the session note above).
 - **Errors**: a tool that raises ends its TOOL span `ERROR` with an `exception`
   event (LangGraph's default tool error handler re-raises, so `invoke` raises too).
-  The status description and the event carry the exception type and message, never a
-  stack trace (a traceback holds local file paths; 0.2.0 and earlier export it). With
-  `TraceConfig(hide_inputs=True)` or `hide_outputs=True` only the exception type
-  name is kept, because an error message can echo prompt or tool content.
+  The status description is the exception message, without a traceback. Stacktraces
+  remain in exception events only when error details are visible. With core 1.2.0+,
+  `TraceConfig.hide_error_details` controls this: content-hide flags derive it by
+  default, and an explicit `False` keeps error details. With older core versions,
+  `hide_inputs=True` or `hide_outputs=True` also hides error details. Hidden failures
+  keep their exception type, but no status description, message, stacktrace or
+  provider-error output (body, response headers or request ids).
   Cancelling an `astream` early closes every span; the root span ends `ERROR`
-  with a `GeneratorExit` description (asserted by the compatibility test).
-- **CI**: no CI job installs `deepagents`, so the compatibility test skips unless it is
-  installed; the results above come from manual runs on Python 3.11 and 3.13.
+  with a `GeneratorExit` exception event (asserted by the compatibility test).
+- **CI**: the Deep Agents job installs the real `deepagents==0.7.21` wheel and runs
+  the compatibility, session and error-policy tests with the current core. It also
+  checks input/output privacy and sessions against published core 1.1.0.
 
 Not emitted: cost, user id (set `using_attributes(user_id=...)` yourself),
 retrieval (Deep Agents has no retriever tool), and a `gen_ai.provider.name`

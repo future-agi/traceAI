@@ -1,11 +1,15 @@
-## [0.2.1] - 2026-10-21
+## [0.2.1] - 2026-10-26
 ### Fixed
-- LangGraph's `configurable.thread_id` is now copied to `session.id` on every span of the run (LangGraph puts it in run metadata). Before, it landed only in `thread_id`/`gen_ai.conversation.id`, so LangGraph and Deep Agents runs had no session unless wrapped in `using_session(...)`. An explicit `using_session(...)` or `metadata={"session_id": ...}` still wins.
-- Token counts on chat model spans now come from the message's `usage_metadata` first, and the provider's raw `llm_output` usage only when it is missing. Anthropic's raw `input_tokens` leaves out cached prompt tokens, so with prompt caching (on by default in Deep Agents) an LLM span reported 4 input tokens for a 4018-token prompt.
-- Failed runs no longer export a stack trace. LangChain's `run.error` is `repr(error)` plus the formatted traceback, which was copied into the span status description (local file paths, usernames), and `Span.record_exception` added `exception.stacktrace`. The status description and the `exception` event now carry only the exception type and message. With `TraceConfig(hide_inputs=True)` or `hide_outputs=True` the message is dropped too and only the exception type name is kept.
+- LangGraph's `configurable.thread_id` is copied to `session.id` on every span, including Deep Agents subagents. Metadata `session_id` and `using_session(...)` retain precedence; blank thread ids set nothing.
+- Chat model token counts prefer the message's `usage_metadata`, so cached prompt tokens are included; provider `llm_output` is a fallback.
+- Failed-run status descriptions use the original exception message, never LangChain's traceback-bearing `run.error`. Stacktraces remain only in exception events when error details are visible. Non-`Exception` errors retain their own traceback and fully qualified type.
+
+### Changed
+- Core `fi-instrumentation-otel>=1.2.0` owns error hiding, including derived content-hide flags and an explicit `hide_error_details=False` override. Hidden failures retain their type but no status description, exception message or stacktrace. On older supported core versions, `hide_inputs` or `hide_outputs` applies the same hiding as a compatibility fallback.
+- Failed-run output attributes (including raw output, messages and function calls) are omitted when error details are hidden: provider error bodies and response headers can echo private content. Session mapping and token usage are retained.
 
 ### Added
-- Deep Agents cookbook (`examples/deep_agents.py`) and compatibility test (`tests/test_deepagents_compat.py`, skipped when `deepagents` is not installed). Tested with `deepagents==0.7.21`, `langchain-core` 1.6.6, `langgraph` 1.2.12. No new package and no new dependency.
+- Deep Agents cookbook (`examples/deep_agents.py`) and compatibility tests against the published `deepagents==0.7.21` wheel. No new package or runtime dependency.
 
 ## [0.2.0] - 2026-07-30
 ### Fixed

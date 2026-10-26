@@ -282,7 +282,8 @@ def test_ac05_astream_closes_every_span(traced):
     assert {_attrs(s).get("session.id") for s in spans} == {cookbook.THREAD_ID}
 
 
-def test_ac05_cancelled_astream_closes_every_span(traced, capsys):
+@pytest.mark.parametrize("traced,hidden", [({}, False), ({"hide": True}, True)], indirect=["traced"])
+def test_ac05_cancelled_astream_closes_every_span(traced, capsys, hidden):
     exporter, instrumentor = traced
 
     async def cancel_after_first_chunk():
@@ -301,9 +302,17 @@ def test_ac05_cancelled_astream_closes_every_span(traced, capsys):
     [root] = [s for s in spans if s.parent is None]
     assert root.end_time is not None
     # LangChain reports the consumer's aclose() as a chain error, so the root
-    # span ends ERROR with a GeneratorExit description (README "Errors").
+    # span ends ERROR; GeneratorExit has no str(error) status message.
     assert root.status.status_code.name == "ERROR"
-    assert "GeneratorExit" in (root.status.description or "")
+    assert root.status.description is None
+    [event] = [e for e in root.events if e.name == "exception"]
+    assert event.attributes["exception.type"] == "GeneratorExit"
+    if hidden:
+        assert "exception.message" not in event.attributes
+        assert "exception.stacktrace" not in event.attributes
+    else:
+        assert event.attributes["exception.message"] == "GeneratorExit()"
+        assert "GeneratorExit" in event.attributes["exception.stacktrace"]
     with capsys.disabled():
         print(
             "\nDEEPAGENTS_CANCELLED_ASTREAM spans={0} root_status={1} root_description={2!r}".format(

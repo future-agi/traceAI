@@ -1,9 +1,7 @@
-"""Failed runs never export a stack trace; hiding inputs/outputs hides the error text.
+"""Legacy and current cores hide error details without losing session mapping.
 
-LangChain's ``run.error`` is ``repr(error)`` plus the formatted traceback (local
-file paths). traceai-langchain keeps the exception type and message, drops the
-traceback, and with ``TraceConfig(hide_inputs/hide_outputs=True)`` keeps only the
-exception type name.
+Visible failures retain stacktraces only in exception events, matching core's
+error policy. Hidden failures must not leak through status, events or attributes.
 """
 
 from __future__ import annotations
@@ -50,12 +48,12 @@ def _dump(span) -> str:
 
 
 @pytest.mark.parametrize("traced", [{}, {"hide_inputs": True, "hide_outputs": True}], indirect=True)
-def test_no_stack_trace_or_local_path_in_any_mode(traced):
+def test_status_never_contains_stack_trace_or_local_path(traced):
     _fail()
     spans = traced.get_finished_spans()
     assert spans
     for span in spans:
-        text = _dump(span)
+        text = span.status.description or ""
         assert "Traceback" not in text
         assert "stacktrace" not in text
         assert "site-packages" not in text
@@ -67,10 +65,11 @@ def test_default_keeps_type_and_message(traced):
     _fail()
     [span] = traced.get_finished_spans()
     assert span.status.status_code.name == "ERROR"
-    assert span.status.description == f"RuntimeError('backend down {MARKER}')"
+    assert span.status.description == f"backend down {MARKER}"
     [event] = [e for e in span.events if e.name == "exception"]
     assert event.attributes["exception.type"] == "RuntimeError"
     assert MARKER in event.attributes["exception.message"]
+    assert "Traceback" in event.attributes["exception.stacktrace"]
 
 
 @pytest.mark.parametrize(
@@ -82,7 +81,11 @@ def test_hidden_config_keeps_only_the_exception_type(traced):
     _fail()
     [span] = traced.get_finished_spans()
     assert span.status.status_code.name == "ERROR"
-    assert span.status.description == "RuntimeError"
+    assert span.status.description is None
     [event] = [e for e in span.events if e.name == "exception"]
-    assert dict(event.attributes) == {"exception.type": "RuntimeError", "exception.escaped": False}
+    assert event.attributes["exception.type"] == "RuntimeError"
+    assert str(event.attributes["exception.escaped"]).lower() == "false"
+    assert set(event.attributes) == {"exception.type", "exception.escaped"}
+    assert "Traceback" not in _dump(span)
+    assert "exception.stacktrace" not in _dump(span)
     assert MARKER not in _dump(span)

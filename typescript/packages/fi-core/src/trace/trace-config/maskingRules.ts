@@ -1,8 +1,9 @@
-import { AttributeValue } from "@opentelemetry/api";
+import { Attributes, AttributeValue } from "@opentelemetry/api";
 import { REDACTED_VALUE } from "./constants";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
-import { MaskingRule, MaskingRuleArgs } from "./types";
+import { MaskingRule, MaskingRuleArgs, TraceConfig } from "./types";
 import { redactPiiInValue } from "./piiRedaction";
+import { isErrorDetailAttribute } from "./errorDetails";
 
 /**
  * Redacts content within a JSON blob of messages.
@@ -102,8 +103,26 @@ const maskEmbeddingVectorsRule: MaskingRule = {
  */
 const maskingRules: MaskingRule[] = [
   {
+    // Error text (exception messages, stack traces, provider error bodies) can quote the content
+    condition: ({ config, key }) =>
+      config.hideErrorDetails && isErrorDetailAttribute(key),
+    action: () => undefined,
+  },
+  {
     condition: ({ config, key }) =>
       config.hideInputs && key === SemanticConventions.INPUT_VALUE,
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    // The raw request body (e.g. the full OpenAI request, messages included), like input.value
+    condition: ({ config, key }) =>
+      config.hideInputs && key === SemanticConventions.RAW_INPUT,
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    // The values filled into a prompt template are the template's inputs
+    condition: ({ config, key }) =>
+      config.hideInputs && key === SemanticConventions.PROMPT_TEMPLATE_VARIABLES,
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -114,6 +133,12 @@ const maskingRules: MaskingRule[] = [
   {
     condition: ({ config, key }) =>
       config.hideOutputs && key === SemanticConventions.OUTPUT_VALUE,
+    action: () => REDACTED_VALUE as AttributeValue,
+  },
+  {
+    // The raw response body, like output.value
+    condition: ({ config, key }) =>
+      config.hideOutputs && key === SemanticConventions.RAW_OUTPUT,
     action: () => REDACTED_VALUE as AttributeValue,
   },
   {
@@ -161,4 +186,29 @@ export function mask({
     return redactPiiInValue(value);
   }
   return value;
+}
+
+/**
+ * Applies {@link mask} to every attribute, dropping the ones it removes. Used for attributes set on
+ * a {@link FISpan} and for the attributes passed when a span is created, so both get the same
+ * masking (content hiding, error-detail hiding and PII redaction).
+ * @param config The {@link TraceConfig} to use
+ * @param attributes The attributes to mask
+ * @returns A new object with the masked attributes
+ */
+export function maskAttributes({
+  config,
+  attributes,
+}: {
+  config: TraceConfig;
+  attributes: Attributes;
+}): Attributes {
+  const masked: Attributes = {};
+  for (const [key, value] of Object.entries(attributes)) {
+    const maskedValue = mask({ config, key, value });
+    if (maskedValue != null) {
+      masked[key] = maskedValue;
+    }
+  }
+  return masked;
 }

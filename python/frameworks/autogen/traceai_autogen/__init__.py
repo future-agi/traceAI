@@ -61,12 +61,12 @@ class AutogenInstrumentor(BaseInstrumentor):
         else:
             assert isinstance(config, TraceConfig)
 
+        # All spans go through FITracer so TraceConfig (including
+        # hide_error_details) applies to them.
         self._tracer = FITracer(
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
-
-        raw_tracer = trace_api.get_tracer(__name__, __version__, tracer_provider)
 
         # Instrument agent classes
         try:
@@ -77,7 +77,7 @@ class AutogenInstrumentor(BaseInstrumentor):
                 if hasattr(BaseChatAgent, "on_messages"):
                     self._v04_original_on_messages[BaseChatAgent] = BaseChatAgent.on_messages
                     BaseChatAgent.on_messages = wrap_agent_on_messages(
-                        BaseChatAgent.on_messages, raw_tracer
+                        BaseChatAgent.on_messages, self._tracer
                     )
                     self._v04_instrumented_classes.append(("BaseChatAgent", BaseChatAgent))
                     logger.debug("Instrumented BaseChatAgent.on_messages")
@@ -109,14 +109,14 @@ class AutogenInstrumentor(BaseInstrumentor):
                     if hasattr(TeamClass, "run"):
                         if TeamClass not in self._v04_original_team_run:
                             self._v04_original_team_run[TeamClass] = TeamClass.run
-                            TeamClass.run = wrap_team_run(TeamClass.run, raw_tracer, "run")
+                            TeamClass.run = wrap_team_run(TeamClass.run, self._tracer, "run")
                             logger.debug(f"Instrumented {class_name}.run")
 
                     if hasattr(TeamClass, "run_stream"):
                         if TeamClass not in self._v04_original_team_run_stream:
                             self._v04_original_team_run_stream[TeamClass] = TeamClass.run_stream
                             TeamClass.run_stream = wrap_team_run(
-                                TeamClass.run_stream, raw_tracer, "run_stream"
+                                TeamClass.run_stream, self._tracer, "run_stream"
                             )
                             logger.debug(f"Instrumented {class_name}.run_stream")
 

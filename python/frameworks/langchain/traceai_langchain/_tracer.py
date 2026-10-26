@@ -3,6 +3,7 @@ import logging
 import math
 import re
 import time
+import traceback
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
@@ -28,7 +29,7 @@ from typing import (
 from uuid import UUID
 
 import wrapt  # type: ignore
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import (
     DocumentAttributes,
     EmbeddingAttributes,
@@ -107,11 +108,6 @@ class _DictWithLock(ObjectProxy, Generic[K, V]):  # type: ignore
 
 class FiTracer(BaseTracer):
     __slots__ = ("_tracer", "_spans_by_run", "_context_by_run")
-
-    def _hide_error_text(self) -> bool:
-        """True when TraceConfig hides inputs or outputs: error text may echo either."""
-        config = getattr(self._tracer, "_self_config", None)
-        return bool(getattr(config, "hide_inputs", False) or getattr(config, "hide_outputs", False))
 
     def _extract_content(self, data: Any) -> Any:
         """Extract clean content from various message formats"""
@@ -192,6 +188,11 @@ class FiTracer(BaseTracer):
         # Run ids whose chain run ended in a LangGraph interrupt (an intentional
         # pause, not an error) — used to keep the node span status OK.
         self._interrupt_run_ids: Dict[UUID, bool] = _DictWithLock[UUID, bool]()
+        # The error object passed to on_*_error, so the status description is
+        # built from it instead of `run.error` (repr + full traceback).
+        self._errors_by_run: Dict[UUID, BaseException] = _DictWithLock[
+            UUID, BaseException
+        ]()
 
     def get_span(self, run_id: UUID) -> Optional[Span]:
         return self._spans_by_run.get(run_id)
@@ -258,6 +259,7 @@ class FiTracer(BaseTracer):
         span = self._spans_by_run.pop(run.id, None)
         captured_context = self._context_by_run.pop(run.id, {})
         is_interrupt = bool(self._interrupt_run_ids.pop(run.id, False))
+        error = self._errors_by_run.pop(run.id, None)
         if span is None:
             return
 
@@ -270,7 +272,7 @@ class FiTracer(BaseTracer):
                     run,
                     captured_context,
                     is_interrupt=is_interrupt,
-                    hide_error_text=self._hide_error_text(),
+                    error=error,
                 )
 
                 # Send final span data with both input and output
@@ -326,8 +328,13 @@ class FiTracer(BaseTracer):
                     span.set_attribute("langgraph.interrupt", True)
                     span.add_event("interrupt", {"langgraph.interrupt": True})
         elif span is not None:
-            _record_exception(span, error, hide_error_text=self._hide_error_text())
-        return forward(error, *args, run_id=run_id, **kwargs)
+            self._errors_by_run[run_id] = error
+            _record_exception(span, error)
+        try:
+            # `forward` ends the run synchronously (`_end_trace` consumes the error).
+            return forward(error, *args, run_id=run_id, **kwargs)
+        finally:
+            self._errors_by_run.pop(run_id, None)
 
     def on_llm_error(
         self, error: BaseException, *args: Any, run_id: UUID, **kwargs: Any
@@ -410,40 +417,84 @@ def _is_graph_interrupt(error: BaseException) -> bool:
     return _GraphBubbleUp is not None and isinstance(error, _GraphBubbleUp)
 
 
-_TRACEBACK_MARKER = "Traceback (most recent call last)"
-_ERROR_TEXT_LIMIT = 500
-
-
-def _error_description(text: Any, hide_error_text: bool) -> str:
-    """Span status description for a failed run.
-
-    LangChain's ``run.error`` is ``repr(error)`` followed by the formatted
-    traceback. The traceback holds local file paths, so it is never exported. When
-    ``TraceConfig`` hides inputs or outputs the error message is hidden too (it can
-    echo prompt or tool content) and only the exception type name is kept.
-    """
-    text = str(text or "")
-    head = text.split(_TRACEBACK_MARKER, 1)[0].strip()
-    if hide_error_text:
-        match = re.match(r"[A-Za-z_][\w.]*", head)
-        return match.group(0) if match else "Error"
-    return head[:_ERROR_TEXT_LIMIT] or "Error"
-
-
 @audit_timing  # type: ignore
-def _record_exception(span: Span, error: BaseException, hide_error_text: bool = False) -> None:
-    """Add an ``exception`` event with the type and (unless hidden) the message.
-
-    ``Span.record_exception`` also attaches ``exception.stacktrace``, which carries
-    local file paths, so the event is built by hand and never has a stack trace.
-    """
+def _record_exception(span: Span, error: BaseException) -> None:
+    # Core >=1.2 owns error masking and provider error codes. Older supported
+    # cores need the integration's input/output privacy fallback.
+    if _legacy_hides_error_details(span):
+        span.add_event("exception", {
+            OTELSpanAttributes.EXCEPTION_TYPE: _qualified_type_name(error),
+            OTELSpanAttributes.EXCEPTION_ESCAPED: False,
+        })
+        return
+    # Stacktraces belong only in exception events, never in status descriptions.
+    if isinstance(error, Exception):
+        span.record_exception(error)
+        return
+    exception_message = str(error)
+    if not exception_message:
+        exception_message = repr(error)
     attributes: Dict[str, AttributeValue] = {
-        OTELSpanAttributes.EXCEPTION_TYPE: error.__class__.__name__,
+        OTELSpanAttributes.EXCEPTION_TYPE: _qualified_type_name(error),
+        OTELSpanAttributes.EXCEPTION_MESSAGE: exception_message,
         OTELSpanAttributes.EXCEPTION_ESCAPED: False,
     }
-    if not hide_error_text:
-        attributes[OTELSpanAttributes.EXCEPTION_MESSAGE] = (str(error) or repr(error))[:_ERROR_TEXT_LIMIT]
+    try:
+        attributes[OTELSpanAttributes.EXCEPTION_STACKTRACE] = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+    except Exception:
+        logger.exception("Failed to record exception stacktrace.")
     span.add_event(name="exception", attributes=attributes)
+
+
+def _qualified_type_name(error: BaseException) -> str:
+    module = type(error).__module__
+    qualname = type(error).__qualname__
+    return f"{module}.{qualname}" if module and module != "builtins" else qualname
+
+
+def _legacy_hides_error_details(span: Span) -> bool:
+    config = getattr(span, "_self_config", None)
+    return (
+        isinstance(config, TraceConfig)
+        and not hasattr(config, "hide_error_details")
+        and bool(config.hide_inputs or config.hide_outputs)
+    )
+
+
+def _hides_error_details(span: Span) -> bool:
+    config = getattr(span, "_self_config", None)
+    if not isinstance(config, TraceConfig):
+        return False
+    # Respect explicit False on core >=1.2, including with hide_inputs=True.
+    if hasattr(config, "hide_error_details"):
+        return bool(config.hide_error_details)
+    return _legacy_hides_error_details(span)
+
+
+# `run.error` is `repr(error)` immediately followed by the formatted traceback.
+_TRACEBACK_MARKER = "Traceback (most recent call last)"
+
+
+def _error_description(
+    error: Optional[BaseException], run_error: Optional[str]
+) -> Optional[str]:
+    """The exception message only, never `run.error`'s traceback.
+
+    LangChain sets `run.error` to `repr(error)` plus the formatted traceback,
+    which carries local file paths and source lines.
+    """
+    if error is not None:
+        try:
+            return str(error) or None
+        except Exception:
+            return None
+    if not run_error:
+        return None
+    # No error object (callback not routed through on_*_error): keep the repr
+    # part and drop the traceback.
+    return run_error.split(_TRACEBACK_MARKER, 1)[0].strip() or None
 
 
 @audit_timing  # type: ignore
@@ -452,16 +503,21 @@ def _update_span(
     run: Run,
     captured_context: Dict[str, Any],
     is_interrupt: bool = False,
-    hide_error_text: bool = False,
+    error: Optional[BaseException] = None,
 ) -> None:
-    if run.error is None or is_interrupt:
+    failed = run.error is not None and not is_interrupt
+    if not failed:
         span.set_status(trace_api.StatusCode.OK)
     else:
         span.set_status(
             trace_api.Status(
-                trace_api.StatusCode.ERROR, _error_description(run.error, hide_error_text)
+                trace_api.StatusCode.ERROR,
+                None if _legacy_hides_error_details(span) else _error_description(error, run.error),
             )
         )
+    # Failed model outputs contain provider error bodies, headers and request
+    # ids. Drop all output representations when error details are hidden.
+    outputs = None if failed and _hides_error_details(span) else run.outputs
     span_kind = (
         FiSpanKindValues.AGENT
         if "agent" in run.name.lower()
@@ -489,22 +545,22 @@ def _update_span(
             _flatten(
                 chain(
                     _as_span_input(filtered_data),
-                    _as_output(_convert_io(run.outputs)),
+                    _as_output(_convert_io(outputs)),
                     _as_input_images(images),
                     _as_eval_input(eval_input),
                     _prompts(run.inputs),
                     _input_messages(run.inputs),
-                    _output_messages(run.outputs),
+                    _output_messages(outputs),
                     _prompt_template(run),
                     _invocation_parameters(run),
                     _model_name(run.extra),
                     _token_counts(run.outputs),
-                    _function_calls(run.outputs),
+                    _function_calls(outputs),
                     _tools(run),
                     _retrieval_documents(run),
                     _metadata(run),
                     _session_id_from_thread_id(run, captured_context),
-                    _as_raw_input_output(run),
+                    _as_raw_input_output(run, outputs),
                     _as_query(query),
                 )
             )
@@ -580,13 +636,15 @@ def _as_eval_input(values: Iterable[str]) -> Iterator[Tuple[str, str]]:
     yield INPUT_VALUE, json.dumps(values)
 
 
-def _as_raw_input_output(run: Run) -> Iterator[Tuple[str, Any]]:
+def _as_raw_input_output(
+    run: Run, outputs: Optional[Mapping[str, Any]]
+) -> Iterator[Tuple[str, Any]]:
     if raw_input := run.inputs:
         if isinstance(raw_input, dict):
             yield INPUT_VALUE, safe_json_dumps(raw_input)
         elif hasattr(raw_input, "__dict__"):
             yield INPUT_VALUE, safe_json_dumps(raw_input.__dict__)
-    if raw_output := run.outputs:
+    if raw_output := outputs:
         if isinstance(raw_output, dict):
             yield OUTPUT_VALUE, safe_json_dumps(raw_output)
         elif hasattr(raw_output, "__dict__"):

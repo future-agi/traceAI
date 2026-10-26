@@ -1,0 +1,38 @@
+name: Deep Agents tests
+
+on:
+  pull_request:
+    paths:
+      - 'python/frameworks/langchain/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/deepagents-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/langchain/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/deepagents-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deepagents:
+    name: Deep Agents and core privacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install integration, current core and real framework
+        run: python -m pip install -e python -e python/frameworks/langchain 'deepagents==0.7.21' langgraph 'pytest-asyncio<1' pytest
+      - name: Test Deep Agents, sessions and error hiding
+        run: PYTHONPATH=python/tests python -m pytest python/frameworks/langchain/tests -q -p no:cacheprovider -o addopts='' -o asyncio_mode=auto
+      - name: Test compatibility with published core
+        run: |
+          python -m pip install --force-reinstall 'fi-instrumentation-otel==1.1.0'
+          python -m pytest python/frameworks/langchain/tests/test_error_text_privacy.py python/frameworks/langchain/tests/test_session_from_thread_id.py -q --noconftest -p no:cacheprovider -o addopts='' -o asyncio_mode=auto
