@@ -1,6 +1,6 @@
 {
   "name": "@traceai/openai-agents",
-  "version": "0.1.1",
+  "version": "0.2.1",
   "description": "OpenTelemetry instrumentation for OpenAI Agents SDK",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -47,6 +47,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
+    "@openai/agents": "0.21.0",
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/sdk-trace-node": "^1.30.0",
     "@types/jest": "^29.5.14",
@@ -58,7 +59,7 @@
     "typescript": "^5.7.3"
   },
   "peerDependencies": {
-    "@openai/agents": "^0.4.0"
+    "@openai/agents": ">=0.4.0 <0.22.0"
   },
   "peerDependenciesMeta": {
     "@openai/agents": {

@@ -1,3 +1,24 @@
+## [0.2.1] - 2026-10-18
+### Fixed
+- The `ERROR` status description of a failed LangChain run is now the exception message
+  (`str(error)` of the error passed to `on_*_error`). It used to be LangChain's
+  `run.error`: `repr(error)` plus the full Python traceback, including local file paths.
+  The stacktrace is still recorded, only in the exception event's `exception.stacktrace`.
+- Non-`Exception` errors (e.g. `KeyboardInterrupt`) record the error's own traceback and
+  its fully qualified type, instead of whatever `traceback.format_exc()` returned in the
+  callback.
+
+### Changed
+- With `fi-instrumentation-otel>=1.2.0`, the content hide flags (`hide_inputs`,
+  `hide_outputs`, ...) also hide error details on LangChain spans: no status
+  description, no `exception.message` / `exception.stacktrace`. This is a behaviour
+  change for users of those flags; see the core 1.2.0 changelog. The dependency pin
+  stays `>=1.0.0` until core 1.2.0 is on PyPI, so upgrade both packages together.
+- With error details hidden, a failed run records no output attributes (`output.value`,
+  output messages, function calls). LangChain fills a failed chat-model run's outputs
+  with the provider's error response: the error body (which can quote the prompt),
+  the response headers and request ids, and AI-gateway metadata.
+
 ## [0.2.0] - 2026-07-30
 ### Fixed
 - `LangGraphInstrumentor` no longer breaks async graph nodes. The previous build monkey-patched `StateGraph.add_node`/`compile` and wrapped node functions with a sync wrapper, which returned a coroutine from `async def` nodes and raised `INVALID_GRAPH_NODE_RETURN_VALUE`. It also corrupted per-request state under concurrency and traced HITL `interrupt()` pauses as errors.

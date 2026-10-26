@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🐛 Status description is the error message, not LangChain's `run.error` (message plus full stack trace).
 - 🔒 Depends on `@traceai/fi-core` 1.1.0 (prompt template variables are hidden with `hideInputs`).
 
-#### @traceai/openai-agents `v0.1.1`
+#### @traceai/openai-agents `v0.2.1`
 - 🐛 Status description is the error message only; error `data` moves to the exception event, whose type is `AgentSpanError`.
 
 ---
