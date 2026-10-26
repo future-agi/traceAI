@@ -20,6 +20,7 @@ By default, traceAI captures all data including prompts, completions, and model 
 | `hide_embedding_vectors` | bool | `false` | Hide embedding vector values |
 | `hide_llm_invocation_parameters` | bool | `false` | Hide model parameters (temperature, etc.) |
 | `base64_image_max_length` | int | `32000` | Truncate large base64 images |
+| `hide_error_details` | bool | derived | Hide error messages and stacktraces (Python). Unset: on when any of `hide_inputs`, `hide_outputs`, `hide_input_messages`, `hide_output_messages`, `hide_input_text`, `hide_output_text` is on |
 
 ## Python Usage
 
@@ -36,6 +37,7 @@ export FI_HIDE_OUTPUT_TEXT=true
 export FI_HIDE_EMBEDDING_VECTORS=true
 export FI_HIDE_LLM_INVOCATION_PARAMETERS=true
 export FI_BASE64_IMAGE_MAX_LENGTH=16000
+export FI_HIDE_ERROR_DETAILS=true
 ```
 
 ### Via Code
@@ -54,6 +56,7 @@ config = TraceConfig(
     hide_embedding_vectors=True,
     hide_llm_invocation_parameters=True,
     base64_image_max_length=16000,
+    hide_error_details=True,
 )
 ```
 
@@ -166,6 +169,46 @@ When data is hidden, it's replaced with `"__REDACTED__"`:
 }
 ```
 
+## Error Details
+
+Error text is content too: provider error bodies can quote the prompt back and carry
+request or session ids, and Python tracebacks carry local file paths.
+
+With `hide_error_details` on (Python), a failed span keeps:
+- status `ERROR`, with no description
+- `error.type`: the provider error code (for example `model_not_found`) or the fully
+  qualified exception class
+- exception events with `exception.type` (and `exception.escaped`) only
+
+and drops `exception.message`, `exception.stacktrace`, `error.message` and
+instrumentor keys ending in `.error.message` / `.error_message`. A failed LangChain run
+also records no outputs: LangChain fills them with the provider's error response
+(error body, response headers, request ids).
+
+If you don't set `hide_error_details` (or `FI_HIDE_ERROR_DETAILS`), it is on whenever
+any of `hide_inputs`, `hide_outputs`, `hide_input_messages`, `hide_output_messages`,
+`hide_input_text` or `hide_output_text` is on. Set it to `false` explicitly to keep
+error messages while hiding inputs and outputs:
+
+```python
+config = TraceConfig(
+    hide_inputs=True,
+    hide_outputs=True,
+    hide_error_details=False,  # keep error messages for debugging
+)
+```
+
+With it off, the status description is the exception message only, never a traceback;
+the stacktrace is recorded on the exception event.
+
+`error.type` is set only on spans that end with status `ERROR` (an exception recorded on
+a span that still succeeds, such as a retried timeout, does not set it). It is the
+provider error code for exceptions from openai, anthropic, groq, litellm,
+botocore/boto3, google-genai, google-api-core and mistralai (for example
+`model_not_found`, `not_found_error`, `ValidationException`, `NOT_FOUND`), the HTTP
+status for httpx `HTTPStatusError` (`"404"`), and the fully qualified exception class
+for everything else (for example `sqlalchemy.exc.OperationalError`).
+
 ## What's Always Captured
 
 Even with maximum redaction, these are always captured:
@@ -173,7 +216,7 @@ Even with maximum redaction, these are always captured:
 - Timestamps and duration
 - Model names
 - Token counts
-- Error messages (consider additional error handling)
+- Error status and `error.type` (error messages are hidden with `hide_error_details`)
 
 ## Best Practices
 

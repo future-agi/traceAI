@@ -70,6 +70,7 @@ config = TraceConfig(
     hide_input_images=False,        # Hide images in inputs
     hide_embedding_vectors=False,   # Hide embedding vectors
     base64_image_max_length=32000,  # Truncate large images
+    hide_error_details=None,        # Hide error messages/stacktraces; None = on if any input/output flag is on
 )
 ```
 
@@ -80,6 +81,7 @@ Or use environment variables:
 - `FI_HIDE_OUTPUT_MESSAGES=true`
 - `FI_HIDE_INPUT_IMAGES=true`
 - `FI_HIDE_EMBEDDING_VECTORS=true`
+- `FI_HIDE_ERROR_DETAILS=true|false` (unset: follows the input/output flags)
 
 ### Context Managers
 
