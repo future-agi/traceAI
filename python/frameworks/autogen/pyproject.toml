@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "traceAI-autogen"
-version = "0.2.0"
+version = "0.2.1"
 description = "OpenTelemetry instrumentation for AutoGen v0.4+ (AgentChat)"
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"
@@ -10,7 +10,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">3.9, <3.14"
+python = ">=3.10,<3.14"
 fi-instrumentation-otel = ">=0.1.11"
 autogen-agentchat = ">=0.4.0"
 
