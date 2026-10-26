@@ -18,6 +18,7 @@ export const INSTRUMENTATION_NAME = "@traceai/codex-sdk";
  */
 const FI_HIDE_INPUTS = "FI_HIDE_INPUTS";
 const FI_HIDE_OUTPUTS = "FI_HIDE_OUTPUTS";
+const FI_HIDE_ERROR_DETAILS = "FI_HIDE_ERROR_DETAILS";
 
 export interface CodexSDKInstrumentationConfig {
   /** Provider to create spans with. Defaults to the global provider at call time. */
@@ -42,6 +43,7 @@ export function resolveContentPolicy(traceConfig?: TraceConfigOptions): ContentP
   return {
     hideInputs: traceConfig?.hideInputs ?? envHide(FI_HIDE_INPUTS),
     hideOutputs: traceConfig?.hideOutputs ?? envHide(FI_HIDE_OUTPUTS),
+    hideErrorDetails: traceConfig?.hideErrorDetails ?? envHide(FI_HIDE_ERROR_DETAILS),
   };
 }
 
@@ -167,7 +169,7 @@ export class CodexSDKInstrumentation {
     const provider = this.tracerProvider ?? trace.getTracerProvider();
     const tracer = new FITracer({
       tracer: provider.getTracer(INSTRUMENTATION_NAME, VERSION),
-      traceConfig: { ...this.traceConfig, hideInputs: policy.hideInputs, hideOutputs: policy.hideOutputs },
+      traceConfig: { ...this.traceConfig, hideInputs: policy.hideInputs, hideOutputs: policy.hideOutputs, hideErrorDetails: policy.hideErrorDetails },
     });
     return { tracer, policy };
   }

@@ -85,31 +85,31 @@ await check("runStreamed(): break before completion is cancelled", async () => {
   assert.equal(turn.attributes["codex.cancelled"], true);
 });
 
-await check("turn.failed: run() rejects, turn ERROR with a fixed label", async () => {
+await check("turn.failed: run() rejects, turn ERROR without details", async () => {
   const thread = codex("failed").startThread({ skipGitRepoCheck: true });
   await assert.rejects(thread.run("go"), /model provider returned 500/);
   const [turn] = turns();
   assert.equal(turn.status.code, 2);
-  assert.equal(turn.status.message, "turn failed");
+  assert.equal(turn.status.message, undefined);
 });
 
-await check("binary exits non-zero with a path and the prompt on stderr: summary only, no leak", async () => {
+await check("binary exits non-zero with a path and the prompt on stderr: details hidden, no leak", async () => {
   const thread = codex("crash").startThread({ skipGitRepoCheck: true });
   await assert.rejects(thread.run(`go ${MARKER}`), (error) => error.message.includes("/Users/probeuser") && error.message.includes(MARKER));
   const [turn] = turns();
   assert.equal(turn.status.code, 2);
-  assert.equal(turn.status.message, "Codex Exec exited with code 1");
+  assert.equal(turn.status.message, undefined);
   const exception = turn.events.find((e) => e.name === "exception");
-  assert.deepEqual(exception.attributes, { "exception.type": "Error", "exception.message": "Codex Exec exited with code 1" });
+  assert.deepEqual(exception.attributes, { "exception.type": "Error" });
   assertNoLeak(MARKER);
 });
 
-await check("unparseable stdout line: summary only, no leak", async () => {
+await check("unparseable stdout line: details hidden, no leak", async () => {
   const thread = codex("badline").startThread({ skipGitRepoCheck: true });
   await assert.rejects(thread.run(`go ${MARKER}`), /Failed to parse item/);
   const [turn] = turns();
   assert.equal(turn.status.code, 2);
-  assert.equal(turn.status.message, "Failed to parse item");
+  assert.equal(turn.status.message, undefined);
   assertNoLeak(MARKER);
 });
 
@@ -141,7 +141,7 @@ await check("MCP calls with null result (wire shape): turn root exported, failed
   const mcp = childrenOf(turn).filter((s) => s.name === "codex.mcp_tool_call");
   assert.equal(mcp.length, 2);
   const failed = mcp.find((s) => s.attributes["codex.item.id"] === "item_m1");
-  assert.deepEqual(failed.status, { code: 2, message: "mcp_tool_call failed" });
+  assert.deepEqual(failed.status, { code: 2 });
   const open = mcp.find((s) => s.attributes["codex.item.id"] === "item_m2");
   assert.equal(open.attributes["codex.item.incomplete"], true);
   assertNoLeak(MARKER);
@@ -156,7 +156,7 @@ await check("unpatched: no spans", async () => {
 });
 
 await check("wrapCodex() with content opt-in records the prompt", async () => {
-  const visible = new CodexSDKInstrumentation({ tracerProvider: provider, traceConfig: { hideInputs: false, hideOutputs: false } });
+  const visible = new CodexSDKInstrumentation({ tracerProvider: provider, traceConfig: { hideInputs: false, hideOutputs: false, hideErrorDetails: false } });
   const client = visible.wrapCodex(codex("tool"));
   await client.startThread({ skipGitRepoCheck: true }).run(`hello ${MARKER}`);
   const [turn] = turns();

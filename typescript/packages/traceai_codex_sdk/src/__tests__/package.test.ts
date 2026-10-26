@@ -36,7 +36,7 @@ describe("package", () => {
   it("defaults to hidden content", () => {
     delete process.env.FI_HIDE_INPUTS;
     delete process.env.FI_HIDE_OUTPUTS;
-    expect(pkg.resolveContentPolicy()).toEqual({ hideInputs: true, hideOutputs: true });
-    expect(pkg.resolveContentPolicy({ hideInputs: false })).toEqual({ hideInputs: false, hideOutputs: true });
+    expect(pkg.resolveContentPolicy()).toEqual({ hideInputs: true, hideOutputs: true, hideErrorDetails: true });
+    expect(pkg.resolveContentPolicy({ hideInputs: false })).toEqual({ hideInputs: false, hideOutputs: true, hideErrorDetails: true });
   });
 });

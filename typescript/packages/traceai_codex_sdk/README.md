@@ -90,7 +90,7 @@ codex.turn                     AGENT   one per run() / runStreamed()
 | File changes | `codex.file_change.count`, `codex.file_change.kinds` (`add`, `delete`, `update`) | `file_change` |
 | MCP | `tool.name` = the MCP tool, `codex.mcp.server`, `codex.mcp.tool` | `mcp_tool_call` |
 | To-dos | `codex.todo.count`, `codex.todo.completed` | `todo_list` (started, updated, completed with the turn) |
-| Errors | turn status ERROR; `codex.error.message`, `codex.error.type`; `codex.cancelled=true` | `turn.failed`; an `error` event with no `turn.completed` after it; a thrown error (for example `Codex Exec exited with code 1`); abort. `failed` items mark their own span ERROR. With outputs hidden, error text is a fixed summary (see "Privacy") |
+| Errors | turn status ERROR; `codex.error.message`, `codex.error.type`; `codex.cancelled=true` | `turn.failed`; an `error` event with no `turn.completed` after it; a thrown error (for example `Codex Exec exited with code 1`); abort. `failed` items mark their own span ERROR. Error details are hidden independently of outputs (see "Privacy") |
 | Retries | `codex.stream_error.count`, one `codex.stream_error` span event each | `error` events. Codex sends them for errors it retries ("Reconnecting... 1/5"); a turn that still reaches `turn.completed` ends OK |
 
 Timing comes from when each event reaches your process. `agent_message` and `reasoning` items arrive only as `item.completed`; their spans start at the previous event (`codex.item.started_event=false`). The binary reports a command's `item.started` and `item.completed` close together, so command spans are short.
@@ -121,13 +121,18 @@ new CodexSDKInstrumentation({ tracerProvider, traceConfig: { hideInputs: false, 
 
 With inputs visible, the turn's `input.value` is the prompt and tool spans carry the command, file changes (including their paths), MCP arguments or search query. With outputs visible, the turn's `output.value` is the final agent message and items carry their output. Precedence: `traceConfig`, then the env var, then hidden. The env vars fail closed: only `false` (trimmed, any case) turns capture on; `0`, `no`, `off` or an empty value keep content hidden. Structural fields (lengths, counts, exit codes, statuses, tool and MCP server names) are always recorded.
 
-Error text is content too. With outputs hidden:
+Error details have a separate, default-on privacy gate: `hideErrorDetails: true`
+(or `FI_HIDE_ERROR_DETAILS=true`). Status codes, error types, cancellation flags
+and retry counts remain, but status descriptions, exception messages/stacks,
+`codex.error.message`, retry-event text and failed-command output are omitted.
+Turning ordinary outputs on does **not** turn error details on.
 
-- A thrown error is reduced to a fixed summary in `codex.error.message`, the status message and the exception event: `Codex Exec exited with code N` (or `signal S`), `Failed to parse item`, or the error's class name. The SDK's full message carries the binary's stderr (config lines, absolute paths, the user name) or the raw output line. The exception event has only `exception.type` and that summary, no stack trace.
-- `turn.failed` and a fatal `error` event give the label `turn failed` or `stream error`, not the provider's error body.
-- `codex.stream_error` events and `codex.error` items carry no text; an MCP tool's error text is not the status message.
-
-With outputs visible, the full message, the stack trace and the error text are recorded.
+To include raw error details, explicitly set both `hideOutputs: false` and
+`hideErrorDetails: false` (or both `FI_HIDE_OUTPUTS=false` and
+`FI_HIDE_ERROR_DETAILS=false`). This can export stderr, provider bodies, local
+paths, usernames and stack traces. If only error details are enabled while
+outputs stay hidden, thrown errors use a fixed summary (`Codex Exec exited with
+code N`, `Failed to parse item`, or the error class) rather than the raw message.
 
 ## Not captured
 

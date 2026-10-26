@@ -174,7 +174,7 @@ describe("every item span keeps its codex.turn root", () => {
     expect(byName(spans, "codex.mcp_tool_call")).toHaveLength(2);
     expect(failed.attributes["codex.item.id"]).toBe("item_m");
     expect(failed.attributes["tool.name"]).toBe("search");
-    expect(failed.status).toEqual({ code: SpanStatusCode.ERROR, message: "mcp_tool_call failed" });
+    expect(failed.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(failed.attributes["output.value"]).toBeUndefined();
     expect(ok.attributes["codex.item.id"]).toBe("item_n");
     expect(ok.status.code).toBe(SpanStatusCode.OK);
@@ -184,7 +184,7 @@ describe("every item span keeps its codex.turn root", () => {
   it("records MCP content (not the text 'null') only with content visible", async () => {
     const { provider, exporter } = memoryProvider();
     const mod = fakeModule();
-    new CodexSDKInstrumentation({ tracerProvider: provider, traceConfig: { hideInputs: false, hideOutputs: false } }).manuallyInstrument(mod);
+    new CodexSDKInstrumentation({ tracerProvider: provider, traceConfig: { hideInputs: false, hideOutputs: false, hideErrorDetails: false } }).manuallyInstrument(mod);
     const thread = new mod.Codex([scripted([MCP_STARTED, MCP_FAILED, MCP_COMPLETED_STARTED, MCP_COMPLETED])]).startThread();
     await drain((await thread.runStreamed("go")).events);
     const [failed, ok] = byName(exporter.getFinishedSpans(), "codex.mcp_tool_call");

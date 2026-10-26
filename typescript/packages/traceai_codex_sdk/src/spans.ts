@@ -44,6 +44,8 @@ import { InputLike, ThreadEventLike, ThreadItemLike, ThreadOptionsLike, TurnOpti
 export interface ContentPolicy {
   hideInputs: boolean;
   hideOutputs: boolean;
+  /** Error details remain hidden even when ordinary outputs are visible. */
+  hideErrorDetails: boolean;
 }
 
 /** How the wrapped event stream stopped. */
@@ -278,6 +280,10 @@ export class TurnTracer {
     if (this.resumed) this.threadId = args.threadId as string;
   }
 
+  private get hideErrorText(): boolean {
+    return this.policy.hideOutputs || this.policy.hideErrorDetails;
+  }
+
   get isFinished(): boolean {
     return this.finished;
   }
@@ -324,7 +330,7 @@ export class TurnTracer {
           this.streamErrorMessage = typeof e.message === "string" ? e.message : "stream error";
           this.turn.addEvent(
             "codex.stream_error",
-            this.policy.hideOutputs ? {} : { message: truncate(this.streamErrorMessage, ERROR_MESSAGE_MAX) },
+            this.hideErrorText ? {} : { message: truncate(this.streamErrorMessage, ERROR_MESSAGE_MAX) },
           );
           break;
         case "item.started":
@@ -412,7 +418,10 @@ export class TurnTracer {
     } else if (errored) {
       const error = (outcome as { error: unknown }).error;
       turn.setAttribute(C.ERROR_TYPE, errorName(error));
-      if (this.policy.hideOutputs) {
+      if (this.policy.hideErrorDetails) {
+        turn.recordException({ name: errorName(error) });
+        turn.setStatus({ code: SpanStatusCode.ERROR });
+      } else if (this.policy.hideOutputs) {
         // Error text is content (stderr, raw lines, paths): a fixed summary, no stack trace.
         const summary = errorSummary(error);
         turn.setAttribute(C.ERROR_MESSAGE, summary);
@@ -427,8 +436,8 @@ export class TurnTracer {
     } else if (failedText !== undefined) {
       // Provider error bodies and Codex messages can carry content: text only with outputs visible.
       const message = this.policy.hideOutputs ? failedLabel : truncate(failedText, ERROR_MESSAGE_MAX);
-      turn.setAttribute(C.ERROR_MESSAGE, message);
-      turn.setStatus({ code: SpanStatusCode.ERROR, message });
+      if (!this.policy.hideErrorDetails) turn.setAttribute(C.ERROR_MESSAGE, message);
+      turn.setStatus({ code: SpanStatusCode.ERROR, ...(this.policy.hideErrorDetails ? {} : { message }) });
     } else {
       turn.setStatus({ code: SpanStatusCode.OK });
     }
@@ -634,7 +643,7 @@ export class TurnTracer {
         if (typeof item.command === "string") input(item.command);
         if (typeof item.aggregated_output === "string") {
           attributes[C.COMMAND_OUTPUT_LENGTH] = item.aggregated_output.length;
-          output(item.aggregated_output);
+          if (item.status !== "failed" || !this.policy.hideErrorDetails) output(item.aggregated_output);
         }
         break;
       case "file_change": {
@@ -652,7 +661,9 @@ export class TurnTracer {
         // `result` is `null` on item.started and on a failed call (see ThreadItemLike).
         if (item.arguments != null) input(safeJson(item.arguments));
         const result = item.result;
-        if (result != null) output(safeJson(result.content ?? result), MimeType.JSON);
+        if (result != null && (item.status !== "failed" || !this.policy.hideErrorDetails)) {
+          output(safeJson(result.content ?? result), MimeType.JSON);
+        }
         break;
       }
       case "web_search":
@@ -671,7 +682,7 @@ export class TurnTracer {
         attributes[C.WARNING] = true;
         if (typeof item.message === "string") {
           attributes[C.TEXT_LENGTH] = item.message.length;
-          if (!this.policy.hideOutputs) attributes[C.ERROR_MESSAGE] = truncate(item.message, ERROR_MESSAGE_MAX);
+          if (!this.hideErrorText) attributes[C.ERROR_MESSAGE] = truncate(item.message, ERROR_MESSAGE_MAX);
         }
         break;
       default:
@@ -689,7 +700,7 @@ export class TurnTracer {
       let message = `${type} failed`;
       if (type === "command_execution" && typeof item.exit_code === "number") {
         message = `command failed (exit ${item.exit_code})`;
-      } else if (type === "mcp_tool_call" && typeof item.error?.message === "string" && !this.policy.hideOutputs) {
+      } else if (type === "mcp_tool_call" && typeof item.error?.message === "string" && !this.hideErrorText) {
         // A tool's error text can carry tool output: only with outputs visible.
         message = truncate(item.error.message, ERROR_MESSAGE_MAX);
       }
