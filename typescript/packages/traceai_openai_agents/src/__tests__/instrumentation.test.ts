@@ -10,7 +10,12 @@ import {
   _resetPatchedStateForTesting,
 } from "../instrumentation";
 import { VERSION } from "../version";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { FITracer } from "@traceai/fi-core";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
 describe("OpenAIAgentsInstrumentation", () => {
@@ -34,7 +39,7 @@ describe("OpenAIAgentsInstrumentation", () => {
 
   describe("VERSION", () => {
     it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.2.0");
+      expect(VERSION).toBe("0.2.1");
     });
   });
 
@@ -373,6 +378,47 @@ describe("FITracingProcessor", () => {
       const spans = memoryExporter.getFinishedSpans();
       expect(spans.length).toBe(2);
       expect(spans[0].status.code).toBe(2); // SpanStatusCode.ERROR
+      // The description is the error message only; `data` goes to the exception event
+      expect(spans[0].status.message).toBe("Tool failed");
+      expect(spans[0].attributes["error.type"]).toBe("AgentSpanError");
+      const exception = spans[0].events.find((e) => e.name === "exception");
+      expect(exception?.attributes?.["exception.type"]).toBe("AgentSpanError");
+      expect(exception?.attributes?.["exception.message"]).toBe(
+        "Tool failed: Connection timeout",
+      );
+    });
+
+    it("should hide error details when inputs are hidden", () => {
+      const hiddenExporter = new InMemorySpanExporter();
+      const hiddenProvider = new BasicTracerProvider({
+        spanProcessors: [new SimpleSpanProcessor(hiddenExporter)],
+      });
+      const hiddenProcessor = new FITracingProcessor(
+        new FITracer({
+          tracer: hiddenProvider.getTracer("test"),
+          traceConfig: { hideInputs: true },
+        }),
+      );
+      const trace = { traceId: "test-trace-hidden", name: "Hidden Trace" };
+      hiddenProcessor.onTraceStart(trace);
+      const errorSpan = {
+        spanId: "span-hidden",
+        traceId: "test-trace-hidden",
+        startedAt: new Date().toISOString(),
+        spanData: { type: "function", name: "failing_tool" },
+        error: { message: "Tool failed", data: { error: "secret prompt text" } },
+      };
+      hiddenProcessor.onSpanStart(errorSpan);
+      hiddenProcessor.onSpanEnd(errorSpan);
+      hiddenProcessor.onTraceEnd(trace);
+
+      const [span] = hiddenExporter.getFinishedSpans();
+      expect(span.status).toEqual({ code: 2 });
+      expect(span.attributes["error.type"]).toBe("AgentSpanError");
+      expect(span.events.find((e) => e.name === "exception")?.attributes).toEqual({
+        "exception.type": "AgentSpanError",
+      });
+      expect(JSON.stringify(span.events)).not.toContain("secret prompt text");
     });
   });
 
