@@ -251,6 +251,20 @@ provider.add_span_processor(BatchSpanProcessor(exporter))
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 ```
 
+### More span processors
+
+A span processor added to the provider `register()` returns runs next to the Future AGI exporter, so spans go to both:
+
+```python
+from fi_instrumentation import register
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+
+trace_provider = register(project_name="my_project")
+trace_provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+```
+
+To export somewhere other than Future AGI, pass your exporter to `register(span_exporter=...)`. In older releases (see the CHANGELOG), the first `add_span_processor()` call replaced the Future AGI exporter, and spans stopped reaching Future AGI.
+
 ### Semantic Conventions
 
 traceAI supports multiple semantic conventions:

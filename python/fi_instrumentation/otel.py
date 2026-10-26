@@ -116,6 +116,9 @@ def register(
 ) -> _TracerProvider:
     """Configure and return a Future AGI `TracerProvider`.
 
+    Span processors added later with `add_span_processor` run next to the Future AGI
+    exporter, never in place of it. To export somewhere else instead, pass `span_exporter`.
+
     All tuning args below default to `None`, meaning the corresponding OpenTelemetry
     environment variable / upstream default applies (no behavior change when unset).
 
@@ -240,8 +243,9 @@ def register(
             transport=transport,
             timeout=timeout,
         )
+    # Replaces the default the provider added on construction. This processor is not marked as a
+    # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
-    tracer_provider._default_processor = True
 
     if set_global_tracer_provider:
         trace_api.set_tracer_provider(tracer_provider)
@@ -271,10 +275,11 @@ class TracerProvider(_TracerProvider):
 
     On construction a default `SimpleSpanProcessor` is added, exporting over `transport`.
     The collector endpoint is inferred from `transport` and the `FI_BASE_URL`/`FI_GRPC_URL`
-    environment variables. Call `add_span_processor` to replace the default. In addition to
-    the arguments below, all upstream `opentelemetry.sdk.trace.TracerProvider` keyword
-    arguments (`sampler`, `resource`, `span_limits`, `id_generator`, ...) are accepted and
-    forwarded.
+    environment variables. The first `add_span_processor` call replaces the default; later calls
+    add processors next to it. The provider `register()` returns has no such default: processors
+    added to it run next to its exporter. In addition to the arguments below, all upstream
+    `opentelemetry.sdk.trace.TracerProvider` keyword arguments (`sampler`, `resource`,
+    `span_limits`, `id_generator`, ...) are accepted and forwarded.
 
     Args:
         transport (Transport): Transport (HTTP or gRPC) used for the default exporter.
@@ -331,7 +336,9 @@ class TracerProvider(_TracerProvider):
         """
         Registers a new `SpanProcessor` for this `TracerProvider`.
 
-        If this `TracerProvider` has a default processor, it will be removed.
+        On a `TracerProvider` constructed directly, the first call replaces the default
+        `SimpleSpanProcessor` added on construction. Any other processor is kept, including the
+        one `register()` adds: the new processor runs next to it, as in upstream OpenTelemetry.
         """
 
         if self._default_processor:

@@ -1,3 +1,30 @@
+## [1.2.1] - 2026-10-26
+### Fixed
+- `register()` no longer marks its own exporter as a default that the next
+  `add_span_processor()` call replaces. Before, adding any span processor to the
+  provider `register()` returns (a console exporter, a second backend, or a
+  framework's own processor, such as LiveKit's privacy filter) shut the Future AGI
+  exporter down and removed it, so traces silently stopped reaching Future AGI.
+  The same happened to a custom `register(span_exporter=...)` exporter.
+
+### Changed
+- `add_span_processor()` on the provider `register()` returns adds the processor
+  next to `register()`'s exporter, as in upstream OpenTelemetry, instead of
+  replacing it. Code that relied on it to swap out `register()`'s exporter now
+  exports to both; pass `register(span_exporter=...)` to export somewhere else
+  instead.
+- `register(span_exporter=...)` followed by `add_span_processor()` keeps the custom
+  exporter, which used to be dropped, so spans go to both.
+- If you pointed a second OTLP exporter at Future AGI to work around the old
+  behaviour (for example traceai-strands with `OTEL_EXPORTER_OTLP_*` set to the
+  Future AGI endpoint), remove it, or every span arrives twice. traceai-strands
+  0.1.1 does not add its exporter when it would send the same spans to the same
+  traces URL with exactly the same header names and values as `register()`'s
+  exporter; an extra or different header on either side keeps it.
+- Not changed: a `TracerProvider()` constructed directly still replaces the default
+  `SimpleSpanProcessor` added on construction on its first `add_span_processor()`
+  call.
+
 ## [1.2.0] - 2026-10-18
 ### Changed
 - **Behaviour change for users of the hide flags:** setting any of `hide_inputs`,
