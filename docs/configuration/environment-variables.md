@@ -57,6 +57,7 @@ export FI_PROJECT_VERSION_NAME="v1.2.0"
 | `FI_HIDE_EMBEDDING_VECTORS` | `false` | Hide embedding vectors |
 | `FI_HIDE_LLM_INVOCATION_PARAMETERS` | `false` | Hide model parameters |
 | `FI_BASE64_IMAGE_MAX_LENGTH` | `32000` | Max chars for base64 images |
+| `FI_HIDE_ERROR_DETAILS` | derived | Hide error messages and stacktraces (Python). Unset: `true` when any input/output hide flag above is `true` |
 
 ```bash
 # Production privacy settings

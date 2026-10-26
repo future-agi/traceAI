@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "traceAI-ag2"
+version = "0.1.0"
+description = "Future AGI tracing for AG2 1.x (PyPI ag2) through its native TelemetryMiddleware"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+license = "Apache-2.0"
+packages = [
+    { include = "traceai_ag2" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+# Peer dependency: never vendored. TelemetryMiddleware (capture_content,
+# agent_name, provider_name, model_name, span_attributes) and
+# Agent.add_middleware ship from ag2 1.0.0 (first stable 1.x).
+ag2 = ">=1.0.0"
+# GEN_AI_SPAN_KIND / GEN_AI_OPERATION_NAME first appear in fi_types at 1.0.0,
+# but published 1.0.0 crashes in register() with
+# opentelemetry-exporter-otlp-proto-http 1.45.0 (otel.py:289 AttributeError:
+# 'HTTPSpanExporter' object has no attribute '_headers'). 1.1.0 is the first
+# release this package's suite passes on.
+fi-instrumentation-otel = ">=1.1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
