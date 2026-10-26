@@ -39,7 +39,7 @@ describe("OpenAIAgentsInstrumentation", () => {
 
   describe("VERSION", () => {
     it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.2.0");
+      expect(VERSION).toBe("0.2.1");
     });
   });
 
