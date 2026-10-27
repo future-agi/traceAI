@@ -26,6 +26,28 @@ from traceai_langchain import LangChainInstrumentor
 from traceai_langchain._tracer import _error_description
 
 SECRET = "the user's prompt: hunter2"
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
+
+def _config(**kwargs):
+    # The package still supports published core 1.1.0, whose TraceConfig has no
+    # explicit error-policy argument. Defer construction until test execution:
+    # collection must succeed, and only this unavailable API case is skipped.
+    # Derived input/output hiding is tested on BOTH core versions below.
+    if "hide_error_details" in kwargs and not NATIVE_ERROR_POLICY:
+        pytest.skip("explicit hide_error_details requires core >=1.2; legacy derived privacy is tested separately")
+    return TraceConfig(**kwargs)
+
+
+def _assert_error_type(span, native_type, legacy_type):
+    event = _exception_event(span)
+    assert event.attributes["exception.type"] == legacy_type
+    if NATIVE_ERROR_POLICY:
+        assert span.attributes["error.type"] == native_type
+    else:
+        # Provider-code normalization is owned by core >=1.2, not LangChain.
+        assert "error.type" not in span.attributes
+
 
 
 class ModelNotFound(Exception):
@@ -135,7 +157,7 @@ def test_chain_error_description_is_message_without_traceback():
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == SECRET
     assert "Traceback" not in span.status.description
-    assert span.attributes["error.type"] == "ValueError"
+    _assert_error_type(span, "ValueError", "ValueError")
     event = _exception_event(span)
     assert event.attributes["exception.message"] == SECRET
     assert "Traceback (most recent call last)" in event.attributes["exception.stacktrace"]
@@ -148,16 +170,16 @@ def test_llm_error_description_is_message_without_traceback():
     span = _span(exporter, "FailingChatModel")
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == f"Error code: 404 - {SECRET}"
-    assert span.attributes["error.type"] == "model_not_found"
+    _assert_error_type(span, "model_not_found", "openai.ModelNotFound")
 
 
 @pytest.mark.parametrize(
     "config",
-    [TraceConfig(hide_inputs=True), TraceConfig(hide_error_details=True)],
+    [{"hide_inputs": True}, {"hide_error_details": True}],
     ids=["derived-from-hide_inputs", "explicit"],
 )
 def test_hidden_error_details(config):
-    with _instrumented(config) as exporter:
+    with _instrumented(_config(**config)) as exporter:
         with pytest.raises(ModelNotFound):
             FailingChatModel().invoke("hello")
         with pytest.raises(ValueError):
@@ -169,7 +191,7 @@ def test_hidden_error_details(config):
         span = _span(exporter, name)
         assert span.status.status_code is StatusCode.ERROR
         assert span.status.description is None
-        assert span.attributes["error.type"] == error_type
+        _assert_error_type(span, error_type, "openai.ModelNotFound" if name == "FailingChatModel" else "ValueError")
         event = _exception_event(span)
         assert "exception.message" not in event.attributes
         assert "exception.stacktrace" not in event.attributes
@@ -195,8 +217,8 @@ def test_error_bookkeeping_is_drained():
 
 
 def test_explicit_false_keeps_details_with_hide_inputs():
-    config = TraceConfig(hide_inputs=True, hide_error_details=False)
-    with _instrumented(config) as exporter:
+    config = {"hide_inputs": True, "hide_error_details": False}
+    with _instrumented(_config(**config)) as exporter:
         with pytest.raises(ValueError):
             RunnableLambda(_fail).with_config(run_name="failing_chain").invoke("x")
     span = _span(exporter, "failing_chain")
@@ -260,12 +282,12 @@ def test_failed_llm_run_outputs_kept_by_default():
 
 @pytest.mark.parametrize(
     "config",
-    [TraceConfig(hide_inputs=True), TraceConfig(hide_error_details=True)],
+    [{"hide_inputs": True}, {"hide_error_details": True}],
     ids=["derived-from-hide_inputs", "explicit"],
 )
 def test_failed_llm_run_outputs_dropped_when_hidden(config):
     """Error body, response headers and request ids are error details."""
-    with _instrumented(config) as exporter:
+    with _instrumented(_config(**config)) as exporter:
         with pytest.raises(GatewayError):
             GatewayFailingChatModel().invoke("hello")
     span = _span(exporter, "GatewayFailingChatModel")
