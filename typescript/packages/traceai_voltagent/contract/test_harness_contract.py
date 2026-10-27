@@ -83,7 +83,10 @@ def _check(result: subprocess.CompletedProcess, what: str) -> None:
 
 
 def _base_env() -> Dict[str, str]:
-    return {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "NO_PROXY": "127.0.0.1,localhost"}
+    # Match the production static model registry. The optional development
+    # models.dev refresh is unrelated to this offline exporter contract.
+    return {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
+            "NO_PROXY": "127.0.0.1,localhost", "NODE_ENV": "production"}
 
 
 # traceAI TraceConfig: content is captured by default; these env vars hide it.
