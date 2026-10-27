@@ -13,6 +13,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from fi_instrumentation import TraceConfig
 
 pytest.importorskip("tavily", reason="tavily-python must be installed to test its instrumentor")
 
@@ -22,6 +23,9 @@ from opentelemetry.trace import StatusCode  # noqa: E402
 
 from _support import attrs, instrumented  # noqa: E402
 from _tavily_fake import FAIL_401, ODD_RESULTS, TAVILY_KEY, FakeTavily  # noqa: E402
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 
 @pytest.fixture()
@@ -103,13 +107,15 @@ def test_an_unprintable_query_gets_the_vendors_own_error(fake):
             raise _Boom("str")
 
     with instrumented() as traced:
-        with pytest.raises(TypeError, match="not JSON serializable"):
+        with pytest.raises(TypeError, match="not JSON serializable") as raised:
             _client(fake).search(Unprintable())
 
     span = traced.one()
     assert "input.value" not in attrs(span)
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description.startswith("TypeError")
+    expected = str(raised.value) if NATIVE_ERROR_POLICY else "TypeError: " + str(raised.value)
+    assert span.status.description == expected
+    assert span.events[0].attributes["exception.type"].endswith("TypeError")
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])

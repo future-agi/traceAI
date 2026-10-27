@@ -59,6 +59,9 @@ from traceai_mcp_use._text import (
     scrub_local,
 )
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 TOOL_SPAN = "execute_tool add"
 METADATA = {
     "ls_provider": "fake",
@@ -359,7 +362,7 @@ def test_hide_outputs_drops_earlier_turns_replayed_as_input():
     assert llm_span["input.value"] == PROMPT
     for span in spans:
         # Error text is content: dropped with either hide flag.
-        assert span.status.description == "ValueError"
+        assert span.status.description == (None if NATIVE_ERROR_POLICY else "ValueError")
 
 
 def test_hide_outputs_with_a_replayed_reply_last_redacts_the_llm_input_value():
@@ -405,7 +408,8 @@ def test_tool_error_records_its_message_by_default_and_never_a_stack_trace():
     spans = exporter.get_finished_spans()
     tool = only(spans, "execute_tool fail")
     assert tool.status.status_code is StatusCode.ERROR
-    assert tool.status.description == "ValueError: tool failed because " + ARG
+    expected = ("" if NATIVE_ERROR_POLICY else "ValueError: ") + "tool failed because " + ARG
+    assert tool.status.description == expected
     (event,) = tool.events
     assert event.name == "exception"
     assert dict(event.attributes) == {
@@ -431,7 +435,7 @@ def test_either_hide_flag_drops_the_error_text(config):
     spans = exporter.get_finished_spans()
     tool = only(spans, "execute_tool fail")
     assert tool.status.status_code is StatusCode.ERROR
-    assert tool.status.description == "ValueError"
+    assert tool.status.description == (None if NATIVE_ERROR_POLICY else "ValueError")
     assert dict(tool.events[0].attributes) == {"exception.type": "ValueError"}
     assert "SERVER-SIDE-TEXT" not in wire(spans) and "tool failed because" not in wire(spans)
 
@@ -629,7 +633,7 @@ def test_llm_error_fails_the_llm_and_agent_spans(hidden):
     for span in spans:
         assert span.status.status_code is StatusCode.ERROR
         if hidden:
-            assert span.status.description == "ConnectionError"
+            assert span.status.description == (None if NATIVE_ERROR_POLICY else "ConnectionError")
         else:
             assert span.status.description == "ConnectionError: provider down " + PROMPT
         assert [event.name for event in span.events] == ["exception"]
@@ -671,7 +675,7 @@ def test_mcp_use_formatted_tool_error_is_an_error_span():
         if capture:
             assert span.status.description == "RuntimeError: Error executing tool fail: tool failed because " + ARG
         else:
-            assert span.status.description == "RuntimeError"
+            assert span.status.description == (None if NATIVE_ERROR_POLICY else "RuntimeError")
             assert ARG not in wire(spans)
 
 
@@ -978,7 +982,7 @@ def test_hide_flags_fail_closed_when_a_run_remembers_too_much(monkeypatch):
     for marker in CONTENT_MARKERS + (ANSWER,):
         assert marker not in text, marker
     tool = only(spans, "execute_tool fail")
-    assert tool.status.description == "ValueError"
+    assert tool.status.description == (None if NATIVE_ERROR_POLICY else "ValueError")
     assert dict(tool.events[0].attributes) == {"exception.type": "ValueError"}
 
 

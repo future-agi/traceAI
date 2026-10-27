@@ -778,25 +778,40 @@ def _fi_provider(exporter):
 
 
 def test_later_add_span_processor_on_fi_provider_keeps_ag2_processor_first():
-    """fi's provider shuts down and clears every processor on the first
-    add_span_processor() after register() (otel.py 329-340); the user's new
-    exporter must still receive normalized AG2 spans."""
-    provider = _fi_provider(InMemorySpanExporter())
+    """Current register() keeps its exporter on later adds (#281). Both it
+    and the added exporter must receive exactly one normalized, private span.
+    Published core 1.1 still replaces the original exporter on the first add.
+    """
+    original = InMemorySpanExporter()
+    provider = _fi_provider(original)
     try:
-        assert install_span_processor(provider) is True
-        replacement = InMemorySpanExporter()
-        provider.add_span_processor(SimpleSpanProcessor(replacement))
+        assert install_span_processor(provider, config=TraceConfig(hide_inputs=True)) is True
+        added = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(added))
 
         chain = provider._active_span_processor._span_processors
-        assert isinstance(chain[0], AG2SpanProcessor), chain
         assert sum(isinstance(p, AG2SpanProcessor) for p in chain) == 1
-        assert [type(p) for p in chain[1:]] == [SimpleSpanProcessor]
 
-        _emit(provider, {"gen_ai.operation.name": "chat", "gen_ai.usage.thinking_tokens": 2})
-        (span,) = replacement.get_finished_spans()
-        got = attrs(span)
-        assert got["gen_ai.span.kind"] == "LLM"
-        assert got["gen_ai.usage.reasoning.output_tokens"] == 2
+        _emit(provider, {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.usage.thinking_tokens": 2,
+            "gen_ai.input.messages": '[{"content": "PRIVATE-LATER-PROCESSOR"}]',
+        })
+        assert provider.force_flush()
+        exporters = [added]
+        if hasattr(TraceConfig(), "hide_error_details"):
+            exporters.append(original)
+        else:
+            assert original.get_finished_spans() == ()
+        ids = []
+        for exporter in exporters:
+            (span,) = exporter.get_finished_spans()
+            ids.append(span.context.span_id)
+            got = attrs(span)
+            assert got["gen_ai.span.kind"] == "LLM"
+            assert got["gen_ai.usage.reasoning.output_tokens"] == 2
+            assert "PRIVATE-LATER-PROCESSOR" not in span.to_json()
+        assert len(set(ids)) == 1
     finally:
         provider.shutdown()
 

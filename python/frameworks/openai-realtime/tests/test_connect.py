@@ -9,6 +9,7 @@ import json
 import time
 
 import pytest
+from fi_instrumentation import TraceConfig
 from openai import AsyncOpenAI, OpenAI
 from websockets.exceptions import InvalidStatus
 from openai.resources.realtime import realtime as rt
@@ -19,6 +20,9 @@ import voice_agent
 from conftest import API_KEY, DROP_ERRORS, MARKER, by_name, root_of
 from traceai_openai_realtime._session import RESPONSE_NAME, ROOT_NAME, TOOL_NAME, TURN_NAME
 from voice_tab import assert_voice_tab
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 SDK3 = hasattr(rt.AsyncRealtimeConnectionManager, "send")  # 3.x: pre-open queue, handlers, reconnect
 
@@ -154,7 +158,7 @@ def test_rejected_key_is_a_failed_connect(instrument, exporter, stub_server):
         async with _client(server, key=bad_key).realtime.connect(model="gpt-realtime-2.1"):
             pass
 
-    with pytest.raises(InvalidStatus):
+    with pytest.raises(InvalidStatus) as raised:
         asyncio.run(session())
     spans = exporter.get_finished_spans()
     root = root_of(spans)
@@ -163,7 +167,8 @@ def test_rejected_key_is_a_failed_connect(instrument, exporter, stub_server):
     assert root.status.status_code == StatusCode.ERROR
     assert root.attributes["realtime.end_reason"] == "connect_failed"
     assert root.attributes["fi.span.kind"] == "CHAIN"
-    assert root.status.description.startswith("InvalidStatus")
+    expected = str(raised.value) if NATIVE_ERROR_POLICY else "InvalidStatus: " + str(raised.value)
+    assert root.status.description == expected
     assert [e.attributes["exception.type"] for e in root.events if e.name == "exception"] == [
         "websockets.exceptions.InvalidStatus"
     ]

@@ -23,6 +23,9 @@ from _support import (  # noqa: E402
 from exa_py import AsyncExa, Exa  # noqa: E402
 from fi_instrumentation import TraceConfig, using_session  # noqa: E402
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 HIDDEN = "__REDACTED__"
 PRIVATE = "private question"
 
@@ -167,7 +170,7 @@ def test_error_text_has_the_key_redacted_and_is_capped(fake, call):
 
 
 @pytest.mark.parametrize("call", _echo_error_cases(), ids=["search", "stream", "async"])
-def test_hidden_inputs_also_leave_error_text(fake, call):
+def test_hidden_inputs_apply_the_core_error_policy(fake, call):
     query = "{0} {1}".format(ECHO_QUERY, PRIVATE)
     with instrumented(config=TraceConfig(hide_inputs=True)) as traced:
         with pytest.raises(ValueError) as caught:
@@ -176,8 +179,15 @@ def test_hidden_inputs_also_leave_error_text(fake, call):
     assert PRIVATE in str(caught.value)
     span = traced.one()
     assert PRIVATE not in traced.wire()
-    assert HIDDEN in span.status.description
-    assert HIDDEN in _exception_event(span)["exception.message"]
+    event = _exception_event(span)
+    assert event["exception.type"] == "ValueError"
+    if NATIVE_ERROR_POLICY:
+        assert span.status.description is None
+        assert "exception.message" not in event
+        assert "exception.stacktrace" not in event
+    else:
+        assert HIDDEN in span.status.description
+        assert HIDDEN in event["exception.message"]
 
 
 def test_short_error_text_is_kept_whole(fake):
@@ -186,7 +196,8 @@ def test_short_error_text_is_kept_whole(fake):
             _client(fake).search(FAIL_QUERY)
 
     span = traced.one()
-    assert span.status.description == "ValueError: {0}".format(caught.value)
+    expected = str(caught.value) if NATIVE_ERROR_POLICY else "ValueError: {0}".format(caught.value)
+    assert span.status.description == expected
     assert _exception_event(span)["exception.message"] == str(caught.value)
 
 
@@ -242,7 +253,9 @@ def test_sync_stream_failing_mid_iteration_is_an_error_not_a_cancel():
             next(stream)
 
     span = traced.one()
-    assert span.status.description == "ConnectionError: connection dropped"
+    expected = "connection dropped" if NATIVE_ERROR_POLICY else "ConnectionError: connection dropped"
+    assert span.status.description == expected
+    assert _exception_event(span)["exception.type"] == "ConnectionError"
     assert "exa.cancelled" not in attrs(span)
     assert "exa.result_count" not in attrs(span)
 
@@ -261,7 +274,9 @@ def test_async_stream_failing_mid_iteration_is_an_error_not_a_cancel():
         asyncio.run(run(traced))
 
     span = traced.one()
-    assert span.status.description == "ConnectionError: connection dropped"
+    expected = "connection dropped" if NATIVE_ERROR_POLICY else "ConnectionError: connection dropped"
+    assert span.status.description == expected
+    assert _exception_event(span)["exception.type"] == "ConnectionError"
     assert "exa.cancelled" not in attrs(span)
 
 
@@ -296,7 +311,13 @@ def test_hidden_inputs_remove_requested_urls_from_error_text(fake):
     span = traced.one()
     assert "example.com" not in traced.wire()
     assert EXA_KEY not in traced.wire()
-    assert HIDDEN in span.status.description
+    if NATIVE_ERROR_POLICY:
+        assert span.status.description is None
+        assert "exception.message" not in _exception_event(span)
+        assert "exception.stacktrace" not in _exception_event(span)
+    else:
+        assert HIDDEN in span.status.description
+    assert _exception_event(span)["exception.type"] == "ValueError"
     assert attrs(span)["exa.url_count"] == 2
 
 

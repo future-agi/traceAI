@@ -175,43 +175,53 @@ def test_register_then_setup_keeps_one_provider_resource_and_headers(monkeypatch
 
 
 def test_add_span_processor_after_register_and_setup_keeps_our_processor_first(monkeypatch, fake):
-    """fi's TracerProvider.add_span_processor shuts down and clears every
-    processor, ours included (fi_instrumentation/otel.py:336-339). setup()
-    re-prepends and re-enables ours so the new processor still sees filtered spans.
+    """Every active exporter receives filtered spans after a later processor add.
+
+    Published core 1.1 replaces register's exporter on the first add. Current
+    core keeps it (#281); setup must normalize before BOTH exporters, not
+    silently restore the old replacement semantics.
     """
-    from fi_instrumentation import register
+    from fi_instrumentation import TraceConfig, register
     from fi_instrumentation.fi_types import ProjectType
 
     monkeypatch.setenv("FI_API_KEY", "placeholder-api-key")
     monkeypatch.setenv("FI_SECRET_KEY", "placeholder-secret-key")
     monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
     saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    original = InMemorySpanExporter()
     provider = register(
         project_type=ProjectType.OBSERVE,
         project_name="ag2-classic-add",
         verbose=False,
+        batch=False,
+        span_exporter=original,
         set_global_tracer_provider=False,
     )
     tracing = setup(tracer_provider=provider, capture_content=False)
     memory = InMemorySpanExporter()
+    second = InMemorySpanExporter()
     try:
-        added = SimpleSpanProcessor(memory)
-        provider.add_span_processor(added)
+        provider.add_span_processor(SimpleSpanProcessor(memory))
+        provider.add_span_processor(SimpleSpanProcessor(second))
         processors = provider._active_span_processor._span_processors
-        assert processors == (tracing.processor, added)
+        assert sum(p is tracing.processor for p in processors) == 1
         assert tracing.processor._disabled is False
 
         two_agent_tool_chat(tracing, fake)
-        spans = memory.get_finished_spans()
-        assert any(s.name == "conversation user" for s in spans)
-        _assert_no_content_and_no_promoted_usage_off_llm(spans)
-        conversation = next(s for s in spans if s.name == "conversation user").attributes
-        assert conversation["gen_ai.span.kind"] == "CHAIN"
-
-        # A second add keeps exactly one copy of ours, still first.
-        second = SimpleSpanProcessor(InMemorySpanExporter())
-        provider.add_span_processor(second)
-        assert provider._active_span_processor._span_processors == (tracing.processor, added, second)
+        assert provider.force_flush(timeout_millis=10_000)
+        expected_ids = {s.context.span_id for s in memory.get_finished_spans()}
+        exporters = [memory, second]
+        if hasattr(TraceConfig(), "hide_error_details"):
+            exporters.append(original)  # Current register() keeps its exporter.
+        else:
+            assert original.get_finished_spans() == ()  # Published 1.1 contract.
+        for exporter in exporters:
+            spans = exporter.get_finished_spans()
+            assert {s.context.span_id for s in spans} == expected_ids
+            assert any(s.name == "conversation user" for s in spans)
+            _assert_no_content_and_no_promoted_usage_off_llm(spans)
+            conversation = next(s for s in spans if s.name == "conversation user").attributes
+            assert conversation["gen_ai.span.kind"] == "CHAIN"
     finally:
         tracing.uninstrument()
         provider.shutdown()
