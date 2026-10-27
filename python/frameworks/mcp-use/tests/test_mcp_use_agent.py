@@ -54,6 +54,9 @@ from opentelemetry.trace import StatusCode
 
 from traceai_mcp_use import FutureAGICallback
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 pytest.importorskip("uvicorn", reason="the loopback MCP server runs on uvicorn")
 
 
@@ -186,7 +189,7 @@ def test_mcp_tool_error_fails_the_tool_span_and_the_agent_recovers():
     spans = exporter.get_finished_spans()
     tool = only(spans, "execute_tool fail")
     assert tool.status.status_code is StatusCode.ERROR
-    assert tool.status.description == "RuntimeError"
+    assert tool.status.description == (None if NATIVE_ERROR_POLICY else "RuntimeError")
     assert tool.attributes["mcp_use.tool.error_type"] == "RuntimeError"
     assert [event.attributes["exception.type"] for event in tool.events] == ["RuntimeError"]
     agent = only(spans, AGENT)
@@ -200,6 +203,8 @@ def test_tool_error_text_is_recorded_by_default_and_dropped_with_hide_inputs():
     run_agent([tool_call("fail", {"reason": ARG}), answer()], [handler])
     spans = exporter.get_finished_spans()
     tool = only(spans, "execute_tool fail")
+    assert tool.status.status_code is StatusCode.ERROR
+    assert only(spans, AGENT).status.status_code is StatusCode.OK
     assert tool.status.description == "RuntimeError: Error executing tool fail: tool failed because " + ARG
     (event,) = tool.events
     assert "exception.stacktrace" not in event.attributes
@@ -215,8 +220,11 @@ def test_tool_error_text_is_recorded_by_default_and_dropped_with_hide_inputs():
     run_agent([tool_call("fail", {"reason": ARG}), answer()], [handler])
     spans = exporter.get_finished_spans()
     tool = only(spans, "execute_tool fail")
-    assert tool.status.description == "RuntimeError"
+    assert tool.status.status_code is StatusCode.ERROR
+    assert only(spans, AGENT).status.status_code is StatusCode.OK
+    assert tool.status.description == (None if NATIVE_ERROR_POLICY else "RuntimeError")
     (event,) = tool.events
+    assert event.name == "exception"
     assert dict(event.attributes) == {"exception.type": "RuntimeError"}
     assert ARG not in wire(spans) and "PROMPT-MARKER" not in wire(spans)
 
@@ -299,8 +307,10 @@ def test_hide_outputs_keeps_earlier_turns_out_of_later_turns(method, external):
     # outputs) is dropped, the exception type kept.
     assert attrs(only(third, AGENT))["input.value"] == "THIRD-PROMPT"
     for span in (only(third, AGENT), only(third, LLM_SPAN)):
-        assert span.status.description == "ValueError"
+        assert span.status.status_code is StatusCode.ERROR
+        assert span.status.description == (None if NATIVE_ERROR_POLICY else "ValueError")
         (event,) = span.events
+        assert event.name == "exception"
         assert dict(event.attributes) == {"exception.type": "ValueError"}
 
 

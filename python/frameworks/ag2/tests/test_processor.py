@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -777,26 +778,55 @@ def _fi_provider(exporter):
     )
 
 
+class _SnapshotExporter(InMemorySpanExporter):
+    """Freeze each delivery before any later processor can change the span."""
+
+    def __init__(self):
+        super().__init__()
+        self.snapshots = []
+
+    def export(self, spans):
+        self.snapshots.extend(span.to_json() for span in spans)
+        return super().export(spans)
+
+
 def test_later_add_span_processor_on_fi_provider_keeps_ag2_processor_first():
-    """fi's provider shuts down and clears every processor on the first
-    add_span_processor() after register() (otel.py 329-340); the user's new
-    exporter must still receive normalized AG2 spans."""
-    provider = _fi_provider(InMemorySpanExporter())
+    """Current register() keeps its exporter on later adds (#281). Both it
+    and the added exporter must receive exactly one normalized, private span.
+    Published core 1.1 still replaces the original exporter on the first add.
+    """
+    original = _SnapshotExporter()
+    provider = _fi_provider(original)
     try:
-        assert install_span_processor(provider) is True
-        replacement = InMemorySpanExporter()
-        provider.add_span_processor(SimpleSpanProcessor(replacement))
+        assert install_span_processor(provider, config=TraceConfig(hide_inputs=True)) is True
+        added = _SnapshotExporter()
+        provider.add_span_processor(SimpleSpanProcessor(added))
 
         chain = provider._active_span_processor._span_processors
-        assert isinstance(chain[0], AG2SpanProcessor), chain
         assert sum(isinstance(p, AG2SpanProcessor) for p in chain) == 1
-        assert [type(p) for p in chain[1:]] == [SimpleSpanProcessor]
 
-        _emit(provider, {"gen_ai.operation.name": "chat", "gen_ai.usage.thinking_tokens": 2})
-        (span,) = replacement.get_finished_spans()
-        got = attrs(span)
-        assert got["gen_ai.span.kind"] == "LLM"
-        assert got["gen_ai.usage.reasoning.output_tokens"] == 2
+        _emit(provider, {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.usage.thinking_tokens": 2,
+            "gen_ai.input.messages": '[{"content": "PRIVATE-LATER-PROCESSOR"}]',
+        })
+        assert provider.force_flush()
+        exporters = [added]
+        if hasattr(TraceConfig(), "hide_error_details"):
+            exporters.append(original)
+        else:
+            assert original.get_finished_spans() == ()
+            assert original.snapshots == []
+        ids = []
+        for exporter in exporters:
+            (snapshot,) = exporter.snapshots
+            span = json.loads(snapshot)
+            ids.append(span["context"]["span_id"])
+            got = span["attributes"]
+            assert got.get("gen_ai.span.kind") == "LLM"
+            assert got["gen_ai.usage.reasoning.output_tokens"] == 2
+            assert "PRIVATE-LATER-PROCESSOR" not in snapshot
+        assert len(set(ids)) == 1
     finally:
         provider.shutdown()
 

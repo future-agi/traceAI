@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, Awaitable, Callable
 
 import pytest
+from fi_instrumentation import TraceConfig
 
 pytest.importorskip("voyageai", reason="voyageai must be installed to test its instrumentor")
 
@@ -29,6 +30,9 @@ from _support import (  # noqa: E402
     instrumented,
     status_code,
 )
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 
 @pytest.fixture()
@@ -101,6 +105,8 @@ def test_async_errors_match_the_sync_error_span(fake):
     sync_span, async_span = traced.spans()
     for span in (sync_span, async_span):
         assert status_code(span) == "ERROR"
-        assert span.status.description.startswith("AuthenticationError")
+        message = span.events[0].attributes["exception.message"]
+        assert span.status.description == (message if NATIVE_ERROR_POLICY else "AuthenticationError: " + message)
+        assert span.events[0].attributes["exception.type"].endswith("AuthenticationError")
         assert event_names(span) == ["exception"]
     assert attrs(async_span) == attrs(sync_span)

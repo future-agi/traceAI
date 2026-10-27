@@ -23,6 +23,9 @@ from tests._support import (  # noqa: E402
     questions,
 )
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 
 def _fail(model, config=None, **kwargs):
     from typesafe_sdk import TypeSafeError
@@ -66,7 +69,11 @@ def test_422_message_shown_by_default_hidden_with_the_flags():
     assert STATE_MARKER in span.status.description  # the API echoed the state
     _, _, hidden = _fail("fail-422", TraceConfig(hide_inputs=True, hide_outputs=True))
     assert STATE_MARKER not in everything(hidden)
-    assert hidden.status.description == "TypeSafeUnprocessableEntityError (HTTP 422)"
+    expected = None if NATIVE_ERROR_POLICY else "TypeSafeUnprocessableEntityError (HTTP 422)"
+    assert hidden.status.description == expected
+    assert hidden.status.status_code is StatusCode.ERROR
+    assert hidden.events[0].attributes["exception.type"].endswith("TypeSafeUnprocessableEntityError")
+    assert "exception.stacktrace" not in hidden.events[0].attributes
     assert "exception.message" not in hidden.events[0].attributes
 
 

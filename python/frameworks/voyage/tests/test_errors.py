@@ -27,6 +27,9 @@ from _support import (  # noqa: E402
     status_code,
 )
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 _RESULT_KEYS = (
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.total_tokens",
@@ -51,7 +54,8 @@ def test_an_api_error_sets_error_status_and_one_exception_event(fake):
 
     for span in traced.spans():
         assert status_code(span) == "ERROR"
-        assert span.status.description.startswith("AuthenticationError: ")
+        message = span.events[0].attributes["exception.message"]
+        assert span.status.description == (message if NATIVE_ERROR_POLICY else "AuthenticationError: " + message)
         assert event_names(span) == ["exception"]
         (event,) = span.events
         assert event.attributes["exception.type"].endswith("AuthenticationError")
@@ -147,12 +151,14 @@ def test_the_key_is_redacted_before_pii_redaction(fake):
 
 def test_a_client_timeout_ends_the_span_as_an_error(fake):
     with instrumented() as traced:
-        with pytest.raises(voyageai.error.Timeout):
+        with pytest.raises(voyageai.error.Timeout) as raised:
             client(fake, timeout=0.3).embed(TEXTS, model="slow")
 
     span = traced.one()
     assert status_code(span) == "ERROR"
-    assert span.status.description.startswith("Timeout")
+    expected = str(raised.value) if NATIVE_ERROR_POLICY else "Timeout: " + str(raised.value)
+    assert span.status.description == expected
+    assert span.events[0].attributes["exception.type"].endswith("Timeout")
     assert "voyage.cancelled" not in attrs(span)
 
 
