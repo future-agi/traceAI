@@ -20,6 +20,7 @@ from typing import Any, Dict
 
 import pytest
 from fi_instrumentation import TraceConfig
+from opentelemetry.trace import StatusCode
 
 pytest.importorskip("tavily", reason="tavily-python must be installed to test its instrumentor")
 
@@ -193,6 +194,7 @@ def test_hidden_inputs_remove_the_query_from_error_text(fake, monkeypatch, mode,
 
     assert str(info.value) == "Bad query: " + query  # unchanged for the caller
     span = traced.one()
+    assert span.status.status_code is StatusCode.ERROR
     assert attrs(span)["input.value"] == "__REDACTED__"
     (event,) = [event for event in span.events if event.name == "exception"]
     assert event.attributes["exception.type"].endswith("BadRequestError")
@@ -251,6 +253,7 @@ def test_hidden_inputs_apply_error_policy_even_for_an_empty_query():
             client.search("")
 
     span = traced.one()
+    assert span.status.status_code is StatusCode.ERROR
     (event,) = [event for event in span.events if event.name == "exception"]
     assert event.attributes["exception.type"].endswith("ConnectionError")
     if NATIVE_ERROR_POLICY:
@@ -341,8 +344,11 @@ def test_error_events_never_carry_a_raw_traceback(fake, monkeypatch, mode, hide)
     # The caller still gets the real traceback.
     assert info.value.__traceback__ is not None
     span = traced.one()
+    assert span.status.status_code is StatusCode.ERROR
     (event,) = [event for event in span.events if event.name == "exception"]
     assert event.attributes["exception.type"].endswith("BadRequestError")
+    if hide:
+        assert PRIVATE not in traced.wire()
     if hide and NATIVE_ERROR_POLICY:
         assert span.status.description is None
         assert "exception.message" not in event.attributes

@@ -13,6 +13,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -174,6 +175,18 @@ def test_register_then_setup_keeps_one_provider_resource_and_headers(monkeypatch
             signal.signal(sig, handler)
 
 
+class _SnapshotExporter(InMemorySpanExporter):
+    """Freeze each delivery before any later processor can change the span."""
+
+    def __init__(self):
+        super().__init__()
+        self.snapshots = []
+
+    def export(self, spans):
+        self.snapshots.extend(span.to_json() for span in spans)
+        return super().export(spans)
+
+
 def test_add_span_processor_after_register_and_setup_keeps_our_processor_first(monkeypatch, fake):
     """Every active exporter receives filtered spans after a later processor add.
 
@@ -188,7 +201,7 @@ def test_add_span_processor_after_register_and_setup_keeps_our_processor_first(m
     monkeypatch.setenv("FI_SECRET_KEY", "placeholder-secret-key")
     monkeypatch.setenv("FI_BASE_URL", "http://127.0.0.1:9")
     saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
-    original = InMemorySpanExporter()
+    original = _SnapshotExporter()
     provider = register(
         project_type=ProjectType.OBSERVE,
         project_name="ag2-classic-add",
@@ -198,8 +211,18 @@ def test_add_span_processor_after_register_and_setup_keeps_our_processor_first(m
         set_global_tracer_provider=False,
     )
     tracing = setup(tracer_provider=provider, capture_content=False)
-    memory = InMemorySpanExporter()
-    second = InMemorySpanExporter()
+    memory = _SnapshotExporter()
+    second = _SnapshotExporter()
+    # Record generated IDs independently of delivery. An exporter-derived set
+    # would miss both duplicated registrations and spans lost by every exporter.
+    started = []
+    on_start = tracing.processor.on_start
+
+    def record_start(span, parent_context=None):
+        started.append((format(span.context.span_id, "#018x"), span.name))
+        return on_start(span, parent_context=parent_context)
+
+    monkeypatch.setattr(tracing.processor, "on_start", record_start)
     try:
         provider.add_span_processor(SimpleSpanProcessor(memory))
         provider.add_span_processor(SimpleSpanProcessor(second))
@@ -209,19 +232,44 @@ def test_add_span_processor_after_register_and_setup_keeps_our_processor_first(m
 
         two_agent_tool_chat(tracing, fake)
         assert provider.force_flush(timeout_millis=10_000)
-        expected_ids = {s.context.span_id for s in memory.get_finished_spans()}
+        expected_ids = [span_id for span_id, _name in started]
+        assert len(expected_ids) == len(set(expected_ids)) == 7
+        expected_kinds = {
+            "chat " + FAKE_MODEL: "LLM",
+            "invoke_agent assistant": "AGENT",
+            "invoke_agent user": "AGENT",
+            "execute_tool get_weather": "TOOL",
+            "conversation user": "CHAIN",
+        }
+        assert Counter(name for _span_id, name in started) == {
+            "chat " + FAKE_MODEL: 2,
+            "invoke_agent assistant": 2,
+            "invoke_agent user": 1,
+            "execute_tool get_weather": 1,
+            "conversation user": 1,
+        }
         exporters = [memory, second]
         if hasattr(TraceConfig(), "hide_error_details"):
             exporters.append(original)  # Current register() keeps its exporter.
         else:
             assert original.get_finished_spans() == ()  # Published 1.1 contract.
+            assert original.snapshots == []
         for exporter in exporters:
-            spans = exporter.get_finished_spans()
-            assert {s.context.span_id for s in spans} == expected_ids
-            assert any(s.name == "conversation user" for s in spans)
-            _assert_no_content_and_no_promoted_usage_off_llm(spans)
-            conversation = next(s for s in spans if s.name == "conversation user").attributes
-            assert conversation["gen_ai.span.kind"] == "CHAIN"
+            spans = [json.loads(snapshot) for snapshot in exporter.snapshots]
+            delivered_ids = [span["context"]["span_id"] for span in spans]
+            assert len(delivered_ids) == len(expected_ids)
+            assert len(set(delivered_ids)) == len(delivered_ids)
+            assert Counter(delivered_ids) == Counter(expected_ids)
+            for span, snapshot in zip(spans, exporter.snapshots):
+                attributes = span["attributes"]
+                assert attributes.get("gen_ai.span.kind") == expected_kinds[span["name"]]
+                assert not set(CONTENT_KEYS).intersection(attributes), span["name"]
+                assert SECRET_PROMPT not in snapshot and TOOL_SECRET_CITY not in snapshot
+                if attributes["gen_ai.span.kind"] != "LLM":
+                    assert not any(
+                        key in PROMOTED_USAGE_KEYS or key.startswith("gen_ai.usage.")
+                        for key in attributes
+                    ), span["name"]
     finally:
         tracing.uninstrument()
         provider.shutdown()

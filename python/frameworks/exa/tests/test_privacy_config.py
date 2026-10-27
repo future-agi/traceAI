@@ -7,6 +7,7 @@ import asyncio
 import pytest
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import StatusCode
 
 pytest.importorskip("exa_py", reason="exa-py must be installed to test its instrumentor")
 
@@ -178,6 +179,7 @@ def test_hidden_inputs_apply_the_core_error_policy(fake, call):
 
     assert PRIVATE in str(caught.value)
     span = traced.one()
+    assert span.status.status_code is StatusCode.ERROR
     assert PRIVATE not in traced.wire()
     event = _exception_event(span)
     assert event["exception.type"] == "ValueError"
@@ -309,6 +311,7 @@ def test_hidden_inputs_remove_requested_urls_from_error_text(fake):
 
     assert urls[0] in str(caught.value)
     span = traced.one()
+    assert span.status.status_code is StatusCode.ERROR
     assert "example.com" not in traced.wire()
     assert EXA_KEY not in traced.wire()
     if NATIVE_ERROR_POLICY:

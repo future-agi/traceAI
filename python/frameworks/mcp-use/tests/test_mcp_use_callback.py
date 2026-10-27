@@ -360,9 +360,14 @@ def test_hide_outputs_drops_earlier_turns_replayed_as_input():
     assert llm_span[call + "function.name"] == "add"
     assert call + "function.arguments" not in llm_span
     assert llm_span["input.value"] == PROMPT
+    assert sorted(span.name for span in spans) == sorted([AGENT, "chat"])
     for span in spans:
-        # Error text is content: dropped with either hide flag.
+        # Error text is content: dropped with either hide flag, not its status.
+        assert span.status.status_code is StatusCode.ERROR
         assert span.status.description == (None if NATIVE_ERROR_POLICY else "ValueError")
+        (event,) = span.events
+        assert event.name == "exception"
+        assert dict(event.attributes) == {"exception.type": "ValueError"}
 
 
 def test_hide_outputs_with_a_replayed_reply_last_redacts_the_llm_input_value():
@@ -982,8 +987,11 @@ def test_hide_flags_fail_closed_when_a_run_remembers_too_much(monkeypatch):
     for marker in CONTENT_MARKERS + (ANSWER,):
         assert marker not in text, marker
     tool = only(spans, "execute_tool fail")
+    assert tool.status.status_code is StatusCode.ERROR
     assert tool.status.description == (None if NATIVE_ERROR_POLICY else "ValueError")
-    assert dict(tool.events[0].attributes) == {"exception.type": "ValueError"}
+    (event,) = tool.events
+    assert event.name == "exception"
+    assert dict(event.attributes) == {"exception.type": "ValueError"}
 
 
 def test_an_internal_failure_in_any_callback_never_reaches_langchain(monkeypatch):
