@@ -31,6 +31,7 @@ import (
 	"iter"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -320,6 +321,13 @@ func (d *demoAgent) answer(ctx context.Context, question string) (string, error)
 	defer span.End()
 	d.tc.SetAttributes(span, attribute.String(traceaia2a.InputValue, question))
 
+	base := strings.TrimRight(envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/")
+	// The demo creates this LLM span and knows its endpoint. Do not infer the
+	// vendor from the model name or label other OpenAI-compatible hosts OpenAI.
+	if endpoint, err := url.Parse(base); err == nil && strings.EqualFold(endpoint.Hostname(), "api.openai.com") {
+		span.SetAttributes(attribute.String("gen_ai.provider.name", "openai"))
+	}
+
 	body, _ := json.Marshal(map[string]any{
 		"model": *model,
 		"messages": []map[string]string{
@@ -327,7 +335,6 @@ func (d *demoAgent) answer(ctx context.Context, question string) (string, error)
 			{"role": "user", "content": question},
 		},
 	})
-	base := strings.TrimRight(envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err

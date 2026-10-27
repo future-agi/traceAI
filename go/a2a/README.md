@@ -68,7 +68,9 @@ remote agent; that request gets `traceparent` (and `tracestate` when set) only.
 
 [`example/main.go`](example/main.go) is a complete program: an agent span, A2A calls (streamed
 with `-stream`), a failing task (`-fail`), and a demo remote agent built with a2a-go's server
-package whose own spans join the trace.
+package whose own spans join the trace. When it calls `api.openai.com`, the demo marks its own LLM
+span with `gen_ai.provider.name=openai`; other OpenAI-compatible hosts remain unlabelled rather than
+guessing a vendor. The A2A interceptor itself still never creates an LLM span or invents a provider.
 
 ```sh
 export FI_API_KEY=... FI_SECRET_KEY=... FI_PROJECT_NAME=my-service
