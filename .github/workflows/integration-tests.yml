@@ -109,6 +109,11 @@ jobs:
         env:
           PACKAGE_NAME: ${{ matrix.package.name }}
         run: |
+          # package scripts invoke `pnpm` themselves; setup-node supplies
+          # corepack, but does not enable its pnpm shim on a clean runner.
+          mkdir -p "$RUNNER_TEMP/corepack-bin"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
           # packageManager pins pnpm 10.30.1 with its integrity hash.
           corepack pnpm --version
           corepack pnpm --filter "@traceai/$PACKAGE_NAME..." install --frozen-lockfile --ignore-scripts
