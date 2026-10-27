@@ -6,6 +6,7 @@ on:
       - 'python/frameworks/langchain/**'
       - 'python/fi_instrumentation/**'
       - 'python/tests/harness/**'
+      - 'python/tests/test_framework_langchain.py'
       - '.github/workflows/deepagents-tests.yml'
   push:
     branches: [dev]
@@ -13,6 +14,7 @@ on:
       - 'python/frameworks/langchain/**'
       - 'python/fi_instrumentation/**'
       - 'python/tests/harness/**'
+      - 'python/tests/test_framework_langchain.py'
       - '.github/workflows/deepagents-tests.yml'
 
 permissions:
@@ -25,14 +27,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install integration, current core and real framework
-        run: python -m pip install -e python -e python/frameworks/langchain 'deepagents==0.7.21' langgraph 'pytest-asyncio<1' pytest
+        run: python -m pip install -e python -e python/frameworks/langchain 'deepagents==0.7.21' langgraph 'pytest-asyncio==0.24.0' 'pytest==8.4.2' pytest-mock
       - name: Test Deep Agents, sessions and error hiding
-        run: PYTHONPATH=python/tests python -m pytest python/frameworks/langchain/tests -q -p no:cacheprovider -o addopts='' -o asyncio_mode=auto
+        run: |
+          python -c 'from fi_instrumentation import TraceConfig; assert hasattr(TraceConfig(), "hide_error_details")'
+          PYTHONPATH=python/tests python -m pytest python/frameworks/langchain/tests python/tests/test_framework_langchain.py -q -p no:cacheprovider -o addopts='' -o asyncio_mode=auto
       - name: Test compatibility with published core
         run: |
           python -m pip install --force-reinstall 'fi-instrumentation-otel==1.1.0'
-          python -m pytest python/frameworks/langchain/tests/test_error_text_privacy.py python/frameworks/langchain/tests/test_session_from_thread_id.py -q --noconftest -p no:cacheprovider -o addopts='' -o asyncio_mode=auto
+          PYTHONPATH=python/tests python -P -m pytest python/frameworks/langchain/tests python/tests/test_framework_langchain.py -q -p no:cacheprovider -o addopts='' -o asyncio_mode=auto
