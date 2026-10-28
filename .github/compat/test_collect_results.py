@@ -359,3 +359,12 @@ class CollectorTests(unittest.TestCase):
                 self.assertEqual(healthy['contract']['junit_paths'], ['junit/attempt1.xml'])
                 self.assertEqual((output / 'junit/attempt1.xml').read_bytes(),
                                  (second if malformed == 1 else first).joinpath('junit/attempt1.xml').read_bytes())
+
+    def test_complete_freeze_must_include_explicit_coupled_companion_pins(self):
+        from collect_results import frozen_environment
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, artifacts, output, folder, data = evidence(Path(temporary))
+            selected = json.loads((plan / 'compat-plan.json').read_text())['cases'][0]
+            selected['coupled_companions'] = [{'name': 'langgraph-prebuilt', 'version': '1.0.5'}]
+            with self.assertRaisesRegex(ValueError, 'coupled companion'):
+                frozen_environment(plan, folder, selected, data['cases'][0])

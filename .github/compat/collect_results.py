@@ -134,6 +134,9 @@ def frozen_environment(plan_dir, folder, selected, row):
         locks.append(f"{name}=={version} --hash=sha256:{digest}")
     if safe_path(plan_dir, resolution["requirements"]).read_text() != "\n".join(sorted(locks)) + "\n":
         raise ValueError("Frozen requirements/report disagree")
+    for companion in selected.get("coupled_companions", []):
+        if expected.get(canonicalize_name(companion["name"])) != companion["version"]:
+            raise ValueError("Frozen coupled companion differs from evidenced planner rule")
     for resolved in row["resolved"]:
         name = canonicalize_name(resolved["name"])
         if expected.get(name) != resolved["version"] or artifacts.get(name) != resolved.get("artifact_sha256"):
