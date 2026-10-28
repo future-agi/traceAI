@@ -1,0 +1,43 @@
+[
+ {
+  "setupComplete": {}
+ },
+ {
+  "serverContent": {
+   "modelTurn": {
+    "role": "model",
+    "parts": [
+     {
+      "text": "Hi there."
+     }
+    ]
+   }
+  }
+ },
+ {
+  "serverContent": {
+   "turnComplete": true
+  },
+  "usageMetadata": {
+   "promptTokenCount": 20,
+   "responseTokenCount": 3,
+   "totalTokenCount": 23,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 10
+    },
+    {
+     "modality": "AUDIO",
+     "tokenCount": 10
+    }
+   ],
+   "responseTokensDetails": [
+    {
+     "modality": "AUDIO",
+     "tokenCount": 3
+    }
+   ]
+  }
+ }
+]

@@ -1,0 +1,47 @@
+[tool.poetry]
+name = "traceAI-hermes-agent"
+version = "0.1.0"
+description = "Future AGI tracing plugin for Hermes Agent: turns, model calls and tool calls as OpenTelemetry spans"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+packages = [
+    { include = "traceai_hermes_agent" }
+]
+keywords = ["opentelemetry", "hermes-agent", "nous-research", "agent", "tracing", "observability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+
+[tool.poetry.dependencies]
+# Hermes Agent v2026.9.24 requires >=3.11,<3.14; later Hermes requires
+# >=3.11,<3.15 and moves installs to 3.14. Keep in step with
+# hermes-plugin/futureagi/pyproject.toml: Hermes refuses a directory plugin
+# whose requires-python excludes the Python it runs on.
+python = ">=3.11,<3.15"
+# 1.35 is the first OTLP/HTTP exporter whose retries stay within its timeout,
+# which bounds how long Hermes waits at exit when Future AGI is unreachable.
+opentelemetry-api = ">=1.35.0"
+opentelemetry-sdk = ">=1.35.0"
+opentelemetry-exporter-otlp-proto-http = ">=1.35.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+
+# Hermes discovers pip-installed plugins through this entry-point group. The
+# plugin stays off until `hermes plugins enable futureagi`.
+[tool.poetry.plugins."hermes_agent.plugins"]
+futureagi = "traceai_hermes_agent:register"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
