@@ -1,1 +1,1 @@
-_instruments = ("pinecone >= 5.0.0",)
+_instruments = ("pinecone >= 3.0.0",)

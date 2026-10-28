@@ -66,7 +66,16 @@ class TestPineconeInstrumentor:
         assert isinstance(PineconeInstrumentor(), PineconeInstrumentor)
 
     def test_instrumentation_dependencies(self):
-        assert tuple(PineconeInstrumentor().instrumentation_dependencies()) == ("pinecone >= 5.0.0",)
+        assert tuple(PineconeInstrumentor().instrumentation_dependencies()) == ("pinecone >= 3.0.0",)
+
+    def test_distribution_preserves_historical_floor(self):
+        from importlib.metadata import requires
+        from packaging.requirements import Requirement
+
+        upstream, = [Requirement(value) for value in requires("traceAI-pinecone")
+                     if Requirement(value).name == "pinecone"]
+        assert upstream.specifier.contains("3.0.0")
+        assert upstream.specifier.contains("4.0.0")
 
     def test_uninstrument_restores_index(self, tracer_provider):
         names = ("query", "upsert", "delete", "fetch", "update", "describe_index_stats")
