@@ -92,30 +92,91 @@ def extract_model_info(agent: Any) -> Dict[str, Any]:
 
 
 def _usage_values(usage: Any) -> Optional[Dict[str, Any]]:
-    """Copy counters, including historical Usage field names."""
+    """Copy known counters; None means unknown, not measured zero."""
     if usage is None:
         return None
-    return {
-        "input_tokens": getattr(usage, "request_tokens", 0)
-        or getattr(usage, "input_tokens", 0),
-        "output_tokens": getattr(usage, "response_tokens", 0)
-        or getattr(usage, "output_tokens", 0),
-        "total_tokens": getattr(usage, "total_tokens", 0),
-        "requests": getattr(usage, "requests", 0),
-    }
+    values = {}
+    for key, names in {
+        "input_tokens": ("request_tokens", "input_tokens"),
+        "output_tokens": ("response_tokens", "output_tokens"),
+        "total_tokens": ("total_tokens",),
+        "requests": ("requests",),
+    }.items():
+        for name in names:
+            value = getattr(usage, name, None)
+            if isinstance(value, int):
+                values[key] = value
+                break
+    return values
+
+
+def _sum_usage(samples):
+    values = {}
+    for sample in samples:
+        for key, value in (sample or {}).items():
+            values[key] = values.get(key, 0) + value
+    return values
+
+
+class _OperationUsage:
+    def __init__(self, budget):
+        self.budget = budget
+        self.previous = _usage_values(budget)
+        self.samples = []
+
+    def extract(self, result):
+        if self.samples:
+            return _sum_usage(self.samples)
+        return extract_usage(result, self.previous)
+
+
+_ACTIVE_USAGE: ContextVar[Any] = ContextVar("pydantic_ai_operation_usage", default=None)
+
+
+def wrap_legacy_usage_incr(original):
+    """Historical responses omit usage. Observe only this run's budget updates.
+
+    Keep the SDK's real shared budget intact (including limits and identity),
+    and never infer usage from changes made by another task or nested run.
+    """
+    @functools.wraps(original)
+    def incr(self, incr_usage, *args, **kwargs):
+        operation = _ACTIVE_USAGE.get()
+        sample = _usage_values(incr_usage)
+        result = original(self, incr_usage, *args, **kwargs)
+        if operation is not None and operation.budget is self:
+            operation.samples.append(sample)
+        return result
+    return incr
 
 
 def extract_usage(
     result: Any, previous_usage: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
-    """Extract this run's usage, excluding the caller's existing budget."""
+    """Prefer run-local response counters over a mutable aggregate budget."""
+    new_messages = getattr(result, "new_messages", None)
+    if callable(new_messages):
+        messages = new_messages()
+        if isinstance(messages, (list, tuple)):
+            responses = [m for m in messages if getattr(m, "kind", None) == "response"]
+            if responses and all(getattr(m, "usage", None) is not None for m in responses):
+                return _sum_usage(_usage_values(m.usage) for m in responses)
+
+    # Historical SDKs expose usage() and no counters on ModelResponse. Shared
+    # budgets use _OperationUsage samples above; unshared results are run-local.
     usage = getattr(result, "usage", None)
     if callable(usage):
         usage = usage()
     values = _usage_values(usage)
     if values is not None and previous_usage is not None:
-        return {key: value - previous_usage[key] for key, value in values.items()}
+        return {key: value - previous_usage.get(key, 0) for key, value in values.items()}
     return values
+
+
+def _record_usage(span, usage):
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        if usage is not None and key in usage:
+            span.set_attribute(f"gen_ai.usage.{key}", usage[key])
 
 
 def _run_attributes(
@@ -213,7 +274,7 @@ def wrap_agent_run(
                 _SYNC_DELEGATION.reset(token)
 
         attributes = _run_attributes(self, args, kwargs, method_name)
-        previous_usage = _usage_values(kwargs.get("usage"))
+        operation_usage = _OperationUsage(kwargs.get("usage"))
 
         start_time = time.time()
 
@@ -223,27 +284,18 @@ def wrap_agent_run(
             attributes=attributes,
         ) as span:
             try:
-                result = await original_method(self, *args, **kwargs)
+                usage_token = _ACTIVE_USAGE.set(operation_usage)
+                try:
+                    result = await original_method(self, *args, **kwargs)
+                finally:
+                    _ACTIVE_USAGE.reset(usage_token)
 
                 # Record result
                 duration_ms = (time.time() - start_time) * 1000
                 span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
 
                 # Extract and record usage
-                usage = extract_usage(result, previous_usage)
-                if usage:
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_INPUT_TOKENS,
-                        usage.get("input_tokens", 0),
-                    )
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_OUTPUT_TOKENS,
-                        usage.get("output_tokens", 0),
-                    )
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_TOTAL_TOKENS,
-                        usage.get("total_tokens", 0),
-                    )
+                _record_usage(span, operation_usage.extract(result))
 
                 # Record output
                 output = getattr(result, "output", None) or getattr(result, "data", None)
@@ -271,7 +323,7 @@ def wrap_agent_run(
     @functools.wraps(original_method)
     def sync_wrapper(self, *args, **kwargs):
         attributes = _run_attributes(self, args, kwargs, method_name)
-        previous_usage = _usage_values(kwargs.get("usage"))
+        operation_usage = _OperationUsage(kwargs.get("usage"))
 
         start_time = time.time()
 
@@ -282,9 +334,11 @@ def wrap_agent_run(
         ) as span:
             try:
                 token = _SYNC_DELEGATION.set(self)
+                usage_token = _ACTIVE_USAGE.set(operation_usage)
                 try:
                     result = original_method(self, *args, **kwargs)
                 finally:
+                    _ACTIVE_USAGE.reset(usage_token)
                     _SYNC_DELEGATION.reset(token)
 
                 # Record result
@@ -292,20 +346,7 @@ def wrap_agent_run(
                 span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
 
                 # Extract and record usage
-                usage = extract_usage(result, previous_usage)
-                if usage:
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_INPUT_TOKENS,
-                        usage.get("input_tokens", 0),
-                    )
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_OUTPUT_TOKENS,
-                        usage.get("output_tokens", 0),
-                    )
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_TOTAL_TOKENS,
-                        usage.get("total_tokens", 0),
-                    )
+                _record_usage(span, operation_usage.extract(result))
 
                 output = getattr(result, "output", None)
                 if output is None:

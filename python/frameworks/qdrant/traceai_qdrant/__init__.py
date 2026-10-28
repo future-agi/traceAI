@@ -65,7 +65,8 @@ class QdrantInstrumentor(BaseInstrumentor):
             original = getattr(QdrantClient, name, None)
             if original is not None:
                 self._original_methods[name] = original
-                wrap_function_wrapper(_MODULE, f"QdrantClient.{name}", wrapper(tracer=tracer))
+                query_kwargs = {"method_name": name} if wrapper is QueryPointsWrapper else {}
+                wrap_function_wrapper(_MODULE, f"QdrantClient.{name}", wrapper(tracer=tracer, **query_kwargs))
 
         logger.debug("Qdrant instrumentation enabled")
 

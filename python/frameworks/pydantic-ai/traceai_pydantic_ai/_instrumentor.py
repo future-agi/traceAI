@@ -10,7 +10,7 @@ from typing import Any, Collection, Optional
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 
-from ._agent_wrapper import wrap_agent_run, wrap_tool_function
+from ._agent_wrapper import wrap_agent_run, wrap_tool_function, wrap_legacy_usage_incr
 from ._attributes import PydanticAIAttributes, PydanticAISpanKind
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         super().__init__()
         self._tracer: Optional[trace_api.Tracer] = None
         self._original_methods: dict = {}
+        self._legacy_usage_original = None
         self._use_builtin: bool = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -117,6 +118,14 @@ class PydanticAIInstrumentor(BaseInstrumentor):
             # Use Pydantic AI's built-in instrumentation
             self._enable_builtin_instrumentation()
             return
+
+        # Before request-local usage lived on ModelResponse, the SDK updated
+        # Usage in place. Observe its increments in the logical run's context.
+        from pydantic_ai import usage as usage_module
+        if not hasattr(usage_module, "RequestUsage"):
+            usage_class = usage_module.Usage
+            self._legacy_usage_original = (usage_class, usage_class.incr)
+            usage_class.incr = wrap_legacy_usage_incr(usage_class.incr)
 
         # Store original methods
         self._original_methods = {
@@ -249,6 +258,10 @@ class PydanticAIInstrumentor(BaseInstrumentor):
                     setattr(Agent, method_name, original)
 
             self._original_methods.clear()
+            if self._legacy_usage_original is not None:
+                usage_class, original = self._legacy_usage_original
+                usage_class.incr = original
+                self._legacy_usage_original = None
 
         except ImportError:
             pass

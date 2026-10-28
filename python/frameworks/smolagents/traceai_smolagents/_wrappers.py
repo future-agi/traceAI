@@ -222,26 +222,28 @@ class _StepWrapper:
         if isgeneratorfunction(wrapped):
             def stream():
                 span = self._tracer.start_span(span_name, attributes=attributes)
-                step_context = trace_api.set_span_in_context(span)
+                producer_context = trace_api.set_span_in_context(span)
                 try:
                     iterator = wrapped(*args, **kwargs)
                     advance, advance_args = iterator.__next__, ()
                     while True:
-                        # A generator suspends at yield. Make the step current
-                        # only inside the producer, never in its consumer.
-                        token = context_api.attach(step_context)
+                        # Resume the producer's latest context, including any
+                        # still-open child span or attached values at its yield.
+                        # The consumer retains its own unrelated context.
+                        token = context_api.attach(producer_context)
                         try:
                             item = advance(*advance_args)
                         except StopIteration as stopped:
                             finish(span, stopped.value)
                             return stopped.value
                         finally:
+                            producer_context = context_api.get_current()
                             context_api.detach(token)
 
                         try:
                             value = yield item
                         except GeneratorExit:
-                            token = context_api.attach(step_context)
+                            token = context_api.attach(producer_context)
                             try:
                                 iterator.close()
                             finally:
