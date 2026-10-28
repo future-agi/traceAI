@@ -174,6 +174,71 @@ pathlib.Path(OUTPUT).write_text(json.dumps(dict(host_uid=65534, private_file='ab
                 signatures.append(diagnostic['signature'])
             self.assertNotEqual(*signatures)
 
+    def test_real_startup_and_initial_conftest_failures_retain_diagnostics(self):
+        import subprocess
+        import sys
+        from run_case import COLLECTION_CODE, collection_failure
+        from plan import clean_env
+        for phase in ('plugin', 'conftest'):
+            signatures = []
+            for missing in ('_error_description', 'GatewayError'):
+                with self.subTest(phase=phase, missing=missing), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    module = 'broken_plugin.py' if phase == 'plugin' else 'conftest.py'
+                    (root / module).write_text('raise ImportError("cannot import name ' + missing + '")\n')
+                    (root / 'test_api.py').write_text('def test_api(): assert True\n')
+                    output, log = root / 'collection.json', root / 'collection.log'
+                    # Explicit fixture-only plugin import path; -I prevents an
+                    # implicit working-directory or PYTHONPATH import otherwise.
+                    code = 'import sys; sys.path.insert(0, sys.argv.pop(1));\n' + COLLECTION_CODE
+                    command = [sys.executable, '-I', '-c', code, str(root), str(output),
+                               'test_api.py', '--rootdir=.', '-c', '/dev/null', '--collect-only']
+                    if phase == 'plugin':
+                        command.extend(['-p', 'broken_plugin'])
+                    with log.open('w') as stream:
+                        process = subprocess.run(command, cwd=root, env=clean_env(), stdout=stream, stderr=subprocess.STDOUT)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertFalse(output.exists(), 'Probe must exercise the pre-collection fallback')
+                    diagnostic = collection_failure({}, log)
+                    self.assertIn(missing, diagnostic['summary'])
+                    self.assertIn(module, diagnostic['test_ids'])
+                    self.assertNotIn(str(root), diagnostic['summary'])
+                    signatures.append(diagnostic['signature'])
+            self.assertNotEqual(*signatures)
+
+    def test_invalid_first_attempt_schema_does_not_prevent_frozen_retry(self):
+        import copy
+        import os
+        import sys
+        from unittest.mock import patch
+        from run_case import main
+        from test_collect_results import evidence, trusted_validator
+        for corruption in ('json', 'schema'):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                plan, _, output, previous, data = evidence(Path(temporary))
+                case_id = data['cases'][0]['case_id']
+                retry = copy.deepcopy(data['cases'][0])
+                retry['attempt'] = 2
+                if corruption == 'schema':
+                    del data['cases'][0]['runtime']
+                    (previous / 'results.json').write_text(json.dumps(data))
+                else:
+                    (previous / 'results.json').write_text('{broken')
+                before = (previous / 'results.json').read_bytes()
+                argv = ['run_case', '--root', str(plan / 'source'), '--plan-dir', str(plan),
+                        '--case-id', case_id, '--out', str(output), '--previous', str(previous)]
+                with patch.object(sys, 'argv', argv), patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}), \
+                     patch('run_case.subprocess.check_output', return_value=SHA), \
+                     patch('run_case.semantic_validator', return_value=trusted_validator()), \
+                     patch('run_case.execute', return_value=retry) as execution:
+                    self.assertEqual(main(), 1)
+                execution.assert_called_once()
+                self.assertEqual(execution.call_args.args[2]['case_id'], case_id)
+                self.assertEqual(execution.call_args.args[-1], 2)
+                result = json.loads((output / 'results.json').read_text())
+                self.assertEqual(result['cases'][0]['status'], 'flaky')
+                self.assertEqual((previous / 'results.json').read_bytes(), before)
+
     def test_canonical_exception_semantics_are_delegated_before_attribution(self):
         from types import SimpleNamespace
         from unittest.mock import Mock

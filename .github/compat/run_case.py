@@ -22,6 +22,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from jsonschema import ValidationError
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import Version
@@ -253,17 +254,33 @@ def invoke(command, *, cwd, log, evidence, retained, output, timeout=600):
     return record
 
 
-def collection_failure(collection, log):
+def collection_failure(collection, log, *, consumer=None):
     """Bounded actual terminal diagnostics, including affected module/node IDs."""
     errors = collection.get("errors", [])
-    ids = sorted({e["test_id"] for e in errors if e.get("test_id")})
+    ids = {e["test_id"] for e in errors if e.get("test_id")}
     diagnostics = [e["diagnostic"] for e in errors if e.get("diagnostic")]
     if not diagnostics:
-        # A crash before the plugin can emit structured errors still retains its
-        # actual terminal diagnostic, not one generic 'collection failed' key.
+        # Initial conftest/plugin imports can fail before our collection hooks
+        # exist. Keep their actual terminal exception AND stable module identity.
+        # Extract identities before normalization removes runner-specific paths.
         content = log.read_bytes()[-32768:].decode(errors="replace") if log.is_file() else ""
+        for match in re.finditer(r'''(?:conftest\s+['"]|File\s+['"])([^'"\n]+\.py)['"]''', content):
+            path = Path(match[1])
+            if consumer is not None and path.is_absolute():
+                try:
+                    path = path.relative_to(consumer)
+                except ValueError:
+                    continue  # Toolchain frames are not affected suite modules.
+            elif path.is_absolute():
+                path = Path(path.name)
+            if ".." not in path.parts:
+                ids.add(path.as_posix())
         diagnostics = [line.strip() for line in content.splitlines()
-                       if re.match(r"^(?:E\\s+)?[\\w.]+(?:Error|Exception|Failure):", line.strip())]
+                       if re.match(r"^(?:E\s+)?[\w.]+(?:Error|Exception|Failure):", line.strip())][:64]
+        if not diagnostics:
+            # Non-Python startup failures still retain bounded terminal output;
+            # they must not all collapse to the same generic incident signature.
+            diagnostics = [line.strip() for line in content.splitlines() if line.strip()][-16:]
     return failure("collection", " | ".join(diagnostics) or "Collection produced no terminal diagnostic; see collection.log", ids)
 
 
@@ -398,7 +415,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             collection = json.loads(collection_evidence.read_text()) if collection_evidence.is_file() else {}
             if invocations["collection"]["exit_code"] != 0 or invocations["collection"]["timed_out"] or not collection:
                 row["status"] = "failed"
-                row["failure"] = collection_failure(collection, output / "collection.log")
+                row["failure"] = collection_failure(collection, output / "collection.log", consumer=consumer)
                 return row
             if collection["deselected"] or collection.get("errors") or not collection["nodes"] or len(collection["nodes"]) != len(set(collection["nodes"])):
                 raise ValueError("Empty/deselected/duplicate/errored full contract collection")
@@ -463,7 +480,7 @@ def main():
             history = validate_case(json.loads((args.previous / "results.json").read_text()), plan, raw, case, schema)
             if len(history) != 1:
                 raise ValueError("Previous artifact already contains a retry")
-        except (ValueError, KeyError, TypeError, OSError) as error:
+        except (ValueError, KeyError, TypeError, OSError, ValidationError) as error:
             # The immutable original remains untouched. Run the retry, but its
             # success can only be flaky until the original history is valid.
             missing = empty_case(case, plan, target)

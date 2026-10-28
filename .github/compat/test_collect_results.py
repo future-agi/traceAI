@@ -360,6 +360,56 @@ class CollectorTests(unittest.TestCase):
                 self.assertEqual((output / 'junit/attempt1.xml').read_bytes(),
                                  (second if malformed == 1 else first).joinpath('junit/attempt1.xml').read_bytes())
 
+    def test_malformed_invocation_shapes_block_only_the_affected_attempt(self):
+        mutations = {
+            'manifest-list': lambda s: [],
+            'manifest-null': lambda s: None,
+            'collection-list': lambda s: {**s, 'collection': []},
+            'contract-list': lambda s: {**s, 'contract': []},
+            'path-list': lambda s: {**s, 'collection': {**s['collection'], 'evidence_path': []}},
+        }
+        for malformed in (1, 2):
+            for name, mutate in mutations.items():
+                with self.subTest(attempt=malformed, shape=name), tempfile.TemporaryDirectory() as temporary:
+                    plan, artifacts, output, first, data = evidence(Path(temporary))
+                    cid = data['cases'][0]['case_id']
+                    second = artifacts / first.name.replace('attempt-1', 'attempt-2')
+                    shutil.copytree(first, second)
+                    retry = copy.deepcopy(data)
+                    retry['run']['run_attempt'] = retry['cases'][0]['attempt'] = 2
+                    write_json(second / 'results.json', retry)
+                    status = json.loads((first / invocation_path(cid, 1)).read_text())
+                    write_json(second / invocation_path(cid, 2), {**status, 'attempt': 2})
+                    folder = first if malformed == 1 else second
+                    relative = invocation_path(cid, malformed)
+                    original = json.dumps(mutate(json.loads((folder / relative).read_text())))
+                    (folder / relative).write_text(original)
+                    before = (first / 'results.json').read_bytes()
+                    with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+                        result, bad = self.collect(plan, artifacts, output)
+                    self.assertTrue(bad)
+                    self.assertEqual([r['status'] for r in result['cases']],
+                                     ['blocked', 'flaky'] if malformed == 1 else ['passed', 'blocked'])
+                    invalid = result['cases'][malformed - 1]
+                    self.assertEqual(invalid['resolved'], [])
+                    self.assertIsNone(invalid['dependency_lock'])
+                    self.assertEqual(invalid['contract']['junit_paths'], [])
+                    self.assertEqual((first / 'results.json').read_bytes(), before)
+                    self.assertEqual((output / f'evidence/{cid}/attempt-{malformed}' / relative).read_text(), original)
+                    self.assertTrue((output / 'results.json').is_file())
+
+    def test_malformed_collection_evidence_is_a_per_attempt_failure(self):
+        for malformed in ([], None, {'nodes': [], 'deselected': [], 'errors': [None]}):
+            with self.subTest(shape=malformed):
+                def mutate(data, folder):
+                    relative = invocation_path(data['cases'][0]['case_id'], 1)
+                    status = json.loads((folder / relative).read_text())
+                    path = folder / status['collection']['evidence_path']
+                    write_json(path, malformed)
+                    status['collection']['evidence_sha256'] = sha256(path.read_bytes())
+                    write_json(folder / relative, status)
+                self.run_control(mutate)
+
     def test_complete_freeze_must_include_explicit_coupled_companion_pins(self):
         from collect_results import frozen_environment
         with tempfile.TemporaryDirectory() as temporary:

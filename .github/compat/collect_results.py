@@ -189,14 +189,47 @@ def blocked_attempt(selected, plan, target, attempt, message):
     return row
 
 
+def invocation_manifest(folder, row, plan, raw):
+    """Validate decoded sidecar shapes before any consumer dereferences them.
+
+    Null nested records are real unstarted invocations, never successful exits.
+    Malformed evidence blocks only this attempt; raw history is already retained.
+    PR1 remains responsible for the shared semantic invocation verdict.
+    """
+    status = json.loads(safe_path(folder, invocation_path(row["case_id"], row["attempt"])).read_text())
+    if not isinstance(status, dict):
+        raise ValueError("Invocation manifest must be an object")
+    for field, expected in (("schema_version", 1), ("case_id", row["case_id"]), ("attempt", row["attempt"]),
+                            ("source_sha", plan["source_sha"]), ("plan_sha256", sha256(raw))):
+        if type(status.get(field)) is not type(expected) or status[field] != expected:
+            raise ValueError("Invocation identity mismatch: " + field)
+    for kind in ("collection", "contract"):
+        if kind not in status:
+            raise ValueError("Missing " + kind + " invocation record")
+        invocation = status[kind]
+        if invocation is None:
+            continue
+        if not isinstance(invocation, dict):
+            raise ValueError(kind + " invocation must be an object or null")
+        if ("exit_code" not in invocation or (invocation["exit_code"] is not None and type(invocation["exit_code"]) is not int)
+                or type(invocation.get("timed_out")) is not bool
+                or any(not isinstance(invocation.get(k), str) for k in ("started_at", "completed_at"))):
+            raise ValueError("Malformed " + kind + " invocation outcome")
+        path, digest = invocation.get("evidence_path"), invocation.get("evidence_sha256")
+        if "evidence_path" not in invocation or "evidence_sha256" not in invocation:
+            raise ValueError("Missing " + kind + " evidence fields")
+        if path is None and digest is None:
+            continue
+        if not isinstance(path, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("Malformed " + kind + " evidence reference")
+        safe_path(folder, path)
+    return status
+
+
 def invocation_references(folder, row, plan, raw, validator):
     """Retain producer exit evidence separately from dependency-written JUnit."""
     relative = invocation_path(row["case_id"], row["attempt"])
-    status = json.loads(safe_path(folder, relative).read_text())
-    for field, expected in (("schema_version", 1), ("case_id", row["case_id"]), ("attempt", row["attempt"]),
-                            ("source_sha", plan["source_sha"]), ("plan_sha256", sha256(raw))):
-        if status.get(field) != expected:
-            raise ValueError("Invocation identity mismatch: " + field)
+    status = invocation_manifest(folder, row, plan, raw)
     references = [relative]
     for kind in ("collection", "contract"):
         invocation = status.get(kind)
@@ -217,7 +250,13 @@ def invocation_references(folder, row, plan, raw, validator):
         references.extend([path, sidecar])
         if kind == "collection":
             collection = json.loads(content)
-            if collection["deselected"] or collection.get("errors") or collection["nodes"] != sorted(t["test_id"] for t in row["contract"]["tests"]):
+            if (not isinstance(collection, dict)
+                    or any(not isinstance(collection.get(k), list) for k in ("nodes", "deselected", "errors"))
+                    or any(not isinstance(node, str) for k in ("nodes", "deselected") for node in collection[k])
+                    or any(not isinstance(error, dict) or not isinstance(error.get("test_id"), str)
+                           or not isinstance(error.get("diagnostic"), str) for error in collection["errors"])):
+                raise ValueError("Malformed collection evidence")
+            if collection["deselected"] or collection["errors"] or collection["nodes"] != sorted(t["test_id"] for t in row["contract"]["tests"]):
                 raise ValueError("Partial/deselected execution differs from full collected identities")
         else:
             if row["contract"]["junit_paths"] != [path]:
@@ -364,7 +403,7 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
                 status_path = invocation_path(cid, attempt)
                 if safe_path(folder, status_path).is_file():
                     references.append(status_path)
-                    status = json.loads(safe_path(folder, status_path).read_text())
+                    status = invocation_manifest(folder, row, plan, raw)
                     for kind in ("collection", "contract"):
                         if isinstance(status.get(kind), dict) and status[kind].get("evidence_path"):
                             references.append(status[kind]["evidence_path"])
