@@ -416,6 +416,7 @@ class KnownBrokenVerdict(unittest.TestCase):
                                       env={**base, **(overrides or {})}, capture_output=True, text=True)
             xml = '<testsuites><testsuite><testcase file=".github/compat/contracts/test_google_genai.py" classname="test_google_genai" name="test_plain"/></testsuite></testsuites>'
             junit.write_text(xml)
+            (directory / 'suite.xml.exit-code').write_text('0\n')
             self.assertEqual(run().returncode, 0)
             for outcome in ['skipped', 'cancelled', '']:
                 self.assertNotEqual(run({'TESTS': outcome}).returncode, 0)
@@ -536,6 +537,7 @@ class WorkflowText(unittest.TestCase):
         ):
             self.assertIn(line, tests)
         self.assertEqual(sum("status=$((rc > status ? rc : status))" in line for line in tests), 3, tests)
+        self.assertEqual(sum('printf' in line and '.xml.exit-code' in line for line in tests), 3, tests)
         self.assertEqual(sum(line == "ran=$((ran + 1))" for line in tests), 3, tests)
 
     @classmethod

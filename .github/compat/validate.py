@@ -6,7 +6,9 @@ module never reads files or starts a subprocess. Artifact commands are data only
 """
 import argparse
 import ast
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import math
+import subprocess
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -253,9 +255,157 @@ def judge_tests(tests, target, runtime, resolved):
     return 'quarantined' if degraded else 'passed'
 
 
-def validate_results(data, registry=None, expected_source_sha=None, expected_case_ids=None):
-    shape(data, 'results')
+def suite_files(root, contract):
+    """Same complete consumer snapshot as PR2, including helpers and configuration."""
+    root = Path(root).resolve()
+    files = set()
+    for relative in contract['paths']:
+        path = safe_path(root, relative)
+        require(path.is_file(), f'missing trusted suite: {relative}')
+        for candidate in path.parent.rglob('*'):
+            if candidate.is_file() and '__pycache__' not in candidate.parts and not candidate.name.endswith('.pyc'):
+                rel = candidate.relative_to(root).as_posix()
+                safe_path(root, rel)
+                files.add(rel)
+        for parent in [path.parent, *path.parent.parents]:
+            if not parent.is_relative_to(root):
+                break
+            for name in ('conftest.py', 'pytest.ini', 'pyproject.toml', 'setup.cfg', '__init__.py'):
+                candidate = parent / name
+                if candidate.is_file():
+                    files.add(candidate.relative_to(root).as_posix())
+    return sorted(files)
+
+
+def suite_digest(root, contract):
+    digest = hashlib.sha256()
+    for relative in suite_files(root, contract):
+        digest.update(relative.encode() + b'\0' + safe_path(root, relative).read_bytes() + b'\0')
+    return digest.hexdigest()
+
+
+def expected_test_nodes(root, contract):
+    """Fail closed for a partial suite: every trusted test function must execute.
+
+    Parameter suffixes are reconciled to their owning function; exact per-parameter
+    identities and outcomes are additionally reconciled against original JUnit.
+    Dynamic/inherited test suites need an explicit collector adapter before promotion.
+    """
+    expected = set()
+    def visit(nodes, prefix):
+        for node in nodes:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'):
+                expected.add(prefix + '::' + node.name)
+            elif isinstance(node, ast.ClassDef) and node.name.startswith('Test'):
+                visit(node.body, prefix + '::' + node.name)
+    for relative in contract['paths']:
+        visit(ast.parse(safe_path(root, relative).read_text()).body, relative)
+    require(expected, 'trusted suite has no statically registered test nodes')
+    return expected
+
+
+def validate_contract(case, target, root):
+    contract, registered = case['contract'], target['contract_test']
+    require(registered is not None, 'pass without an execution contract')
+    require(case['language'] == 'python', 'native execution-evidence adapter not yet qualified')
+    require(contract['suite_sha256'] == suite_digest(root, registered), 'trusted suite digest mismatch')
+    # Scenarios are the owner's declarations about the complete, immutable suite,
+    # not an artifact's arbitrary labels. Executing a subset cannot claim them.
+    require(set(contract['scenarios']) == set(registered['scenarios']) and
+            len(contract['scenarios']) == len(set(contract['scenarios'])), 'registered scenarios mismatch')
+    expected = expected_test_nodes(root, registered)
+    actual = {t['test_id'].split('[', 1)[0] for t in contract['tests'] if t['outcome'] != 'skipped'}
+    require(actual == expected, f'registered contract test nodes mismatch: missing={sorted(expected-actual)}, unrelated={sorted(actual-expected)}')
+    # Producer appends runner isolation/JUnit options, but must retain the trusted
+    # argv in order (with an optional -I immediately after the Python executable).
+    command = list(contract['command'])
+    if command[:2] == ['python', '-I']:
+        command.pop(1)
+    require(command[:len(registered['command'])] == registered['command'], 'registered contract command mismatch')
+
+
+def requested_version(req, language):
+    value = req['requirement']
+    version = req['selected_version']
+    if language == 'python':
+        if value.startswith(('=', '!', '<', '>', '~')):
+            parsed = Requirement(req['name'] + value)
+        else:
+            parsed = Requirement(value)
+        require(canonicalize_name(parsed.name) == canonicalize_name(req['name']) and
+                parsed.url is None and parsed.marker is None and bool(str(parsed.specifier)) and
+                parsed.specifier.contains(version, prereleases=True), 'requested requirement excludes selected version')
+    else:
+        # Native floating adapters are not enabled yet. Only native exact pins are
+        # accepted; never reinterpret npm ranges, Go MVS or Maven as PEP 440.
+        if language in ('typescript', 'java', 'csharp'):
+            require(value == version or value == '=' + version, 'native requirement needs a verified exact pin')
+        elif language == 'go':
+            require(value in (version, req['name'] + '@' + version) and version.startswith('v'),
+                    'Go requirement must be an exact module version, not a minimum')
+
+
+def timestamp(value):
+    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    require(parsed.tzinfo is not None, 'timestamp requires timezone')
+    return parsed
+
+
+def reconcile_artifacts(case, artifact_root):
+    require(artifact_root is not None, 'execution evidence requires an artifact root')
+    lock = case['dependency_lock']
+    if lock:
+        path = safe_path(artifact_root, lock['path'])
+        require(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == lock['sha256'], 'lock digest mismatch')
+    paths = case['contract']['junit_paths']
+    require(len(paths) == len(set(paths)), 'duplicate JUnit report')
+    observed_tests = [t for path in paths for t in junit_tests(safe_path(artifact_root, path))]
+    claimed = case['contract']['tests']
+    require(len(observed_tests) == len(claimed) and len({t['test_id'] for t in observed_tests}) == len(observed_tests),
+            'JUnit test count/identity mismatch')
+    actual = {t['test_id']: t for t in observed_tests}
+    for test in claimed:
+        require(test['test_id'] in actual, 'JUnit test identity mismatch')
+        row = actual[test['test_id']]
+        require(all(test[k] == row[k] for k in ('outcome', 'failure_signature')) and
+                abs(test['duration_seconds'] - row['duration_seconds']) <= 0.000001,
+                f'JUnit outcome/signature/duration mismatch: {test["test_id"]}')
+
+
+def reconcile_plan(data, plan, raw):
+    require(json.loads(raw) == plan, 'trusted plan object/bytes mismatch')
     run = data['run']
+    require(hashlib.sha256(raw).hexdigest() == run['plan_sha256'], 'plan digest mismatch')
+    for field in ('source_sha', 'workflow_sha', 'cooldown_hours', 'cooldown_cutoff', 'self_test'):
+        require(run[field] == plan[field], f'trusted plan {field} mismatch')
+    planned = {c['case_id']: c for c in plan['cases']}
+    require(len(planned) == len(plan['cases']) and set(planned) == set(run['planned_case_ids']), 'trusted planned cases mismatch')
+    for case in data['cases']:
+        require(case['case_id'] in planned, 'unplanned result')
+        trusted = planned[case['case_id']]
+        for field in ('integration_id', 'mode', 'selector', 'requested'):
+            require(case[field] == trusted[field], f'trusted case {field} mismatch')
+        require(case['runtime']['version'].split('.')[:2] == trusted['runtime'].split('.')[:2], 'trusted runtime mismatch')
+        if case['status'] in ('passed', 'quarantined'):
+            require(trusted['resolution'] is not None and not trusted['problems'], 'pass without trusted resolution')
+            require(case['resolved'] == trusted['resolution']['resolved'], 'trusted resolved tuple mismatch')
+        expected = [{**d, 'resolved_version': next((r['version'] for r in case['resolved'] if
+                     canonicalize_name(r['name']) == canonicalize_name(d['name'])), None)} for d in trusted['discovery']]
+        require(case['discovery'] == expected, 'trusted discovery mismatch')
+
+
+def validate_results(data, registry=None, expected_source_sha=None, expected_case_ids=None,
+                     *, artifact_root=None, source_root=ROOT, expected_plan=None, plan_bytes=None):
+    shape(data, 'results')
+    if registry is None:
+        registry = load_registry(source_root)
+    if expected_plan is not None:
+        require(plan_bytes is not None, 'trusted plan bytes required')
+        reconcile_plan(data, expected_plan, plan_bytes)
+    run = data['run']
+    require(timestamp(run['started_at']) - timestamp(run['cooldown_cutoff']) == timedelta(hours=72),
+            'cutoff must be 72 hours before immutable plan start')
+    require(timestamp(run['completed_at']) >= timestamp(run['started_at']), 'run completed before start')
     require(expected_source_sha is None or run['source_sha'] == expected_source_sha, 'source identity mismatch')
     planned = set(run['planned_case_ids'])
     require(expected_case_ids is None or planned == set(expected_case_ids), 'plan identity mismatch')
@@ -303,21 +453,48 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
                 name = canonicalize_name(req['name']) if case['language'] == 'python' else req['name']
                 require(req['selected_version'] is not None and resolved.get((name, req['role'])) == req['selected_version'],
                         'requested/resolved mismatch')
+                requested_version(req, case['language'])
             if target:
-                require(target['contract_test'] is not None, 'pass without an execution contract')
+                validate_contract(case, target, source_root)
+                if case['language'] == 'python':
+                    require(case['runtime']['implementation'] == target['runtimes']['implementation'] and
+                            SpecifierSet(target['runtimes']['declared']).contains(case['runtime']['version']),
+                            'execution runtime outside registered constraints')
+                    for upstream in target['upstream']:
+                        matches = [r for r in case['requested'] if canonicalize_name(r['name']) == canonicalize_name(upstream['name'])
+                                   and r['role'] == ('upstream' if upstream['role'] == 'primary' else 'companion')]
+                        require(len(matches) == 1, 'requested upstream role mismatch')
+                        version = matches[0]['selected_version']
+                        require(upstream['declared_range'] is not None and
+                                SpecifierSet(upstream['declared_range']).contains(version, prereleases=True),
+                                'selected upstream outside registered support')
+                        if case['selector'] == 'floor':
+                            require(version == upstream['exact_floor'], 'selected version is not the exact registered floor')
                 verdict = judge_tests(tests, target, case['runtime'], case['resolved'])
                 require(verdict == case['status'], 'false pass/quarantine status')
             else:
                 require(case['status'] != 'passed' or all(t['outcome'] == 'passed' for t in tests), 'pass with failures')
             require(case['status'] != 'passed' or case['failure'] is None, 'pass with a failure')
+        if successful or contract['junit_paths']:
+            reconcile_artifacts(case, artifact_root)
+        discovery_names = [canonicalize_name(d['name']) if case['language'] == 'python' else d['name'] for d in case['discovery']]
+        require(len(set(discovery_names)) == len(discovery_names), 'duplicate discovery package')
+        if successful and case['selector'] == 'latest_eligible':
+            expected_names = {canonicalize_name(u['name']) if case['language'] == 'python' else u['name']
+                              for u in target['upstream']} if target else {
+                              name for (name, role) in resolved if role in ('upstream', 'companion')}
+            require(expected_names and set(discovery_names) == expected_names, 'incomplete latest-eligible discovery')
         for discovery in case['discovery']:
             found = [r for r in case['resolved'] if (canonicalize_name(r['name']) if case['language'] == 'python' else r['name']) ==
                      (canonicalize_name(discovery['name']) if case['language'] == 'python' else discovery['name'])]
             if successful:
                 require(len(found) == 1 and discovery['resolved_version'] == found[0]['version'] == discovery['requested_version'], 'discovery/resolution mismatch')
                 require(not discovery['yanked'], 'pass with yanked release')
+                age = discovery['published_at'] or discovery['first_seen_at']
+                require(age is not None and timestamp(age) <= timestamp(run['cooldown_cutoff']), 'release inside cooldown or missing eligibility time')
                 if case['selector'] == 'latest_eligible':
-                    require(discovery['requested_version'] == discovery['latest_eligible'], 'false latest-eligible claim')
+                    require(discovery['absolute_latest'] is not None and discovery['latest_eligible'] is not None and
+                            discovery['requested_version'] == discovery['latest_eligible'], 'false latest-eligible claim')
     require(set(groups) == planned, 'missing planned evidence')
     for attempts in groups.values():
         attempts.sort(key=lambda c: c['attempt'])
@@ -331,10 +508,26 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
     return data
 
 
-def failure_signature(kind, test_ids, text):
-    # First exception/assertion line; runner paths/addresses/timestamps are unstable.
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    message = next((line for line in lines if re.search(r'(?:Error|Exception|assert\b|Assertion)', line)), lines[0] if lines else kind)
+def failure_signature(kind, test_ids, text, diagnostic=None):
+    # Pytest source excerpts may contain earlier assertions or exception names.
+    # Only its actual diagnostic (message attribute / E-prefixed lines) is evidence.
+    errors = [re.sub(r'^E\s+', '', line).strip() for line in text.splitlines() if re.match(r'^E\s+', line)]
+    if diagnostic:
+        message = diagnostic.strip()
+        # Assertion messages omit their type in pytest's message attribute.
+        if message.startswith('assert '):
+            message = 'AssertionError: ' + message
+    elif errors:
+        message = '\n'.join(errors)
+    else:
+        diagnostics = [line.strip() for line in text.splitlines()
+                       if re.match(r'^[\w.]+(?:Error|Exception|Failure):', line.strip())]
+        require(diagnostics, 'missing actual exception diagnostic')
+        message = diagnostics[-1]
+    # Include the actual exception type even if a plugin emits a terse message.
+    types = [re.match(r'^([\w.]+):', line).group(1) for line in errors if re.match(r'^([\w.]+):', line)]
+    if types and not message.startswith(types[-1] + ':'):
+        message = types[-1] + ': ' + message
     message = re.sub(r'0x[0-9a-fA-F]+', '<address>', message)
     message = re.sub(r'(?:/[^\s:]+)+/', '<path>/', message)
     message = re.sub(r'\d{4}-\d\d-\d\d[T ][\d:.+Z-]+', '<time>', message)
@@ -343,27 +536,57 @@ def failure_signature(kind, test_ids, text):
 
 
 def junit_tests(path):
+    path = Path(path)
     require(path.is_file() and path.stat().st_size <= 16 * 1024 * 1024, f'missing/oversized JUnit: {path}')
-    tree = ET.parse(path)
+    raw = path.read_bytes()
+    require(b'<!DOCTYPE' not in raw and b'<!ENTITY' not in raw, 'unsafe JUnit declarations')
+    try:
+        tree = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise ValueError(f'malformed JUnit: {path}') from exc
+    require(tree.tag in ('testsuites', 'testsuite'), 'invalid JUnit root')
     tests = []
     for node in tree.iter('testcase'):
         file = node.get('file', '')
-        require(file.endswith('.py') and not PurePosixPath(file).is_absolute() and '..' not in PurePosixPath(file).parts,
+        require(file.endswith('.py') and not PurePosixPath(file).is_absolute() and '..' not in PurePosixPath(file).parts and '\\' not in file,
                 'JUnit requires repository-relative file attributes (use --rootdir and junit_family=xunit1)')
+        require(node.get('name'), 'JUnit missing test name')
         classname = node.get('classname', '')
         marker = PurePosixPath(file).stem
         suffix = classname.rsplit(marker, 1)[-1].strip('.') if marker in classname else ''
-        test_id = file + '::' + (suffix.replace('.', '::') + '::' if suffix else '') + node.get('name', '')
+        test_id = file + '::' + (suffix.replace('.', '::') + '::' if suffix else '') + node.get('name')
+        children = [c for c in node if c.tag in ('failure', 'error', 'skipped')]
+        require(len(children) <= 1, 'ambiguous JUnit outcomes')
         outcome, signature = 'passed', None
-        for tag in ['failure', 'error', 'skipped']:
-            child = node.find(tag)
-            if child is not None:
-                outcome = tag
-                if tag != 'skipped':
-                    signature = failure_signature(tag, [test_id], child.text or child.get('message', tag))
-                break
-        tests.append(dict(test_id=test_id, outcome=outcome, duration_seconds=float(node.get('time', '0')),
+        if children:
+            child = children[0]
+            outcome = child.tag
+            if outcome != 'skipped':
+                signature = failure_signature(outcome, [test_id], child.text or '', child.get('message'))
+        duration = float(node.get('time', '0'))
+        require(math.isfinite(duration) and duration >= 0, 'invalid JUnit duration')
+        tests.append(dict(test_id=test_id, outcome=outcome, duration_seconds=duration,
                           failure_signature=signature, exception_id=None))
+    require(tests, f'empty JUnit collection: {path}')
+    require(len({t['test_id'] for t in tests}) == len(tests), 'duplicate JUnit test IDs')
+    for suite in tree.iter('testsuite'):
+        nodes = list(suite.iter('testcase'))
+        counts = dict(tests=len(nodes), failures=sum(n.find('failure') is not None for n in nodes),
+                      errors=sum(n.find('error') is not None for n in nodes), skipped=sum(n.find('skipped') is not None for n in nodes))
+        for key, value in counts.items():
+            require(key not in suite.attrib or int(suite.get(key)) == value, f'JUnit {key} count mismatch')
+    return tests
+
+
+def invocation_tests(paths, exits):
+    require(paths and len(paths) == len(exits), 'each invocation requires its own exit code and JUnit')
+    tests = []
+    for path, exit_code in zip(paths, exits):
+        require(exit_code in (0, 1), 'runner/collection error cannot be quarantined')
+        suite = junit_tests(path)
+        require((exit_code == 0) == all(t['outcome'] == 'passed' for t in suite),
+                f'runner/JUnit outcome mismatch for invocation: {path}')
+        tests.extend(suite)
     return tests
 
 
@@ -375,11 +598,13 @@ def main(argv=None):
         command.add_argument('--root', type=Path, default=ROOT)
         if name == 'results':
             command.add_argument('path', type=Path)
+            command.add_argument('--plan', type=Path, help='Original immutable compat-plan.json (default: beside results)')
         if name == 'verdict':
             command.add_argument('--integration-id', required=True)
             command.add_argument('--context', type=Path, required=True)
             command.add_argument('--junit', action='append', type=Path, default=[])
-            command.add_argument('--exit-code', type=int, required=True)
+            command.add_argument('--exit-code', type=int, action='append', required=True,
+                                 help='One status per --junit, in the same order; never an aggregated maximum')
         if name == 'fixture-gate':
             command.add_argument('kind', choices=['scoped', 'execution'])
     args = parser.parse_args(argv)
@@ -396,26 +621,17 @@ def main(argv=None):
         registry = load_registry(args.root)
         if args.command == 'results':
             data = json.loads(args.path.read_text())
-            validate_results(data, registry)
-            for case in data['cases']:
-                if case['dependency_lock']:
-                    lock = case['dependency_lock']
-                    path = safe_path(args.path.parent, lock['path'])
-                    require(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == lock['sha256'], 'lock digest mismatch')
-                for path in case['contract']['junit_paths']:
-                    require(safe_path(args.path.parent, path).is_file(), 'missing JUnit evidence')
+            plan_path = args.plan or args.path.parent / 'compat-plan.json'
+            raw = plan_path.read_bytes()
+            source_sha = subprocess.check_output(['git', '-C', str(args.root), 'rev-parse', 'HEAD'], text=True).strip()
+            validate_results(data, registry, expected_source_sha=source_sha,
+                             artifact_root=args.path.parent, source_root=args.root,
+                             expected_plan=json.loads(raw), plan_bytes=raw)
         elif args.command == 'verdict':
-            require(args.exit_code in [0, 1], 'runner/collection error cannot be quarantined')
             target = next(t for t in registry['integrations'] if t['id'] == args.integration_id)
             context = json.loads(args.context.read_text())
-            require(args.junit, 'no JUnit suites planned: integration not tested')
-            tests = []
-            for path in args.junit:
-                suite = junit_tests(path)
-                require(suite, f'empty collection: {path}')
-                tests.extend(suite)
+            tests = invocation_tests(args.junit, args.exit_code)
             verdict = judge_tests(tests, target, context['runtime'], context['resolved'])
-            require((args.exit_code == 0) == all(t['outcome'] == 'passed' for t in tests), 'runner/JUnit outcome mismatch')
             print(f'{target["id"]}: {verdict}; executed={len(tests)}; qualification={target["qualification"]["status"]}')
         else:
             print(f'Validated {len(registry["integrations"])} inventory records (not a compatibility claim).')

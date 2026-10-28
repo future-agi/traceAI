@@ -1,5 +1,11 @@
 {
-  "notice": "Synthetic acceptance data, not a real exception or issue assertion. Dates rebound to today only inside the fixture gate. Production registry has zero exceptions.",
+  "notice": "Synthetic acceptance data, not a real exception or issue assertion. Dates rebound to today only inside the fixture gate. The initial snapshot is historical, not a production invariant.",
+  "initial_snapshot": {
+    "foundation_sha": "64e3a57ad273559849bbab0b8125bc57c7e7592e",
+    "integrations": 146,
+    "exceptions": 0,
+    "qualified": 0
+  },
   "target": {
     "id": "python-fixture",
     "package_dir": "python/frameworks/fixture",

@@ -21,7 +21,15 @@ if [ "${#files[@]}" -ne "$EXPECTED_SUITES" ] || [ "$EXPECTED_SUITES" -eq 0 ]; th
   exit 1
 fi
 args=()
-for file in "${files[@]}"; do args+=(--junit "$file"); done
+maximum=0
+for file in "${files[@]}"; do
+  [ -f "$file.exit-code" ] || { echo "::error::missing invocation exit status for $file"; exit 1; }
+  rc=$(cat "$file.exit-code")
+  case "$rc" in 0|1|2|3|4|5) ;; *) echo "::error::invalid/crashed invocation exit status"; exit 1 ;; esac
+  [ "$rc" -le "$maximum" ] || maximum=$rc
+  args+=(--junit "$file" --exit-code "$rc")
+done
+[ "$maximum" = "$TEST_EXIT_CODE" ] || { echo "::error::aggregate/invocation exit mismatch"; exit 1; }
 exec "${VALIDATOR_PYTHON:-python3}" "${GITHUB_WORKSPACE:-$(pwd)}/.github/compat/validate.py" verdict \
   --root "${GITHUB_WORKSPACE:-$(pwd)}" --integration-id "$INTEGRATION_ID" \
-  --context "$TEST_CONTEXT" --exit-code "$TEST_EXIT_CODE" "${args[@]}"
+  --context "$TEST_CONTEXT" "${args[@]}"

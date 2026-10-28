@@ -263,7 +263,10 @@ jobs:
           if [ "$OWN_TESTS" = "true" ]; then
             ran=$((ran + 1))
             echo "::group::$PKG_NAME: $PKG_DIR/tests"
-            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest tests -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/own.xml") || { rc=$?; status=$((rc > status ? rc : status)); }
+            rc=0
+            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest tests -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/own.xml") || rc=$?
+            printf '%s\n' "$rc" > "$JUNIT_DIR/own.xml.exit-code"
+            status=$((rc > status ? rc : status))
             echo "::endgroup::"
           fi
 
@@ -273,13 +276,19 @@ jobs:
           for test_file in $CORE_TESTS; do
             ran=$((ran + 1))
             echo "::group::$PKG_NAME: $test_file"
-            (cd "$GITHUB_WORKSPACE/python" && "$venv_python" -P -m pytest "${test_file#python/}" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/core-$ran.xml") || { rc=$?; status=$((rc > status ? rc : status)); }
+            rc=0
+            (cd "$GITHUB_WORKSPACE/python" && "$venv_python" -P -m pytest "${test_file#python/}" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/core-$ran.xml") || rc=$?
+            printf '%s\n' "$rc" > "$JUNIT_DIR/core-$ran.xml.exit-code"
+            status=$((rc > status ? rc : status))
             echo "::endgroup::"
           done
 
           for test_file in $CONTRACT_TESTS; do
             ran=$((ran + 1))
-            "$venv_python" -m pytest "$test_file" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o addopts= -o asyncio_mode=auto -o junit_family=xunit1 --junitxml="$JUNIT_DIR/contract-$ran.xml" || { rc=$?; status=$((rc > status ? rc : status)); }
+            rc=0
+            "$venv_python" -m pytest "$test_file" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o addopts= -o asyncio_mode=auto -o junit_family=xunit1 --junitxml="$JUNIT_DIR/contract-$ran.xml" || rc=$?
+            printf '%s\n' "$rc" > "$JUNIT_DIR/contract-$ran.xml.exit-code"
+            status=$((rc > status ? rc : status))
           done
 
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"

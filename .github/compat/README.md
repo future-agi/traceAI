@@ -76,6 +76,18 @@ The old list may survive while repair PRs remove lines, but new scoped verdicts
 must not fall back to its permission-to-fail behavior. If no valid scoped
 exception can be established, the failure stays visible.
 
+Fingerprints use the actual JUnit exception diagnostic and type, never a displayed
+traceback source line (which may contain an earlier unrelated assertion). All
+producers must use `validate.failure_signature` / `validate.junit_tests` so that
+quarantine matching and downstream evidence reconciliation use the same digest.
+Existing fingerprints require review when the diagnostic algorithm changes.
+
+Each Python invocation writes `<report>.xml.exit-code`. The verdict reconciles
+each status against its own JUnit **before** considering any exact exceptions.
+An all-passing suite with a coverage/runner exit of 1 remains red even if another
+suite has an exactly quarantined test failure. A maximum aggregate exit is only
+a display/checksum, never execution evidence.
+
 ## Results ABI
 
 PR2 uploads `compatibility-plan` (including `compat-plan.json`), per-case
@@ -98,6 +110,33 @@ nonzero/skip violations, false pass with failures, requested/resolved mismatch,
 bad lock hashes and expired/mis-scoped exceptions. Qualified passed cases need
 nonzero executed contracts and a reproducible dependency lock. Preserve both
 attempts; a retry pass after failure is `flaky`, not an ordinary pass.
+
+`validate_results(..., artifact_root=..., source_root=..., expected_plan=...,
+plan_bytes=...)` validates original reports, lock digests, trusted suite digest,
+registered command/scenarios and every statically declared test function in the
+registered paths. Parameterized nodes retain exact IDs in JUnit and exceptions;
+complete-suite coverage is checked at the function level. The caller supplies the
+trusted immutable source checkout and plan bytes; downloaded argv is never run.
+A passing JSON object without an artifact root is not execution evidence.
+
+The `results` CLI requires the original `compat-plan.json` beside `results.json`
+(or `--plan PATH`) and a `--root` checkout at the tested source SHA. Plan identity,
+requested tuples, resolved tuples, discovery and runtime are reconciled before a
+passing claim is accepted. Full-suite scenarios are owner's declarations bound
+to the complete trusted suite, not arbitrary labels supplied by the artifact.
+Dynamic/inherited Python suites and non-Python evidence need qualified native
+collector adapters before this validator will accept a successful case.
+
+Python requests are checked using PEP 440/508. Native non-Python requests are
+accepted only as exact pins, never reinterpreted with Python range semantics.
+Latest-eligible evidence requires the complete upstream/companion discovery set,
+non-yanked releases, a publication or first-seen timestamp at/before the immutable
+72-hour cutoff, and matching selected/resolved/latest-eligible versions. Existing
+locked regression jobs do not claim floating-latest coverage.
+
+Initial counts/statuses are historical fixture data only. Production tests check
+metadata/inventory completeness and valid changes; they do not prohibit adding
+integrations, reviewed exceptions or evidence-backed qualification.
 
 ## Execution and privileges
 

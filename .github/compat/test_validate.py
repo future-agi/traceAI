@@ -1,7 +1,10 @@
 """Registry/evidence and adversarial exact-exception tests (no SDK or network)."""
 import copy
 from datetime import date, timedelta
+import hashlib
 import json
+import os
+import xml.etree.ElementTree as ET
 from pathlib import Path
 import subprocess
 import sys
@@ -9,7 +12,8 @@ import tempfile
 import unittest
 
 from validate import (ROOT, load_registry, validate_registry, validate_results,
-                      judge_tests, failure_signature, junit_tests, safe_path)
+                      judge_tests, failure_signature, junit_tests, safe_path,
+                      suite_digest, expected_test_nodes, invocation_tests, requested_version)
 
 
 def fixture():
@@ -20,7 +24,7 @@ def fixture():
     return data
 
 
-def result_fixture():
+def result_fixture(artifact_root=None):
     now = '2026-10-28T09:00:00Z'
     registry = load_registry(ROOT)
     target = next(t for t in registry['integrations'] if t['id'] == 'python-anthropic')
@@ -42,15 +46,62 @@ def result_fixture():
                event='self_test', url='https://example.invalid/run', source_sha='1'*40, workflow_sha='2'*40,
                plan_sha256='a'*64, planned_case_ids=[case['case_id']], started_at=now, completed_at=now,
                cooldown_hours=72, cooldown_cutoff='2026-10-25T09:00:00Z', self_test=True)
+    contract = target['contract_test']
+    nodes = sorted(expected_test_nodes(ROOT, contract))
+    case['contract'].update(command=contract['command'], suite_sha256=suite_digest(ROOT, contract),
+                            scenarios=contract['scenarios'], collected=len(nodes), executed=len(nodes),
+                            tests=[dict(test_id=node, outcome='passed', duration_seconds=0.1,
+                                        failure_signature=None, exception_id=None) for node in nodes])
+    if artifact_root is not None:
+        artifact_root = Path(artifact_root)
+        (artifact_root / 'locks').mkdir(exist_ok=True)
+        (artifact_root / 'junit').mkdir(exist_ok=True)
+        lock = b'anthropic==0.41.0\n'
+        (artifact_root / 'locks/freeze.txt').write_bytes(lock)
+        case['dependency_lock']['sha256'] = hashlib.sha256(lock).hexdigest()
+        root = ET.Element('testsuites')
+        suite = ET.SubElement(root, 'testsuite')
+        for node in nodes:
+            path, name = node.split('::')
+            ET.SubElement(suite, 'testcase', file=path, classname='test_anthropic', name=name, time='0.1')
+        ET.ElementTree(root).write(artifact_root / 'junit/tests.xml')
     return dict(schema_version=1, run=run, cases=[case]), registry
 
 
+def plan_fixture(data):
+    c = data['cases'][0]
+    plan = {key: data['run'][key] for key in ('source_sha', 'workflow_sha', 'cooldown_hours', 'cooldown_cutoff', 'self_test')}
+    plan['cases'] = [{**{key: c[key] for key in ('case_id', 'integration_id', 'mode', 'selector', 'requested', 'discovery')},
+                      'runtime': '3.11', 'problems': [], 'resolution': {'resolved': c['resolved']}}]
+    raw = json.dumps(plan).encode()
+    data['run']['plan_sha256'] = hashlib.sha256(raw).hexdigest()
+    return json.loads(raw), raw
+
+
 class RegistryTests(unittest.TestCase):
-    def test_full_inventory_and_no_fabricated_quarantines(self):
+    def test_production_inventory_is_complete_and_valid(self):
+        # Inventory completeness is verified against discovered manifests, not a
+        # permanent count/status veto on additions, exceptions or qualification.
+        load_registry(ROOT)
+
+    def test_frozen_initial_snapshot(self):
+        snapshot = json.loads((ROOT / '.github/compat/fixtures/validation.json').read_text())['initial_snapshot']
+        self.assertEqual(snapshot, {'foundation_sha': '64e3a57ad273559849bbab0b8125bc57c7e7592e',
+                                   'integrations': 146, 'exceptions': 0, 'qualified': 0})
+
+    def test_owned_exception_and_qualification_are_not_prohibited(self):
         registry = load_registry(ROOT)
-        self.assertEqual(len(registry['integrations']), 146)
-        self.assertFalse(any(t['exceptions'] for t in registry['integrations']))
-        self.assertTrue(all(t['qualification']['status'] != 'qualified' for t in registry['integrations']))
+        target = next(t for t in registry['integrations'] if t['id'] == 'python-anthropic')
+        ex = fixture()['target']['exceptions'][0]
+        ex.update(id='fixture-review-only', test_ids=['.github/compat/contracts/test_anthropic.py::test_error_propagation'],
+                  upstream_constraints=[{'name': 'anthropic', 'specifier': '==0.41.0'}])
+        target['exceptions'] = [ex]
+        validate_registry(registry, ROOT)
+        target['exceptions'] = []
+        # Synthetic registry only: prove the test harness permits the transition.
+        target['qualification'].update(status='qualified', evidence=['fixture-only-execution-evidence'])
+        target['upstream'][0]['runtime_range_source'] = None
+        validate_registry(registry, ROOT)
 
     def test_duplicates_and_missing_packages_fail(self):
         data = load_registry(ROOT)
@@ -89,6 +140,23 @@ class RegistryTests(unittest.TestCase):
             (Path(tmp)/'link').symlink_to('/tmp')
             with self.assertRaises(ValueError):
                 safe_path(Path(tmp), 'link/secret')
+
+
+def pytest_report(root, relative, source, label, *, runner_failure=False):
+    path = Path(root) / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source)
+    if runner_failure:
+        (Path(root) / 'conftest.py').write_text('def pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 1\n')
+    report = Path(root) / (label + '.xml')
+    run = subprocess.run([sys.executable, '-I', '-m', 'pytest', str(path), '-c', '/dev/null',
+                          '--rootdir', str(root), '-o', 'junit_family=xunit1', '--junitxml', str(report),
+                          '-p', 'no:cacheprovider'], cwd=root,
+                         env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1', 'PYTHONDONTWRITEBYTECODE': '1'},
+                         capture_output=True, text=True)
+    if not report.is_file():
+        raise AssertionError(run.stdout + run.stderr)
+    return report, run.returncode
 
 
 class ScopeTests(unittest.TestCase):
@@ -140,6 +208,47 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertNotEqual(a, failure_signature('failure', ['a::b'], 'AssertionError: different behavior'))
 
+    def test_real_pytest_different_failure_in_same_excepted_node_is_red(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rel = 'python/frameworks/fixture/tests/test_contract.py'
+            for error in ('RuntimeError("old SDK incompatibility")', 'TypeError("unrelated new bug")',
+                          'RuntimeError("different incompatibility")'):
+                report, rc = pytest_report(tmp, rel, 'def test_call():\n    assert True\n    raise ' + error + '\n', str(len(error)))
+                self.assertEqual(rc, 1)
+                rows = junit_tests(report)
+                if error.startswith('RuntimeError("old'):
+                    data = fixture()
+                    data['target']['exceptions'][0].update(test_ids=[rows[0]['test_id']], failure_signature=rows[0]['failure_signature'])
+                    original = rows[0]['failure_signature']
+                    self.assertEqual(judge_tests(rows, data['target'], data['runtime'], data['resolved']), 'quarantined')
+                else:
+                    self.assertNotEqual(original, rows[0]['failure_signature'])
+                    with self.assertRaisesRegex(ValueError, 'unmatched signature'):
+                        judge_tests(rows, data['target'], data['runtime'], data['resolved'])
+
+    def test_each_real_pytest_invocation_must_explain_its_own_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            good, rc_good = pytest_report(tmp, 'test_own.py', 'def test_pass():\n    assert True\n', 'own', runner_failure=True)
+            failed, rc_failed = pytest_report(tmp, 'test_core.py', 'def test_known():\n    raise RuntimeError("known")\n', 'core')
+            self.assertEqual((rc_good, rc_failed), (1, 1))
+            # Max(exit)=1 plus a known failure used to hide the first runner failure.
+            with self.assertRaisesRegex(ValueError, 'runner/JUnit outcome mismatch'):
+                invocation_tests([good, failed], [rc_good, rc_failed])
+            self.assertEqual(len(invocation_tests([good, failed], [0, 1])), 2)
+            with self.assertRaisesRegex(ValueError, 'each invocation'):
+                invocation_tests([good, failed], [1])
+
+    def test_junit_rejects_empty_malformed_inconsistent_and_unsafe_reports(self):
+        samples = ['<testsuites/>', 'not xml', '<html/>',
+                   '<!DOCTYPE testsuites [<!ENTITY x "bad">]><testsuites/>',
+                   '<testsuite tests="0"><testcase file="test_x.py" name="test_x"/></testsuite>',
+                   '<testsuite><testcase file="test_x.py" name="test_x"><failure/><skipped/></testcase></testsuite>']
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'junit.xml'
+            for xml in samples:
+                path.write_text(xml)
+                with self.subTest(xml=xml), self.assertRaises(ValueError): junit_tests(path)
+
     def test_junit_preserves_parameter_and_class_node_id(self):
         xml = '<testsuites><testsuite><testcase file="python/frameworks/x/tests/test_sdk.py" classname="python.frameworks.x.tests.test_sdk.TestSDK" name="test_call[param]" time="0.1"/></testsuite></testsuites>'
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,29 +257,37 @@ class ScopeTests(unittest.TestCase):
 
 
 class ResultTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.artifacts = Path(tmp.name)
+
+    def validate(self, data, registry, **kwargs):
+        return validate_results(data, registry, artifact_root=self.artifacts, **kwargs)
+
     def test_valid_pending_evidence_stays_pending(self):
-        data, registry = result_fixture()
-        self.assertIs(validate_results(data, registry), data)
+        data, registry = result_fixture(self.artifacts)
+        self.assertIs(self.validate(data, registry), data)
         self.assertEqual(data['cases'][0]['qualification'], 'pilot_pending')
 
     def test_unexecuted_integration_cannot_pass(self):
-        data, registry = result_fixture(); c = data['cases'][0]['contract']
+        data, registry = result_fixture(self.artifacts); c = data['cases'][0]['contract']
         c.update(tests=[], executed=0, collected=0)
         with self.assertRaisesRegex(ValueError, 'nonzero execution'):
-            validate_results(data, registry)
+            self.validate(data, registry)
 
     def test_missing_unplanned_duplicate_and_source_mismatch(self):
         for mutation in ['missing', 'unplanned', 'duplicate', 'sha']:
-            data, registry = result_fixture()
+            data, registry = result_fixture(self.artifacts)
             if mutation == 'missing': data['cases'] = []
             if mutation == 'unplanned': data['cases'][0]['case_id'] = 'rogue'
             if mutation == 'duplicate': data['cases'] *= 2
             if mutation == 'sha': data['cases'][0]['source_sha'] = '3'*40
-            with self.subTest(mutation=mutation), self.assertRaises(ValueError): validate_results(data, registry)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError): self.validate(data, registry)
 
     def test_requested_resolved_skip_failure_and_count_mismatch(self):
         for mutation in ['requested', 'skip', 'failure', 'count', 'lock', 'core', 'qualification']:
-            data, registry = result_fixture(); c = data['cases'][0]
+            data, registry = result_fixture(self.artifacts); c = data['cases'][0]
             if mutation == 'requested': c['requested'][0]['selected_version'] = '999'
             if mutation == 'skip': c['contract']['tests'][0]['outcome'] = 'skipped'
             if mutation == 'failure': c['contract']['tests'][0].update(outcome='failure', failure_signature='b'*64)
@@ -178,17 +295,119 @@ class ResultTests(unittest.TestCase):
             if mutation == 'lock': c['dependency_lock'] = None
             if mutation == 'core': c['resolved'] = [r for r in c['resolved'] if r['role'] != 'core']
             if mutation == 'qualification': c['qualification'] = 'qualified'
-            with self.subTest(mutation=mutation), self.assertRaises(ValueError): validate_results(data, registry)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError): self.validate(data, registry)
+
+    def test_unrelated_partial_or_changed_suite_cannot_substitute_for_contract(self):
+        for mutation in ('unrelated', 'partial', 'digest', 'scenario', 'command'):
+            data, registry = result_fixture(self.artifacts)
+            c = data['cases'][0]['contract']
+            if mutation == 'unrelated': c['tests'][0]['test_id'] = 'python/frameworks/openai/tests/test_other.py::test_pass'
+            if mutation == 'partial':
+                c['tests'].pop(); c['collected'] -= 1; c['executed'] -= 1
+            if mutation == 'digest': c['suite_sha256'] = 'b'*64
+            if mutation == 'scenario': c['scenarios'] = ['sync']
+            if mutation == 'command': c['command'] = ['python', '-m', 'pytest', 'test_other.py']
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'registered|trusted suite'):
+                self.validate(data, registry)
+
+    def test_reports_must_match_claimed_nodes_outcomes_signatures_durations_and_counts(self):
+        for mutation in ('empty', 'malformed', 'node', 'outcome', 'duration', 'duplicate', 'signature'):
+            data, registry = result_fixture(self.artifacts)
+            path = self.artifacts / 'junit/tests.xml'
+            tree = ET.parse(path)
+            node = next(tree.iter('testcase'))
+            if mutation == 'empty': path.write_text('<testsuites/>')
+            elif mutation == 'malformed': path.write_text('not xml')
+            elif mutation == 'duplicate':
+                data['cases'][0]['contract']['junit_paths'] *= 2
+            else:
+                if mutation == 'node': node.set('name', 'test_other')
+                if mutation == 'outcome': ET.SubElement(node, 'skipped')
+                if mutation == 'duration': node.set('time', '999')
+                if mutation == 'signature': ET.SubElement(node, 'failure', message='TypeError: unrelated')
+                tree.write(path)
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'JUnit'):
+                self.validate(data, registry)
+        data, registry = result_fixture(self.artifacts)
+        with self.assertRaisesRegex(ValueError, 'artifact root'):
+            validate_results(data, registry)
+
+    def test_requested_requirement_uses_pep440_and_exact_native_pins(self):
+        for req, valid in [('==0.1.0', False), ('anthropic==0.41.0', True), ('>=0.41,<1', True),
+                           ('other==0.41.0', False), ('anthropic@https://example.invalid/file', False)]:
+            row = dict(name='anthropic', requirement=req, selected_version='0.41.0')
+            if valid: requested_version(row, 'python')
+            else:
+                with self.assertRaises(ValueError): requested_version(row, 'python')
+        for language, req, version in [('typescript', '^1.0.0', '2.0.0'), ('go', '>=v1.0.0', 'v1.2.0'), ('java', '[1,3)', '2')]:
+            with self.assertRaises(ValueError): requested_version(dict(name='sdk', requirement=req, selected_version=version), language)
+        data, registry = result_fixture(self.artifacts)
+        data['cases'][0]['requested'][0]['requirement'] = '==0.1.0'
+        with self.assertRaisesRegex(ValueError, 'requirement excludes'):
+            self.validate(data, registry)
+
+    def test_latest_requires_complete_discovery_and_immutable_cooldown(self):
+        for mutation in ('missing', 'duplicate', 'recent', 'unknown_age', 'first_seen_recent', 'cutoff', 'latest'):
+            data, registry = result_fixture(self.artifacts)
+            case = data['cases'][0]
+            case['selector'] = 'latest_eligible'
+            discovery = dict(name='anthropic', absolute_latest='0.41.0', latest_eligible='0.41.0',
+                             requested_version='0.41.0', resolved_version='0.41.0',
+                             published_at='2026-10-25T09:00:00Z', first_seen_at=None, yanked=False)
+            case['discovery'] = [discovery]
+            self.validate(data, registry)  # exactly on the cutoff is eligible
+            if mutation == 'missing': case['discovery'] = []
+            if mutation == 'duplicate': case['discovery'] *= 2
+            if mutation == 'recent': discovery['published_at'] = '2026-10-28T08:59:00Z'
+            if mutation == 'unknown_age': discovery['published_at'] = None
+            if mutation == 'first_seen_recent':
+                discovery.update(published_at=None, first_seen_at='2026-10-28T08:59:00Z')
+            if mutation == 'cutoff': data['run']['cooldown_cutoff'] = '2026-10-28T09:00:00Z'
+            if mutation == 'latest': discovery['latest_eligible'] = '0.42.0'
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError): self.validate(data, registry)
+
+    def test_trusted_plan_binds_requests_discovery_source_and_runtime(self):
+        for mutation in ('digest', 'request', 'source', 'runtime', 'discovery'):
+            data, registry = result_fixture(self.artifacts)
+            plan, raw = plan_fixture(data)
+            self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
+            if mutation == 'digest': data['run']['plan_sha256'] = 'b'*64
+            if mutation == 'request': data['cases'][0]['requested'][0]['requirement'] = '>=0.1'
+            if mutation == 'source': data['run']['source_sha'] = '3'*40
+            if mutation == 'runtime': data['cases'][0]['runtime']['version'] = '3.12.0'
+            if mutation == 'discovery': data['cases'][0]['discovery'] = [dict(name='anthropic', absolute_latest='0.41.0',
+                latest_eligible='0.41.0', requested_version='0.41.0', resolved_version='0.41.0',
+                published_at=None, first_seen_at=None, yanked=False)]
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'plan|trusted'):
+                self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
+
+    def test_cli_parses_original_reports_and_trusted_plan(self):
+        data, registry = result_fixture(self.artifacts)
+        sha = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+        data['run']['source_sha'] = data['cases'][0]['source_sha'] = sha
+        _, raw = plan_fixture(data)
+        (self.artifacts / 'compat-plan.json').write_bytes(raw)
+        path = self.artifacts / 'results.json'
+        path.write_text(json.dumps(data))
+        def run():
+            return subprocess.run([sys.executable, '-I', str(ROOT / '.github/compat/validate.py'),
+                                   'results', str(path), '--root', str(ROOT)], capture_output=True, text=True)
+        self.assertEqual(run().returncode, 0, run().stderr)
+        for xml in ('<testsuites/>', 'not xml'):
+            (self.artifacts / 'junit/tests.xml').write_text(xml)
+            result = run()
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn('JUnit', result.stderr)
 
     def test_retry_cannot_re_resolve_or_launder_flake(self):
-        data, registry = result_fixture()
+        data, registry = result_fixture(self.artifacts)
         data['cases'].append(copy.deepcopy(data['cases'][0])); data['cases'][1]['attempt'] = 2
         data['cases'][0]['status'] = 'failed'
-        with self.assertRaisesRegex(ValueError, 'flaky'): validate_results(data, registry)
+        with self.assertRaisesRegex(ValueError, 'flaky'): self.validate(data, registry)
         data['cases'][1]['status'] = 'flaky'
-        validate_results(data, registry)
+        self.validate(data, registry)
         data['cases'][1]['requested'][0]['selected_version'] = '999'
-        with self.assertRaisesRegex(ValueError, 'immutable'): validate_results(data, registry)
+        with self.assertRaisesRegex(ValueError, 'immutable'): self.validate(data, registry)
 
 
 if __name__ == '__main__':
