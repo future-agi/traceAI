@@ -19,7 +19,6 @@ guardrails | its core test file does not load (SpanAttributes.FI_SPAN_KIND no lo
 haystack | 5 tests expect pre-GenAI attribute names (llm.token_count.*, fi.span.kind) and a list of dependencies
 huggingface | 3 tests expect llm.system; 1 expects generated text that is no longer recorded
 instructor | 6 tests: instructor.core no longer exists in current instructor (5), and a dependency string check (1)
-langchain | 2 tests: dependency count and a set_attributes call no longer made
 litellm | 3 tests use SpanAttributes.FI_SPAN_KIND, which no longer exists
 llama_index | 14 tests: llama_index.core.base.agent no longer exists; 1 expects SpanAttributes.LLM_MODEL_NAME; 1 a dependency count
 mcp | 1 test expects two instrumentation dependencies, the package declares one

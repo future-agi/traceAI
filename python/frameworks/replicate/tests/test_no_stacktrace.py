@@ -31,6 +31,9 @@ from _support import (  # noqa: E402
     make_client,
 )
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 LOCAL = (__file__, os.path.dirname(os.path.dirname(replicate.__file__)), "Traceback", "site-packages")
 
 
@@ -56,8 +59,13 @@ def test_a_failed_run_exports_type_and_message_but_no_stacktrace(config):
     assert span.status.status_code is StatusCode.ERROR
     (event,) = exception_events(span)
     assert event.attributes["exception.type"] == "replicate.exceptions.ModelError"
-    expected = "__REDACTED__" if config.hide_outputs else MODEL_ERROR
-    assert event.attributes["exception.message"] == expected
+    if NATIVE_ERROR_POLICY and config.hide_outputs:
+        assert span.status.description is None
+        assert "exception.message" not in event.attributes
+        assert MODEL_ERROR not in traced.wire()
+    else:
+        expected = "__REDACTED__" if config.hide_outputs else MODEL_ERROR
+        assert event.attributes["exception.message"] == expected
     _assert_no_local_detail(traced)
 
 

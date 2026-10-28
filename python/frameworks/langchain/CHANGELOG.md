@@ -1,23 +1,15 @@
-## [0.2.1] - 2026-10-18
+## [0.2.1] - 2026-10-26
 ### Fixed
-- The `ERROR` status description of a failed LangChain run is now the exception message
-  (`str(error)` of the error passed to `on_*_error`). It used to be LangChain's
-  `run.error`: `repr(error)` plus the full Python traceback, including local file paths.
-  The stacktrace is still recorded, only in the exception event's `exception.stacktrace`.
-- Non-`Exception` errors (e.g. `KeyboardInterrupt`) record the error's own traceback and
-  its fully qualified type, instead of whatever `traceback.format_exc()` returned in the
-  callback.
+- LangGraph's `configurable.thread_id` is copied to `session.id` on every span, including Deep Agents subagents. Metadata `session_id` and `using_session(...)` retain precedence; blank thread ids set nothing.
+- Chat model token counts prefer the message's `usage_metadata`, so cached prompt tokens are included; provider `llm_output` is a fallback.
+- Failed-run status descriptions use the original exception message, never LangChain's traceback-bearing `run.error`. Stacktraces remain only in exception events when error details are visible. Non-`Exception` errors retain their own traceback and fully qualified type.
 
 ### Changed
-- With `fi-instrumentation-otel>=1.2.0`, the content hide flags (`hide_inputs`,
-  `hide_outputs`, ...) also hide error details on LangChain spans: no status
-  description, no `exception.message` / `exception.stacktrace`. This is a behaviour
-  change for users of those flags; see the core 1.2.0 changelog. The dependency pin
-  stays `>=1.0.0` until core 1.2.0 is on PyPI, so upgrade both packages together.
-- With error details hidden, a failed run records no output attributes (`output.value`,
-  output messages, function calls). LangChain fills a failed chat-model run's outputs
-  with the provider's error response: the error body (which can quote the prompt),
-  the response headers and request ids, and AI-gateway metadata.
+- Core `fi-instrumentation-otel>=1.2.0` owns error hiding, including derived content-hide flags and an explicit `hide_error_details=False` override. Hidden failures retain their type but no status description, exception message or stacktrace. On older supported core versions, `hide_inputs` or `hide_outputs` applies the same hiding as a compatibility fallback.
+- Failed-run output attributes (including raw output, messages and function calls) are omitted when error details are hidden: provider error bodies and response headers can echo private content. Session mapping and token usage are retained.
+
+### Added
+- Deep Agents cookbook (`examples/deep_agents.py`) and compatibility tests against the published `deepagents==0.7.21` wheel. No new package or runtime dependency.
 
 ## [0.2.0] - 2026-07-30
 ### Fixed

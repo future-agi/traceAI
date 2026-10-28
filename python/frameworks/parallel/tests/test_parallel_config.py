@@ -28,6 +28,9 @@ from _parallel_support import (  # noqa: E402
 )
 from traceai_parallel import ParallelInstrumentor  # noqa: E402
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 # Dropped by hide_inputs. input.value is kept as TraceConfig's placeholder.
 INPUT_KEYS = ("gen_ai.retrieval.query", "parallel.urls", "parallel.objective")
 EMAIL = "jane.doe@example.com"
@@ -138,10 +141,17 @@ def test_pii_is_redacted_before_the_cap_so_no_partial_email_survives(fake):
     assert "jane.doe" not in traced.wire()
 
 
-def _error_texts(span):
+def _error_texts(span, *, hidden=False):
     """The three recorded error texts: status description, exception message, stacktrace."""
     (event,) = span.events
     assert event.name == "exception"
+    if hidden and NATIVE_ERROR_POLICY:
+        assert span.status.status_code is StatusCode.ERROR
+        assert span.status.description is None
+        assert event.attributes["exception.type"] == "parallel.BadRequestError"
+        assert "exception.message" not in event.attributes
+        assert "exception.stacktrace" not in event.attributes
+        return []  # There are no text fields to redact under the native privacy policy.
     return [
         span.status.description,
         event.attributes["exception.message"],
@@ -170,7 +180,7 @@ def test_hide_inputs_removes_the_query_from_error_text(fake, pii):
     assert "rejected request: " + query in str(error)
     assert attrs(span)["input.value"] == REDACTED_VALUE
     assert span.status.status_code is StatusCode.ERROR
-    for text in _error_texts(span):
+    for text in _error_texts(span, hidden=True):
         assert "rejected request: " + REDACTED_VALUE in text
         assert FAIL_ECHO not in text
     wire = traced.wire()
@@ -215,7 +225,7 @@ def test_hide_inputs_removes_every_query_url_and_objective_from_error_text(
     assert "secret" in str(error)
     # Each input becomes one placeholder; the server's own words stay.
     quoted = "rejected request: " + " | ".join([REDACTED_VALUE] * 3)
-    for text in _error_texts(span):
+    for text in _error_texts(span, hidden=True):
         assert quoted in text
     assert "secret" not in traced.wire()
 
@@ -228,10 +238,14 @@ def test_hidden_inputs_are_replaced_longest_first_in_one_pass(fake):
     with instrumented(config=TraceConfig(hide_inputs=True)) as traced:
         _, span = _failed(traced, sync_client(fake).search, **kwargs)
 
-    description, message, _ = _error_texts(span)
+    texts = _error_texts(span, hidden=True)
     quoted = "rejected request: " + " | ".join([REDACTED_VALUE] * 3) + "'"
-    assert quoted in description
-    assert quoted in message
+    if NATIVE_ERROR_POLICY:
+        assert texts == []
+    else:
+        description, message, _ = texts
+        assert quoted in description
+        assert quoted in message
     assert "alpha" not in traced.wire()
 
 
@@ -242,7 +256,7 @@ def test_hide_inputs_removes_the_query_after_the_key_is_redacted(fake):
     with instrumented(config=TraceConfig(hide_inputs=True)) as traced:
         _, span = _failed(traced, sync_client(fake).search, search_queries=[query])
 
-    for text in _error_texts(span):
+    for text in _error_texts(span, hidden=True):
         assert "rejected request: " + REDACTED_VALUE in text
     wire = traced.wire()
     assert PARALLEL_KEY not in wire
@@ -274,7 +288,7 @@ def test_without_hide_inputs_error_text_is_recorded_as_thrown(fake):
     expected = "rejected request: {0} focus | https://x.example/a | https://x.example/b | goal"
     assert expected.format(FAIL_ECHO) in message
     description, recorded, stacktrace = _error_texts(span)
-    assert description == "BadRequestError: " + message
+    assert description == (message if NATIVE_ERROR_POLICY else "BadRequestError: " + message)
     assert recorded == message
     assert message in stacktrace
     assert REDACTED_VALUE not in traced.wire()
@@ -331,7 +345,7 @@ def test_async_hide_inputs_removes_inputs_from_error_and_warning_text(fake, pii)
 
     assert len(sync_spans) == len(async_spans) == 3
     for sync_span, async_span in zip(sync_spans[:2], async_spans[:2]):
-        sync_texts, async_texts = _error_texts(sync_span), _error_texts(async_span)
+        sync_texts, async_texts = _error_texts(sync_span, hidden=True), _error_texts(async_span, hidden=True)
         # Status description and exception message match the sync call's;
         # the stacktraces differ only in their frames.
         assert async_texts[:2] == sync_texts[:2]
@@ -358,8 +372,8 @@ def test_unreadable_inputs_under_hide_inputs_record_no_error_text(fake, monkeypa
         )
 
     assert "unread-secret" in str(error)
-    expected = ["BadRequestError: " + REDACTED_VALUE, REDACTED_VALUE, REDACTED_VALUE]
-    assert _error_texts(span) == expected
+    expected = [] if NATIVE_ERROR_POLICY else ["BadRequestError: " + REDACTED_VALUE, REDACTED_VALUE, REDACTED_VALUE]
+    assert _error_texts(span, hidden=True) == expected
     assert "secret" not in traced.wire()
 
 

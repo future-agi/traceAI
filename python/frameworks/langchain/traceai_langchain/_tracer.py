@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+import re
 import time
 import traceback
 from copy import deepcopy
@@ -418,8 +419,15 @@ def _is_graph_interrupt(error: BaseException) -> bool:
 
 @audit_timing  # type: ignore
 def _record_exception(span: Span, error: BaseException) -> None:
-    # The stacktrace lives only in the exception event's `exception.stacktrace`
-    # (dropped by the FI span wrapper when error details are hidden).
+    # Core >=1.2 owns error masking and provider error codes. Older supported
+    # cores need the integration's input/output privacy fallback.
+    if _legacy_hides_error_details(span):
+        span.add_event("exception", {
+            OTELSpanAttributes.EXCEPTION_TYPE: _qualified_type_name(error),
+            OTELSpanAttributes.EXCEPTION_ESCAPED: False,
+        })
+        return
+    # Stacktraces belong only in exception events, never in status descriptions.
     if isinstance(error, Exception):
         span.record_exception(error)
         return
@@ -446,13 +454,23 @@ def _qualified_type_name(error: BaseException) -> str:
     return f"{module}.{qualname}" if module and module != "builtins" else qualname
 
 
-def _hides_error_details(span: Span) -> bool:
-    # FI spans carry the instrumentor's TraceConfig. `hide_error_details` is new
-    # in fi-instrumentation-otel 1.2.0.
+def _legacy_hides_error_details(span: Span) -> bool:
     config = getattr(span, "_self_config", None)
-    return isinstance(config, TraceConfig) and bool(
-        getattr(config, "hide_error_details", False)
+    return (
+        isinstance(config, TraceConfig)
+        and not hasattr(config, "hide_error_details")
+        and bool(config.hide_inputs or config.hide_outputs)
     )
+
+
+def _hides_error_details(span: Span) -> bool:
+    config = getattr(span, "_self_config", None)
+    if not isinstance(config, TraceConfig):
+        return False
+    # Respect explicit False on core >=1.2, including with hide_inputs=True.
+    if hasattr(config, "hide_error_details"):
+        return bool(config.hide_error_details)
+    return _legacy_hides_error_details(span)
 
 
 # `run.error` is `repr(error)` immediately followed by the formatted traceback.
@@ -493,12 +511,12 @@ def _update_span(
     else:
         span.set_status(
             trace_api.Status(
-                trace_api.StatusCode.ERROR, _error_description(error, run.error)
+                trace_api.StatusCode.ERROR,
+                None if _legacy_hides_error_details(span) else _error_description(error, run.error),
             )
         )
-    # The outputs of a failed run are the provider's error response: for
-    # langchain-openai, an AIMessage whose response_metadata holds the error
-    # body and the response headers (request ids). They are error details.
+    # Failed model outputs contain provider error bodies, headers and request
+    # ids. Drop all output representations when error details are hidden.
     outputs = None if failed and _hides_error_details(span) else run.outputs
     span_kind = (
         FiSpanKindValues.AGENT
@@ -541,6 +559,7 @@ def _update_span(
                     _tools(run),
                     _retrieval_documents(run),
                     _metadata(run),
+                    _session_id_from_thread_id(run, captured_context),
                     _as_raw_input_output(run, outputs),
                     _as_query(query),
                 )
@@ -915,11 +934,17 @@ def _model_name(extra: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, str]]
 
 @stop_on_exception
 def _token_counts(outputs: Optional[Mapping[str, Any]]) -> Iterator[Tuple[str, int]]:
-    """Yields token count information if present."""
+    """Yields token count information if present.
+
+    The message's ``usage_metadata`` (LangChain's normalized usage) comes
+    first. The provider's raw ``llm_output`` usage is the fallback: Anthropic's
+    raw ``input_tokens`` leaves out cached prompt tokens, which
+    ``usage_metadata`` counts, so a cached prompt was reported as a few tokens.
+    """
     if not (
         token_usage := (
-            _parse_token_usage_for_non_streaming_outputs(outputs)
-            or _parse_token_usage_for_streaming_outputs(outputs)
+            _parse_token_usage_for_streaming_outputs(outputs)
+            or _parse_token_usage_for_non_streaming_outputs(outputs)
         )
     ):
         return
@@ -1089,6 +1114,31 @@ def _metadata(run: Run) -> Iterator[Tuple[str, str]]:
 
     # Also include the full metadata as JSON for completeness
     yield METADATA, safe_json_dumps(metadata)
+
+
+@stop_on_exception
+def _session_id_from_thread_id(
+    run: Run, captured_context: Mapping[str, Any]
+) -> Iterator[Tuple[str, str]]:
+    """Fall back to LangGraph's ``thread_id`` for ``session.id``.
+
+    LangGraph copies ``configurable.thread_id`` into run metadata, so every node,
+    LLM and tool run of a thread carries it. It is used only when nothing more
+    specific set the session: ``using_session(...)`` (already on the span from
+    ``captured_context``) and ``metadata["session_id"]`` (emitted by ``_metadata``)
+    both win. A blank ``thread_id`` sets nothing. The choice is made per run, so a
+    session set for only part of a graph run covers only the runs inside it.
+    """
+    if SESSION_ID in captured_context:
+        return
+    if not run.extra or not isinstance(metadata := run.extra.get("metadata"), Mapping):
+        return
+    if metadata.get(LANGCHAIN_SESSION_ID) is not None:
+        return
+    thread_id = metadata.get(LANGCHAIN_THREAD_ID)
+    if thread_id is None or (isinstance(thread_id, str) and not thread_id.strip()):
+        return
+    yield SESSION_ID, str(thread_id)
 
 
 @stop_on_exception
@@ -1280,6 +1330,7 @@ RERANKER_QUERY = RerankerAttributes.RERANKER_QUERY
 RERANKER_TOP_K = RerankerAttributes.RERANKER_TOP_K
 RETRIEVAL_DOCUMENTS = SpanAttributes.RETRIEVAL_DOCUMENTS
 GEN_AI_CONVERSATION_ID = SpanAttributes.GEN_AI_CONVERSATION_ID
+SESSION_ID = SpanAttributes.SESSION_ID
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
 GEN_AI_TOOL_DESCRIPTION = SpanAttributes.GEN_AI_TOOL_DESCRIPTION

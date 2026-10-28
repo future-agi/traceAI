@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pytest
+from fi_instrumentation import TraceConfig
 
 pytest.importorskip("tavily", reason="tavily-python must be installed to test its instrumentor")
 pytest.importorskip("opentelemetry.proto", reason="the harness decodes OTLP protobuf")
@@ -28,6 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests"))
 
 from _tavily_fake import CONTENT_MARKERS, FAIL_401, TAVILY_KEY, FakeTavily  # noqa: E402
 from harness import Receiver, _flatten_attributes  # noqa: E402
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 FI_API_KEY = "placeholder-fi-api-key"
 FI_SECRET_KEY = "placeholder-fi-secret-key"
@@ -132,9 +136,12 @@ def test_real_client_calls_reach_the_collector_contract(journey):
     assert "tavily.result_count" not in failed
     assert search_failed["status"]["code"] == "STATUS_CODE_ERROR"
     assert search_failed["status"]["message"] == (
-        "InvalidAPIKeyError: Unauthorized: invalid API key."
+        "Unauthorized: invalid API key." if NATIVE_ERROR_POLICY
+        else "InvalidAPIKeyError: Unauthorized: invalid API key."
     )
     assert [event["name"] for event in search_failed.get("events", [])] == ["exception"]
+    event = _flatten_attributes(search_failed["events"][0]["attributes"])
+    assert event["exception.type"].endswith("InvalidAPIKeyError")
 
     assert int(_flatten_attributes(async_search["attributes"])["tavily.result_count"]) == 1
 

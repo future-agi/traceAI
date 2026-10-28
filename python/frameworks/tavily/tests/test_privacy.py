@@ -19,11 +19,16 @@ import json
 from typing import Any, Dict
 
 import pytest
+from fi_instrumentation import TraceConfig
+from opentelemetry.trace import StatusCode
 
 pytest.importorskip("tavily", reason="tavily-python must be installed to test its instrumentor")
 
 from _support import attrs, instrumented  # noqa: E402
 from _tavily_fake import ECHO_400, TAVILY_KEY, FakeTavily  # noqa: E402
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 OTHER_KEY = "tvly-session-key-must-not-be-exported"
 
@@ -189,11 +194,18 @@ def test_hidden_inputs_remove_the_query_from_error_text(fake, monkeypatch, mode,
 
     assert str(info.value) == "Bad query: " + query  # unchanged for the caller
     span = traced.one()
+    assert span.status.status_code is StatusCode.ERROR
     assert attrs(span)["input.value"] == "__REDACTED__"
-    assert span.status.description == "BadRequestError: Bad query: __REDACTED__"
     (event,) = [event for event in span.events if event.name == "exception"]
-    assert event.attributes["exception.message"] == "Bad query: __REDACTED__"
-    assert "Bad query: __REDACTED__" in event.attributes["exception.stacktrace"]
+    assert event.attributes["exception.type"].endswith("BadRequestError")
+    if NATIVE_ERROR_POLICY:
+        assert span.status.description is None
+        assert "exception.message" not in event.attributes
+        assert "exception.stacktrace" not in event.attributes
+    else:
+        assert span.status.description == "BadRequestError: Bad query: __REDACTED__"
+        assert event.attributes["exception.message"] == "Bad query: __REDACTED__"
+        assert "Bad query: __REDACTED__" in event.attributes["exception.stacktrace"]
     wire = _wire(traced)
     assert PRIVATE not in wire
     assert "tvly-" not in wire
@@ -221,14 +233,15 @@ def test_without_hidden_inputs_error_text_keeps_the_query(fake, mode):
 
     span = traced.one()
     assert attrs(span)["input.value"] == query
-    assert span.status.description == "BadRequestError: Bad query: " + query
+    prefix = "Bad query: " if NATIVE_ERROR_POLICY else "BadRequestError: Bad query: "
+    assert span.status.description == prefix + query
     (event,) = [event for event in span.events if event.name == "exception"]
     assert event.attributes["exception.message"] == "Bad query: " + query
     assert "Bad query: " + query in event.attributes["exception.stacktrace"]
 
 
-def test_hidden_inputs_leave_error_text_alone_for_an_empty_query():
-    """An empty query has nothing to remove; the error text stays readable."""
+def test_hidden_inputs_apply_error_policy_even_for_an_empty_query():
+    """Native privacy drops error text even when the input itself was empty."""
     import requests
     from fi_instrumentation import TraceConfig
     from tavily import TavilyClient
@@ -240,11 +253,19 @@ def test_hidden_inputs_leave_error_text_alone_for_an_empty_query():
             client.search("")
 
     span = traced.one()
-    assert span.status.description.startswith("ConnectionError: ")
-    assert "__REDACTED__" not in span.status.description
+    assert span.status.status_code is StatusCode.ERROR
     (event,) = [event for event in span.events if event.name == "exception"]
-    assert "__REDACTED__" not in event.attributes["exception.message"]
-    assert event.attributes["exception.message"] == str(info.value)[:1024]
+    assert event.attributes["exception.type"].endswith("ConnectionError")
+    if NATIVE_ERROR_POLICY:
+        assert span.status.description is None
+        assert "exception.message" not in event.attributes
+        assert "exception.stacktrace" not in event.attributes
+        assert str(info.value) not in traced.wire()
+    else:
+        assert span.status.description.startswith("ConnectionError: ")
+        assert "__REDACTED__" not in span.status.description
+        assert "__REDACTED__" not in event.attributes["exception.message"]
+        assert event.attributes["exception.message"] == str(info.value)[:1024]
 
 
 def test_query_is_capped_at_1024_utf8_bytes_on_a_character_boundary(fake):
@@ -323,9 +344,18 @@ def test_error_events_never_carry_a_raw_traceback(fake, monkeypatch, mode, hide)
     # The caller still gets the real traceback.
     assert info.value.__traceback__ is not None
     span = traced.one()
+    assert span.status.status_code is StatusCode.ERROR
     (event,) = [event for event in span.events if event.name == "exception"]
-    stacktrace = event.attributes["exception.stacktrace"]
-    assert stacktrace.startswith("BadRequestError")
+    assert event.attributes["exception.type"].endswith("BadRequestError")
+    if hide:
+        assert PRIVATE not in traced.wire()
+    if hide and NATIVE_ERROR_POLICY:
+        assert span.status.description is None
+        assert "exception.message" not in event.attributes
+        assert "exception.stacktrace" not in event.attributes
+    else:
+        stacktrace = event.attributes["exception.stacktrace"]
+        assert stacktrace.startswith("BadRequestError")
     wire = traced.wire()
     for marker in FRAME_MARKERS + (os.path.expanduser("~"), getpass.getuser(), __file__):
         assert marker not in wire, marker

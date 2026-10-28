@@ -6,6 +6,7 @@ import asyncio
 import os
 
 import pytest
+from fi_instrumentation import TraceConfig
 
 pytest.importorskip("parallel", reason="parallel-web must be installed to test its instrumentor")
 
@@ -25,6 +26,9 @@ from _parallel_support import (  # noqa: E402
     sync_client,
 )
 from traceai_parallel import _wrappers  # noqa: E402
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 STACKTRACE_LIMIT = 16 * 1024
 
@@ -113,7 +117,8 @@ def test_http_500_on_extract_sets_error_and_reraises(fake):
     span = traced.one()
     assert span.name == "parallel.extract"
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description.startswith("InternalServerError: Error code: 500")
+    prefix = "Error code: 500" if NATIVE_ERROR_POLICY else "InternalServerError: Error code: 500"
+    assert span.status.description.startswith(prefix)
     assert _exception_event(span)["exception.type"] == "parallel.InternalServerError"
 
 

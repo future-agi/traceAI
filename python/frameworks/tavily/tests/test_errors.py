@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from fi_instrumentation import TraceConfig
 
 pytest.importorskip("tavily", reason="tavily-python must be installed to test its instrumentor")
 
@@ -20,6 +21,9 @@ from _tavily_fake import (  # noqa: E402
     TAVILY_KEY,
     FakeTavily,
 )
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 
 @pytest.fixture()
@@ -50,7 +54,8 @@ def _exception_events(span: Any) -> list:
 
 def _assert_error_span(span: Any, error: BaseException) -> None:
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description == "{0}: {1}".format(type(error).__name__, error)
+    expected = str(error) if NATIVE_ERROR_POLICY else "{0}: {1}".format(type(error).__name__, error)
+    assert span.status.description == expected
     (event,) = _exception_events(span)
     assert event.attributes["exception.type"].endswith(type(error).__name__)
     values = attrs(span)

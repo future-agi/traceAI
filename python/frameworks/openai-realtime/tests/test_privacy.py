@@ -7,12 +7,16 @@ import asyncio
 import logging
 
 import pytest
+from fi_instrumentation import TraceConfig
 from openai import AsyncOpenAI
 
 import voice_agent
 from conftest import API_KEY, AUDIO_PREFIX, DROP_ERRORS, MARKER, by_name, load, replay, root_of
 from traceai_openai_realtime._session import RESPONSE_NAME, TOOL_NAME, TURN_NAME
 from voice_tab import all_values, assert_voice_tab
+
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 CONTENT_KEYS = (
     "input.value",
@@ -97,7 +101,12 @@ def test_hide_switches_through_the_sdk_including_errors_and_a_socket_drop(env, m
         assert needle not in blob, needle
     root = root_of(spans)
     assert root.attributes["realtime.end_reason"] == "socket_closed"
-    assert root.status.description == "ConnectionClosedError"
+    assert root.status.description == (None if NATIVE_ERROR_POLICY else "ConnectionClosedError")
+    assert root.status.status_code.name == "ERROR"
+    (event,) = [event for event in root.events if event.name == "exception"]
+    assert event.attributes["exception.type"].endswith("ConnectionClosedError")
+    assert "exception.message" not in event.attributes
+    assert "exception.stacktrace" not in event.attributes
 
 
 def test_full_mode_carries_content(instrument, exporter, stub_server):

@@ -38,6 +38,9 @@ from _support import (  # noqa: E402
     make_client,
 )
 
+# Published core 1.1 retains the legacy descriptions; current core owns error privacy.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
+
 
 def test_run_text_model_is_one_llm_span():
     with FakeReplicate() as fake, instrumented() as traced:
@@ -151,11 +154,16 @@ def test_failed_error_string_is_redacted_when_outputs_are_hidden():
             client.run(FAIL_MODEL, input={})
 
     span = traced.one()
-    # AC-05: still an error, the error string is redacted rather than dropped.
+    # Still an error: current core drops details, legacy core keeps a placeholder.
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description == "__REDACTED__"
+    assert span.status.description == (None if NATIVE_ERROR_POLICY else "__REDACTED__")
     (event,) = exception_events(span)
-    assert event.attributes["exception.message"] == "__REDACTED__"
+    assert event.attributes["exception.type"].endswith("ModelError")
+    assert "exception.stacktrace" not in event.attributes
+    if NATIVE_ERROR_POLICY:
+        assert "exception.message" not in event.attributes
+    else:
+        assert event.attributes["exception.message"] == "__REDACTED__"
     assert MODEL_ERROR not in traced.wire()
 
 
