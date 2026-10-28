@@ -21,6 +21,8 @@ TARGETS = (
     ('openai', 'go', 'go/openai', 'go.mod'),
     ('a2a', 'go', 'go/a2a', 'go.mod'),
     ('eino', 'go', 'go/eino', 'go.mod'),
+    ('anthropic', 'go', 'go/anthropic', 'go.mod'),
+    ('genai', 'go', 'go/genai', 'go.mod'),
     ('arconia', 'java', 'java/examples/arconia-example', 'pom.xml'),
     ('quarkus-langchain4j', 'java', 'java/examples/quarkus-langchain4j-example', 'pom.xml'),
 )
