@@ -1,0 +1,34 @@
+{
+  "post_call_transcription": {
+    "type": "post_call_transcription",
+    "event_timestamp": 1760000060,
+    "data": {
+      "conversation_id": "conv_9001k1zph3fkeh5s8xg9z90swaqa",
+      "agent_id": "agent_7101k5zvyjhmfg983brhmhkd98n6",
+      "transcript": [
+        {
+          "role": "user",
+          "message": "{{MARKER}}"
+        }
+      ]
+    }
+  },
+  "post_call_audio": {
+    "type": "post_call_audio",
+    "event_timestamp": 1760000060,
+    "data": {
+      "conversation_id": "conv_9001k1zph3fkeh5s8xg9z90swaqa",
+      "agent_id": "agent_7101k5zvyjhmfg983brhmhkd98n6",
+      "full_audio": "UklGRg=="
+    }
+  },
+  "call_initiation_failure": {
+    "type": "call_initiation_failure",
+    "event_timestamp": 1760000060,
+    "data": {
+      "conversation_id": "conv_9001k1zph3fkeh5s8xg9z90swaqa",
+      "agent_id": "agent_7101k5zvyjhmfg983brhmhkd98n6",
+      "failure_reason": "busy {{MARKER}}"
+    }
+  }
+}
