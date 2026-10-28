@@ -96,6 +96,8 @@ def extract_usage(result: Any) -> Optional[Dict[str, Any]]:
         Dict with usage info or None
     """
     usage = getattr(result, "usage", None)
+    if callable(usage):
+        usage = usage()
     if not usage:
         return None
 
@@ -171,8 +173,8 @@ def wrap_agent_run(
             attributes[PydanticAIAttributes.AGENT_INSTRUCTIONS] = instr_str
 
         # Add result type info
-        result_type = getattr(self, "result_type", None)
-        if result_type:
+        result_type = getattr(self, "result_type", None) or getattr(self, "output_type", None)
+        if result_type and result_type is not str:
             attributes[PydanticAIAttributes.AGENT_RESULT_TYPE] = str(result_type)
             attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = True
         else:

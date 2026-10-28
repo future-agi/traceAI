@@ -25,6 +25,8 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
         "_original_create",
         "_original_async_create",
         "_original_patch",
+        "_instructor_class",
+        "_async_instructor_class",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -50,15 +52,16 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
         # actual entry points for structured-output LLM calls in instructor 1.x+.
         # (The old instructor.patch.handle_response_model was removed in 1.0.)
         create_wrapper = _HandleResponseWrapper(tracer=self._tracer)
-        client_module = import_module("instructor.core.client")
-        self._original_create = getattr(client_module.Instructor, "create", None)
-        self._original_async_create = getattr(client_module.AsyncInstructor, "create", None)
-        wrap_function_wrapper(
-            "instructor.core.client", "Instructor.create", create_wrapper
-        )
-        wrap_function_wrapper(
-            "instructor.core.client", "AsyncInstructor.create", create_wrapper
-        )
+        client_module = import_module("instructor")
+        self._instructor_class = client_module.Instructor
+        self._async_instructor_class = getattr(client_module, "AsyncInstructor", None)
+        if self._async_instructor_class is None:
+            # Instructor 1.0 exposes the async class only in instructor.client.
+            self._async_instructor_class = import_module("instructor.client").AsyncInstructor
+        self._original_create = self._instructor_class.create
+        self._original_async_create = self._async_instructor_class.create
+        wrap_function_wrapper(self._instructor_class, "create", create_wrapper)
+        wrap_function_wrapper(self._async_instructor_class, "create", create_wrapper)
 
         if Protect is not None:
             self._original_protect = Protect.protect
@@ -76,10 +79,13 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
             instructor_module.patch = self._original_patch  # type: ignore[attr-defined]
             self._original_patch = None
 
-        client_module = import_module("instructor.core.client")
         if self._original_create is not None:
-            client_module.Instructor.create = self._original_create
+            self._instructor_class.create = self._original_create
             self._original_create = None
         if self._original_async_create is not None:
-            client_module.AsyncInstructor.create = self._original_async_create
+            self._async_instructor_class.create = self._original_async_create
             self._original_async_create = None
+
+        if self._original_protect is not None and Protect is not None:
+            Protect.protect = self._original_protect
+            self._original_protect = None

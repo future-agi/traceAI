@@ -1,22 +1,16 @@
-"""Integration tests for Pydantic AI instrumentation.
-
-These tests require pydantic-ai to be installed and an API key to be set.
-They are marked with `integration` to be skipped in CI without credentials.
-"""
+"""Offline integration tests against real Pydantic AI Agent execution."""
 
 import pytest
-import os
 from unittest.mock import MagicMock, patch
+from pydantic_ai import models
+from pydantic_ai.models.test import TestModel
+from pydantic_ai.models.function import FunctionModel
 
-# Check if we can run integration tests
-HAS_PYDANTIC_AI = False
-HAS_OPENAI_KEY = bool(os.environ.get("OPENAI_API_KEY"))
 
-try:
-    import pydantic_ai
-    HAS_PYDANTIC_AI = True
-except ImportError:
-    pass
+@pytest.fixture(autouse=True)
+def no_provider_requests(monkeypatch):
+    # Built-in test/function models exercise Agent without credentials or HTTP.
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
 
 
 @pytest.fixture
@@ -31,10 +25,10 @@ def memory_exporter():
     provider = TracerProvider()
     processor = SimpleSpanProcessor(exporter)
     provider.add_span_processor(processor)
-    trace.set_tracer_provider(provider)
 
     yield exporter, provider
 
+    provider.shutdown()
     exporter.clear()
 
 
@@ -62,9 +56,10 @@ def instrumented_pydantic_ai(memory_exporter):
     with patch.object(instrumentor, "instrumentation_dependencies", return_value=[]):
         with patch.dict(sys.modules, {"pydantic_ai": mock_pydantic_ai}):
             instrumentor.instrument(tracer_provider=provider)
-            yield exporter, instrumentor
-
-    instrumentor.uninstrument()
+            try:
+                yield exporter, instrumentor
+            finally:
+                instrumentor.uninstrument()
 
 
 class TestInstrumentorIntegration:
@@ -87,7 +82,6 @@ class TestInstrumentorIntegration:
         assert instrumentor._tracer is None
 
 
-@pytest.mark.skipif(not HAS_PYDANTIC_AI, reason="pydantic-ai not installed")
 class TestPydanticAIInstalled:
     """Tests that run when pydantic-ai is installed."""
 
@@ -100,7 +94,7 @@ class TestPydanticAIInstalled:
         """Test Agent can be created."""
         from pydantic_ai import Agent
 
-        agent = Agent("test-model", instructions="Test")
+        agent = Agent(TestModel(), instructions="Test")
         assert agent is not None
 
     def test_instrumentor_patches_agent(self, memory_exporter):
@@ -131,18 +125,8 @@ class TestPydanticAIInstalled:
         assert Agent.run is original_run
 
 
-@pytest.mark.skipif(
-    not (HAS_PYDANTIC_AI and HAS_OPENAI_KEY),
-    reason="Requires pydantic-ai and OPENAI_API_KEY"
-)
-@pytest.mark.integration
 class TestRealWorldIntegration:
-    """Real-world integration tests with actual API calls.
-
-    These tests make real API calls and require:
-    - pydantic-ai installed
-    - OPENAI_API_KEY environment variable
-    """
+    """Real SDK runs with deterministic local models, not replacement Agent methods."""
 
     @pytest.mark.asyncio
     async def test_basic_agent_run(self, memory_exporter):
@@ -162,11 +146,12 @@ class TestRealWorldIntegration:
         try:
             # Create and run agent
             agent = Agent(
-                "openai:gpt-4o-mini",
+                TestModel(custom_output_text="4"),
                 instructions="Reply with just the number.",
             )
 
             result = await agent.run("What is 2+2?")
+            assert result.output == "4"
 
             # Get spans
             spans = exporter.get_finished_spans()
@@ -201,11 +186,12 @@ class TestRealWorldIntegration:
 
         try:
             agent = Agent(
-                "openai:gpt-4o-mini",
+                TestModel(custom_output_text="6"),
                 instructions="Reply with just the number.",
             )
 
             result = agent.run_sync("What is 3+3?")
+            assert result.output == "6"
 
             spans = exporter.get_finished_spans()
 
@@ -215,7 +201,7 @@ class TestRealWorldIntegration:
             assert len(agent_spans) >= 1
 
             span = agent_spans[0]
-            assert span.attributes.get("pydantic_ai.run.method") == "run_sync"
+            assert {s.attributes["pydantic_ai.run.method"] for s in agent_spans} == {"run", "run_sync"}
 
         finally:
             instrumentor.uninstrument()
@@ -240,8 +226,8 @@ class TestRealWorldIntegration:
 
         try:
             agent = Agent(
-                "openai:gpt-4o-mini",
-                result_type=MathResult,
+                TestModel(custom_output_args={"answer": 10, "explanation": "5+5"}),
+                output_type=MathResult,
             )
 
             result = agent.run_sync("What is 5+5?")
@@ -274,7 +260,7 @@ class TestRealWorldIntegration:
         instrumentor.instrument(tracer_provider=provider)
 
         try:
-            agent = Agent("openai:gpt-4o-mini")
+            agent = Agent(TestModel())
 
             @agent.tool
             def add_numbers(ctx: RunContext, a: int, b: int) -> int:
@@ -308,7 +294,7 @@ class TestRealWorldIntegration:
         instrumentor.instrument(tracer_provider=provider)
 
         try:
-            agent = Agent("openai:gpt-4o-mini")
+            agent = Agent(TestModel(custom_output_text="Hello from the test model"))
 
             result = agent.run_sync("Say hello in exactly 5 words")
 
@@ -318,13 +304,12 @@ class TestRealWorldIntegration:
             spans = exporter.get_finished_spans()
             agent_spans = [s for s in spans if "agent.run" in s.name]
 
-            if agent_spans:
-                span = agent_spans[0]
-                # Should have token usage attributes
-                input_tokens = span.attributes.get("gen_ai.usage.input_tokens")
-                output_tokens = span.attributes.get("gen_ai.usage.output_tokens")
-                # These may be 0 or actual values
-                assert input_tokens is not None or output_tokens is not None
+            assert len(agent_spans) == 2  # run_sync delegates to run
+            usage = result.usage() if callable(result.usage) else result.usage
+            assert usage.input_tokens > 0
+            for span in agent_spans:
+                assert span.attributes["gen_ai.usage.input_tokens"] == usage.input_tokens
+                assert span.attributes["gen_ai.usage.output_tokens"] == usage.output_tokens
 
         finally:
             instrumentor.uninstrument()
@@ -344,24 +329,29 @@ class TestRealWorldIntegration:
 
         try:
             # Use invalid model to trigger error
-            agent = Agent("openai:invalid-model-name")
+            error = ValueError("model failed")
 
-            with pytest.raises(Exception):
+            def fail_model(messages, info):
+                raise error
+
+            agent = Agent(FunctionModel(fail_model))
+
+            with pytest.raises(ValueError, match="model failed") as caught:
                 agent.run_sync("Hello")
 
             spans = exporter.get_finished_spans()
             agent_spans = [s for s in spans if "agent.run" in s.name]
 
-            if agent_spans:
-                span = agent_spans[0]
-                # Should have error attributes
-                assert span.attributes.get("pydantic_ai.is_error") == True
+            assert caught.value is error
+            assert len(agent_spans) == 2
+            for span in agent_spans:
+                assert span.attributes["pydantic_ai.is_error"] is True
+                assert span.status.status_code.name == "ERROR"
 
         finally:
             instrumentor.uninstrument()
 
 
-@pytest.mark.skipif(not HAS_PYDANTIC_AI, reason="pydantic-ai not installed")
 class TestConvenienceFunctions:
     """Test convenience functions with Pydantic AI installed."""
 
@@ -400,3 +390,5 @@ class TestConvenienceFunctions:
         assert instrumentor._use_builtin == True
 
         instrumentor.uninstrument()
+        from pydantic_ai import Agent
+        Agent.instrument_all(False)

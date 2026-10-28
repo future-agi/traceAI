@@ -27,8 +27,24 @@ from smolagents.agents import (
 from smolagents.models import (
     ChatMessage,  # type: ignore[import-untyped]
     ChatMessageToolCall,
-    ChatMessageToolCallDefinition,
 )
+
+try:
+    from smolagents.models import ChatMessageToolCallFunction as ChatMessageToolCallDefinition
+except ImportError:  # The supported 1.12 SDK used the old name.
+    from smolagents.models import ChatMessageToolCallDefinition
+
+
+@pytest.fixture
+def vcr_config():
+    # A missing/mismatched cassette must fail, never contact a provider.
+    return {"record_mode": "none"}
+
+
+def _message(content):
+    if hasattr(OpenAIServerModel, "generate"):
+        return ChatMessage(role="user", content=content)
+    return {"role": "user", "content": content}
 
 
 def remove_all_vcr_request_headers(request: Any) -> Any:
@@ -132,10 +148,7 @@ class TestModels:
         )
         output_message = model(
             messages=[
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": input_message_content}],
-                }
+                _message(input_message_content)
             ]
         )
         output_message_content = output_message.content
@@ -144,7 +157,7 @@ class TestModels:
         spans = in_memory_span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        assert span.name == "OpenAIServerModel.__call__"
+        assert span.name == f"{type(model).__name__}.{'generate' if hasattr(model, 'generate') else '__call__'}"
         assert span.status.is_ok
         attributes = dict(span.attributes or {})
         assert attributes.pop(GEN_AI_SPAN_KIND) == LLM
@@ -205,12 +218,10 @@ class TestModels:
             def forward(self, location: str) -> str:
                 return "sunny"
 
-        output_message = model(
+        generate = model.generate if hasattr(model, "generate") else model
+        output_message = generate(
             messages=[
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": input_message_content}],
-                }
+                _message(input_message_content)
             ],
             tools_to_call_from=[GetWeatherTool()],
         )
@@ -220,12 +231,13 @@ class TestModels:
         assert len(tool_calls) == 1
         assert isinstance(tool_call := tool_calls[0], ChatMessageToolCall)
         assert tool_call.function.name == "get_weather"
-        assert tool_call.function.arguments == {"location": "Paris"}
+        assert (json.loads(tool_call.function.arguments) if isinstance(tool_call.function.arguments, str)
+                else tool_call.function.arguments) == {"location": "Paris"}
 
         spans = in_memory_span_exporter.get_finished_spans()
         assert len(spans) == 1
         span = spans[0]
-        assert span.name == "OpenAIServerModel.__call__"
+        assert span.name == f"{type(model).__name__}.{'generate' if hasattr(model, 'generate') else '__call__'}"
         assert span.status.is_ok
         attributes = dict(span.attributes or {})
         assert attributes.pop(GEN_AI_SPAN_KIND) == LLM
@@ -291,18 +303,18 @@ class TestModels:
 
 
 class TestRun:
-    @pytest.mark.xfail
-    def test_multiagents(self) -> None:
+    def test_multiagents(self, in_memory_span_exporter) -> None:
         class FakeModelMultiagentsManagerAgent:
-            def __call__(
+            def generate(
                 self,
                 messages: list[dict[str, Any]],
                 stop_sequences: Optional[list[str]] = None,
                 grammar: Optional[Any] = None,
                 tools_to_call_from: Optional[list[Tool]] = None,
+                **kwargs,
             ) -> Any:
                 if tools_to_call_from is not None:
-                    if len(messages) < 3:
+                    if "Report on the current US president" not in str(messages):
                         return ChatMessage(
                             role="assistant",
                             content="",
@@ -312,7 +324,7 @@ class TestRun:
                                     type="function",
                                     function=ChatMessageToolCallDefinition(
                                         name="search_agent",
-                                        arguments="Who is the current US president?",
+                                        arguments={"task": "Who is the current US president?", "additional_args": {}},
                                     ),
                                 )
                             ],
@@ -327,13 +339,13 @@ class TestRun:
                                     id="call_0",
                                     type="function",
                                     function=ChatMessageToolCallDefinition(
-                                        name="final_answer", arguments="Final report."
+                                        name="final_answer", arguments={"answer": "Final report."}
                                     ),
                                 )
                             ],
                         )
                 else:
-                    if len(messages) < 3:
+                    if "Report on the current US president" not in str(messages):
                         return ChatMessage(
                             role="assistant",
                             content="""
@@ -357,15 +369,17 @@ final_answer("Final report.")
 """,
                         )
 
+        FakeModelMultiagentsManagerAgent.__call__ = FakeModelMultiagentsManagerAgent.generate
         manager_model = FakeModelMultiagentsManagerAgent()
 
         class FakeModelMultiagentsManagedAgent:
-            def __call__(
+            def generate(
                 self,
                 messages: list[dict[str, Any]],
                 tools_to_call_from: Optional[list[Tool]] = None,
                 stop_sequences: Optional[list[str]] = None,
                 grammar: Optional[Any] = None,
+                **kwargs,
             ) -> Any:
                 return ChatMessage(
                     role="assistant",
@@ -376,12 +390,13 @@ final_answer("Final report.")
                             type="function",
                             function=ChatMessageToolCallDefinition(
                                 name="final_answer",
-                                arguments="Report on the current US president",
+                                arguments={"answer": "Report on the current US president"},
                             ),
                         )
                     ],
                 )
 
+        FakeModelMultiagentsManagedAgent.__call__ = FakeModelMultiagentsManagedAgent.generate
         managed_model = FakeModelMultiagentsManagedAgent()
 
         web_agent = ToolCallingAgent(
@@ -399,11 +414,20 @@ final_answer("Final report.")
             tools=[],
             model=manager_model,
             managed_agents=[web_agent],
-            additional_authorized_imports=["time", "numpy", "pandas"],
+            additional_authorized_imports=["time"],
         )
 
         report = manager_code_agent.run("Fake question.")
         assert report == "Final report."
+        spans = in_memory_span_exporter.get_finished_spans()
+        roots = [span for span in spans if span.parent is None]
+        assert len(roots) == 1, [s.name for s in roots]
+        root, = roots
+        assert root.attributes[GEN_AI_SPAN_KIND] == AGENT
+        assert any(span.name.startswith("Step ") for span in spans)
+        assert any(span.name == "ToolCallingAgent.run" and span.parent is not None for span in spans)
+        assert all(span.status.is_ok for span in spans)
+        in_memory_span_exporter.clear()
 
         manager_toolcalling_agent = ToolCallingAgent(
             tools=[],
@@ -413,6 +437,15 @@ final_answer("Final report.")
 
         report = manager_toolcalling_agent.run("Fake question.")
         assert report == "Final report."
+        spans = in_memory_span_exporter.get_finished_spans()
+        roots = [span for span in spans if span.parent is None]
+        assert len(roots) == 1, [s.name for s in roots]
+        root, = roots
+        assert root.attributes[GEN_AI_SPAN_KIND] == AGENT
+        assert any(span.name.startswith("Step ") for span in spans)
+        assert any(span.name == "ToolCallingAgent.run" and span.parent is not None for span in spans)
+        assert all(span.status.is_ok for span in spans)
+        in_memory_span_exporter.clear()
 
 
 class TestTools:
@@ -447,8 +480,6 @@ class TestTools:
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         assert json.loads(input_value) == {
             "args": ["Paris"],
-            "sanitize_inputs_outputs": False,
-            "kwargs": {},
         }
         assert attributes.pop(OUTPUT_VALUE) == "sunny"
         assert attributes.pop(OUTPUT_MIME_TYPE) == TEXT
@@ -494,8 +525,6 @@ class TestTools:
         assert isinstance(input_value := attributes.pop(INPUT_VALUE), str)
         assert json.loads(input_value) == {
             "args": ["Paris"],
-            "sanitize_inputs_outputs": False,
-            "kwargs": {},
         }
         assert isinstance(output_value := attributes.pop(OUTPUT_VALUE), str)
         assert json.loads(output_value) == {
@@ -534,6 +563,7 @@ JSON = FiMimeTypeValues.JSON.value
 TEXT = FiMimeTypeValues.TEXT.value
 
 # span kinds
+AGENT = FiSpanKindValues.AGENT.value
 CHAIN = FiSpanKindValues.CHAIN.value
 LLM = FiSpanKindValues.LLM.value
 TOOL = FiSpanKindValues.TOOL.value
