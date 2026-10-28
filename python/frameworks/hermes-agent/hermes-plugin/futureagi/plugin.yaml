@@ -1,0 +1,17 @@
+name: futureagi
+version: 0.1.0
+description: "Future AGI tracing: one OpenTelemetry trace per Hermes turn, with model and tool spans. Prompt, tool and error text stay off unless FI_HERMES_CAPTURE_CONTENT=true."
+author: "Future AGI"
+license: Apache-2.0
+homepage: https://github.com/future-agi/traceAI/tree/main/python/frameworks/hermes-agent
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - post_tool_call
+  - on_session_end
+  - on_session_finalize
+  - subagent_start
+  - subagent_stop
