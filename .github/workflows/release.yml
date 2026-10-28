@@ -1,0 +1,209 @@
+# Release: publish every package whose version is not on its registry yet.
+#
+# Releasing stays a normal pull request: bump `version` in the package's pyproject.toml or
+# package.json and add the CHANGELOG entry. Once that reaches main, this workflow (per package,
+# in parallel, the two cores first):
+#   1. builds the package and checks the distribution (twine check / pnpm pack);
+#   2. installs the built artifact in a clean environment and imports it, and checks that the
+#      installed version equals the one in the repository;
+#   3. publishes it to PyPI (trusted publishing, or PYPI_API_TOKEN) or npm (NPM_TOKEN, with provenance);
+#   4. waits until the registry serves that version;
+#   5. tags the commit (`<pypi name>-v<version>`, e.g. traceai-livekit-v0.1.2, or
+#      `npm-<name>-v<version>`) and creates the GitHub release from the package's CHANGELOG section.
+#
+# Until the registry credentials are set up, every run does steps 1 and 2 and uploads the
+# artifacts, then stops with a warning: nothing is published and nothing is tagged. Publishing
+# turns on per ecosystem:
+#   PyPI  the repository variable PYPI_TRUSTED_PUBLISHING=true (a trusted publisher on each PyPI
+#         project pointing at this repository and release-python.yml), or the secret PYPI_API_TOKEN;
+#   npm   the secret NPM_TOKEN (publish rights on the @traceai scope).
+# The pull_request trigger only checks: that every package's __version__ agrees with its
+# pyproject.toml, and what the push to main would publish (shown in the run summary).
+# Java (JitPack builds from tags) and C# are not covered. The planner is .github/release/release_plan.py.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - python/pyproject.toml
+      - python/traceai/pyproject.toml
+      - python/frameworks/*/pyproject.toml
+      - python/**/version.py
+      - python/**/__init__.py
+      - typescript/packages/*/package.json
+      - .github/release/**
+      - .github/workflows/release.yml
+      - .github/workflows/release-python.yml
+      - .github/workflows/release-typescript.yml
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: Package names to release, space-separated (empty = every package whose version is not published)
+        type: string
+        default: ''
+      dry_run:
+        description: Build and check only; publish nothing, tag nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      python_core: ${{ steps.plan.outputs.python_core }}
+      python: ${{ steps.plan.outputs.python }}
+      typescript_core: ${{ steps.plan.outputs.typescript_core }}
+      typescript: ${{ steps.plan.outputs.typescript }}
+      publish_python: ${{ steps.gates.outputs.publish_python }}
+      publish_typescript: ${{ steps.gates.outputs.publish_typescript }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Test the planner
+        run: python3 -m unittest discover -s .github/release -p 'test_*.py'
+
+      - name: Every __version__ agrees with its pyproject.toml
+        run: python3 .github/release/release_plan.py --check
+
+      - name: Work out what is not published yet
+        id: plan
+        env:
+          ONLY: ${{ inputs.packages }}
+        run: |
+          # shellcheck disable=SC2086
+          python3 .github/release/release_plan.py ${ONLY:+--only $ONLY} > "$RUNNER_TEMP/plan.json"
+          jq . "$RUNNER_TEMP/plan.json"
+          {
+            echo "python_core=$(jq -c '[.python[] | select(.core)]' "$RUNNER_TEMP/plan.json")"
+            echo "python=$(jq -c '[.python[] | select(.core | not)]' "$RUNNER_TEMP/plan.json")"
+            echo "typescript_core=$(jq -c '[.typescript[] | select(.core)]' "$RUNNER_TEMP/plan.json")"
+            echo "typescript=$(jq -c '[.typescript[] | select(.core | not)]' "$RUNNER_TEMP/plan.json")"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release plan"
+            echo
+            if [ "$(jq '(.python | length) + (.typescript | length)' "$RUNNER_TEMP/plan.json")" = 0 ]; then
+              echo "Every package version is already published. Nothing to do."
+            else
+              echo "| Package | Version | First release? |"
+              echo "|---|---|---|"
+              jq -r '(.python + .typescript)[] | "| \(.name) | \(.version) | \(if .first_release then "yes" else "no" end) |"' "$RUNNER_TEMP/plan.json"
+            fi
+            echo
+            echo "<details><summary>Skipped</summary>"
+            echo
+            jq -r '.skipped[] | "- \(.name): \(.reason)"' "$RUNNER_TEMP/plan.json"
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Decide whether publishing is on
+        id: gates
+        env:
+          # Secrets cannot be read in a job-level `if`; an empty value means "not set".
+          HAS_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
+          PYPI_TRUSTED: ${{ vars.PYPI_TRUSTED_PUBLISHING == 'true' }}
+          HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+          IS_RELEASE_EVENT: ${{ github.event_name != 'pull_request' && inputs.dry_run != true }}
+        run: |
+          py=false; ts=false
+          if [ "$IS_RELEASE_EVENT" = true ]; then
+            if [ "$HAS_PYPI_TOKEN" = true ] || [ "$PYPI_TRUSTED" = true ]; then py=true; fi
+            if [ "$HAS_NPM_TOKEN" = true ]; then ts=true; fi
+          fi
+          echo "publish_python=$py" >> "$GITHUB_OUTPUT"
+          echo "publish_typescript=$ts" >> "$GITHUB_OUTPUT"
+          if [ "$IS_RELEASE_EVENT" = true ]; then
+            [ "$py" = true ] || echo "::warning title=PyPI publishing is off::set the repository variable PYPI_TRUSTED_PUBLISHING=true (after adding a trusted publisher on each PyPI project for release-python.yml) or the secret PYPI_API_TOKEN. Python packages are built and checked only."
+            [ "$ts" = true ] || echo "::warning title=npm publishing is off::set the secret NPM_TOKEN (publish rights on @traceai). TypeScript packages are built and checked only."
+          else
+            echo "Check only (${{ github.event_name }}${{ inputs.dry_run == true && ', dry run' || '' }}): nothing is published."
+          fi
+          echo "Publish: python=$py typescript=$ts" >> "$GITHUB_STEP_SUMMARY"
+
+  python-core:
+    name: Python core
+    needs: plan
+    if: needs.plan.outputs.python_core != '[]'
+    uses: ./.github/workflows/release-python.yml
+    with:
+      packages: ${{ needs.plan.outputs.python_core }}
+      publish: ${{ needs.plan.outputs.publish_python == 'true' }}
+    secrets: inherit
+
+  python:
+    name: Python
+    needs: [plan, python-core]
+    # The core (fi-instrumentation-otel) must be on PyPI before a package that needs its new version.
+    if: >-
+      !cancelled() && needs.plan.result == 'success'
+      && (needs.python-core.result == 'success' || needs.python-core.result == 'skipped')
+      && needs.plan.outputs.python != '[]'
+    uses: ./.github/workflows/release-python.yml
+    with:
+      packages: ${{ needs.plan.outputs.python }}
+      publish: ${{ needs.plan.outputs.publish_python == 'true' }}
+    secrets: inherit
+
+  typescript-core:
+    name: TypeScript core
+    needs: plan
+    if: needs.plan.outputs.typescript_core != '[]'
+    uses: ./.github/workflows/release-typescript.yml
+    with:
+      packages: ${{ needs.plan.outputs.typescript_core }}
+      publish: ${{ needs.plan.outputs.publish_typescript == 'true' }}
+    secrets: inherit
+
+  typescript:
+    name: TypeScript
+    needs: [plan, typescript-core]
+    if: >-
+      !cancelled() && needs.plan.result == 'success'
+      && (needs.typescript-core.result == 'success' || needs.typescript-core.result == 'skipped')
+      && needs.plan.outputs.typescript != '[]'
+    uses: ./.github/workflows/release-typescript.yml
+    with:
+      packages: ${{ needs.plan.outputs.typescript }}
+      publish: ${{ needs.plan.outputs.publish_typescript == 'true' }}
+    secrets: inherit
+
+  release:
+    # The one check to require: red when any package failed, green when every planned package
+    # went through (a package set that was empty counts as green).
+    name: Release
+    needs: [plan, python-core, python, typescript-core, typescript]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verdict
+        env:
+          RESULTS: ${{ toJson(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo "$RESULTS" | jq -e '[.[] | .result] | any(. == "failure" or . == "cancelled")' > /dev/null; then
+            echo "::error title=Release failed::see the failed package jobs above"
+            exit 1
+          fi

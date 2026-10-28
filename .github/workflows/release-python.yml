@@ -1,0 +1,132 @@
+# Called by release.yml for a set of Python packages (one job per package). Builds the sdist and
+# wheel, checks them, installs the wheel in a clean environment and imports it, then (when
+# `publish` is true) uploads to PyPI, waits for the version to be served, tags the commit and
+# creates the GitHub release from the package's CHANGELOG. See release.yml for the whole picture.
+name: Release (Python packages)
+
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: JSON array of planner entries ({name, version, dir, import_name, tag, changelog, ...})
+        type: string
+        required: true
+      publish:
+        description: Upload to PyPI, tag and create the GitHub release (false = build and check only)
+        type: boolean
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package:
+    name: ${{ matrix.name }} ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write   # the tag and the GitHub release
+      id-token: write   # PyPI trusted publishing
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.packages) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      DIR: ${{ matrix.dir }}
+      IMPORT_NAME: ${{ matrix.import_name }}
+      TAG: ${{ matrix.tag }}
+      CHANGELOG: ${{ matrix.changelog }}
+      PUBLISH: ${{ inputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Where the distributions go
+        run: echo "DIST=$RUNNER_TEMP/dist" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the build tools
+        run: python -m pip install --quiet build==1.2.2 twine==6.1.0
+
+      - name: Build the sdist and the wheel
+        run: python -m build --outdir "$DIST" "$DIR"
+
+      - name: Check the distributions
+        run: |
+          ls -l "$DIST"
+          python -m twine check --strict "$DIST"/*
+
+      - name: Install the wheel in a clean environment and import it
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/pip" install --quiet "$DIST"/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/smoke/bin/python" - <<'PY'
+          import importlib, os
+          from importlib.metadata import version
+          name, want, module = os.environ["NAME"], os.environ["VERSION"], os.environ.get("IMPORT_NAME")
+          got = version(name)
+          assert got == want, f"installed {name} is {got}, the repository says {want}"
+          if module:
+              m = importlib.import_module(module)
+              declared = getattr(m, "__version__", None)
+              assert declared in (None, want), f"{module}.__version__ is {declared}, the package is {want}"
+              print(f"import {module}: ok" + (f", __version__ = {declared}" if declared else ""))
+          print(f"{name} {got}: installed and importable")
+          PY
+          "$RUNNER_TEMP/smoke/bin/pip" check
+
+      - name: Keep the distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+      - name: Not publishing
+        if: inputs.publish != true
+        run: echo "::notice title=${{ matrix.name }} ${{ matrix.version }} not published::built and checked only (publishing is off or this is a dry run)"
+
+      - name: Publish to PyPI
+        if: inputs.publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ runner.temp }}/dist
+          # Empty when the secret is not set: the action then uses trusted publishing (OIDC).
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          print-hash: true
+
+      - name: Wait until PyPI serves the version
+        if: inputs.publish
+        run: |
+          python -m venv "$RUNNER_TEMP/verify"
+          for attempt in $(seq 1 20); do
+            if "$RUNNER_TEMP/verify/bin/pip" install --quiet --no-deps --no-cache-dir "$NAME==$VERSION" 2>/dev/null; then
+              echo "$NAME==$VERSION installs from PyPI"
+              exit 0
+            fi
+            echo "attempt $attempt: not served yet"
+            sleep 30
+          done
+          echo "::error title=$NAME $VERSION not on PyPI::published, but pip could not install it after 10 minutes"
+          exit 1
+
+      - name: Tag and create the GitHub release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          python3 .github/release/release_notes.py "$NAME" "$VERSION" ${CHANGELOG:+--changelog "$CHANGELOG"} \
+            --install "pip install \"$NAME==$VERSION\"" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$NAME $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "$DIST"/*
+          echo "- [$NAME $VERSION](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG) published to PyPI" >> "$GITHUB_STEP_SUMMARY"
