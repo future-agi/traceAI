@@ -90,8 +90,8 @@ function assertPrivateByDefault(spans, expected) {
 
 function assertCreateErrorSpan(span, expected) {
   assert.equal(span.status.code, 2, "span status must be ERROR");
-  assert.equal(span.status.message, `${expected.name} (${expected.status})`);
-  assert.equal(span.attributes["cursor.error.message"], `${expected.name} (${expected.status})`);
+  assert.equal(span.status.message, undefined);
+  assert.equal(span.attributes["cursor.error.message"], undefined);
   assert.equal(span.attributes["fi.span.kind"], "AGENT");
   assert.equal(span.attributes["cursor.error.name"], expected.name);
   if (expected.code) assert.equal(span.attributes["cursor.error.code"], expected.code);
@@ -148,10 +148,8 @@ await check("Agent.resume of a missing local agent: same error to the caller, on
   assert.equal(spans[0].status.code, 2);
   assert.equal(spans[0].attributes["cursor.agent.id"], missing);
   assert.equal(spans[0].attributes["session.id"], missing);
-  const detail = error.status ?? error.code;
-  const summary = detail !== undefined && detail !== "" ? `${spans[0].attributes["cursor.error.name"]} (${detail})` : spans[0].attributes["cursor.error.name"];
-  assert.equal(spans[0].status.message, summary);
-  assert.equal(spans[0].attributes["cursor.error.message"], summary);
+  assert.equal(spans[0].status.message, undefined);
+  assert.equal(spans[0].attributes["cursor.error.message"], undefined);
   const exception = spans[0].events.find((e) => e.name === "exception");
   assert.deepEqual(exception?.attributes, { "exception.type": spans[0].attributes["cursor.error.name"] });
   assertPrivateByDefault(spans, error);
@@ -205,7 +203,7 @@ await check("missing key (no account): the REAL local runtime runs send/stream/w
   assert.equal(run.status.code, 2);
   assert.equal(run.attributes["session.id"], agent.agentId);
   assert.equal(run.attributes["cursor.run.status"], "error");
-  assert.ok(/^RunError( \(.+\))?$/.test(run.status.message), `fixed run-error summary, got ${run.status.message}`);
+  assert.equal(run.status.message, undefined, "fi-core hides error details by default");
   const dump = exported(spans);
   assert.ok(!dump.includes("CONTRACT-MARKER-7713"), "prompt exported by default");
   assert.ok(!dump.includes(CHECKOUT) && !dump.includes(cwd), "local path exported by default");

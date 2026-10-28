@@ -35,9 +35,11 @@ try {
   }
   const first = await run.wait();
   console.log("run 1:", first.status, first.usage);
+  if (first.status !== "finished") throw new Error(`Cursor run 1 ${first.status}; inspect RunResult.error and the account allowance.`);
 
   const second = await (await agent.send("Now say which file is the largest.")).wait();
   console.log("run 2:", second.status, second.usage, "\nagent (session id):", agent.agentId);
+  if (second.status !== "finished") throw new Error(`Cursor run 2 ${second.status}; inspect RunResult.error and the account allowance.`);
 } finally {
   await agent?.[Symbol.asyncDispose]();
   // Export the spans, including a failed Agent.create (e.g. a bad CURSOR_API_KEY).

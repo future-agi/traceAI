@@ -51,7 +51,7 @@ const runSpans = () => byName(spans(), SpanNames.RUN);
 const toolSpans = () => spans().filter((s) => s.name.startsWith(SpanNames.TOOL_PREFIX));
 const childrenOf = (span: ReadableSpan) => spans().filter((s) => parentId(s) === span.spanContext().spanId);
 
-const ENV_KEYS = ["FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"] as const;
+const ENV_KEYS = ["FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_ERROR_DETAILS"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -141,7 +141,7 @@ describe("streamed run (documented events)", () => {
 
     const read = one(spans(), `${SpanNames.TOOL_PREFIX}read`);
     expect(read.status.code).toBe(SpanStatusCode.ERROR);
-    expect(read.status.message).toBe("read failed");
+    expect(read.status.message).toBeUndefined();
 
     const shell = one(spans(), `${SpanNames.TOOL_PREFIX}shell`);
     expect(attr(shell, C.TOOL_STARTED_EVENT)).toBe(false);
@@ -305,7 +305,7 @@ describe("live-recorded run (@cursor/sdk 1.0.38, 2026-10-20)", () => {
     expect(result.status).toBe("error");
     const run = one(spans(), SpanNames.RUN);
     expect(run.status.code).toBe(SpanStatusCode.ERROR);
-    expect(run.status.message).toBe("RunError");
+    expect(run.status.message).toBeUndefined();
     expect(attr(run, C.RUN_ERROR_CODE)).toBeUndefined();
     expect(exportedText(spans())).not.toContain("Model unavailable");
 
@@ -326,9 +326,9 @@ describe("run outcomes", () => {
     await until(() => runSpans().length === 1);
     const span = one(spans(), SpanNames.RUN);
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
-    // Cursor's run-error text is content: a fixed summary by default.
-    expect(span.status.message).toBe("RunError (provider_error)");
-    expect(attr(span, C.ERROR_MESSAGE)).toBe("RunError (provider_error)");
+    // fi-core 1.1 also removes fixed error summaries when content is hidden.
+    expect(span.status.message).toBeUndefined();
+    expect(attr(span, C.ERROR_MESSAGE)).toBeUndefined();
     expect(exportedText(spans())).not.toContain("Model provider returned 500");
     expect(attr(span, C.RUN_ERROR_CODE)).toBe("provider_error");
     expect(attr(span, C.RUN_STATUS)).toBe("error");
@@ -344,7 +344,7 @@ describe("run outcomes", () => {
     await run.wait();
     await until(() => runSpans().length === 1);
     const span = one(spans(), SpanNames.RUN);
-    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "cancelled" });
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(attr(span, C.RUN_CANCELLED)).toBe(true);
   });
 
@@ -355,7 +355,7 @@ describe("run outcomes", () => {
     const run = await agent.send("hi");
     await expect(drain(run.stream())).rejects.toBe(boom);
     const span = one(spans(), SpanNames.RUN);
-    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "Error" });
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(span.events.find((e) => e.name === "exception")?.attributes).toEqual({ "exception.type": "Error" });
     const ls = one(spans(), `${SpanNames.TOOL_PREFIX}ls`);
     expect(ls.status.code).toBe(SpanStatusCode.ERROR);
@@ -368,8 +368,8 @@ describe("run outcomes", () => {
     const agent = await sdk.Agent.create({ model: { id: "composer-2" } });
     await expect(agent.send("hi")).rejects.toBe(auth);
     const span = one(spans(), SpanNames.RUN);
-    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "AuthenticationError (401)" });
-    expect(attr(span, C.ERROR_MESSAGE)).toBe("AuthenticationError (401)");
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR });
+    expect(attr(span, C.ERROR_MESSAGE)).toBeUndefined();
     expect(attr(span, C.ERROR_NAME)).toBe("AuthenticationError");
     expect(attr(span, C.ERROR_CODE)).toBe("error");
     expect(attr(span, C.ERROR_STATUS)).toBe(401);
@@ -415,7 +415,7 @@ describe("run outcomes", () => {
     }
     await expect(run.wait()).rejects.toBe(err);
     const span = one(spans(), SpanNames.RUN);
-    expect(span.status).toEqual({ code: SpanStatusCode.ERROR, message: "Error" });
+    expect(span.status).toEqual({ code: SpanStatusCode.ERROR });
     expect(span.events.some((e) => e.name === "exception")).toBe(true);
   });
 });
@@ -460,7 +460,7 @@ describe("error text is content", () => {
     return exportedText(spans());
   }
 
-  it("default: no message, no stack, no path in events, status or attributes; fixed summaries instead", async () => {
+  it("default: no message, no stack, no path; fi-core also suppresses status summaries", async () => {
     const text = await failEverywhere();
     expect(text).not.toContain(PATH);
     expect(text).not.toContain("/Users/");
@@ -468,11 +468,11 @@ describe("error text is content", () => {
     expect(text).not.toContain("exception.message");
     expect(text).not.toContain("exception.stacktrace");
     const create = one(spans(), SpanNames.CREATE);
-    expect(create.status.message).toBe("AuthenticationError (401)");
+    expect(create.status.message).toBeUndefined();
     expect(create.events[0].attributes).toEqual({ "exception.type": "AuthenticationError" });
     const [sendSpan, failedRun] = runSpans();
-    expect(sendSpan.status.message).toBe("AuthenticationError (401)");
-    expect(failedRun.status.message).toBe("RunError (internal)");
+    expect(sendSpan.status.message).toBeUndefined();
+    expect(failedRun.status.message).toBeUndefined();
     expect(attr(failedRun, C.RUN_ERROR_CODE)).toBe("internal");
   });
 

@@ -91,11 +91,11 @@ Cursor Agent run              AGENT  session.id = agent id, model, tokens, statu
 Status:
 
 - Run `finished`: OK.
-- Run `error`: ERROR, `cursor.run.error_code` from `RunResult.error.code`. Status message `RunError (<code>)` by default, or `RunError` when Cursor gives no code (a live run with a model setting the plan does not include fails this way); Cursor's own error text only with content opted in (see Privacy).
-- Run `cancelled`: ERROR with status message `cancelled` and `cursor.run.cancelled=true` (no Cursor message, no error code).
+- Run `error`: ERROR, `cursor.run.error_code` from `RunResult.error.code`. No status message by default; Cursor's own error text only with content opted in (see Privacy).
+- Run `cancelled`: ERROR with `cursor.run.cancelled=true` (status message omitted by default) (no Cursor message, no error code).
 - `send()`, `stream()` or `wait()` throwing: ERROR on the run span, an `exception` event and the SDK error fields (`cursor.error.name`, `.code`, `.http_status`, `.retryable`, `.operation`). The caller gets the same error.
 - `Agent.create()` / `Agent.resume()` throwing (for example `AuthenticationError` for a wrong API key): one ERROR span `Cursor Agent create` / `Cursor Agent resume`. A successful create emits no span.
-- A `tool_call` with `status: "error"`: ERROR on the tool span, status message `<tool> failed` by default.
+- A `tool_call` with `status: "error"`: ERROR on the tool span, with no status message by default.
 
 ### When the run span closes
 
@@ -119,7 +119,7 @@ By default no prompt, tool argument, tool result, thinking text, assistant text,
 Errors are content too: messages and stack traces carry local paths and usernames, and Cursor's run-error text can quote prompt text. By default an error exports only its class and structural fields:
 
 - the `exception` event has `exception.type` (the class name) and no `exception.message` or `exception.stacktrace`;
-- the status message and `cursor.error.message` are a fixed summary, `<ErrorName> (<http status or code>)`, for example `AuthenticationError (401)`, or `RunError (<code>)` for a failed run;
+- fi-core 1.1 removes the status message and `cursor.error.message`, including fixed summaries, because hiding content also enables `hideErrorDetails`;
 - `cursor.error.name`, `.code`, `.http_status`, `.retryable` and `.operation` are exported as is.
 
 Turn content on in code:
@@ -128,7 +128,7 @@ Turn content on in code:
 new CursorSDKInstrumentation({ tracerProvider, traceConfig: { hideInputs: false, hideOutputs: false } });
 ```
 
-or with the fi-core environment variables `FI_HIDE_INPUTS=false` (prompts, tool arguments) and `FI_HIDE_OUTPUTS=false` (results, thinking, assistant text). Only an explicit `false` turns content on. Error messages, stack traces and Cursor's run-error text are exported only when both are on. Text values are cut at 5000 characters (error messages at 500). With content on, values are exported as the SDK reports them, including file paths inside tool arguments and results.
+or with the fi-core environment variables `FI_HIDE_INPUTS=false` (prompts, tool arguments) and `FI_HIDE_OUTPUTS=false` (results, thinking, assistant text). Only an explicit `false` turns content on. Error messages, stack traces and Cursor's run-error text are exported only when both are on and `hideErrorDetails` / `FI_HIDE_ERROR_DETAILS` is not enabled. Setting `hideErrorDetails: false` alone does not opt into raw Cursor error content; it retains fixed summaries while content remains hidden. Text values are cut at 5000 characters (error messages at 500). With content on, values are exported as the SDK reports them, including file paths inside tool arguments and results.
 
 ## Not captured / limitations
 
@@ -150,8 +150,9 @@ Call `await shutdown(tracerProvider)` before a short script exits. It closes eve
 
 - No spans: call `manuallyInstrument(CursorSDK)` before `Agent.create()`. With ESM, the automatic require hook does not see `import`.
 - Only a `Cursor Agent create` span, `AuthenticationError (401)`: the API key is wrong (or revoked). Create a user API key in the Cursor dashboard ([grok.com/dashboard](https://grok.com/dashboard); new keys start with `grok_`), or use `Cursor.auth.login()`.
-- A `Cursor Agent run` span `RunError` (no code) about a second after it starts, with a working key and no tool spans: the model or its settings are not in your plan. With content on, `cursor.error.message` reads `Model unavailable on <plan> ...`. Pass a model and params that `Cursor.models.list()` returns for your key, for example `{ id: "composer-2.5", params: [{ id: "fast", value: "false" }] }` on Plus.
-- A `Cursor Agent run` span with status `RunError` (`cursor.run.status=error`) a few seconds after `send()`, and no tool spans: no API key at all (no `apiKey`, no `CURSOR_API_KEY`, no stored login). `Agent.create()` succeeds without a key; the run is rejected once it starts (`[unknown] Invalid User API Key` in `RunResult.error`).
+- A `Cursor Agent run` span with ERROR status and no error code about a second after it starts, with a working key and no tool spans: the model or its settings are not in your plan. With content on, `cursor.error.message` reads `Model unavailable on <plan> ...`. Pass a model and params that `Cursor.models.list()` returns for your key, for example `{ id: "composer-2.5", params: [{ id: "fast", value: "false" }] }` on Plus.
+- A `Cursor Agent run` span with ERROR status (`cursor.run.status=error`) a few seconds after `send()`, and no tool spans: no API key at all (no `apiKey`, no `CURSOR_API_KEY`, no stored login). `Agent.create()` succeeds without a key; the run is rejected once it starts (`[unknown] Invalid User API Key` in `RunResult.error`).
+- `RunResult.error.message` says `Weekly usage limit reached`: the account has exhausted its allowance. Wait for the reset or add credits in Cursor; changing the tracing settings cannot remove this limit. The example exits non-zero for failed runs.
 - A `shell` tool result saying the working directory no longer exists: `local.cwd` was a relative path. Pass an absolute one.
 - Run span but no tool spans on a working key: your code did not read `run.stream()`, or read it after the run span closed. Read the stream before or while you call `wait()`.
 - Extra traces with names like `LocalGitExecutor.exec`: the provider was registered as the global one. Use `setGlobalTracerProvider: false`.
@@ -183,7 +184,7 @@ What the real stream showed, compared with the replay this package was first tes
 - Thinking arrives as text deltas closed by an empty-text event with `thinking_duration_ms`, as assumed; Cursor's duration covers only the streaming of the thinking text.
 - Tool calls: `running` (repeated for partial updates with the same args), then `completed`; ids `tool_<uuid>`; no `truncated` field; tools can run in parallel.
 - `totalTokens` includes cache reads and writes, and `inputTokens` excludes them (the replay had assumed total = input + output). Fixed: `gen_ai.usage.input_tokens` now adds the cache tokens.
-- A failed run can carry `RunResult.error` with a message and no code; the default status message is then `RunError`.
+- A failed run can carry `RunResult.error` with a message and no code; fi-core 1.1 omits the default status message; the ERROR status and structural fields remain.
 - A relative `local.cwd` breaks the agent's `shell` tool ("working directory no longer exists"); the example now resolves it.
 - `agent.getUsage()` returned `403 feature_unavailable` on Plus.
 - Privacy, over every stored column: default config, prompt marker 0, README marker 0, home paths 0; content on, the prompt in `input`, the README marker in tool and run outputs, home paths in tool arguments (as documented). API key 0 in both. No SDK-internal (`context-tracer`) span reached Future AGI.
