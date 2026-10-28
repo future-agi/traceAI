@@ -51,3 +51,12 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(summarize(package, CUTOFF)["latest_eligible"], "v2.3.0")
         self.assertIn("/vN", package["module_path_assessment"])
         self.assertTrue(all(r["module_path"].endswith("/v2") for r in package["releases"]))
+        self.assertTrue(all(r["go_version"] == "1.23" for r in package["releases"]))
+        raw["versions"][0]["go_mod"] = "module example.com/SDK/v3\ngo 1.23\n"
+        with self.assertRaisesRegex(ValueError, "module path"):
+            go("example.com/SDK/v2", raw, SEEN)
+
+    def test_native_semver_rejects_invalid_numeric_identifiers(self):
+        for version in ("1.0.0-01", "1.0.0-rc..1", "01.0.0", "1.0"):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                semver(version)

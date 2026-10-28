@@ -67,6 +67,8 @@ def semver(value):
     if not match:
         raise ValueError(f"Invalid semver: {value}")
     major, minor, patch, pre = match.groups()
+    if pre and any(p.isdigit() and len(p) > 1 and p.startswith("0") or not p for p in pre.split(".")):
+        raise ValueError(f"Invalid semver prerelease: {value}")
     parts = tuple((0, int(p)) if p.isdigit() else (1, p) for p in pre.split(".")) if pre else ()
     return int(major), int(minor), int(patch), pre is None, parts
 
@@ -112,9 +114,15 @@ def go(name, data, seen_at):
         version = info["Version"]
         parsed = semver(version)
         retracted = any(semver(lo) <= parsed <= semver(hi) for lo, hi in retractions)
+        mod = info.get("go_mod", "")
+        module = re.search(r'(?m)^module\s+"?([^"\s]+)"?\s*$', mod)
+        if mod and (not module or module.group(1) != name):
+            raise ValueError("Go module path metadata disagrees with the explicit inventory path")
+        go_version = re.search(r"(?m)^go\s+([0-9.]+)\s*$", mod)
         releases.append({"version": version, "prerelease": not parsed[3], "published_at": info.get("Time"),
                          "first_seen_at": seen_at, "yanked": retracted, "retracted": retracted,
-                         "go_mod": info.get("go_mod"), "module_path": name})
+                         "go_mod": info.get("go_mod"), "module_path": name,
+                         "go_version": go_version.group(1) if go_version else None})
     return {"name": name, "ecosystem": "go", "dist_tags": {}, "retractions": retractions,
             "module_path_assessment": "New /vN paths require explicit inventory review; not auto-discovered.",
             "releases": sorted(releases, key=lambda r: semver(r["version"]))}
