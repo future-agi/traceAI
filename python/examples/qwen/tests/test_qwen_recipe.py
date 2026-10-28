@@ -12,6 +12,7 @@ import sys
 import tempfile
 import uuid
 from contextlib import contextmanager
+from importlib.metadata import version
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -27,13 +28,12 @@ from traceai_openai import OpenAIInstrumentor
 
 import app
 
-# traceai-openai 0.1.10 and earlier label every span "openai"; later versions
-# (future-agi/traceAI#249) use the vendor's name for its documented API host.
-# They also omit gen_ai.request.model on streamed and failed calls, where later
-# versions record the requested model. Accept both so this recipe passes on either version.
-PROVIDER_NAMES = ("openai", "dashscope")
-
 RECIPE = Path(__file__).resolve().parents[1]
+# Identify the matrix implementation by its import path, not by inspecting the
+# provider map or the exported value: a source regression must not pass as 0.1.10.
+SOURCE_INSTRUMENTOR = Path(traceai_openai.__file__).resolve() == (
+    RECIPE.parents[1] / "frameworks/openai/traceai_openai/__init__.py"
+)
 _fake_spec = importlib.util.spec_from_file_location(
     "qwen_recipe_fake", RECIPE / "tests" / "_fake_openai.py"
 )
@@ -60,12 +60,15 @@ REGION_BASES = {
     "China (Hong Kong)": "https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com/compatible-mode/v1",
     "Germany (Frankfurt)": "https://{WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1",
 }
-SHARED_BASES = [
-    DOCUMENTED_BASE,
-    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
-    "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1",
+# Explicit source expectations for each documented shared endpoint. Hong Kong's
+# shared host is not mapped by #249; its workspace-dedicated host is mapped.
+SHARED_PROVIDER_CASES = [
+    (DOCUMENTED_BASE, "dashscope"),
+    ("https://dashscope.aliyuncs.com/compatible-mode/v1", "dashscope"),
+    ("https://dashscope-us.aliyuncs.com/compatible-mode/v1", "dashscope"),
+    ("https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1", "openai"),
 ]
+SHARED_BASES = [base for base, _ in SHARED_PROVIDER_CASES]
 REFUSED_URLS = [
     (REGION_BASES["Beijing"], "workspace id from the console"),
     (REGION_BASES["Singapore"].replace("{WorkspaceId}", "%7BWorkspaceId%7D"), "workspace id from the console"),
@@ -211,17 +214,17 @@ def attributes(span):
     }
 
 
-def assert_llm(receiver, project, model=MODEL):
+def assert_llm(receiver, project, model=MODEL, *, source_provider="dashscope"):
     [span] = receiver.spans()
     attrs = attributes(span)
     assert span["name"] == "ChatCompletion"
     assert attrs["gen_ai.span.kind"] == "LLM"
     if model is None:
         # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
-        assert attrs.get("gen_ai.request.model") in (None, MODEL)
+        assert attrs.get("gen_ai.request.model") == (MODEL if SOURCE_INSTRUMENTOR else None)
     else:
         assert attrs["gen_ai.request.model"] == model
-    assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
+    assert attrs["gen_ai.provider.name"] == (source_provider if SOURCE_INSTRUMENTOR else "openai")
     for request in receiver.requests():
         assert request["path"] == "/tracer/v1/traces"
         assert request["headers"]["x-api-key"] == FI_KEY
@@ -285,6 +288,13 @@ def child_environment(directory, receiver=None, fake=None):
     if fake:
         child_env[app.BASE_URL_ENV] = fake.base_url
     return child_env
+
+
+def test_instrumentor_matches_matrix_cell():
+    mode = "source" if SOURCE_INSTRUMENTOR else "published"
+    assert os.environ.get("PACKAGE_MODE", mode) == mode
+    if not SOURCE_INSTRUMENTOR:
+        assert version("traceAI-openai") == "0.1.10"
 
 
 def test_documented_default_base_url(monkeypatch):
@@ -399,27 +409,48 @@ def test_stream_accumulates_text_and_optional_usage(traced, include_usage):
         assert not any(name.startswith("gen_ai.usage.") for name in attrs)
 
 
-@pytest.mark.parametrize("base", [
-    *SHARED_BASES,
-    *(base.replace("{WorkspaceId}", WORKSPACE) for base in REGION_BASES.values()),
+@pytest.mark.parametrize("base, source_provider", [
+    *SHARED_PROVIDER_CASES,
+    *((base.replace("{WorkspaceId}", WORKSPACE), "dashscope") for base in REGION_BASES.values()),
+    ("https://qwen-proxy.example.invalid/custom/v1", "openai"),
+    ("https://dashscope-intl.aliyuncs.com.example.invalid/custom/v1", "openai"),
+    ("https://example.maas.aliyuncs.com.example.invalid/custom/v1", "openai"),
 ])
-def test_regional_base_routes_and_bearer_auth(traced, base):
+@pytest.mark.parametrize("operation", ["chat", "stream", "error"])
+def test_regional_base_routes_bearer_auth_and_provider(traced, base, source_provider, operation):
     receiver, provider, project = traced
     requests = []
 
     def handler(request):
         requests.append(request)
+        if operation == "stream":
+            return httpx.Response(200, content=stream_body(include_usage=True), headers={"Content-Type": "text/event-stream"})
+        if operation == "error":
+            return httpx.Response(401, json=AUTH_ERROR)
         return httpx.Response(200, json=completion())
 
     with app.make_client(base_url=base, http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
-        client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Local region fixture."}])
+        client.max_retries = 0
+        kwargs = {"model": MODEL, "messages": [{"role": "user", "content": "Local region fixture."}]}
+        if operation == "error":
+            with pytest.raises(openai.AuthenticationError):
+                client.chat.completions.create(**kwargs)
+        elif operation == "stream":
+            stream = client.chat.completions.create(**kwargs, stream=True, stream_options={"include_usage": True})
+            chunks = list(stream)
+            assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == ANSWER
+        else:
+            assert client.chat.completions.create(**kwargs).choices[0].message.content == ANSWER
     assert provider.force_flush()
     [request] = requests
     assert str(request.url) == base + "/chat/completions"
     assert request.headers["authorization"] == f"Bearer {VENDOR_KEY}"
     assert "x-api-key" not in request.headers
     assert "x-secret-key" not in request.headers
-    assert_llm(receiver, project)
+    span, _ = assert_llm(
+        receiver, project, model=MODEL if operation == "chat" else None, source_provider=source_provider,
+    )
+    assert span["status"]["code"] == ("STATUS_CODE_ERROR" if operation == "error" else "STATUS_CODE_OK")
 
 
 @pytest.mark.parametrize("status, code, message, error_class", [
@@ -527,7 +558,7 @@ def test_app_subprocess_exports_one_span(monkeypatch, streaming, env_project):
             [span] = receiver.spans()
             project = receiver.requests()[0]["resource_attributes"][0]["project_name"]
             assert project == (env_project or "qwen-openai-recipe")
-            _, attrs = assert_llm(receiver, project, model=None if streaming else MODEL)
+            _, attrs = assert_llm(receiver, project, model=None if streaming else MODEL, source_provider="openai")
             assert attrs["output.value"] == ANSWER
             assert_usage(attrs)
 
@@ -641,7 +672,7 @@ def test_cli_model_overrides_environment():
             assert request["body"]["messages"] == [{"role": "user", "content": "What is a rainbow?"}]
             assert (directory / "guard.ready").exists()
             assert (directory / "guard.log").read_text() == ""
-            assert_llm(receiver, "qwen-openai-recipe", model="qwen-cli-test")
+            assert_llm(receiver, "qwen-openai-recipe", model="qwen-cli-test", source_provider="openai")
 
 
 def test_setup_tracing_keeps_global_provider(monkeypatch):
@@ -676,6 +707,15 @@ def test_readme_and_requirements_pin_contract():
     assert readme.startswith("# Qwen (OpenAI-compatible) with traceAI\n")
     assert DOCUMENTED_BASE in readme
     assert "provider field says `openai`" in readme
+    for base, expected_provider in SHARED_PROVIDER_CASES:
+        host = urlsplit(base).hostname
+        assert re.search(
+            rf"^\| `{re.escape(host)}` [^|]+ \| `openai` \| `{expected_provider}` \|$",
+            readme, re.MULTILINE,
+        )
+    assert "| `*.maas.aliyuncs.com` (including Hong Kong workspace hosts) | `openai` | `dashscope` |" in readme
+    assert "The Hong Kong shared host is not in the current provider map" in readme
+    assert "For Virginia, prefer the workspace-dedicated endpoint from your console." in readme
     for name in (app.API_KEY_ENV, app.BASE_URL_ENV, app.MODEL_ENV, "FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME", "FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS"):
         assert name in readme
     assert "| `FI_PROJECT_NAME` | No | Observe project name. Defaults to `qwen-openai-recipe`. Goes to the tracer only. |" in readme

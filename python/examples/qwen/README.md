@@ -83,7 +83,18 @@ finally:
 
 The shared instrumentor emits a `ChatCompletion` span with `gen_ai.span.kind=LLM` per completed chat call. Non-streamed `gen_ai.request.model` is the model id the provider returns in its response; `gen_ai.request.parameters` contains the requested ID unless invocation parameters are hidden.
 
-Up to `traceai-openai` 0.1.10, the provider field says `openai`, including for Qwen. Later versions ([#249](https://github.com/future-agi/traceAI/pull/249)) label the DashScope hosts and `*.maas.aliyuncs.com` workspace hosts as `dashscope`; custom proxy hosts keep `openai`.
+Up to `traceai-openai` 0.1.10, the provider field says `openai`, including for Qwen. Current source after [#249](https://github.com/future-agi/traceAI/pull/249) uses the explicit host mapping below for `gen_ai.provider.name`, on chat, streamed, and failed calls:
+
+| Host | Published 0.1.10 | Current source |
+| --- | --- | --- |
+| `dashscope.aliyuncs.com` (Beijing) | `openai` | `dashscope` |
+| `dashscope-intl.aliyuncs.com` (Singapore) | `openai` | `dashscope` |
+| `dashscope-us.aliyuncs.com` (Virginia) | `openai` | `dashscope` |
+| `cn-hongkong.dashscope.aliyuncs.com` (Hong Kong shared) | `openai` | `openai` |
+| `*.maas.aliyuncs.com` (including Hong Kong workspace hosts) | `openai` | `dashscope` |
+| Custom proxies and loopback hosts | `openai` | `openai` |
+
+The Hong Kong shared host is not in the current provider map, so it retains `openai`; its workspace-dedicated host is mapped to `dashscope`. This affects the tracing label, not which endpoint receives the request.
 
 - Streamed output accumulates in `output.value`. Up to 0.1.10, streamed and failed calls have no `gen_ai.request.model` attribute; later versions record the requested model there. The requested model remains in `gen_ai.request.parameters` unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
 - When the provider supplies usage, the span records `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens`. Missing usage is omitted, never set to zero. Without `include_usage`, the OpenAI-compatible stream does not return usage by default; [Alibaba documents](https://www.alibabacloud.com/help/en/model-studio/stream) requesting it in the last chunk.
@@ -103,6 +114,8 @@ The [Base URL overview](https://www.alibabacloud.com/help/en/model-studio/base-u
 | China (Hong Kong) | `https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1` | `https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com/compatible-mode/v1` |
 | Japan (Tokyo) | Use your workspace endpoint | `https://{WorkspaceId}.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1` |
 | Germany (Frankfurt) | Use your workspace endpoint | `https://{WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1` |
+
+For Virginia, prefer the workspace-dedicated endpoint from your console. Alibaba's [Base URL overview](https://www.alibabacloud.com/help/en/model-studio/base-url) lists the shared `dashscope-us.aliyuncs.com` endpoint above, while its [regional endpoint table](https://www.alibabacloud.com/help/en/model-studio/regions) marks the Virginia shared domain as unsupported; both list the workspace-dedicated endpoint.
 
 The SDK appends `/chat/completions` and sends `Authorization: Bearer <DASHSCOPE_API_KEY>`. Do not append that endpoint path yourself. Workspace endpoints require a key belonging to that workspace; shared endpoints accept keys from workspaces in the same region. Keys and model availability are region-specific. Use the exact Model Studio model ID, such as `qwen-plus`, rather than a Hugging Face repository name.
 
@@ -168,7 +181,7 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 | 1.69.0 | Repository source (SDK floor) |
 | 3.24.0 | Published `traceAI-openai==0.1.10` + `fi-instrumentation-otel==1.1.0` |
 
-The fixtures cover chat, streaming with and without final usage, response-versus-request model IDs, provider errors, privacy controls, project-name precedence, strict URL validation, and CLI subprocesses. Synthetic response IDs and usage counts are fixture data, not provider output. Tests accept both the published instrumentor's provider/model attributes and the source behavior described above.
+The fixtures cover chat, streaming with and without final usage, response-versus-request model IDs, provider errors, privacy controls, project-name precedence, strict URL validation, and CLI subprocesses. Synthetic response IDs and usage counts are fixture data, not provider output. Provider assertions require the exact label for each shared and workspace host, including the Hong Kong shared-host exception, across chat, streaming, and errors. Proxy and look-alike hosts must keep `openai`. Expected provider/model attributes are selected by the imported source or pinned published package, not by accepting either value.
 
 ## Official API references
 
