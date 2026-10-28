@@ -216,6 +216,28 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'self-test'):
             verify_provenance(bundle, self.metadata(), self.API())
 
+    def test_issue_writer_only_upserts_labels_and_issues_and_preserves_human_labels(self):
+        class FakeAPI:
+            def __init__(self):
+                self.calls = []
+            def request(self, path, data=None, method='GET'):
+                self.calls.append((path, data, method))
+                if method == 'GET':
+                    return {'labels': [{'name': 'human-triaged'}, {'name': 'compat:release-pending'}]}
+                return {'number': 42}
+        api = FakeAPI()
+        action = dict(number=42, title='Recovered', body='Evidence', state='closed',
+                      labels=['compatibility', 'compat:contract-regression'])
+        apply_actions(api, [action])
+        patches = [(p, d) for p, d, m in api.calls if m == 'PATCH']
+        self.assertEqual(len(patches), 1)
+        path, payload = patches[0]
+        self.assertEqual(path, '/repos/future-agi/traceAI/issues/42')
+        self.assertEqual(payload['state'], 'closed')
+        self.assertIn('human-triaged', payload['labels'])
+        self.assertNotIn('compat:release-pending', payload['labels'])
+        self.assertTrue(all('/labels' in p or '/issues/' in p for p, _, _ in api.calls))
+
     def test_api_is_fixed_repository_only(self):
         with self.assertRaisesRegex(ValueError, 'fixed repository'):
             GitHub('not-a-real-token').request('/repos/outsider/project/issues')

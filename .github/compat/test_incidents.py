@@ -186,9 +186,10 @@ class HeartbeatTests(unittest.TestCase):
         self.assertEqual(closed['state'], 'closed')
 
     def test_expired_exception_is_explicit(self):
-        registry = self.enabled()
-        registry['integrations'][0]['exceptions'] = [dict(id='expired-test', expires='2026-10-27')]
-        self.assertTrue(any(a['id'] == 'exception:expired-test' for a in heartbeat([], registry, NOW)))
+        for expires in ('2026-10-27', '2026-10-28'):
+            registry = self.enabled()
+            registry['integrations'][0]['exceptions'] = [dict(id='expired-test', expires=expires)]
+            self.assertTrue(any(a['id'] == 'exception:expired-test' for a in heartbeat([], registry, NOW)))
 
 
 if __name__ == '__main__':

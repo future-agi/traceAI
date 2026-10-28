@@ -126,7 +126,7 @@ def release_notes(index):
                 {"integration_id": row["integration_id"], "mode": row["mode"], "status": row["status"],
                  "qualification": row["qualification"], "exact_packages": row["packages"],
                  "checked_at": row["checked_at"], "evidence": row["run_url"],
-                 "release_pending": row["mode"] == "source",
+                 "release_pending": row["mode"] == "source" and row["status"] == "passed",
                  "confirm_before_release": ["fix included in an installable instrumentation and core release",
                                            "support additions and exact known-bad exclusions", "floor/cap and privacy changes"]}
                 for row in index["observations"]]}

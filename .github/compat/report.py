@@ -437,6 +437,8 @@ def main():
     incidents = write_outputs(args.output, runs, registry, now, issues, errors, args.fixtures, args.baseline)
     if args.apply:
         apply_actions(api, incidents["actions"])
+        (args.output / "incident-actions.json").write_text(json.dumps(
+            {"dry_run": False, "actions": incidents["actions"]}, indent=2, sort_keys=True) + "\n")
         (args.output / "applied.json").write_text(json.dumps({"actions_applied": len(incidents["actions"])}) + "\n")
     print(json.dumps({"dry_run": not args.apply, "validated_runs": len(runs), "health_errors": len(errors),
                       "incident_actions": len(incidents["actions"]), "output": str(args.output)}))

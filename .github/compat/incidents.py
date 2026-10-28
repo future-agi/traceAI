@@ -291,7 +291,7 @@ def heartbeat(runs, registry, now):
     alerts = []
     for target in registry["integrations"]:
         for exc in target["exceptions"]:
-            if datetime.fromisoformat(exc["expires"]).date() < now.date():
+            if datetime.fromisoformat(exc["expires"]).date() <= now.date():
                 alerts.append({"id": "exception:" + exc["id"],
                                "summary": f"Expired compatibility exception {exc['id']} for {target['id']}; repair or explicitly review it."})
         if not target["canary"]["enabled"]:
