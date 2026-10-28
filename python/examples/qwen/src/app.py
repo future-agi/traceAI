@@ -1,7 +1,9 @@
 """Trace Qwen Chat Completions through the official OpenAI SDK."""
 
 import argparse
+import ipaddress
 import os
+import re
 import sys
 from urllib.parse import unquote, urlsplit
 
@@ -23,16 +25,47 @@ def _fully_unquoted(value: str) -> str:
 
 
 def check_base_url(url: str) -> str:
-    """Refuse documented mistakes; return allowed URLs unchanged (never rewritten)."""
+    """Validate without rewriting; permit customer proxies and loopback servers."""
+    def refuse(reason):
+        raise ValueError(f"{BASE_URL_ENV}: {reason}")
+
+    if not url or any(c.isspace() or not c.isprintable() for c in url):
+        refuse("use an absolute URL without whitespace or control characters")
     if "{WorkspaceId}" in _fully_unquoted(url):
-        raise ValueError("Replace {WorkspaceId} with your workspace id from the console.")
-    parsed = urlsplit(url)
-    # Compare the host without case or an absolute-FQDN trailing dot.
-    host = (parsed.hostname or "").lower().rstrip(".")
-    if (host == "aliyuncs.com" or host.endswith(".aliyuncs.com")) and not (
-        parsed.path.removesuffix("/").endswith("/compatible-mode/v1")
-    ):
-        raise ValueError("The OpenAI SDK base must end with /compatible-mode/v1.")
+        refuse("Replace {WorkspaceId} with your workspace id from the console.")
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        parts.port  # Reject malformed ports before tracing.
+    except ValueError:
+        refuse("use a valid absolute HTTP(S) URL")
+    if parts.username is not None or parts.password is not None:
+        refuse("remove URL credentials; supply the key through DASHSCOPE_API_KEY")
+    if parts.scheme not in ("http", "https") or not host:
+        refuse("use an absolute HTTP(S) URL with a host")
+    if not host.isascii():
+        refuse("use a plain ASCII host with valid IDNA spelling")
+    comparable_host = host.lower().rstrip(".")
+    structural_host = host.lower().removesuffix(".")
+    try:
+        ipaddress.ip_address(structural_host)
+    except ValueError:
+        try:
+            structural_host.encode("ascii").decode("idna")
+        except UnicodeError:
+            refuse("use a plain ASCII host with valid IDNA spelling")
+        if len(structural_host) > 253 or not all(
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?", label)
+            for label in structural_host.split(".")
+        ):
+            refuse("use a valid ASCII host")
+    if comparable_host == "aliyuncs.com" or comparable_host.endswith(".aliyuncs.com"):
+        if parts.scheme != "https":
+            refuse("use HTTPS for the Model Studio endpoint")
+        if "?" in url or "#" in url:
+            refuse("remove the query or fragment from the SDK base URL")
+        if parts.path not in ("/compatible-mode/v1", "/compatible-mode/v1/"):
+            refuse("use exactly /compatible-mode/v1 with at most one trailing slash")
     return url
 
 
@@ -84,9 +117,10 @@ def main(argv=None) -> int:
                 **({"stream_options": {"include_usage": True}} if args.stream else {}),
             )
             if args.stream:
-                for chunk in response:
-                    if chunk.choices:
-                        print(chunk.choices[0].delta.content or "", end="", flush=True)
+                with response:
+                    for chunk in response:
+                        if chunk.choices:
+                            print(chunk.choices[0].delta.content or "", end="", flush=True)
                 print()
             else:
                 print(response.choices[0].message.content or "")

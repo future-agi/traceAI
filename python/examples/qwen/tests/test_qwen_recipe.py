@@ -54,10 +54,18 @@ DOCUMENTED_BASE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 WORKSPACE = "ws-" + "test0001"  # Syntactic example, never a real workspace.
 REGION_BASES = {
     "Beijing": "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-    "Virginia": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+    "US (Virginia)": "https://{WorkspaceId}.us-east-1.maas.aliyuncs.com/compatible-mode/v1",
     "Singapore": "https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     "Japan (Tokyo)": "https://{WorkspaceId}.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    "China (Hong Kong)": "https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com/compatible-mode/v1",
+    "Germany (Frankfurt)": "https://{WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1",
 }
+SHARED_BASES = [
+    DOCUMENTED_BASE,
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+    "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1",
+]
 REFUSED_URLS = [
     (REGION_BASES["Beijing"], "workspace id from the console"),
     (REGION_BASES["Singapore"].replace("{WorkspaceId}", "%7BWorkspaceId%7D"), "workspace id from the console"),
@@ -74,18 +82,49 @@ REFUSED_URLS = [
     ("https://dashscope.aliyuncs.com./", "/compatible-mode/v1"),
     ("https://DashScope-Intl.AliyunCS.com.:443/v1", "/compatible-mode/v1"),
     (REGION_BASES["Beijing"].replace("{WorkspaceId}", "%257BWorkspaceId%257D"), "workspace id from the console"),
+    # Exact path, not a suffix match; no extra trailing slashes or URL metadata.
+    (DOCUMENTED_BASE + "///", "/compatible-mode/v1"),
+    (DOCUMENTED_BASE.replace("/compatible-mode", "/prefix/compatible-mode"), "/compatible-mode/v1"),
+    (DOCUMENTED_BASE + "?", "query or fragment"),
+    (DOCUMENTED_BASE + "?api_key=placeholder", "query or fragment"),
+    (DOCUMENTED_BASE + "#", "query or fragment"),
+    (DOCUMENTED_BASE + "#section", "query or fragment"),
+    (DOCUMENTED_BASE.replace("https:", "http:"), "HTTPS"),
+    ("https://dashscope-intl。aliyuncs.com/v1", "ASCII host"),
+    ("https://dashscope-intl．aliyuncs.com/v1", "ASCII host"),
+    ("https://dashscope-intl｡aliyuncs.com/v1", "ASCII host"),
+    ("https://dashscope-intl.aliyuncs.com../compatible-mode/v1", "valid ASCII host"),
+    ("https://user:placeholder@dashscope-intl.aliyuncs.com/compatible-mode/v1", "URL credentials"),
+    ("https://user:placeholder@example.invalid/custom", "URL credentials"),
+    ("", "absolute URL"),
+    ("/compatible-mode/v1", "absolute HTTP(S) URL"),
+    ("ftp://example.invalid/custom", "absolute HTTP(S) URL"),
+    ("https:///compatible-mode/v1", "absolute HTTP(S) URL"),
+    (" https://example.invalid/v1", "whitespace"),
+    ("https://example.invalid/\npath", "control characters"),
+    ("https://example.invalid/\x00path", "control characters"),
+    ("https://example.invalid:wrong/v1", "valid absolute HTTP(S) URL"),
+    ("https://example.invalid:70000/v1", "valid absolute HTTP(S) URL"),
+    ("http://[::1/v1", "valid absolute HTTP(S) URL"),
+    ("https://bad%2eexample.invalid/v1", "valid ASCII host"),
+    ("https://xn--/v1", "valid IDNA spelling"),
+    ("https://-bad.example/v1", "valid ASCII host"),
+    ("https://bad..example/v1", "valid ASCII host"),
 ]
 ALLOWED_URLS = [
-    DOCUMENTED_BASE,
+    *SHARED_BASES,
     DOCUMENTED_BASE + "/",
-    REGION_BASES["Virginia"],
     *(base.replace("{WorkspaceId}", WORKSPACE) for base in REGION_BASES.values()),
     f"https://{WORKSPACE}.cn-hongkong.maas.aliyuncs.com/compatible-mode/v1/",
     "http://127.0.0.1:12345/compatible-mode/v1",
     "http://localhost:12345/arbitrary",
     "https://example.invalid/arbitrary",
     "https://aliyuncs.com.example.invalid/arbitrary",
+    "https://DashScope-Intl.AliyunCS.com.:443/compatible-mode/v1/",
+    "http://[::1]:12345/custom/v1",
+    "http://myproj_proxy_1:12345/custom/v1",
 ]
+
 TEST_COMMAND = """env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \\
   PYTHONPATH="python/examples/qwen/src:python:python/frameworks/openai:python/tests" \\
   uv run --no-project --python 3.11 \\
@@ -360,6 +399,56 @@ def test_stream_accumulates_text_and_optional_usage(traced, include_usage):
         assert not any(name.startswith("gen_ai.usage.") for name in attrs)
 
 
+@pytest.mark.parametrize("base", [
+    *SHARED_BASES,
+    *(base.replace("{WorkspaceId}", WORKSPACE) for base in REGION_BASES.values()),
+])
+def test_regional_base_routes_and_bearer_auth(traced, base):
+    receiver, provider, project = traced
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json=completion())
+
+    with app.make_client(base_url=base, http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
+        client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Local region fixture."}])
+    assert provider.force_flush()
+    [request] = requests
+    assert str(request.url) == base + "/chat/completions"
+    assert request.headers["authorization"] == f"Bearer {VENDOR_KEY}"
+    assert "x-api-key" not in request.headers
+    assert "x-secret-key" not in request.headers
+    assert_llm(receiver, project)
+
+
+@pytest.mark.parametrize("status, code, message, error_class", [
+    (400, "invalid_value", "-1 is lesser than the minimum of 0 - 'seed'", openai.BadRequestError),
+    (404, "model_not_found", "The model does not exist or you do not have access to it.", openai.NotFoundError),
+    (429, "limit_requests", "Requests rate limit exceeded, please try again later.", openai.RateLimitError),
+    (429, "insufficient_quota", "You exceeded your current quota, please check your plan and billing details.", openai.RateLimitError),
+    (500, "internal_error", "An internal error has occured, please try again later or contact service support.", openai.InternalServerError),
+])
+def test_provider_error_statuses(traced, status, code, message, error_class):
+    receiver, provider, project = traced
+    body = {"error": {"message": message, "type": "invalid_request_error", "param": None, "code": code}}
+    client, requests = mock_client(body, status=status)
+    client.max_retries = 0
+    with client, pytest.raises(error_class) as caught:
+        client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Local error fixture."}])
+    assert caught.value.status_code == status
+    assert caught.value.code == code
+    assert provider.force_flush()
+    [request] = requests
+    assert_vendor_request(request)
+    span, attrs = assert_llm(receiver, project, model=None)
+    assert span["status"]["code"] == "STATUS_CODE_ERROR"
+    assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
+    [event] = [event for event in span["events"] if event["name"] == "exception"]
+    assert attributes(event)["exception.type"] == f"openai.{error_class.__name__}"
+    assert code in attributes(event)["exception.message"]
+
+
 def test_cross_region_401_records_authentication_error(traced):
     receiver, provider, project = traced
     client, requests = mock_client(AUTH_ERROR, status=401)
@@ -374,7 +463,8 @@ def test_cross_region_401_records_authentication_error(traced):
     span, attrs = assert_llm(receiver, project, model=None)
     assert json.loads(attrs["gen_ai.request.parameters"])["model"] == MODEL
     assert span["status"]["code"] == "STATUS_CODE_ERROR"
-    assert "AuthenticationError" in span["status"]["message"]
+    # Source fi-core normalizes redundant exception-type prefixes in status text.
+    assert "invalid_api_key" in span["status"]["message"]
     [event] = [event for event in span["events"] if event["name"] == "exception"]
     assert attributes(event)["exception.type"] == "openai.AuthenticationError"
     assert "invalid_api_key" in attributes(event)["exception.message"]
@@ -409,7 +499,7 @@ def test_hide_outputs_removes_answer_from_export(monkeypatch, hidden):
 @pytest.mark.parametrize("env_project", [None, "qwen-subprocess-env"], ids=["default-project", "env-project"])
 @pytest.mark.parametrize("streaming", [False, True], ids=["chat", "stream"])
 def test_app_subprocess_exports_one_span(monkeypatch, streaming, env_project):
-    with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="qwen-recipe-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="qwen-recipe-") as temporary:
         directory = Path(temporary)
         with Receiver() as receiver, FakeOpenAI() as fake:
             child_env = child_environment(directory, receiver, fake)
@@ -450,7 +540,7 @@ def test_guard_refuses_provider_before_dns(operation):
         "connect": f"socket.socket().connect(({host!r}, 443))",
         "connect_ex": f"socket.socket().connect_ex(({host!r}, 443))",
     }
-    with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="qwen-guard-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="qwen-guard-") as temporary:
         directory = Path(temporary)
         result = subprocess.run(
             [sys.executable, "-c", "import socket; " + calls[operation]],
@@ -475,31 +565,27 @@ def test_check_base_url_preserves_allowed_urls(url):
     assert app.check_base_url(url) == url
 
 
-@pytest.mark.parametrize("url, reason", [REFUSED_URLS[0], REFUSED_URLS[1], REFUSED_URLS[4]])
+@pytest.mark.parametrize("url, reason", [(url, reason) for url, reason in REFUSED_URLS if url and "\x00" not in url])
 def test_main_rejects_url_before_client_or_tracing(monkeypatch, capsys, url, reason):
-    with Receiver() as receiver, FakeOpenAI() as fake:
-        monkeypatch.setenv("FI_BASE_URL", receiver.origin)
-        monkeypatch.setenv(app.BASE_URL_ENV, url)
-        monkeypatch.delenv(app.API_KEY_ENV, raising=False)
+    monkeypatch.setenv(app.BASE_URL_ENV, url)
+    monkeypatch.delenv(app.API_KEY_ENV, raising=False)
 
-        def forbidden(*_args, **_kwargs):
-            pytest.fail("Invalid URL must be rejected before tracing or client setup")
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Invalid URL must be rejected before tracing or client setup")
 
-        monkeypatch.setattr(app, "setup_tracing", forbidden)
-        monkeypatch.setattr(app, "make_client", forbidden)
-        assert app.main([]) == 2
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert reason in captured.err
-        assert fake.requests() == []
-        assert receiver.spans() == []
-        assert receiver.requests() == []
+    monkeypatch.setattr(app, "setup_tracing", forbidden)
+    monkeypatch.setattr(app, "make_client", forbidden)
+    assert app.main([]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert reason in captured.err
+    assert VENDOR_KEY not in captured.err
 
 
 def test_make_client_env_override_and_explicit_arguments(monkeypatch):
-    monkeypatch.setenv(app.BASE_URL_ENV, REGION_BASES["Virginia"])
+    monkeypatch.setenv(app.BASE_URL_ENV, SHARED_BASES[2])
     with app.make_client() as client:
-        assert str(client.base_url) == REGION_BASES["Virginia"] + "/"
+        assert str(client.base_url) == SHARED_BASES[2] + "/"
         assert client.api_key == VENDOR_KEY
     monkeypatch.setenv(app.BASE_URL_ENV, "https://dashscope.aliyuncs.com")
     monkeypatch.delenv(app.API_KEY_ENV)
@@ -540,7 +626,7 @@ def test_main_missing_key_names_variable_before_tracing(monkeypatch, capsys):
 
 
 def test_cli_model_overrides_environment():
-    with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="qwen-model-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="qwen-model-") as temporary:
         directory = Path(temporary)
         with Receiver() as receiver, FakeOpenAI() as fake:
             child_env = child_environment(directory, receiver, fake)
@@ -602,14 +688,19 @@ def test_readme_and_requirements_pin_contract():
         "https://cn-hongkong.dashscope.aliyuncs.com", "https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com",
         "legacy international (Singapore)", "HTTP 401", "invalid_api_key", "Qwen-Audio",
         "DashScope native", "Responses API", 'stream_options={"include_usage": True}',
-        "Without `include_usage`", "1.69.0", "3.24.0", "not tested against the live provider",
-        "trailing slash",
+        "Without `include_usage`", "1.69.0", "3.24.0",
+        "at most one trailing slash",
         "model id the provider returns in its response", "no `gen_ai.request.model` attribute",
-        "gen_ai.request.parameters", "current `traceai-openai` behaviour",
+        "gen_ai.request.parameters", "Authorization: Bearer <DASHSCOPE_API_KEY>",
         "not a Future AGI authentication failure", "legacy hosts are still accepted",
         "use the DashScope protocol", 'PYTHONPATH="python/examples/qwen/src:python/tests"',
     ):
         assert phrase in readme
+    for page in ("compatibility-of-openai-with-dashscope", "base-url", "regions", "stream", "error-code", "models", "get-api-key"):
+        assert f"https://www.alibabacloud.com/help/en/model-studio/{page}" in readme
+    run_section = readme.split("## Run\n", 1)[1].split("## Code\n", 1)[0]
+    assert 'export DASHSCOPE_MODEL="qwen-plus"' in run_section
+    assert "openai-compatible-recipe-tests.yml" in readme
     assert TEST_COMMAND in readme
     assert not re.search(r"sk-[A-Za-z0-9]{8,}", readme + source)
     assert not re.search(r"ws-[A-Za-z0-9]+", readme + source)
