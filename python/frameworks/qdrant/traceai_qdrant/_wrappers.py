@@ -46,8 +46,19 @@ class QueryPointsWrapper(BaseWrapper):
     def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
         parent = _TEXT_QUERY.get()
         if (self._method_name in ("search", "query_points") and parent is not None
-                and parent[0] is instance and sys._getframe(1).f_code is parent[1]):
-            return wrapped(*args, **kwargs)
+                and parent[0] is instance):
+            caller = sys._getframe(1)
+            try:
+                # The C implementation calls us directly; pure-Python wrapt
+                # inserts its dispatch frames. Skip only that infrastructure,
+                # not user callbacks between the SDK query and this operation.
+                while caller is not None and caller.f_globals.get("__name__", "").startswith("wrapt."):
+                    caller = caller.f_back
+                delegated = caller is not None and caller.f_code is parent[1]
+            finally:
+                del caller
+            if delegated:
+                return wrapped(*args, **kwargs)
         token = None
         if self._method_name == "query":
             token = _TEXT_QUERY.set((instance, getattr(inspect.unwrap(wrapped), "__code__", None)))

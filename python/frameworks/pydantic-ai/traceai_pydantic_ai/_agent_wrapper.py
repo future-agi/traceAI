@@ -12,6 +12,7 @@ import uuid
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, Optional, TypeVar, Union
 
+from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
@@ -119,13 +120,21 @@ def _sum_usage(samples):
 
 
 class _OperationUsage:
-    def __init__(self, budget):
+    def __init__(self, budget, capture_legacy=False):
         self.budget = budget
+        self.capture_legacy = capture_legacy
         self.samples = []
+        self.context = None
 
     def extract(self, result):
-        if self.samples:
-            return _sum_usage(self.samples)
+        if self.capture_legacy:
+            # The SDK may create the effective budget itself. Select it from
+            # the original result, without supplying/replacing application args
+            # or assuming the first Usage.incr target is the run's budget.
+            budget = getattr(result, "usage", None)
+            if callable(budget):
+                budget = budget()
+            return _sum_usage(sample for target, sample in self.samples if target is budget)
         values = _response_usage(result)
         if values is not None:
             return values
@@ -134,6 +143,15 @@ class _OperationUsage:
             # operations' changes to the same mutable aggregate.
             return {}
         return extract_usage(result)
+
+
+def _parent_run_context():
+    operation = _ACTIVE_USAGE.get()
+    # Historical SDK NoOpTracer scopes install an invalid current span. Keep
+    # genuine nested logical runs attached, but prefer valid application spans.
+    if operation is not None and not trace_api.get_current_span().get_span_context().is_valid:
+        return operation.context
+    return None
 
 
 _ACTIVE_USAGE: ContextVar[Any] = ContextVar("pydantic_ai_operation_usage", default=None)
@@ -150,8 +168,8 @@ def wrap_legacy_usage_incr(original):
         operation = _ACTIVE_USAGE.get()
         sample = _usage_values(incr_usage)
         result = original(self, incr_usage, *args, **kwargs)
-        if operation is not None and operation.budget is self:
-            operation.samples.append(sample)
+        if operation is not None:
+            operation.samples.append((self, sample))
         return result
     return incr
 
@@ -265,6 +283,7 @@ def wrap_agent_run(
     original_method: Callable,
     tracer: trace_api.Tracer,
     method_name: str,
+    capture_legacy_usage: bool = False,
 ) -> Callable:
     """Wrap an agent run method with tracing.
 
@@ -287,7 +306,7 @@ def wrap_agent_run(
                 _SYNC_DELEGATION.reset(token)
 
         attributes = _run_attributes(self, args, kwargs, method_name)
-        operation_usage = _OperationUsage(kwargs.get("usage"))
+        operation_usage = _OperationUsage(kwargs.get("usage"), capture_legacy_usage)
 
         start_time = time.time()
 
@@ -295,7 +314,9 @@ def wrap_agent_run(
             AGENT_RUN_SPAN_NAME,
             kind=SpanKind.CLIENT,
             attributes=attributes,
+            context=_parent_run_context(),
         ) as span:
+            operation_usage.context = context_api.get_current()
             try:
                 usage_token = _ACTIVE_USAGE.set(operation_usage)
                 try:
@@ -336,7 +357,7 @@ def wrap_agent_run(
     @functools.wraps(original_method)
     def sync_wrapper(self, *args, **kwargs):
         attributes = _run_attributes(self, args, kwargs, method_name)
-        operation_usage = _OperationUsage(kwargs.get("usage"))
+        operation_usage = _OperationUsage(kwargs.get("usage"), capture_legacy_usage)
 
         start_time = time.time()
 
@@ -344,7 +365,9 @@ def wrap_agent_run(
             AGENT_RUN_SPAN_NAME,
             kind=SpanKind.CLIENT,
             attributes=attributes,
+            context=_parent_run_context(),
         ) as span:
+            operation_usage.context = context_api.get_current()
             try:
                 token = _SYNC_DELEGATION.set(self)
                 usage_token = _ACTIVE_USAGE.set(operation_usage)

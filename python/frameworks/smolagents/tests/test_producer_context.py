@@ -1,5 +1,6 @@
 """A suspended producer owns its current context, not its consumer's context."""
 
+from functools import wraps
 from types import SimpleNamespace
 
 import pytest
@@ -10,8 +11,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from traceai_smolagents._wrappers import _StepWrapper
 
 
+@pytest.mark.parametrize("decorated", [False, True])
 @pytest.mark.parametrize("termination", ["next", "send", "throw", "close"])
-def test_nested_producer_context_survives_each_iterator_boundary(termination):
+def test_nested_producer_context_survives_each_iterator_boundary(termination, decorated):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -38,6 +40,15 @@ def test_nested_producer_context_survives_each_iterator_boundary(termination):
             finally:
                 context.detach(token)
         return "done"
+
+    decorator_calls = []
+    if decorated:
+        original = operation
+
+        @wraps(original)
+        def operation(*args, **kwargs):
+            decorator_calls.append(trace.get_current_span().get_span_context().span_id)
+            return original(*args, **kwargs)
 
     iterator = None
     try:
@@ -66,6 +77,8 @@ def test_nested_producer_context_survives_each_iterator_boundary(termination):
         assert seen == [child_id]
         spans = {s.name: s for s in exporter.get_finished_spans()}
         assert len(spans) == 5
+        if decorated:
+            assert decorator_calls == [spans["Step 1"].context.span_id]
         assert spans["resumed-or-cleanup"].parent.span_id == child_id
         assert spans["producer-child"].parent.span_id == spans["Step 1"].context.span_id
         assert spans["Step 1"].parent.span_id == caller.get_span_context().span_id

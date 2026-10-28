@@ -1,9 +1,44 @@
 """Real text/vector operations must not acquire duplicate delegation spans."""
 
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
+import pytest
 import numpy as np
 from qdrant_client import QdrantClient, models
+
+
+@pytest.mark.parametrize("pure_python", [False, True])
+def test_delegation_with_both_wrapt_implementations(pure_python, tmp_path):
+    # wrapt chooses its implementation at import time; a fresh interpreter is
+    # required. Run the identical real-SDK callback/direct-operation contract.
+    env = os.environ.copy()
+    env.pop("WRAPT_DISABLE_EXTENSIONS", None)
+    if pure_python:
+        env["WRAPT_DISABLE_EXTENSIONS"] = "true"
+    script = """
+import socket
+import sys
+import wrapt
+from wrapt.wrappers import FunctionWrapper as PythonFunctionWrapper
+import pytest
+assert (wrapt.FunctionWrapper is PythonFunctionWrapper) == (sys.argv[2] == 'true')
+def deny_connect(*args, **kwargs):
+    raise AssertionError('offline Qdrant contract attempted a connection')
+socket.socket.connect = deny_connect
+socket.socket.connect_ex = deny_connect
+raise SystemExit(pytest.main(['-q', '-p', 'no:cacheprovider', sys.argv[1]]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", script,
+         str(Path(__file__).resolve()) + "::test_text_query_and_independent_vector_operations",
+         str(pure_python).lower()],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_text_query_and_independent_vector_operations(instrument_qdrant, in_memory_span_exporter):

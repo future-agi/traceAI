@@ -55,7 +55,9 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         return cls._instance
 
     def __init__(self):
-        """Initialize the instrumentor."""
+        """Initialize the singleton once; retain originals for later teardown."""
+        if hasattr(self, "_original_methods"):
+            return
         super().__init__()
         self._tracer: Optional[trace_api.Tracer] = None
         self._original_methods: dict = {}
@@ -138,8 +140,9 @@ class PydanticAIInstrumentor(BaseInstrumentor):
             self._original_methods["run_stream"] = Agent.run_stream
 
         # Patch methods
-        Agent.run = wrap_agent_run(Agent.run, self._tracer, "run")
-        Agent.run_sync = wrap_agent_run(Agent.run_sync, self._tracer, "run_sync")
+        capture_legacy = self._legacy_usage_original is not None
+        Agent.run = wrap_agent_run(Agent.run, self._tracer, "run", capture_legacy)
+        Agent.run_sync = wrap_agent_run(Agent.run_sync, self._tracer, "run_sync", capture_legacy)
 
         if hasattr(Agent, "run_stream"):
             Agent.run_stream = self._wrap_run_stream(Agent.run_stream)

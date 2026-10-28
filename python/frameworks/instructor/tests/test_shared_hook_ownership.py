@@ -2,6 +2,7 @@
 
 import inspect
 import sys
+from functools import wraps
 from types import ModuleType
 
 import pytest
@@ -12,6 +13,67 @@ from wrapt import FunctionWrapper
 
 import traceai_instructor
 from traceai_instructor import InstructorInstrumentor
+
+
+@pytest.mark.parametrize("instructor_first", [True, False])
+@pytest.mark.parametrize("decorator_count", [1, 2])
+def test_ordinary_decorators_keep_running_without_retaining_live_hooks(monkeypatch, instructor_first, decorator_count):
+    calls = []
+    result = {"status": "passed"}
+
+    class Protect:
+        def protect(self, inputs, protect_rules):
+            calls.append("original")
+            return result
+
+    monkeypatch.setattr(traceai_instructor, "Protect", Protect)
+    original = inspect.getattr_static(Protect, "protect")
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = InstructorInstrumentor()
+
+    def decorate(function):
+        @wraps(function)
+        def call(*args, **kwargs):
+            calls.append("decorator")
+            return function(*args, **kwargs)
+        return call
+
+    def invoke(expected_spans):
+        calls.clear()
+        exporter.clear()
+        assert Protect().protect("input", [{"rule": "local"}]) is result
+        assert calls == ["decorator"] * decorator_count + ["original"]
+        assert len(exporter.get_finished_spans()) == expected_spans
+
+    try:
+        if instructor_first:
+            instrumentor.instrument(tracer_provider=provider)
+        for _ in range(decorator_count):
+            Protect.protect = decorate(inspect.getattr_static(Protect, "protect"))
+        outer = inspect.getattr_static(Protect, "protect")
+        wrapped_metadata = outer.__wrapped__
+        if not instructor_first:
+            instrumentor.instrument(tracer_provider=provider)
+        invoke(1)
+        instrumentor.uninstrument()
+        invoke(0)
+        assert inspect.getattr_static(Protect, "protect") is outer
+        assert outer.__wrapped__ is wrapped_metadata
+        # The old closed-over hook is now inert, even when a fresh hook is
+        # installed above the untouched decorator chain.
+        for _ in range(2):
+            instrumentor.instrument(tracer_provider=provider)
+            invoke(1)
+            instrumentor.uninstrument()
+            invoke(0)
+            assert inspect.getattr_static(Protect, "protect") is outer
+    finally:
+        if instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.uninstrument()
+        Protect.protect = original
+        provider.shutdown()
 
 
 @pytest.mark.parametrize("instructor_first", [True, False])

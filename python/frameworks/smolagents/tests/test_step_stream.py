@@ -1,6 +1,7 @@
 """Iterator boundaries must never make a suspended Step span current."""
 
 import json
+from functools import wraps
 from types import SimpleNamespace
 
 import httpx
@@ -29,9 +30,21 @@ def current_id():
     return trace.get_current_span().get_span_context().span_id
 
 
-def test_real_sdk_interleaved_streams_leave_consumer_context_unchanged(tracing):
+@pytest.mark.parametrize("decorated", [False, True])
+def test_real_sdk_interleaved_streams_leave_consumer_context_unchanged(tracing, monkeypatch, decorated):
     exporter, tracer, provider = tracing
     requests = []
+    decorator_calls = []
+    if decorated:
+        method = "_step_stream" if hasattr(ToolCallingAgent, "_step_stream") else "step"
+        original = getattr(ToolCallingAgent, method)
+
+        @wraps(original)
+        def passthrough(*args, **kwargs):
+            decorator_calls.append(current_id())
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(ToolCallingAgent, method, passthrough)
 
     class EchoTool(Tool):
         name = "echo"
@@ -131,6 +144,9 @@ def test_real_sdk_interleaved_streams_leave_consumer_context_unchanged(tracing):
     assert len(steps) == 4
     assert all(span.status.status_code.name == "OK" for span in steps)
     step_ids = {span.context.span_id for span in steps}
+    if decorated:
+        assert len(decorator_calls) == 4
+        assert set(decorator_calls) == step_ids
     model_spans = [
         span for span in spans if span.name.startswith(f"{OpenAIServerModel.__name__}.")
     ]

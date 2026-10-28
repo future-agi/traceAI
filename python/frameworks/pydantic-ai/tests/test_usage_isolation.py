@@ -75,6 +75,18 @@ def test_empty_shared_usage_returns_original_success(traces, method):
     assert traces.get_finished_spans()[0].status.status_code.name == "OK"
 
 
+def test_reconstructing_singleton_does_not_lose_owned_hooks(traces):
+    from pydantic_ai import Agent
+    run_hook = Agent.run
+    incr_hook = getattr(run_usage().__class__, "incr", None)
+    # Public singleton construction while active must not erase the originals
+    # required to detach either the Agent or the historical Usage hook.
+    PydanticAIInstrumentor().uninstrument()
+    assert Agent.run is not run_hook
+    if not hasattr(usage_module, "RequestUsage"):
+        assert run_usage().__class__.incr is not incr_hook
+
+
 def test_unknown_usage_is_not_invented():
     from types import SimpleNamespace
     unknown = SimpleNamespace(request_tokens=None, response_tokens=None,

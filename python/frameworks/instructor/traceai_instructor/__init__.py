@@ -20,6 +20,19 @@ from wrapt import FunctionWrapper, wrap_function_wrapper
 _instruments = ("instructor >= 1.0.0",)
 
 
+class _OwnedProtectWrapper(GuardrailProtectWrapper):
+    """A later ordinary decorator can close over our hook permanently."""
+
+    def __init__(self, tracer):
+        super().__init__(tracer)
+        self.enabled = True
+
+    def __call__(self, wrapped, instance, args, kwargs):
+        if not self.enabled:
+            return wrapped(*args, **kwargs)
+        return super().__call__(wrapped, instance, args, kwargs)
+
+
 class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
     __slots__ = (
         "_tracer",
@@ -67,9 +80,10 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
         self._protect_owner = Protect
         self._protect_hook = None
         if Protect is not None:
+            self._protect_callback = _OwnedProtectWrapper(tracer=self._tracer)
             self._protect_hook = FunctionWrapper(
                 getattr_static(Protect, "protect"),
-                GuardrailProtectWrapper(tracer=self._tracer),
+                self._protect_callback,
             )
             Protect.protect = self._protect_hook
 
@@ -87,9 +101,11 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
             self._original_async_create = None
 
         if self._protect_hook is not None:
-            # Protect is shared by several integrations. Remove just our exact
-            # wrapper from the live chain, preserving later-installed wrappers
-            # and any earlier wrapper another integration has since removed.
+            # Disable first: ordinary decorators close over the callable, so
+            # mutating their __wrapped__ metadata cannot actually detach us.
+            self._protect_callback.enabled = False
+            # Protect is shared by several integrations. Splice just our exact
+            # wrapper where the parent is a mutable wrapt dispatch link.
             owner, hook = self._protect_owner, self._protect_hook
             current = getattr_static(owner, "protect")
             if current is hook:
@@ -99,7 +115,8 @@ class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
                 while hasattr(current, "__wrapped__") and id(current) not in seen:
                     seen.add(id(current))
                     if current.__wrapped__ is hook:
-                        current.__wrapped__ = hook.__wrapped__
+                        if isinstance(current, FunctionWrapper):
+                            current.__wrapped__ = hook.__wrapped__
                         break
                     current = current.__wrapped__
             self._protect_hook = None

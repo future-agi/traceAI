@@ -1,7 +1,7 @@
 import sys
 from enum import Enum
 from functools import wraps
-from inspect import signature, isgeneratorfunction
+from inspect import signature, isgeneratorfunction, unwrap
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -219,12 +219,21 @@ class _StepWrapper:
             **dict(get_attributes_from_context()),
             **dict(_get_raw_input(args, **kwargs)),
         }
-        if isgeneratorfunction(wrapped):
+        # functools.wraps preserves generator identity in __wrapped__, not in
+        # the outer function's flags. Invoke the outer callable, never bypass it.
+        if isgeneratorfunction(unwrap(wrapped)):
             def stream():
                 span = self._tracer.start_span(span_name, attributes=attributes)
                 producer_context = trace_api.set_span_in_context(span)
                 try:
-                    iterator = wrapped(*args, **kwargs)
+                    # An outer decorator executes eagerly while constructing
+                    # the iterator. It belongs to the producer's Step too.
+                    token = context_api.attach(producer_context)
+                    try:
+                        iterator = wrapped(*args, **kwargs)
+                    finally:
+                        producer_context = context_api.get_current()
+                        context_api.detach(token)
                     advance, advance_args = iterator.__next__, ()
                     while True:
                         # Resume the producer's latest context, including any
