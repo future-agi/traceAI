@@ -317,8 +317,14 @@ def test_errors_pin_sdk_class_exception_and_model_gap(receiver, status, error_cl
         span, attrs = assert_export(receiver, project)
     assert len(seen) == 1
     assert span["status"]["code"] == "STATUS_CODE_ERROR"
-    assert error_class.__name__ in span["status"]["message"]
+    # Current fi-core removes the redundant type prefix from status text while
+    # preserving the qualified exception.type. Published 1.1.0 keeps the prefix.
+    expected_status = str(error.value)
+    if not hasattr(fi_instrumentation.TraceConfig, "hide_error_details"):
+        expected_status = f"{error_class.__name__}: {expected_status}"
+    assert span["status"]["message"] == expected_status
     [exception] = [event for event in span["events"] if event["name"] == "exception"]
+    assert attributes(exception)["exception.type"] == f"{error_class.__module__}.{error_class.__qualname__}"
     assert error_body(status)["error"]["message"] in json.dumps(exception)
     # 0.1.10 records the model only from non-streamed responses; later versions record the requested one.
     assert attrs.get("gen_ai.request.model") in (None, REQUEST_MODEL)
