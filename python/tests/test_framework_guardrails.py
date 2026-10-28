@@ -348,7 +348,7 @@ class TestPostValidationWrapper:
         assert result == {"validation": "completed"}
         # Should set input value from user_message
         mock_span.set_attribute.assert_any_call("input.value", "Test user query")
-        # Metadata gets flattened, so check for calls that were made
+        # Only governed input/output and safe validator identity are recorded
         assert mock_span.set_attribute.call_count > 3
 
     def test_post_validation_wrapper_no_metadata(self):
@@ -673,6 +673,158 @@ def test_prompt_wrapper_exported_attributes_and_privacy(hide_content):
             assert "private-answer" in attrs["output.value"]
     finally:
         provider.shutdown()
+
+
+@pytest.fixture
+def installed_guardrails():
+    from guardrails.llm_providers import PromptCallableBase, AsyncPromptCallableBase
+    originals = (PromptCallableBase.__call__, AsyncPromptCallableBase.__call__)
+    from fi_instrumentation import TraceConfig
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = GuardrailsInstrumentor()
+
+    def install(**privacy):
+        instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**privacy))
+        return exporter
+
+    yield install
+    instrumentor.uninstrument()
+    assert (PromptCallableBase.__call__, AsyncPromptCallableBase.__call__) == originals
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_installed_prompt_stream_is_lazy_and_unchanged(installed_guardrails, asynchronous):
+    from guardrails.llm_providers import PromptCallableBase, AsyncPromptCallableBase
+    from guardrails.classes.llm.llm_response import LLMResponse
+
+    consumed = []
+
+    def chunks():
+        for text in ("first", "second"):
+            consumed.append(text)
+            yield text
+
+    async def async_chunks():
+        for text in ("first", "second"):
+            consumed.append(text)
+            yield text
+
+    response = LLMResponse(output="", **(
+        {"async_stream_output": async_chunks()} if asynchronous
+        else {"stream_output": chunks()}
+    ))
+
+    class LocalPrompt(PromptCallableBase):
+        def _invoke_llm(self, *args, **kwargs):
+            return response
+
+    class LocalAsyncPrompt(AsyncPromptCallableBase):
+        async def invoke_llm(self, *args, **kwargs):
+            return response
+
+    exporter = installed_guardrails()
+    result = await LocalAsyncPrompt()() if asynchronous else LocalPrompt()()
+    assert result is response
+    assert consumed == []  # The hook must not eagerly serialize either iterator.
+    if asynchronous:
+        iterator = result.async_stream_output
+        assert await iterator.__anext__() == "first"
+        assert consumed == ["first"]
+        assert [part async for part in iterator] == ["second"]
+    else:
+        iterator = result.stream_output
+        assert next(iterator) == "first"
+        assert consumed == ["first"]
+        assert list(iterator) == ["second"]
+    assert consumed == ["first", "second"]
+    span, = exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.OK
+    assert span.attributes["gen_ai.span.kind"] == "LLM"
+    assert "first" not in json.dumps(dict(span.attributes))
+
+
+@pytest.mark.parametrize("hide_inputs,hide_outputs", [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("custom_handler", [False, True])
+def test_installed_validation_privacy_and_custom_handler(
+    installed_guardrails, monkeypatch, hide_inputs, hide_outputs, custom_handler,
+):
+    from guardrails.validator_base import Validator, validators_registry
+    from guardrails.validator_service import ValidatorServiceBase
+    from guardrails.classes.credentials import Credentials
+    from guardrails.classes.validation.validator_logs import ValidatorLogs
+    from guardrails.classes.validation.validation_result import PassResult
+    from guardrails.types import OnFailAction
+
+    # Exercise the real SDK constructor and method, replacing only local config
+    # loading to avoid the user's credentials and the SDK's own hub telemetry.
+    monkeypatch.setattr(Credentials, "from_rc_file", lambda: Credentials(
+        no_metrics=True, enable_metrics=False, use_remote_inferencing=False,
+    ))
+    monkeypatch.setitem(validators_registry, "fi/dataset_embeddings", Validator)
+    monkeypatch.setattr(Validator, "rail_alias", "fi/dataset_embeddings")
+    callback = lambda value, failures: value
+    validator = Validator(on_fail=callback if custom_handler else OnFailAction.NOOP, use_local=True)
+    assert validator.on_fail_descriptor == ("custom" if custom_handler else OnFailAction.NOOP)
+    if custom_handler:
+        assert validator.on_fail_method is callback
+    service = object.__new__(ValidatorServiceBase)
+    service._disable_tracer = True
+    logs = ValidatorLogs(validator_name="LocalValidator", registered_name=validator.rail_alias,
+                         value_before_validation="private-question", property_path="$")
+    result = PassResult(metadata={"user_message": "private-question", "nested": {
+        "secret": "private-metadata",
+    }, "score": 0.95})
+    exporter = installed_guardrails(hide_inputs=hide_inputs, hide_outputs=hide_outputs)
+    # Keyword invocation is supported as well as positional invocation.
+    returned = service.after_run_validator(validator=validator, validator_logs=logs, result=result)
+    assert returned is logs
+    assert logs.validation_result is result
+    assert logs.end_time is not None
+    span, = exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.OK
+    attrs = dict(span.attributes)
+    assert attrs["validator_on_fail"] == ("custom" if custom_handler else "NOOP")
+    assert attrs["validator_name"] == "fi/dataset_embeddings"
+    assert "user_message" not in attrs
+    assert "score" not in attrs
+    assert "private-metadata" not in json.dumps(attrs)
+    assert attrs["input.value"] == ("__REDACTED__" if hide_inputs else "private-question")
+    assert attrs["output.value"] == ("__REDACTED__" if hide_outputs else "pass")
+    if hide_inputs:
+        assert "private-question" not in json.dumps(attrs)
+
+
+def test_installed_validation_survives_telemetry_extraction_failure(installed_guardrails):
+    from guardrails.validator_base import Validator
+    from guardrails.validator_service import ValidatorServiceBase
+    from guardrails.classes.validation.validator_logs import ValidatorLogs
+    from guardrails.classes.validation.validation_result import PassResult
+
+    class BrokenTelemetryValidator(Validator):
+        @property
+        def on_fail_descriptor(self):
+            raise ValueError("synthetic telemetry failure")
+
+    validator = object.__new__(BrokenTelemetryValidator)
+    validator.rail_alias = "test/local"
+    logs = ValidatorLogs(validator_name="Local", registered_name="test/local",
+                         value_before_validation="question", property_path="$")
+    result = PassResult()
+    service = object.__new__(ValidatorServiceBase)
+    service._disable_tracer = True
+    exporter = installed_guardrails()
+    assert service.after_run_validator(validator, logs, result) is logs
+    assert logs.validation_result is result
+    span, = exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.OK
 
 
 if __name__ == "__main__":

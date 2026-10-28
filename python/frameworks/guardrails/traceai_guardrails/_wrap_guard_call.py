@@ -1,4 +1,6 @@
 import json
+import logging
+from contextlib import contextmanager
 from abc import ABC
 from enum import Enum
 from inspect import signature
@@ -13,6 +15,8 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+
+logger = logging.getLogger(__name__)
 
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -122,6 +126,17 @@ def _get_raw_output(response: Any) -> str:
 
 
 def _to_dict(result: Any) -> Any:
+    from guardrails.classes.llm.llm_response import LLMResponse
+
+    if isinstance(result, LLMResponse):
+        # LLMResponse.to_dict() calls to_interface(), which drains stream_output
+        # and tries to synchronously consume async_stream_output. Never invoke
+        # SDK serializers on these responses, even when nested in call inputs.
+        return {
+            "output": result.output,
+            "promptTokenCount": result.prompt_token_count,
+            "responseTokenCount": result.response_token_count,
+        }
     if not result:
         return
     if hasattr(result, "to_dict"):
@@ -211,71 +226,67 @@ class _GuardCallWrapper(_WithTracer):
 
 
 class _PromptCallableWrapper(_WithTracer):
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: Tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-    ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
-            return wrapped(*args, **kwargs)
-
-        if instance:
-            span_name = f"{instance.__class__.__name__}.{wrapped.__name__}"
-        else:
-            span_name = wrapped.__name__
+    @contextmanager
+    def _trace_call(self, wrapped, instance, args, kwargs):
+        span_name = (
+            f"{instance.__class__.__name__}.{wrapped.__name__}"
+            if instance is not None else wrapped.__name__
+        )
         with self._tracer.start_as_current_span(
-            span_name,
-            attributes=dict(
-                _flatten(
-                    {
-                        GEN_AI_SPAN_KIND: LLM,
-                        INPUT_VALUE: _get_input_value(
-                            wrapped,
-                            *args,
-                            **kwargs,
-                        ),
-                        INPUT_VALUE: _get_raw_input(
-                            args,
-                            **kwargs,
-                        ),
-                    }
-                )
-            ),
+            span_name, attributes={GEN_AI_SPAN_KIND: LLM.value},
         ) as span:
-            span.set_attributes(dict(get_attributes_from_context()))
             try:
+                span.set_attributes(dict(get_attributes_from_context()))
+                span.set_attribute(INPUT_VALUE, _get_raw_input(args, **kwargs))
                 if messages := kwargs.get("msg_history"):
-                    for k, v in _get_llm_input_messages(messages):
-                        span.set_attribute(k, v)
-
-                response = wrapped(*args, **kwargs)
-                if response.output:
-                    span.set_attribute(OUTPUT_VALUE, response.output)
-                    for k, v in _get_llm_output_messages(response.output):
-                        span.set_attribute(k, v)
-
-                if (
-                    hasattr(response, "prompt_token_count")
-                    and response.prompt_token_count is not None
-                ):
-                    span.set_attribute(PROMPT_TOKENS, response.prompt_token_count)
-
-                if (
-                    hasattr(response, "response_token_count")
-                    and response.response_token_count is not None
-                ):
-                    span.set_attribute(COMPLETION_TOKENS, response.response_token_count)
-
-                span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
+                    for key, value in _get_llm_input_messages(messages):
+                        span.set_attribute(key, value)
+            except Exception:
+                logger.debug("Failed to extract prompt attributes", exc_info=True)
+            try:
+                yield span
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
                 )
                 span.record_exception(exception)
                 raise
-            span.set_status(trace_api.StatusCode.OK)
+            else:
+                span.set_status(trace_api.StatusCode.OK)
+
+    def _record_response(self, span, response):
+        try:
+            if response.output:
+                span.set_attribute(OUTPUT_VALUE, response.output)
+                for key, value in _get_llm_output_messages(response.output):
+                    span.set_attribute(key, value)
+            for field, key in (
+                ("prompt_token_count", PROMPT_TOKENS),
+                ("response_token_count", COMPLETION_TOKENS),
+            ):
+                if (value := getattr(response, field, None)) is not None:
+                    span.set_attribute(key, value)
+            span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
+        except Exception:
+            # Telemetry must not change the callable's result or consume streams.
+            logger.debug("Failed to extract prompt response attributes", exc_info=True)
+
+    def __call__(self, wrapped, instance, args, kwargs):
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+        with self._trace_call(wrapped, instance, args, kwargs) as span:
+            response = wrapped(*args, **kwargs)
+            self._record_response(span, response)
+        return response
+
+
+class _AsyncPromptCallableWrapper(_PromptCallableWrapper):
+    async def __call__(self, wrapped, instance, args, kwargs):
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return await wrapped(*args, **kwargs)
+        with self._trace_call(wrapped, instance, args, kwargs) as span:
+            response = await wrapped(*args, **kwargs)
+            self._record_response(span, response)
         return response
 
 
@@ -328,62 +339,45 @@ class _ParseCallableWrapper(_WithTracer):
 
 
 class _PostValidationWrapper(_WithTracer):
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: Tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-    ) -> Any:
+    def __call__(self, wrapped, instance, args, kwargs):
         if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
-        if instance:
-            span_name = f"{instance.__class__.__name__}.{wrapped.__name__}"
-        else:
-            span_name = wrapped.__name__
+        span_name = (
+            f"{instance.__class__.__name__}.{wrapped.__name__}"
+            if instance is not None else wrapped.__name__
+        )
         with self._tracer.start_as_current_span(
-            span_name,
-            attributes=dict(
-                _flatten(
-                    {
-                        INPUT_VALUE: _get_raw_input(args, **kwargs),
-                    }
-                )
-            ),
+            span_name, attributes={GEN_AI_SPAN_KIND: GUARDRAIL.value},
         ) as span:
-            span.set_attributes(dict(get_attributes_from_context()))
             try:
-                validator = args[0]
+                span.set_attributes(dict(get_attributes_from_context()))
+                validator = args[0] if args else kwargs["validator"]
+                logs = args[1] if len(args) > 1 else kwargs.get("validator_logs")
+                result = args[2] if len(args) > 2 else kwargs["result"]
                 span.set_attribute("validator_name", validator.rail_alias)
-                span.set_attribute(
-                    "validator_on_fail", validator.on_fail_descriptor.name
-                )
-
-                validation_result = args[2]
-                if validator.rail_alias == "fi/dataset_embeddings":
+                descriptor = validator.on_fail_descriptor
+                # Guardrails uses an Enum for built-ins, but 'custom' for callable
+                # handlers. Never assume .name exists or stringify the callback.
+                descriptor = getattr(descriptor, "name", descriptor)
+                if isinstance(descriptor, str):
+                    span.set_attribute("validator_on_fail", descriptor)
+                value = getattr(logs, "value_before_validation", None)
+                if validator.rail_alias == "fi/dataset_embeddings" and result.metadata:
+                    value = result.metadata.get("user_message", value)
+                if value is not None:
                     span.set_attribute(
-                        INPUT_VALUE,
-                        (
-                            validation_result.metadata.get("user_message")
-                            if validation_result.metadata
-                            else ""
-                        ),
+                        INPUT_VALUE, value if isinstance(value, str) else safe_json_dumps(value)
                     )
-                span.set_attribute(OUTPUT_VALUE, validation_result.outcome)
-                span.set_attributes(
-                    dict(
-                        _flatten(
-                            (
-                                validation_result.metadata
-                                if validation_result.metadata
-                                else {}
-                            ),
-                        )
-                    )
-                )
+                span.set_attribute(OUTPUT_VALUE, result.outcome)
+                # Only the validator identity and failure policy are public
+                # metadata. Arbitrary result.metadata can contain user text or
+                # secrets. Do not flatten it, or serialize ValidatorLogs (which
+                # mixes input, output and metadata) into an ungoverned attribute.
+            except Exception:
+                logger.debug("Failed to extract validator attributes", exc_info=True)
+            try:
                 response = wrapped(*args, **kwargs)
-                span.set_attribute(OUTPUT_VALUE, _get_raw_output(response))
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))

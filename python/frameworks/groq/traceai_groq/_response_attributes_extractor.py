@@ -38,6 +38,8 @@ class _ResponseAttributesExtractor:
         request_parameters: Mapping[str, Any],
         is_streaming: bool = False,
     ) -> Iterator[Tuple[str, AttributeValue]]:
+        if is_streaming:
+            return  # Streaming metadata/messages are assembled by get_attributes().
         yield from self._get_attributes_from_chat_completion(
             completion=response,
             request_parameters=request_parameters,
@@ -49,7 +51,7 @@ class _ResponseAttributesExtractor:
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         if model := getattr(completion, "model", None):
-            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
+            yield SpanAttributes.GEN_AI_RESPONSE_MODEL, model
         if usage := getattr(completion, "usage", None):
             yield from self._get_attributes_from_completion_usage(usage)
         if (choices := getattr(completion, "choices", None)) and isinstance(
