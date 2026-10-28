@@ -20,11 +20,17 @@ def wrap_legacy(original, tracer, method):
     signature = inspect.signature(original)
 
     def observe(agent, args, kwargs):
-        bound = signature.bind(agent, *args, **kwargs).arguments
+        try:
+            bound = signature.bind(agent, *args, **kwargs).arguments
+        except TypeError:
+            # Let the SDK raise its own call error, with its original message.
+            bound = {}
+        extras = next((bound.get(name, {}) for name, parameter in signature.parameters.items()
+                       if parameter.kind == inspect.Parameter.VAR_KEYWORD), {})
         if method.endswith("execute_function"):
             value = bound.get("func_call")
         elif method.endswith("initiate_chat"):
-            value = bound.get("message", bound.get("kwargs", {}).get("message"))
+            value = bound.get("message", extras.get("message"))
         else:
             value = bound.get("messages")
         attributes = {

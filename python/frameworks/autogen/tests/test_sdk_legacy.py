@@ -31,6 +31,7 @@ def test_real_legacy_reply_chat_and_function(spans):
     finished = spans[0].get_finished_spans()
     expected_replies = 2 if returns_result else 3  # old SDK asks user to terminate
     assert [s.name for s in finished] == ["autogen.generate_reply"] * expected_replies + ["autogen.initiate_chat", "autogen.execute_function"]
+    assert json.loads(finished[expected_replies].attributes["input.value"]) == "hello"
     for span in finished[1:expected_replies]:
         assert span.parent.span_id == finished[expected_replies].context.span_id
     for span in finished:
@@ -59,6 +60,7 @@ async def test_real_legacy_async_reply_chat_and_function(spans):
     finished = spans[0].get_finished_spans()
     expected_replies = 2 if returns_result else 3
     assert [s.name for s in finished] == ["autogen.a_generate_reply"] * expected_replies + ["autogen.a_initiate_chat", "autogen.a_execute_function"]
+    assert json.loads(finished[expected_replies].attributes["input.value"]) == "hello"
     for span in finished[1:expected_replies]:
         assert span.parent.span_id == finished[expected_replies].context.span_id
     assert all(s.status.status_code == StatusCode.OK for s in finished)
