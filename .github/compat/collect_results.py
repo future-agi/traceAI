@@ -370,6 +370,15 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
     result = {"schema_version": 1, "run": run_header(plan, raw), "cases": rows}
     jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(result)
     write_json(output / "results.json", result)
+    try:
+        validator.validate_results(result, registry, expected_source_sha=plan["source_sha"],
+                                   artifact_root=output, source_root=source_root,
+                                   expected_plan=plan, plan_bytes=raw)
+    except (ValueError, KeyError, OSError) as error:
+        # Never drop rows merely because a strict consumer found another defect.
+        # Retain the canonical validation failure and fail the aggregate job.
+        write_json(output / "validation-errors.json", {"error": str(error)})
+        blocked.append("__canonical_validation__")
     unexpected = [p.name for p in artifacts.iterdir() if p.name not in expected_dirs] if artifacts.exists() else []
     if unexpected:
         raise ValueError("Unplanned/duplicate artifact directories: " + ", ".join(sorted(unexpected)))
