@@ -14,9 +14,16 @@ def build_index(runs, registry, now, *, fixture=False):
         run = bundle["run"]
         for case in bundle["cases"]:
             packages = sorted(case["resolved"], key=lambda p: (p["role"], p["name"]))
-            key = digest([case["integration_id"], case["mode"], case["runtime"],
-                          [(name_key(p["name"], case["language"]), p["role"], p["version"]) for p in packages],
-                          case["contract"]["suite_sha256"]])
+            actual = {(name_key(p["name"], case["language"]), p["role"]): p["version"] for p in packages}
+            identity = [case["integration_id"], case["mode"], case["runtime"],
+                        [(name_key(p["name"], case["language"]), p["role"], p["version"]) for p in packages],
+                        case["contract"]["suite_sha256"]]
+            if not actual or any(actual.get((name_key(p["name"], case["language"]), p["role"])) != p["selected_version"]
+                                 for p in case["requested"]):
+                identity.append({"unresolved_selection": sorted(
+                    (name_key(p["name"], case["language"]), p["role"], p["selected_version"] or p["requirement"])
+                    for p in case["requested"])})
+            key = digest(identity)
             if key in rows and timestamp(rows[key]["checked_at"]) > timestamp(case["completed_at"]):
                 continue
             rows[key] = {"id": key, "integration_id": case["integration_id"], "language": case["language"],
@@ -38,7 +45,10 @@ def build_index(runs, registry, now, *, fixture=False):
     stale = {a["id"] for a in health}
     for row in rows.values():
         cadence = "weekly" if row["mode"] == "published" or row["selector"] in ("floor", "historical") else "daily"
-        if timestamp(row["checked_at"]) < now - timedelta(days=8) or f"heartbeat:{row['integration_id']}:{cadence}" in stale:
+        # Missing *other* weekly cells is an automation-health gap, not proof
+        # that this fresh exact published observation is itself stale.
+        if (timestamp(row["checked_at"]) < now - timedelta(days=8) or
+                (cadence == "daily" and f"heartbeat:{row['integration_id']}:daily" in stale)):
             row["status"] = "stale"
     return {"schema_version": 1, "generated_at": iso(now), "inventory_revision": registry["inventory_revision"],
             "fixture": fixture, "observations": sorted(rows.values(), key=lambda r: (r["integration_id"], r["mode"], r["id"])),
@@ -73,6 +83,8 @@ def render_markdown(index, *, baseline=False):
                   f"[evidence]({row['run_url']})" + (" (**self-test, not a support claim**)" if row["self_test"] else ""),
                   f"- Runtime/OS: `{text(json.dumps(row['runtime'], sort_keys=True))}`; selector: `{row['selector']}`.",
                   f"- Source SHA: `{row['source_sha']}`; contract: `{row['suite_sha256']}`.",
+                  "- Requested selection: " + ", ".join(
+                      f"`{text(p['name'])}=={text(p['selected_version'] or 'unresolved')}` ({p['role']})" for p in row["requested"]),
                   "- Exact resolved packages: " + (", ".join(f"`{text(p['name'])}=={text(p['version'])}` ({p['role']})"
                                                             for p in row["packages"]) or "none (installation did not complete)"),
                   f"- Features exercised: {text(', '.join(row['scenarios'])) or 'none'}.",
@@ -105,10 +117,17 @@ def render_markdown(index, *, baseline=False):
               "An operator must separately promote trusted canary/reporter implementation to main and observe a real scheduled run. "
               "Branch self-tests and manual dry runs are not proof of active scheduling.",
               "- Missing expected weekday/Sunday evidence is a heartbeat incident after the 36-hour daily / eight-day weekly grace; "
-              "Saturday alone is not a missed sweep. Expired exceptions are automation failures.",
+              "Saturday alone is not a missed sweep. Weekly completeness requires source floor/latest at the representative "
+              "and boundary runtimes plus the published representative consumer; a lone cell cannot clear it. "
+              "Missing other cells does not erase a fresh exact observation. Expired exceptions are automation failures.",
+              "- Only labelled, schema-valid GitHub Actions bot issues supply reporter state. Public marker copies are ignored; "
+              "malformed or conflicting owned records are isolated without stopping unrelated incidents.",
               "- Incidents deduplicate by integration + complete upstream tuple + failure signature. "
               "Two fresh, distinct comparable passing runs recover every failed scope. Development-only fixes remain release pending "
-              "for published failures; a newer upstream patch does not erase an older bad tuple.",
+              "for published failures, including repeated failures of the unchanged released package. "
+              "Pre-execution resolution/install failures may recover through a complete validated execution of the exact tuple/runtime; "
+              "executed contract failures still require identical suite and failed-test coverage. "
+              "A newer upstream patch does not erase an older bad tuple. Unseen old failures remain actionable even after a reporter outage.",
               "- `release-notes.json` contains exact support/failure inputs, not an automatically approved support-policy change. "
               "Confirm published fix versions, support additions, exclusions and floor/cap/privacy changes before release.",
               "- Agents receive a human-claimed handoff with a one-open-repair-PR marker guard. "

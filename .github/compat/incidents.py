@@ -6,6 +6,10 @@ import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
+
+REPORTER_USER = {"id": 41898282, "login": "github-actions[bot]", "type": "Bot"}
 
 MARKER = re.compile(r"<!-- traceai-compat:v1 ([A-Za-z0-9_=-]+) -->")
 REPAIR = re.compile(r"<!-- traceai-compat-repair:([0-9a-f]{64}) -->")
@@ -77,28 +81,106 @@ def text(value, limit=1500):
     return re.sub(r"[\x00-\x08\x0b-\x1f]", "", value)[:limit]
 
 
+@lru_cache(maxsize=1)
+def state_validator():
+    """Validate every persisted field before it can influence reconciliation."""
+    from jsonschema import Draft202012Validator, FormatChecker
+    abi = json.loads(Path(__file__).with_name("results.schema.json").read_text())
+    case = abi["$defs"]["case"]["properties"]
+    string = {"type": "string", "minLength": 1}
+    sha = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    date = {"type": "string", "format": "date-time"}
+    def obj(properties, required=None):
+        return {"type": "object", "properties": properties, "required": list(properties) if required is None else required,
+                "additionalProperties": False}
+    evidence_properties = {key: case[key] for key in ("case_id", "mode", "runtime", "source_sha", "resolved",
+                                                       "dependency_lock", "reproduction")}
+    evidence_properties.update(run_id={"type": "string", "pattern": "^[1-9][0-9]*$"}, url=string, at=date,
+                               test_ids={"type": "array", "uniqueItems": True, "items": string},
+                               scenarios=case["contract"]["properties"]["scenarios"])
+    evidence_required = list(evidence_properties)
+    evidence_properties.update(failure_kind=case["failure"]["anyOf"][0]["properties"]["kind"],
+                               pre_execution={"type": "boolean"})
+    ev = obj(evidence_properties, evidence_required)
+    watermark = {"type": "array", "prefixItems": [evidence_properties["run_id"], {"type": "integer", "minimum": 1},
+                    {"type": "integer", "minimum": 1, "maximum": 2}, date], "minItems": 4, "maxItems": 4}
+    scope_properties = {"failure": ev, "passes": {"type": "array", "maxItems": 2, "items": ev},
+                        "source_passes": {"type": "array", "maxItems": 2, "items": ev},
+                        "watermark": watermark, "suite": sha,
+                        "source_watermark": {"anyOf": [watermark, {"type": "null"}]}}
+    properties = {"version": {"const": 1}, "key": sha, "kind": {"enum": ["compatibility", "health"]},
+                  "owner": string, "status": {"enum": ["open", "release_pending", "recovered"]},
+                  "first_seen": date, "last_seen": date, "summary": string,
+                  "integration_id": string, "signature": sha,
+                  "classification": {"enum": ["resolution-install", "infra", "upstream-api-change", "contract-regression"]},
+                  "tuple": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {
+                      "type": "array", "prefixItems": [string, {"enum": ["upstream", "companion"]}, string],
+                      "minItems": 3, "maxItems": 3}},
+                  "last_known_good": {"anyOf": [ev, {"type": "null"}]},
+                  "scopes": {"type": "object", "minProperties": 1, "propertyNames": sha,
+                             "additionalProperties": obj(scope_properties, [k for k in scope_properties if k != "source_watermark"])}}
+    required = ["version", "key", "kind", "owner", "status", "first_seen", "last_seen", "summary"]
+    schema = obj(properties, required)
+    schema["allOf"] = [{"if": {"properties": {"kind": {"const": "compatibility"}}},
+                        "then": {"required": ["integration_id", "signature", "classification", "tuple", "last_known_good", "scopes"]}}]
+    return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
+def reporter_owned(issue):
+    user = issue.get("user") or {}
+    labels = {label.get("name") if isinstance(label, dict) else label for label in issue.get("labels", [])}
+    return (isinstance(user, dict) and all(user.get(key) == value for key, value in REPORTER_USER.items())
+            and "compatibility" in labels and "pull_request" not in issue)
+
+
 def parse_issue(issue):
-    matches = MARKER.findall(issue.get("body") or "")
+    body = issue.get("body") or ""
+    if not isinstance(body, str) or len(body) > 65000:
+        return None
+    matches = MARKER.findall(body)
     if len(matches) != 1:
         return None
     try:
-        state = json.loads(base64.urlsafe_b64decode(matches[0]))
-        if not re.fullmatch(r"[0-9a-f]{64}", state["key"]):
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate state field")
+                value[key] = item
+            return value
+        state = json.loads(base64.b64decode(matches[0], altchars=b"-_", validate=True), object_pairs_hook=unique)
+        if not state_validator().is_valid(state) or timestamp(state["first_seen"]) > timestamp(state["last_seen"]):
             return None
-        if state.get("version") != 1 or state.get("kind") not in ("compatibility", "health"):
-            return None
+        if state["kind"] == "compatibility":
+            if state["key"] != digest([state["integration_id"], state["tuple"], state["signature"]]):
+                return None
+            for key, scope in state["scopes"].items():
+                bad = scope["failure"]
+                if key != digest({"mode": bad["mode"], "runtime": bad["runtime"], "suite": scope["suite"]}):
+                    return None
+                if bad.get("pre_execution") and (bad.get("failure_kind") not in ("resolution", "install") or bad["test_ids"]):
+                    return None
+                for ev in [bad, *scope["passes"], *scope["source_passes"]]:
+                    if ev["url"] != f"https://github.com/future-agi/traceAI/actions/runs/{ev['run_id']}":
+                        return None
         return state
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, UnicodeError):
         return None
 
 
 def evidence(case, run):
-    return {"run_id": run["run_id"], "url": run["url"], "at": case["completed_at"],
-            "case_id": case["case_id"], "mode": case["mode"], "runtime": case["runtime"],
-            "source_sha": case["source_sha"], "resolved": case["resolved"],
-            "dependency_lock": case["dependency_lock"], "reproduction": case["reproduction"],
-            "test_ids": case["failure"]["test_ids"] if case["failure"] else [],
-            "scenarios": case["contract"]["scenarios"]}
+    ev = {"run_id": run["run_id"], "url": run["url"], "at": case["completed_at"],
+          "case_id": case["case_id"], "mode": case["mode"], "runtime": case["runtime"],
+          "source_sha": case["source_sha"], "resolved": case["resolved"],
+          "dependency_lock": case["dependency_lock"], "reproduction": case["reproduction"],
+          "test_ids": case["failure"]["test_ids"] if case["failure"] else [],
+          "scenarios": case["contract"]["scenarios"]}
+    if case["failure"]:
+        ev["failure_kind"] = case["failure"]["kind"]
+        ev["pre_execution"] = (case["failure"]["kind"] in ("resolution", "install")
+                               and not case["contract"]["tests"] and not case["contract"]["junit_paths"]
+                               and case["contract"]["executed"] == 0 and not ev["test_ids"])
+    return ev
 
 
 def last_known_good(case, runs, before):
@@ -162,16 +244,25 @@ def body_for(state):
 def reconcile(runs, issues, registry, now, health=()):
     """Return deterministic issue upserts and repair handoffs; never perform writes."""
     targets = {i["id"]: i for i in registry["integrations"]}
-    states, existing = {}, {}
-    for issue in issues:
-        if "pull_request" in issue:
+    states, existing, isolated = {}, {}, set()
+    record_health = []
+    for issue in sorted(issues, key=lambda i: i["number"]):
+        # Public issue bodies and labels are attacker-controlled. Only the fixed
+        # GitHub Actions bot's issues may supply persisted reporter state.
+        if not reporter_owned(issue):
             continue
         state = parse_issue(issue)
-        if not state:
+        if not state or (state["kind"] == "compatibility" and state["integration_id"] not in targets):
+            record_health.append({"id": f"issue-state:{issue['number']}",
+                                  "summary": f"Malformed reporter-owned incident #{issue['number']}; isolated for maintainer review."})
             continue
         key = state["key"]
-        if key in existing:
-            raise ValueError("duplicate incident markers require maintainer reconciliation")
+        if key in existing or key in isolated:
+            isolated.add(key)
+            states.pop(key, None)
+            record_health.append({"id": "issue-conflict:" + key,
+                                  "summary": f"Conflicting reporter-owned incident records for {key}; only this key is paused for maintainer reconciliation."})
+            continue
         states[key], existing[key] = state, issue
     original = {key: json.dumps(value, sort_keys=True) for key, value in states.items()}
     # Process older evidence first, but never replay older evidence over persisted
@@ -181,11 +272,13 @@ def reconcile(runs, issues, registry, now, health=()):
     fresh_cutoff = now - timedelta(days=8)
     for case, run in observations:
         at = timestamp(case["completed_at"])
-        if at > now or at < fresh_cutoff:
+        if at > now:
             continue
         failed = case["status"] in ("failed", "flaky", "quarantined", "blocked") and case["failure"] is not None
         if failed:
             key = incident_key(case)
+            if key in isolated:
+                continue
             state = states.setdefault(key, {
                 "version": 1, "key": key, "kind": "compatibility", "integration_id": case["integration_id"],
                 "tuple": upstream_tuple(case), "signature": case["failure"]["signature"],
@@ -199,11 +292,20 @@ def reconcile(runs, issues, registry, now, health=()):
             observation = [run["run_id"], run["run_attempt"], case["attempt"], case["completed_at"]]
             if scope and (at < timestamp(scope["watermark"][3]) or observation == scope["watermark"]):
                 continue
-            state["scopes"][sk] = {"failure": evidence(case, run), "passes": [], "source_passes": [],
+            state["scopes"][sk] = {"failure": evidence(case, run), "passes": [],
+                                   "source_passes": scope["source_passes"] if scope and case["mode"] == "published" else [],
+                                   "source_watermark": scope.get("source_watermark") if scope else None,
                                    "watermark": observation, "suite": case["contract"]["suite_sha256"]}
+            if case["mode"] == "source":
+                for other in state["scopes"].values():
+                    if other["failure"]["mode"] == "published" and other["failure"]["runtime"] == case["runtime"]:
+                        source_mark = other.get("source_watermark")
+                        if source_mark is None or at >= timestamp(source_mark[3]):
+                            other["source_passes"] = []
+                            other["source_watermark"] = observation
             state["status"] = "open"
             state["last_seen"] = max(state["last_seen"], case["completed_at"], key=timestamp)
-        elif case["status"] == "passed":
+        elif case["status"] == "passed" and at >= fresh_cutoff:
             for state in states.values():
                 if state["kind"] != "compatibility" or state["integration_id"] != case["integration_id"]:
                     continue
@@ -211,21 +313,28 @@ def reconcile(runs, issues, registry, now, health=()):
                     continue
                 for sk, scope in state["scopes"].items():
                     bad = scope["failure"]
-                    if at <= timestamp(scope["watermark"][3]) or scope["suite"] != case["contract"]["suite_sha256"]:
+                    # Resolution/install failed before a suite existed. A full
+                    # validated pass of that exact tuple/runtime can recover it;
+                    # executed contract failures still require the identical suite.
+                    if not bad.get("pre_execution") and scope["suite"] != case["contract"]["suite_sha256"]:
                         continue
                     if bad["runtime"] != case["runtime"]:
                         continue
                     executed = {t["test_id"] for t in case["contract"]["tests"] if t["outcome"] == "passed"}
                     if not set(bad["test_ids"]).issubset(executed) or not set(bad["scenarios"]).issubset(case["contract"]["scenarios"]):
                         continue
-                    comparable = sk == scope_key(case)
+                    comparable = bad["mode"] == case["mode"]
                     source_recovery = bad["mode"] == "published" and case["mode"] == "source"
                     if not (comparable or source_recovery):
                         continue
                     field = "passes" if comparable else "source_passes"
+                    watermark_field = "watermark" if comparable else "source_watermark"
+                    watermark = scope.get(watermark_field)
+                    if at <= timestamp(bad["at"]) or (watermark and at <= timestamp(watermark[3])):
+                        continue
                     if run["run_id"] not in [p["run_id"] for p in scope[field]]:
                         scope[field] = (scope[field] + [evidence(case, run)])[-2:]
-                    scope["watermark"] = [run["run_id"], run["run_attempt"], case["attempt"], case["completed_at"]]
+                    scope[watermark_field] = [run["run_id"], run["run_attempt"], case["attempt"], case["completed_at"]]
                     state["last_seen"] = max(state["last_seen"], case["completed_at"], key=timestamp)
     for state in states.values():
         if state["kind"] == "compatibility":
@@ -239,13 +348,13 @@ def reconcile(runs, issues, registry, now, health=()):
                         scope[field] = [p for p in scope[field] if timestamp(p["at"]) >= fresh_cutoff]
             if all(len(s["passes"]) >= 2 for s in scopes):
                 state["status"] = "recovered"
-            elif any(s["failure"]["mode"] == "published" and len(s["source_passes"]) >= 2
-                     and len(s["passes"]) < 2 for s in scopes):
+            elif all(len(s["passes"]) >= 2 or (s["failure"]["mode"] == "published" and len(s["source_passes"]) >= 2)
+                     for s in scopes):
                 state["status"] = "release_pending"
             else:
                 state["status"] = "open"
     active_health = set()
-    for alert in health:
+    for alert in list(health) + record_health:
         key = digest(["health", alert["id"]])
         active_health.add(key)
         state = states.setdefault(key, {"version": 1, "key": key, "kind": "health", "first_seen": iso(now),
@@ -297,11 +406,25 @@ def heartbeat(runs, registry, now):
         if not target["canary"]["enabled"]:
             continue
         cases = [c for r in runs if not r["run"]["self_test"] for c in r["cases"]
-                 if c["integration_id"] == target["id"] and c["status"] not in ("stale", "not_tested")]
+                 if c["integration_id"] == target["id"] and c["status"] not in ("stale", "not_tested")
+                 and timestamp(c["completed_at"]) <= now
+                 and not (c["failure"] and c["failure"]["kind"] == "automation" and not c["contract"]["executed"])]
+        representative = target["runtimes"]["representative"][:1]
+        boundaries = sorted(set(representative + target["runtimes"]["boundaries"]))
         for cadence, grace in (("daily", timedelta(hours=36)), ("weekly", timedelta(days=8))):
-            eligible = [c for c in cases if (c["mode"] == "source" and c["selector"] == "latest_eligible"
-                        if cadence == "daily" else c["mode"] == "published" or c["selector"] in ("floor", "historical"))]
-            last = max((timestamp(c["completed_at"]) for c in eligible), default=None)
+            required = [("source", "latest_eligible", runtime) for runtime in representative]
+            if cadence == "weekly":
+                required = [("source", selector, runtime) for runtime in boundaries for selector in ("floor", "latest_eligible")]
+                if "published" in target["canary"]["modes"]:
+                    required += [("published", "latest_eligible", runtime) for runtime in representative]
+            # Every required scope needs fresh evidence. One floor/source result
+            # cannot substitute for the published consumer or runtime boundaries.
+            latest = []
+            for mode, selector, runtime in required:
+                eligible = [c for c in cases if c["mode"] == mode and c["selector"] == selector
+                            and (c["runtime"]["version"] == runtime or c["runtime"]["version"].startswith(runtime + "."))]
+                latest.append(max((timestamp(c["completed_at"]) for c in eligible), default=None))
+            last = min(latest) if latest and all(t is not None for t in latest) else None
             # Find a scheduled due time whose deadline passed and which has not
             # been satisfied by a later complete observation. A Saturday gap alone
             # cannot create an alert after a complete Friday run.

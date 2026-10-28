@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import unittest
 
-from incidents import (body_for, classify, heartbeat, incident_key, parse_issue,
+from incidents import (REPORTER_USER, body_for, classify, heartbeat, incident_key, parse_issue,
                        reconcile, text, timestamp, upstream_tuple)
 
 HERE = Path(__file__).resolve().parent
@@ -13,7 +13,7 @@ NOW = timestamp('2026-10-28T12:00:00Z')
 
 
 def issue_for(action, number=42):
-    return dict(number=number, body=action['body'], state=action['state'], labels=action['labels'])
+    return dict(number=number, body=action['body'], state=action['state'], labels=action['labels'], user=dict(REPORTER_USER))
 
 
 def lifecycle(runs, issues=()):
@@ -136,10 +136,84 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual(handoff['existing_prs'], [43])
         self.assertFalse(handoff['automatic_execution'])
 
-    def test_duplicate_incident_marker_fails_closed(self):
+    def test_public_marker_copy_cannot_block_or_supply_incident_state(self):
         action = lifecycle(RUNS[:2])['actions'][0]
-        with self.assertRaisesRegex(ValueError, 'duplicate incident'):
-            lifecycle(RUNS[:3], [issue_for(action), issue_for(action, 44)])
+        for labels in ([], ['compatibility']):
+            copied = issue_for(action, 44)
+            copied.update(user=dict(id=123, login='outsider', type='User'), labels=labels)
+            result = lifecycle(RUNS[:3], [issue_for(action), copied])
+            self.assertEqual(len(result['actions']), 1)
+            self.assertEqual(result['actions'][0]['number'], 42)
+            self.assertEqual(len(result['states']), 1)
+
+    def test_conflicting_owned_records_isolate_only_their_key(self):
+        action = lifecycle(RUNS[:2])['actions'][0]
+        runs = copy.deepcopy(RUNS[:3])
+        runs[-1]['cases'][0]['failure']['signature'] = 'f' * 64
+        result = lifecycle(runs, [issue_for(action), issue_for(action, 44)])
+        self.assertFalse(any(a['number'] in (42, 44) for a in result['actions']))
+        self.assertTrue(any(s['kind'] == 'health' and 'Conflicting' in s['summary'] for s in result['states']))
+        self.assertTrue(any(s.get('signature') == 'f' * 64 for s in result['states']))
+
+    def test_incomplete_owned_state_is_isolated_without_aborting(self):
+        action = lifecycle(RUNS[:2])['actions'][0]
+        for field, value in [('scopes', None), ('tuple', []), ('last_seen', 'bad-date'), ('signature', 'bad')]:
+            state = parse_issue(action)
+            state[field] = value
+            # Build the marker directly: malformed state is never a valid body input.
+            import base64
+            marker = base64.urlsafe_b64encode(json.dumps(state).encode()).decode()
+            issue = issue_for(action)
+            issue['body'] = '<!-- traceai-compat:v1 ' + marker + ' -->'
+            self.assertIsNone(parse_issue(issue))
+            result = lifecycle(RUNS[:3], [issue])
+            self.assertTrue(any(s['kind'] == 'health' for s in result['states']))
+            self.assertTrue(any(s['kind'] == 'compatibility' for s in result['states']))
+
+    def test_resolution_failure_with_empty_suite_recovers_but_contract_failure_does_not(self):
+        import hashlib
+        failed = copy.deepcopy(RUNS[1])
+        case = failed['cases'][0]
+        case.update(resolved=[], dependency_lock=None, status='blocked')
+        case['failure'].update(kind='resolution', test_ids=[])
+        case['contract'].update(suite_sha256=hashlib.sha256(b'').hexdigest(), tests=[], collected=0, executed=0,
+                                junit_paths=[], scenarios=[])
+        issue = issue_for(lifecycle([failed])['actions'][0])
+        result = lifecycle([RUNS[-2], RUNS[-1]], [issue])
+        self.assertEqual(result['actions'][0]['state'], 'closed')
+        case['failure']['kind'] = 'contract'
+        issue = issue_for(lifecycle([failed])['actions'][0])
+        self.assertEqual(lifecycle([RUNS[-2], RUNS[-1]], [issue])['states'][0]['status'], 'open')
+
+    def test_repeated_published_failure_preserves_fresh_source_fix(self):
+        pending = lifecycle(RUNS[:5])
+        issue = issue_for(pending['actions'][0])
+        failure = copy.deepcopy(RUNS[2])
+        failure['run'].update(run_id='2000', url='https://github.com/future-agi/traceAI/actions/runs/2000')
+        failure['cases'][0]['completed_at'] = '2026-10-28T06:00:00Z'
+        result = lifecycle([failure], [issue])
+        state = result['states'][0]
+        self.assertEqual(state['status'], 'release_pending')
+        self.assertEqual(len(next(iter(state['scopes'].values()))['source_passes']), 2)
+        updated = issue_for(result['actions'][0])
+        self.assertEqual(lifecycle([failure], [updated])['actions'], [])
+
+    def test_source_failure_invalidates_source_fix_without_erasing_published_history(self):
+        pending = lifecycle(RUNS[:5])
+        source = copy.deepcopy(RUNS[2])
+        source['cases'][0].update(mode='source', completed_at='2026-10-28T06:00:00Z')
+        state = lifecycle([source], [issue_for(pending['actions'][0])])['states'][0]
+        self.assertEqual(state['status'], 'open')
+        self.assertTrue(all(not s['source_passes'] for s in state['scopes'].values()))
+
+    def test_unseen_old_failure_survives_reporter_outage_and_is_stale_in_index(self):
+        from publish import build_index
+        failed = copy.deepcopy(RUNS[1])
+        failed['cases'][0]['completed_at'] = '2026-10-19T04:00:00Z'
+        failed['run']['completed_at'] = '2026-10-19T04:00:00Z'
+        result = lifecycle([failed])
+        self.assertEqual(result['actions'][0]['state'], 'open')
+        self.assertEqual(build_index([failed], REGISTRY, NOW)['observations'][0]['status'], 'stale')
 
     def test_future_and_old_evidence_do_not_recover(self):
         runs = copy.deepcopy(RUNS)
@@ -170,12 +244,40 @@ class HeartbeatTests(unittest.TestCase):
             bundle['run']['self_test'] = True
         self.assertEqual(heartbeat(runs, self.enabled(), NOW), heartbeat([], self.enabled(), NOW))
 
+    def complete_weekly(self, at='2026-10-18T04:00:00Z'):
+        bundle = copy.deepcopy(RUNS[-1])
+        bundle['cases'] = []
+        for runtime in ('3.10', '3.11', '3.13'):
+            for selector in ('floor', 'latest_eligible'):
+                case = copy.deepcopy(RUNS[4]['cases'][0])
+                case.update(mode='source', selector=selector, completed_at=at)
+                case['runtime']['version'] = runtime + '.9'
+                bundle['cases'].append(case)
+        case = copy.deepcopy(RUNS[-1]['cases'][0])
+        case['completed_at'] = at
+        bundle['cases'].append(case)
+        return bundle
+
     def test_weekend_after_complete_friday_and_sunday_is_not_stale(self):
-        runs = [copy.deepcopy(RUNS[4]), copy.deepcopy(RUNS[6])]
+        runs = [copy.deepcopy(RUNS[4]), self.complete_weekly()]
         runs[0]['cases'][0]['completed_at'] = '2026-10-23T04:00:00Z'
-        runs[1]['cases'][0]['completed_at'] = '2026-10-18T04:00:00Z'
         for now in ('2026-10-24T18:00:00Z', '2026-10-25T02:00:00Z'):
             self.assertEqual(heartbeat(runs, self.enabled(), timestamp(now)), [])
+
+    def test_one_source_floor_or_partial_weekly_cannot_clear_freshness(self):
+        complete = self.complete_weekly('2026-10-27T04:00:00Z')
+        self.assertEqual(heartbeat([complete], self.enabled(), NOW), [])
+        for subset in ([complete['cases'][2]], complete['cases'][:-1], complete['cases'][1:]):
+            bundle = copy.deepcopy(complete)
+            bundle['cases'] = subset
+            self.assertTrue(any(a['id'].endswith(':weekly') for a in heartbeat([bundle], self.enabled(), NOW)))
+
+    def test_missing_case_placeholder_is_not_complete_weekly_evidence(self):
+        bundle = self.complete_weekly('2026-10-27T04:00:00Z')
+        case = bundle['cases'][0]
+        case.update(status='blocked', failure=dict(kind='automation'), resolved=[], dependency_lock=None)
+        case['contract'].update(executed=0, collected=0, tests=[], junit_paths=[])
+        self.assertTrue(any(a['id'].endswith(':weekly') for a in heartbeat([bundle], self.enabled(), NOW)))
 
     def test_health_repeats_do_not_spam_and_fresh_health_closes(self):
         health = [dict(id='heartbeat:example:daily', summary='Missing example run')]

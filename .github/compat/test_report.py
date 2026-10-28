@@ -10,7 +10,8 @@ from unittest.mock import patch
 import zipfile
 
 from report import (CANARY, REPO, ROOT, GitHub, MAX_EXPANDED, SafeRedirect, apply_actions,
-                    extract_archive, load_json, safe_path, validate_bundle, verify_provenance)
+                    extract_archive, github_results, junit_outcomes, load_json, lock_packages, safe_path,
+                    validate_bundle, verify_provenance)
 from incidents import timestamp
 
 HERE = Path(__file__).resolve().parent
@@ -68,10 +69,10 @@ class ValidationTests(unittest.TestCase):
             root = Path(tmp)
             lock = safe_path(root, bundle['cases'][0]['dependency_lock']['path'])
             lock.parent.mkdir()
-            lock.write_text('retained lock')
+            lock.write_text('openai==1.93.1\ntraceAI-openai==0.1.10\nfi-instrumentation-otel==1.1.0\n')
             junit = safe_path(root, bundle['cases'][0]['contract']['junit_paths'][0])
             junit.parent.mkdir()
-            junit.write_text('<testsuite tests="1"><testcase name="test_stream"/></testsuite>')
+            junit.write_text('<testsuite tests="1"><testcase file="tests/test_fixture.py" classname="tests.test_fixture" name="test_stream"/></testsuite>')
             selected = {key: bundle['cases'][0][key] for key in ('case_id', 'integration_id', 'mode', 'selector', 'requested')}
             selected['runtime'] = '3.11'
             plan = dict(source_sha=bundle['run']['source_sha'], workflow_sha=bundle['run']['workflow_sha'],
@@ -95,7 +96,7 @@ class ValidationTests(unittest.TestCase):
             root = Path(tmp)
             lock = safe_path(root, bundle['cases'][0]['dependency_lock']['path'])
             lock.parent.mkdir()
-            lock.write_text('retained lock')
+            lock.write_text('openai==1.93.1\ntraceAI-openai==0.1.10\nfi-instrumentation-otel==1.1.0\n')
             bundle['cases'][0]['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
             junit = safe_path(root, bundle['cases'][0]['contract']['junit_paths'][0])
             junit.parent.mkdir()
@@ -126,6 +127,119 @@ class ValidationTests(unittest.TestCase):
         case['failure']['kind'] = 'install'
         case['contract'].update(tests=[], executed=0, collected=0, junit_paths=[])
         validate_bundle(bundle, REGISTRY, NOW)
+
+    def test_successful_flaky_retry_uses_the_retained_original_failure(self):
+        bundle = copy.deepcopy(RUNS[-1])
+        first = copy.deepcopy(bundle['cases'][0])
+        first.update(status='failed', failure=copy.deepcopy(RUNS[1]['cases'][0]['failure']))
+        first['contract']['tests'][0]['outcome'] = 'failure'
+        first['contract']['tests'][0]['failure_signature'] = first['failure']['signature']
+        bundle['cases'][0].update(attempt=2, status='flaky', failure=None)
+        bundle['cases'].insert(0, first)
+        validate_bundle(bundle, REGISTRY, NOW)
+        missing_failure = copy.deepcopy(bundle)
+        missing_failure['cases'][0]['failure'] = None
+        with self.assertRaisesRegex(ValueError, 'signature'):
+            validate_bundle(missing_failure, REGISTRY, NOW)
+        for change in (lambda c: c['resolved'][0].update(version='0.0.1'),
+                       lambda c: c['contract'].update(executed=0, collected=0, tests=[]),
+                       lambda c: c['contract']['tests'][0].update(outcome='failure')):
+            invalid = copy.deepcopy(bundle)
+            change(invalid['cases'][1])
+            with self.assertRaises(ValueError):
+                validate_bundle(invalid, REGISTRY, NOW)
+        # Flaky is degraded, never a recovery pass or install recommendation.
+        from publish import build_index
+        self.assertIsNone(build_index([bundle], REGISTRY, NOW)['observations'][0]['install_command'])
+
+    def test_missing_boundary_upload_is_not_an_observed_runtime(self):
+        bundle = copy.deepcopy(RUNS[1])
+        case = bundle['cases'][0]
+        case.update(status='blocked', resolved=[], dependency_lock=None)
+        case['failure'].update(kind='automation', test_ids=[])
+        case['contract'].update(tests=[], collected=0, executed=0, junit_paths=[], scenarios=[])
+        selection = {k: case[k] for k in ('case_id', 'integration_id', 'mode', 'selector', 'requested')}
+        selection['runtime'] = '3.13'
+        data = json.dumps(dict(source_sha=bundle['run']['source_sha'], workflow_sha=bundle['run']['workflow_sha'],
+                               self_test=False, cases=[selection])).encode()
+        bundle['run']['plan_sha256'] = hashlib.sha256(data).hexdigest()
+        validate_bundle(bundle, REGISTRY, NOW, plan_bytes=data)
+        executed = copy.deepcopy(RUNS[-1])
+        executed['run']['plan_sha256'] = hashlib.sha256(data).hexdigest()
+        with self.assertRaisesRegex(ValueError, 'runtime differs'):
+            validate_bundle(executed, REGISTRY, NOW, plan_bytes=data)
+
+    def test_discovery_requires_complete_age_provenance(self):
+        mutations = [lambda c: c.update(discovery=[]),
+                     lambda c: c['discovery'][0].update(published_at=None, first_seen_at=None),
+                     lambda c: c['discovery'][0].update(published_at='2026-10-28T04:00:00Z'),
+                     lambda c: c['discovery'][0].update(requested_version='0.0.1'),
+                     lambda c: c['discovery'].append(copy.deepcopy(c['discovery'][0]))]
+        for change in mutations:
+            bundle = copy.deepcopy(RUNS[-1])
+            change(bundle['cases'][0])
+            with self.assertRaises(ValueError):
+                validate_bundle(bundle, REGISTRY, NOW)
+        bundle = copy.deepcopy(RUNS[-1])
+        bundle['cases'][0]['discovery'][0]['published_at'] = None
+        validate_bundle(bundle, REGISTRY, NOW)  # old first-seen time is explicit fallback
+
+    def test_junit_requires_exact_ids_outcomes_and_no_duplicates(self):
+        bundle = copy.deepcopy(RUNS[-1])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = safe_path(root, bundle['cases'][0]['dependency_lock']['path'])
+            lock.parent.mkdir()
+            lock.write_text('openai==1.93.1\ntraceAI-openai==0.1.10\nfi-instrumentation-otel==1.1.0\n')
+            bundle['cases'][0]['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+            junit = safe_path(root, bundle['cases'][0]['contract']['junit_paths'][0])
+            junit.parent.mkdir()
+            good = '<testcase file="tests/test_fixture.py" classname="tests.test_fixture" name="test_stream"/>'
+            for xml in ('<testsuite><testcase file="other.py" name="other"/></testsuite>',
+                        '<testsuite>' + good + good + '</testsuite>',
+                        '<testsuite>' + good.replace('/>', '><failure/></testcase>') + '</testsuite>'):
+                junit.write_text(xml)
+                with self.assertRaisesRegex(ValueError, 'JUnit'):
+                    validate_bundle(bundle, REGISTRY, NOW, artifact_root=root)
+            junit.write_text('<testsuite>' + good + '</testsuite>')
+            validate_bundle(bundle, REGISTRY, NOW, artifact_root=root)
+        self.assertEqual(junit_outcomes(b'<testsuite><testcase file="x/test_a.py" classname="x.test_a.TestFoo" name="test_a[p.q]"/></testsuite>'),
+                         {'x/test_a.py::TestFoo::test_a[p.q]': 'passed'})
+        self.assertEqual(junit_outcomes(b'<testsuite><testcase classname="x.test_a" name="test_a[p.q]"/></testsuite>'),
+                         {'x/test_a.py::test_a[p.q]': 'passed'})
+
+    def test_correctly_hashed_contradictory_lock_is_rejected(self):
+        bundle = copy.deepcopy(RUNS[-1])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = safe_path(root, bundle['cases'][0]['dependency_lock']['path'])
+            lock.parent.mkdir()
+            junit = safe_path(root, bundle['cases'][0]['contract']['junit_paths'][0])
+            junit.parent.mkdir()
+            junit.write_text('<testsuite><testcase file="tests/test_fixture.py" name="test_stream"/></testsuite>')
+            for package in ('openai', 'traceAI-openai', 'fi-instrumentation-otel'):
+                freeze = '\n'.join(p['name'] + '==' + ('0.0.1' if p['name'] == package else p['version'])
+                                   for p in bundle['cases'][0]['resolved'])
+                lock.write_text(freeze)
+                bundle['cases'][0]['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+                with self.subTest(package=package), self.assertRaisesRegex(ValueError, 'contradicts'):
+                    validate_bundle(bundle, REGISTRY, NOW, artifact_root=root)
+        self.assertEqual(lock_packages(b'traceAI-openai @ file:///tmp/traceai_openai-0.1.10-py3-none-any.whl#sha256=abc',
+                                       'pip-freeze', 'python'), {'traceai-openai': '0.1.10'})
+        report = json.dumps({'install': [{'metadata': {'name': 'Foo_Bar', 'version': '1.0'}}]}).encode()
+        self.assertEqual(lock_packages(report, 'pip-report', 'python'), {'foo-bar': '1.0'})
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            lock_packages(b'foo==1.0\nfoo==2.0', 'pip-freeze', 'python')
+        with self.assertRaises(ValueError):
+            lock_packages(b'foo @ file:///source', 'pip-freeze', 'python')
+
+    def test_malformed_plan_shapes_raise_validation_errors(self):
+        for plan in (None, [], {'cases': None}, dict(source_sha='a'*40, workflow_sha='b'*40, self_test=False, cases=[None])):
+            bundle = copy.deepcopy(RUNS[-1])
+            data = json.dumps(plan).encode()
+            bundle['run']['plan_sha256'] = hashlib.sha256(data).hexdigest()
+            with self.assertRaises(ValueError):
+                validate_bundle(bundle, REGISTRY, NOW, plan_bytes=data)
 
     def test_duplicate_json_keys_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -215,6 +329,70 @@ class ProvenanceTests(unittest.TestCase):
         bundle['run']['self_test'] = True
         with self.assertRaisesRegex(ValueError, 'self-test'):
             verify_provenance(bundle, self.metadata(), self.API())
+
+    def test_rerun_retains_original_plan_but_checks_each_attempt_execution(self):
+        bundle = copy.deepcopy(RUNS[-1])
+        bundle['run'].update(run_attempt=2, started_at='2026-10-28T10:58:33Z', completed_at='2026-10-28T11:08:00Z')
+        first = bundle['cases'][0]
+        first.update(started_at='2026-10-28T10:59:00Z', completed_at='2026-10-28T11:00:00Z')
+        second = copy.deepcopy(first)
+        second.update(attempt=2, started_at='2026-10-28T11:07:00Z', completed_at='2026-10-28T11:08:00Z')
+        bundle['cases'].append(second)
+        metadata = self.metadata()
+        metadata.update(run_attempt=2, run_started_at='2026-10-28T11:06:31Z', updated_at='2026-10-28T11:09:00Z')
+        original = dict(metadata, run_attempt=1, run_started_at='2026-10-28T10:58:00Z', updated_at='2026-10-28T11:01:00Z')
+        class API:
+            def request(self, path):
+                return original if path.endswith('/attempts/1') else {'status': 'ahead'}
+        verify_provenance(bundle, metadata, API())
+        second['started_at'] = '2026-10-28T10:59:00Z'
+        with self.assertRaisesRegex(ValueError, 'its GitHub attempt'):
+            verify_provenance(bundle, metadata, API())
+        second['started_at'] = '2026-10-28T11:07:00Z'
+        first['completed_at'] = '2026-10-28T11:07:00Z'
+        with self.assertRaisesRegex(ValueError, 'its GitHub attempt'):
+            verify_provenance(bundle, metadata, API())
+
+    def test_malformed_downloaded_shapes_are_isolated_from_healthy_runs(self):
+        def archive(results, plan=None):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as zip:
+                zip.writestr('results.json', json.dumps(results))
+                zip.writestr('compat-plan.json', json.dumps(plan))
+                zip.writestr('locks/fixture.txt', 'openai==1.93.1\ntraceAI-openai==0.1.10\nfi-instrumentation-otel==1.1.0\n')
+                zip.writestr('junit/fixture.xml', '<testsuite><testcase file="tests/test_fixture.py" name="test_stream"/></testsuite>')
+            return buffer.getvalue()
+        healthy = copy.deepcopy(RUNS[-1])
+        case = healthy['cases'][0]
+        selected = {k: case[k] for k in ('case_id', 'integration_id', 'mode', 'selector', 'requested')}
+        selected['runtime'] = '3.11'
+        plan = dict(source_sha=healthy['run']['source_sha'], workflow_sha=healthy['run']['workflow_sha'], self_test=False, cases=[selected])
+        healthy['run']['plan_sha256'] = hashlib.sha256(json.dumps(plan).encode()).hexdigest()
+        freeze = b'openai==1.93.1\ntraceAI-openai==0.1.10\nfi-instrumentation-otel==1.1.0\n'
+        case['dependency_lock']['sha256'] = hashlib.sha256(freeze).hexdigest()
+        archives = {1007: archive(healthy, plan)}
+        malformed = [None, [], {'run': None}, {'run': []}, dict(healthy, cases=None)]
+        malformed_plan = copy.deepcopy(healthy)
+        malformed_plan['run']['plan_sha256'] = hashlib.sha256(b'null').hexdigest()
+        for index, invalid in enumerate(malformed, 2000):
+            archives[index] = archive(invalid)
+        archives[3000] = archive(malformed_plan)
+        base = dict(self.metadata(), created_at='2026-10-28T04:00:00Z')
+        metadata = [dict(base, id=id, html_url=f'https://github.com/{REPO}/actions/runs/{id}') for id in archives]
+        class API:
+            def pages(self, path, key, **kwargs):
+                if path.startswith('actions/workflows/'):
+                    return metadata
+                id = int(path.split('/')[2])
+                return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archives[id]), id=id)]
+            def request(self, path, **kwargs):
+                if path.endswith('/zip'):
+                    return archives[int(path.split('/')[-2])]
+                return {'status': 'ahead'}
+        bundles, errors = github_results(API(), REGISTRY, NOW)
+        self.assertEqual(len(bundles), 1)
+        self.assertEqual(len(errors), 6)
+        self.assertEqual({e['id'] for e in errors}, {f'invalid-run:{id}' for id in archives if id != 1007})
 
     def test_issue_writer_only_upserts_labels_and_issues_and_preserves_human_labels(self):
         class FakeAPI:

@@ -58,6 +58,26 @@ class PublishTests(unittest.TestCase):
         self.assertTrue(any(r['observed_status'] == 'failed' for r in index['observations']))
         self.assertTrue(any(r['observed_status'] == 'passed' for r in index['observations']))
 
+    def test_distinct_unresolved_selected_tuples_survive_in_index(self):
+        runs = copy.deepcopy(RUNS[:2])
+        for i, bundle in enumerate(runs):
+            case = bundle['cases'][0]
+            case.update(resolved=[], dependency_lock=None, status='blocked', failure=copy.deepcopy(RUNS[1]['cases'][0]['failure']))
+            case['requested'][0]['selected_version'] = ('1.69.0', '1.93.1')[i]
+            case['requested'][0]['requirement'] = 'openai==' + case['requested'][0]['selected_version']
+            case['contract']['suite_sha256'] = 'a' * 64
+        index = build_index(runs, REGISTRY, NOW)
+        self.assertEqual(len(index['observations']), 2)
+        self.assertEqual({row['requested'][0]['selected_version'] for row in index['observations']}, {'1.69.0', '1.93.1'})
+        self.assertTrue(all(row['install_command'] is None for row in index['observations']))
+
+    def test_incomplete_weekly_coverage_does_not_erase_fresh_exact_published_pass(self):
+        index = build_index([RUNS[-1]], REGISTRY, NOW)
+        self.assertTrue(any(a['id'].endswith(':weekly') for a in index['health']))
+        row = index['observations'][0]
+        self.assertEqual(row['status'], 'passed')
+        self.assertIn('openai==1.93.1', row['install_command'])
+
     def test_release_note_inputs_need_human_confirmation(self):
         notes = release_notes(build_index(RUNS, REGISTRY, NOW, fixture=True))
         self.assertTrue(notes['requires_maintainer_review'])

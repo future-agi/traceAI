@@ -15,6 +15,7 @@ Only **published / passed** rows identify tested installable releases. Source ro
 - Qualification: **pilot_pending**; last checked: **2026-10-28T05:00:00Z**; [evidence](https://github.com/future-agi/traceAI/actions/runs/1007)
 - Runtime/OS: `{"arch": "x86_64", "implementation": "cpython", "os": "linux", "version": "3.11.9"}`; selector: `latest_eligible`.
 - Source SHA: `64e3a57ad273559849bbab0b8125bc57c7e7592e`; contract: `21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95`.
+- Requested selection: `openai==1.93.1` (upstream), `traceAI-openai==0.1.10` (instrumentation), `fi-instrumentation-otel==1.1.0` (core)
 - Exact resolved packages: `fi-instrumentation-otel==1.1.0` (core), `traceAI-openai==0.1.10` (instrumentation), `openai==1.93.1` (upstream)
 - Features exercised: real-sdk, sync, async, streaming, error-propagation, span-lifecycle, privacy.
 - Complete environment lock: `{"format": "pip-freeze", "path": "locks/fixture.txt", "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"}`.
@@ -31,6 +32,7 @@ python -m pip install 'fi-instrumentation-otel==1.1.0' 'traceAI-openai==0.1.10' 
 - Qualification: **pilot_pending**; last checked: **2026-10-26T04:00:00Z**; [evidence](https://github.com/future-agi/traceAI/actions/runs/1001)
 - Runtime/OS: `{"arch": "x86_64", "implementation": "cpython", "os": "linux", "version": "3.11.9"}`; selector: `latest_eligible`.
 - Source SHA: `64e3a57ad273559849bbab0b8125bc57c7e7592e`; contract: `21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95`.
+- Requested selection: `openai==1.92.0` (upstream), `traceAI-openai==0.1.10` (instrumentation), `fi-instrumentation-otel==1.1.0` (core)
 - Exact resolved packages: `fi-instrumentation-otel==1.1.0` (core), `traceAI-openai==0.1.10` (instrumentation), `openai==1.92.0` (upstream)
 - Features exercised: real-sdk, sync, async, streaming, error-propagation, span-lifecycle, privacy.
 - Complete environment lock: `{"format": "pip-freeze", "path": "locks/fixture.txt", "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"}`.
@@ -47,6 +49,7 @@ python -m pip install 'fi-instrumentation-otel==1.1.0' 'traceAI-openai==0.1.10' 
 - Qualification: **pilot_pending**; last checked: **2026-10-27T07:00:00Z**; [evidence](https://github.com/future-agi/traceAI/actions/runs/1005)
 - Runtime/OS: `{"arch": "x86_64", "implementation": "cpython", "os": "linux", "version": "3.11.9"}`; selector: `latest_eligible`.
 - Source SHA: `64e3a57ad273559849bbab0b8125bc57c7e7592e`; contract: `21d1570285a666fb43bd561849296f26a21e61d01b3d5a93235f7cd3f0884b95`.
+- Requested selection: `openai==1.93.1` (upstream), `traceAI-openai==0.1.10` (instrumentation), `fi-instrumentation-otel==1.1.0` (core)
 - Exact resolved packages: `fi-instrumentation-otel==1.1.0` (core), `traceAI-openai==0.1.10` (instrumentation), `openai==1.93.1` (upstream)
 - Features exercised: real-sdk, sync, async, streaming, error-propagation, span-lifecycle, privacy.
 - Complete environment lock: `{"format": "pip-freeze", "path": "locks/fixture.txt", "sha256": "85e4a7035dcef823773c5d8fa660e32ce82ed0df2ded129676120d0af9cfa154"}`.
@@ -211,13 +214,15 @@ This includes known-broken and unqualified gaps, shared/core packages and separa
 - Stale/missing weekly canary evidence for python-anthropic (last complete: none). Check the default-branch scheduler; dev-only cron is dormant. No passing status may be inferred.
 - Stale/missing daily canary evidence for python-langchain (last complete: none). Check the default-branch scheduler; dev-only cron is dormant. No passing status may be inferred.
 - Stale/missing weekly canary evidence for python-langchain (last complete: none). Check the default-branch scheduler; dev-only cron is dormant. No passing status may be inferred.
+- Stale/missing weekly canary evidence for python-openai (last complete: none). Check the default-branch scheduler; dev-only cron is dormant. No passing status may be inferred.
 
 ## Operating and release practice
 
 - The pilot is Python OpenAI, Anthropic and LangChain. Expand only after a low-noise baseline and measured CI use.
 - Main is the default branch. Cron definitions merged only into dev are dormant. An operator must separately promote trusted canary/reporter implementation to main and observe a real scheduled run. Branch self-tests and manual dry runs are not proof of active scheduling.
-- Missing expected weekday/Sunday evidence is a heartbeat incident after the 36-hour daily / eight-day weekly grace; Saturday alone is not a missed sweep. Expired exceptions are automation failures.
-- Incidents deduplicate by integration + complete upstream tuple + failure signature. Two fresh, distinct comparable passing runs recover every failed scope. Development-only fixes remain release pending for published failures; a newer upstream patch does not erase an older bad tuple.
+- Missing expected weekday/Sunday evidence is a heartbeat incident after the 36-hour daily / eight-day weekly grace; Saturday alone is not a missed sweep. Weekly completeness requires source floor/latest at the representative and boundary runtimes plus the published representative consumer; a lone cell cannot clear it. Missing other cells does not erase a fresh exact observation. Expired exceptions are automation failures.
+- Only labelled, schema-valid GitHub Actions bot issues supply reporter state. Public marker copies are ignored; malformed or conflicting owned records are isolated without stopping unrelated incidents.
+- Incidents deduplicate by integration + complete upstream tuple + failure signature. Two fresh, distinct comparable passing runs recover every failed scope. Development-only fixes remain release pending for published failures, including repeated failures of the unchanged released package. Pre-execution resolution/install failures may recover through a complete validated execution of the exact tuple/runtime; executed contract failures still require identical suite and failed-test coverage. A newer upstream patch does not erase an older bad tuple. Unseen old failures remain actionable even after a reporter outage.
 - `release-notes.json` contains exact support/failure inputs, not an automatically approved support-policy change. Confirm published fix versions, support additions, exclusions and floor/cap/privacy changes before release.
 - Agents receive a human-claimed handoff with a one-open-repair-PR marker guard. This reporter never starts an agent, invokes vendors, spends money, opens repair PRs, pushes code or merges. Slack/Linear delivery is disabled; GitHub issues are canonical.
 - New integrations need a real upstream SDK contract, exact floor/family/runtime evidence, aligned metadata/guards, privacy assertions, clean built-consumer checks, no empty/skip success, and a successful scheduled result before qualification.

@@ -105,6 +105,106 @@ def schema_validate(data, filename):
         raise ValueError(f"{filename}: invalid data at {list(errors[0].path)} ({errors[0].validator})")
 
 
+def placeholder(case):
+    """Collector metadata is not an observed execution runtime."""
+    return (case["status"] == "blocked" and case["failure"] is not None
+            and case["failure"]["kind"] == "automation" and not case["resolved"]
+            and case["dependency_lock"] is None and not case["contract"]["tests"]
+            and not case["contract"]["junit_paths"] and case["contract"]["executed"] == 0)
+
+
+def validate_plan_snapshot(raw):
+    """Validate the ABI fields we consume before indexing any plan content."""
+    plan = json.loads(raw)
+    if not isinstance(plan, dict) or any(key not in plan for key in
+            ("source_sha", "workflow_sha", "self_test", "cases")):
+        raise ValueError("invalid retained plan shape")
+    if not isinstance(plan["cases"], list) or not plan["cases"] or not isinstance(plan["self_test"], bool):
+        raise ValueError("invalid retained plan cases/self-test")
+    ids = set()
+    for selected in plan["cases"]:
+        if not isinstance(selected, dict) or any(key not in selected for key in
+                ("case_id", "integration_id", "mode", "selector", "requested", "runtime")):
+            raise ValueError("invalid retained plan case")
+        if (not isinstance(selected["case_id"], str) or selected["case_id"] in ids
+                or not isinstance(selected["runtime"], str) or not isinstance(selected["requested"], list)):
+            raise ValueError("invalid/duplicate retained plan selection")
+        ids.add(selected["case_id"])
+    return plan
+
+
+def lock_packages(content, format, language):
+    """Read data only. Unsupported/native formats cannot certify an install tuple."""
+    packages = {}
+    def add(name, version):
+        if not isinstance(name, str) or not isinstance(version, str) or not name or not version:
+            raise ValueError("invalid lock package metadata")
+        key = name_key(name, language)
+        if key in packages:
+            raise ValueError("duplicate lock distribution")
+        packages[key] = version
+    if language == "python" and format == "pip-freeze":
+        from urllib.parse import unquote, urlsplit
+        for line in content.decode("utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            pinned = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:===|==)([A-Za-z0-9][A-Za-z0-9.!+_-]*)", line)
+            if pinned:
+                add(*pinned.groups())
+                continue
+            # pip freeze records installed source wheels as direct references.
+            # The wheel filename carries the version; never dereference the URL.
+            direct = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*) @ (\S+)", line)
+            if direct:
+                name, url = direct.groups()
+                wheel = unquote(urlsplit(url).path).rsplit("/", 1)[-1]
+                parts = wheel[:-4].split("-") if wheel.endswith(".whl") else []
+                if len(parts) in (5, 6) and name_key(parts[0], language) == name_key(name, language):
+                    add(name, parts[1])
+                    continue
+            raise ValueError("unverifiable pip-freeze entry")
+    elif language == "python" and format == "pip-report":
+        data = json.loads(content)
+        if not isinstance(data, dict) or not isinstance(data.get("install"), list):
+            raise ValueError("invalid pip-report")
+        for item in data["install"]:
+            if not isinstance(item, dict) or not isinstance(item.get("metadata"), dict):
+                raise ValueError("invalid pip-report metadata")
+            add(item["metadata"].get("name"), item["metadata"].get("version"))
+    else:
+        raise ValueError("unsupported dependency lock format for evidence verification")
+    return packages
+
+
+def junit_outcomes(content):
+    if b"<!DOCTYPE" in content.upper() or b"<!ENTITY" in content.upper():
+        raise ValueError("JUnit DTD/entities are forbidden")
+    try:
+        xml = ET.fromstring(content)
+    except ET.ParseError:
+        raise ValueError("malformed JUnit") from None
+    observed = {}
+    for node in xml.iter("testcase"):
+        file, name, classname = node.get("file", ""), node.get("name", ""), node.get("classname", "")
+        if not name or not (file or classname):
+            raise ValueError("JUnit lacks canonical test identity")
+        if file:
+            path = PurePosixPath(file)
+            if path.is_absolute() or ".." in path.parts or "\\" in file:
+                raise ValueError("noncanonical JUnit file")
+            stem = file.removesuffix(".py").replace("/", ".")
+            cls = classname[len(stem) + 1:] if classname.startswith(stem + ".") else ""
+            test_id = file + "::" + (cls + "::" if cls else "") + name
+        else:
+            test_id = classname.replace(".", "/") + ".py::" + name
+        outcomes = [kind for kind in ("failure", "error", "skipped") if node.find(kind) is not None]
+        if len(outcomes) > 1 or test_id in observed:
+            raise ValueError("duplicate/contradictory JUnit test identity")
+        observed[test_id] = outcomes[0] if outcomes else "passed"
+    return observed
+
+
 def validate_bundle(bundle, registry, now, *, artifact_root=None, plan_bytes=None):
     schema_validate(bundle, "results.schema.json")
     run = bundle["run"]
@@ -126,7 +226,7 @@ def validate_bundle(bundle, registry, now, *, artifact_root=None, plan_bytes=Non
     if plan_bytes is not None:
         if hashlib.sha256(plan_bytes).hexdigest() != run["plan_sha256"]:
             raise ValueError("plan digest mismatch")
-        plan = json.loads(plan_bytes)
+        plan = validate_plan_snapshot(plan_bytes)
         if plan["source_sha"] != run["source_sha"] or plan["workflow_sha"] != run["workflow_sha"]:
             raise ValueError("plan SHA identity mismatch")
         if plan["self_test"] != run["self_test"] or [c["case_id"] for c in plan["cases"]] != planned:
@@ -144,8 +244,9 @@ def validate_bundle(bundle, registry, now, *, artifact_root=None, plan_bytes=Non
             selection = planned_cases[case["case_id"]]
             if any(selection.get(key) != case[key] for key in ("integration_id", "mode", "selector", "requested")):
                 raise ValueError("case selection differs from retained plan")
-            if case["language"] == "python" and not (case["runtime"]["version"] == selection.get("runtime") or
-                    case["runtime"]["version"].startswith(str(selection.get("runtime")) + ".")):
+            if case["language"] == "python" and not placeholder(case) and not (
+                    case["runtime"]["version"] == selection["runtime"] or
+                    case["runtime"]["version"].startswith(selection["runtime"] + ".")):
                 raise ValueError("actual runtime differs from plan")
         target = targets.get(case["integration_id"])
         if not target or case["language"] != target["language"] or case["source_sha"] != run["source_sha"]:
@@ -185,31 +286,29 @@ def validate_bundle(bundle, registry, now, *, artifact_root=None, plan_bytes=Non
             lock_path = safe_path(artifact_root, lock["path"])
             if lock_path.stat().st_size > 8 * 1024 * 1024:
                 raise ValueError("oversized dependency lock")
-            if hashlib.sha256(lock_path.read_bytes()).hexdigest() != lock["sha256"]:
+            content = lock_path.read_bytes()
+            if hashlib.sha256(content).hexdigest() != lock["sha256"]:
                 raise ValueError("dependency lock digest mismatch")
-        if artifact_root is not None and contract["junit_paths"]:
-            observed = {outcome: 0 for outcome in ("passed", "failure", "error", "skipped")}
+            locked = lock_packages(content, lock["format"], case["language"])
+            if any(locked.get(name) != package["version"] for name, package in resolved.items()):
+                raise ValueError("dependency lock contradicts resolved versions")
+        if artifact_root is not None:
+            observed = {}
             for relative in contract["junit_paths"]:
                 path = safe_path(artifact_root, relative)
                 if path.stat().st_size > 8 * 1024 * 1024:
                     raise ValueError("oversized JUnit")
-                content = path.read_bytes()
-                if b"<!DOCTYPE" in content.upper() or b"<!ENTITY" in content.upper():
-                    raise ValueError("JUnit DTD/entities are forbidden")
-                try:
-                    xml = ET.fromstring(content)
-                except ET.ParseError:
-                    raise ValueError("malformed JUnit") from None
-                for node in xml.iter("testcase"):
-                    outcome = next((k for k in ("error", "failure", "skipped") if node.find(k) is not None), "passed")
-                    observed[outcome] += 1
-            if any(observed[k] != sum(t["outcome"] == k for t in tests) for k in observed):
-                raise ValueError("JUnit/JSON outcome count mismatch")
-        if case["status"] == "passed":
+                outcomes = junit_outcomes(path.read_bytes())
+                if observed.keys() & outcomes.keys():
+                    raise ValueError("duplicate JUnit test identity across files")
+                observed.update(outcomes)
+            if observed != {t["test_id"]: t["outcome"] for t in tests}:
+                raise ValueError("JUnit/JSON test identity/outcome mismatch")
+        if case["status"] in ("passed", "flaky"):
             minimum = (target.get("contract_test") or {}).get("minimum_executed", 1)
             if not lock or not contract["junit_paths"] or contract["executed"] < max(1, minimum):
                 raise ValueError("pass lacks executed contract/lock/JUnit")
-            if case["failure"] or any(t["outcome"] != "passed" for t in tests) or contract["unexpected_skips"]:
+            if (case["status"] == "passed" and case["failure"]) or any(t["outcome"] != "passed" for t in tests) or contract["unexpected_skips"]:
                 raise ValueError("false pass with failed/skipped tests")
             roles = {p["role"] for p in case["resolved"]}
             if not {"instrumentation", "core", "upstream"}.issubset(roles):
@@ -228,21 +327,44 @@ def validate_bundle(bundle, registry, now, *, artifact_root=None, plan_bytes=Non
                 if not actual or actual["role"] != package["role"] or (package["selected_version"] is not None and
                         package["selected_version"] != actual["version"]):
                     raise ValueError("requested/resolved mismatch")
-            for discovery in case["discovery"]:
-                actual = resolved.get(name_key(discovery["name"], case["language"]))
-                if not actual or discovery["resolved_version"] != actual["version"] or discovery["yanked"]:
-                    raise ValueError("discovery/resolved mismatch or yanked pass")
+            discoveries = {name_key(d["name"], case["language"]): d for d in case["discovery"]}
+            tuple_names = {name for name, p in resolved.items() if p["role"] in ("upstream", "companion")}
+            if len(discoveries) != len(case["discovery"]) or set(discoveries) != tuple_names or not expected_names.issubset(discoveries):
+                raise ValueError("pass lacks complete discovery provenance")
+            for name, discovery in discoveries.items():
+                actual, wanted = resolved[name], requested.get(name)
+                if (not wanted or discovery["requested_version"] != wanted["selected_version"] or
+                        discovery["resolved_version"] != actual["version"] or discovery["yanked"]):
+                    raise ValueError("discovery/requested/resolved mismatch or yanked pass")
+                release_at = discovery["published_at"] or discovery["first_seen_at"]
+                if not release_at or timestamp(release_at) > timestamp(run["cooldown_cutoff"]):
+                    raise ValueError("selected release lacks proven 72-hour cooldown")
+                if discovery["first_seen_at"] and timestamp(discovery["first_seen_at"]) > timestamp(run["completed_at"]):
+                    raise ValueError("future discovery timestamp")
                 if case["selector"] == "latest_eligible" and actual["version"] != discovery["latest_eligible"]:
                     raise ValueError("latest-eligible claim does not match tested version")
-        if case["status"] in ("failed", "flaky", "quarantined") and not case["failure"]:
+        if case["status"] in ("failed", "quarantined") and not case["failure"]:
             raise ValueError("failure status without signature")
     if {cid for cid, attempt in seen if attempt == 1} != set(planned):
         raise ValueError("missing planned result/first attempt")
     for case in bundle["cases"]:
-        if case["attempt"] == 2 and case["status"] == "passed":
+        if case["status"] == "flaky" and case["attempt"] != 2:
+            raise ValueError("flaky requires a retained failed first attempt")
+        if case["attempt"] == 2:
             first = next(c for c in bundle["cases"] if c["case_id"] == case["case_id"] and c["attempt"] == 1)
-            if first["status"] != "passed":
+            if case["requested"] != first["requested"]:
+                raise ValueError("retry selection differs from original attempt")
+            if case["status"] == "passed" and first["status"] != "passed":
                 raise ValueError("fail-then-pass retry must remain flaky")
+            if case["status"] == "flaky":
+                if first["status"] not in ("failed", "blocked", "quarantined") or first["failure"] is None:
+                    raise ValueError("flaky lacks retained original failure")
+                if case["failure"] is not None and case["failure"] != first["failure"]:
+                    raise ValueError("flaky failure differs from retained original failure")
+            if first["dependency_lock"] and case["dependency_lock"] and (
+                    first["dependency_lock"]["sha256"] != case["dependency_lock"]["sha256"] or
+                    first["dependency_lock"]["format"] != case["dependency_lock"]["format"]):
+                raise ValueError("retry changed the installed dependency lock")
     return bundle
 
 
@@ -304,10 +426,32 @@ def verify_provenance(bundle, metadata, api):
         raise ValueError("run/attempt mismatch")
     if metadata["head_sha"] != run["workflow_sha"] or metadata["event"] != run["event"] or metadata["html_url"] != run["url"]:
         raise ValueError("workflow SHA/event/URL mismatch")
-    if metadata.get("run_started_at") and timestamp(run["started_at"]) < timestamp(metadata["run_started_at"]) - timedelta(minutes=5):
-        raise ValueError("artifact starts before GitHub run")
+    attempts = {metadata["run_attempt"]: metadata}
+    if run["run_attempt"] > 2:
+        raise ValueError("only the original attempt and one retry are supported")
+    if run["run_attempt"] > 1:
+        attempts[1] = api.request(f"/repos/{REPO}/actions/runs/{run['run_id']}/attempts/1")
+        first = attempts[1]
+        if (str(first.get("id")) != run["run_id"] or first.get("run_attempt") != 1 or
+                first.get("head_sha") != run["workflow_sha"] or first.get("event") != run["event"]):
+            raise ValueError("original attempt provenance mismatch")
+    original = attempts[1]
+    if original.get("run_started_at") and timestamp(run["started_at"]) < timestamp(original["run_started_at"]) - timedelta(minutes=5):
+        raise ValueError("artifact starts before original GitHub attempt")
+    if original.get("updated_at") and timestamp(run["started_at"]) > timestamp(original["updated_at"]) + timedelta(minutes=5):
+        raise ValueError("retained plan starts after original GitHub attempt")
     if metadata.get("updated_at") and timestamp(run["completed_at"]) > timestamp(metadata["updated_at"]) + timedelta(minutes=5):
         raise ValueError("artifact completes after GitHub run")
+    for case in bundle["cases"]:
+        if placeholder(case):
+            continue  # A collector placeholder is explicitly not execution evidence.
+        attempt = attempts.get(case["attempt"])
+        if attempt is None:
+            raise ValueError("case has no matching GitHub attempt")
+        if attempt.get("run_started_at") and timestamp(case["started_at"]) < timestamp(attempt["run_started_at"]) - timedelta(minutes=5):
+            raise ValueError("case starts before its GitHub attempt")
+        if attempt.get("updated_at") and timestamp(case["completed_at"]) > timestamp(attempt["updated_at"]) + timedelta(minutes=5):
+            raise ValueError("case completes after its GitHub attempt")
     # The scheduler can execute main code while testing a distinct immutable dev
     # SHA. Require source ancestry in a trusted branch, not equality to workflow SHA.
     comparison = api.request(f"/repos/{REPO}/compare/{run['source_sha']}...dev")
@@ -329,13 +473,12 @@ def github_results(api, registry, now, selected_run=None):
             continue
         if meta.get("head_repository", {}).get("full_name") != REPO or meta.get("path") != CANARY:
             continue
-        artifacts = api.pages(f"actions/runs/{meta['id']}/artifacts", "artifacts", max_pages=2)
-        matches = [a for a in artifacts if a["name"] == "compatibility-results" and not a["expired"]]
-        if not matches:
-            # Early rollout has self-test-only dev runs with no live artifact;
-            # heartbeat detects missing expected live sweeps instead of inventing a pass.
-            continue
         try:
+            artifacts = api.pages(f"actions/runs/{meta['id']}/artifacts", "artifacts", max_pages=2)
+            matches = [a for a in artifacts if a["name"] == "compatibility-results" and not a["expired"]]
+            if not matches:
+                # Heartbeat detects a missing expected sweep, never invent a pass.
+                continue
             if len(matches) != 1 or matches[0]["size_in_bytes"] > MAX_ARCHIVE:
                 raise ValueError("duplicate/oversized aggregate artifact")
             archive = api.request(f"/repos/{REPO}/actions/artifacts/{matches[0]['id']}/zip", binary=True)
@@ -343,13 +486,14 @@ def github_results(api, registry, now, selected_run=None):
                 root = Path(tmp)
                 extract_archive(archive, root)
                 bundle = load_json(safe_path(root, "results.json"))
-                if bundle["run"].get("self_test"):
+                schema_validate(bundle, "results.schema.json")
+                if bundle["run"]["self_test"]:
                     continue
                 validate_bundle(bundle, registry, now, artifact_root=root,
                                 plan_bytes=safe_path(root, "compat-plan.json").read_bytes())
                 verify_provenance(bundle, meta, api)
                 bundles.append(bundle)
-        except (ValueError, KeyError, OSError, zipfile.BadZipFile) as exc:
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, zipfile.BadZipFile) as exc:
             # Failure text contains no artifact payload. Preserve the broken run
             # as a health incident; malformed evidence must not disappear silently.
             errors.append({"id": f"invalid-run:{meta['id']}",
