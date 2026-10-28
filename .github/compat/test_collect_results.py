@@ -84,6 +84,7 @@ class CollectorTests(unittest.TestCase):
         self.mock.start(); self.addCleanup(self.mock.stop)
         self.env = patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"})
         self.env.start(); self.addCleanup(self.env.stop)
+        os.environ.pop("GITHUB_RUN_ID", None)
 
     def collect(self, plan, artifacts, output, **kwargs):
         return collect(plan, artifacts, output, SCHEMA, source_root=plan, **kwargs)

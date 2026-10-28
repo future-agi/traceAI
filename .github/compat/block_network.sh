@@ -16,6 +16,7 @@ if [[ "${1:-}" != --inside ]]; then
   # Set up mounts while privileged, BEFORE any dependency code starts. unshare
   # below maps namespace root to host nobody, NOT host root. Each job is ephemeral.
   args=(--die-with-parent --new-session --unshare-pid --unshare-net --unshare-ipc --unshare-uts
+    --cap-add CAP_NET_ADMIN --cap-add CAP_SYS_ADMIN --cap-add CAP_SETUID --cap-add CAP_SETGID --cap-add CAP_SETPCAP
     --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /sbin /sbin --ro-bind /lib /lib
     --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --tmpfs /home
     --dir /etc --ro-bind "$root" "$root" --bind "$output" "$output"

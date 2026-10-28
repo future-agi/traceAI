@@ -124,7 +124,8 @@ pathlib.Path(OUTPUT).write_text(json.dumps(dict(host_uid=65534, private_file='ab
                     for command in ([str(python), '-I', '-c', 'import importlib.metadata; print("inventory")'],
                                     [str(python), '-I', '-c', 'import runpy; print("freeze")']):
                         result = subprocess.run(sandbox(root, output, Path(sys.base_prefix).resolve(), consumer, command),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, timeout=60)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+                        self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertIn('"host_uid": 65534', result.stderr)
                         self.assertEqual(json.loads((output / 'startup.json').read_text())['host_socket'], 'denied')
                     self.assertFalse((root / 'escape-write').exists())
