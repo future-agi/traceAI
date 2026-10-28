@@ -357,6 +357,21 @@ class CanonicalBoundaryTests(unittest.TestCase):
         self.assertEqual(kwargs['plan_bytes'], raw)
         self.assertEqual(kwargs['expected_case_ids'], bundle['run']['planned_case_ids'])
 
+    def test_nested_canonical_sidecars_are_controlled_validation_errors(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for failure in (RecursionError, ImportError):
+            module = SimpleNamespace(validate_results=Mock(side_effect=failure))
+            spec = SimpleNamespace(loader=SimpleNamespace(exec_module=Mock()))
+            selected = {k: RUNS[-1]['cases'][0][k] for k in ('case_id', 'integration_id', 'mode', 'selector', 'requested')}
+            selected['runtime'] = '3.11'
+            raw = json.dumps(dict(source_sha=RUNS[-1]['run']['source_sha'], workflow_sha=RUNS[-1]['run']['workflow_sha'],
+                                  self_test=False, cases=[selected])).encode()
+            with patch('report.Path.is_file', return_value=True), \
+                    patch('report.importlib.util.spec_from_file_location', return_value=spec), \
+                    patch('report.importlib.util.module_from_spec', return_value=module), self.assertRaises(ValueError):
+                canonical_validate(RUNS[-1], REGISTRY, Path('/artifact'), raw, Path('/static-source'))
+
     def source_api(self, mode='100644', corrupt=False):
         import base64
         content = b'raise AssertionError("source is static data, never executed")\n'

@@ -465,14 +465,19 @@ def canonical_validate(bundle, registry, artifact_root, plan_bytes, source_root)
     path = Path(__file__).with_name("validate.py")
     if not path.is_file():
         raise ValueError("canonical validator must be absorbed before production reporting")
-    spec = importlib.util.spec_from_file_location("compat_trusted_validator", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    plan = validate_plan_snapshot(plan_bytes)
-    return module.validate_results(bundle, registry, expected_source_sha=plan["source_sha"],
-                                   expected_case_ids=[c["case_id"] for c in plan["cases"]],
-                                   artifact_root=artifact_root, source_root=source_root,
-                                   expected_plan=plan, plan_bytes=plan_bytes)
+    try:
+        spec = importlib.util.spec_from_file_location("compat_trusted_validator", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        plan = validate_plan_snapshot(plan_bytes)
+        return module.validate_results(bundle, registry, expected_source_sha=plan["source_sha"],
+                                       expected_case_ids=[c["case_id"] for c in plan["cases"]],
+                                       artifact_root=artifact_root, source_root=source_root,
+                                       expected_plan=plan, plan_bytes=plan_bytes)
+    except RecursionError:
+        raise ValueError("canonical evidence exceeds nesting limit") from None
+    except ImportError:
+        raise ValueError("canonical validator dependency is unavailable") from None
 
 
 def snapshot_source(api, bundle, registry, destination):
