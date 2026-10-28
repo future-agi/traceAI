@@ -51,7 +51,7 @@ const observability = new VoltAgentObservability({
 });
 
 const agent = new Agent({ name: "assistant", instructions: "...", model: /* AI SDK model */ });
-new VoltAgent({ agents: { assistant: agent }, observability });
+const app = new VoltAgent({ agents: { assistant: agent }, observability });
 ```
 
 The constructor warns (`console.warn`) when the provider you pass is the global one.
@@ -192,9 +192,10 @@ VoltAgent itself has no capture flag; a VoltOps export of the same run still has
   `await observability.forceFlush()` (VoltAgent flushes every processor) or
   `await processor.forceFlush()`. VoltAgent ends some memory spans in the background just after
   `generateText` resolves, so flush at the end of the handler.
-- A one-off script does not exit after `forceFlush()`: `new VoltAgent()` keeps the process running
-  (it installs signal handlers for a graceful shutdown). End it with
-  `await observability.shutdown()`, which flushes every processor too.
+- For full application cleanup, keep the `VoltAgent` instance and call `await app.shutdown()`
+  in a `finally` block; shutting down observability alone does not stop all application resources.
+  Also call `await tracerProvider.shutdown()` when the script owns that provider.
+  See the resumed-workflow limitation below.
 - On platforms with `waitUntil`, VoltAgent's serverless observability can flush in the background:
   `setWaitUntil(waitUntil: (promise: Promise<unknown>) => void)` from `@voltagent/core`
   (`src/observability/wait-until.ts`).
@@ -205,6 +206,29 @@ VoltAgent itself has no capture flag; a VoltOps export of the same run still has
   `shutdown()` flushes it but never shuts it down.
 - A collector that is down or rejects a batch never fails the agent: export errors are logged
   through the OpenTelemetry diag logger, and `forceFlush()` / `shutdown()` never throw.
+
+## Known upstream issue: resumed workflows in 2.11.0
+
+With `@voltagent/core` **2.11.0**, a successfully resumed workflow leaves a referenced
+**500 ms polling interval** running after completion, including after
+`await app.shutdown()`. A Node process that resumes workflows may therefore not exit
+on its own. This also reproduces with VoltAgent alone, without importing traceAI;
+the traceAI processor is not the cause. Ordinary, non-resumed workflows are unaffected
+by this particular leak.
+
+Use the documented lifecycle: convert a workflow builder with `.toWorkflow()` once,
+register and reuse that instance, then call `await app.shutdown()` for full cleanup.
+That does **not** recover the orphaned interval in 2.11.0. There is no supported public
+API to dispose of this completed resumed step's interval. In a **short-lived script**,
+after awaiting application shutdown and flushing/shutting down exporters you own,
+call `process.exit(0)` (or a nonzero status on failure) as a last step. Do not add a
+forced exit to a long-running server, and do not manipulate VoltAgent's private timers.
+
+The resume-event Jest tests retain all assertions and full application teardown in a
+separate invocation. Its runner explicitly exits only after Jest returns its actual
+pass/fail result, to bound this upstream leak; ordinary tests run separately with
+open-handle detection and no forced exit. The contract fixture uses the same exit
+only for its resume journey, after flushing output and shutdown.
 
 ## Tested versions
 

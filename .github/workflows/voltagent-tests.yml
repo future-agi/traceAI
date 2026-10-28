@@ -55,9 +55,9 @@ jobs:
         run: |
           pnpm run build:deps
           pnpm --filter @traceai/voltagent run build
-      - name: Unit tests and natural process shutdown
+      - name: Unit tests (natural shutdown) and isolated upstream resume regression
         working-directory: typescript
-        run: timeout 180 pnpm --filter @traceai/voltagent test --runInBand
+        run: timeout 180 pnpm --filter @traceai/voltagent test
       - name: Real VoltAgent exporter contract (offline model)
         run: |
           python -m pip install pytest protobuf opentelemetry-proto jsonschema requests

@@ -3,6 +3,8 @@ module.exports = {
   testEnvironment: 'node',
   setupFiles: ['<rootDir>/test/environment.cjs'],
   roots: ['<rootDir>/src'],
+  // The known upstream resume timer leak is isolated; no forceExit for ordinary tests.
+  testPathIgnorePatterns: ['workflow-resume\\.test\\.ts$'],
   testMatch: [
     '**/__tests__/**/*.test.ts',
     '**/?(*.)+(spec|test).ts'

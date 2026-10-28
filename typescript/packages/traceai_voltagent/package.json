@@ -17,11 +17,13 @@
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
-    "test": "jest",
+    "test": "pnpm run test:unit && pnpm run test:resume",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "test:coverage": "pnpm run test:unit --coverage && pnpm run test:resume",
     "lint": "eslint . --ext .ts",
-    "prepare": "pnpm run build"
+    "prepare": "pnpm run build",
+    "test:unit": "jest --runInBand --detectOpenHandles",
+    "test:resume": "node test/run-resume.cjs"
   },
   "files": [
     "dist",

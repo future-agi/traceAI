@@ -146,6 +146,7 @@ const observability = new VoltAgentObservability({ spanProcessors: [recorder, pr
 
 const result = { journey: JOURNEY, hidden: HIDDEN, cwd: process.cwd() };
 const started = Date.now();
+let app;
 
 if (JOURNEY === "subagent") {
   const researcher = new Agent({
@@ -166,7 +167,7 @@ if (JOURNEY === "subagent") {
     ]),
     subAgents: [researcher],
   });
-  new VoltAgent({ agents: { supervisor, researcher }, observability, checkDependencies: false });
+  app = new VoltAgent({ agents: { supervisor, researcher }, observability, checkDependencies: false });
   const out = await supervisor.generateText(MARKERS.prompt, { conversationId: "conv-sub", userId: "user-1", maxSteps: 4 });
   result.text = out.text;
 } else if (JOURNEY === "events") {
@@ -197,8 +198,8 @@ if (JOURNEY === "subagent") {
       if (!resumeData) await suspend("needs approval", { question: data.question });
       return { approved: resumeData?.approved === true };
     },
-  });
-  new VoltAgent({ agents: { assistant: agent }, workflows: { approval: workflow }, observability, checkDependencies: false });
+  }).toWorkflow();
+  app = new VoltAgent({ agents: { assistant: agent }, workflows: { approval: workflow }, observability, checkDependencies: false });
   const stream = await agent.streamText(MARKERS.prompt, { conversationId: "conv-events", userId: "user-9" });
   result.text = await stream.text;
   const suspended = await workflow.run({ amount: 5, question: MARKERS.suspendData });
@@ -211,7 +212,7 @@ if (JOURNEY === "subagent") {
     model: scriptedModel("mockai/mock-model-1", toolSteps()),
     tools: [weatherTool, explodingTool],
   });
-  new VoltAgent({ agents: { assistant: agent }, observability, checkDependencies: false });
+  app = new VoltAgent({ agents: { assistant: agent }, observability, checkDependencies: false });
   const runs = JOURNEY === "burst" ? BURST : 1;
   const texts = [];
   for (let i = 0; i < runs; i += 1) {
@@ -241,8 +242,12 @@ const storedCounts = [];
 for (const traceId of traceIds) storedCounts.push((await observability.getTraceFromStorage(traceId)).length);
 result.storedCount = storedCounts.reduce((sum, count) => sum + count, 0);
 result.modelCalls = modelCalls;
+await app.shutdown();
 await processor.shutdown();
 await tracerProvider.shutdown().catch(() => undefined);
 result.totalMs = Date.now() - started;
-process.stdout.write(`\nRESULT_JSON:${JSON.stringify(result)}\n`);
-process.exit(0);
+await new Promise((resolve) => process.stdout.write(`\nRESULT_JSON:${JSON.stringify(result)}\n`, resolve));
+// @voltagent/core 2.11.0 leaks a referenced 500 ms interval after resume, even
+// after public app.shutdown(). Only this fixture journey needs the documented
+// short-lived-script workaround. All other journeys must exit naturally.
+if (JOURNEY === "events") process.exit(0);

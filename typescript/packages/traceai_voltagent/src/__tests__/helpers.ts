@@ -171,15 +171,18 @@ export function fiProvider() {
   return { exporter, provider };
 }
 
-/** Wire agents (and workflows) into a fresh VoltAgentObservability whose spanProcessors are `processors`. */
+/** Wire agents and workflows into a fresh app; callers must run the full public app.shutdown(). */
 export function voltagent(
   agents: Record<string, Agent>,
   processors: SpanProcessor[],
   workflows?: Record<string, ReturnType<typeof approvalWorkflow>>,
 ) {
   const observability = new VoltAgentObservability({ spanProcessors: processors });
-  new VoltAgent({ agents, workflows, observability, checkDependencies: false });
-  return observability;
+  const app = new VoltAgent({ agents, workflows, observability, checkDependencies: false });
+  return {
+    shutdown: () => app.shutdown(),
+    getTraceFromStorage: observability.getTraceFromStorage.bind(observability),
+  };
 }
 
 /**
@@ -217,7 +220,7 @@ export function approvalWorkflow() {
       if (!resumeData) await suspend("needs approval", { question: data.question });
       return { approved: resumeData?.approved === true };
     },
-  });
+  }).toWorkflow();
 }
 
 /** VoltAgentObservability registers its provider globally; reset between tests. */
