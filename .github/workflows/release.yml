@@ -146,6 +146,9 @@ jobs:
     name: Python core
     needs: plan
     if: needs.plan.outputs.python_core != '[]'
+    permissions:
+      contents: write
+      id-token: write
     uses: ./.github/workflows/release-python.yml
     with:
       packages: ${{ needs.plan.outputs.python_core }}
@@ -160,6 +163,9 @@ jobs:
       !cancelled() && needs.plan.result == 'success'
       && (needs.python-core.result == 'success' || needs.python-core.result == 'skipped')
       && needs.plan.outputs.python != '[]'
+    permissions:
+      contents: write
+      id-token: write
     uses: ./.github/workflows/release-python.yml
     with:
       packages: ${{ needs.plan.outputs.python }}
@@ -170,6 +176,9 @@ jobs:
     name: TypeScript core
     needs: plan
     if: needs.plan.outputs.typescript_core != '[]'
+    permissions:
+      contents: write
+      id-token: write
     uses: ./.github/workflows/release-typescript.yml
     with:
       packages: ${{ needs.plan.outputs.typescript_core }}
@@ -183,6 +192,9 @@ jobs:
       !cancelled() && needs.plan.result == 'success'
       && (needs.typescript-core.result == 'success' || needs.typescript-core.result == 'skipped')
       && needs.plan.outputs.typescript != '[]'
+    permissions:
+      contents: write
+      id-token: write
     uses: ./.github/workflows/release-typescript.yml
     with:
       packages: ${{ needs.plan.outputs.typescript }}
