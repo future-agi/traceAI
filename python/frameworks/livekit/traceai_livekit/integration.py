@@ -348,9 +348,10 @@ def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
     if not swapped_any:
         logger.warning(f"No {transport.value} exporters found to replace")
     
-    # `register()` marks its own exporter as a default that the next `add_span_processor` call
-    # replaces. LiveKit adds its privacy filter through `add_span_processor`, which would shut the
-    # exporter down and send nothing. Keep it: processors added from here on run alongside it.
+    # On fi-instrumentation-otel 1.1.0 and earlier, `register()` marks its own exporter as a default
+    # that the next `add_span_processor` call replaces. LiveKit adds its privacy filter through
+    # `add_span_processor`, which would shut the exporter down and send nothing. Keep it: processors
+    # added from here on run alongside it. Releases with the TH-8727 fix set no mark to clear.
     if getattr(provider, "_default_processor", False):
         provider._default_processor = False
 

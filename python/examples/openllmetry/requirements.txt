@@ -1,0 +1,7 @@
+# Not a traceAI package: these are the example's own dependencies.
+traceloop-sdk==0.62.4
+# traceloop-sdk 0.62.4 imports httpx and requests but declares neither, and
+# openai 3.x depends on httpx2, not httpx. Without them the import fails.
+httpx
+requests
+openai==3.24.0  # the version the contract test ran with; the instrumentor is pinned by traceloop-sdk
