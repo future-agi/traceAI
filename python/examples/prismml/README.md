@@ -143,7 +143,25 @@ The local server still receives the prompt. Future AGI masking does not change t
 - Starting or stopping the server, distributing weights, live GPU jobs, MLX server differences, benchmarks or model quality.
 - Tool execution and streaming tool calls.
 - Other products called Prism: the [ssimplifi Prism proxy guide](https://ssimplifi.com/guides/openai-compatible-api), [prism-proxy](https://git.sovereign-society.org/prism/prism-proxy), and [Prism PHP](https://mintlify.wiki/prism-php/prism/providers/overview).
-- This recipe is not tested against the live provider: the tests use a local fake of the OpenAI API. They do not start a Bonsai server or download weights.
+- The automated contract suite uses a local fake of the OpenAI API and does not download weights. The real-server check below is separate.
+
+## Real-server check
+
+On 2026-10-28 this recipe ran against the official PrismML `llama-server`
+release `prism-b10826-c9c34bc`, with the official
+`Ternary-Bonsai-2-2B-PQ2_0.gguf` weights (verified against the published SHA256SUMS).
+The Linux CPU server used `BONSAI_MODEL=2B`, `BONSAI_NGL=0`, `BONSAI_CTX=4096`,
+`BONSAI_THINKING=0`, and `--alias bonsai`. The model and binary came from the
+[official demo](https://github.com/PrismML-Eng/Bonsai-demo) and its linked releases.
+
+With the pinned `openai==3.24.0`, `traceAI-openai==0.1.10`, and
+`fi-instrumentation-otel==1.1.0`, both the normal and `--stream` recipe commands
+returned answers. Their exported spans were read back in Future AGI Cloud:
+non-streamed calls had model `bonsai` and token usage; the default stream had
+answer text but no model or usage attributes, matching the published-version
+behavior described above. A separate call with input/output/invocation-parameter
+hiding enabled exported no prompt or answer text. This check covers the 2B text
+model on the llama.cpp server, not 27B tool calling, vision, or MLX.
 
 ## Tests
 
