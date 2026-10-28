@@ -26,6 +26,14 @@ from fi_instrumentation.fi_types import (
 )
 from fi_instrumentation.instrumentation.context_attributes import using_attributes
 
+try:
+    import anthropic.resources.completions  # noqa: F401
+
+    _HAS_LEGACY_COMPLETIONS = True
+except ImportError:
+    # anthropic>=1.0 removed the legacy Completions API entirely.
+    _HAS_LEGACY_COMPLETIONS = False
+
 
 class TestAnthropicFramework:
     """Test Anthropic framework instrumentation."""
@@ -81,11 +89,34 @@ class TestAnthropicFramework:
     def test_anthropic_import(self):
         """Test that we can import the Anthropic instrumentor."""
         assert AnthropicInstrumentor is not None
-        
+
         # Test basic instantiation
         instrumentor = AnthropicInstrumentor()
         assert instrumentor is not None
-    
+
+    def test_instrument_without_legacy_completions_api(self):
+        """anthropic>=1.0 removed anthropic.resources.completions entirely
+        (the legacy Text Completions API). instrument() must degrade to
+        wrapping only Messages instead of raising ImportError and
+        instrumenting nothing - regression test for that failure mode.
+        """
+        instrumentor = AnthropicInstrumentor()
+
+        with patch.dict(sys.modules, {"anthropic.resources.completions": None}):
+            instrumentor.instrument(tracer_provider=self.trace_provider)
+
+            try:
+                from anthropic.resources.messages import Messages
+
+                assert type(Messages.create).__name__ == 'BoundFunctionWrapper'
+                assert instrumentor._original_messages_create is not None
+                assert instrumentor._original_completions_create is None
+                assert instrumentor._original_async_completions_create is None
+            finally:
+                instrumentor.uninstrument()
+
+        assert type(Messages.create).__name__ != 'BoundFunctionWrapper'
+
     def test_anthropic_basic_instrumentation(self, mock_anthropic_requests):
         """Test basic Anthropic messages instrumentation."""
         # Initialize instrumentor
@@ -202,6 +233,10 @@ class TestAnthropicFramework:
         finally:
             instrumentor.uninstrument()
     
+    @pytest.mark.skipif(
+        not _HAS_LEGACY_COMPLETIONS,
+        reason="anthropic>=1.0 removed the legacy Completions API entirely",
+    )
     def test_anthropic_completions_legacy(self, mock_anthropic_requests):
         """Test Anthropic completions (legacy) instrumentation setup."""
         # Don't need to modify mock for this test - just testing setup
@@ -261,6 +296,10 @@ class TestAnthropicFramework:
         finally:
             instrumentor.uninstrument()
     
+    @pytest.mark.skipif(
+        not _HAS_LEGACY_COMPLETIONS,
+        reason="anthropic>=1.0 removed the legacy Completions API entirely",
+    )
     def test_instrumentor_uninstrumentation(self):
         """Test that uninstrumentation properly restores original behavior."""
         from anthropic.resources.messages import Messages
