@@ -144,7 +144,11 @@ at their original `locks/` paths or beneath
 `evidence/<case_id>/attempt-<attempt>/locks/` in the aggregate. Other lock adapters
 remain unqualified, not silently treated as equivalent to Python. Registry roles
 are bound to normalized distribution names; roles cannot be swapped and the same
-identity cannot occur under multiple roles.
+identity cannot occur under multiple roles. A truthful failed/blocked
+`requested_resolved_mismatch` observation may retain an actual installation that
+differs from the intended frozen report; validate both inventories and retain the
+mismatch, never replace actual observations with intended versions. This cannot
+attest passed/quarantined/flaky compatibility.
 
 `flaky` requires all the same successful execution validation as `passed`, plus a
 retained prior genuine failed/blocked attempt with failure evidence. It never

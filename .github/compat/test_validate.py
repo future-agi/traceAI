@@ -599,6 +599,25 @@ class ResultTests(unittest.TestCase):
             if mutation == 'first_flaky': first['status'] = 'flaky'
             with self.subTest(mutation=mutation), self.assertRaises(ValueError): self.validate(data, registry)
 
+    def test_truthful_failed_install_mismatch_retains_actual_observations_not_frozen_fiction(self):
+        data, registry = result_fixture(self.artifacts)
+        plan, raw = plan_fixture(data, self.artifacts)
+        case = data['cases'][0]
+        case.update(status='blocked', failure=dict(kind='requested_resolved_mismatch', signature='a'*64,
+            summary='Installed environment differs from frozen resolver report', test_ids=[]))
+        case['resolved'][0]['version'] = '0.99.0'
+        lock = self.artifacts / 'locks/freeze.txt'
+        lock.write_text(lock.read_text().replace('anthropic==0.41.0', 'anthropic==0.99.0'))
+        case['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+        self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
+        self.assertEqual(case['resolved'][0]['version'], '0.99.0')
+        case['failure']['kind'] = 'infrastructure'
+        with self.assertRaisesRegex(ValueError, 'frozen report|frozen resolution'):
+            self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
+        case['status'] = 'passed'; case['failure'] = None
+        with self.assertRaises(ValueError):
+            self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
+
     def test_lock_parsers_reject_malformed_duplicate_and_unknown_adapters(self):
         report = dict(version='1', install=[dict(metadata=dict(name='Sdk_Name', version='1.0'))])
         self.assertEqual(installed_distributions(json.dumps(report).encode(), 'pip-report'), {'sdk-name': '1.0'})

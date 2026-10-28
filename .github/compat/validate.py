@@ -434,7 +434,7 @@ def installed_distributions(raw, format):
     return identities
 
 
-def preserved_resolution(case, resolution, artifact_root):
+def preserved_resolution(case, resolution, artifact_root, *, observed_mismatch=False):
     """Original report/requirements bytes are bound by the immutable plan."""
     contents = {}
     for key in ('report', 'requirements'):
@@ -459,8 +459,8 @@ def preserved_resolution(case, resolution, artifact_root):
     require(contents['requirements'].decode() == '\n'.join(sorted(requirements)) + '\n', 'frozen requirements/report disagree')
     for row in case['resolved']:
         name = canonicalize_name(row['name'])
-        require(expected.get(name) == row['version'] and
-                digests.get(name) == row.get('artifact_sha256'), 'resolved artifact not in frozen report')
+        require(observed_mismatch or (expected.get(name) == row['version'] and
+                digests.get(name) == row.get('artifact_sha256')), 'resolved artifact not in frozen report')
     return expected
 
 
@@ -516,7 +516,13 @@ def reconcile_artifacts(case, artifact_root, resolution=None, plan_sha256=None):
         for row in case['resolved']:
             require(installed.get(canonicalize_name(row['name'])) == row['version'], 'installed lock/resolved mismatch')
         if resolution is not None:
-            require(installed == preserved_resolution(case, resolution, artifact_root), 'complete installed lock/frozen resolution mismatch')
+            mismatch = (case['status'] in ('failed', 'blocked') and case['failure'] is not None and
+                        case['failure']['kind'] == 'requested_resolved_mismatch')
+            frozen = preserved_resolution(case, resolution, artifact_root, observed_mismatch=mismatch)
+            require(installed == frozen or mismatch, 'complete installed lock/frozen resolution mismatch')
+            # A truthful failed install-mismatch row retains the actual complete
+            # inventory, not a fictional copy of the intended frozen environment.
+            # It can never attest passed/quarantined/flaky compatibility.
     if plan_sha256 is not None:
         reconcile_invocations(case, artifact_root, plan_sha256)
     paths = case['contract']['junit_paths']
