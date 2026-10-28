@@ -199,6 +199,15 @@ class SpanAttributes:
     """Prompts provided to a completions API."""
 
     # Input/Output values (OpenInference compat)
+    RAW_INPUT = "raw.input"
+    """The raw request body (e.g. the full provider request, messages included)"""
+
+    RAW_OUTPUT = "raw.output"
+    """The raw response body"""
+
+    LLM_PROMPT_TEMPLATE_VARIABLES = "llm.prompt_template.variables"
+    """JSON of the values filled into a prompt template"""
+
     OUTPUT_VALUE = "output.value"
     OUTPUT_MIME_TYPE = "output.mime_type"
     INPUT_VALUE = "input.value"
@@ -967,6 +976,7 @@ class FiLLMProviderValues(Enum):
     VERTEXAI = "vertexai"
     XAI = "xai"
     DEEPSEEK = "deepseek"
+    MINIMAX = "minimax"
 
 
 class ProjectType(Enum):
