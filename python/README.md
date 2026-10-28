@@ -261,7 +261,9 @@ These examples reuse existing instrumentation or configure tracing adapters.
 | OpenLIT | [Setup](examples/openlit/) |
 | OpenLLMetry (Traceloop SDK) | [Setup](examples/openllmetry/) |
 | OrcaRouter | [Setup](examples/orcarouter/) |
+| Perplexity Agent API | [Setup](examples/perplexity/) |
 | PrismML Bonsai | [Setup](examples/prismml/) |
+| Qwen (Alibaba Cloud Model Studio) | [Setup](examples/qwen/) |
 | Deep Agents (via LangChain) | [Setup](frameworks/langchain/README.md#deep-agents) |
 
 ## Environment Variables
