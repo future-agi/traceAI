@@ -39,14 +39,16 @@ def normalize(text):
     text = re.sub(r"\b0x[0-9a-fA-F]+\b", "<address>", text)
     text = re.sub(r"\b\d{4}-\d{2}-\d{2}[T ][\d:.+Z-]+", "<time>", text)
     text = re.sub(r"(?i)(api[_-]?key|token|authorization|password|secret)(\s*[=:]\s*)[^\s,;]+", r"\1\2<redacted>", text)
-    return " ".join(text.split())[:2000]
+    return " ".join(text.split())
 
 
 def failure(kind, summary, ids=()):
     summary = normalize(summary) or kind
     test_ids = sorted(set(ids))
+    # Hash the complete normalized behavior; truncate only the human-facing text.
+    # Otherwise large multi-test failures can collapse distinct later assertions.
     signature = sha256(json.dumps([kind, test_ids, summary], separators=(",", ":")).encode())
-    return {"kind": kind, "signature": signature, "summary": summary, "test_ids": test_ids}
+    return {"kind": kind, "signature": signature, "summary": summary[:2000], "test_ids": test_ids}
 
 
 def run_header(plan, plan_bytes):
@@ -270,8 +272,6 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             row["contract"].update(tests=tests, collected=len(tests), executed=sum(t["outcome"] != "skipped" for t in tests),
                                    unexpected_skips=sum(t["outcome"] == "skipped" for t in tests),
                                    junit_paths=[path.relative_to(output).as_posix()])
-            if row["contract"]["executed"]:
-                row["contract"]["scenarios"] = contract["scenarios"]
             if process.returncode not in (0, 1, 2, 3, 4, 5):
                 stage = "infrastructure"
                 raise ValueError(f"Runner crashed (exit {process.returncode}); exceptions cannot waive crashes")
@@ -289,6 +289,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                 row["failure"] = failure("contract", " | ".join(d["summary"] for d in details) or f"pytest exit {process.returncode}", [t["test_id"] for t in bad])
             else:
                 row["status"] = "passed"
+                row["contract"]["scenarios"] = contract["scenarios"]
     except (ValueError, OSError, subprocess.SubprocessError, ET.ParseError, KeyError) as error:
         kind = locals().get("stage", "resolution")
         row["status"] = "blocked" if kind in ("resolution", "install", "infrastructure") else "failed"

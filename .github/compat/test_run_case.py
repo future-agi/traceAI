@@ -50,6 +50,13 @@ class RunnerTests(unittest.TestCase):
         self.assertNotEqual(a["signature"], failure("contract", "AssertionError missing model", ["tests/test.py::test_sdk"])["signature"])
         self.assertNotIn("sensitive-value", normalize("api_key=sensitive-value"))
 
+    def test_long_failures_do_not_collapse_distinct_later_behavior(self):
+        prefix = "AssertionError: " + "same " * 500
+        a = failure("contract", prefix + "missing model", ["tests/test.py::test_sdk"])
+        b = failure("contract", prefix + "missing usage", ["tests/test.py::test_sdk"])
+        self.assertEqual(a["summary"], b["summary"])
+        self.assertNotEqual(a["signature"], b["signature"])
+
     def test_junit_path_traversal_and_duplicates_fail_closed(self):
         for xml in ('<testsuite><testcase file="../../bad.py" name="test"/></testsuite>',
                     '<testsuite><testcase name="test"/><testcase name="test"/></testsuite>',
