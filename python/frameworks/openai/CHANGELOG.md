@@ -1,5 +1,6 @@
 ## [Unreleased]
 ### Fixed
+- Chat streams used with `with` / `async with` retain the traced iterator and finish once on exhaustion or early context exit; context-body errors mark an unfinished span as ERROR.
 - Streamed and failed Chat Completions spans now carry `gen_ai.request.model` (the requested model); a successful non-streamed response still records the served model.
 - `gen_ai.provider.name` follows the client's `base_url` host for a small, explicit set of OpenAI-compatible vendors (Azure, Google, Vertex AI, DeepSeek, xAI, Mistral, Anthropic, Baseten, DashScope, Databricks, Lepton, Perplexity, OrcaRouter, Anannas, Doubleword). Unknown hosts, proxies and loopback servers keep `openai`. Previously the label was always `openai`, even for Azure and Google hosts.
 - Responses API: non-streamed `output.value` is valid JSON with `output.mime_type=application/json` (it was Python `str(dict)`) and leads with `output_text`; a string `input` is no longer JSON-quoted; text-only assistant messages are a flat `message.content`, so trace views show the answer instead of `{}`.
