@@ -93,6 +93,11 @@ class PublishTests(unittest.TestCase):
             case['completed_at'] = '2026-10-19T05:00:00Z'
             self.assertEqual(build_index([bundle], REGISTRY, NOW)['observations'][0]['status'], 'stale')
 
+    def test_weekly_observation_ages_out_at_the_eight_day_deadline(self):
+        bundle = copy.deepcopy(RUNS[-1])
+        bundle['cases'][0]['completed_at'] = '2026-10-20T12:00:00Z'
+        self.assertEqual(build_index([bundle], REGISTRY, NOW)['observations'][0]['status'], 'stale')
+
     def test_daily_observation_due_grace_and_weekend_are_per_scope(self):
         bundle = copy.deepcopy(RUNS[4])
         case = bundle['cases'][0]

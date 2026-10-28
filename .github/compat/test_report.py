@@ -709,8 +709,6 @@ class ProvenanceTests(unittest.TestCase):
             def pages(self, path, key, **kwargs):
                 if path.startswith('actions/artifacts?'):
                     return []
-                if path.startswith('actions/artifacts?'):
-                    return []
                 if path.startswith('actions/workflows/'):
                     return metadata
                 ident = int(path.split('/')[2])
@@ -809,6 +807,8 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(bad['issue_number'], 42)
         self.assertGreater(bad['age_days'], 30)
         self.assertEqual(bad['scopes'][0]['evidence']['run_id'], failed['run']['run_id'])
+        self.assertNotIn('test_ids', bad['scopes'][0]['evidence'])
+        self.assertNotIn('reproduction', bad['scopes'][0]['evidence'])
         self.assertIn('Unrecovered known-bad tuples', page)
         self.assertIn('1.93.1', page)
         self.assertIn('aged', page)

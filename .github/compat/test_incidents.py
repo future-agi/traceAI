@@ -474,6 +474,25 @@ class HeartbeatTests(unittest.TestCase):
                 recovered = reconcile([RUNS[-1]], [issue], REGISTRY, NOW)['actions']
                 self.assertTrue(any(a['key'] == action['key'] and a['state'] == 'closed' for a in recovered))
 
+    def test_legacy_run_health_requires_the_same_positive_validation(self):
+        from incidents import body_for
+        action = reconcile([], [], REGISTRY, NOW, [dict(id='invalid-run:1007', summary='Invalid artifact')])['actions'][0]
+        legacy = parse_issue(action)
+        legacy.pop('health_id')
+        issue = issue_for(dict(action, body=body_for(legacy)))
+        self.assertEqual(reconcile([], [issue], REGISTRY, NOW)['actions'], [])
+        self.assertEqual(reconcile([RUNS[-1]], [issue], REGISTRY, NOW)['actions'][0]['state'], 'closed')
+
+    def test_exception_health_needs_registry_removal_or_unexpired_replacement(self):
+        health = [dict(id='exception:expired-test', summary='Expired exception')]
+        issue = issue_for(reconcile([], [], REGISTRY, NOW, health)['actions'][0])
+        registry = self.enabled()
+        registry['integrations'][0]['exceptions'] = [dict(id='expired-test', expires='2026-10-28')]
+        self.assertEqual(reconcile([], [issue], registry, NOW)['actions'], [])
+        registry['integrations'][0]['exceptions'][0]['expires'] = '2026-10-29'
+        self.assertEqual(reconcile([], [issue], registry, NOW)['actions'][0]['state'], 'closed')
+        self.assertEqual(reconcile([], [issue], REGISTRY, NOW)['actions'][0]['state'], 'closed')
+
     def test_expired_exception_is_explicit(self):
         for expires in ('2026-10-27', '2026-10-28'):
             registry = self.enabled()

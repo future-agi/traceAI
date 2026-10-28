@@ -31,7 +31,11 @@ def known_bad_rows(states, registry, now, issues):
                      "status": state["status"], "signature": state["signature"], "summary": state["summary"],
                      "issue_number": numbers.get(state["key"]), "last_failure": failed_at,
                      "age_days": round(max(0, (now - timestamp(failed_at)).total_seconds() / 86400), 3),
-                     "scopes": [{"suite_sha256": scope["suite"], "evidence": scope["failure"]}
+                     # Keep durable references, not another copy of potentially
+                     # thousands of test IDs/argv already retained in the issue.
+                     "scopes": [{"suite_sha256": scope["suite"], "evidence": {
+                         k: scope["failure"][k] for k in ("run_id", "url", "at", "case_id", "mode", "runtime",
+                                                         "source_sha", "resolved", "dependency_lock")}}
                                 for _, scope in sorted(state["scopes"].items())]})
     return sorted(rows, key=lambda r: (r["integration_id"], r["id"]))
 
@@ -84,7 +88,7 @@ def build_index(runs, registry, now, *, fixture=False, states=(), issues=()):
         checked = timestamp(row["checked_at"])
         # Each observation ages on its own cadence. Missing another runtime,
         # selector or mode is a separate completeness/heartbeat health problem.
-        stale = checked < now - timedelta(days=8)
+        stale = checked <= now - timedelta(days=8)
         if daily:
             for days in range(18):
                 due = (now - timedelta(days=days)).replace(hour=3, minute=17, second=0, microsecond=0)
