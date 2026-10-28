@@ -278,6 +278,14 @@ class ValidationTests(unittest.TestCase):
         value = {'text': '[\\"' * 20000}
         self.assertEqual(decode_json(json.dumps(value)), value)
 
+    def test_plan_shape_does_not_impose_python_runtime_syntax_on_other_languages(self):
+        for runtime in ('20', '21', '8.0'):
+            selected = dict(case_id='native-deferred', integration_id='typescript-openai', mode='source',
+                            selector='latest_eligible', requested=[], runtime=runtime)
+            plan = dict(source_sha='a'*40, workflow_sha='b'*40, self_test=False, cases=[selected])
+            self.assertEqual(validate_plan_snapshot(json.dumps(plan).encode()), plan)
+        # Shape parsing does not enable native execution or claim qualification.
+
     def test_duplicate_json_keys_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'data.json'

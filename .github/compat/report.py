@@ -121,9 +121,8 @@ def validate_plan_snapshot(raw):
                 ("case_id", "integration_id", "mode", "selector", "requested", "runtime")):
             raise ValueError("invalid retained plan case")
         if (not isinstance(selected["case_id"], str) or selected["case_id"] in ids
-                or not isinstance(selected["runtime"], str)
-                or not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", selected["runtime"])
-                or not isinstance(selected["requested"], list)):
+                or not isinstance(selected["runtime"], str) or not selected["runtime"]
+                or len(selected["runtime"]) > 128 or not isinstance(selected["requested"], list)):
             raise ValueError("invalid/duplicate retained plan selection")
         identity = selected.get("runtime_identity")
         if identity is not None and (not isinstance(identity, dict) or any(

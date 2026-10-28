@@ -144,7 +144,7 @@ def state_validator():
     evidence_required = list(evidence_properties)
     evidence_properties.update(failure_kind=case["failure"]["anyOf"][0]["properties"]["kind"],
                                pre_execution={"type": "boolean"},
-                               planned_runtime={"type": "string", "pattern": r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$"},
+                               planned_runtime={"type": "string", "minLength": 1, "maxLength": 128},
                                planned_runtime_identity=case["runtime"])
     ev = obj(evidence_properties, evidence_required)
     watermark = {"type": "array", "prefixItems": [evidence_properties["run_id"], {"type": "integer", "minimum": 1},
