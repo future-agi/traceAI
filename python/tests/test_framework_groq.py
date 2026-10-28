@@ -666,9 +666,10 @@ def test_real_sdk_stream_output_and_privacy(hide_content):
     common = dict(id="local-stream", created=1, model="llama-3.1-70b-versatile",
                   object="chat.completion.chunk")
     chunks = [
-        ChatCompletionChunk(**common, choices=[{"index": 0, "delta": {"content": "private-"}}]),
+        ChatCompletionChunk(**common, choices=[{"index": 0, "delta": {"content": "private-"}}],
+                            x_groq={"id": "local-stream", "usage": None, "error": None}),
         ChatCompletionChunk(**common, choices=[{"index": 0, "delta": {"content": "answer"}}],
-                            x_groq={"usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}}),
+                            x_groq={"id": "local-stream", "error": None, "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}}),
     ]
     attributes = list(_as_streaming_output(chunks))
     assert len(attributes) == len(dict(attributes))
