@@ -24,7 +24,6 @@ llama_index | 14 tests: llama_index.core.base.agent no longer exists; 1 expects 
 mcp | 1 test expects two instrumentation dependencies, the package declares one
 mistralai | 1 test expects raw.input where the code now writes input.value
 ollama | 2 tests expect llm.system; 2 expect generated text and embedding size that are no longer recorded
-openai-agents | its own tests do not load (conftest imports traceai_openai, not installed); 2 core tests expect raw.output and a trace-start call
 pinecone | 5 tests error: pinecone-client is now a stub that raises "renamed to pinecone"; the package has to move to the pinecone package
 portkey | 10 tests expect pre-GenAI attribute names (llm.model_name, llm.invocation_parameters)
 pydantic-ai | 1 test builds an agent with model "test-model", which pydantic-ai no longer accepts
