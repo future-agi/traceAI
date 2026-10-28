@@ -90,6 +90,8 @@ jobs:
     permissions:
       contents: read
       actions: read
+      issues: read
+      pull-requests: read
     steps:
       # Never check out workflow_run.head_sha, a source_ref, or artifact code.
       # This intentionally blocks production until trusted code is promoted to main.
@@ -130,6 +132,7 @@ jobs:
       contents: read
       actions: read
       issues: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

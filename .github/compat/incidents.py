@@ -8,10 +8,49 @@ import re
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
+import zlib
+
+MAX_STATE = 2 * 1024 * 1024
+
+
+def decode_json(raw, limit=8 * 1024 * 1024):
+    """Bound untrusted JSON before either the decoder or schema can recurse."""
+    if len(raw) > limit:
+        raise ValueError("JSON exceeds size limit")
+    value = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    depth, quoted, escaped = 0, False, False
+    for char in value:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > 64:
+                raise ValueError("JSON exceeds nesting limit")
+        elif char in "]}":
+            depth -= 1
+    def unique(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = item
+        return result
+    try:
+        return json.loads(value, object_pairs_hook=unique,
+                          parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON number")))
+    except RecursionError:
+        raise ValueError("JSON exceeds decoder nesting limit") from None
 
 REPORTER_USER = {"id": 41898282, "login": "github-actions[bot]", "type": "Bot"}
 
-MARKER = re.compile(r"<!-- traceai-compat:v1 ([A-Za-z0-9_=-]+) -->")
+MARKER = re.compile(r"<!-- traceai-compat:v([12]) ([A-Za-z0-9_=-]+) -->")
 REPAIR = re.compile(r"<!-- traceai-compat-repair:([0-9a-f]{64}) -->")
 LABELS = {
     "compatibility": "5319e7", "compat:agent-ready": "0e8a16",
@@ -47,6 +86,10 @@ def upstream_tuple(case):
               for p in case["resolved"] if p["role"] in ("upstream", "companion")}
     selected = {(name_key(p["name"], case["language"]), p["role"]): p["selected_version"]
                 for p in case["requested"] if p["role"] in ("upstream", "companion")}
+    if case["failure"] and case["failure"]["kind"] == "requested_resolved_mismatch":
+        # This is an automation/installation failure of the *intended* selection,
+        # not a compatibility defect of the accidentally installed distribution.
+        return sorted((name, role, version or "unresolved") for (name, role), version in selected.items())
     return sorted((name, role, actual.get((name, role)) or version or "unresolved")
                   for (name, role), version in (selected | actual).items())
 
@@ -100,7 +143,9 @@ def state_validator():
                                scenarios=case["contract"]["properties"]["scenarios"])
     evidence_required = list(evidence_properties)
     evidence_properties.update(failure_kind=case["failure"]["anyOf"][0]["properties"]["kind"],
-                               pre_execution={"type": "boolean"})
+                               pre_execution={"type": "boolean"},
+                               planned_runtime={"type": "string", "pattern": r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$"},
+                               planned_runtime_identity=case["runtime"])
     ev = obj(evidence_properties, evidence_required)
     watermark = {"type": "array", "prefixItems": [evidence_properties["run_id"], {"type": "integer", "minimum": 1},
                     {"type": "integer", "minimum": 1, "maximum": 2}, date], "minItems": 4, "maxItems": 4}
@@ -141,14 +186,14 @@ def parse_issue(issue):
     if len(matches) != 1:
         return None
     try:
-        def unique(pairs):
-            value = {}
-            for key, item in pairs:
-                if key in value:
-                    raise ValueError("duplicate state field")
-                value[key] = item
-            return value
-        state = json.loads(base64.b64decode(matches[0], altchars=b"-_", validate=True), object_pairs_hook=unique)
+        version, encoded = matches[0]
+        raw = base64.b64decode(encoded, altchars=b"-_", validate=True)
+        if version == "2":
+            decoder = zlib.decompressobj()
+            raw = decoder.decompress(raw, MAX_STATE + 1)
+            if len(raw) > MAX_STATE or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                return None
+        state = decode_json(raw, MAX_STATE)
         if not state_validator().is_valid(state) or timestamp(state["first_seen"]) > timestamp(state["last_seen"]):
             return None
         if state["kind"] == "compatibility":
@@ -158,17 +203,20 @@ def parse_issue(issue):
                 bad = scope["failure"]
                 if key != digest({"mode": bad["mode"], "runtime": bad["runtime"], "suite": scope["suite"]}):
                     return None
-                if bad.get("pre_execution") and (bad.get("failure_kind") not in ("resolution", "install") or bad["test_ids"]):
+                if bad.get("pre_execution") and (bad.get("failure_kind") not in
+                        ("resolution", "install", "requested_resolved_mismatch", "automation") or bad["test_ids"]):
+                    return None
+                if bad.get("pre_execution") and bad.get("failure_kind") == "automation" and "planned_runtime" not in bad:
                     return None
                 for ev in [bad, *scope["passes"], *scope["source_passes"]]:
                     if ev["url"] != f"https://github.com/future-agi/traceAI/actions/runs/{ev['run_id']}":
                         return None
         return state
-    except (ValueError, KeyError, TypeError, UnicodeError):
+    except (ValueError, KeyError, TypeError, UnicodeError, RecursionError, zlib.error):
         return None
 
 
-def evidence(case, run):
+def evidence(case, run, selected=None):
     ev = {"run_id": run["run_id"], "url": run["url"], "at": case["completed_at"],
           "case_id": case["case_id"], "mode": case["mode"], "runtime": case["runtime"],
           "source_sha": case["source_sha"], "resolved": case["resolved"],
@@ -177,9 +225,20 @@ def evidence(case, run):
           "scenarios": case["contract"]["scenarios"]}
     if case["failure"]:
         ev["failure_kind"] = case["failure"]["kind"]
-        ev["pre_execution"] = (case["failure"]["kind"] in ("resolution", "install")
-                               and not case["contract"]["tests"] and not case["contract"]["junit_paths"]
-                               and case["contract"]["executed"] == 0 and not ev["test_ids"])
+        empty = (not case["contract"]["tests"] and not case["contract"]["junit_paths"]
+                 and case["contract"]["executed"] == 0 and not ev["test_ids"])
+        missing = (case["failure"]["kind"] == "automation" and not case["resolved"]
+                   and case["dependency_lock"] is None and selected is not None)
+        ev["pre_execution"] = empty and (missing or case["failure"]["kind"] in
+                                                     ("resolution", "install", "requested_resolved_mismatch"))
+        if missing and empty:
+            # Only the separately validated immutable plan can supply a missing
+            # job's execution scope. Collector runtime remains an observation,
+            # not a fabricated runner runtime. No plan => no automatic recovery.
+            ev["planned_runtime"] = selected["runtime"]
+            identity = selected.get("runtime_identity")
+            if identity:
+                ev["planned_runtime_identity"] = {k: identity[k] for k in ("version", "implementation", "os", "arch")}
     return ev
 
 
@@ -195,8 +254,13 @@ def last_known_good(case, runs, before):
 
 
 def body_for(state):
-    encoded = base64.urlsafe_b64encode(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()).decode()
-    lines = [f"<!-- traceai-compat:v1 {encoded} -->", "## Compatibility incident", "",
+    # Lossless bounded v2 encoding deduplicates repeated suite IDs and evidence.
+    # v1 records remain readable; never truncate failed-test or recovery scope.
+    raw = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    if len(raw) > MAX_STATE:
+        raise ValueError("incident state exceeds safe expanded limit")
+    encoded = base64.urlsafe_b64encode(zlib.compress(raw, level=9)).decode()
+    lines = [f"<!-- traceai-compat:v2 {encoded} -->", "## Compatibility incident", "",
              f"State: **{text(state['status'])}**. Owner: {text(state.get('owner', 'nik13'))}.",
              f"First seen: {state['first_seen']}; last evidence: {state['last_seen']}."]
     if state["kind"] == "health":
@@ -212,6 +276,7 @@ def body_for(state):
             lines += [f"- {bad['mode']} / {text(json.dumps(bad['runtime']))}; source `{bad['source_sha']}`; "
                       f"[run]({bad['url']}); case `{bad['case_id']}`; comparable passing runs: {len(scope['passes'])}.",
                       f"  Resolved: `{text(json.dumps(bad['resolved']), 3000)}`",
+                      f"  Planned runtime (missing uploads only): `{text(json.dumps(bad.get('planned_runtime_identity') or bad.get('planned_runtime')))}`",
                       f"  Lock: `{text(json.dumps(bad['dependency_lock']))}`",
                       f"  Tests: `{text(json.dumps(bad['test_ids']))}`",
                       f"  Reproduce (inspect argv; never execute artifact commands automatically): `{text(json.dumps(bad['reproduction']))}`"]
@@ -241,7 +306,7 @@ def body_for(state):
     return rendered
 
 
-def reconcile(runs, issues, registry, now, health=()):
+def reconcile(runs, issues, registry, now, health=(), *, plans=None):
     """Return deterministic issue upserts and repair handoffs; never perform writes."""
     targets = {i["id"]: i for i in registry["integrations"]}
     states, existing, isolated = {}, {}, set()
@@ -292,7 +357,9 @@ def reconcile(runs, issues, registry, now, health=()):
             observation = [run["run_id"], run["run_attempt"], case["attempt"], case["completed_at"]]
             if scope and (at < timestamp(scope["watermark"][3]) or observation == scope["watermark"]):
                 continue
-            state["scopes"][sk] = {"failure": evidence(case, run), "passes": [],
+            selected = next((c for c in (plans or {}).get(run["run_id"], {}).get("cases", [])
+                             if c["case_id"] == case["case_id"]), None)
+            state["scopes"][sk] = {"failure": evidence(case, run, selected), "passes": [],
                                    "source_passes": scope["source_passes"] if scope and case["mode"] == "published" else [],
                                    "source_watermark": scope.get("source_watermark") if scope else None,
                                    "watermark": observation, "suite": case["contract"]["suite_sha256"]}
@@ -318,7 +385,14 @@ def reconcile(runs, issues, registry, now, health=()):
                     # executed contract failures still require the identical suite.
                     if not bad.get("pre_execution") and scope["suite"] != case["contract"]["suite_sha256"]:
                         continue
-                    if bad["runtime"] != case["runtime"]:
+                    if bad.get("pre_execution") and bad.get("failure_kind") == "automation":
+                        # Immutable planned identity wins, never collector Python.
+                        planned = bad["planned_runtime"]
+                        identity = bad.get("planned_runtime_identity")
+                        if (identity and identity != case["runtime"]) or not (
+                                case["runtime"]["version"] == planned or case["runtime"]["version"].startswith(planned + ".")):
+                            continue
+                    elif bad["runtime"] != case["runtime"]:
                         continue
                     executed = {t["test_id"] for t in case["contract"]["tests"] if t["outcome"] == "passed"}
                     if not set(bad["test_ids"]).issubset(executed) or not set(bad["scenarios"]).issubset(case["contract"]["scenarios"]):
@@ -353,26 +427,24 @@ def reconcile(runs, issues, registry, now, health=()):
                 state["status"] = "release_pending"
             else:
                 state["status"] = "open"
-    active_health = set()
-    for alert in list(health) + record_health:
-        key = digest(["health", alert["id"]])
-        active_health.add(key)
-        state = states.setdefault(key, {"version": 1, "key": key, "kind": "health", "first_seen": iso(now),
-                                        "owner": "nik13"})
-        # Do not generate a write just to bump a heartbeat timestamp every day.
-        if state.get("status") != "open" or state.get("summary") != alert["summary"]:
-            state.update(status="open", summary=alert["summary"], last_seen=iso(now))
-    for key, state in states.items():
-        if state["kind"] == "health" and key not in active_health and state["status"] != "recovered":
-            state.update(status="recovered", last_seen=iso(now))
     actions, handoffs = [], []
-    for key, state in sorted(states.items()):
+
+    def queue(state):
+        key = state["key"]
         issue = existing.get(key)
         desired = "closed" if state["status"] == "recovered" else "open"
-        # A first report may replay a fully recovered historical incident. Do
-        # not open a new issue just to announce an already completed recovery.
+        # Never open an issue just to announce an already recovered history.
         if desired == "closed" and issue is None:
-            continue
+            return
+        try:
+            body = body_for(state)
+        except ValueError:
+            # A pathological incident is isolated, not silently truncated or
+            # allowed to prevent every other integration's output/action.
+            record_health.append({"id": "incident-size:" + key,
+                                  "summary": f"Incident {key} exceeds safe persisted/body limits; this key's writes and handoff are paused. "
+                                             "Inspect retained compatibility-results for its complete failed/recovery scope."})
+            return
         labels = ["compatibility"]
         labels += ["compat:heartbeat"] if state["kind"] == "health" else ["compat:" + state["classification"]]
         if state["kind"] == "compatibility" and desired == "open":
@@ -386,13 +458,30 @@ def reconcile(runs, issues, registry, now, health=()):
         issue_labels = {l["name"] if isinstance(l, dict) else l for l in (issue or {}).get("labels", [])}
         unchanged = original.get(key) == json.dumps(state, sort_keys=True)
         if unchanged and issue and issue["state"] == desired and set(labels).issubset(issue_labels):
-            continue
+            return
         suffix = state.get("integration_id", "automation heartbeat")
         actions.append({"key": key, "number": issue["number"] if issue else None, "state": desired,
                         "title": f"[compatibility] {suffix}: {state.get('classification', 'health')} ({key[:12]})",
-                        "body": body_for(state), "labels": labels,
+                        "body": body, "labels": labels,
                         "notification": "recovery" if desired == "closed" else ("new" if not issue else "evidence_updated")})
-    return {"actions": actions, "handoffs": handoffs, "states": list(states.values())}
+
+    for key, state in sorted(states.items()):
+        if state["kind"] == "compatibility":
+            queue(state)
+    active_health = set()
+    for alert in list(health) + record_health:
+        key = digest(["health", alert["id"]])
+        active_health.add(key)
+        state = states.setdefault(key, {"version": 1, "key": key, "kind": "health", "first_seen": iso(now), "owner": "nik13"})
+        # Do not generate a write just to bump a heartbeat timestamp every day.
+        if state.get("status") != "open" or state.get("summary") != alert["summary"]:
+            state.update(status="open", summary=alert["summary"], last_seen=iso(now))
+    for key, state in sorted(states.items()):
+        if state["kind"] == "health":
+            if key not in active_health and state["status"] != "recovered":
+                state.update(status="recovered", last_seen=iso(now))
+            queue(state)
+    return {"actions": actions, "handoffs": handoffs, "states": list(states.values()), "health": record_health}
 
 
 def heartbeat(runs, registry, now):

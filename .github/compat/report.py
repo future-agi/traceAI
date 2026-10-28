@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 # -I excludes CWD and user site packages; only these trusted sibling modules are
 # imported. Never add an artifact or a tested source checkout to sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from incidents import LABELS, heartbeat, iso, name_key, reconcile, timestamp
+from incidents import LABELS, decode_json, heartbeat, iso, name_key, reconcile, timestamp
 from publish import build_index, release_notes, render_markdown
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -85,15 +85,7 @@ def extract_archive(data, destination):
 def load_json(path, limit=8 * 1024 * 1024):
     if path.stat().st_size > limit:
         raise ValueError("JSON exceeds size limit")
-    def unique(pairs):
-        value = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError("duplicate JSON key")
-            value[key] = item
-        return value
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique,
-                      parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON number")))
+    return decode_json(path.read_bytes(), limit)
 
 
 def schema_validate(data, filename):
@@ -115,7 +107,7 @@ def placeholder(case):
 
 def validate_plan_snapshot(raw):
     """Validate the ABI fields we consume before indexing any plan content."""
-    plan = json.loads(raw)
+    plan = decode_json(raw)
     if not isinstance(plan, dict) or any(key not in plan for key in
             ("source_sha", "workflow_sha", "self_test", "cases")):
         raise ValueError("invalid retained plan shape")
@@ -127,8 +119,15 @@ def validate_plan_snapshot(raw):
                 ("case_id", "integration_id", "mode", "selector", "requested", "runtime")):
             raise ValueError("invalid retained plan case")
         if (not isinstance(selected["case_id"], str) or selected["case_id"] in ids
-                or not isinstance(selected["runtime"], str) or not isinstance(selected["requested"], list)):
+                or not isinstance(selected["runtime"], str)
+                or not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", selected["runtime"])
+                or not isinstance(selected["requested"], list)):
             raise ValueError("invalid/duplicate retained plan selection")
+        identity = selected.get("runtime_identity")
+        if identity is not None and (not isinstance(identity, dict) or any(
+                not isinstance(identity.get(k), str) or not identity[k] for k in ("version", "implementation", "os", "arch"))
+                or not (identity["version"] == selected["runtime"] or identity["version"].startswith(selected["runtime"] + "."))):
+            raise ValueError("invalid retained plan runtime identity")
         ids.add(selected["case_id"])
     return plan
 
@@ -165,7 +164,7 @@ def lock_packages(content, format, language):
                     continue
             raise ValueError("unverifiable pip-freeze entry")
     elif language == "python" and format == "pip-report":
-        data = json.loads(content)
+        data = decode_json(content)
         if not isinstance(data, dict) or not isinstance(data.get("install"), list):
             raise ValueError("invalid pip-report")
         for item in data["install"]:
@@ -398,7 +397,7 @@ class GitHub:
             raise ValueError(f"GitHub API {method} failed with HTTP {exc.code}") from None
         if len(content) > MAX_ARCHIVE:
             raise ValueError("oversized API response")
-        return content if binary else json.loads(content)
+        return content if binary else decode_json(content, MAX_ARCHIVE)
 
     def pages(self, path, key=None, max_pages=20):
         rows = []
@@ -459,24 +458,42 @@ def verify_provenance(bundle, metadata, api):
         raise ValueError("tested source is not in trusted dev ancestry")
 
 
-def github_results(api, registry, now, selected_run=None):
+def github_results(api, registry, now, selected_run=None, *, plans=None):
     since = (now - timedelta(days=16)).date().isoformat()
     runs = api.pages("actions/workflows/compatibility-canary.yml/runs?status=completed&created=%3E%3D" + since,
                      "workflow_runs", max_pages=5)
-    if selected_run and not any(str(r["id"]) == str(selected_run) for r in runs):
-        runs.insert(0, api.request(f"/repos/{REPO}/actions/runs/{int(selected_run)}"))
     bundles, errors = [], []
+    if selected_run:
+        if not re.fullmatch(r"[1-9][0-9]*", str(selected_run)):
+            raise ValueError("requested run ID must be a positive integer")
+        if not any(str(r["id"]) == str(selected_run) for r in runs):
+            try:
+                selected = api.request(f"/repos/{REPO}/actions/runs/{selected_run}")
+                if str(selected.get("id")) != str(selected_run):
+                    raise ValueError("requested run identity mismatch")
+                runs.insert(0, selected)
+            except (ValueError, KeyError, TypeError, OSError):
+                errors.append({"id": f"requested-run:{selected_run}",
+                               "summary": f"Requested canary run {selected_run} is unavailable or rejected; no execution was inferred."})
     for meta in runs:
-        if timestamp(meta["created_at"]) < now - timedelta(days=16):
-            continue
-        if meta.get("head_branch") not in ("main", "dev") or meta.get("event") == "pull_request":
-            continue
-        if meta.get("head_repository", {}).get("full_name") != REPO or meta.get("path") != CANARY:
-            continue
+        explicit = str(meta["id"]) == str(selected_run)
         try:
+            # created_at belongs to the original run, not its latest attempt.
+            # Explicit selection has no history-window cutoff; stale observations
+            # remain visible as stale and cannot supply fresh recovery evidence.
+            executed_at = meta.get("run_started_at") or meta["created_at"]
+            if not explicit and timestamp(executed_at) < now - timedelta(days=16):
+                continue
+            if (meta.get("head_branch") not in ("main", "dev") or meta.get("event") == "pull_request"
+                    or meta.get("head_repository", {}).get("full_name") != REPO or meta.get("path") != CANARY):
+                if explicit:
+                    raise ValueError("requested run is outside trusted provenance")
+                continue
             artifacts = api.pages(f"actions/runs/{meta['id']}/artifacts", "artifacts", max_pages=2)
             matches = [a for a in artifacts if a["name"] == "compatibility-results" and not a["expired"]]
             if not matches:
+                if explicit:
+                    raise ValueError("requested aggregate is unavailable/expired")
                 # Heartbeat detects a missing expected sweep, never invent a pass.
                 continue
             if len(matches) != 1 or matches[0]["size_in_bytes"] > MAX_ARCHIVE:
@@ -488,12 +505,16 @@ def github_results(api, registry, now, selected_run=None):
                 bundle = load_json(safe_path(root, "results.json"))
                 schema_validate(bundle, "results.schema.json")
                 if bundle["run"]["self_test"]:
+                    if explicit:
+                        raise ValueError("requested run is a self-test, not production evidence")
                     continue
-                validate_bundle(bundle, registry, now, artifact_root=root,
-                                plan_bytes=safe_path(root, "compat-plan.json").read_bytes())
+                raw = safe_path(root, "compat-plan.json").read_bytes()
+                validate_bundle(bundle, registry, now, artifact_root=root, plan_bytes=raw)
                 verify_provenance(bundle, meta, api)
+                if plans is not None:
+                    plans[bundle["run"]["run_id"]] = validate_plan_snapshot(raw)
                 bundles.append(bundle)
-        except (ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, zipfile.BadZipFile) as exc:
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, RecursionError, zipfile.BadZipFile) as exc:
             # Failure text contains no artifact payload. Preserve the broken run
             # as a health incident; malformed evidence must not disappear silently.
             errors.append({"id": f"invalid-run:{meta['id']}",
@@ -524,11 +545,12 @@ def apply_actions(api, actions):
             api.request(f"/repos/{REPO}/issues", payload, "POST")
 
 
-def write_outputs(output, runs, registry, now, issues=(), extra_health=(), fixture=False, baseline=False):
+def write_outputs(output, runs, registry, now, issues=(), extra_health=(), fixture=False, baseline=False, *, plans=None):
     output.mkdir(parents=True, exist_ok=True)
     index = build_index(runs, registry, now, fixture=fixture)
     index["health"] += list(extra_health)
-    incidents = reconcile(runs, issues, registry, now, index["health"])
+    incidents = reconcile(runs, issues, registry, now, index["health"], plans=plans)
+    index["health"] += incidents["health"]
     outputs = {"results-index.json": index, "incident-actions.json": {"dry_run": True, "actions": incidents["actions"]},
                "remediation-handoff.json": incidents["handoffs"], "release-notes.json": release_notes(index)}
     schema_validate(index, "results-index.schema.json")
@@ -551,7 +573,7 @@ def main():
     args = parser.parse_args()
     now = timestamp(args.now) if args.now else datetime.now(timezone.utc)
     registry = load_json(ROOT / ".github/compat/registry.json")
-    runs, issues, errors = [], [], []
+    runs, issues, errors, plans = [], [], [], {}
     api = None
     if args.fixtures:
         runs = load_json(ROOT / ".github/compat/fixtures/reporter-results.json")["runs"]
@@ -562,23 +584,28 @@ def main():
     elif args.artifact_root:
         root = args.artifact_root.resolve()
         bundle = load_json(safe_path(root, "results.json"))
-        validate_bundle(bundle, registry, now, artifact_root=root, plan_bytes=safe_path(root, "compat-plan.json").read_bytes())
+        raw = safe_path(root, "compat-plan.json").read_bytes()
+        validate_bundle(bundle, registry, now, artifact_root=root, plan_bytes=raw)
+        plans[bundle["run"]["run_id"]] = validate_plan_snapshot(raw)
         runs = [bundle]
     elif args.github:
         api = GitHub()
-        runs, errors = github_results(api, registry, now, args.run_id)
+        runs, errors = github_results(api, registry, now, args.run_id, plans=plans)
         if args.apply:
             if (os.environ.get("COMPAT_REPORT_ALLOW_WRITES") != "true" or
                     os.environ.get("GITHUB_REF") != "refs/heads/main" or
                     os.environ.get("GITHUB_REPOSITORY") != REPO or
                     os.environ.get("GITHUB_EVENT_NAME") not in ("workflow_run", "workflow_dispatch", "schedule")):
                 raise ValueError("issue writes require the trusted default-branch workflow guard")
-            issues = api.pages("issues?state=all")
+        # Read-only incident/repair-PR context belongs to normal artifacts too.
+        # Only --apply below can mutate labels/issues. Fixture and branch paths
+        # never construct an API client or read/write repository issue state.
+        issues = api.pages("issues?state=all")
     elif not args.baseline:
         parser.error("choose --fixtures, --artifact-root, --github or --baseline")
     if args.apply and (not args.github or args.fixtures or args.artifact_root or args.baseline):
         raise ValueError("fixtures/branch artifacts are dry-run only")
-    incidents = write_outputs(args.output, runs, registry, now, issues, errors, args.fixtures, args.baseline)
+    incidents = write_outputs(args.output, runs, registry, now, issues, errors, args.fixtures, args.baseline, plans=plans)
     if args.apply:
         apply_actions(api, incidents["actions"])
         (args.output / "incident-actions.json").write_text(json.dumps(

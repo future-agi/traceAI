@@ -78,10 +78,46 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(row['status'], 'passed')
         self.assertIn('openai==1.93.1', row['install_command'])
 
+    def test_boundary_freshness_uses_own_weekly_scope_not_missing_daily_runtime(self):
+        for selector, runtime in [('latest_eligible', '3.13.9'), ('floor', '3.11.9')]:
+            bundle = copy.deepcopy(RUNS[-1])
+            case = bundle['cases'][0]
+            case.update(mode='source', selector=selector)
+            case['runtime']['version'] = runtime
+            index = build_index([bundle], REGISTRY, NOW)
+            self.assertTrue(any(a['id'].endswith(':daily') for a in index['health']))
+            self.assertEqual(index['observations'][0]['status'], 'passed')
+            # A two-day boundary pass remains fresh, but nine days is stale.
+            case['completed_at'] = '2026-10-26T05:00:00Z'
+            self.assertEqual(build_index([bundle], REGISTRY, NOW)['observations'][0]['status'], 'passed')
+            case['completed_at'] = '2026-10-19T05:00:00Z'
+            self.assertEqual(build_index([bundle], REGISTRY, NOW)['observations'][0]['status'], 'stale')
+
+    def test_daily_observation_due_grace_and_weekend_are_per_scope(self):
+        bundle = copy.deepcopy(RUNS[4])
+        case = bundle['cases'][0]
+        for checked, now, expected in [
+                ('2026-10-26T04:00:00Z', '2026-10-28T16:00:00Z', 'stale'),
+                ('2026-10-27T04:00:00Z', '2026-10-28T12:00:00Z', 'passed'),
+                ('2026-10-23T04:00:00Z', '2026-10-25T02:00:00Z', 'passed'),
+                ('2026-10-23T04:00:00Z', '2026-10-26T16:00:00Z', 'stale')]:
+            case['completed_at'] = checked
+            with self.subTest(checked=checked, now=now):
+                self.assertEqual(build_index([bundle], REGISTRY, timestamp(now))['observations'][0]['status'], expected)
+
+    def test_recovered_source_note_does_not_invent_outstanding_release_obligation(self):
+        from incidents import reconcile
+        self.assertEqual(reconcile(RUNS, [], REGISTRY, NOW)['states'][0]['status'], 'recovered')
+        notes = release_notes(build_index(RUNS, REGISTRY, NOW))
+        source = next(i for i in notes['inputs'] if i['mode'] == 'source')
+        self.assertTrue(source['source_build_unreleased'])
+        self.assertNotIn('release_pending', source)
+
     def test_release_note_inputs_need_human_confirmation(self):
         notes = release_notes(build_index(RUNS, REGISTRY, NOW, fixture=True))
         self.assertTrue(notes['requires_maintainer_review'])
-        self.assertTrue(any(i['release_pending'] for i in notes['inputs']))
+        self.assertTrue(any(i['source_build_unreleased'] for i in notes['inputs']))
+        self.assertTrue(all('release_pending' not in i for i in notes['inputs']))
         self.assertTrue(all('exact_packages' in i and 'confirm_before_release' in i for i in notes['inputs']))
 
     def test_fixture_golden_matches(self):

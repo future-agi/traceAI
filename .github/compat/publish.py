@@ -42,13 +42,22 @@ def build_index(runs, registry, now, *, fixture=False):
                 row["install_command"] = "python -m pip install " + " ".join(
                     f"'{p['name']}=={p['version']}'" for p in packages)
     health = heartbeat(runs, registry, now)
-    stale = {a["id"] for a in health}
     for row in rows.values():
-        cadence = "weekly" if row["mode"] == "published" or row["selector"] in ("floor", "historical") else "daily"
-        # Missing *other* weekly cells is an automation-health gap, not proof
-        # that this fresh exact published observation is itself stale.
-        if (timestamp(row["checked_at"]) < now - timedelta(days=8) or
-                (cadence == "daily" and f"heartbeat:{row['integration_id']}:daily" in stale)):
+        target = targets[row["integration_id"]]
+        representative = target["runtimes"]["representative"][:1]
+        daily = (row["mode"] == "source" and row["selector"] == "latest_eligible" and any(
+            row["runtime"]["version"] == v or row["runtime"]["version"].startswith(v + ".") for v in representative))
+        checked = timestamp(row["checked_at"])
+        # Each observation ages on its own cadence. Missing another runtime,
+        # selector or mode is a separate completeness/heartbeat health problem.
+        stale = checked < now - timedelta(days=8)
+        if daily:
+            for days in range(18):
+                due = (now - timedelta(days=days)).replace(hour=3, minute=17, second=0, microsecond=0)
+                if due.weekday() in (0, 1, 2, 3, 4, 6) and due + timedelta(hours=36) <= now and checked < due:
+                    stale = True
+                    break
+        if stale:
             row["status"] = "stale"
     return {"schema_version": 1, "generated_at": iso(now), "inventory_revision": registry["inventory_revision"],
             "fixture": fixture, "observations": sorted(rows.values(), key=lambda r: (r["integration_id"], r["mode"], r["id"])),
@@ -121,15 +130,20 @@ def render_markdown(index, *, baseline=False):
               "and boundary runtimes plus the published representative consumer; a lone cell cannot clear it. "
               "Missing other cells does not erase a fresh exact observation. Expired exceptions are automation failures.",
               "- Only labelled, schema-valid GitHub Actions bot issues supply reporter state. Public marker copies are ignored; "
-              "malformed or conflicting owned records are isolated without stopping unrelated incidents.",
+              "malformed, conflicting or oversized owned records are isolated as health errors without stopping unrelated incidents. "
+              "Persisted state uses bounded lossless compression; failed-test/recovery scope is never truncated.",
               "- Incidents deduplicate by integration + complete upstream tuple + failure signature. "
               "Two fresh, distinct comparable passing runs recover every failed scope. Development-only fixes remain release pending "
               "for published failures, including repeated failures of the unchanged released package. "
-              "Pre-execution resolution/install failures may recover through a complete validated execution of the exact tuple/runtime; "
+              "Pre-execution resolution/install/selection-mismatch failures may recover through complete validated execution of the intended exact tuple/runtime. "
+              "Missing uploads require retained immutable planned runtime evidence, never the collector runtime; "
               "executed contract failures still require identical suite and failed-test coverage. "
               "A newer upstream patch does not erase an older bad tuple. Unseen old failures remain actionable even after a reporter outage.",
               "- `release-notes.json` contains exact support/failure inputs, not an automatically approved support-policy change. "
               "Confirm published fix versions, support additions, exclusions and floor/cap/privacy changes before release.",
+              "- Normal production dry-run artifacts read existing incident and repair-PR context with read-only permissions; "
+              "only the separately guarded apply job can write issues. Explicit retained run IDs bypass discovery age limits, "
+              "but their actual attempt execution timestamps still govern freshness; unavailable/rejected requested evidence is a health error.",
               "- Agents receive a human-claimed handoff with a one-open-repair-PR marker guard. "
               "This reporter never starts an agent, invokes vendors, spends money, opens repair PRs, pushes code or merges. "
               "Slack/Linear delivery is disabled; GitHub issues are canonical.",
@@ -145,7 +159,7 @@ def release_notes(index):
                 {"integration_id": row["integration_id"], "mode": row["mode"], "status": row["status"],
                  "qualification": row["qualification"], "exact_packages": row["packages"],
                  "checked_at": row["checked_at"], "evidence": row["run_url"],
-                 "release_pending": row["mode"] == "source" and row["status"] == "passed",
+                 "source_build_unreleased": row["mode"] == "source",
                  "confirm_before_release": ["fix included in an installable instrumentation and core release",
                                            "support additions and exact known-bad exclusions", "floor/cap and privacy changes"]}
                 for row in index["observations"]]}

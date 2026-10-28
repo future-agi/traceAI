@@ -10,8 +10,8 @@ from unittest.mock import patch
 import zipfile
 
 from report import (CANARY, REPO, ROOT, GitHub, MAX_EXPANDED, SafeRedirect, apply_actions,
-                    extract_archive, github_results, junit_outcomes, load_json, lock_packages, safe_path,
-                    validate_bundle, verify_provenance)
+                    extract_archive, github_results, junit_outcomes, load_json, lock_packages, main, safe_path,
+                    validate_bundle, validate_plan_snapshot, verify_provenance, write_outputs)
 from incidents import timestamp
 
 HERE = Path(__file__).resolve().parent
@@ -24,6 +24,26 @@ def mutated(change):
     bundle = copy.deepcopy(RUNS[-1])
     change(bundle, bundle['cases'][0])
     return bundle
+
+
+def bundle_archive(bundle):
+    bundle = copy.deepcopy(bundle)
+    case = bundle['cases'][0]
+    selected = {k: case[k] for k in ('case_id', 'integration_id', 'mode', 'selector', 'requested')}
+    selected['runtime'] = '.'.join(case['runtime']['version'].split('.')[:2])
+    selected['runtime_identity'] = case['runtime']
+    plan = dict(source_sha=bundle['run']['source_sha'], workflow_sha=bundle['run']['workflow_sha'], self_test=False, cases=[selected])
+    raw = json.dumps(plan).encode()
+    bundle['run']['plan_sha256'] = hashlib.sha256(raw).hexdigest()
+    freeze = ''.join(p['name'] + '==' + p['version'] + '\n' for p in case['resolved']).encode()
+    case['dependency_lock']['sha256'] = hashlib.sha256(freeze).hexdigest()
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, 'w') as archive:
+        archive.writestr('results.json', json.dumps(bundle))
+        archive.writestr('compat-plan.json', raw)
+        archive.writestr(case['dependency_lock']['path'], freeze)
+        archive.writestr(case['contract']['junit_paths'][0], '<testsuite><testcase file="tests/test_fixture.py" name="test_stream"/></testsuite>')
+    return bundle, out.getvalue()
 
 
 class ValidationTests(unittest.TestCase):
@@ -241,6 +261,22 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_bundle(bundle, REGISTRY, NOW, plan_bytes=data)
 
+    def test_deep_json_is_bounded_at_each_untrusted_boundary(self):
+        nested = b'[' * 20000 + b'0' + b']' * 20000
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'nested.json'
+            path.write_bytes(nested)
+            with self.assertRaisesRegex(ValueError, 'nesting'):
+                load_json(path)
+        with self.assertRaisesRegex(ValueError, 'nesting'):
+            validate_plan_snapshot(nested)
+        with self.assertRaisesRegex(ValueError, 'nesting'):
+            lock_packages(nested, 'pip-report', 'python')
+        # Brackets and escaped quotes in strings do not consume the depth budget.
+        from incidents import decode_json
+        value = {'text': '[\\"' * 20000}
+        self.assertEqual(decode_json(json.dumps(value)), value)
+
     def test_duplicate_json_keys_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'data.json'
@@ -393,6 +429,139 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(len(bundles), 1)
         self.assertEqual(len(errors), 6)
         self.assertEqual({e['id'] for e in errors}, {f'invalid-run:{id}' for id in archives if id != 1007})
+
+    def test_deep_malformed_run_does_not_discard_healthy_evidence(self):
+        healthy, archive = bundle_archive(RUNS[-1])
+        bad = io.BytesIO()
+        with zipfile.ZipFile(bad, 'w') as zip:
+            zip.writestr('results.json', '[' * 20000 + '0' + ']' * 20000)
+        metadata = [dict(self.metadata(), created_at='2026-10-28T04:00:00Z'),
+                    dict(self.metadata(), id=2000, html_url=f'https://github.com/{REPO}/actions/runs/2000', created_at='2026-10-28T04:00:00Z')]
+        class API:
+            def pages(self, path, key, **kwargs):
+                if path.startswith('actions/workflows/'):
+                    return metadata
+                id = int(path.split('/')[2])
+                return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archive), id=id)]
+            def request(self, path, **kwargs):
+                if path.endswith('/zip'):
+                    return archive if '/1007/' in path else bad.getvalue()
+                return {'status': 'ahead'}
+        bundles, errors = github_results(API(), REGISTRY, NOW)
+        self.assertEqual([b['run']['run_id'] for b in bundles], ['1007'])
+        self.assertEqual([e['id'] for e in errors], ['invalid-run:2000'])
+
+    def test_explicit_old_run_and_recent_rerun_are_not_silently_dropped(self):
+        from datetime import timedelta
+        from incidents import iso
+        for recent in (False, True):
+            bundle = copy.deepcopy(RUNS[-1])
+            if not recent:
+                def earlier(value):
+                    if isinstance(value, dict):
+                        return {k: earlier(v) for k, v in value.items()}
+                    if isinstance(value, list):
+                        return [earlier(v) for v in value]
+                    if isinstance(value, str) and value.startswith('2026-') and value.endswith('Z'):
+                        return iso(timestamp(value) - timedelta(days=30))
+                    return value
+                bundle = earlier(bundle)
+            else:
+                bundle['run']['run_attempt'] = 2
+                # Failed-only-job reruns may retain a successful original case.
+            bundle, archive = bundle_archive(bundle)
+            meta = dict(self.metadata(), created_at='2026-09-28T04:00:00Z', run_attempt=bundle['run']['run_attempt'])
+            meta.update(run_started_at=bundle['cases'][0]['started_at'], updated_at=bundle['run']['completed_at'])
+            class API:
+                def pages(self, path, key, **kwargs):
+                    if path.startswith('actions/workflows/'):
+                        return []
+                    return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archive), id=123)]
+                def request(self, path, **kwargs):
+                    if path.endswith('/zip'):
+                        return archive
+                    if path.endswith('/attempts/1'):
+                        return dict(meta, run_attempt=1)
+                    if '/compare/' in path:
+                        return {'status': 'ahead'}
+                    return meta
+            plans = {}
+            with self.subTest(recent=recent):
+                bundles, errors = github_results(API(), REGISTRY, NOW, selected_run='1007', plans=plans)
+                self.assertEqual(errors, [])
+                self.assertEqual(len(bundles), 1)
+                self.assertIn('1007', plans)
+                from publish import build_index
+                row = build_index(bundles, REGISTRY, NOW)['observations'][0]
+                self.assertEqual(row['status'], 'passed' if recent else 'stale')
+
+    def test_unavailable_rejected_or_expired_requested_evidence_is_explicit_health(self):
+        for kind in ('unavailable', 'branch', 'expired', 'wrong-id'):
+            meta = dict(self.metadata(), created_at='2026-09-01T00:00:00Z')
+            if kind == 'branch':
+                meta['head_branch'] = 'ci/untrusted'
+            if kind == 'wrong-id':
+                meta['id'] = 999
+            class API:
+                def pages(self, path, key, **kwargs):
+                    return []
+                def request(self, path, **kwargs):
+                    if kind == 'unavailable':
+                        raise ValueError('GitHub API GET failed with HTTP 404')
+                    return meta
+            with self.subTest(kind=kind):
+                bundles, errors = github_results(API(), REGISTRY, NOW, selected_run='1007')
+                self.assertEqual(bundles, [])
+                self.assertEqual(len(errors), 1)
+                self.assertIn('1007', errors[0]['id'])
+
+    def test_normal_github_dry_run_includes_existing_issue_and_repair_pr_without_writes(self):
+        from incidents import REPORTER_USER, reconcile
+        failed = copy.deepcopy(RUNS[1])
+        action = reconcile([failed], [], REGISTRY, NOW)['actions'][0]
+        issue = dict(number=42, body=action['body'], state=action['state'], labels=action['labels'], user=dict(REPORTER_USER))
+        pr = dict(number=43, state='open', pull_request={}, body='<!-- traceai-compat-repair:' + action['key'] + ' -->')
+        class API:
+            def __init__(self):
+                self.reads = []
+            def pages(self, path, *args, **kwargs):
+                self.reads.append(path)
+                return [issue, pr]
+            def request(self, path, data=None, method='GET', **kwargs):
+                if method != 'GET':
+                    raise AssertionError('dry-run attempted a write')
+        api = API()
+        with tempfile.TemporaryDirectory() as tmp, patch('report.GitHub', return_value=api), \
+                patch('report.github_results', return_value=([failed], [])), \
+                patch('sys.argv', ['report', '--github', '--output', tmp, '--now', NOW.isoformat()]), patch('builtins.print'):
+            main()
+            handoff = json.loads((Path(tmp) / 'remediation-handoff.json').read_text())[0]
+        self.assertEqual(api.reads, ['issues?state=all'])
+        self.assertEqual(handoff['issue_number'], 42)
+        self.assertEqual(handoff['existing_prs'], [43])
+        self.assertEqual(handoff['guard'], 'blocked_existing_pr')
+        self.assertFalse(handoff['automatic_execution'])
+
+    def test_fixture_apply_cannot_construct_an_api_or_mutate_issues(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('report.GitHub') as api, \
+                patch('sys.argv', ['report', '--fixtures', '--apply', '--output', tmp]):
+            with self.assertRaisesRegex(ValueError, 'dry-run only'):
+                main()
+            api.assert_not_called()
+
+    def test_isolated_incident_health_is_retained_in_report_outputs(self):
+        from incidents import body_for
+        def bounded(state):
+            if state['kind'] == 'compatibility':
+                raise ValueError('oversized')
+            return body_for(state)
+        with tempfile.TemporaryDirectory() as tmp, patch('incidents.body_for', side_effect=bounded):
+            write_outputs(Path(tmp), RUNS[:2], REGISTRY, NOW)
+            index = json.loads((Path(tmp) / 'results-index.json').read_text())
+            actions = json.loads((Path(tmp) / 'incident-actions.json').read_text())['actions']
+            self.assertTrue(any(a['id'].startswith('incident-size:') for a in index['health']))
+            self.assertTrue(any('exceeds' in a['body'] for a in actions))
+            self.assertTrue((Path(tmp) / 'compatibility.md').is_file())
 
     def test_issue_writer_only_upserts_labels_and_issues_and_preserves_human_labels(self):
         class FakeAPI:

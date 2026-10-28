@@ -222,6 +222,143 @@ class IncidentTests(unittest.TestCase):
         state = lifecycle(runs)['states'][0]
         self.assertEqual(state['status'], 'open')
 
+    def test_large_multiruntime_recovery_is_lossless_bounded_and_idempotent(self):
+        failed = copy.deepcopy(RUNS[1])
+        failed['cases'] = []
+        for mode, runtime in [('source', '3.10.9'), ('source', '3.11.9'),
+                              ('source', '3.13.9'), ('published', '3.11.9')]:
+            case = copy.deepcopy(RUNS[1]['cases'][0])
+            case.update(mode=mode, runtime=dict(case['runtime'], version=runtime), case_id=mode + runtime)
+            ids = ['python/frameworks/langchain/tests/test_instrumentor.py::test_real_graph_streaming_and_cancellation[' + str(i) + ']'
+                   for i in range(55)]
+            case['failure']['test_ids'] = ids
+            case['contract']['tests'] = [dict(case['contract']['tests'][0], test_id=node) for node in ids]
+            case['contract'].update(collected=55, executed=55)
+            failed['cases'].append(case)
+        first = lifecycle([failed])['actions'][0]
+        self.assertLess(len(first['body'].encode()), 60000)
+        issue = issue_for(first)
+        from report import validate_bundle
+        passes = []
+        for template in RUNS[-2:]:
+            bundle = copy.deepcopy(template)
+            bundle['cases'] = copy.deepcopy(failed['cases'])
+            bundle['run']['planned_case_ids'] = [c['case_id'] for c in bundle['cases']]
+            for case in bundle['cases']:
+                case.update(status='passed', failure=None, started_at=bundle['run']['started_at'], completed_at=bundle['run']['completed_at'])
+                for node in case['contract']['tests']:
+                    node.update(outcome='passed', failure_signature=None)
+            validate_bundle(bundle, REGISTRY, NOW)
+            passes.append(bundle)
+        for count, bundle in enumerate(passes, 1):
+            result = lifecycle([bundle], [issue])
+            action = result['actions'][0]
+            self.assertLess(len(action['body'].encode()), 60000)
+            parsed = parse_issue(action)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(len(parsed['scopes']), 4)
+            self.assertTrue(all(len(s['failure']['test_ids']) == 55 for s in parsed['scopes'].values()))
+            self.assertTrue(all(len(s['passes']) == count for s in parsed['scopes'].values()))
+            issue = issue_for(action)
+            self.assertEqual(lifecycle([bundle], [issue])['actions'], [])
+        self.assertEqual(issue['state'], 'closed')
+
+    def test_legacy_state_and_bounded_compressed_state_are_read_safely(self):
+        import base64
+        import zlib
+        state = parse_issue(lifecycle(RUNS[:2])['actions'][0])
+        marker = base64.urlsafe_b64encode(json.dumps(state).encode()).decode()
+        legacy = dict(body='<!-- traceai-compat:v1 ' + marker + ' -->')
+        self.assertEqual(parse_issue(legacy), state)
+        for raw in (b'x' * (2 * 1024 * 1024 + 1), b'[' * 100 + b'0' + b']' * 100):
+            marker = base64.urlsafe_b64encode(zlib.compress(raw)).decode()
+            self.assertIsNone(parse_issue(dict(body='<!-- traceai-compat:v2 ' + marker + ' -->')))
+        for raw in (zlib.compress(json.dumps(state).encode()) + b'trailing', b'not-zlib'):
+            marker = base64.urlsafe_b64encode(raw).decode()
+            self.assertIsNone(parse_issue(dict(body='<!-- traceai-compat:v2 ' + marker + ' -->')))
+
+    def test_oversized_incident_is_health_not_global_reporter_failure(self):
+        from unittest.mock import patch
+        runs = copy.deepcopy(RUNS[:3])
+        runs[-1]['cases'][0]['failure']['signature'] = 'f' * 64
+        key = incident_key(runs[0]['cases'][0]) if runs[0]['cases'][0]['failure'] else incident_key(runs[1]['cases'][0])
+        def bounded(state):
+            if state['key'] == key:
+                raise ValueError('oversized')
+            return body_for(state)
+        with patch('incidents.body_for', side_effect=bounded):
+            result = lifecycle(runs)
+        self.assertEqual(len(result['actions']), 2)
+        self.assertTrue(any(s['kind'] == 'health' and 'exceeds' in s['summary'] for s in result['states']))
+        self.assertTrue(any(s.get('signature') == 'f' * 64 for s in result['states']))
+        self.assertFalse(any(h['incident_key'] == key for h in result['handoffs']))
+        self.assertTrue(any(a['id'] == 'incident-size:' + key for a in result['health']))
+
+    def test_missing_upload_uses_planned_not_collector_runtime_for_recovery(self):
+        import hashlib
+        failed = copy.deepcopy(RUNS[1])
+        case = failed['cases'][0]
+        case.update(status='blocked', resolved=[], dependency_lock=None)
+        case['failure'].update(kind='automation', test_ids=[])
+        case['contract'].update(suite_sha256=hashlib.sha256(b'').hexdigest(), tests=[], junit_paths=[], scenarios=[], collected=0, executed=0)
+        identity = dict(case['runtime'], version='3.13.9')
+        plans = {failed['run']['run_id']: dict(cases=[dict(case_id=case['case_id'], runtime='3.13', runtime_identity=identity)])}
+        first = reconcile([failed], [], REGISTRY, NOW, plans=plans)['actions'][0]
+        bad = next(iter(parse_issue(first)['scopes'].values()))['failure']
+        self.assertEqual(bad['runtime']['version'], '3.11.9')
+        self.assertEqual(bad['planned_runtime_identity'], identity)
+        passes = copy.deepcopy(RUNS[-2:])
+        for bundle in passes:
+            bundle['cases'][0]['runtime'] = identity
+        issue = issue_for(first)
+        self.assertEqual(lifecycle(passes[:1], [issue])['states'][0]['status'], 'open')
+        closed = lifecycle(passes, [issue])['actions'][0]
+        self.assertEqual(closed['state'], 'closed')
+        self.assertEqual(lifecycle(passes, [issue_for(closed)])['actions'], [])
+        for variation in ('runtime', 'tuple', 'mode', 'arch'):
+            wrong = copy.deepcopy(passes)
+            for bundle in wrong:
+                candidate = bundle['cases'][0]
+                if variation == 'runtime':
+                    candidate['runtime']['version'] = '3.10.9'
+                elif variation == 'arch':
+                    candidate['runtime']['arch'] = 'aarch64'
+                elif variation == 'mode':
+                    candidate['mode'] = 'source'
+                else:
+                    next(p for p in candidate['resolved'] if p['role'] == 'upstream')['version'] = '1.94.0'
+            with self.subTest(variation=variation):
+                expected = 'release_pending' if variation == 'mode' else 'open'
+                self.assertEqual(lifecycle(wrong, [issue])['states'][0]['status'], expected)
+        # No plan must not turn a collector runtime into an execution identity.
+        unplanned = issue_for(lifecycle([failed])['actions'][0])
+        self.assertEqual(lifecycle(RUNS[-2:], [unplanned])['states'][0]['status'], 'open')
+
+    def test_mismatch_recovery_requires_intended_tuple_and_keeps_actual_observation(self):
+        failed = copy.deepcopy(RUNS[1])
+        case = failed['cases'][0]
+        case['failure'].update(kind='requested_resolved_mismatch', test_ids=[])
+        case['contract'].update(tests=[], junit_paths=[], collected=0, executed=0, scenarios=[])
+        next(p for p in case['resolved'] if p['role'] == 'upstream')['version'] = '1.92.0'
+        first = lifecycle([failed])['actions'][0]
+        state = parse_issue(first)
+        self.assertEqual(state['tuple'], [['openai', 'upstream', '1.93.1']])
+        bad = next(iter(state['scopes'].values()))['failure']
+        self.assertEqual(next(p for p in bad['resolved'] if p['role'] == 'upstream')['version'], '1.92.0')
+        self.assertEqual(lifecycle(RUNS[-2:], [issue_for(first)])['actions'][0]['state'], 'closed')
+        wrong = copy.deepcopy(RUNS[-2:])
+        for bundle in wrong:
+            next(p for p in bundle['cases'][0]['resolved'] if p['role'] == 'upstream')['version'] = '1.92.0'
+        self.assertEqual(lifecycle(wrong, [issue_for(first)])['states'][0]['status'], 'open')
+        # A mismatch with executed assertions is not an empty-suite exemption.
+        case['contract'] = copy.deepcopy(RUNS[1]['cases'][0]['contract'])
+        case['failure']['test_ids'] = [case['contract']['tests'][0]['test_id']]
+        strict = issue_for(lifecycle([failed])['actions'][0])
+        wrong = copy.deepcopy(RUNS[-2:])
+        for bundle in wrong:
+            bundle['cases'][0]['contract']['suite_sha256'] = 'e' * 64
+        self.assertEqual(lifecycle(wrong, [strict])['states'][0]['status'], 'open')
+
     def test_mentions_and_hidden_markers_are_escaped_in_visible_text(self):
         self.assertNotIn('@', text('@someone <script>'))
         self.assertNotIn('<script>', text('@someone <script>'))
