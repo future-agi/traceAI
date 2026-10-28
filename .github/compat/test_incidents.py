@@ -20,6 +20,70 @@ def lifecycle(runs, issues=()):
     return reconcile(copy.deepcopy(runs), copy.deepcopy(issues), REGISTRY, NOW)
 
 
+class ResumeRecoveryTests(unittest.TestCase):
+    def test_extreme_timezone_offsets_in_owned_state_are_isolated(self):
+        import base64
+        first = lifecycle(RUNS[:2])['actions'][0]
+        for field in ('first_seen', 'evidence', 'watermark', 'last_known_good'):
+            state = parse_issue(first)
+            scope = next(iter(state['scopes'].values()))
+            extreme = '9999-12-31T23:59:59-01:00'
+            if field == 'first_seen':
+                state['first_seen'] = state['last_seen'] = extreme
+            elif field == 'evidence':
+                scope['failure']['at'] = extreme
+            elif field == 'watermark':
+                scope['watermark'][3] = extreme
+            else:
+                state['last_known_good']['at'] = extreme
+            issue = issue_for(first)
+            issue['body'] = '<!-- traceai-compat:v1 ' + base64.urlsafe_b64encode(json.dumps(state).encode()).decode() + ' -->'
+            with self.subTest(field=field):
+                self.assertIsNone(parse_issue(issue))
+                result = lifecycle([RUNS[1]], [issue])
+                self.assertTrue(any(s['kind'] == 'health' for s in result['states']))
+                self.assertTrue(any(s['kind'] == 'compatibility' for s in result['states']))
+
+    def test_daily_recovery_uses_same_freshness_as_publication_including_persisted_passes(self):
+        from datetime import timedelta
+        from incidents import iso
+        from publish import build_index
+        def dated(template, at, mode, selector='latest_eligible', runtime='3.11.9'):
+            bundle = copy.deepcopy(template)
+            bundle['cases'][0].update(mode=mode, selector=selector, completed_at=at,
+                                      started_at=iso(timestamp(at) - timedelta(minutes=10)))
+            bundle['cases'][0]['runtime']['version'] = runtime
+            return bundle
+        for failure_mode in ('source', 'published'):
+            for persisted in (False, True):
+                failed = dated(RUNS[1], '2026-10-21T04:00:00Z', failure_mode)
+                old = dated(RUNS[3], '2026-10-22T04:00:00Z', 'source')
+                fresh = dated(RUNS[4], '2026-10-28T05:00:00Z', 'source')
+                issue = issue_for(lifecycle([failed])['actions'][0])
+                if persisted:
+                    action = reconcile([old], [issue], REGISTRY, timestamp('2026-10-22T12:00:00Z'))['actions'][0]
+                    issue = issue_for(action)
+                    observations = [fresh]
+                else:
+                    observations = [old, fresh]
+                self.assertEqual(build_index([old], REGISTRY, NOW)['observations'][0]['status'], 'stale')
+                result = lifecycle(observations, [issue])
+                state = next(s for s in result['states'] if s['kind'] == 'compatibility')
+                with self.subTest(mode=failure_mode, persisted=persisted):
+                    self.assertEqual(state['status'], 'open')
+                    passes = [p['at'] for s in state['scopes'].values() for p in s['passes'] + s['source_passes']]
+                    self.assertEqual(passes, ['2026-10-28T05:00:00Z'])
+        # Weekly boundaries retain an older, still-fresh observation; daily Friday
+        # evidence is still fresh before Sunday has actually missed its deadline.
+        for runtime, old_at, new_at, now in [
+                ('3.13.9', '2026-10-22T04:00:00Z', '2026-10-28T05:00:00Z', NOW),
+                ('3.11.9', '2026-10-23T04:00:00Z', '2026-10-24T05:00:00Z', timestamp('2026-10-25T02:00:00Z'))]:
+            failed = dated(RUNS[1], '2026-10-21T04:00:00Z', 'source', runtime=runtime)
+            passes = [dated(RUNS[3], old_at, 'source', runtime=runtime), dated(RUNS[4], new_at, 'source', runtime=runtime)]
+            issue = issue_for(reconcile([failed], [], REGISTRY, now)['actions'][0])
+            self.assertEqual(reconcile(passes, [issue], REGISTRY, now)['states'][0]['status'], 'recovered')
+
+
 class IncidentTests(unittest.TestCase):
     def test_repeats_update_one_incident_and_replay_is_noop(self):
         first = lifecycle(RUNS[:2])

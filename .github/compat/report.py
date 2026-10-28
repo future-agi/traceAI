@@ -37,7 +37,11 @@ REPO = "future-agi/traceAI"
 CANARY = ".github/workflows/compatibility-canary.yml"
 MAX_ARCHIVE = 24 * 1024 * 1024
 MAX_EXPANDED = 64 * 1024 * 1024
-MAX_FILES = 512
+# Match the producer's bounded retained aggregate count (21 weekly cells and
+# both attempts already exceed 512). Byte/path/decompression limits stay strict;
+# this does not admit the separate large plan wheelhouse as report evidence.
+MAX_FILES = 4096
+MAX_SOURCE_FILES = 512
 
 
 def safe_path(root, relative):
@@ -215,12 +219,25 @@ def lock_packages(content, format, language):
 
 
 def junit_outcomes(content):
-    if b"<!DOCTYPE" in content.upper() or b"<!ENTITY" in content.upper():
-        raise ValueError("JUnit DTD/entities are forbidden")
+    class NoDeclarations(ET.TreeBuilder):
+        def doctype(self, name, pubid, system):
+            # Parser-level rejection also covers UTF-16/32 encodings; scanning
+            # only ASCII bytes allowed declarations to bypass this boundary.
+            raise ValueError("JUnit DTD/entity declarations are forbidden")
     try:
-        xml = ET.fromstring(content)
+        xml = ET.fromstring(content, parser=ET.XMLParser(target=NoDeclarations()))
     except ET.ParseError:
         raise ValueError("malformed JUnit") from None
+    if Path(__file__).with_name("validate.py").is_file():
+        # Once absorbed, production uses the same trusted parser as the producer,
+        # not a separately evolving interpretation of pytest's class identities.
+        with tempfile.TemporaryDirectory(prefix="compat-junit-") as tmp:
+            path = Path(tmp) / "report.xml"
+            path.write_bytes(content)
+            tests = trusted_validator().junit_tests(path)
+        return {test["test_id"]: test["outcome"] for test in tests}
+    # Standalone foundation fixtures precede canonical absorption. Keep exact
+    # canonical class splitting here too; production still requires that module.
     observed = {}
     for node in xml.iter("testcase"):
         file, name, classname = node.get("file", ""), node.get("name", ""), node.get("classname", "")
@@ -230,9 +247,9 @@ def junit_outcomes(content):
             path = PurePosixPath(file)
             if path.is_absolute() or ".." in path.parts or "\\" in file:
                 raise ValueError("noncanonical JUnit file")
-            stem = file.removesuffix(".py").replace("/", ".")
-            cls = classname[len(stem) + 1:] if classname.startswith(stem + ".") else ""
-            test_id = file + "::" + (cls + "::" if cls else "") + name
+            marker = path.stem
+            cls = classname.rsplit(marker, 1)[-1].strip(".") if marker in classname else ""
+            test_id = file + "::" + (cls.replace(".", "::") + "::" if cls else "") + name
         else:
             test_id = classname.replace(".", "/") + ".py::" + name
         outcomes = [kind for kind in ("failure", "error", "skipped") if node.find(kind) is not None]
@@ -449,7 +466,7 @@ class GitHub:
         raise ValueError("API pagination bound reached; refusing partial incident/history state")
 
 
-def verify_provenance(bundle, metadata, api):
+def verify_provenance(bundle, metadata, api, *, allow_self_test=False):
     run = bundle["run"]
     if metadata.get("repository", {}).get("full_name") != REPO or metadata.get("head_repository", {}).get("full_name") != REPO:
         raise ValueError("foreign repository run")
@@ -457,7 +474,7 @@ def verify_provenance(bundle, metadata, api):
         raise ValueError("untrusted workflow/branch")
     if metadata.get("event") not in ("schedule", "workflow_dispatch", "push") or metadata.get("pull_requests"):
         raise ValueError("PR or unexpected run cannot report incidents")
-    if metadata["status"] != "completed" or run["self_test"]:
+    if metadata["status"] != "completed" or (run["self_test"] and not allow_self_test):
         raise ValueError("incomplete/self-test run cannot report incidents")
     if str(metadata["id"]) != run["run_id"] or metadata["run_attempt"] != run["run_attempt"]:
         raise ValueError("run/attempt mismatch")
@@ -563,7 +580,15 @@ def snapshot_source(api, bundle, registry, destination):
     Historical suite hashes cannot be compared to today's changed checkout.
     """
     targets = {t["id"]: t for t in registry["integrations"]}
-    contracts = [(targets[c["integration_id"]].get("contract_test") or {}) for c in bundle["cases"]]
+    # No suite was executed for resolution/install/missing-upload placeholders.
+    # Missing registered files can be the failure itself; do not discard that row
+    # (or unrelated healthy cells) before canonical failure validation can run.
+    # Any actual execution/success still needs its complete historical suite.
+    needs_suite = lambda c: (c["status"] in ("passed", "flaky", "quarantined") or
+                             c["contract"]["tests"] or c["contract"]["junit_paths"] or
+                             c["contract"]["collected"] or c["contract"]["executed"])
+    contracts = [(targets[c["integration_id"]].get("contract_test") or {})
+                 for c in bundle["cases"] if needs_suite(c)]
     paths = {p for contract in contracts for p in contract.get("paths", [])}
     prefixes, configs = set(), set()
     for relative in paths:
@@ -581,7 +606,7 @@ def snapshot_source(api, bundle, registry, destination):
     selected = [row for row in tree["tree"] if row.get("type") != "tree" and
                 (row.get("path") in configs or any(row.get("path", "").startswith(p) for p in prefixes))
                 and "__pycache__" not in PurePosixPath(row.get("path", "")).parts and not row.get("path", "").endswith(".pyc")]
-    if len(selected) > MAX_FILES or sum(row.get("size", 0) for row in selected) > MAX_EXPANDED:
+    if len(selected) > MAX_SOURCE_FILES or sum(row.get("size", 0) for row in selected) > MAX_EXPANDED:
         raise ValueError("trusted source suite exceeds size/file limit")
     seen = set()
     for row in selected:
@@ -606,7 +631,7 @@ def snapshot_source(api, bundle, registry, destination):
     return destination
 
 
-def github_results(api, registry, now, selected_run=None, *, plans=None):
+def github_results(api, registry, now, selected_run=None, *, plans=None, diagnostics=None):
     since = (now - timedelta(days=16)).date().isoformat()
     runs = api.pages("actions/workflows/compatibility-canary.yml/runs?status=completed&created=%3E%3D" + since,
                      "workflow_runs", max_pages=5)
@@ -629,7 +654,10 @@ def github_results(api, registry, now, selected_run=None, *, plans=None):
             meta = api.request(f"/repos/{REPO}/actions/runs/{ident}")
             if str(meta.get("id")) != ident:
                 raise ValueError("discovered run identity mismatch")
-            runs.append(meta)
+            # During a rerun the previous aggregate still exists. It does not
+            # attest the running attempt; wait for its completion notification.
+            if meta.get("status") == "completed":
+                runs.append(meta)
         except (ValueError, KeyError, TypeError, OSError):
             errors.append({"id": f"requested-run:{ident}",
                            "summary": f"Recently uploaded aggregate run {ident} is unavailable; no execution was inferred."})
@@ -648,6 +676,10 @@ def github_results(api, registry, now, selected_run=None, *, plans=None):
     for meta in runs:
         explicit = str(meta["id"]) == str(selected_run)
         try:
+            if meta.get("status") != "completed":
+                if explicit and diagnostics is not None:
+                    diagnostics["trigger"] = "attempt_not_completed"
+                continue
             # created_at belongs to the original run, not its latest attempt.
             # Explicit selection has no history-window cutoff; stale observations
             # remain visible as stale and cannot supply fresh recovery evidence.
@@ -674,11 +706,20 @@ def github_results(api, registry, now, selected_run=None, *, plans=None):
                 extract_archive(archive, root)
                 bundle = load_json(safe_path(root, "results.json"))
                 schema_validate(bundle, "results.schema.json")
-                if bundle["run"]["self_test"]:
-                    if explicit:
-                        raise ValueError("requested run is a self-test, not production evidence")
-                    continue
                 raw = safe_path(root, "compat-plan.json").read_bytes()
+                if bundle["run"]["self_test"]:
+                    # Authenticate the completed trigger, original plan and flag
+                    # before ignoring it. A self-test is a diagnostic, never an
+                    # invalid-production-run incident (nor a heartbeat trigger).
+                    verify_provenance(bundle, meta, api, allow_self_test=True)
+                    plan = validate_plan_snapshot(raw)
+                    if (hashlib.sha256(raw).hexdigest() != bundle["run"]["plan_sha256"] or
+                            plan["source_sha"] != bundle["run"]["source_sha"] or
+                            plan["workflow_sha"] != bundle["run"]["workflow_sha"] or not plan["self_test"]):
+                        raise ValueError("self-test plan identity mismatch")
+                    if explicit and diagnostics is not None:
+                        diagnostics["trigger"] = "authenticated_self_test"
+                    continue
                 verify_provenance(bundle, meta, api)
                 with tempfile.TemporaryDirectory(prefix="compat-trusted-suite-") as source:
                     historical = snapshot_registry(api, bundle["run"]["source_sha"], Path(source))
@@ -688,7 +729,9 @@ def github_results(api, registry, now, selected_run=None, *, plans=None):
                 if plans is not None:
                     plans[bundle["run"]["run_id"]] = validate_plan_snapshot(raw)
                 bundles.append(bundle)
-        except (ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, RecursionError, zipfile.BadZipFile) as exc:
+                if explicit and diagnostics is not None:
+                    diagnostics["trigger"] = "production"
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, RecursionError, OverflowError, zipfile.BadZipFile) as exc:
             # Failure text contains no artifact payload. Preserve the broken run
             # as a health incident; malformed evidence must not disappear silently.
             errors.append({"id": f"invalid-run:{meta['id']}",
@@ -745,8 +788,11 @@ def main():
                         help="Trusted static source snapshot for offline strict artifact replay (never executed)")
     parser.add_argument("--github", action="store_true")
     parser.add_argument("--run-id")
+    parser.add_argument("--trigger-run-id", help="workflow_run trigger; fail closed on mutations unless this exact run is validated production evidence")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
+    if args.trigger_run_id and (not args.github or args.run_id or args.fixtures or args.baseline or args.artifact_root):
+        parser.error("--trigger-run-id requires exclusive --github mode")
     now = timestamp(args.now) if args.now else datetime.now(timezone.utc)
     registry = load_json(ROOT / ".github/compat/registry.json")
     runs, issues, errors, plans = [], [], [], {}
@@ -770,13 +816,35 @@ def main():
         runs = [bundle]
     elif args.github:
         api = GitHub()
-        runs, errors = github_results(api, registry, now, args.run_id, plans=plans)
+        diagnostics = {}
+        runs, errors = github_results(api, registry, now, args.trigger_run_id or args.run_id, plans=plans, diagnostics=diagnostics)
         if args.apply:
             if (os.environ.get("COMPAT_REPORT_ALLOW_WRITES") != "true" or
                     os.environ.get("GITHUB_REF") != "refs/heads/main" or
                     os.environ.get("GITHUB_REPOSITORY") != REPO or
                     os.environ.get("GITHUB_EVENT_NAME") not in ("workflow_run", "workflow_dispatch", "schedule")):
                 raise ValueError("issue writes require the trusted default-branch workflow guard")
+        trigger = diagnostics.get("trigger", "unverified_trigger")
+        production = trigger == "production"
+        # workflow_run of the default self_test=true dispatch must not drive any
+        # issue lifecycle, including unrelated heartbeat creation/closure. Unknown
+        # trigger intent is fail-closed too; retain diagnostics for operator review.
+        # An explicitly selected authenticated self-test is equally non-actionable.
+        if args.trigger_run_id or trigger == "authenticated_self_test":
+            args.output.mkdir(parents=True, exist_ok=True)
+            decision = {"run_id": args.trigger_run_id or args.run_id, "production": production, "reason": trigger}
+            (args.output / "trigger-decision.json").write_text(json.dumps(decision, indent=2) + "\n")
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                    output.write("production=" + str(production).lower() + "\n")
+            if not production:
+                (args.output / "incident-actions.json").write_text(json.dumps({"dry_run": True, "actions": []}) + "\n")
+                (args.output / "trigger-diagnostics.json").write_text(json.dumps({"errors": errors}, indent=2) + "\n")
+                print(json.dumps({"dry_run": True, "trigger": trigger, "incident_actions": 0, "output": str(args.output)}))
+                return
+        elif os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                output.write("production=true\n")  # Explicit production schedule/manual reporter invocation.
         # Read-only incident/repair-PR context belongs to normal artifacts too.
         # Only --apply below can mutate labels/issues. Fixture and branch paths
         # never construct an API client or read/write repository issue state.

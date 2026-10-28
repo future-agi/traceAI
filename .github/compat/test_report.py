@@ -853,6 +853,186 @@ class ProvenanceTests(unittest.TestCase):
         self.assertFalse(redirected.has_header('Authorization'))
 
 
+class ResumeBoundaryTests(unittest.TestCase):
+    """Layout controls are not fabricated executions; API tests never write."""
+    setUp = ProvenanceTests.setUp
+    metadata = ProvenanceTests.metadata
+    def test_weekly_archive_retains_failed_only_and_all_case_retry_layouts(self):
+        # 21 pilot cells, 18 retained files/cell plus shared/root references.
+        # The real weekly replay has 399 members; full retained retries have 772.
+        originals = {'results.json': b'{}', 'compat-plan.json': b'{}'}
+        for cell in range(21):
+            for item in range(18):
+                originals[f'evidence/case-{cell}/attempt-1/item-{item}.json'] = b'original'
+        originals.update({f'locks/shared-{i}.txt': b'lock' for i in range(19)})
+        self.assertEqual(len(originals), 399)
+        for retried in (range(7), range(21)):
+            files = dict(originals)
+            for cell in retried:
+                for item in range(18):
+                    files[f'evidence/case-{cell}/attempt-2/item-{item}.json'] = b'retry'
+            memory = io.BytesIO()
+            with zipfile.ZipFile(memory, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                for relative, content in files.items():
+                    archive.writestr(relative, content)
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                extract_archive(memory.getvalue(), root)
+                self.assertEqual({p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}, files)
+        # Count remains fail-closed and byte/path budgets are unchanged.
+        memory = io.BytesIO()
+        with zipfile.ZipFile(memory, 'w') as archive:
+            for i in range(4097):
+                archive.writestr(f'{i}.txt', b'')
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, 'file/expanded-size'):
+            extract_archive(memory.getvalue(), Path(tmp))
+
+    def test_overflowing_timestamp_run_is_isolated_from_healthy_run(self):
+        good, archive = bundle_archive(RUNS[-1])
+        bad = copy.deepcopy(good)
+        bad['run'].update(run_id='2000', url=f'https://github.com/{REPO}/actions/runs/2000',
+                          completed_at='9999-12-31T23:59:59-01:00')
+        _, bad_archive = bundle_archive(bad)
+        metadata = [dict(self.metadata(), created_at='2026-10-28T04:00:00Z'),
+                    dict(self.metadata(), id=2000, html_url=bad['run']['url'], created_at='2026-10-28T04:00:00Z')]
+        class API:
+            def pages(self, path, key, **kwargs):
+                if path.startswith('actions/artifacts?'):
+                    return []
+                if path.startswith('actions/workflows/'):
+                    return metadata
+                ident = int(path.split('/')[2])
+                return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archive), id=ident)]
+            def request(self, path, **kwargs):
+                return (archive if '/1007/' in path else bad_archive) if path.endswith('/zip') else {'status': 'ahead'}
+        bundles, errors = github_results(API(), REGISTRY, NOW)
+        self.assertEqual([b['run']['run_id'] for b in bundles], ['1007'])
+        self.assertEqual([e['id'] for e in errors], ['invalid-run:2000'])
+
+    def test_active_artifact_discovered_retry_is_not_a_production_failure(self):
+        bundle, archive = bundle_archive(RUNS[-1])
+        meta = dict(self.metadata(), status='in_progress', run_attempt=2)
+        class API:
+            def pages(self, path, key, **kwargs):
+                if path.startswith('actions/workflows/'):
+                    return []
+                return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archive), id=123,
+                             created_at='2026-10-28T05:10:00Z', workflow_run=dict(id=1007))]
+            def request(self, path, **kwargs):
+                return archive if path.endswith('/zip') else meta
+        bundles, errors = github_results(API(), REGISTRY, NOW)
+        self.assertEqual((bundles, errors), ([], []))
+        self.strict.assert_not_called()
+
+    def test_selftest_workflow_run_and_apply_cannot_reconcile_or_write_heartbeat(self):
+        from report import main
+        bundle = copy.deepcopy(RUNS[-1])
+        bundle['run']['self_test'] = True
+        bundle, archive = bundle_archive(bundle)
+        # The retained plan and aggregate must agree, not simply a self_test bit.
+        raw = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(archive)) as source, zipfile.ZipFile(raw, 'w') as dest:
+            plan = json.loads(source.read('compat-plan.json'))
+            plan['self_test'] = True
+            plan_bytes = json.dumps(plan).encode()
+            bundle['run']['plan_sha256'] = hashlib.sha256(plan_bytes).hexdigest()
+            for entry in source.infolist():
+                content = source.read(entry)
+                if entry.filename == 'results.json':
+                    content = json.dumps(bundle).encode()
+                elif entry.filename == 'compat-plan.json':
+                    content = plan_bytes
+                dest.writestr(entry.filename, content)
+        meta = dict(self.metadata(), created_at='2026-10-28T04:00:00Z')
+        class API:
+            def pages(self, path, key=None, **kwargs):
+                if path.startswith('actions/workflows/'):
+                    return [meta]
+                if path.startswith('actions/artifacts?'):
+                    return []
+                if path.startswith('actions/runs/'):
+                    return [dict(name='compatibility-results', expired=False, size_in_bytes=len(raw.getvalue()), id=123)]
+                raise AssertionError('self-test must not even read incident context')
+            def request(self, path, data=None, method='GET', **kwargs):
+                if method != 'GET':
+                    raise AssertionError('self-test attempted a write')
+                return raw.getvalue() if path.endswith('/zip') else {'status': 'ahead'}
+        for apply in (False, True):
+            with self.subTest(apply=apply), tempfile.TemporaryDirectory() as tmp, \
+                    patch('report.GitHub', return_value=API()), patch('report.reconcile') as reconcile, \
+                    patch('report.apply_actions') as writes, patch('builtins.print'), \
+                    patch.dict('os.environ', dict(COMPAT_REPORT_ALLOW_WRITES='true', GITHUB_REF='refs/heads/main',
+                                                  GITHUB_REPOSITORY=REPO, GITHUB_EVENT_NAME='workflow_run')), \
+                    patch('sys.argv', ['report', '--github', '--trigger-run-id', '1007', '--output', tmp] + (['--apply'] if apply else [])):
+                main()
+                reconcile.assert_not_called()
+                writes.assert_not_called()
+                decision = json.loads((Path(tmp) / 'trigger-decision.json').read_text())
+                self.assertFalse(decision['production'])
+                self.assertEqual(decision['reason'], 'authenticated_self_test')
+                self.assertEqual(json.loads((Path(tmp) / 'incident-actions.json').read_text())['actions'], [])
+
+    def test_trigger_gate_is_revalidated_by_apply_and_workflow_requires_production_output(self):
+        from incidents import reconcile
+        for decision, applied in [('production', True), ('unverified_trigger', False)]:
+            def results(api, registry, now, selected, *, plans, diagnostics):
+                diagnostics['trigger'] = decision
+                return ([RUNS[-1]] if applied else []), []
+            class API:
+                def pages(self, *args, **kwargs):
+                    return []
+            with self.subTest(decision=decision), tempfile.TemporaryDirectory() as tmp, \
+                    patch('report.GitHub', return_value=API()), patch('report.github_results', side_effect=results), \
+                    patch('report.apply_actions') as writes, patch('builtins.print'), \
+                    patch.dict('os.environ', dict(COMPAT_REPORT_ALLOW_WRITES='true', GITHUB_REF='refs/heads/main',
+                                                  GITHUB_REPOSITORY=REPO, GITHUB_EVENT_NAME='workflow_run')), \
+                    patch('sys.argv', ['report', '--github', '--apply', '--trigger-run-id', '1007', '--output', tmp]):
+                main()
+                self.assertEqual(writes.called, applied)
+        workflow = (ROOT / '.github/workflows/compatibility-report.yml').read_text()
+        self.assertIn("needs.render.outputs.production == 'true'", workflow)
+        self.assertEqual(workflow.count('--trigger-run-id "$CANARY_TRIGGER_RUN_ID"'), 2)
+        self.assertIn('production: ${{ steps.evidence.outputs.production }}', workflow)
+
+    def test_preexecution_missing_suite_preserves_unrelated_executed_contract(self):
+        failed = copy.deepcopy(RUNS[1])
+        case = failed['cases'][0]
+        case.update(status='blocked', resolved=[], dependency_lock=None)
+        case['failure'].update(kind='resolution', test_ids=[])
+        case['contract'].update(tests=[], junit_paths=[], scenarios=[], collected=0, executed=0, suite_sha256=hashlib.sha256(b'').hexdigest())
+        registry = copy.deepcopy(REGISTRY)
+        next(t for t in registry['integrations'] if t['id'] == 'python-openai')['contract_test']['paths'] = ['missing/test_absent.py']
+        class Empty:
+            def request(self, path):
+                return dict(truncated=False, tree=[])
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(snapshot_source(Empty(), failed, registry, Path(tmp)), Path(tmp))
+        # A different healthy integration still needs its complete authenticated suite.
+        api, healthy_registry = CanonicalBoundaryTests().source_api()
+        next(t for t in healthy_registry['integrations'] if t['id'] == 'python-anthropic')['contract_test']['paths'] = ['missing/test_absent.py']
+        missing = copy.deepcopy(case)
+        missing.update(integration_id='python-anthropic', case_id='anthropic-blocked')
+        mixed = copy.deepcopy(RUNS[-1])
+        mixed['cases'].append(missing)
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_source(api, mixed, healthy_registry, Path(tmp))
+            self.assertTrue((Path(tmp) / 'tests/test_trusted.py').is_file())
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, 'missing registered'):
+            snapshot_source(Empty(), RUNS[-1], registry, Path(tmp))
+
+    def test_junit_nested_and_parameterized_identities_match_canonical_semantics(self):
+        for classname, name, expected in [
+                ('tests.test_x', 'test_y', 'tests/test_x.py::test_y'),
+                ('tests.test_x.TestOuter', 'test_y[p.q]', 'tests/test_x.py::TestOuter::test_y[p.q]'),
+                ('tests.test_x.TestOuter.TestInner', 'test_y[p.q]', 'tests/test_x.py::TestOuter::TestInner::test_y[p.q]')]:
+            raw = f'<testsuite><testcase file="tests/test_x.py" classname="{classname}" name="{name}"/></testsuite>'.encode()
+            self.assertEqual(junit_outcomes(raw), {expected: 'passed'})
+        # Declaration rejection cannot depend on the XML byte encoding.
+        xml = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE testsuite [<!ENTITY x "test_y">]><testsuite><testcase file="tests/test_x.py" name="&x;"/></testsuite>'
+        with self.assertRaisesRegex(ValueError, 'DTD|declaration'):
+            junit_outcomes(xml.encode('utf-16'))
+
+
 class ResourceBoundaryTests(unittest.TestCase):
     def test_schema_stops_after_first_error(self):
         from jsonschema import Draft202012Validator

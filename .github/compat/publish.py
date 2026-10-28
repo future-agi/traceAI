@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
-
-from incidents import digest, heartbeat, iso, name_key, parse_issue, reporter_owned, text, timestamp
+from incidents import digest, heartbeat, iso, name_key, observation_fresh, parse_issue, reporter_owned, text, timestamp
 
 
 def known_bad_rows(states, registry, now, issues):
@@ -82,20 +80,7 @@ def build_index(runs, registry, now, *, fixture=False, states=(), issues=()):
     health = heartbeat(runs, registry, now)
     for row in rows.values():
         target = targets[row["integration_id"]]
-        representative = target["runtimes"]["representative"][:1]
-        daily = (row["mode"] == "source" and row["selector"] == "latest_eligible" and any(
-            row["runtime"]["version"] == v or row["runtime"]["version"].startswith(v + ".") for v in representative))
-        checked = timestamp(row["checked_at"])
-        # Each observation ages on its own cadence. Missing another runtime,
-        # selector or mode is a separate completeness/heartbeat health problem.
-        stale = checked <= now - timedelta(days=8)
-        if daily:
-            for days in range(18):
-                due = (now - timedelta(days=days)).replace(hour=3, minute=17, second=0, microsecond=0)
-                if due.weekday() in (0, 1, 2, 3, 4, 6) and due + timedelta(hours=36) <= now and checked < due:
-                    stale = True
-                    break
-        if stale:
+        if not observation_fresh(target, row["mode"], row["selector"], row["runtime"], row["checked_at"], now):
             row["status"] = "stale"
     return {"schema_version": 1, "generated_at": iso(now), "inventory_revision": registry["inventory_revision"],
             "fixture": fixture, "observations": sorted(rows.values(), key=lambda r: (r["integration_id"], r["mode"], r["id"])),
@@ -145,7 +130,7 @@ def render_markdown(index, *, baseline=False):
             lines += [f"- Failure: {text(row['failure']['summary'])}; signature `{row['failure']['signature']}`. "
                       "Do not install this tuple as a workaround. Consult a fresh published pass for this integration, if any."]
         if row["install_command"] and row["status"] == "passed":
-            lines += ["", "Exact tested install (retain the full lock from the evidence for transitive reproducibility):", "",
+            lines += ["", "Direct-version install pins (use the complete evidence lock to reproduce the tested transitive environment):", "",
                       "```sh", row["install_command"], "```"]
         lines += [""]
     if index["known_bad"]:
@@ -203,8 +188,20 @@ def render_markdown(index, *, baseline=False):
               "source commit, including its authenticated registry, for static hashing/AST checks only; current trusted code validates historical "
               "evidence against that historical registry, while current qualification remains separate. Tested-source code and artifact commands are never imported or executed. "
               "The separately trusted canary collector binds the aggregate to its original plan; the aggregate's copied plan alone is not independent provenance.",
+              "- Publication and recovery use the same cadence-aware freshness rule, including persisted source-recovery evidence. "
+              "Old daily passes cannot combine with a new pass merely because they are less than eight days old; weekly boundary evidence keeps its own cadence. "
+              "Recovery records retain their actual selector/mode/runtime; ambiguous legacy source records use the stricter representative-daily rule.",
               "- `release-notes.json` contains exact support/failure inputs, not an automatically approved support-policy change. "
+              "Its historical incident inputs retain unrecovered exclusions and release obligations even without current downloads; "
+              "they are explicitly aged references, not fresh observations or proof of a released fix. "
               "Confirm published fix versions, support additions, exclusions and floor/cap/privacy changes before release.",
+              "- A completed canary self-test is not a production failure. The workflow_run trigger must authenticate "
+              "its run identity and retained plan before incident reconciliation is enabled. Authenticated self-tests skip all writes, "
+              "including heartbeat; an unverified trigger also fails closed on writes and retains a diagnostic artifact. "
+              "A scheduled production heartbeat remains independent. Running retries wait for completion instead of reusing the previous attempt's aggregate.",
+              "- Retained weekly aggregate archives allow at most 4,096 members, 24 MiB compressed and 64 MiB expanded, "
+              "including both attempts. Large plan wheelhouses are separate inputs, not reporter archives. "
+              "Registered suite files are required for executed evidence; pre-execution failures remain reportable without inventing an executed suite.",
               "- Normal production dry-run artifacts read existing incident and repair-PR context with read-only permissions; "
               "only the separately guarded apply job can write issues. Explicit retained run IDs bypass discovery age limits, "
               "but their actual attempt execution timestamps still govern freshness; recent aggregate upload discovery also retains fresh reruns of old IDs "
@@ -230,4 +227,16 @@ def release_notes(index):
                  "source_build_unreleased": row["mode"] == "source",
                  "confirm_before_release": ["fix included in an installable instrumentation and core release",
                                            "support additions and exact known-bad exclusions", "floor/cap and privacy changes"]}
-                for row in index["observations"]]}
+                for row in index["observations"]],
+            "historical_incidents": [
+                {"evidence_kind": "historical_incident", "incident_key": bad["id"],
+                 "integration_id": bad["integration_id"], "incident_status": bad["status"],
+                 "intended_upstream_tuple": bad["tuple"], "signature": bad["signature"],
+                 "summary": bad["summary"], "issue_number": bad["issue_number"],
+                 "last_failure": bad["last_failure"], "age_days": bad["age_days"], "scopes": bad["scopes"],
+                 "fresh_observation": False, "requires_maintainer_review": True,
+                 "published_scope_affected": any(s["evidence"]["mode"] == "published" for s in bad["scopes"]),
+                 "confirm_before_release": ["investigate unrecovered exact tuple before claiming compatibility",
+                                            "confirm known exclusions and any installable released fix",
+                                            "retention expiry is not recovery; references may outlive artifacts"]}
+                for bad in index["known_bad"]]}

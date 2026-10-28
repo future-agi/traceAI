@@ -78,6 +78,8 @@ jobs:
 
   render:
     name: Validate trusted canary evidence
+    outputs:
+      production: ${{ steps.evidence.outputs.production }}
     if: >-
       github.repository == 'future-agi/traceAI' && github.ref == 'refs/heads/main' &&
       ((github.event_name == 'schedule' && github.ref_name == github.event.repository.default_branch) ||
@@ -105,12 +107,15 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0' 'packaging==24.2'
       - name: Validate provenance, locks, plan bytes and all planned cases; render dry-run
+        id: evidence
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          CANARY_TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          CANARY_RUN_ID: ${{ inputs.run_id }}
         run: |
           args=()
-          if [ -n "$CANARY_RUN_ID" ]; then args+=(--run-id "$CANARY_RUN_ID"); fi
+          if [ -n "$CANARY_TRIGGER_RUN_ID" ]; then args+=(--trigger-run-id "$CANARY_TRIGGER_RUN_ID");
+          elif [ -n "$CANARY_RUN_ID" ]; then args+=(--run-id "$CANARY_RUN_ID"); fi
           python -I .github/compat/report.py --github "${args[@]}" --output "$RUNNER_TEMP/report"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -123,7 +128,8 @@ jobs:
     name: Reconcile compatibility incidents
     needs: render
     if: >-
-      needs.render.result == 'success' && github.repository == 'future-agi/traceAI' &&
+      needs.render.result == 'success' && needs.render.outputs.production == 'true' &&
+      github.repository == 'future-agi/traceAI' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name != 'workflow_dispatch' || !inputs.self_test)
     runs-on: ubuntu-24.04
@@ -148,10 +154,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           COMPAT_REPORT_ALLOW_WRITES: 'true'
-          CANARY_RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          CANARY_TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          CANARY_RUN_ID: ${{ inputs.run_id }}
         run: |
           args=()
-          if [ -n "$CANARY_RUN_ID" ]; then args+=(--run-id "$CANARY_RUN_ID"); fi
+          if [ -n "$CANARY_TRIGGER_RUN_ID" ]; then args+=(--trigger-run-id "$CANARY_TRIGGER_RUN_ID");
+          elif [ -n "$CANARY_RUN_ID" ]; then args+=(--run-id "$CANARY_RUN_ID"); fi
           python -I .github/compat/report.py --github --apply "${args[@]}" --output "$RUNNER_TEMP/incidents"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -61,10 +61,36 @@ LABELS = {
 
 
 def timestamp(value):
-    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if dt.tzinfo is None:
-        raise ValueError("timestamp must include timezone")
-    return dt.astimezone(timezone.utc)
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return dt.astimezone(timezone.utc)
+    except OverflowError:
+        # ISO-shaped values can cross datetime's year boundary when normalized.
+        # This is malformed evidence, not a process-wide reporter failure.
+        raise ValueError("timestamp outside supported UTC range") from None
+
+
+def observation_fresh(target, mode, selector, runtime, checked_at, now):
+    """One cadence rule for customer observations and both recovery stores.
+
+    A representative source/latest cell is due Mon-Fri and Sunday, with 36h
+    grace. Other configured scopes have an eight-day maximum age. Missing other
+    cells belongs to heartbeat, not to the freshness of this observation.
+    """
+    checked = timestamp(checked_at)
+    if checked > now or checked <= now - timedelta(days=8):
+        return False
+    representative = target["runtimes"]["representative"][:1]
+    daily = mode == "source" and selector == "latest_eligible" and any(
+        runtime["version"] == v or runtime["version"].startswith(v + ".") for v in representative)
+    if daily:
+        for days in range(18):
+            due = (now - timedelta(days=days)).replace(hour=3, minute=17, second=0, microsecond=0)
+            if due.weekday() in (0, 1, 2, 3, 4, 6) and due + timedelta(hours=36) <= now and checked < due:
+                return False
+    return True
 
 
 def iso(dt):
@@ -142,7 +168,8 @@ def state_validator():
                                test_ids={"type": "array", "uniqueItems": True, "items": string},
                                scenarios=case["contract"]["properties"]["scenarios"])
     evidence_required = list(evidence_properties)
-    evidence_properties.update(failure_kind=case["failure"]["anyOf"][0]["properties"]["kind"],
+    evidence_properties.update(selector=case["selector"],
+                               failure_kind=case["failure"]["anyOf"][0]["properties"]["kind"],
                                pre_execution={"type": "boolean"},
                                planned_runtime={"type": "string", "minLength": 1, "maxLength": 128},
                                planned_runtime_identity=case["runtime"])
@@ -201,7 +228,12 @@ def parse_issue(issue):
         if state["kind"] == "compatibility":
             if state["key"] != digest([state["integration_id"], state["tuple"], state["signature"]]):
                 return None
+            if state["last_known_good"]:
+                timestamp(state["last_known_good"]["at"])
             for key, scope in state["scopes"].items():
+                timestamp(scope["watermark"][3])
+                if scope.get("source_watermark"):
+                    timestamp(scope["source_watermark"][3])
                 bad = scope["failure"]
                 if key != digest({"mode": bad["mode"], "runtime": bad["runtime"], "suite": scope["suite"]}):
                     return None
@@ -211,6 +243,7 @@ def parse_issue(issue):
                 if bad.get("pre_execution") and bad.get("failure_kind") == "automation" and "planned_runtime" not in bad:
                     return None
                 for ev in [bad, *scope["passes"], *scope["source_passes"]]:
+                    timestamp(ev["at"])
                     if ev["url"] != f"https://github.com/future-agi/traceAI/actions/runs/{ev['run_id']}":
                         return None
         return state
@@ -220,7 +253,7 @@ def parse_issue(issue):
 
 def evidence(case, run, selected=None):
     ev = {"run_id": run["run_id"], "url": run["url"], "at": case["completed_at"],
-          "case_id": case["case_id"], "mode": case["mode"], "runtime": case["runtime"],
+          "case_id": case["case_id"], "mode": case["mode"], "selector": case["selector"], "runtime": case["runtime"],
           "source_sha": case["source_sha"], "resolved": case["resolved"],
           "dependency_lock": case["dependency_lock"], "reproduction": case["reproduction"],
           "test_ids": case["failure"]["test_ids"] if case["failure"] else [],
@@ -388,7 +421,13 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
     # newer failures. Per-scope watermarks keep retries and repeated reports idempotent.
     observations = sorted([(c, r["run"]) for r in runs if not r["run"]["self_test"] for c in r["cases"]],
                           key=lambda pair: (timestamp(pair[0]["completed_at"]), pair[1]["run_id"], pair[0]["attempt"]))
-    fresh_cutoff = now - timedelta(days=8)
+    def fresh(ev, target):
+        # Legacy persisted evidence has no selector. Do not assume weekly grace
+        # for an ambiguous representative source pass; use the stricter daily
+        # rule. Newly written evidence retains its actual selector independently
+        # of the failed scope (source recovery may differ from published scope).
+        return observation_fresh(target, ev["mode"], ev.get("selector", "latest_eligible"),
+                                 ev["runtime"], ev["at"], now)
     for case, run in observations:
         at = timestamp(case["completed_at"])
         if at > now:
@@ -426,7 +465,7 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
                             other["source_watermark"] = observation
             state["status"] = "open"
             state["last_seen"] = max(state["last_seen"], case["completed_at"], key=timestamp)
-        elif case["status"] == "passed" and at >= fresh_cutoff:
+        elif case["status"] == "passed" and fresh(evidence(case, run), targets[case["integration_id"]]):
             for state in states.values():
                 if state["kind"] != "compatibility" or state["integration_id"] != case["integration_id"]:
                     continue
@@ -473,7 +512,7 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
             if state["status"] != "recovered":
                 for scope in scopes:
                     for field in ("passes", "source_passes"):
-                        scope[field] = [p for p in scope[field] if timestamp(p["at"]) >= fresh_cutoff]
+                        scope[field] = [p for p in scope[field] if fresh(p, targets[state["integration_id"]])]
             if all(len(s["passes"]) >= 2 for s in scopes):
                 state["status"] = "recovered"
             elif all(len(s["passes"]) >= 2 or (s["failure"]["mode"] == "published" and len(s["source_passes"]) >= 2)

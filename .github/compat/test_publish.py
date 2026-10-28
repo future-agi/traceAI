@@ -140,6 +140,33 @@ class PublishTests(unittest.TestCase):
                 self.assertEqual(len(rows), 2)
                 self.assertEqual({r['observed_status'] for r in rows}, {'failed', 'passed'})
 
+    def test_release_notes_keep_historical_exclusions_and_release_obligations(self):
+        from incidents import reconcile, REPORTER_USER
+        for templates, expected in [(RUNS[:2], 'open'), (RUNS[:5], 'release_pending')]:
+            action = reconcile(templates, [], REGISTRY, NOW)['actions'][0]
+            issue = dict(number=42, state=action['state'], body=action['body'], labels=action['labels'], user=dict(REPORTER_USER))
+            later = timestamp('2026-11-28T12:00:00Z')
+            index = build_index([], REGISTRY, later, states=reconcile([], [issue], REGISTRY, later)['states'], issues=[issue])
+            notes = release_notes(index)
+            self.assertEqual(index['observations'], [])
+            self.assertEqual(len(notes['historical_incidents']), 1)
+            obligation = notes['historical_incidents'][0]
+            self.assertEqual(obligation['incident_key'], action['key'])
+            self.assertEqual(obligation['incident_status'], 'open')  # old source passes have expired
+            self.assertEqual(obligation['issue_number'], 42)
+            self.assertEqual(obligation['intended_upstream_tuple'], [['openai', 'upstream', '1.93.1']])
+            self.assertGreater(obligation['age_days'], 30)
+            self.assertTrue(obligation['published_scope_affected'])
+            self.assertTrue(obligation['requires_maintainer_review'])
+            self.assertFalse(obligation['fresh_observation'])
+            self.assertNotIn('checked_at', obligation)
+            self.assertTrue(obligation['scopes'])
+            # A release-pending state is preserved as such while source passes are fresh.
+            current = build_index([], REGISTRY, NOW, states=reconcile([], [issue], REGISTRY, NOW)['states'], issues=[issue])
+            self.assertEqual(release_notes(current)['historical_incidents'][0]['incident_status'], expected)
+        recovered = reconcile(RUNS, [], REGISTRY, NOW)['states']
+        self.assertEqual(release_notes(build_index([], REGISTRY, NOW, states=recovered))['historical_incidents'], [])
+
     def test_fixture_golden_matches(self):
         page = render_markdown(build_index(RUNS, REGISTRY, NOW, fixture=True))
         self.assertEqual(page, (HERE / 'fixtures/expected-compatibility.md').read_text())
