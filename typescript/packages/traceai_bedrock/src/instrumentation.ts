@@ -7,6 +7,8 @@ import {
 import {
   context,
   diag,
+  Exception,
+  Span,
   SpanKind,
   SpanStatusCode,
   Tracer,
@@ -14,6 +16,7 @@ import {
 } from "@opentelemetry/api";
 import {
   getAttributesFromContext,
+  getErrorMessage,
   FITracer,
   TraceConfigOptions,
 } from "@traceai/fi-core";
@@ -61,6 +64,23 @@ let _isBedrockPatched = false;
  */
 export function isPatched(): boolean {
   return _isBedrockPatched;
+}
+
+/**
+ * Records a failed call on the span: the exception event and an ERROR status whose description is
+ * the error message only. Values that are not an `Error` of this realm (an error from another
+ * realm, a plain object, a string) are handled the same way, instead of `String(error)`, which
+ * gives "Name: message" or "[object Object]".
+ */
+export function recordBedrockError(span: Span, error: unknown): void {
+  if (error != null && typeof error === "object") {
+    span.recordException(error as Exception);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: getErrorMessage(error) });
+    return;
+  }
+  const text = String(error);
+  span.recordException(text);
+  span.setStatus({ code: SpanStatusCode.ERROR, message: text });
 }
 
 /**
@@ -280,23 +300,14 @@ export class BedrockInstrumentation extends InstrumentationBase {
           span.end();
           return response;
         })
-        .catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error.message,
-          });
+        .catch((error: unknown) => {
+          recordBedrockError(span, error);
           span.end();
           throw error;
         });
     } catch (error) {
       // Handle errors that occur before the Promise is returned (e.g. invalid parameters)
-      if (error instanceof Error) {
-        span.recordException(error);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-      } else {
-        span.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
-      }
+      recordBedrockError(span, error);
       span.end();
       throw error;
     }
@@ -374,12 +385,8 @@ export class BedrockInstrumentation extends InstrumentationBase {
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
             })
-            .catch((error: Error) => {
-              span.recordException(error);
-              span.setStatus({
-                code: SpanStatusCode.ERROR,
-                message: error.message,
-              });
+            .catch((error: unknown) => {
+              recordBedrockError(span, error);
               span.end();
             });
         } else {
@@ -391,13 +398,9 @@ export class BedrockInstrumentation extends InstrumentationBase {
         // Return user stream immediately - instrumentation cannot interfere
         return { ...response, body: userStream };
       })
-      .catch((error: Error) => {
+      .catch((error: unknown) => {
         // If the AWS SDK call itself fails, record error but still try to return original response
-        span.recordException(error);
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: error.message,
-        });
+        recordBedrockError(span, error);
         span.end();
         throw error; // Re-throw since we have no stream to return
       });
@@ -445,23 +448,14 @@ export class BedrockInstrumentation extends InstrumentationBase {
           span.end();
           return response;
         })
-        .catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error.message,
-          });
+        .catch((error: unknown) => {
+          recordBedrockError(span, error);
           span.end();
           throw error;
         });
     } catch (error) {
       // Handle errors that occur before the Promise is returned (e.g. invalid parameters)
-      if (error instanceof Error) {
-        span.recordException(error);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-      } else {
-        span.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
-      }
+      recordBedrockError(span, error);
       span.end();
       throw error;
     }
