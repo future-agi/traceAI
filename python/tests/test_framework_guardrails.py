@@ -37,96 +37,73 @@ from traceai_guardrails._wrap_guard_call import (
 
 
 class TestGuardrailsInstrumentor:
-    """Test the main Guardrails instrumentor."""
+    """Exercise the real installed Guardrails hook targets without a provider call."""
 
     def setup_method(self):
-        """Set up test fixtures."""
         self.instrumentor = GuardrailsInstrumentor()
 
     def test_instrumentation_dependencies(self):
-        """Test instrumentation dependencies."""
-        deps = self.instrumentor.instrumentation_dependencies()
-        assert deps == ("guardrails-ai>=0.4.5,<0.5.1",)
+        assert self.instrumentor.instrumentation_dependencies() == ("guardrails-ai>=0.5.0",)
 
-    @patch("traceai_guardrails.metadata.version")
-    def test_instrument_version_skip(self, mock_version):
-        """Test instrumentation skipped for version >= 0.5.1."""
-        mock_version.return_value = "0.5.1"
-        
-        with patch("traceai_guardrails.logger") as mock_logger:
-            self.instrumentor._instrument()
-            mock_logger.info.assert_called_with(
-                "Guardrails version >= 0.5.1 detected, skipping instrumentation"
-            )
+    @pytest.mark.parametrize("version,supported", [
+        ("0.4.5", False), ("0.5.0", True), ("0.5.1", True), ("0.6.0", True),
+    ])
+    def test_instrument_version_support(self, version, supported):
+        # The obsolete pre-0.5.1 guard was removed; retain the declared >=0.5.0
+        # support contract rather than reintroducing a silent instrumentation skip.
+        from packaging.requirements import Requirement
 
-    @patch("traceai_guardrails.wrap_function_wrapper")
-    @patch("traceai_guardrails.import_module")
-    @patch("traceai_guardrails.metadata.version")
-    @patch("traceai_guardrails.trace_api.get_tracer")
-    def test_instrument_basic(self, mock_get_tracer, mock_version, mock_import, mock_wrap):
-        """Test basic instrumentation setup."""
-        mock_version.return_value = "0.5.0"
-        mock_tracer = Mock()
-        mock_get_tracer.return_value = mock_tracer
-        
-        # Mock guardrails module - skip the complex import mocking for now
-        # Mock imported modules
-        mock_runner = Mock()
-        mock_runner.Runner.step = Mock()
-        mock_llm = Mock()
-        mock_llm.PromptCallableBase.__call__ = Mock()
-        mock_validation = Mock()
-        mock_validation.ValidatorServiceBase.after_run_validator = Mock()
-        
-        mock_import.side_effect = [mock_runner, mock_llm, mock_validation]
-        
-        # Just test the basic flow without the complex guard contextvar mocking
+        requirement, = self.instrumentor.instrumentation_dependencies()
+        assert (Version(version) in Requirement(requirement).specifier) is supported
+
+    def test_instrument_basic(self):
+        import guardrails as gd
+        from guardrails.run import Runner
+        from guardrails.llm_providers import PromptCallableBase
+        from guardrails.validator_service import ValidatorServiceBase
+        from opentelemetry.sdk.trace import TracerProvider
+
+        originals = (Runner.step, PromptCallableBase.__call__,
+                     ValidatorServiceBase.after_run_validator,
+                     gd.guard.contextvars, gd.async_guard.contextvars)
+        provider = TracerProvider()
         try:
-            self.instrumentor._instrument()
-        except Exception:
-            # Expected to fail due to missing guardrails import, that's OK
-            pass
-        
-        # Verify tracer setup
-        mock_get_tracer.assert_called_once()
-        
-        # Check basic attributes
-        assert hasattr(self.instrumentor, '_tracer')
-
-    @patch("traceai_guardrails.import_module")
-    def test_uninstrument(self, mock_import):
-        """Test uninstrumentation."""
-        # Set up mock originals
-        self.instrumentor._original_guardrails_runner_step = Mock()
-        self.instrumentor._original_guardrails_llm_providers_call = Mock()
-        self.instrumentor._original_guardrails_validation_after_run = Mock()
-        
-        # Mock modules
-        mock_runner = Mock()
-        mock_llm = Mock()
-        mock_validation = Mock()
-        mock_import.side_effect = [mock_llm, mock_runner, mock_validation]
-        
-        # Test uninstrumentation - it should complete without errors
-        try:
+            self.instrumentor._instrument(tracer_provider=provider)
+            assert Runner.step.__wrapped__ is originals[0]
+            assert PromptCallableBase.__call__.__wrapped__ is originals[1]
+            assert ValidatorServiceBase.after_run_validator.__wrapped__ is originals[2]
+            assert isinstance(gd.guard.contextvars, _Contextvars)
+            assert isinstance(gd.async_guard.contextvars, _Contextvars)
+        finally:
             self.instrumentor._uninstrument()
-        except Exception:
-            # Expected to fail due to missing guardrails, that's OK for this test
-            pass
-        
-        # Verify the method was called
-        assert mock_import.call_count >= 1
+            provider.shutdown()
+        assert Runner.step is originals[0]
+        assert PromptCallableBase.__call__ is originals[1]
+        assert ValidatorServiceBase.after_run_validator is originals[2]
+        assert gd.guard.contextvars is originals[3]
+        assert gd.async_guard.contextvars is originals[4]
 
-    @patch("traceai_guardrails.metadata.version")
-    def test_instrument_exception_handling(self, mock_version):
-        """Test exception handling during instrumentation."""
-        mock_version.return_value = "0.5.0"
-        
+    def test_uninstrument(self):
+        # Calling cleanup before any hooks are installed must be harmless.
+        import guardrails as gd
+        from guardrails.run import Runner
+        from guardrails.llm_providers import PromptCallableBase
+        from guardrails.validator_service import ValidatorServiceBase
+
+        originals = (Runner.step, PromptCallableBase.__call__,
+                     ValidatorServiceBase.after_run_validator,
+                     gd.guard.contextvars, gd.async_guard.contextvars)
+        self.instrumentor._uninstrument()
+        assert (Runner.step, PromptCallableBase.__call__,
+                ValidatorServiceBase.after_run_validator,
+                gd.guard.contextvars, gd.async_guard.contextvars) == originals
+
+    def test_instrument_exception_handling(self):
         with patch("traceai_guardrails.import_module", side_effect=ImportError("Test error")):
-            with patch.object(self.instrumentor, '_uninstrument') as mock_uninstrument:
-                with pytest.raises(ImportError):
+            with patch.object(self.instrumentor, '_uninstrument', wraps=self.instrumentor._uninstrument) as cleanup:
+                with pytest.raises(ImportError, match="Test error"):
                     self.instrumentor._instrument()
-                mock_uninstrument.assert_called_once()
+                cleanup.assert_called_once()
 
 
 class TestContextvars:
@@ -272,8 +249,8 @@ class TestPromptCallableWrapper:
         
         assert result == mock_response
         # Should set LLM input message attributes (includes .message. in path)
-        mock_span.set_attribute.assert_any_call("llm.input_messages.0.message.role", "user")
-        mock_span.set_attribute.assert_any_call("llm.input_messages.0.message.content", "Hello")
+        mock_span.set_attribute.assert_any_call("gen_ai.input.messages.0.message.role", "user")
+        mock_span.set_attribute.assert_any_call("gen_ai.input.messages.0.message.content", "Hello")
 
     def test_prompt_callable_wrapper_with_tokens(self):
         """Test prompt callable wrapper with token counts."""
@@ -292,8 +269,8 @@ class TestPromptCallableWrapper:
         
         assert result == mock_response
         # Should set token count attributes
-        mock_span.set_attribute.assert_any_call("llm.token_count.prompt", 15)
-        mock_span.set_attribute.assert_any_call("llm.token_count.completion", 25)
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 15)
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 25)
 
     def test_prompt_callable_wrapper_exception(self):
         """Test prompt callable wrapper exception handling."""
@@ -593,12 +570,12 @@ class TestUtilityFunctions:
         
         # Should extract role and content for each message (with .message. in path)
         attr_dict = dict(attributes)
-        assert "llm.input_messages.0.message.role" in attr_dict
-        assert attr_dict["llm.input_messages.0.message.role"] == "system"
-        assert "llm.input_messages.0.message.content" in attr_dict
-        assert attr_dict["llm.input_messages.0.message.content"] == "You are helpful"
-        assert "llm.input_messages.2.message.content" in attr_dict
-        assert attr_dict["llm.input_messages.2.message.content"] == "Hi there!"
+        assert "gen_ai.input.messages.0.message.role" in attr_dict
+        assert attr_dict["gen_ai.input.messages.0.message.role"] == "system"
+        assert "gen_ai.input.messages.0.message.content" in attr_dict
+        assert attr_dict["gen_ai.input.messages.0.message.content"] == "You are helpful"
+        assert "gen_ai.input.messages.2.message.content" in attr_dict
+        assert attr_dict["gen_ai.input.messages.2.message.content"] == "Hi there!"
 
     def test_get_llm_input_messages_invalid(self):
         """Test _get_llm_input_messages with invalid messages."""
@@ -621,10 +598,10 @@ class TestUtilityFunctions:
         attributes = list(_get_llm_output_messages(output))
         
         attr_dict = dict(attributes)
-        assert "llm.output_messages.0.message.role" in attr_dict
-        assert attr_dict["llm.output_messages.0.message.role"] == "assistant"
-        assert "llm.output_messages.0.message.content" in attr_dict
-        assert attr_dict["llm.output_messages.0.message.content"] == "This is the assistant response"
+        assert "gen_ai.output.messages.0.message.role" in attr_dict
+        assert attr_dict["gen_ai.output.messages.0.message.role"] == "assistant"
+        assert "gen_ai.output.messages.0.message.content" in attr_dict
+        assert attr_dict["gen_ai.output.messages.0.message.content"] == "This is the assistant response"
 
     def test_get_llm_output_messages_empty(self):
         """Test _get_llm_output_messages with empty output."""
@@ -650,5 +627,53 @@ class TestWithTracer:
         assert wrapper._tracer == mock_tracer
 
 
+@pytest.mark.parametrize("hide_content", [False, True])
+def test_prompt_wrapper_exported_attributes_and_privacy(hide_content):
+    """Canonical attributes survive export, while hidden payloads never do."""
+    from fi_instrumentation import FITracer, TraceConfig
+    from guardrails.classes.llm.llm_response import LLMResponse
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = FITracer(provider.get_tracer(__name__), config=TraceConfig(
+        hide_inputs=hide_content, hide_outputs=hide_content,
+    ))
+    response = LLMResponse(output="private-answer", prompt_token_count=3, response_token_count=5)
+
+    def respond(msg_history):
+        assert msg_history == [{"role": "user", "content": "private-question"}]
+        return response
+
+    try:
+        result = _PromptCallableWrapper(tracer=tracer)(
+            respond, None, (), {"msg_history": [{"role": "user", "content": "private-question"}]},
+        )
+        assert result is response
+        span, = exporter.get_finished_spans()
+        attrs = dict(span.attributes)
+        assert span.status.status_code == StatusCode.OK
+        assert attrs["gen_ai.span.kind"] == "LLM"
+        assert attrs["gen_ai.usage.input_tokens"] == 3
+        assert attrs["gen_ai.usage.output_tokens"] == 5
+        assert "raw.input" not in attrs
+        assert "raw.output" not in attrs
+        if hide_content:
+            assert "private-question" not in json.dumps(attrs)
+            assert "private-answer" not in json.dumps(attrs)
+            assert not any(key.startswith("gen_ai.input.messages") for key in attrs)
+            assert not any(key.startswith("gen_ai.output.messages") for key in attrs)
+        else:
+            assert attrs["gen_ai.input.messages.0.message.content"] == "private-question"
+            assert attrs["gen_ai.output.messages.0.message.content"] == "private-answer"
+            assert "private-question" in attrs["input.value"]
+            assert "private-answer" in attrs["output.value"]
+    finally:
+        provider.shutdown()
+
+
 if __name__ == "__main__":
-    pytest.main([__file__]) 
+    pytest.main([__file__])

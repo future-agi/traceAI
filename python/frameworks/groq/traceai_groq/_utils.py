@@ -108,9 +108,6 @@ def _extract_eval_input(
         ):
             eval_input.append(message["content"])
 
-    if eval_input and len(eval_input) > 0:
-        yield SpanAttributes.INPUT_VALUE, eval_input[0]
-
     eval_input = "\n".join(eval_input)
     yield SpanAttributes.INPUT_VALUE, eval_input
 
@@ -192,8 +189,9 @@ def _as_streaming_output(chunks: List[ChatCompletionChunk]):
         if model:
             yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
 
+    # output.value is the assembled answer, not a second copy of the raw chunks.
+    # Emitting both with the same key silently overwrites the answer in the span.
     yield SpanAttributes.OUTPUT_VALUE, output_value
-    yield SpanAttributes.OUTPUT_VALUE, safe_json_dumps(processed_chunks)
 
 
 def _to_dict(value: Any) -> Any:

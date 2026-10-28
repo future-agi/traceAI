@@ -52,7 +52,7 @@ class TestGroqInstrumentor:
     def test_instrumentation_dependencies(self):
         """Test instrumentation dependencies."""
         deps = self.instrumentor.instrumentation_dependencies()
-        assert ("groq >= 0.9.0") == deps
+        assert deps == ("groq >= 0.9.0",)
 
     @patch("traceai_groq.wrap_function_wrapper")
     @patch("traceai_groq.trace_api.get_tracer")
@@ -327,7 +327,7 @@ class TestRequestAttributesExtractor:
         # Should contain some attributes (exact keys depend on implementation)
         assert len(attributes) > 0
         # Check for span kind
-        assert "fi.span.kind" in attr_dict
+        assert attr_dict["gen_ai.span.kind"] == "LLM"
 
     def test_get_extra_attributes_from_request(self):
         """Test extracting extra attributes from request."""
@@ -449,8 +449,8 @@ class TestUtilityFunctions:
         attributes = list(_extract_eval_input(messages))
         
         attr_dict = dict(attributes)
-        assert "eval.input" in attr_dict
-        assert "query" in attr_dict
+        assert attr_dict == {"input.value": "First message\nSecond message\nUser message"}
+        assert len(attributes) == len(attr_dict)  # No duplicate canonical keys.
 
     def test_process_response_dict(self):
         """Test _process_response with dict response."""
@@ -498,8 +498,8 @@ class TestUtilityFunctions:
         
         assert len(attributes) == 1
         key, value = attributes[0]
-        assert key.endswith("output")  
-        assert '"test": "value"' in value
+        assert key == "output.value"
+        assert json.loads(value) == {"test": "value"}
 
     def test_as_streaming_output(self):
         """Test _as_streaming_output function."""
@@ -530,8 +530,12 @@ class TestUtilityFunctions:
         attr_dict = dict(attributes)
         assert "output.value" in attr_dict
         assert attr_dict["output.value"] == "Hello world!"
-        assert "llm.model_name" in attr_dict
-        assert "llm.token_count.total" in attr_dict
+        assert attr_dict["gen_ai.request.model"] == "llama-3.1-70b-versatile"
+        assert attr_dict["gen_ai.usage.total_tokens"] == 50
+        assert attr_dict["gen_ai.usage.input_tokens"] == 10
+        assert attr_dict["gen_ai.usage.output_tokens"] == 40
+        assert len(attributes) == len(attr_dict)  # Text must not be overwritten by raw chunks.
+        assert "raw.output" not in attr_dict
 
     def test_to_dict_with_model_dump(self):
         """Test _to_dict with object that has __dict__."""
@@ -650,5 +654,47 @@ class TestWithSpan:
         assert hasattr(with_span, '_extra_attributes') or hasattr(with_span, 'extra_attributes')
 
 
+@pytest.mark.parametrize("hide_content", [False, True])
+def test_real_sdk_stream_output_and_privacy(hide_content):
+    """Use real SDK chunk models; export text once and retain token metadata."""
+    from fi_instrumentation import FITracer, TraceConfig
+    from groq.types.chat import ChatCompletionChunk
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    common = dict(id="local-stream", created=1, model="llama-3.1-70b-versatile",
+                  object="chat.completion.chunk")
+    chunks = [
+        ChatCompletionChunk(**common, choices=[{"index": 0, "delta": {"content": "private-"}}]),
+        ChatCompletionChunk(**common, choices=[{"index": 0, "delta": {"content": "answer"}}],
+                            x_groq={"usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}}),
+    ]
+    attributes = list(_as_streaming_output(chunks))
+    assert len(attributes) == len(dict(attributes))
+    assert dict(attributes)["output.value"] == "private-answer"
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = FITracer(provider.get_tracer(__name__), config=TraceConfig(hide_outputs=hide_content))
+    try:
+        with tracer.start_as_current_span("groq-stream") as span:
+            for key, value in attributes:
+                span.set_attribute(key, value)
+        finished, = exporter.get_finished_spans()
+        attrs = dict(finished.attributes)
+        assert attrs["gen_ai.usage.input_tokens"] == 2
+        assert attrs["gen_ai.usage.output_tokens"] == 3
+        assert attrs["gen_ai.usage.total_tokens"] == 5
+        assert attrs["gen_ai.request.model"] == common["model"]
+        assert "raw.output" not in attrs
+        if hide_content:
+            assert "private-answer" not in json.dumps(attrs)
+        else:
+            assert attrs["output.value"] == "private-answer"
+    finally:
+        provider.shutdown()
+
+
 if __name__ == "__main__":
-    pytest.main([__file__]) 
+    pytest.main([__file__])
