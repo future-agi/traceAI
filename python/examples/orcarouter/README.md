@@ -16,7 +16,7 @@ Or install the packages directly:
 pip install traceAI-openai fi-instrumentation-otel openai
 ```
 
-The requirements pin `openai==3.24.0`, `traceAI-openai==0.1.10`, and `fi-instrumentation-otel==1.1.0`. The tested versions are listed under [Tests](#tests).
+The requirements pin `openai==3.24.0`, `traceAI-openai==0.1.10`, and `fi-instrumentation-otel==1.1.0`. Dependency variants are listed under [Tests](#tests).
 
 ## Configure
 
@@ -80,7 +80,7 @@ The fixtures produce one `ChatCompletion` span with `gen_ai.span.kind=LLM` per c
 
 For a successful non-streamed call, `gen_ai.request.model` is the model id the provider returns in its response. The requested model stays in the JSON attribute `gen_ai.request.parameters`. For streamed and failed calls, `traceai-openai` 0.1.10 and earlier leave `gen_ai.request.model` absent; the requested model is still in `gen_ai.request.parameters`. Hiding invocation parameters with `FI_HIDE_LLM_INVOCATION_PARAMETERS=true` removes that JSON attribute, so those versions record no model at all on streamed and failed spans. Later versions record the requested model in `gen_ai.request.model` either way; the tests accept both.
 
-The tests pin `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens` when the response includes usage. Missing usage is omitted, never replaced with zero. The default stream fixture exports none of these attributes. A stream with `stream_options={"include_usage": True}` and a final usage chunk exports all three. The same instrumentor accumulates streamed output text in `output.value`. These are fixture observations, not a guarantee that the hosted gateway supplies stream usage.
+The tests pin `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens` when the response includes usage. Missing usage is omitted, never replaced with zero. The default stream fixture exports none of these attributes. A stream with `stream_options={"include_usage": True}` and a final usage chunk exports all three. The same instrumentor accumulates streamed output text in `output.value`. OrcaRouter documents `stream_options={"include_usage": True}` to include token counts in the chunk immediately before `[DONE]`. The CLI leaves this option unset by default.
 
 The 401 and 429 fixtures raise the SDK's `AuthenticationError` and `RateLimitError`. Each exports one ERROR span with an exception event. Error tests disable SDK retries so a fixture produces one request. Gateway errors such as a wrong or non-OrcaRouter key (401), an unfunded wallet or rate limits come from OrcaRouter: the SDK raises them and the span records them as ERROR. They are not Future AGI ingest failures.
 
@@ -105,7 +105,6 @@ For a non-streamed Chat Completions call, `output.value` is the assistant text. 
 - Tool calling, vision, reasoning, embeddings, and Responses API behavior. Vendor compatibility claims at the [introduction](https://docs.orcarouter.ai/introduction) do not establish coverage by this test suite.
 - Hosted model availability, routing decisions, billing, and costs.
 - Native export. OrcaRouter's [Observability page](https://docs.orcarouter.ai/operations/observability) documents a Prometheus/OpenMetrics workspace-metrics scrape, an `X-Orca-Request-Id` response header and console request logs, but no trace export (checked 2026-10-06). This recipe traces on the client with `traceai-openai`: calls made without the instrumented SDK are not traced, and OrcaRouter metrics and console logs are not imported.
-- Not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API.
 
 ## Tests
 
@@ -138,8 +137,15 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 
 For the SDK floor, replace the `openai==3.24.0` pin with `openai==1.69.0`. For the other Python versions, change `--python`. The suite uses MockTransport at the documented host and local servers bound to `127.0.0.1`. Child processes use a socket guard that refuses external DNS and connections before they happen. A readiness sentinel and a negative control verify that the guard is installed and works.
 
-| Python | `openai` | traceAI packages | Result |
+| Python | `openai` | traceAI packages | Local check configuration |
 |---|---|---|---|
-| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
-| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
-| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
+| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Commands above |
+| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Commands above |
+| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Commands above |
+
+## Official API references
+
+- [OpenAI SDK compatibility](https://docs.orcarouter.ai/compatibility/openai-sdk)
+- [API keys and authentication](https://docs.orcarouter.ai/getting-started/get-api-key)
+- [Models](https://docs.orcarouter.ai/getting-started/models)
+- [Streaming and usage](https://docs.orcarouter.ai/advanced/streaming)
