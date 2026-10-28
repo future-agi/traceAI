@@ -30,6 +30,13 @@ if [[ "${1:-}" != --inside ]]; then
     --ro-bind "$root" "$root" --bind "$output" "$output"
     --ro-bind "$toolchain" "$toolchain" --chdir "$cwd" --clearenv
     --setenv PATH /usr/sbin:/usr/bin:/sbin:/bin)
+  # bwrap creates implicit mount parents mode 0700. Make the interpreter's
+  # synthetic parent directories traversable by the mapped disposable UID.
+  parent=$(dirname "$toolchain")
+  while [[ "$parent" != / ]]; do
+    args+=(--perms 0755 --dir "$parent")
+    parent=$(dirname "$parent")
+  done
   [[ ! -e /lib64 ]] || args+=(--ro-bind /lib64 /lib64)
   [[ ! -d /etc/ssl/certs ]] || args+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   exec sudo --non-interactive env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
@@ -48,6 +55,7 @@ exec unshare --user --map-users=65534,0,1 --map-groups=65534,0,1 --setuid=0 --se
   /bin/bash -c '
     set -euo pipefail
     root=$1; output=$2; toolchain=$3; shift 3
+    namei -l "$toolchain/bin/python3" >&2
     # -S: mandatory probes use only the clean toolchain, never dependency .pth.
     "$toolchain/bin/python3" -I -S - "$root" "$output" <<'\''PY'\''
 import json, os, pathlib, socket, subprocess, sys
