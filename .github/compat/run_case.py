@@ -224,7 +224,8 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                                                        cwd=consumer, env=clean_env(), text=True))
             installed = {canonicalize_name(n): v for n, v in actual.items()}
             freeze = subprocess.check_output([python, "-I", "-m", "pip", "freeze", "--all"], cwd=consumer, env=clean_env())
-            freeze_path = lock_dir / (case["case_id"] + f"-attempt{attempt}.freeze.txt")
+            # Retry identity includes the lock's relative path, not only its digest.
+            freeze_path = lock_dir / (case["case_id"] + ".freeze.txt")
             freeze_path.write_bytes(freeze)
             row["dependency_lock"] = {"format": "pip-freeze", "path": freeze_path.relative_to(output).as_posix(), "sha256": sha256(freeze)}
             stage = "requested_resolved_mismatch"
