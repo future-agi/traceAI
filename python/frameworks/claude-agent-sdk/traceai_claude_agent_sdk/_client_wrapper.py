@@ -17,6 +17,7 @@ from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 from ._attributes import ClaudeAgentAttributes, ClaudeAgentSpanKind
 from ._hooks import (
     create_pre_tool_use_hook,
+    create_subagent_start_hook,
     create_post_tool_use_hook,
     set_parent_span,
     clear_parent_span,
@@ -192,6 +193,7 @@ def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer) -> None:
 
         pre_hook = create_pre_tool_use_hook(tracer)
         post_hook = create_post_tool_use_hook(tracer)
+        start_hook = create_subagent_start_hook(tracer)
 
         # Insert at beginning to ensure we trace before user hooks
         pre_matcher = HookMatcher(matcher=None, hooks=[pre_hook])
@@ -199,6 +201,9 @@ def inject_tracing_hooks(options: Any, tracer: trace_api.Tracer) -> None:
 
         options.hooks["PreToolUse"].insert(0, pre_matcher)
         options.hooks["PostToolUse"].insert(0, post_matcher)
+        options.hooks.setdefault("SubagentStart", []).insert(
+            0, HookMatcher(matcher=None, hooks=[start_hook])
+        )
 
         logger.debug("Injected OpenTelemetry tracing hooks")
     except ImportError:
