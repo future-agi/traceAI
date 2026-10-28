@@ -34,7 +34,7 @@ def evidence(directory):
     row.update(status="passed", runtime={"implementation": "cpython", "version": "3.11.9", "os": "linux", "arch": "x86_64"},
                resolved=[{"name": r["name"], "role": r["role"], "version": r["selected_version"]} for r in selected["requested"]])
     row["contract"].update(collected=1, executed=1, junit_paths=["junit/case.xml"], tests=[{
-        "test_id": "tests/test_contract.py::test_real_sdk", "outcome": "passed", "duration_seconds": 0.1,
+        "test_id": "python/frameworks/openai/tests/test_openai_compatible_spans.py::test_real_sdk", "outcome": "passed", "duration_seconds": 0.1,
         "failure_signature": None, "exception_id": None}])
     lock = b"openai==3.24.0\ntraceai-openai==0.1.10\nfi-instrumentation-otel==1.2.1\n"
     row["dependency_lock"] = {"format": "pip-freeze", "path": "locks/case.txt", "sha256": sha256(lock)}
@@ -42,7 +42,7 @@ def evidence(directory):
     (case_dir / "locks").mkdir(parents=True)
     (case_dir / "junit").mkdir()
     (case_dir / "locks/case.txt").write_bytes(lock)
-    (case_dir / "junit/case.xml").write_text('<testsuite><testcase file="tests/test_contract.py" name="test_real_sdk"/></testsuite>')
+    (case_dir / "junit/case.xml").write_text('<testsuite><testcase file="python/frameworks/openai/tests/test_openai_compatible_spans.py" name="test_real_sdk" time="0.1"/></testsuite>')
     result = {"schema_version": 1, "run": run_header(plan, raw), "cases": [row]}
     write_json(case_dir / "results.json", result)
     return plan_dir, artifacts, output, case_dir, result
@@ -76,8 +76,9 @@ class CollectorTests(unittest.TestCase):
         def mutate(data, folder):
             row = data["cases"][0]
             row["status"] = "failed"
-            row["failure"] = failure("contract", "AssertionError: upstream removed response field", ["tests/test_contract.py::test_real_sdk"])
+            row["failure"] = failure("contract", "E AssertionError: upstream removed response field", ["python/frameworks/openai/tests/test_openai_compatible_spans.py::test_real_sdk"])
             row["contract"]["tests"][0].update(outcome="failure", failure_signature=row["failure"]["signature"])
+            (folder / "junit/case.xml").write_text('<testsuite><testcase file="python/frameworks/openai/tests/test_openai_compatible_spans.py" name="test_real_sdk" time="0.1"><failure>E AssertionError: upstream removed response field</failure></testcase></testsuite>')
         result = self.run_control(mutate)
         self.assertEqual(result["cases"][0]["status"], "failed")
         self.assertEqual(result["cases"][0]["failure"]["kind"], "contract")
@@ -102,6 +103,10 @@ class CollectorTests(unittest.TestCase):
         for mutation in mutations:
             with self.subTest(mutation=mutation):
                 self.run_control(mutation)
+
+    def test_pass_claim_with_changed_junit_fails_closed(self):
+        result = self.run_control(lambda data, folder: (folder / "junit/case.xml").write_text('<testsuite><testcase file="python/frameworks/openai/tests/test_openai_compatible_spans.py" name="test_real_sdk" time="0.1"><failure>AssertionError</failure></testcase></testsuite>'))
+        self.assertIn("do not match original JUnit", result["cases"][0]["failure"]["summary"])
 
     def test_artifact_symlinks_fail_closed(self):
         self.run_control(lambda data, folder: (folder / "evil").symlink_to("/tmp"))

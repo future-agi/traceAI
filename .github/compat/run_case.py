@@ -271,6 +271,9 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                                    junit_paths=[path.relative_to(output).as_posix()])
             if row["contract"]["executed"]:
                 row["contract"]["scenarios"] = contract["scenarios"]
+            if process.returncode not in (0, 1, 2, 3, 4, 5):
+                stage = "infrastructure"
+                raise ValueError(f"Runner crashed (exit {process.returncode}); exceptions cannot waive crashes")
             if process.returncode in (2, 3, 4, 5) or any(d["kind"] == "collection" for d in details):
                 raise ValueError(f"Collection/runner failure (pytest exit {process.returncode})")
             if row["contract"]["executed"] < contract["minimum_executed"]:

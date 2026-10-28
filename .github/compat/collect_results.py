@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import jsonschema
@@ -19,7 +20,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from plan import safe_path, sha256, validate_plan, write_json
-from run_case import empty_case, failure, now, run_header
+from run_case import empty_case, failure, junit, now, run_header
 
 MAX_FILE = 32 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
@@ -121,6 +122,15 @@ def collect(plan_dir, artifacts, output, schema):
                 if row["status"] in ("passed", "flaky") and row["contract"]["executed"] < target["contract_test"]["minimum_executed"]:
                     raise ValueError("Insufficient contract execution")
                 references = list(row["contract"]["junit_paths"])
+                observed = []
+                for relative in references:
+                    observed.extend(junit(safe_path(folder, relative))[0])
+                reported = [{**t, "exception_id": None} for t in row["contract"]["tests"]]
+                if observed != reported:
+                    raise ValueError("Reported outcomes do not match original JUnit")
+                paths = set(target["contract_test"]["paths"]) if target["contract_test"] else set()
+                if any(t["test_id"].split("::", 1)[0] not in paths for t in observed):
+                    raise ValueError("JUnit test ID is not repository-relative to the planned contract")
                 lock = row["dependency_lock"]
                 if lock:
                     path = safe_path(folder, lock["path"])
@@ -147,7 +157,7 @@ def collect(plan_dir, artifacts, output, schema):
             latest = max(cases, key=lambda c: c["attempt"])
             if latest["status"] != "passed" and not selected["non_blocking"]:
                 blocked.append(case_id)
-        except (ValueError, KeyError, OSError, jsonschema.ValidationError) as error:
+        except (ValueError, KeyError, OSError, ET.ParseError, jsonschema.ValidationError) as error:
             row = empty_case(selected, plan, targets[selected["integration_id"]])
             row["failure"] = failure("automation", str(error))
             row["completed_at"] = now()
