@@ -39,7 +39,7 @@ jobs:
           import json, os
           from pathlib import Path
           matrix = []
-          for recipe in ('databricks', 'lepton', 'orcarouter', 'anannas-ai', 'doubleword', 'perplexity'):
+          for recipe in ('databricks', 'lepton', 'orcarouter', 'anannas-ai', 'doubleword', 'perplexity', 'qwen'):
               root = Path('python/examples') / recipe
               if not root.exists():
                   continue  # Recipes may land independently.
