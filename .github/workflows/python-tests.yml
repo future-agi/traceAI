@@ -11,10 +11,8 @@ name: Python tests
 # each package is then tested against this repo's fi_instrumentation (the core_install step).
 # A change to python/tests/conftest.py or pytest.ini tests the packages that have core tests.
 # A moved file plans both the package it left and the one it entered.
-# A package on .github/python-tests-known-broken.txt still runs and shows a warning, but its
-# test failures do not fail the check; if its tests pass, the "Known-broken verdict" step fails the
-# job until the package is taken off the list. A failed install fails the check, listed or not:
-# the install steps have no continue-on-error, so the package's tests never run on a broken install.
+# Legacy known-broken reasons are provenance only, never permission for package-wide failures.
+# Every package produces JUnit; the scoped verdict rejects unrelated failures, skips and empty suites.
 # Every job has a timeout-minutes, so nothing can hang for GitHub's 6-hour default.
 # The "Python tests" job at the end is the one check to mark required on main and dev (on dev only
 # once this file is on dev: GitHub runs the workflow found in the PR's merge commit or the pushed commit).
@@ -71,6 +69,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install registry validation tools
+        run: pip install jsonschema==4.23.0 packaging==24.2
 
       - name: Test the planner and the known-broken verdict
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
@@ -139,7 +140,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Poetry
-        run: pip install "poetry==$POETRY_VERSION"
+        run: pip install "poetry==$POETRY_VERSION" jsonschema==4.23.0 packaging==24.2
 
       - name: Install fi_instrumentation and its dev dependencies
         working-directory: python
@@ -149,7 +150,19 @@ jobs:
         working-directory: python
         run: |
           echo "Not run here: the $(ls tests/test_framework_*.py | wc -l) framework test files import the framework packages, so each runs in its package's job (package (<name>)): $(ls tests/test_framework_*.py | xargs -n1 basename | tr '\n' ' ')"
-          poetry run pytest tests -p no:cacheprovider --ignore-glob='tests/test_framework_*.py'
+          poetry run pytest tests -p no:cacheprovider --ignore-glob='tests/test_framework_*.py' --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/core.xml"
+          poetry run python -I -c 'import json, platform, importlib.metadata as m; print(json.dumps({"runtime":{"implementation":"cpython", "version":platform.python_version()}, "resolved":[{"name":d.metadata["Name"], "version":d.version} for d in m.distributions()]}))' > "$RUNNER_TEMP/core-context.json"
+          python3 "$GITHUB_WORKSPACE/.github/compat/validate.py" verdict --root "$GITHUB_WORKSPACE" --integration-id python-fi-instrumentation --context "$RUNNER_TEMP/core-context.json" --junit "$RUNNER_TEMP/core.xml" --exit-code 0
+
+      - name: Preserve core execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-tests-python-fi-instrumentation
+          path: |
+            ${{ runner.temp }}/core.xml
+            ${{ runner.temp }}/core-context.json
+          if-no-files-found: error
 
   package:
     name: package (${{ matrix.package.name }}${{ matrix.package.known_broken && ', known broken' || '' }})
@@ -162,6 +175,8 @@ jobs:
       matrix:
         package: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
+      JUNIT_DIR: ${{ runner.temp }}/junit
+      TEST_CONTEXT: ${{ runner.temp }}/python-test-context.json
       PKG_DIR: ${{ matrix.package.dir }}
       # Both backends get their environment at <package dir>/.venv.
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
@@ -173,6 +188,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install registry validation tools
+        run: pip install jsonschema==4.23.0 packaging==24.2
 
       - name: Install the package and its dev dependencies (poetry)
         id: install_poetry
@@ -223,24 +241,29 @@ jobs:
 
       - name: Tests
         id: tests
-        continue-on-error: ${{ matrix.package.known_broken }}
+        continue-on-error: true
         env:
           PKG_NAME: ${{ matrix.package.name }}
           OWN_TESTS: ${{ matrix.package.own_tests }}
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
+          CONTRACT_TESTS: ${{ join(matrix.package.contract_tests, ' ') }}
         run: |
           # Run every set, then fail if any failed (no -x).
           venv_python="$GITHUB_WORKSPACE/$PKG_DIR/.venv/bin/python"
+          mkdir -p "$JUNIT_DIR"
+          "$venv_python" -I -c 'import json, platform, importlib.metadata as m; print(json.dumps({"runtime":{"implementation":"cpython", "version":platform.python_version()}, "resolved":[{"name":d.metadata["Name"], "version":d.version} for d in m.distributions()]}))' > "$TEST_CONTEXT"
           status=0
           ran=0
           expected=0
           [ "$OWN_TESTS" = "true" ] && expected=$((expected + 1))
           expected=$((expected + $(echo $CORE_TESTS | wc -w)))
+          expected=$((expected + $(echo $CONTRACT_TESTS | wc -w)))
+          echo "expected_suites=$expected" >> "$GITHUB_OUTPUT"
 
           if [ "$OWN_TESTS" = "true" ]; then
             ran=$((ran + 1))
             echo "::group::$PKG_NAME: $PKG_DIR/tests"
-            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest tests -p no:cacheprovider) || status=1
+            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest tests -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/own.xml") || { rc=$?; status=$((rc > status ? rc : status)); }
             echo "::endgroup::"
           fi
 
@@ -250,34 +273,54 @@ jobs:
           for test_file in $CORE_TESTS; do
             ran=$((ran + 1))
             echo "::group::$PKG_NAME: $test_file"
-            (cd "$GITHUB_WORKSPACE/python" && "$venv_python" -P -m pytest "${test_file#python/}" -p no:cacheprovider) || status=1
+            (cd "$GITHUB_WORKSPACE/python" && "$venv_python" -P -m pytest "${test_file#python/}" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/core-$ran.xml") || { rc=$?; status=$((rc > status ? rc : status)); }
             echo "::endgroup::"
           done
 
+          for test_file in $CONTRACT_TESTS; do
+            ran=$((ran + 1))
+            "$venv_python" -m pytest "$test_file" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o addopts= -o asyncio_mode=auto -o junit_family=xunit1 --junitxml="$JUNIT_DIR/contract-$ran.xml" || { rc=$?; status=$((rc > status ? rc : status)); }
+          done
+
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           if [ "$ran" != "$expected" ]; then
             echo "::error::$PKG_NAME: $expected test sets were planned but $ran ran"
             exit 1
           fi
           if [ "$ran" = "0" ]; then
-            echo "::notice::$PKG_NAME has no tests"
+            echo "::error::$PKG_NAME has no tests; not compatible"
+            exit 1
           fi
           exit "$status"
 
-      # A package on the known-broken list may fail its Tests step without failing the job. This step
-      # says so with a warning, and fails the job when the listed package passes instead, or when an
-      # install step failed (the install steps have no continue-on-error).
+      # The Tests step collects every suite even when one fails. This required verdict
+      # is the only authority for exact issue-backed quarantines; legacy reasons do not waive failures.
       - name: Known-broken verdict
-        if: always() && matrix.package.known_broken
+        if: always()
         env:
           PKG_NAME: ${{ matrix.package.name }}
           REASON: ${{ matrix.package.known_broken_reason }}
+          INTEGRATION_ID: ${{ matrix.package.integration_id }}
+          EXPECTED_SUITES: ${{ steps.tests.outputs.expected_suites }}
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
           INSTALL_POETRY: ${{ steps.install_poetry.outcome }}
           INSTALL_HATCH: ${{ steps.install_hatch.outcome }}
           CORE_INSTALL: ${{ steps.core_install.outcome }}
           TESTS: ${{ steps.tests.outcome }}
           OWN_TESTS: ${{ matrix.package.own_tests }}
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
+          CONTRACT_TESTS: ${{ join(matrix.package.contract_tests, ' ') }}
         run: bash .github/scripts/known_broken_verdict.sh
+
+      - name: Preserve exact execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-tests-${{ matrix.package.integration_id }}
+          path: |
+            ${{ runner.temp }}/junit/
+            ${{ runner.temp }}/python-test-context.json
+          if-no-files-found: error
 
   result:
     name: Python tests

@@ -627,6 +627,10 @@
             "minLength": 1
           },
           "minItems": 0
+        },
+        "regression_ci": {
+          "type": "boolean",
+          "description": "Explicitly wired into legacy integration-tests.yml; contract presence alone is not execution evidence. Optional, defaults false."
         }
       },
       "required": [

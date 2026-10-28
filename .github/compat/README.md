@@ -20,6 +20,18 @@ validation. PR2 owns discovery, planning, execution and the canary workflow.
 PR3 owns reporting, incident lifecycle and generated customer documentation.
 Do not create a second integration inventory in a planner.
 
+PR1 adds the optional boolean `integrations[].regression_ci` (absent means
+false). This additive schema extension explicitly preserves the nine targets
+already executed by `integration-tests.yml`; many other registry entries have
+candidate contract commands but were never wired to that workflow. The planner
+now derives executable targets from this field and emits `coverage_gaps` for
+affected remaining inventory, rather than treating test files as execution.
+No results ABI fields change. Consumers should absorb PR1's registry/schema
+before validating its registry snapshot.
+
+The Java example runtime observations reference the parent compiler target
+(`>=17`), not a verified example runtime; their legacy jobs execute on JDK 21.
+
 ## Registry interpretation
 
 `package_dir` is repository-relative. `upstream` names primary and coupled

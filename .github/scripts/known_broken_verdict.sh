@@ -1,42 +1,27 @@
 #!/usr/bin/env bash
-# The "Known-broken verdict" step of .github/workflows/python-tests.yml (tested in test_python_test_plan.py).
-# Reads PKG_NAME, REASON, INSTALL_POETRY, INSTALL_HATCH, CORE_INSTALL, TESTS, OWN_TESTS and CORE_TESTS from the environment.
-set -eo pipefail
-
-echo "outcomes: install (poetry)=$INSTALL_POETRY install (hatch)=$INSTALL_HATCH fi_instrumentation=$CORE_INSTALL tests=$TESTS"
-install_failed=""
-[ "$INSTALL_POETRY" = "failure" ] && install_failed="${install_failed:+$install_failed, }install (poetry)"
-[ "$INSTALL_HATCH" = "failure" ] && install_failed="${install_failed:+$install_failed, }install (hatch)"
-[ "$CORE_INSTALL" = "failure" ] && install_failed="${install_failed:+$install_failed, }fi_instrumentation install"
-# Any other Tests outcome (empty, or a renamed step id) is a wiring bug: fail rather than warn.
-case "$TESTS" in
-  success|failure|cancelled|skipped) ;;
-  *)
-    echo "::error::$PKG_NAME: unexpected Tests outcome '$TESTS'; check the verdict step's env in python-tests.yml"
-    exit 1
-    ;;
+# Legacy entrypoint retained for callers; REASON/known_broken never waive a failure.
+# Every package calls this gate, with exact JUnit and actual installed runtime data.
+set -euo pipefail
+for outcome in "${INSTALL_POETRY:-}" "${INSTALL_HATCH:-}" "${CORE_INSTALL:-}"; do
+  case "$outcome" in
+    success|skipped) ;;
+    *) echo "::error::${PKG_NAME:-package}: install/setup did not succeed"; exit 1 ;;
+  esac
+done
+case "${TESTS:-}" in
+  success|failure) ;;
+  *) echo "::error::${PKG_NAME:-package}: tests did not run to completion"; exit 1 ;;
 esac
-# A failed install fails the check, listed or not: the package's tests never ran against a working
-# install, so neither a pass nor a failure of them says anything about the listed reason.
-# The install steps have no continue-on-error, so a failed install skips the Tests step; this
-# check comes before the "skipped" one so the error names the install, whatever TESTS says.
-if [ -n "$install_failed" ]; then
-  echo "::error::$PKG_NAME: $install_failed failed; a failed install fails the check, listed or not"
+: "${INTEGRATION_ID:?missing integration ID}" "${JUNIT_DIR:?missing JUnit directory}" "${TEST_CONTEXT:?missing execution context}"
+: "${EXPECTED_SUITES:?missing planned suite count}" "${TEST_EXIT_CODE:?missing runner exit code}"
+shopt -s nullglob
+files=("$JUNIT_DIR"/*.xml)
+if [ "${#files[@]}" -ne "$EXPECTED_SUITES" ] || [ "$EXPECTED_SUITES" -eq 0 ]; then
+  echo "::error::${PKG_NAME:-package}: expected $EXPECTED_SUITES nonempty suites, found ${#files[@]}; not tested"
   exit 1
 fi
-# The Tests step is skipped when checkout or setup failed outright (a failed install is handled above), or
-# the job was cancelled: that is not a pass, and the job fails with it.
-if [ "$TESTS" = "skipped" ]; then
-  echo "::error::$PKG_NAME is known broken ($REASON), but its tests did not run (an earlier step failed, or the job was cancelled)"
-  exit 1
-fi
-# The tests passed: the line has to come off the list.
-if [ "$TESTS" = "success" ]; then
-  if [ "$OWN_TESTS" != "true" ] && [ -z "$CORE_TESTS" ]; then
-    echo "::error::$PKG_NAME is on the known-broken list but has no tests; remove its line from .github/python-tests-known-broken.txt"
-  else
-    echo "::error::$PKG_NAME is on the known-broken list but its tests pass; remove its line from .github/python-tests-known-broken.txt"
-  fi
-  exit 1
-fi
-echo "::warning::$PKG_NAME is known broken ($REASON): its failures do not fail the check"
+args=()
+for file in "${files[@]}"; do args+=(--junit "$file"); done
+exec "${VALIDATOR_PYTHON:-python3}" "${GITHUB_WORKSPACE:-$(pwd)}/.github/compat/validate.py" verdict \
+  --root "${GITHUB_WORKSPACE:-$(pwd)}" --integration-id "$INTEGRATION_ID" \
+  --context "$TEST_CONTEXT" --exit-code "$TEST_EXIT_CODE" "${args[@]}"

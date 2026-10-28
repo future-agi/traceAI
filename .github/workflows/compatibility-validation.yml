@@ -1,0 +1,128 @@
+name: Compatibility validation
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - '.github/compat/**'
+      - '.github/scripts/**'
+      - '.github/integration-ci/**'
+      - '.github/workflows/*tests.yml'
+      - '.github/workflows/compatibility-validation.yml'
+      - 'python/**/pyproject.toml'
+      - 'python/**/package.py'
+      - 'python/**/__init__.py'
+      - 'typescript/**/package.json'
+      - 'go/**/go.mod'
+      - 'java/**/pom.xml'
+      - 'csharp/**/*.csproj'
+  workflow_dispatch:
+  push:
+    branches: ['ci/compat-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-validation-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Registry and verdict regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - run: pip install jsonschema==4.23.0 packaging==24.2
+      - name: Record immutable source and validate declarations
+        run: |
+          echo "Tested source SHA: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          python .github/compat/validate.py registry --root "$GITHUB_WORKSPACE"
+      - run: |
+          python -m unittest discover -s .github/compat -p 'test_validate.py' -v
+          python -m unittest discover -s .github/scripts -p 'test_*.py' -v
+          python -m unittest discover -s .github/integration-ci -p 'test_*.py' -v
+
+  acceptance:
+    name: Acceptance gate (${{ matrix.kind }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [scoped, execution]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - run: pip install jsonschema==4.23.0 packaging==24.2
+      - name: Judge synthetic exact-exception execution using the production verdict
+        env:
+          FIXTURE_KIND: ${{ matrix.kind }}
+        run: |
+          echo "Tested source SHA: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          python .github/compat/validate.py fixture-gate "$FIXTURE_KIND"
+
+  offline-contract:
+    name: Offline SDK floor (${{ matrix.package }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - package: google-genai
+            requirement: google-genai==1.8.0
+            suite: test_google_genai.py
+          - package: anthropic
+            requirement: anthropic==0.41.0
+            suite: test_anthropic.py
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Install development core and instrumentation with exact SDK floor
+        env:
+          PACKAGE: ${{ matrix.package }}
+          REQUIREMENT: ${{ matrix.requirement }}
+        run: |
+          python -m venv "$RUNNER_TEMP/contract-env"
+          "$RUNNER_TEMP/contract-env/bin/pip" install pytest==8.4.2 pytest-asyncio==0.24.0 -e ./python -e "./python/frameworks/$PACKAGE" "$REQUIREMENT"
+          "$RUNNER_TEMP/contract-env/bin/pip" freeze > "$RUNNER_TEMP/contract-freeze.txt"
+      - name: Execute with loopback only (no host-network fallback)
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          echo "Tested source SHA: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          # Dependencies are already installed. This namespace has no external interface,
+          # including for child processes; FI_BASE_URL alone is not isolation.
+          sudo --preserve-env=FI_BASE_URL,FI_GRPC_URL unshare --net bash -euo pipefail -c '
+            ip link set lo up
+            test "$(ls /sys/class/net | tr "\n" " ")" = "lo "
+            exec "$1" -m pytest "$2/.github/compat/contracts/$3" -q -p no:cacheprovider --rootdir="$2" -o addopts= -o asyncio_mode=auto -o junit_family=xunit1 --junitxml="$4/contract.xml"
+          ' bash "$RUNNER_TEMP/contract-env/bin/python" "$GITHUB_WORKSPACE" "$SUITE" "$RUNNER_TEMP"
+      - name: Preserve floor execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-floor-${{ matrix.package }}
+          path: |
+            ${{ runner.temp }}/contract.xml
+            ${{ runner.temp }}/contract-freeze.txt
+          if-no-files-found: error

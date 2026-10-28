@@ -17,11 +17,22 @@
 
 ## Checklist
 
-- [ ] Branch is off `main`
+- [ ] Base branch is intentional (`dev` for integration/compatibility work; no automatic merge)
 - [ ] Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:` …)
 - [ ] No TODOs or commented-out code left in
 - [ ] No real API keys or secrets in the diff
 - [ ] If prose was added or changed: checked against [`docs/VOCABULARY.md`](../docs/VOCABULARY.md)
+
+## Compatibility (integration changes; otherwise mark N/A)
+
+- [ ] Named affected package-language IDs, upstream families and accountable registry owner
+- [ ] Exact floor, locked baseline, latest eligible and relevant boundaries have execution evidence (or are explicitly blocked/unqualified)
+- [ ] Package requirements, runtime guards and registry observations agree; no silent support-floor increase or family removal
+- [ ] Real SDK contracts check returns/errors, spans, privacy and applicable async/stream/tools/cancellation behavior
+- [ ] Built instrumentation **and core** tested from a clean consumer; source and released evidence distinguished
+- [ ] Nonzero executed tests, zero unexpected skips; every planned suite has JUnit
+- [ ] Any exception is exact test/version/runtime/signature-scoped, issue-backed, owned and expires within 14 days; no package-wide waiver
+- [ ] Explained support/privacy changes and whether a release is needed before customers benefit
 
 ## Notes for reviewers
 

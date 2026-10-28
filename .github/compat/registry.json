@@ -179,7 +179,8 @@
       "legacy_known_broken_reason": null,
       "notes": [
         "go.mod is a baseline requirement, not a tested minimum; record MVS graph and retractions. A new major module path requires separate assessment."
-      ]
+      ],
+      "regression_ci": true
     },
     {
       "id": "go-anthropic",
@@ -259,7 +260,8 @@
       "legacy_known_broken_reason": null,
       "notes": [
         "go.mod is a baseline requirement, not a tested minimum; record MVS graph and retractions. A new major module path requires separate assessment."
-      ]
+      ],
+      "regression_ci": true
     },
     {
       "id": "go-eino",
@@ -352,7 +354,8 @@
       "legacy_known_broken_reason": null,
       "notes": [
         "go.mod is a baseline requirement, not a tested minimum; record MVS graph and retractions. A new major module path requires separate assessment."
-      ]
+      ],
+      "regression_ci": true
     },
     {
       "id": "go-genai",
@@ -432,7 +435,8 @@
       "legacy_known_broken_reason": null,
       "notes": [
         "go.mod is a baseline requirement, not a tested minimum; record MVS graph and retractions. A new major module path requires separate assessment."
-      ]
+      ],
+      "regression_ci": true
     },
     {
       "id": "go-openai",
@@ -512,7 +516,8 @@
       "legacy_known_broken_reason": null,
       "notes": [
         "go.mod is a baseline requirement, not a tested minimum; record MVS graph and retractions. A new major module path requires separate assessment."
-      ]
+      ],
+      "regression_ci": true
     },
     {
       "id": "java-arconia-example",
@@ -555,7 +560,7 @@
       },
       "runtimes": {
         "implementation": "jdk",
-        "declared": null,
+        "declared": ">=17",
         "source": {
           "path": "java/pom.xml",
           "key": "properties/maven.compiler.target",
@@ -603,8 +608,10 @@
       "exceptions": [],
       "legacy_known_broken_reason": null,
       "notes": [
-        "Maven dependency pins are not a qualified support range; discovery/execution adapter deferred."
-      ]
+        "Maven dependency pins are not a qualified support range; discovery/execution adapter deferred.",
+        "Runtime declaration records the referenced parent compiler target, not a tested example runtime; execution uses JDK 21."
+      ],
+      "regression_ci": true
     },
     {
       "id": "java-quarkus-langchain4j-example",
@@ -634,7 +641,7 @@
       },
       "runtimes": {
         "implementation": "jdk",
-        "declared": null,
+        "declared": ">=17",
         "source": {
           "path": "java/pom.xml",
           "key": "properties/maven.compiler.target",
@@ -682,8 +689,10 @@
       "exceptions": [],
       "legacy_known_broken_reason": null,
       "notes": [
-        "Maven dependency pins are not a qualified support range; discovery/execution adapter deferred."
-      ]
+        "Maven dependency pins are not a qualified support range; discovery/execution adapter deferred.",
+        "Runtime declaration records the referenced parent compiler target, not a tested example runtime; execution uses JDK 21."
+      ],
+      "regression_ci": true
     },
     {
       "id": "java-traceai-java-anthropic",
@@ -4679,10 +4688,42 @@
         "modes": [],
         "selectors": []
       },
-      "contract_test": null,
+      "contract_test": {
+        "command": [
+          "python",
+          "-m",
+          "pytest",
+          ".github/compat/contracts/test_google_genai.py",
+          "-q",
+          "-p",
+          "no:cacheprovider",
+          "-o",
+          "addopts=",
+          "-o",
+          "asyncio_mode=auto"
+        ],
+        "cwd": ".",
+        "paths": [
+          ".github/compat/contracts/test_google_genai.py"
+        ],
+        "minimum_executed": 1,
+        "unexpected_skips": "fail",
+        "network": "loopback-only",
+        "scenarios": [
+          "real-sdk",
+          "sync",
+          "async",
+          "streaming",
+          "error-propagation",
+          "span-lifecycle",
+          "privacy"
+        ]
+      },
       "exceptions": [],
       "legacy_known_broken_reason": null,
-      "notes": []
+      "notes": [
+        "First offline real-SDK execution contract. Remains unqualified until floor/latest and clean-consumer evidence exist; not added to the floating pilot."
+      ]
     },
     {
       "id": "python-google-genai-live",
@@ -9085,7 +9126,8 @@
       },
       "exceptions": [],
       "legacy_known_broken_reason": null,
-      "notes": []
+      "notes": [],
+      "regression_ci": true
     },
     {
       "id": "typescript-cohere",
@@ -11302,7 +11344,8 @@
       },
       "exceptions": [],
       "legacy_known_broken_reason": null,
-      "notes": []
+      "notes": [],
+      "regression_ci": true
     },
     {
       "id": "typescript-pinecone",

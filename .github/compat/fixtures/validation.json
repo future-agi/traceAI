@@ -1,0 +1,68 @@
+{
+  "notice": "Synthetic acceptance data, not a real exception or issue assertion. Dates rebound to today only inside the fixture gate. Production registry has zero exceptions.",
+  "target": {
+    "id": "python-fixture",
+    "package_dir": "python/frameworks/fixture",
+    "upstream": [
+      {
+        "name": "fixture-sdk"
+      }
+    ],
+    "runtimes": {
+      "implementation": "cpython"
+    },
+    "exceptions": [
+      {
+        "id": "fixture-only-known-failure",
+        "test_ids": [
+          "python/frameworks/fixture/tests/test_contract.py::test_known[param]"
+        ],
+        "upstream_constraints": [
+          {
+            "name": "fixture-sdk",
+            "specifier": "==1.0.0"
+          }
+        ],
+        "runtime_constraints": {
+          "implementation": "cpython",
+          "specifier": "==3.11.*"
+        },
+        "expected_outcome": "failure",
+        "failure_signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "owner": "fixture-owner",
+        "issue": "https://github.com/future-agi/traceAI/issues/1",
+        "added": "2000-01-01",
+        "expires": "2000-01-08",
+        "exit_criteria": "Synthetic data only; never load into production registry."
+      }
+    ]
+  },
+  "runtime": {
+    "implementation": "cpython",
+    "version": "3.11.9"
+  },
+  "resolved": [
+    {
+      "name": "fixture-sdk",
+      "version": "1.0.0"
+    }
+  ],
+  "scoped": [
+    {
+      "test_id": "python/frameworks/fixture/tests/test_contract.py::test_known[param]",
+      "outcome": "failure",
+      "failure_signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "exception_id": null,
+      "duration_seconds": 0.01
+    }
+  ],
+  "execution": [
+    {
+      "test_id": "python/frameworks/fixture/tests/test_contract.py::test_known[param]",
+      "outcome": "failure",
+      "failure_signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "exception_id": null,
+      "duration_seconds": 0.01
+    }
+  ]
+}
