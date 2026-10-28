@@ -282,15 +282,20 @@ def _wrap_stream(original_method, tracer, name, attributes, record_result, kind)
         stream = None
         count = 0
         ended = False
+        missing = object()
+        pending = missing
         try:
             with trace_api.use_span(span, end_on_exit=False, record_exception=False,
                                     set_status_on_exception=False):
                 stream = original_method(self, *args, **kwargs).__aiter__()
             while True:
                 try:
-                    with trace_api.use_span(span, end_on_exit=False, record_exception=False,
-                                            set_status_on_exception=False):
-                        item = await stream.__anext__()
+                    if pending is not missing:
+                        item, pending = pending, missing
+                    else:
+                        with trace_api.use_span(span, end_on_exit=False, record_exception=False,
+                                                set_status_on_exception=False):
+                            item = await stream.__anext__()
                 except StopAsyncIteration:
                     break
                 count += 1
@@ -300,18 +305,24 @@ def _wrap_stream(original_method, tracer, name, attributes, record_result, kind)
                     # on_messages() returns immediately on Response without
                     # advancing the generator again. Finalize BEFORE yielding
                     # this terminal item, rather than relying on async-gen GC.
-                    with trace_api.use_span(span, end_on_exit=False, record_exception=False,
-                                            set_status_on_exception=False):
-                        await stream.aclose()
-                    stream = None
-                    span.set_attribute("autogen.is_error", False)
-                    span.set_status(Status(StatusCode.OK))
-                    span.set_attribute("autogen.stream.message_count", count)
-                    span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
-                    span.end()
-                    ended = True
-                    yield item
-                    return
+                    try:
+                        with trace_api.use_span(span, end_on_exit=False, record_exception=False,
+                                                set_status_on_exception=False):
+                            # Exhaust the final yield naturally: aclose() here
+                            # would interrupt the SDK's nested async-for cleanup.
+                            pending = await stream.__anext__()
+                    except StopAsyncIteration:
+                        stream = None
+                        span.set_attribute("autogen.is_error", False)
+                        span.set_status(Status(StatusCode.OK))
+                        span.set_attribute("autogen.stream.message_count", count)
+                        span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
+                        span.end()
+                        ended = True
+                        yield item
+                        return
+                    # Preserve even a nonstandard SDK's post-result items.
+                    # They are buffered, never silently discarded.
                 yield item
             span.set_attribute("autogen.is_error", False)
             span.set_status(Status(StatusCode.OK))

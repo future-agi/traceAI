@@ -322,8 +322,13 @@ class TestWrapTeamRun:
         span.__exit__ = MagicMock(return_value=None)
         tracer.start_as_current_span = MagicMock(return_value=span)
 
+        from autogen_agentchat.base import TaskResult
+        terminal = TaskResult(messages=[], stop_reason="complete")
+        exhausted = []
         async def original_run_stream(self, *, task=None, **kwargs):
             yield task
+            yield terminal
+            exhausted.append(True)  # not reached by premature aclose()
 
         wrapped = wrap_team_run(original_run_stream, tracer, "run_stream")
 
@@ -334,10 +339,16 @@ class TestWrapTeamRun:
         team._max_turns = None
 
         async def run_test():
-            return [item async for item in wrapped(team, task="Stream task")]
+            stream = wrapped(team, task="Stream task")
+            first = await anext(stream)
+            last = await anext(stream)
+            assert exhausted == [True]
+            tracer.start_span.return_value.end.assert_called_once()
+            await stream.aclose()
+            return [first, last]
 
         result = asyncio.run(run_test())
-        assert result == ["Stream task"]
+        assert result == ["Stream task", terminal]
         tracer.start_span.assert_called_once()
         tracer.start_span.return_value.end.assert_called_once()
 
