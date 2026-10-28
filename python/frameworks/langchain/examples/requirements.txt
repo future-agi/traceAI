@@ -1,5 +1,9 @@
 # Dependencies for running the scripts in this examples/ directory.
 #
+# Not for deep_agents.py: it needs deepagents==0.7.21, langchain-core>=1.6.6 and
+# langgraph>=1.0 (see the README's Deep Agents section), which conflict with the
+# pins below. Install those in a separate environment.
+#
 # These demos use pre-1.0 LangChain APIs (e.g. langchain.chains.LLMChain,
 # langchain.agents.AgentExecutor, langchain.memory.ConversationBufferMemory,
 # langchain.schema / langchain.vectorstores / langchain.embeddings) that were

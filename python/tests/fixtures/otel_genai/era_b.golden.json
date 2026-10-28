@@ -1,0 +1,28 @@
+[
+  {
+    "name": "invoke_agent",
+    "attributes": [
+      {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}}
+    ],
+    "status": {}
+  },
+  {
+    "name": "retrieval",
+    "attributes": [
+      {"key": "gen_ai.operation.name", "value": {"stringValue": "retrieval"}}
+    ],
+    "status": {}
+  },
+  {
+    "name": "chat gpt-test",
+    "attributes": [
+      {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+      {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-test"}},
+      {"key": "gen_ai.response.model", "value": {"stringValue": "gpt-test-actual"}},
+      {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "3"}},
+      {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "4"}},
+      {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}}
+    ],
+    "status": {}
+  }
+]

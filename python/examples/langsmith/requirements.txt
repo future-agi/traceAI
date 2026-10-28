@@ -1,0 +1,6 @@
+# Not a traceAI package: these are the example's own dependencies.
+# langsmith's otel extra pulls in the OpenTelemetry SDK and OTLP/HTTP exporter.
+langsmith[otel]==0.14.4
+# src/app.py imports these directly; pinned to the versions the contract test ran with.
+opentelemetry-sdk==1.45.0
+opentelemetry-exporter-otlp-proto-http==1.45.0
