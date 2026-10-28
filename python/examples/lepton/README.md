@@ -28,8 +28,9 @@ There is no shared public base URL. The endpoint URL from the API tab, or `lep e
 | `LEPTON_ENDPOINT_URL` | Yes | Endpoint URL from the endpoint details page, API tab, plus `/v1`. No default. |
 | `LEPTON_MODEL` | Yes, unless `--model` is supplied | Model served by your endpoint. |
 | `FI_BASE_URL` | No | Override the Future AGI collector origin; used by the tracer only. |
+| `FI_PROJECT_NAME` | No | Observe project name; defaults to `lepton-openai-recipe`. |
 
-Missing values and refused URLs exit with code 2 before tracing starts. This recipe requires a non-empty `LEPTON_API_TOKEN`. Create the endpoint with an access token, as NVIDIA recommends over making it public. Use the token the API tab shows.
+Missing values and refused URLs exit with code 2 before tracing starts. This recipe requires a non-empty `LEPTON_API_TOKEN`. As a security choice for this recipe, create a token-protected endpoint rather than a public one; NVIDIA documents both access modes. Use the token the API tab shows.
 
 ## Run
 
@@ -46,7 +47,7 @@ python src/app.py
 python src/app.py --stream
 ```
 
-You can also supply `--model` and `--prompt`. The example model is the model in NVIDIA's endpoint tutorial. Set the name to the model your endpoint actually serves.
+You can also supply `--model` and `--prompt`. The example model is the model in NVIDIA's endpoint tutorial. Set the name to the model your endpoint actually serves; list it with `client.models.list()` using the same configured client. The SDK sends the endpoint token as `Authorization: Bearer <token>`. The recipe environment variable names are application configuration, not NVIDIA SDK defaults.
 
 ## Code
 
@@ -74,7 +75,7 @@ The app validates the URL, model and non-empty token before registering tracing.
 
 ## What you see in Future AGI
 
-- One `ChatCompletion` span with `gen_ai.span.kind=LLM` per tested call.
+- One `ChatCompletion` span with `gen_ai.span.kind=LLM` per Chat Completions call.
 - For a non-streamed response, `gen_ai.request.model` is the model id the provider returns in its response.
 - `traceai-openai` 0.1.10 and earlier leave `gen_ai.request.model` absent on streamed and failed calls; later versions (future-agi/traceAI#249) record the requested model there. The requested model remains in the `gen_ai.request.parameters` JSON unless `FI_HIDE_LLM_INVOCATION_PARAMETERS=true`.
 - Token usage is present only when the response includes usage. Missing usage is omitted, never filled with zero.
@@ -90,9 +91,9 @@ Lepton here means [NVIDIA DGX Cloud Lepton endpoints](https://docs.nvidia.com/dg
 
 Copy the endpoint URL and API key from the endpoint details page, in its [API tab](https://docs.nvidia.com/dgx-cloud/lepton/features/endpoints/create-llm/). You can also run `lep endpoint get -n <name>` and read `external_endpoint`. The endpoint URL looks like `https://<workspace>-<endpoint>.xenon.lepton.run`. Append `/v1` yourself when setting `LEPTON_ENDPOINT_URL`: NVIDIA's [LLM endpoint example](https://docs.nvidia.com/dgx-cloud/lepton/examples/endpoint/deploy-gpt-oss/) uses `<ENDPOINT_URL>/v1/chat/completions`. If the endpoint is not OpenAI-compatible, stop; this recipe does not apply.
 
-`check_base_url()` returns an allowed URL exactly as given; it never appends `/v1`. For hosts under `*.xenon.lepton.run`, it requires HTTPS, rejects a host-only URL or `/` path, and refuses query strings and fragments. For every host, it refuses non-ASCII or malformed IDNA hostnames and credentials in the URL.
+`check_base_url()` returns an allowed URL exactly as given; it never appends `/v1`. For hosts under `*.xenon.lepton.run`, it requires HTTPS and exactly `/v1` or `/v1/`, rejects endpoint paths such as `/v1/chat/completions`, and refuses query strings and fragments. For every host, it refuses non-ASCII or malformed IDNA hostnames and credentials in the URL.
 
-The tested OpenAI SDK appends a trailing slash to a non-empty base path and lower-cases the scheme and host (the path keeps its case). For the syntactic test host `https://ws0000-example.xenon.lepton.run/v1`, the client base URL is `https://ws0000-example.xenon.lepton.run/v1/` and the request URL is `https://ws0000-example.xenon.lepton.run/v1/chat/completions`. The suite also keeps `https://endpoint.example.invalid/v1` as a syntactic test host on the reserved `.invalid` domain. Neither test host is contacted; both use in-process fixtures.
+The OpenAI SDK appends a trailing slash to a non-empty base path and lower-cases the scheme and host (the path keeps its case). For the syntactic test host `https://ws0000-example.xenon.lepton.run/v1`, the client base URL is `https://ws0000-example.xenon.lepton.run/v1/` and the request URL is `https://ws0000-example.xenon.lepton.run/v1/chat/completions`. The suite also keeps `https://endpoint.example.invalid/v1` as a syntactic test host on the reserved `.invalid` domain. Neither test host is contacted; both use in-process fixtures.
 
 Endpoints can be public and reachable by anyone with the URL. For a public endpoint, treat the URL like a secret and never commit it. The app does not print endpoint URLs in its configuration or request error messages. Legacy Lepton AI hosts and console hosts are refused even with upper-case or trailing-dot spellings. Literal and repeatedly percent-encoded placeholders are refused.
 
@@ -100,7 +101,7 @@ Endpoints can be public and reachable by anyone with the URL. For a public endpo
 
 Set `FI_HIDE_INPUTS=true` to keep prompt text out of exported span attributes. Set `FI_HIDE_OUTPUTS=true` to keep response text out. You can also pass `TraceConfig(hide_inputs=True)` to the instrumentor. The endpoint still receives the prompt. Future AGI masking does not change the provider's own logging.
 
-In the tested chat, streaming and HTTP 401 fixtures, the endpoint URL and host are absent from exported span attributes, events, status and resource values. This holds with the `FI_HIDE_*` flags enabled or disabled. The instrumentor does not export `server.address`, `url.full` or a base-URL attribute in these cases. This observation covers this recipe's instrumentor; extra HTTP instrumentation or logging has its own behavior.
+In the chat, streaming and HTTP 401 fixtures, the endpoint URL and host are absent from exported span attributes, events, status and resource values. This holds with the `FI_HIDE_*` flags enabled or disabled. The instrumentor does not export `server.address`, `url.full` or a base-URL attribute in these cases. This observation covers this recipe's instrumentor; extra HTTP instrumentation or logging has its own behavior.
 
 The vendor token is also absent from the exported spans, resources and collector headers. Future AGI keys are used only for the collector.
 
@@ -111,7 +112,6 @@ The vendor token is also absent from the exported spans, resources and collector
 - The `leptonai` photon client.
 - NVIDIA's Python SDK. It is a workspace control-plane client for batch jobs, endpoints and secrets, not an inference client.
 - Non-OpenAI-compatible endpoints, endpoint deployment, and APIs other than Chat Completions.
-- Live endpoint calls. This recipe is not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API and in-process fixtures.
 
 ## Tests
 
@@ -144,8 +144,14 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 
 For the floor row, change `openai==3.24.0` to `openai==1.69.0` in the repository-source command. Tests use `httpx.MockTransport` at the syntactic test host and loopback subprocesses protected by a socket guard. No provider host is called.
 
-| Python | `openai` | traceAI packages | Result |
+| Python | `openai` | traceAI packages | Local check configuration |
 |---|---|---|---|
-| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
-| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
-| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
+| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Commands above |
+| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Commands above |
+| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Commands above |
+
+## Official API references
+
+- [Use an endpoint and list its models](https://docs.nvidia.com/dgx-cloud/lepton/get-started/endpoint/)
+- [Endpoint access control](https://docs.nvidia.com/dgx-cloud/lepton/features/endpoints/configurations/)
+- [OpenAI-compatible inference example](https://docs.nvidia.com/dgx-cloud/lepton/examples/endpoint/deploy-gpt-oss/)

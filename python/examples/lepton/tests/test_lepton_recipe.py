@@ -42,7 +42,7 @@ TEST_BASE_URL = "https://endpoint.example.invalid/v1"
 XENON_TEST_BASE_URL = "https://ws0000-example.xenon.lepton.run/v1"
 MODEL = "nvidia/Nemotron-Research-Reasoning-Qwen-1.5B"
 # Synthetic served id. NVIDIA docs do not publish a rewrite of this example model.
-# No live Lepton call. Host exclusions are unchanged.
+# Keep the model-resolution control synthetic and distinct from the request.
 RESPONSE_MODEL = "fixture-served/not-a-live-lepton-model"
 VENDOR_KEY = "placeholder-lepton-key"
 FI_KEY = "placeholder-futureagi-key"
@@ -98,6 +98,9 @@ REFUSED_URLS = [
     ("https://ws0000-example.xenon.lepton.run", "append /v1"),
     ("https://ws0000-example.xenon.lepton.run/", "append /v1"),
     ("https://WS0000-EXAMPLE.XENON.LEPTON.RUN.", "append /v1"),
+    (XENON_TEST_BASE_URL + "/chat/completions", "base path /v1"),
+    (XENON_TEST_BASE_URL + "/models", "base path /v1"),
+    ("https://ws0000-example.xenon.lepton.run/api/v1", "base path /v1"),
     (XENON_TEST_BASE_URL + "?placeholder=query", "query or fragment"),
     (XENON_TEST_BASE_URL + "#placeholder-fragment", "query or fragment"),
     (XENON_TEST_BASE_URL + "?", "query or fragment"),
@@ -597,6 +600,9 @@ def test_main_missing_configuration_exits_before_tracing(monkeypatch, capsys, va
     (quote(quote(app.DOCUMENTED_BASE_URL_FORMS[0], safe=""), safe=""), "placeholder"),
     ("http://ws0000-example.xenon.lepton.run/v1", "https"),
     ("https://ws0000-example.xenon.lepton.run", "append /v1"),
+    (XENON_TEST_BASE_URL + "/chat/completions", "base path /v1"),
+    (XENON_TEST_BASE_URL + "/models", "base path /v1"),
+    ("https://ws0000-example.xenon.lepton.run/api/v1", "base path /v1"),
     (XENON_TEST_BASE_URL + "?placeholder=query", "query or fragment"),
 ])
 def test_main_refuses_url_without_tracing_or_network(monkeypatch, capsys, tmp_path, url, reason):
@@ -709,7 +715,7 @@ def test_readme_and_requirements_pin_customer_contract():
         "If the endpoint is not OpenAI-compatible, stop", "anyone with the URL",
         "treat the URL like a secret", "never commit it", "Append `/v1` yourself",
         "https://<workspace>-<endpoint>.xenon.lepton.run", "lep endpoint get -n <name>",
-        "This recipe requires a non-empty `LEPTON_API_TOKEN`", "as NVIDIA recommends",
+        "This recipe requires a non-empty `LEPTON_API_TOKEN`", "NVIDIA documents both access modes",
         "lower-cases the scheme and host (the path keeps its case)",
         "put `src/` on `PYTHONPATH` or run the snippet from `src/`",
         "HTTPS", "credentials", XENON_TEST_BASE_URL,

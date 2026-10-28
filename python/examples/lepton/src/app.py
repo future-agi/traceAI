@@ -26,6 +26,8 @@ def check_base_url(url: str) -> str:
         decoded = next_value
     if any(marker in decoded for marker in ("<", ">", "ENDPOINT_URL")):
         raise ValueError(f"Replace the {BASE_URL_ENV} placeholder using the API tab.")
+    if any(char.isspace() or not char.isprintable() for char in url):
+        raise ValueError(f"Set {BASE_URL_ENV} to a valid HTTP endpoint base URL.") from None
     try:
         parsed = urlsplit(url)
         host = parsed.hostname or ""
@@ -50,6 +52,8 @@ def check_base_url(url: str) -> str:
             raise ValueError("append /v1 to the endpoint URL (NVIDIA documents <ENDPOINT_URL>/v1/chat/completions)")
         if "?" in url or "#" in url:
             raise ValueError("Remove the query or fragment from the endpoint base URL.")
+        if parsed.path not in ("/v1", "/v1/"):
+            raise ValueError("Use the endpoint base path /v1, not an endpoint or another path.")
     return url
 
 
@@ -69,7 +73,7 @@ def make_client(
 
 def setup_tracing(project_name: str | None = None):
     provider = register(
-        project_name=project_name or "lepton-openai-recipe",
+        project_name=project_name or os.environ.get("FI_PROJECT_NAME") or "lepton-openai-recipe",
         project_type=ProjectType.OBSERVE,
         set_global_tracer_provider=False,
         verbose=False,
