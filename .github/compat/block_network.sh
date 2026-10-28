@@ -9,7 +9,8 @@ if [[ "${1:-}" != --inside ]]; then
   # sudo only creates the new namespaces; no capabilities in the host namespace
   # survive exec. no-new-privs prevents an installed test binary gaining them.
   exec sudo --non-interactive env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
-    unshare --user --map-root-user --net -- \
+    unshare --user --map-users="0:$(id -u):1" --map-groups="0:$(id -g):1" \
+    --setuid=0 --setgid=0 --keep-caps --net -- \
     setpriv --no-new-privs bash "$(realpath "$0")" --inside "$@"
 fi
 shift
