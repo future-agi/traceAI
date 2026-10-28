@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from collect_results import collect, validate_case
 from plan import sha256, write_json
-from run_case import empty_case, failure, run_header
+from run_case import empty_case, failure, run_header, contract_command
 from test_plan import NOW, SHA, inputs, generate, RUNTIMES
 
 SCHEMA = json.loads(Path(__file__).with_name("results.schema.json").read_text())
@@ -34,7 +34,7 @@ def evidence(directory):
     row.update(status="passed", runtime={k: RUNTIMES["3.11"][k] for k in ("implementation", "version", "os", "arch")},
                resolved=[{"name": r["name"], "role": r["role"], "version": r["selected_version"], "artifact_sha256": "a" * 64}
                          for r in selected["requested"]])
-    row["contract"].update(suite_sha256="f" * 64, command=target["contract_test"]["command"], scenarios=target["contract_test"]["scenarios"],
+    row["contract"].update(suite_sha256="f" * 64, command=contract_command(target["contract_test"], "junit/attempt1.xml"), scenarios=target["contract_test"]["scenarios"],
         collected=2, executed=2, junit_paths=["junit/attempt1.xml"], tests=[{
         "test_id": node, "outcome": "passed", "duration_seconds": 0.1, "failure_signature": None, "exception_id": None} for node in IDS])
     distributions = [(r["name"], r["selected_version"]) for r in selected["requested"]] + [("transitive-sdk-helper", "1.0.0")]
@@ -70,7 +70,7 @@ def semantic_check(row, target, root):
     # the real PR1 interface from the immutable source checkout, not this mock.
     if row["contract"]["suite_sha256"] != "f" * 64:
         raise ValueError("trusted suite digest mismatch")
-    if row["contract"]["command"] != target["contract_test"]["command"]:
+    if row["contract"]["command"] != contract_command(target["contract_test"], "junit/attempt1.xml"):
         raise ValueError("registered contract command mismatch")
     if {t["test_id"] for t in row["contract"]["tests"]} != set(IDS):
         raise ValueError("registered contract test nodes mismatch")

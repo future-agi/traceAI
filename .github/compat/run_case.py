@@ -60,6 +60,11 @@ def aggregate_failure(details, ids, fallback="pytest failed"):
     return result
 
 
+def contract_command(registered, junit_path):
+    return ["python", "-I", *registered["command"][1:], "--import-mode=importlib", "--rootdir=.",
+            "-p", "pytest_asyncio.plugin", "-o", "junit_family=legacy", "--junitxml=" + junit_path]
+
+
 def sandbox(root, output, toolchain, consumer, command):
     return ["bash", str(root / "block_network.sh"), str(root), str(output), str(toolchain), str(consumer), *command]
 
@@ -128,7 +133,7 @@ def copy_suite(root, consumer, files):
     return digest.hexdigest()
 
 
-def junit(path):
+def junit(path, validator=None):
     if path.stat().st_size > 10 * 1024 * 1024:
         raise ValueError("Oversized JUnit")
     raw = path.read_bytes()
@@ -166,6 +171,14 @@ def junit(path):
                       "failure_signature": sig, "exception_id": None})
     if len({t["test_id"] for t in tests}) != len(tests):
         raise ValueError("Duplicate JUnit test IDs")
+    if validator is not None:
+        # PR1 owns canonical diagnostics/identity semantics. In particular, use
+        # its complete exception diagnostics rather than a truncated display.
+        canonical = validator.junit_tests(path)
+        by_id = {t["test_id"]: t for t in canonical}
+        for detail in details:
+            detail["signature"] = by_id[detail["test_ids"][0]]["failure_signature"]
+        tests = canonical
     return tests, details
 
 
@@ -239,6 +252,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             shared_output.chmod(0o777)
             toolchain = Path(sys.base_prefix).resolve()
             inventory = [python, "-I", "-c", "import importlib.metadata as m,json; print(json.dumps({d.metadata['Name']: d.version for d in m.distributions()}))"]
+            stage = "infrastructure"
             with (output / "inventory-sandbox.log").open("w") as log:
                 actual = json.loads(subprocess.check_output(sandbox(temporary, shared_output, toolchain, consumer, inventory),
                     cwd=consumer, env=clean_env(), stderr=log, text=True, timeout=120))
@@ -274,8 +288,8 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             if command[:3] != ["python", "-m", "pytest"]:
                 raise ValueError("Pilot runner accepts only trusted Python pytest contracts")
             isolated_junit = shared_output / path.name
-            argv = [python, "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-p", "pytest_asyncio.plugin", "-o", "junit_family=legacy", "--junitxml=" + str(isolated_junit)]
-            row["contract"]["command"] = ["python", "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-p", "pytest_asyncio.plugin", "-o", "junit_family=legacy", "--junitxml=" + path.relative_to(output).as_posix()]
+            argv = [python, *contract_command(contract, str(isolated_junit))[1:]]
+            row["contract"]["command"] = contract_command(contract, path.relative_to(output).as_posix())
             with (output / "contract.log").open("w") as log:
                 process = subprocess.run(sandbox(temporary, shared_output, toolchain, consumer, argv), cwd=consumer, env=clean_env(), stdout=log,
                                          stderr=subprocess.STDOUT, timeout=600)
@@ -285,7 +299,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                 raise ValueError(f"Missing JUnit (runner/namespace exit {process.returncode}); see contract.log")
             shutil.copyfile(isolated_junit, path)
             stage = "collection"
-            tests, details = junit(path)
+            tests, details = junit(path, semantic_validator(root))
             row["contract"].update(tests=tests, collected=len(tests), executed=sum(t["outcome"] != "skipped" for t in tests),
                                    unexpected_skips=sum(t["outcome"] == "skipped" for t in tests),
                                    junit_paths=[path.relative_to(output).as_posix()])

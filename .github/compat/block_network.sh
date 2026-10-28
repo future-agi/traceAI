@@ -13,13 +13,21 @@ if [[ "${1:-}" != --inside ]]; then
   [[ -z $(find "$root" "$toolchain" -type s -print -quit) ]] || exit 92
   chmod 755 "$root"
   chmod 777 "$output"
+  # Only synthetic account metadata is exposed to the ID-map helpers. No host
+  # passwd/home/subordinate-ID database is shared with dependency execution.
+  printf 'root:x:0:0:sandbox:/root:/bin/sh\nnobody:x:65534:65534:sandbox:/nonexistent:/usr/sbin/nologin\n' > "$root/passwd"
+  printf 'root:x:0:\nnogroup:x:65534:\n' > "$root/group"
+  printf 'root:65534:1\n' > "$root/subuid"
+  cp "$root/subuid" "$root/subgid"
   # Set up mounts while privileged, BEFORE any dependency code starts. unshare
   # below maps namespace root to host nobody, NOT host root. Each job is ephemeral.
   args=(--die-with-parent --new-session --unshare-pid --unshare-net --unshare-ipc --unshare-uts
     --cap-add CAP_NET_ADMIN --cap-add CAP_SYS_ADMIN --cap-add CAP_SETUID --cap-add CAP_SETGID --cap-add CAP_SETPCAP
     --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /sbin /sbin --ro-bind /lib /lib
     --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --tmpfs /home
-    --dir /etc --ro-bind "$root" "$root" --bind "$output" "$output"
+    --dir /etc --ro-bind "$root/passwd" /etc/passwd --ro-bind "$root/group" /etc/group
+    --ro-bind "$root/subuid" /etc/subuid --ro-bind "$root/subgid" /etc/subgid
+    --ro-bind "$root" "$root" --bind "$output" "$output"
     --ro-bind "$toolchain" "$toolchain" --chdir "$cwd" --clearenv
     --setenv PATH /usr/sbin:/usr/bin:/sbin:/bin)
   [[ ! -e /lib64 ]] || args+=(--ro-bind /lib64 /lib64)

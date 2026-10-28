@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -21,7 +22,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from plan import safe_path, sha256, validate_plan, write_json, semantic_validator
-from run_case import empty_case, failure, junit, now, run_header
+from run_case import empty_case, failure, junit, now, run_header, contract_command
 
 MAX_FILE = 32 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
@@ -221,9 +222,13 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
                     if source_root is None:
                         raise ValueError("Trusted source checkout required for semantic contract validation")
                     semantic_validator(source_root).validate_contract(row, target, source_root)
+                    if len(row["contract"]["junit_paths"]) != 1 or row["contract"]["command"] != contract_command(target["contract_test"], row["contract"]["junit_paths"][0]):
+                        raise ValueError("Exact trusted contract command mismatch")
                     frozen_environment(plan_dir, folder, selected, row)
                 references = list(row["contract"]["junit_paths"])
-                observed = [t for relative in references for t in junit(safe_path(folder, relative))[0]]
+                validator = semantic_validator(source_root) if source_root is not None else None
+                parser = validator if validator is not None and hasattr(validator, "junit_tests") else None
+                observed = [t for relative in references for t in junit(safe_path(folder, relative), parser)[0]]
                 reported = [{**t, "exception_id": None} for t in row["contract"]["tests"]]
                 if observed != reported:
                     raise ValueError("Reported outcomes do not match original JUnit")
@@ -284,6 +289,10 @@ def main():
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--jobs", type=Path, required=True, help="Trusted REST jobs?filter=all snapshot, all pages")
     args = parser.parse_args()
+    plan = json.loads((args.plan_dir / "compat-plan.json").read_text())
+    source_sha = subprocess.check_output(["git", "-C", str(args.source_root), "rev-parse", "HEAD"], text=True).strip()
+    if source_sha != plan["source_sha"]:
+        raise ValueError("Trusted contract checkout does not match frozen source SHA")
     schema = json.loads(Path(__file__).with_name("results.schema.json").read_text())
     pages = json.loads(args.jobs.read_text())
     jobs = [j for page in pages for j in page["jobs"]]
