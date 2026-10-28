@@ -6,6 +6,7 @@ from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
     MessageAttributes,
+    RerankerAttributes,
     SpanAttributes,
 )
 from opentelemetry.util.types import AttributeValue
@@ -40,25 +41,20 @@ class _ChatRequestAttributesExtractor:
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes including messages."""
-        # For chat_stream and chat with message
+        # Keep system/history/current messages in order without overwriting
+        # indices. Canonical input-message keys also honor FI_HIDE_INPUTS.
+        messages = []
+        if "preamble" in request_parameters:
+            messages.append({"role": "system", "message": request_parameters["preamble"]})
+        messages.extend(request_parameters.get("chat_history", []))
         if "message" in request_parameters:
             message = request_parameters.get("message", "")
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", "user"
-            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", message
+            messages.append({"role": "user", "message": message})
             yield SpanAttributes.INPUT_VALUE, message
 
-        # Chat history
-        if "chat_history" in request_parameters:
-            chat_history = request_parameters.get("chat_history", [])
-            for i, msg in enumerate(chat_history):
-                role = msg.get("role", "")
-                content = msg.get("message", "")
-                yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_ROLE}", role
-                yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_CONTENT}", content
-
-        # Preamble (system prompt)
-        if "preamble" in request_parameters:
-            yield SpanAttributes.GEN_AI_PROVIDER_NAME_PROMPT, request_parameters.get("preamble", "")
+        for i, msg in enumerate(messages):
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role", "")
+            yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.{MessageAttributes.MESSAGE_CONTENT}", msg.get("message", "")
 
         # Documents for RAG
         if "documents" in request_parameters:
@@ -134,21 +130,21 @@ class _RerankRequestAttributesExtractor:
         yield SpanAttributes.GEN_AI_PROVIDER_NAME, "cohere"
 
         model = request_parameters.get("model", "rerank-english-v3.0")
-        yield SpanAttributes.RERANKER_MODEL_NAME, model
+        yield RerankerAttributes.RERANKER_MODEL_NAME, model
 
         yield SpanAttributes.INPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
         yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
 
         # Top N
         if "top_n" in request_parameters:
-            yield SpanAttributes.RERANKER_TOP_K, request_parameters.get("top_n")
+            yield RerankerAttributes.RERANKER_TOP_K, request_parameters.get("top_n")
 
     def get_extra_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes."""
         query = request_parameters.get("query", "")
-        yield SpanAttributes.RERANKER_QUERY, query
+        yield RerankerAttributes.RERANKER_QUERY, query
         yield SpanAttributes.INPUT_VALUE, query
 
         documents = request_parameters.get("documents", [])
