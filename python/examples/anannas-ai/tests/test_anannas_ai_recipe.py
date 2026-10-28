@@ -637,7 +637,7 @@ def test_readme_requirements_and_customer_facing_pins():
         "pip install -r requirements.txt",
         "pip install traceAI-openai fi-instrumentation-otel openai",
         "python src/app.py", "python src/app.py --stream",
-        "verbose=False", "openai==1.69.0", "not tested against the live provider (no paid call)",
+        "verbose=False", "openai==1.69.0", "https://docs.anannas.ai/quickstart",
     ):
         assert text in readme
     assert "TBD" not in readme
