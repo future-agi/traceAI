@@ -11,7 +11,7 @@ import zipfile
 
 from report import (CANARY, REPO, ROOT, GitHub, MAX_EXPANDED, SafeRedirect, apply_actions,
                     extract_archive, github_results, junit_outcomes, load_json, lock_packages, main, safe_path,
-                    validate_bundle, validate_plan_snapshot, verify_provenance, write_outputs)
+                    canonical_validate, snapshot_source, validate_bundle, validate_plan_snapshot, verify_provenance, write_outputs)
 from incidents import timestamp
 
 HERE = Path(__file__).resolve().parent
@@ -36,7 +36,8 @@ def bundle_archive(bundle):
     raw = json.dumps(plan).encode()
     bundle['run']['plan_sha256'] = hashlib.sha256(raw).hexdigest()
     freeze = ''.join(p['name'] + '==' + p['version'] + '\n' for p in case['resolved']).encode()
-    case['dependency_lock']['sha256'] = hashlib.sha256(freeze).hexdigest()
+    for observation in bundle['cases']:
+        observation['dependency_lock']['sha256'] = hashlib.sha256(freeze).hexdigest()
     out = io.BytesIO()
     with zipfile.ZipFile(out, 'w') as archive:
         archive.writestr('results.json', json.dumps(bundle))
@@ -329,7 +330,78 @@ class ArchiveTests(unittest.TestCase):
                 safe_path(root, 'link/file')
 
 
+class CanonicalBoundaryTests(unittest.TestCase):
+    def test_missing_shared_validator_fails_closed(self):
+        with patch('report.Path.is_file', return_value=False), self.assertRaisesRegex(ValueError, 'must be absorbed'):
+            canonical_validate(RUNS[-1], REGISTRY, Path('/artifact'), b'{}', Path('/source'))
+
+    def test_only_trusted_sibling_validator_receives_public_abi(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        bundle, _ = bundle_archive(RUNS[-1])
+        selected = {k: bundle['cases'][0][k] for k in ('case_id', 'integration_id', 'mode', 'selector', 'requested')}
+        selected['runtime'] = '3.11'
+        raw = json.dumps(dict(source_sha=bundle['run']['source_sha'], workflow_sha=bundle['run']['workflow_sha'], self_test=False, cases=[selected])).encode()
+        module = SimpleNamespace(validate_results=Mock(return_value=bundle))
+        spec = SimpleNamespace(loader=SimpleNamespace(exec_module=Mock()))
+        with patch('report.Path.is_file', return_value=True), \
+                patch('report.importlib.util.spec_from_file_location', return_value=spec) as load, \
+                patch('report.importlib.util.module_from_spec', return_value=module):
+            canonical_validate(bundle, REGISTRY, Path('/artifact'), raw, Path('/static-source'))
+        self.assertEqual(load.call_args.args[1], HERE / 'validate.py')
+        spec.loader.exec_module.assert_called_once_with(module)
+        args, kwargs = module.validate_results.call_args
+        self.assertEqual(args, (bundle, REGISTRY))
+        self.assertEqual(kwargs['artifact_root'], Path('/artifact'))
+        self.assertEqual(kwargs['source_root'], Path('/static-source'))
+        self.assertEqual(kwargs['plan_bytes'], raw)
+        self.assertEqual(kwargs['expected_case_ids'], bundle['run']['planned_case_ids'])
+
+    def source_api(self, mode='100644', corrupt=False):
+        import base64
+        content = b'raise AssertionError("source is static data, never executed")\n'
+        sha = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+        class API:
+            def __init__(self):
+                self.paths = []
+            def request(self, path):
+                self.paths.append(path)
+                if '/git/trees/' in path:
+                    return dict(truncated=False, tree=[
+                        dict(path='tests/test_trusted.py', mode=mode, type='blob', sha=sha, size=len(content)),
+                        dict(path='unrelated/validate.py', mode='100644', type='blob', sha='f'*40, size=1)])
+                return dict(encoding='base64', content=base64.b64encode(content + (b'x' if corrupt else b'')).decode())
+        registry = copy.deepcopy(REGISTRY)
+        next(t for t in registry['integrations'] if t['id'] == 'python-openai')['contract_test']['paths'] = ['tests/test_trusted.py']
+        return API(), registry
+
+    def test_source_snapshot_is_pinned_static_and_only_from_registered_paths(self):
+        import sys
+        api, registry = self.source_api()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(snapshot_source(api, RUNS[-1], registry, root), root)
+            self.assertIn('never executed', (root / 'tests/test_trusted.py').read_text())
+            self.assertNotIn(str(root), sys.path)
+            self.assertFalse((root / 'unrelated').exists())
+        self.assertIn(RUNS[-1]['run']['source_sha'], api.paths[0])
+        self.assertEqual(len(api.paths), 2)
+
+    def test_symlink_or_tampered_source_snapshot_is_rejected(self):
+        for mode, corrupt in [('120000', False), ('100644', True)]:
+            api, registry = self.source_api(mode, corrupt)
+            with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+                snapshot_source(api, RUNS[-1], registry, Path(tmp))
+
+
 class ProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        # These API/ZIP tests deliberately use synthetic one-test bundles, not a
+        # registered SDK contract. Test the separate strict boundary below with
+        # its exact public ABI; integration replay uses the actual PR1 module.
+        self.strict = self.enterContext(patch('report.canonical_validate'))
+        self.snapshot = self.enterContext(patch('report.snapshot_source', side_effect=lambda api, bundle, registry, root: root))
+
     def metadata(self):
         run = RUNS[-1]['run']
         return dict(repository=dict(full_name=REPO), head_repository=dict(full_name=REPO), path=CANARY,
@@ -450,6 +522,15 @@ class ProvenanceTests(unittest.TestCase):
         bundles, errors = github_results(API(), REGISTRY, NOW)
         self.assertEqual([b['run']['run_id'] for b in bundles], ['1007'])
         self.assertEqual([e['id'] for e in errors], ['invalid-run:2000'])
+        self.strict.assert_called_once()
+        self.assertEqual(self.strict.call_args.args[0]['run']['run_id'], '1007')
+        self.snapshot.assert_called_once()
+        # A schema/private-validator pass cannot bypass canonical invocation,
+        # registered-suite or complete-frozen-lock rejection.
+        self.strict.side_effect = ValueError('missing invocation evidence')
+        bundles, errors = github_results(API(), REGISTRY, NOW)
+        self.assertEqual(bundles, [])
+        self.assertEqual({e['id'] for e in errors}, {'invalid-run:1007', 'invalid-run:2000'})
 
     def test_explicit_old_run_and_recent_rerun_are_not_silently_dropped(self):
         from datetime import timedelta
@@ -467,11 +548,24 @@ class ProvenanceTests(unittest.TestCase):
                     return value
                 bundle = earlier(bundle)
             else:
-                bundle['run']['run_attempt'] = 2
-                # Failed-only-job reruns may retain a successful original case.
+                # Immutable plan starts a month ago; the attempt-2 execution is
+                # fresh, with the original successful attempt retained as well.
+                fresh = copy.deepcopy(bundle['cases'][0])
+                original_start = iso(timestamp(bundle['run']['started_at']) - timedelta(days=30))
+                original_end = iso(timestamp(bundle['run']['completed_at']) - timedelta(days=30))
+                bundle['run'].update(run_attempt=2, started_at=original_start,
+                                     cooldown_cutoff=iso(timestamp(bundle['run']['cooldown_cutoff']) - timedelta(days=30)))
+                original = bundle['cases'][0]
+                original.update(started_at=original_start, completed_at=original_end)
+                for discovery in original['discovery']:
+                    for key in ('published_at', 'first_seen_at'):
+                        if discovery[key]:
+                            discovery[key] = iso(timestamp(discovery[key]) - timedelta(days=30))
+                fresh.update(attempt=2, discovery=copy.deepcopy(original['discovery']))
+                bundle['cases'].append(fresh)
             bundle, archive = bundle_archive(bundle)
             meta = dict(self.metadata(), created_at='2026-09-28T04:00:00Z', run_attempt=bundle['run']['run_attempt'])
-            meta.update(run_started_at=bundle['cases'][0]['started_at'], updated_at=bundle['run']['completed_at'])
+            meta.update(run_started_at=bundle['cases'][-1]['started_at'], updated_at=bundle['run']['completed_at'])
             class API:
                 def pages(self, path, key, **kwargs):
                     if path.startswith('actions/workflows/'):
@@ -481,7 +575,8 @@ class ProvenanceTests(unittest.TestCase):
                     if path.endswith('/zip'):
                         return archive
                     if path.endswith('/attempts/1'):
-                        return dict(meta, run_attempt=1)
+                        return dict(meta, run_attempt=1, run_started_at=bundle['cases'][0]['started_at'],
+                                    updated_at=bundle['cases'][0]['completed_at'])
                     if '/compare/' in path:
                         return {'status': 'ahead'}
                     return meta

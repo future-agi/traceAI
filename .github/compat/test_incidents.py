@@ -359,6 +359,31 @@ class IncidentTests(unittest.TestCase):
             bundle['cases'][0]['contract']['suite_sha256'] = 'e' * 64
         self.assertEqual(lifecycle(wrong, [strict])['states'][0]['status'], 'open')
 
+    def test_release_upgrade_requires_replay_of_retained_failed_suite(self):
+        from report import validate_bundle
+        issue = issue_for(lifecycle(RUNS[:2])['actions'][0])
+        upgraded = copy.deepcopy(RUNS[-2:])
+        for bundle in upgraded:
+            case = bundle['cases'][0]
+            for package in case['resolved']:
+                if package['role'] in ('instrumentation', 'core'):
+                    package['version'] = '9.0.0'
+                    next(p for p in case['requested'] if p['role'] == package['role']).update(
+                        selected_version='9.0.0', requirement=package['name'] + '==9.0.0')
+            case['contract']['suite_sha256'] = 'd' * 64
+            validate_bundle(bundle, REGISTRY, NOW)
+        self.assertEqual(lifecycle(upgraded, [issue])['states'][0]['status'], 'open')
+        # A clean consumer may install a fixed instrumentation/core release while
+        # replaying tests/configuration from the retained failing source snapshot.
+        # The failed exact IDs/scenarios stay intact; no suite-evolution waiver.
+        retained = RUNS[1]['cases'][0]['contract']['suite_sha256']
+        for bundle in upgraded:
+            bundle['cases'][0]['contract']['suite_sha256'] = retained
+            validate_bundle(bundle, REGISTRY, NOW)
+        result = lifecycle(upgraded, [issue])
+        self.assertEqual(result['actions'][0]['state'], 'closed')
+        self.assertEqual(lifecycle(upgraded, [issue_for(result['actions'][0])])['actions'], [])
+
     def test_mentions_and_hidden_markers_are_escaped_in_visible_text(self):
         self.assertNotIn('@', text('@someone <script>'))
         self.assertNotIn('<script>', text('@someone <script>'))

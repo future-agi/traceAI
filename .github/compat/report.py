@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import importlib.util
+import base64
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -458,6 +460,72 @@ def verify_provenance(bundle, metadata, api):
         raise ValueError("tested source is not in trusted dev ancestry")
 
 
+def canonical_validate(bundle, registry, artifact_root, plan_bytes, source_root):
+    """Use PR1's trusted implementation, never a validator from tested source."""
+    path = Path(__file__).with_name("validate.py")
+    if not path.is_file():
+        raise ValueError("canonical validator must be absorbed before production reporting")
+    spec = importlib.util.spec_from_file_location("compat_trusted_validator", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    plan = validate_plan_snapshot(plan_bytes)
+    return module.validate_results(bundle, registry, expected_source_sha=plan["source_sha"],
+                                   expected_case_ids=[c["case_id"] for c in plan["cases"]],
+                                   artifact_root=artifact_root, source_root=source_root,
+                                   expected_plan=plan, plan_bytes=plan_bytes)
+
+
+def snapshot_source(api, bundle, registry, destination):
+    """Fetch only registered suite data at the authenticated source commit.
+
+    AST/digest inspection is data-only: never import or run this source, never
+    put it on sys.path, and never use commands/paths supplied by the artifact.
+    Historical suite hashes cannot be compared to today's changed checkout.
+    """
+    targets = {t["id"]: t for t in registry["integrations"]}
+    contracts = [(targets[c["integration_id"]].get("contract_test") or {}) for c in bundle["cases"]]
+    paths = {p for contract in contracts for p in contract.get("paths", [])}
+    prefixes, configs = set(), set()
+    for relative in paths:
+        safe_path(destination, relative)
+        path = PurePosixPath(relative)
+        prefixes.add(path.parent.as_posix() + "/")
+        for parent in [path.parent, *path.parent.parents]:
+            for name in ("conftest.py", "pytest.ini", "pyproject.toml", "setup.cfg", "__init__.py"):
+                configs.add((parent / name).as_posix())
+    if not paths:
+        return destination
+    tree = api.request(f"/repos/{REPO}/git/trees/{bundle['run']['source_sha']}?recursive=1")
+    if tree.get("truncated") or not isinstance(tree.get("tree"), list):
+        raise ValueError("unavailable/truncated trusted source tree")
+    selected = [row for row in tree["tree"] if row.get("type") != "tree" and
+                (row.get("path") in configs or any(row.get("path", "").startswith(p) for p in prefixes))
+                and "__pycache__" not in PurePosixPath(row.get("path", "")).parts and not row.get("path", "").endswith(".pyc")]
+    if len(selected) > MAX_FILES or sum(row.get("size", 0) for row in selected) > MAX_EXPANDED:
+        raise ValueError("trusted source suite exceeds size/file limit")
+    seen = set()
+    for row in selected:
+        path = safe_path(destination, row["path"])
+        folded = unicodedata.normalize("NFC", row["path"]).casefold()
+        if folded in seen or row.get("mode") not in ("100644", "100755") or row.get("type") != "blob":
+            raise ValueError("duplicate/symlink/non-file trusted suite path")
+        seen.add(folded)
+        if not re.fullmatch(r"[0-9a-f]{40}", row.get("sha", "")) or row.get("size", MAX_ARCHIVE) > 8 * 1024 * 1024:
+            raise ValueError("invalid/oversized source blob")
+        blob = api.request(f"/repos/{REPO}/git/blobs/{row['sha']}")
+        if blob.get("encoding") != "base64":
+            raise ValueError("unexpected trusted source encoding")
+        content = base64.b64decode(blob["content"].replace("\n", ""), validate=True)
+        actual = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+        if actual != row["sha"] or len(content) != row.get("size"):
+            raise ValueError("trusted source blob identity mismatch")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    if any(not safe_path(destination, p).is_file() for p in paths):
+        raise ValueError("missing registered trusted suite")
+    return destination
+
+
 def github_results(api, registry, now, selected_run=None, *, plans=None):
     since = (now - timedelta(days=16)).date().isoformat()
     runs = api.pages("actions/workflows/compatibility-canary.yml/runs?status=completed&created=%3E%3D" + since,
@@ -511,6 +579,9 @@ def github_results(api, registry, now, selected_run=None, *, plans=None):
                 raw = safe_path(root, "compat-plan.json").read_bytes()
                 validate_bundle(bundle, registry, now, artifact_root=root, plan_bytes=raw)
                 verify_provenance(bundle, meta, api)
+                with tempfile.TemporaryDirectory(prefix="compat-trusted-suite-") as source:
+                    source_root = snapshot_source(api, bundle, registry, Path(source))
+                    canonical_validate(bundle, registry, root, raw, source_root)
                 if plans is not None:
                     plans[bundle["run"]["run_id"]] = validate_plan_snapshot(raw)
                 bundles.append(bundle)
@@ -567,6 +638,8 @@ def main():
     parser.add_argument("--fixtures", action="store_true")
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--artifact-root", type=Path)
+    parser.add_argument("--source-root", type=Path, default=ROOT,
+                        help="Trusted static source snapshot for offline strict artifact replay (never executed)")
     parser.add_argument("--github", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--apply", action="store_true")
@@ -586,6 +659,7 @@ def main():
         bundle = load_json(safe_path(root, "results.json"))
         raw = safe_path(root, "compat-plan.json").read_bytes()
         validate_bundle(bundle, registry, now, artifact_root=root, plan_bytes=raw)
+        canonical_validate(bundle, registry, root, raw, args.source_root.resolve())
         plans[bundle["run"]["run_id"]] = validate_plan_snapshot(raw)
         runs = [bundle]
     elif args.github:

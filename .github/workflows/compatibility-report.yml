@@ -57,7 +57,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install reporter schema validator (no vendor SDKs or write token)
-        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0' 'packaging==24.2'
       - name: Test incident lifecycle, provenance and hostile artifact boundaries
         run: |
           python -I -m unittest discover -s .github/compat -p test_report.py -v
@@ -103,7 +103,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
-      - run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+      - run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0' 'packaging==24.2'
       - name: Validate provenance, locks, plan bytes and all planned cases; render dry-run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -143,7 +143,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install trusted reporter dependency (no canary package install or contract execution)
-        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0' 'packaging==24.2'
       - name: Revalidate provenance and reconcile one issue per key
         env:
           GH_TOKEN: ${{ github.token }}

@@ -299,6 +299,8 @@ def body_for(state):
                   "known exclusions, support/privacy changes and whether a release is pending.",
                   "Do not merge, spend money, invoke providers, push automatically, narrow support or add exceptions to obtain green.",
                   "Recovery needs two distinct fresh comparable runs for every failed mode/runtime/suite. "
+                  "For a released fix, retain the failed suite/configuration source SHA and run that suite against the new clean installed release twice. "
+                  "Changed test/configuration bytes cannot borrow the old suite digest; preserve failed IDs/scenarios and original invocation evidence. "
                   "A source fix cannot close a published-package failure. A different upstream patch cannot erase this tuple."]
     rendered = "\n".join(lines) + "\n"
     if len(rendered.encode()) > 60000:

@@ -139,6 +139,14 @@ def render_markdown(index, *, baseline=False):
               "Missing uploads require retained immutable planned runtime evidence, never the collector runtime; "
               "executed contract failures still require identical suite and failed-test coverage. "
               "A newer upstream patch does not erase an older bad tuple. Unseen old failures remain actionable even after a reporter outage.",
+              "- A package/configuration version bump or new regression test changes the suite hash, not proof of recovery. "
+              "For a fixed published release, replay the retained failed suite/configuration from its immutable source SHA "
+              "against the new clean installed instrumentation/core selection, twice. Retain original plan/JUnit/lock/invocation evidence; "
+              "do not relabel a changed suite with the old digest or remove failed-test/scenario coverage.",
+              "- Production and offline artifact ingestion require the shared canonical validator after PR1 absorption, including "
+              "per-invocation status and complete frozen resolution evidence. Production fetches registered suite files at the authenticated "
+              "source commit for static hashing/AST checks only; tested-source code and artifact commands are never imported or executed. "
+              "The separately trusted canary collector binds the aggregate to its original plan; the aggregate's copied plan alone is not independent provenance.",
               "- `release-notes.json` contains exact support/failure inputs, not an automatically approved support-policy change. "
               "Confirm published fix versions, support additions, exclusions and floor/cap/privacy changes before release.",
               "- Normal production dry-run artifacts read existing incident and repair-PR context with read-only permissions; "
