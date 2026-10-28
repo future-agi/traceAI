@@ -38,7 +38,7 @@ def runtime_identity(python):
     code = ("import json,platform; from pip._vendor.packaging.tags import sys_tags; "
             "print(json.dumps(dict(version=platform.python_version(),implementation=platform.python_implementation().lower(),"
             "os=platform.system().lower(),arch=platform.machine(),tags=[str(t) for t in sys_tags()])))")
-    return json.loads(subprocess.check_output([python, "-I", "-c", code], text=True, env=clean_env()))
+    return bounded_json(subprocess.check_output([python, "-I", "-c", code], text=True, env=clean_env()))
 
 
 def semantic_validator(root):
@@ -74,6 +74,42 @@ LANGGRAPH_105_COMPANIONS = [
 def coupled_companions(case):
     graph = next((r["selected_version"] for r in case["requested"] if canonicalize_name(r["name"]) == "langgraph"), None)
     return [dict(r) for r in LANGGRAPH_105_COMPANIONS] if case["integration_id"] == "python-langchain" and graph == "1.0.5" else []
+
+
+def bounded_json(raw, *, max_bytes=32 * 1024 * 1024, max_depth=64):
+    """Decode bounded UTF-8 evidence without recursive parser/schema failures.
+
+    Count containers outside strings before decoding. A small deeply nested
+    upload can otherwise exhaust the decoder OR the schema error formatter.
+    This iterative scan also covers sidecars consumed by the shared validator.
+    """
+    if len(raw) > max_bytes:
+        raise ValueError("Oversized JSON evidence")
+    text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    if len(text.encode("utf-8")) > max_bytes:
+        raise ValueError("Oversized JSON evidence")
+    depth = 0
+    quoted = escaped = False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > max_depth:
+                raise ValueError("JSON evidence exceeds nesting limit")
+        elif char in "]}":
+            depth -= 1
+    try:
+        return json.loads(text)
+    except RecursionError as error:
+        raise ValueError("JSON evidence exceeds decoder recursion limit") from error
 
 
 def sha256(data):
@@ -121,7 +157,7 @@ def run(command, cwd, log):
 
 
 def validate_plan(plan):
-    schema = json.loads(Path(__file__).with_name("plan.schema.json").read_text())
+    schema = bounded_json(Path(__file__).with_name("plan.schema.json").read_text())
     jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(plan)
     ids = [c["case_id"] for c in plan["cases"]]
     if len(ids) != len(set(ids)):
@@ -258,18 +294,34 @@ def build_sources(root, output, registry):
     import zipfile
     from email.parser import BytesParser
     wheels = output / "built"
-    wheels.mkdir()
+    wheels.mkdir(exist_ok=True)
     entries = [t for t in registry["integrations"] if (t["language"] == "python" and t["role"] == "core") or t["canary"]["enabled"]]
+    result, errors = {}, {}
     for target in entries:
-        run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheels),
-             str(safe_path(root, target["package_dir"]))], output, output / (target["id"] + "-build.log"))
-    result = {}
-    for path in wheels.glob("*.whl"):
-        with zipfile.ZipFile(path) as archive:
-            name = next(n for n in archive.namelist() if n.endswith(".dist-info/METADATA"))
-            metadata = BytesParser().parsebytes(archive.read(name))
-            result[canonicalize_name(metadata["Name"])] = (metadata["Version"], path)
-    return result
+        name = canonicalize_name(target["distribution"])
+        # A failed build's partial output must not masquerade as another target's
+        # wheel or prevent independent instrumentation builds from proceeding.
+        destination = wheels / target["id"]
+        try:
+            destination.mkdir()
+            run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(destination),
+                 str(safe_path(root, target["package_dir"]))], output, output / (target["id"] + "-build.log"))
+            artifacts = list(destination.glob("*.whl"))
+            if len(artifacts) != 1:
+                raise ValueError("Expected exactly one built wheel for " + name)
+            path = artifacts[0]
+            with zipfile.ZipFile(path) as archive:
+                records = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
+                if len(records) != 1:
+                    raise ValueError("Expected exactly one wheel METADATA for " + name)
+                metadata = BytesParser().parsebytes(archive.read(records[0]))
+                if canonicalize_name(metadata.get("Name", "")) != name or not metadata.get("Version"):
+                    raise ValueError("Built wheel distribution identity mismatch: " + name)
+                Version(metadata["Version"])
+                result[name] = (metadata["Version"], path)
+        except (ValueError, subprocess.SubprocessError, OSError, zipfile.BadZipFile, KeyError) as error:
+            errors[name] = "Source artifact build failed for " + name + ": " + str(error)
+    return result, errors
 
 
 def resolve(case, root, output, built, python):
@@ -278,7 +330,7 @@ def resolve(case, root, output, built, python):
     Fetch only the report's exact binary URLs and hashes. Install jobs run offline
     from this wheelhouse using --require-hashes; no second registry resolution.
     """
-    target = next(t for t in json.loads((root / ".github/compat/registry.json").read_text())["integrations"]
+    target = next(t for t in bounded_json((root / ".github/compat/registry.json").read_text())["integrations"]
                   if t["id"] == case["integration_id"])
     contract = target["contract_test"]
     if not contract or any(not safe_path(root, path).is_file() for path in contract["paths"]):
@@ -307,8 +359,8 @@ def resolve(case, root, output, built, python):
     command = [python, "-m", "pip", "install", "--dry-run", "--ignore-installed", "--only-binary=:all:",
                "--report", str(report), *requirements, *TOOLS]
     run(command, output, output / (case["case_id"] + "-resolve.log"))
-    data = json.loads(report.read_text())
-    snapshot = json.loads((output / "discovery.json").read_text())
+    data = bounded_json(report.read_text())
+    snapshot = bounded_json((output / "discovery.json").read_text())
     packages = {canonicalize_name(p["name"]): p for p in snapshot["packages"]}
     cutoff = timestamp(snapshot["discovered_at"]) - dt.timedelta(hours=72)  # same frozen planning instant
     names, lock, resolved = set(), [], []
@@ -381,9 +433,9 @@ def main():
     if (args.out / "compat-plan.json").exists():
         raise ValueError("Refusing to re-resolve/overwrite an immutable plan; reuse the original artifact")
     raw = (args.root / ".github/compat/registry.json").read_bytes()
-    registry = json.loads(raw)
+    registry = bounded_json(raw)
     verify_metadata(registry, args.root)
-    discovery = json.loads(args.discovery.read_text())
+    discovery = bounded_json(args.discovery.read_text())
     now = timestamp(discovery["discovered_at"])
     if args.now and timestamp(args.now) != now:
         raise ValueError("Discovery and planning must use one frozen eligibility cutoff")
@@ -395,19 +447,19 @@ def main():
     source = subprocess.check_output(["git", "-C", str(args.root), "rev-parse", "HEAD"], text=True).strip()
     workflow = os.environ.get("GITHUB_WORKFLOW_SHA", source)
     plan = generate(registry, discovery, source, workflow, now, args.mode, args.self_test,
-                    json.loads(args.allowlist.read_text()) if args.allowlist else None, identities)
+                    bounded_json(args.allowlist.read_text()) if args.allowlist else None, identities)
     plan["registry_sha256"] = sha256(raw)
     (args.out / "registry.json").write_bytes(raw)
     shutil.copyfile(args.discovery, args.out / "discovery.json")
     if args.resolve:
-        try:
-            built = build_sources(args.root, args.out, registry)
-        except (ValueError, subprocess.SubprocessError, OSError) as error:
-            built = {}
-            for case in plan["cases"]:
-                case["problems"].append("Source artifact build failed: " + str(error))
+        built, build_errors = build_sources(args.root, args.out, registry)
         pythons = dict(p.split("=", 1) for p in args.python)
         for case in plan["cases"]:
+            if case["mode"] == "source":
+                for req in case["requested"]:
+                    name = canonicalize_name(req["name"])
+                    if req["role"] in ("core", "instrumentation") and name not in built:
+                        case["problems"].append(build_errors.get(name, "Missing source artifact: " + name))
             try:
                 interpreter = pythons.get(case["runtime"], sys.executable)
                 if runtime_identity(interpreter) != case["runtime_identity"]:

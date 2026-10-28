@@ -22,7 +22,7 @@ import jsonschema
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 
-from plan import safe_path, sha256, validate_plan, write_json, semantic_validator
+from plan import safe_path, sha256, validate_plan, write_json, semantic_validator, bounded_json
 from run_case import empty_case, failure, junit, now, run_header, contract_command, invocation_path
 
 MAX_FILE = 32 * 1024 * 1024
@@ -119,7 +119,7 @@ def frozen_environment(plan_dir, folder, selected, row):
         copied = safe_path(folder, "locks/" + Path(resolution[key]).name).read_bytes()
         if sha256(content) != resolution[digest] or copied != content:
             raise ValueError("Frozen report/requirements digest mismatch")
-    report = json.loads(safe_path(plan_dir, resolution["report"]).read_text())
+    report = bounded_json(safe_path(plan_dir, resolution["report"]).read_text())
     if report.get("version") != "1" or not report.get("install"):
         raise ValueError("Missing successful pip resolution report")
     expected, locks, artifacts = {}, [], {}
@@ -196,7 +196,7 @@ def invocation_manifest(folder, row, plan, raw):
     Malformed evidence blocks only this attempt; raw history is already retained.
     PR1 remains responsible for the shared semantic invocation verdict.
     """
-    status = json.loads(safe_path(folder, invocation_path(row["case_id"], row["attempt"])).read_text())
+    status = bounded_json(safe_path(folder, invocation_path(row["case_id"], row["attempt"])).read_text())
     if not isinstance(status, dict):
         raise ValueError("Invocation manifest must be an object")
     for field, expected in (("schema_version", 1), ("case_id", row["case_id"]), ("attempt", row["attempt"]),
@@ -227,41 +227,53 @@ def invocation_manifest(folder, row, plan, raw):
 
 
 def invocation_references(folder, row, plan, raw, validator):
-    """Retain producer exit evidence separately from dependency-written JUnit."""
+    """Retain authentic failure evidence too; only successes require clean exits."""
     relative = invocation_path(row["case_id"], row["attempt"])
+    passing = row["status"] in ("passed", "flaky", "quarantined")
+    if not safe_path(folder, relative).is_file() and not passing:
+        return []  # Canonical reconciliation still rejects missing observed evidence.
     status = invocation_manifest(folder, row, plan, raw)
     references = [relative]
     for kind in ("collection", "contract"):
-        invocation = status.get(kind)
-        if not isinstance(invocation, dict):
-            raise ValueError("Missing " + kind + " invocation")
-        code = invocation.get("exit_code")
-        if type(code) is not int or invocation.get("timed_out") is not False:
-            raise ValueError("Incomplete/timed-out " + kind + " invocation")
-        if (kind == "collection" and code != 0) or (kind == "contract" and code not in (0, 1)):
-            raise ValueError("Collection/runner failure cannot attest compatibility")
+        invocation = status[kind]
+        if invocation is None:
+            if passing:
+                raise ValueError("Missing " + kind + " invocation")
+            continue
+        code = invocation["exit_code"]
+        if passing:
+            if type(code) is not int or invocation["timed_out"]:
+                raise ValueError("Incomplete/timed-out " + kind + " invocation")
+            if (kind == "collection" and code != 0) or (kind == "contract" and code not in (0, 1)):
+                raise ValueError("Collection/runner failure cannot attest compatibility")
         path = invocation["evidence_path"]
+        if path is None and not passing:
+            continue
         content = safe_path(folder, path).read_bytes()
         if sha256(content) != invocation["evidence_sha256"]:
             raise ValueError("Invocation evidence digest mismatch")
+        references.append(path)
         sidecar = path + ".exit-code"
-        if safe_path(folder, sidecar).read_text() != str(code) + "\n":
-            raise ValueError("Invocation/exit-code sidecar mismatch")
-        references.extend([path, sidecar])
+        if passing or safe_path(folder, sidecar).is_file():
+            shell_code = 124 if invocation["timed_out"] else (128 - code if code is not None and code < 0 else code)
+            if safe_path(folder, sidecar).read_text() != str(shell_code) + "\n":
+                raise ValueError("Invocation/exit-code sidecar mismatch")
+            references.append(sidecar)
         if kind == "collection":
-            collection = json.loads(content)
+            collection = bounded_json(content)
             if (not isinstance(collection, dict)
                     or any(not isinstance(collection.get(k), list) for k in ("nodes", "deselected", "errors"))
                     or any(not isinstance(node, str) for k in ("nodes", "deselected") for node in collection[k])
                     or any(not isinstance(error, dict) or not isinstance(error.get("test_id"), str)
                            or not isinstance(error.get("diagnostic"), str) for error in collection["errors"])):
                 raise ValueError("Malformed collection evidence")
-            if collection["deselected"] or collection["errors"] or collection["nodes"] != sorted(t["test_id"] for t in row["contract"]["tests"]):
+            if passing and (collection["deselected"] or collection["errors"] or collection["nodes"] != sorted(t["test_id"] for t in row["contract"]["tests"])):
                 raise ValueError("Partial/deselected execution differs from full collected identities")
         else:
             if row["contract"]["junit_paths"] != [path]:
                 raise ValueError("Invocation/JUnit reference mismatch")
-            validator.invocation_tests([safe_path(folder, path)], [code])
+            if passing:
+                validator.invocation_tests([safe_path(folder, path)], [code])
     return references
 
 
@@ -270,14 +282,13 @@ def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, 
     if row["qualification"] != target["qualification"]["status"] or row["language"] != target["language"]:
         raise ValueError("Artifact cannot promote qualification/change language")
     passing = row["status"] in ("passed", "flaky", "quarantined")
-    if not passing:
-        return []
-    validator.validate_contract(row, target, source_root)
-    if len(row["contract"]["junit_paths"]) != 1 or row["contract"]["command"] != contract_command(target["contract_test"], row["contract"]["junit_paths"][0]):
-        raise ValueError("Exact trusted contract command mismatch")
-    verdict = validator.judge_tests(row["contract"]["tests"], target, row["runtime"], row["resolved"])
-    if verdict != ("passed" if row["status"] == "flaky" else row["status"]):
-        raise ValueError("False pass/quarantine status")
+    if passing:
+        validator.validate_contract(row, target, source_root)
+        if len(row["contract"]["junit_paths"]) != 1 or row["contract"]["command"] != contract_command(target["contract_test"], row["contract"]["junit_paths"][0]):
+            raise ValueError("Exact trusted contract command mismatch")
+        verdict = validator.judge_tests(row["contract"]["tests"], target, row["runtime"], row["resolved"])
+        if verdict != ("passed" if row["status"] == "flaky" else row["status"]):
+            raise ValueError("False pass/quarantine status")
     references = invocation_references(folder, row, plan, raw, validator)
     # Reuse PR1's complete discovery/support/invocation semantics with the REAL
     # attempt identities and retained history. Never re-label attempt 2 as 1 or
@@ -296,7 +307,14 @@ def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, 
             current.add(row["dependency_lock"]["path"])
         current.update(p.relative_to(folder).as_posix() for p in (folder / "locks").rglob("*") if p.is_file())
         for relative in current:
+            if relative.endswith(".json"):
+                bounded_json(safe_path(folder, relative).read_bytes())
             copy_reference(folder, stage, relative)
+        # Failure rows are reconciled BEFORE any root reference is accepted. A
+        # genuine failed invocation stays failed; malformed evidence alone becomes
+        # UNKNOWN/blocked and cannot poison otherwise healthy aggregate rows.
+        if not passing and invocation_path(row["case_id"], row["attempt"]) in references:
+            validator.reconcile_invocations(row, stage, sha256(raw))
         validator.validate_results({"schema_version": 1, "run": data["run"], "cases": peers}, registry,
                                    expected_source_sha=plan["source_sha"], source_root=source_root, artifact_root=stage,
                                    expected_plan=plan, plan_bytes=raw)
@@ -320,7 +338,7 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
     if any(not p.is_file() or p.stat().st_size > MAX_FILE for p in metadata_paths):
         raise ValueError("Missing/oversized plan metadata")
     raw = metadata_paths[0].read_bytes()
-    plan = validate_plan(json.loads(raw))
+    plan = validate_plan(bounded_json(raw))
     registry_bytes = metadata_paths[1].read_bytes()
     if sha256(registry_bytes) != plan["registry_sha256"]:
         raise ValueError("Registry snapshot identity mismatch")
@@ -330,7 +348,7 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
     if registry_bytes != safe_path(source_root, ".github/compat/registry.json").read_bytes():
         raise ValueError("Registry snapshot differs from immutable source registry")
     validator = semantic_validator(source_root)
-    registry = validator.validate_registry(json.loads(registry_bytes), source_root)
+    registry = validator.validate_registry(bounded_json(registry_bytes), source_root)
     targets = {t["id"]: t for t in registry["integrations"]}
     if os.environ.get("GITHUB_RUN_ID") and jobs is None:
         raise ValueError("Actions job-attempt reconciliation is mandatory in CI")
@@ -372,7 +390,7 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
                         destination = safe_path(output, f"evidence/{cid}/attempt-{attempt}/" + path.relative_to(folder).as_posix())
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(path, destination)
-                data = json.loads((folder / "results.json").read_text())
+                data = bounded_json((folder / "results.json").read_text())
                 row = validate_case(data, plan, raw, selected, schema, independent=True)[0]
                 if row["attempt"] != attempt or data["run"]["run_attempt"] != attempt:
                     raise ValueError("Artifact attempt/name mismatch")
@@ -399,16 +417,6 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
                     if sha256(safe_path(folder, lock["path"]).read_bytes()) != lock["sha256"]:
                         raise ValueError("Dependency lock absent or digest mismatch")
                     references.append(lock["path"])
-                # Failure evidence also retains invocation metadata at the root.
-                status_path = invocation_path(cid, attempt)
-                if safe_path(folder, status_path).is_file():
-                    references.append(status_path)
-                    status = invocation_manifest(folder, row, plan, raw)
-                    for kind in ("collection", "contract"):
-                        if isinstance(status.get(kind), dict) and status[kind].get("evidence_path"):
-                            references.append(status[kind]["evidence_path"])
-                            if safe_path(folder, status[kind]["evidence_path"] + ".exit-code").is_file():
-                                references.append(status[kind]["evidence_path"] + ".exit-code")
                 for relative in sorted(set(references)):
                     copy_reference(folder, output, relative)
                 if attempt == wanted and job_error:
@@ -447,12 +455,12 @@ def main():
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--jobs", type=Path, required=True, help="Trusted REST jobs?filter=all snapshot, all pages")
     args = parser.parse_args()
-    plan = json.loads((args.plan_dir / "compat-plan.json").read_text())
+    plan = bounded_json((args.plan_dir / "compat-plan.json").read_text())
     source_sha = subprocess.check_output(["git", "-C", str(args.source_root), "rev-parse", "HEAD"], text=True).strip()
     if source_sha != plan["source_sha"]:
         raise ValueError("Trusted contract checkout does not match frozen source SHA")
-    schema = json.loads(Path(__file__).with_name("results.schema.json").read_text())
-    pages = json.loads(args.jobs.read_text())
+    schema = bounded_json(Path(__file__).with_name("results.schema.json").read_text())
+    pages = bounded_json(args.jobs.read_text())
     jobs = [j for page in pages for j in page["jobs"]]
     _, bad = collect(args.plan_dir.resolve(), args.artifacts.resolve(), args.out.resolve(), schema,
                      source_root=args.source_root.resolve(), jobs=jobs)

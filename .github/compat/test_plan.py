@@ -79,6 +79,20 @@ class PlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "drift"):
             verify_metadata(registry, ROOT)
 
+    def test_json_decoding_bounds_containers_not_escaped_string_contents(self):
+        from unittest.mock import patch
+        from plan import bounded_json
+        data = {'escaped': '\\"' + '[' * 2000 + '\\"', 'valid': [{'x': True}]}
+        self.assertEqual(bounded_json(json.dumps(data).encode()), data)
+        for raw in ('[' * 65 + '0' + ']' * 65, '{"key":' * 65 + '0' + '}' * 65):
+            with self.assertRaisesRegex(ValueError, 'nesting limit'):
+                bounded_json(raw)
+        with self.assertRaisesRegex(ValueError, 'Oversized JSON'):
+            bounded_json('"abcd"', max_bytes=5)
+        with patch('plan.json.loads', side_effect=RecursionError('decoder control')):
+            with self.assertRaisesRegex(ValueError, 'decoder recursion limit'):
+                bounded_json('{}')
+
     def test_safe_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -104,6 +118,51 @@ class PlanTests(unittest.TestCase):
         case = next(c for c in plan['cases'] if c['integration_id'] == 'python-openai')
         self.assertEqual(case['runtime_identity']['version'], '3.11.17')
         self.assertEqual(case['requested'][0]['selected_version'], '3.27.0')
+
+    def test_build_failures_only_block_source_cases_requiring_that_distribution(self):
+        import sys
+        import zipfile
+        from unittest.mock import patch
+        import plan as planner
+        registry, discovery = inputs()
+        for broken in ('python-langchain', 'python-fi-instrumentation'):
+            with self.subTest(broken=broken), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / 'out'
+                fixture = root / 'discovery.json'
+                fixture.write_text(json.dumps(discovery))
+                attempted, resolutions = [], []
+                def wheel(command, cwd, log):
+                    target = next(t for t in registry['integrations'] if str(ROOT / t['package_dir']) == command[-1])
+                    attempted.append(target['id'])
+                    if target['id'] == broken:
+                        raise ValueError('Synthetic isolated build failure: ' + broken)
+                    wheels = Path(command[command.index('--wheel-dir') + 1])
+                    wheels.mkdir(parents=True, exist_ok=True)
+                    name = target['distribution'].replace('-', '_')
+                    with zipfile.ZipFile(wheels / (name + '-1.0.0-py3-none-any.whl'), 'w') as archive:
+                        archive.writestr(name + '-1.0.0.dist-info/METADATA', 'Name: ' + target['distribution'] + '\nVersion: 1.0.0\n')
+                def resolve(case, source, out, built, python):
+                    if not case['problems']:
+                        resolutions.append(case['case_id'])
+                        if case['mode'] == 'source':
+                            self.assertTrue(all(r['name'].lower().replace('_', '-') in built for r in case['requested'] if r['role'] in ('core', 'instrumentation')))
+                argv = ['plan', '--root', str(ROOT), '--out', str(output), '--discovery', str(fixture),
+                        '--mode', 'weekly', '--resolve']
+                for runtime in RUNTIMES:
+                    argv.extend(['--python', runtime + '=' + runtime])
+                with patch.object(sys, 'argv', argv), patch('plan.run', side_effect=wheel), \
+                     patch('plan.resolve', side_effect=resolve), patch('plan.runtime_identity', side_effect=lambda p: RUNTIMES[p]), \
+                     patch('plan.subprocess.check_output', return_value=SHA):
+                    planner.main()
+                planned = json.loads((output / 'compat-plan.json').read_text())['cases']
+                self.assertEqual(set(attempted), {'python-fi-instrumentation', 'python-openai', 'python-anthropic', 'python-langchain'})
+                affected = [c for c in planned if c['mode'] == 'source' and (broken == 'python-fi-instrumentation' or c['integration_id'] == broken)]
+                healthy = [c for c in planned if c not in affected]
+                self.assertEqual(len(affected), 18 if broken == 'python-fi-instrumentation' else 6)
+                self.assertTrue(all(c['problems'] and c['resolution'] is None for c in affected))
+                self.assertTrue(all(not c['problems'] and c['case_id'] in resolutions for c in healthy))
+                self.assertEqual(sum(c['mode'] == 'published' and c['case_id'] in resolutions for c in planned), 3)
 
     def test_langgraph_coupled_companions_do_not_change_primary_or_floor(self):
         from plan import coupled_companions

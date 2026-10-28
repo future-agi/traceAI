@@ -213,7 +213,7 @@ pathlib.Path(OUTPUT).write_text(json.dumps(dict(host_uid=65534, private_file='ab
         from unittest.mock import patch
         from run_case import main
         from test_collect_results import evidence, trusted_validator
-        for corruption in ('json', 'schema'):
+        for corruption in ('json', 'schema', 'deep-json'):
             with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
                 plan, _, output, previous, data = evidence(Path(temporary))
                 case_id = data['cases'][0]['case_id']
@@ -222,6 +222,8 @@ pathlib.Path(OUTPUT).write_text(json.dumps(dict(host_uid=65534, private_file='ab
                 if corruption == 'schema':
                     del data['cases'][0]['runtime']
                     (previous / 'results.json').write_text(json.dumps(data))
+                elif corruption == 'deep-json':
+                    (previous / 'results.json').write_text('[' * 2000 + '0' + ']' * 2000)
                 else:
                     (previous / 'results.json').write_text('{broken')
                 before = (previous / 'results.json').read_bytes()

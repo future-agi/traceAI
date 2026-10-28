@@ -116,7 +116,8 @@ def judge(tests, target, runtime, resolved):
 def trusted_validator():
     return SimpleNamespace(validate_contract=semantic_check, validate_registry=lambda data, root: data,
         reconcile_plan=reconcile, judge_tests=judge, invocation_tests=invocation_tests,
-        validate_results=lambda *args, **kwargs: None, junit_tests=lambda path: junit(path)[0])
+        validate_results=lambda *args, **kwargs: None, junit_tests=lambda path: junit(path)[0],
+        reconcile_invocations=lambda *args: None)
 
 
 class CollectorTests(unittest.TestCase):
@@ -160,6 +161,11 @@ class CollectorTests(unittest.TestCase):
             row["contract"]["tests"][0].update(outcome="failure", failure_signature=row["failure"]["signature"])
             xml = (folder / "junit/attempt1.xml").read_text().replace('time="0.1"/>', 'time="0.1"><failure>E AssertionError: upstream removed response field</failure></testcase>', 1)
             (folder / "junit/attempt1.xml").write_text(xml)
+            (folder / "junit/attempt1.xml.exit-code").write_text('1\n')
+            relative = invocation_path(row['case_id'], 1)
+            status = json.loads((folder / relative).read_text())
+            status['contract'].update(exit_code=1, evidence_sha256=sha256(xml.encode()))
+            write_json(folder / relative, status)
         result = self.run_control(mutate)
         self.assertEqual(result["cases"][0]["status"], "failed")
         self.assertEqual(result["cases"][0]["failure"]["kind"], "contract")
@@ -409,6 +415,81 @@ class CollectorTests(unittest.TestCase):
                     status['collection']['evidence_sha256'] = sha256(path.read_bytes())
                     write_json(folder / relative, status)
                 self.run_control(mutate)
+
+    def test_deep_json_blocks_only_one_attempt_and_retains_raw_history(self):
+        for malformed in (1, 2):
+            for kind in ('results', 'invocation', 'collection', 'report'):
+                with self.subTest(attempt=malformed, kind=kind), tempfile.TemporaryDirectory() as temporary:
+                    plan, artifacts, output, first, data = evidence(Path(temporary))
+                    cid = data['cases'][0]['case_id']
+                    second = artifacts / first.name.replace('attempt-1', 'attempt-2')
+                    shutil.copytree(first, second)
+                    retry = copy.deepcopy(data)
+                    retry['run']['run_attempt'] = retry['cases'][0]['attempt'] = 2
+                    write_json(second / 'results.json', retry)
+                    status = json.loads((first / invocation_path(cid, 1)).read_text())
+                    write_json(second / invocation_path(cid, 2), {**status, 'attempt': 2})
+                    folder = first if malformed == 1 else second
+                    relative = {'results': 'results.json', 'invocation': invocation_path(cid, malformed),
+                                'collection': status['collection']['evidence_path'], 'report': 'locks/case.report.json'}[kind]
+                    original = '[' * 2000 + '0' + ']' * 2000
+                    (folder / relative).write_text(original)
+                    if kind == 'collection':
+                        manifest = json.loads((folder / invocation_path(cid, malformed)).read_text())
+                        manifest['collection']['evidence_sha256'] = sha256(original.encode())
+                        write_json(folder / invocation_path(cid, malformed), manifest)
+                    with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+                        result, bad = self.collect(plan, artifacts, output)
+                    self.assertTrue(bad)
+                    self.assertEqual([r['status'] for r in result['cases']],
+                                     ['blocked', 'flaky'] if malformed == 1 else ['passed', 'blocked'])
+                    invalid = result['cases'][malformed - 1]
+                    self.assertEqual(invalid['resolved'], [])
+                    self.assertIsNone(invalid['dependency_lock'])
+                    self.assertEqual((output / f'evidence/{cid}/attempt-{malformed}' / relative).read_text(), original)
+                    self.assertEqual((folder / relative).read_text(), original)
+                    self.assertTrue((output / 'results.json').is_file())
+
+    def test_failed_attempts_are_canonically_checked_before_copying_root_references(self):
+        for corruption in (None, 'chronology', 'role'):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                plan, artifacts, output, folder, data = evidence(Path(temporary))
+                row = data['cases'][0]
+                # A genuine pre-contract collection failure with an installed lock.
+                row.update(status='failed', failure=failure('collection', 'ImportError: missing SDK symbol', [IDS[0].split('::')[0]]))
+                row['contract'].update(tests=[], collected=0, executed=0, scenarios=[], junit_paths=[])
+                relative = invocation_path(row['case_id'], 1)
+                status = json.loads((folder / relative).read_text())
+                status['contract'] = None
+                status['collection']['exit_code'] = 2
+                (folder / (status['collection']['evidence_path'] + '.exit-code')).write_text('2\n')
+                if corruption == 'chronology':
+                    status['collection']['completed_at'] = 'not-a-time'
+                if corruption == 'role':
+                    for resolved in row['resolved']:
+                        if resolved['role'] in ('core', 'instrumentation'):
+                            resolved['role'] = 'core' if resolved['role'] == 'instrumentation' else 'instrumentation'
+                write_json(folder / relative, status)
+                write_json(folder / 'results.json', data)
+                validator = trusted_validator()
+                def canonical(data, *args, artifact_root, **kwargs):
+                    for candidate in data['cases']:
+                        if candidate['status'] != 'failed':
+                            continue
+                        manifest = json.loads((artifact_root / relative).read_text())
+                        if manifest['collection']['completed_at'] == 'not-a-time':
+                            raise ValueError('invalid invocation chronology')
+                        if next(r for r in candidate['resolved'] if r['name'] == row['requested'][1]['name'])['role'] != 'instrumentation':
+                            raise ValueError('registered distribution role mismatch')
+                validator.validate_results = canonical
+                with patch('collect_results.semantic_validator', return_value=validator):
+                    result, bad = self.collect(plan, artifacts, output)
+                self.assertTrue(bad)
+                expected = 'blocked' if corruption else 'failed'
+                self.assertEqual(result['cases'][0]['status'], expected)
+                self.assertFalse((output / 'validation-errors.json').exists())
+                self.assertEqual((output / relative).exists(), corruption is None)
+                self.assertTrue((output / f'evidence/{row["case_id"]}/attempt-1/results.json').is_file())
 
     def test_complete_freeze_must_include_explicit_coupled_companion_pins(self):
         from collect_results import frozen_environment

@@ -28,7 +28,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from discover import UTC, iso
-from plan import clean_env, safe_path, sha256, validate_plan, write_json, semantic_validator, runtime_identity
+from plan import clean_env, safe_path, sha256, validate_plan, write_json, semantic_validator, runtime_identity, bounded_json
 
 
 COLLECTION_CODE = r'''import json,pathlib,pytest,re,sys
@@ -361,7 +361,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             inventory = [python, "-I", "-c", "import importlib.metadata as m,json; print(json.dumps({d.metadata['Name']: d.version for d in m.distributions()}))"]
             stage = "infrastructure"
             with (output / "inventory-sandbox.log").open("w") as log:
-                actual = json.loads(subprocess.check_output(sandbox(temporary, shared_output, toolchain, consumer, inventory),
+                actual = bounded_json(subprocess.check_output(sandbox(temporary, shared_output, toolchain, consumer, inventory),
                     cwd=consumer, env=clean_env(), stderr=log, text=True, timeout=120))
                 installed = {canonicalize_name(n): v for n, v in actual.items()}
                 freeze = subprocess.check_output(sandbox(temporary, shared_output, toolchain, consumer,
@@ -372,7 +372,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             row["dependency_lock"] = {"format": "pip-freeze", "path": freeze_path.relative_to(output).as_posix(), "sha256": sha256(freeze)}
             stage = "requested_resolved_mismatch"
             # Compare every distribution in the complete report, not only direct pins.
-            report = json.loads(safe_path(plan_dir, resolution["report"]).read_text())
+            report = bounded_json(safe_path(plan_dir, resolution["report"]).read_text())
             expected = {canonicalize_name(item["metadata"]["name"]): item["metadata"]["version"] for item in report["install"]}
             # A fresh --without-pip consumer has no bootstrapped distributions.
             # The frozen resolution includes pip itself for inventory tooling.
@@ -412,7 +412,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                 cwd=consumer, log=output / "collection.log", evidence=collected_path, retained=collection_evidence, output=output)
             write_json(output / invocation_path(case["case_id"], attempt), invocations)
             stage = "collection"
-            collection = json.loads(collection_evidence.read_text()) if collection_evidence.is_file() else {}
+            collection = bounded_json(collection_evidence.read_text()) if collection_evidence.is_file() else {}
             if invocations["collection"]["exit_code"] != 0 or invocations["collection"]["timed_out"] or not collection:
                 row["status"] = "failed"
                 row["failure"] = collection_failure(collection, output / "collection.log", consumer=consumer)
@@ -455,7 +455,7 @@ def main():
     root, folder, output = args.root.resolve(), args.plan_dir.resolve(), args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     raw = (folder / "compat-plan.json").read_bytes()
-    plan = validate_plan(json.loads(raw))
+    plan = validate_plan(bounded_json(raw))
     case = next(c for c in plan["cases"] if c["case_id"] == args.case_id)
     registry_raw = (folder / "registry.json").read_bytes()
     if sha256(registry_raw) != plan["registry_sha256"]:
@@ -465,7 +465,7 @@ def main():
     current = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
     if current != plan["source_sha"]:
         raise ValueError("Source SHA does not match frozen plan")
-    registry = semantic_validator(root).validate_registry(json.loads(registry_raw), root)
+    registry = semantic_validator(root).validate_registry(bounded_json(registry_raw), root)
     target = next(t for t in registry["integrations"] if t["id"] == case["integration_id"])
     history = []
     if int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")) > 1:
@@ -476,8 +476,8 @@ def main():
         from collect_results import check_tree, validate_case
         try:
             check_tree(args.previous)
-            schema = json.loads(Path(__file__).with_name("results.schema.json").read_text())
-            history = validate_case(json.loads((args.previous / "results.json").read_text()), plan, raw, case, schema)
+            schema = bounded_json(Path(__file__).with_name("results.schema.json").read_text())
+            history = validate_case(bounded_json((args.previous / "results.json").read_text()), plan, raw, case, schema)
             if len(history) != 1:
                 raise ValueError("Previous artifact already contains a retry")
         except (ValueError, KeyError, TypeError, OSError, ValidationError) as error:
