@@ -750,7 +750,10 @@ def test_readme_and_requirements_contract():
     assert "--with 'traceAI-openai==0.1.10'" in readme
     assert "--with 'fi-instrumentation-otel==1.1.0'" in readme
     assert "TBD" not in readme
-    assert "not tested against the live provider" in readme
+    assert "## Real-server check" in readme
+    assert "Ternary-Bonsai-2-2B-PQ2_0.gguf" in readme
+    assert "The automated contract suite uses a local fake" in readme
+    assert "not 27B tool calling, vision, or MLX" in readme
     requirements = (ROOT / "requirements.txt").read_text().splitlines()
     assert [line for line in requirements if not line.startswith("#")] == [
         "openai==3.24.0", "traceAI-openai==0.1.10", "fi-instrumentation-otel==1.1.0"]
