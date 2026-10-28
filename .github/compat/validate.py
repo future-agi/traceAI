@@ -569,6 +569,12 @@ def reconcile_failure(case, manifest, observed_tests, artifact_root):
 def reconcile_artifacts(case, artifact_root, resolution=None, plan_sha256=None):
     require(artifact_root is not None, 'execution evidence requires an artifact root')
     lock = case['dependency_lock']
+    mismatch = (case['status'] in ('failed', 'blocked') and case['failure'] is not None and
+                case['failure']['kind'] == 'requested_resolved_mismatch')
+    # Absence of an observation is UNKNOWN, not evidence of an incompatible
+    # installation. Authenticate the claimed mismatch even when no lock exists.
+    if mismatch:
+        require(lock is not None, 'requested/resolved failure evidence requires an observed installed lock')
     if lock:
         path = safe_path(artifact_root, lock['path'])
         require(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == lock['sha256'], 'lock digest mismatch')
@@ -576,13 +582,13 @@ def reconcile_artifacts(case, artifact_root, resolution=None, plan_sha256=None):
         installed = installed_distributions(path.read_bytes(), lock['format'])
         for row in case['resolved']:
             require(installed.get(canonicalize_name(row['name'])) == row['version'], 'installed lock/resolved mismatch')
+        frozen = None
         if resolution is not None:
-            mismatch = (case['status'] in ('failed', 'blocked') and case['failure'] is not None and
-                        case['failure']['kind'] == 'requested_resolved_mismatch')
             frozen = preserved_resolution(case, resolution, artifact_root, observed_mismatch=mismatch)
             require(installed == frozen or mismatch, 'complete installed lock/frozen resolution mismatch')
-            if mismatch:
-                require(installed != frozen or any(installed.get(canonicalize_name(r['name'])) != r['selected_version']
+        if mismatch:
+            require((frozen is not None and installed != frozen) or
+                    any(installed.get(canonicalize_name(r['name'])) != r['selected_version']
                         for r in case['requested']), 'requested/resolved failure evidence contradicts frozen installation')
             # A truthful failed install-mismatch row retains the actual complete
             # inventory, not a fictional copy of the intended frozen environment.
@@ -735,7 +741,7 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
             else:
                 require(case['status'] != 'passed' or all(t['outcome'] == 'passed' for t in tests), 'pass with failures')
             require(case['status'] not in ('passed', 'flaky') or case['failure'] is None, 'pass with a failure')
-        if successful or contract['junit_paths'] or case['dependency_lock'] or (case['failure'] is not None and case['failure']['kind'] == 'contract'):
+        if successful or contract['junit_paths'] or case['dependency_lock'] or (case['failure'] is not None and case['failure']['kind'] in ('contract', 'requested_resolved_mismatch')):
             resolution = None
             if expected_plan is not None:
                 resolution = next(c['resolution'] for c in expected_plan['cases'] if c['case_id'] == case['case_id'])

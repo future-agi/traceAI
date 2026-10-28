@@ -72,7 +72,13 @@ class _Stream(ObjectProxy):  # type: ignore
         except BaseException as exception:
             self._error(exception)
             raise
-        self._response_accumulator.process_chunk(item)
+        try:
+            self._response_accumulator.process_chunk(item)
+        except BaseException as exception:
+            # An accumulator failure is terminal for this advance too. Finish
+            # ERROR now, not OK when the caller subsequently closes the stream.
+            self._error(exception)
+            raise
         return item
 
     def __aiter__(self):
@@ -89,7 +95,13 @@ class _Stream(ObjectProxy):  # type: ignore
         except BaseException as exception:
             self._error(exception)
             raise
-        self._response_accumulator.process_chunk(item)
+        try:
+            self._response_accumulator.process_chunk(item)
+        except BaseException as exception:
+            # An accumulator failure is terminal for this advance too. Finish
+            # ERROR now, not OK when the caller subsequently closes the stream.
+            self._error(exception)
+            raise
         return item
 
     def close(self):
@@ -285,7 +297,10 @@ class _MessageResponseAccumulator:
         elif isinstance(chunk, RawContentBlockStartEvent):
             self._current_content_block_type = chunk.content_block
         elif isinstance(chunk, RawContentBlockDeltaEvent):
-            if isinstance(self._current_content_block_type, TextBlock):
+            # Citation/signature/thinking deltas are valid SDK events, not text
+            # or partial tool JSON. Pass them through unchanged without reading
+            # fields that belong only to another delta variant.
+            if isinstance(self._current_content_block_type, TextBlock) and chunk.delta.type == "text_delta":
                 value = {
                     "messages": {
                         "index": str(self._current_message_idx),
@@ -297,7 +312,7 @@ class _MessageResponseAccumulator:
                     }
                 }
                 self._values += value
-            elif isinstance(self._current_content_block_type, ToolUseBlock):
+            elif isinstance(self._current_content_block_type, ToolUseBlock) and chunk.delta.type == "input_json_delta":
                 value = {
                     "messages": {
                         "index": str(self._current_message_idx),

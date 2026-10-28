@@ -145,6 +145,26 @@ class PlanTable(FixtureCase):
                 self.assertIs(result["run_all"], run_all)
                 self.assertIs(result["core_changed"], core_changed)
 
+    def test_package_local_offline_pilots_are_isolated_without_duplicate_own_collection(self):
+        registry = json.loads((REPO_ROOT / '.github/compat/registry.json').read_text())
+        planned = planner.plan(['.github/scripts/python_test_plan.py'], root=REPO_ROOT)
+        by_id = {p['integration_id']: p for p in planned['packages']}
+        for target in registry['integrations']:
+            if target['language'] != 'python' or not target['canary']['pilot']:
+                continue
+            package = by_id[target['id']]
+            with self.subTest(integration=target['id']):
+                self.assertEqual(package['contract_tests'], target['contract_test']['paths'])
+                self.assertFalse(set(package['contract_tests']) & set(package['own_test_paths']))
+                own_files = {p.relative_to(REPO_ROOT).as_posix() for p in
+                             (REPO_ROOT / package['dir'] / 'tests').rglob('*.py')
+                             if p.name.startswith('test_') or p.name.endswith('_test.py')}
+                self.assertEqual(own_files, set(package['own_test_paths']) |
+                                 {p for p in package['contract_tests'] if p in own_files})
+                self.assertEqual(package['own_tests'], bool(package['own_test_paths']))
+        self.assertTrue(by_id['python-openai']['contract_tests'])
+        self.assertTrue(by_id['python-langchain']['contract_tests'])
+
     def test_package_entries(self):
         result = planner.plan(["python/fi_instrumentation/otel.py"], root=self.root)
         by_name = {package["name"]: package for package in result["packages"]}

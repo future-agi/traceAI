@@ -231,10 +231,19 @@ def plan(changed, root=REPO_ROOT):
         target = by_dir.get(package['dir'])
         if target is None:
             raise PlanError(f'{package["dir"]}: missing compatibility registry entry')
+        contract = target['contract_test'] or {}
+        paths = contract.get('paths', [])
+        # Real-SDK pilot contracts can live inside their package. Their location
+        # does not relax the registered loopback-only boundary.
+        isolated = [p for p in paths if contract.get('network') == 'loopback-only' and
+                    (target['canary']['pilot'] or p.startswith('.github/compat/contracts/'))]
+        own_files = sorted({p.relative_to(root).as_posix()
+                            for p in (root / package['dir'] / 'tests').rglob('*.py')
+                            if p.name.startswith('test_') or p.name.endswith('_test.py')})
+        own_paths = [p for p in own_files if not any(p == c or p.startswith(c + '/') for c in isolated)]
         package.update(integration_id=target['id'], qualification=target['qualification']['status'],
                        exception_ids=[ex['id'] for ex in target['exceptions']],
-                       contract_tests=[p for p in (target['contract_test'] or {}).get('paths', [])
-                                       if p.startswith('.github/compat/contracts/')])
+                       contract_tests=isolated, own_test_paths=own_paths, own_tests=bool(own_paths))
 
     # Every test_framework file on disk belongs to a package (and fails loudly if not),
     # whether or not this change touches it.

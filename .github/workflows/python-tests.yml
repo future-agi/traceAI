@@ -245,6 +245,7 @@ jobs:
           TEST_CONTEXT: ${{ runner.temp }}/python-test-context.json
           PKG_NAME: ${{ matrix.package.name }}
           OWN_TESTS: ${{ matrix.package.own_tests }}
+          OWN_TEST_PATHS: ${{ join(matrix.package.own_test_paths, ' ') }}
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
           CONTRACT_TESTS: ${{ join(matrix.package.contract_tests, ' ') }}
         run: |
@@ -264,7 +265,12 @@ jobs:
             ran=$((ran + 1))
             echo "::group::$PKG_NAME: $PKG_DIR/tests"
             rc=0
-            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest tests -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/own.xml") || rc=$?
+            # Registered offline contracts have their own sandboxed invocation
+            # below. Never collect them a second time through a host-network tests/.
+            own_paths=()
+            for test_file in $OWN_TEST_PATHS; do own_paths+=("$GITHUB_WORKSPACE/$test_file"); done
+            [ "${#own_paths[@]}" -gt 0 ] || exit 1
+            (cd "$GITHUB_WORKSPACE/$PKG_DIR" && "$venv_python" -m pytest "${own_paths[@]}" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o junit_family=xunit1 --junitxml="$JUNIT_DIR/own.xml") || rc=$?
             printf '%s\n' "$rc" > "$JUNIT_DIR/own.xml.exit-code"
             status=$((rc > status ? rc : status))
             echo "::endgroup::"
@@ -320,6 +326,7 @@ jobs:
           CORE_INSTALL: ${{ steps.core_install.outcome }}
           TESTS: ${{ steps.tests.outcome }}
           OWN_TESTS: ${{ matrix.package.own_tests }}
+          OWN_TEST_PATHS: ${{ join(matrix.package.own_test_paths, ' ') }}
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
           CONTRACT_TESTS: ${{ join(matrix.package.contract_tests, ' ') }}
         run: bash .github/scripts/known_broken_verdict.sh

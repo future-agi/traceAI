@@ -293,6 +293,96 @@ def test_async_temporary_iterator_disposal_preserves_later_sdk_error(instrument)
     assert only_span(exporter).status.status_code == StatusCode.ERROR
 
 
+def citation_stream_body():
+    # citations_delta belongs to the current text block, but is not text_delta.
+    # Use the real SDK parser, including releases predating typed citations.
+    events = [
+        {'type': 'message_start', 'message': {**message(), 'content': [], 'stop_reason': None}},
+        {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
+        {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': ANSWER}},
+        {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'citations_delta', 'citation': {
+            'type': 'char_location', 'cited_text': 'offline source', 'document_index': 0,
+            'document_title': 'contract', 'start_char_index': 0, 'end_char_index': 14}}},
+        {'type': 'content_block_stop', 'index': 0},
+        {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
+         'usage': {'output_tokens': 2}},
+        {'type': 'message_stop'},
+    ]
+    return b''.join(event_bytes(event) for event in events)
+
+
+def test_sync_citation_delta_preserves_valid_sdk_events(instrument):
+    handler = lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=citation_stream_body())
+    with sdk(handler) as client:
+        expected = [event.model_dump() for event in client.messages.create(stream=True, **arguments())]
+    _, exporter = instrument()
+    with sdk(handler) as client:
+        stream = client.messages.create(stream=True, **arguments())
+        actual = [event.model_dump() for event in stream]
+        assert actual == expected
+        assert actual[3]['delta']['type'] == 'citations_delta'
+        assert_resumed_output_and_usage(exporter)
+        stream.close()
+    assert_resumed_output_and_usage(exporter)
+
+
+def test_async_citation_delta_preserves_valid_sdk_events(instrument):
+    handler = lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=citation_stream_body())
+    async def baseline():
+        async with sdk(handler, True) as client:
+            return [event.model_dump() async for event in await client.messages.create(stream=True, **arguments())]
+    expected = asyncio.run(baseline())
+    _, exporter = instrument()
+    async def run():
+        async with sdk(handler, True) as client:
+            stream = await client.messages.create(stream=True, **arguments())
+            actual = [event.model_dump() async for event in stream]
+            assert actual == expected
+            assert actual[3]['delta']['type'] == 'citations_delta'
+            assert_resumed_output_and_usage(exporter)
+            await stream.close()
+    asyncio.run(run())
+    assert_resumed_output_and_usage(exporter)
+
+
+def test_sync_accumulator_exception_finishes_error_before_close(instrument, monkeypatch):
+    from traceai_anthropic._stream import _MessageResponseAccumulator
+    error = RuntimeError('offline-accumulator-error')
+    def fail(self, chunk):
+        raise error
+    monkeypatch.setattr(_MessageResponseAccumulator, 'process_chunk', fail)
+    _, exporter = instrument()
+    with sdk(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=citation_stream_body())) as client:
+        stream = client.messages.create(stream=True, **arguments())
+        with pytest.raises(RuntimeError) as caught:
+            next(stream)
+        assert caught.value is error
+        assert only_span(exporter).status.status_code == StatusCode.ERROR
+        stream.close()
+        stream.close()
+    assert only_span(exporter).status.status_code == StatusCode.ERROR
+
+
+def test_async_accumulator_exception_finishes_error_before_close(instrument, monkeypatch):
+    from traceai_anthropic._stream import _MessageResponseAccumulator
+    error = RuntimeError('offline-accumulator-error')
+    def fail(self, chunk):
+        raise error
+    monkeypatch.setattr(_MessageResponseAccumulator, 'process_chunk', fail)
+    _, exporter = instrument()
+    async def run():
+        async with sdk(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=citation_stream_body()), True) as client:
+            stream = await client.messages.create(stream=True, **arguments())
+            with pytest.raises(RuntimeError) as caught:
+                await stream.__anext__()
+            assert caught.value is error
+            assert only_span(exporter).status.status_code == StatusCode.ERROR
+            await stream.close()
+            await stream.aclose()
+    asyncio.run(run())
+    assert only_span(exporter).status.status_code == StatusCode.ERROR
+
+
 def test_stream_error_completes_exactly_once(instrument):
     _, exporter = instrument()
     body = event_bytes({'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'offline-stream-error'}})

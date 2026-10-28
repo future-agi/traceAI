@@ -574,6 +574,24 @@ class ResultTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn('failure evidence', result.stderr)
 
+    def test_strict_cli_rejects_fabricated_mismatch_without_installed_lock(self):
+        data, _ = self.retained_retry_fixture()
+        first = data['cases'][0]
+        first['dependency_lock'] = None
+        first['failure'].update(kind='requested_resolved_mismatch', test_ids=[])
+        result = self.strict_cli(data)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('failure evidence', result.stderr)
+
+    def test_unobserved_mismatch_claim_is_not_unknown_install_failure(self):
+        data, registry = self.retry_fixture()
+        first = data['cases'][0]
+        first['failure']['kind'] = 'requested_resolved_mismatch'
+        with self.assertRaisesRegex(ValueError, 'failure evidence'):
+            self.validate(data, registry)
+        first['failure']['kind'] = 'install'
+        self.validate(data, registry)  # Genuine pre-execution UNKNOWN remains valid.
+
     def test_failed_test_ids_must_match_actual_failed_nodes_not_passing_or_missing_nodes(self):
         data, registry = self.retained_retry_fixture()
         self.set_first_failure_evidence(data)
