@@ -1,4 +1,5 @@
 import logging
+import os
 from abc import ABC
 from contextlib import contextmanager
 from itertools import chain
@@ -51,6 +52,19 @@ class _WithTracer(ABC):
 
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        config = getattr(tracer, "_self_config", None)
+        hidden = getattr(config, "hide_error_details", None)
+        if hidden is None:
+            # Older supported core releases predate error-detail masking. Do
+            # not newly export private exception bodies when completing errors.
+            override = os.environ.get("FI_HIDE_ERROR_DETAILS")
+            hidden = override.lower() == "true" if override is not None else any(
+                getattr(config, field, False) for field in (
+                    "hide_inputs", "hide_outputs", "hide_input_messages",
+                    "hide_output_messages", "hide_input_text", "hide_output_text",
+                )
+            )
+        self._hide_error_details = hidden
 
     @contextmanager
     def _start_as_current_span(
@@ -72,7 +86,7 @@ class _WithTracer(ABC):
             record_exception=False,
             set_status_on_exception=False,
         ) as span:
-            operation = _WithSpan(span=span)
+            operation = _WithSpan(span=span, hide_error_details=self._hide_error_details)
             try:
                 yield operation
             except BaseException as exception:

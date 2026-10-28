@@ -479,6 +479,49 @@ class ResultTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn('JUnit', result.stderr)
 
+    def test_strict_cli_rejects_rehashed_lock_status_role_and_stability_controls(self):
+        for mutation in ('lock', 'invocation', 'role', 'prerelease', 'flaky_empty'):
+            data, registry = result_fixture(self.artifacts)
+            sha = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+            case = data['cases'][0]
+            data['run']['source_sha'] = case['source_sha'] = sha
+            if mutation == 'role':
+                for field in ('requested', 'resolved'):
+                    case[field][1]['role'], case[field][2]['role'] = case[field][2]['role'], case[field][1]['role']
+            if mutation == 'prerelease':
+                version = '2.0.0rc1'
+                case['selector'] = 'latest_eligible'
+                case['requested'][0].update(requirement='==' + version, selected_version=version)
+                case['resolved'][0]['version'] = version
+                case['discovery'] = [dict(name='anthropic', absolute_latest=version, latest_eligible=version,
+                    requested_version=version, resolved_version=version, published_at='2026-10-24T00:00:00Z', first_seen_at=None, yanked=False)]
+                lock = self.artifacts / 'locks/freeze.txt'
+                lock.write_text(lock.read_text().replace('anthropic==0.41.0', 'anthropic==' + version))
+                case['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+            _, raw = plan_fixture(data, self.artifacts)
+            (self.artifacts / 'compat-plan.json').write_bytes(raw)
+            if mutation == 'lock':
+                lock = self.artifacts / 'locks/freeze.txt'
+                lock.write_text(lock.read_text().replace('anthropic==0.41.0', 'anthropic==0.99.0'))
+                case['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+            if mutation == 'invocation':
+                (self.artifacts / 'junit/tests.xml.exit-code').write_text('1\n')
+                path = self.artifacts / f'invocations/{case["case_id"]}-attempt-1.json'
+                manifest = json.loads(path.read_text()); manifest['contract']['exit_code'] = 1
+                path.write_text(json.dumps(manifest))
+            if mutation == 'flaky_empty':
+                case.update(status='failed', failure=dict(kind='install', signature='a'*64, summary='failure', test_ids=[]))
+                case['contract'].update(tests=[], junit_paths=[], executed=0, collected=0)
+                second = copy.deepcopy(case); second.update(attempt=2, status='flaky', failure=None)
+                data['cases'].append(second)
+            path = self.artifacts / 'results.json'
+            path.write_text(json.dumps(data))
+            result = subprocess.run([sys.executable, '-I', str(ROOT / '.github/compat/validate.py'),
+                'results', str(path), '--root', str(ROOT)], capture_output=True, text=True)
+            with self.subTest(mutation=mutation):
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('compatibility:', result.stderr)
+
     def retry_fixture(self):
         data, registry = result_fixture(self.artifacts)
         second = copy.deepcopy(data['cases'][0])
@@ -515,6 +558,19 @@ class ResultTests(unittest.TestCase):
             if mutation == 'no_failure': first['failure'] = None
             if mutation == 'first_flaky': first['status'] = 'flaky'
             with self.subTest(mutation=mutation), self.assertRaises(ValueError): self.validate(data, registry)
+
+    def test_lock_parsers_reject_malformed_duplicate_and_unknown_adapters(self):
+        report = dict(version='1', install=[dict(metadata=dict(name='Sdk_Name', version='1.0'))])
+        self.assertEqual(installed_distributions(json.dumps(report).encode(), 'pip-report'), {'sdk-name': '1.0'})
+        invalid = [b'not-json', b'{"version":"1","version":"1","install":[]}',
+            json.dumps({**report, 'install': report['install'] * 2}).encode(),
+            json.dumps(dict(version='1', install=[dict(metadata=dict(name='sdk', version='not-version'))])).encode(),
+            json.dumps(dict(version='1', install=[dict(metadata={})])).encode()]
+        for raw in invalid:
+            with self.subTest(raw=raw), self.assertRaises(ValueError): installed_distributions(raw, 'pip-report')
+        for raw in (b'', b'sdk>=1\n', b'sdk==1\nSDK==1\n', b'sdk @ file:///wheel\n'):
+            with self.subTest(raw=raw), self.assertRaises(ValueError): installed_distributions(raw, 'pip-freeze')
+        with self.assertRaisesRegex(ValueError, 'unqualified'): installed_distributions(b'{}', 'npm-lock')
 
     def test_complete_frozen_lock_cannot_be_rehashed_into_another_environment(self):
         for mutation in ('wrong_upstream', 'missing_core', 'missing_transitive', 'extra', 'duplicate', 'malformed'):

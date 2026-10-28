@@ -12,13 +12,16 @@ class _WithSpan:
     __slots__ = (
         "_span",
         "_is_finished",
+        "_hide_error_details",
     )
 
     def __init__(
         self,
         span: trace_api.Span,
+        hide_error_details: bool = False,
     ) -> None:
         self._span = span
+        self._hide_error_details = hide_error_details
         try:
             self._is_finished = not self._span.is_recording()
         except Exception:
@@ -36,11 +39,17 @@ class _WithSpan:
     def set_attributes(self, attributes: Dict[str, AttributeValue]) -> None:
         self._span.set_attributes(attributes)
 
-    def record_exception(self, exception: Exception) -> None:
+    def record_exception(self, exception: BaseException) -> None:
         if self._is_finished:
             return
         try:
-            self._span.record_exception(exception)
+            if self._hide_error_details:
+                self._span.add_event("exception", attributes={
+                    "exception.type": type(exception).__name__,
+                    "exception.escaped": "False",
+                })
+            else:
+                self._span.record_exception(exception)
         except Exception:
             logger.exception("Failed to record exception on span")
             print("Error recording exception on span")

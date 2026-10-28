@@ -122,6 +122,45 @@ def test_privacy(instrument):
     assert ANSWER not in attrs
 
 
+def test_legacy_completion_or_removed_api_shape(instrument):
+    _, exporter = instrument()
+    with sdk(lambda _: httpx.Response(400, json={'type': 'error', 'error': {
+        'type': 'invalid_request_error', 'message': 'offline-legacy-error'}})) as client:
+        if Version(anthropic.__version__).major >= 1:
+            assert not hasattr(client, 'completions')
+            assert type(client.messages.create).__name__ == 'BoundFunctionWrapper'
+        else:
+            with pytest.raises(anthropic.BadRequestError, match='offline-legacy-error'):
+                client.completions.create(model=MODEL, max_tokens_to_sample=16, prompt=SECRET)
+            assert only_span(exporter).status.status_code == StatusCode.ERROR
+
+
+def test_async_legacy_completion_or_removed_api_shape(instrument):
+    _, exporter = instrument()
+    async def run():
+        async with sdk(lambda _: httpx.Response(400, json={'type': 'error', 'error': {
+            'type': 'invalid_request_error', 'message': 'offline-legacy-error'}}), True) as client:
+            if Version(anthropic.__version__).major >= 1:
+                assert not hasattr(client, 'completions')
+                assert type(client.messages.create).__name__ == 'BoundFunctionWrapper'
+            else:
+                with pytest.raises(anthropic.BadRequestError, match='offline-legacy-error'):
+                    await client.completions.create(model=MODEL, max_tokens_to_sample=16, prompt=SECRET)
+                assert only_span(exporter).status.status_code == StatusCode.ERROR
+    asyncio.run(run())
+
+
+def test_uninstrument_restores_count_tokens_and_create(instrument):
+    from anthropic.resources.messages import Messages
+    original_create, original_count = Messages.create, Messages.count_tokens
+    instrument()
+    assert Messages.create is not original_create
+    assert Messages.count_tokens is not original_count
+    AnthropicInstrumentor().uninstrument()
+    assert Messages.create is original_create
+    assert Messages.count_tokens is original_count
+
+
 def test_async_error_propagation_and_completion(instrument):
     _, exporter = instrument()
     async def run():
@@ -176,6 +215,21 @@ def test_sync_early_close_and_context_return_proxy(instrument):
             assert next(iter(stream)).type == 'message_start'
         assert stream.response.is_closed
         stream.close()
+    assert only_span(exporter).status.status_code == StatusCode.OK
+
+
+def test_async_stream_normal_completion(instrument):
+    _, exporter = instrument()
+    body = event_bytes({'type': 'message_start', 'message': {**message(), 'content': [], 'stop_reason': None}})
+    body += event_bytes({'type': 'message_stop'})
+    async def run():
+        async with sdk(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=body), True) as client:
+            stream = await client.messages.create(stream=True, **arguments())
+            events = [event async for event in stream]
+            assert events[0].type == 'message_start'
+            assert events[-1].type == 'message_stop'
+            await stream.close()
+    asyncio.run(run())
     assert only_span(exporter).status.status_code == StatusCode.OK
 
 
