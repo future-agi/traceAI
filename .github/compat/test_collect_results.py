@@ -226,3 +226,20 @@ class CollectorTests(unittest.TestCase):
         with patch('collect_results.semantic_validator', return_value=SimpleNamespace(validate_contract=lambda *args: None)):
             result = self.run_control(mutate)
         self.assertIn('full collected identities', result['cases'][0]['failure']['summary'])
+
+    def test_github_success_clone_is_not_a_rerun_but_new_or_failed_execution_is(self):
+        for changed in (None, 'steps', 'conclusion', 'created_at'):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                plan, artifacts, output, _, data = evidence(Path(temporary))
+                cid = data['cases'][0]['case_id']
+                old = dict(id=1, name=f'Canary ({cid})', run_attempt=1, status='completed', conclusion='success',
+                    created_at='2026-10-28T01:00:00Z', started_at='2026-10-28T01:00:01Z', completed_at='2026-10-28T01:01:00Z',
+                    runner_id=123, head_sha=SHA, steps=[dict(name='contract', conclusion='success', started_at='2026-10-28T01:00:02Z')])
+                clone = {**old, 'id': 2, 'run_attempt': 2, 'created_at': '2026-10-28T02:00:00Z'}
+                if changed == 'steps': clone['steps'] = [dict(name='checkout', conclusion='failure')]
+                if changed == 'conclusion': clone['conclusion'] = 'failure'
+                if changed == 'created_at': clone['created_at'] = '2026-10-28T00:59:00Z'
+                with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+                    result, blocked = self.collect(plan, artifacts, output, jobs=[old, clone])
+                self.assertEqual(bool(blocked), changed is not None)
+                self.assertEqual(result['cases'][-1]['status'], 'passed' if changed is None else 'blocked')

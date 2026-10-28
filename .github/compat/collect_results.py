@@ -160,6 +160,19 @@ def current_job(jobs, case_id):
     latest = max(matches, key=lambda j: (int(j["run_attempt"]), int(j["id"])))
     if latest.get("status") != "completed":
         raise ValueError("Current case job has not completed")
+    # GitHub clones successful, NOT-rerun jobs into the new attempt with new IDs
+    # and run_attempt, but the old execution timestamps/steps/runner. Confirm the
+    # entire trusted execution trace, not merely success or an artifact's claim.
+    # A real setup failure/new execution never has this identical prior trace.
+    trace = ("started_at", "completed_at", "steps", "runner_id", "head_sha")
+    if (latest.get("conclusion") == "success" and all(latest.get(k) for k in trace)
+            and latest.get("created_at") and latest["completed_at"] < latest["created_at"]):
+        originals = [j for j in matches if int(j["run_attempt"]) < int(latest["run_attempt"])
+                     and j.get("status") == "completed" and j.get("conclusion") == "success"
+                     and j.get("created_at") and j["created_at"] <= j.get("started_at", "")
+                     and all(j.get(k) == latest[k] for k in trace)]
+        if originals:
+            return max(originals, key=lambda j: int(j["run_attempt"]))
     return latest
 
 
