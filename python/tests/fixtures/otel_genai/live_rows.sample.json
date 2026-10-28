@@ -1,0 +1,62 @@
+[
+ {
+  "name": "chat",
+  "observation_type": "llm",
+  "model": "",
+  "provider": "openai",
+  "gen_ai_system": "openai",
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_tokens": 0
+ },
+ {
+  "name": "dual_emit",
+  "observation_type": "unknown",
+  "model": "",
+  "provider": "",
+  "gen_ai_system": "",
+  "prompt_tokens": 3,
+  "completion_tokens": 4,
+  "total_tokens": 7
+ },
+ {
+  "name": "dual_emit prompt_tokens",
+  "observation_type": "unknown",
+  "model": "",
+  "provider": "",
+  "gen_ai_system": "",
+  "prompt_tokens": 3,
+  "completion_tokens": 0,
+  "total_tokens": 3
+ },
+ {
+  "name": "invoke_agent",
+  "observation_type": "unknown",
+  "model": "",
+  "provider": "",
+  "gen_ai_system": "",
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_tokens": 0
+ },
+ {
+  "name": "retrieval",
+  "observation_type": "unknown",
+  "model": "",
+  "provider": "",
+  "gen_ai_system": "",
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_tokens": 0
+ },
+ {
+  "name": "chat gpt-test",
+  "observation_type": "llm",
+  "model": "gpt-test",
+  "provider": "openai",
+  "gen_ai_system": "",
+  "prompt_tokens": 3,
+  "completion_tokens": 4,
+  "total_tokens": 7
+ }
+]
