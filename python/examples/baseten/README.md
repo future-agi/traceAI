@@ -6,7 +6,7 @@ not need a Baseten tracing package.
 
 ## Install
 
-From this directory, install the tested pins:
+From this directory, install the dependency pins:
 
 ```bash
 pip install -r requirements.txt
@@ -30,8 +30,17 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `FI_BASE_URL` | Optional Future AGI collector origin | Tracer only |
 | `FI_PROJECT_NAME` | Optional Observe project name; defaults to `baseten-openai` | Tracer only |
 
-Choose a slug from Baseten's current [Model APIs table](https://docs.baseten.co/inference/model-apis/overview).
-`zai-org/GLM-5.2` is a documentation example, not a model availability guarantee.
+Choose a language-model slug from Baseten's current [Model APIs catalog](https://docs.baseten.co/inference/model-apis/overview#list-available-models)
+or `client.models.list()`. `zai-org/GLM-5.2` is listed on Baseten's
+[pricing page](https://www.baseten.co/pricing/); availability depends on your account.
+Model APIs use [per-token pricing](https://docs.baseten.co/inference/model-apis/pricing-and-limits#pricing).
+A $0/month Basic plan is pay-as-you-go, not a promise of free inference.
+The decision models `elephant-1` and `mammoth-1` use the separate
+[System One API](https://docs.baseten.co/inference/model-apis/decision-models),
+not this Chat Completions recipe.
+
+The app exits 2 for a missing or empty model or Baseten key, or an invalid base
+URL, before tracing or network calls. It does not check the Future AGI keys itself.
 
 ## Run
 
@@ -104,9 +113,15 @@ own per-deployment URL and are not covered. The app rejects hosts matching
 `https://model-abc123.api.baseten.co/environments/production/sync/v1`.
 
 The Anthropic Messages beta at `https://inference.baseten.co` uses a different
-client and is not covered. The app rejects that root and tells you to use
-`/v1` for the OpenAI SDK. It returns allowed URLs unchanged, including custom
-proxy URLs; it does not rewrite rejected URLs. Baseten CLI is out of scope.
+client and is not covered ([client configuration](https://docs.baseten.co/inference/model-apis/overview#migrate)).
+The app rejects that root and tells you to use `/v1` for the OpenAI SDK.
+On `inference.baseten.co`, the URL must use HTTPS and the path must be exactly
+`/v1` or `/v1/`. Endpoint paths, repeated trailing slashes, dot segments, queries,
+fragments, URL credentials, whitespace, control characters, and invalid host
+spellings fail early. Uppercase hosts and a trailing DNS dot do not bypass the
+checks. Customer proxies and loopback servers may use their own HTTP(S) paths;
+proxy labels may contain internal underscores. Allowed URLs are returned
+unchanged. Baseten CLI and the System One API are out of scope.
 
 `x-session-affinity` is a Baseten routing header. It is NOT a Future AGI
 session id; there is no bridge between them. For a Future AGI session, use
@@ -136,7 +151,7 @@ change Baseten's own logging.
 - Anthropic SDK calls to Baseten and its Anthropic Messages beta.
 - Dedicated deployments and the Baseten CLI.
 - Historical import of past requests.
-- Not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API.
+- System One decision-model requests, Responses API calls, and pricing-table changes.
 
 ## Tests
 
@@ -158,10 +173,12 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
 
 The tests use MockTransport at the documented host and local HTTP servers.
 Subprocesses install a socket guard that blocks external hosts before DNS.
+CI runs the three cells below via
+[OpenAI-compatible recipe tests](../../../.github/workflows/openai-compatible-recipe-tests.yml).
 
 | Python | `openai` | traceAI packages | Result |
 | --- | --- | --- | --- |
-| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
+| 3.11 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
 | 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
 | 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
 

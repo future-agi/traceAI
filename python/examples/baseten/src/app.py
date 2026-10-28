@@ -1,6 +1,7 @@
 """Trace Baseten Model APIs Chat Completions with the OpenAI SDK."""
 
 import argparse
+import ipaddress
 import os
 import re
 import sys
@@ -18,21 +19,51 @@ MODEL_ENV = "BASETEN_MODEL"
 
 
 def check_base_url(url: str) -> str:
-    """Reject the two Baseten surfaces that need a different recipe."""
-    parsed = urlsplit(url)
-    # Compare the host without an absolute-FQDN trailing dot; the URL itself is
-    # returned unchanged.
-    host = (parsed.hostname or "").rstrip(".")
-    if host == "inference.baseten.co" and parsed.path in ("", "/"):
-        raise ValueError(
-            "Baseten's root is the Anthropic Messages beta endpoint; "
-            "use https://inference.baseten.co/v1 for the OpenAI SDK."
-        )
-    if re.fullmatch(r"model-[^.]+\.api\.baseten\.co", host):
-        raise ValueError(
-            "Baseten dedicated deployments use a per-deployment URL and are "
-            "out of scope for this Model APIs recipe."
-        )
+    """Validate without rewriting; permit customer proxies and loopback servers."""
+    def refuse(reason):
+        raise ValueError(f"{BASE_URL_ENV}: {reason}")
+
+    if not url or any(c.isspace() or not c.isprintable() for c in url):
+        refuse("use an absolute URL without whitespace or control characters")
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        parts.port  # Reject malformed ports before tracing.
+    except ValueError:
+        refuse("use a valid absolute HTTP(S) URL")
+    if parts.username is not None or parts.password is not None:
+        refuse("remove URL credentials; supply the key through BASETEN_API_KEY")
+    if parts.scheme not in ("http", "https") or not host:
+        refuse("use an absolute HTTP(S) URL with a host")
+    if not host.isascii():
+        refuse("use a plain ASCII host with valid IDNA spelling")
+    comparable_host = host.lower().rstrip(".")
+    structural_host = host.lower().removesuffix(".")
+    try:
+        ipaddress.ip_address(structural_host)
+    except ValueError:
+        try:
+            structural_host.encode("ascii").decode("idna")
+        except UnicodeError:
+            refuse("use a plain ASCII host with valid IDNA spelling")
+        if len(structural_host) > 253 or not all(
+            re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?", label)
+            for label in structural_host.split(".")
+        ):
+            refuse("use a valid ASCII host")
+    if re.fullmatch(r"model-[^.]+\.api\.baseten\.co", comparable_host):
+        refuse("Baseten dedicated deployments use a per-deployment URL and are "
+               "out of scope for this Model APIs recipe")
+    if comparable_host == "inference.baseten.co":
+        if parts.scheme != "https":
+            refuse(f"use HTTPS: {DEFAULT_BASE_URL}")
+        if "?" in url or "#" in url:
+            refuse(f"remove the query or fragment; use {DEFAULT_BASE_URL}")
+        if parts.path in ("", "/"):
+            refuse("Baseten's root is the Anthropic Messages beta endpoint; "
+                   "use https://inference.baseten.co/v1 for the OpenAI SDK")
+        if parts.path not in ("/v1", "/v1/"):
+            refuse(f"use the base URL {DEFAULT_BASE_URL}, without an endpoint path")
     return url
 
 
@@ -65,13 +96,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         base_url = check_base_url(os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL)
-        model = args.model or os.environ[MODEL_ENV]
-        api_key = os.environ[API_KEY_ENV]
+        model = args.model or os.environ.get(MODEL_ENV)
+        if not model:
+            raise ValueError(f"{MODEL_ENV}: set a catalog model id or pass --model")
+        api_key = os.environ.get(API_KEY_ENV)
+        if not api_key:
+            raise ValueError(f"{API_KEY_ENV}: set your Baseten API key")
     except ValueError as error:
         print(str(error), file=sys.stderr)
-        return 2
-    except KeyError as error:
-        print(f"Set {error.args[0]} before running this example.", file=sys.stderr)
         return 2
 
     provider = setup_tracing()
@@ -82,9 +114,10 @@ def main(argv=None) -> int:
                 stream=args.stream,
             )
             if args.stream:
-                for chunk in response:
-                    if chunk.choices:
-                        print(chunk.choices[0].delta.content or "", end="", flush=True)
+                with response:
+                    for chunk in response:
+                        if chunk.choices:
+                            print(chunk.choices[0].delta.content or "", end="", flush=True)
                 print()
             else:
                 print(response.choices[0].message.content or "")

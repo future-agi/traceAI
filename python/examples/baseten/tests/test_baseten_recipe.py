@@ -46,7 +46,7 @@ REFUSED = (
     # Host spelling variants must not bypass the refusals.
     ("https://inference.baseten.co.", "Anthropic Messages beta"),
     ("https://INFERENCE.Baseten.CO/", "Anthropic Messages beta"),
-    ("https://user@inference.baseten.co:443", "Anthropic Messages beta"),
+    ("https://user@inference.baseten.co:443", "URL credentials"),
     ("https://model-abc123.api.baseten.co./v1", "dedicated deployments"),
     ("https://MODEL-abc123.API.baseten.co:8443/v1", "dedicated deployments"),
 )
@@ -439,7 +439,9 @@ def test_guard_refuses_provider_before_dns(operation, tmp_path):
 
 
 @pytest.mark.parametrize("url", [
-    DOCUMENTED_URL, DOCUMENTED_URL + "/", "http://127.0.0.1:1234/v1",
+    DOCUMENTED_URL, DOCUMENTED_URL + "/", "https://INFERENCE.BASETEN.CO/v1/",
+    "https://inference.baseten.co./v1", "https://inference.baseten.co:443/v1",
+    "http://127.0.0.1:1234/v1", "http://[::1]:1234/v1", "http://myproj_proxy_1:1234/v1",
     "http://localhost:1234/custom/path/", "https://customer.example/proxy/v1?route=one",
     "https://model-abc123.api.baseten.co.customer.example/v1",
 ])
@@ -505,6 +507,74 @@ def test_model_and_prompt_cli_override(monkeypatch, receiver, tmp_path):
         assert (tmp_path / "guard.ready").is_file()
 
 
+def strict_refused_urls():
+    cases = []
+    for host in ("inference.baseten.co", "INFERENCE.BASETEN.CO", "inference.baseten.co."):
+        for path in ("/v1/chat/completions", "/chat/completions", "/v1/embeddings",
+                     "/v1/responses", "/v1/systemone", "/V1", "/v1//", "/%76%31",
+                     "/v1/../v1", "/v1/..", "/."):
+            cases.append((f"https://{host}{path}", "base URL"))
+        cases.append((f"http://{host}/v1", "HTTPS"))
+        for suffix in ("?", "#", "?route=x", "#anchor"):
+            cases.append((f"https://{host}/v1{suffix}", "query or fragment"))
+    for char in (" ", "\t", "\r", "\n", "\x00", "\x7f", " ", "​"):
+        cases.append((f"https://inference.baseten.co/v1{char}", "whitespace or control"))
+    for dot in ("。", "．", "｡"):
+        cases.append((f"https://inference{dot}baseten.co/v1", "ASCII host"))
+    for host in ("xn--.example", "inference..baseten.co", "-bad.example", "bad_.example",
+                 "inference.baseten.co%2e", "inference.baseten.co.."):
+        cases.append((f"https://{host}/v1", "host"))
+    for host in ("inference.baseten.co", "proxy.example.test", "127.0.0.1:12345"):
+        cases.append((f"https://private-credential-marker:private-password-marker@{host}/v1", "credentials"))
+        cases.append((f"https://@{host}/v1", "credentials"))
+    cases.extend((
+        ("", "absolute URL"), ("inference.baseten.co/v1", "absolute"),
+        ("ftp://inference.baseten.co/v1", "HTTP(S)"),
+        ("https:///v1", "host"), ("https://[invalid/v1", "valid absolute"),
+        ("https://inference.baseten.co:invalid/v1", "valid absolute"),
+    ))
+    return cases
+
+
+def test_strict_urls_exit_before_tracing_or_client(monkeypatch, receiver, capsys):
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid URL must exit before tracing or client creation")
+
+    monkeypatch.setattr(app, "setup_tracing", unexpected)
+    monkeypatch.setattr(app, "make_client", unexpected)
+    for url, reason in strict_refused_urls():
+        with pytest.raises(ValueError) as caught:
+            app.check_base_url(url)
+        message = str(caught.value)
+        assert app.BASE_URL_ENV in message
+        assert reason in message
+        assert "\n" not in message
+        assert "private-credential-marker" not in message
+        assert "private-password-marker" not in message
+        if not url:
+            continue  # An empty environment override selects the default.
+        environment = dict(os.environ)
+        environment[app.BASE_URL_ENV] = url
+        with monkeypatch.context() as context:
+            # Exercise NUL without trying to put it in the real OS environment.
+            context.setattr(app.os, "environ", environment)
+            assert app.main([]) == 2
+        output = capsys.readouterr()
+        assert output.out == ""
+        assert message in output.err
+        assert "private-credential-marker" not in output.err
+        assert receiver.spans() == []
+        assert receiver.requests() == []
+
+
+@pytest.mark.parametrize("variable", [app.MODEL_ENV, app.API_KEY_ENV])
+def test_empty_configuration_exits_before_tracing(variable, monkeypatch, capsys):
+    monkeypatch.setenv(variable, "")
+    monkeypatch.setattr(app, "setup_tracing", lambda: pytest.fail("empty configuration"))
+    assert app.main([]) == 2
+    assert variable in capsys.readouterr().err
+
+
 def test_readme_contract_and_pins():
     readme = (RECIPE / "README.md").read_text()
     assert "# Baseten (OpenAI-compatible) with traceAI" in readme
@@ -532,7 +602,10 @@ def test_readme_contract_and_pins():
     assert "NOT a Future AGI" in readme
     assert "using_session" in readme
     assert "1.69.0" in readme
-    assert "not tested against the live provider" in readme.lower()
+    assert "per-token pricing" in readme
+    assert "System One API" in readme
+    assert "path must be exactly" in readme
+    assert "`/v1` or `/v1/`" in readme
     assert not re.search(r"\b(?:sk-(?:proj-)?|fi-)[A-Za-z0-9_]{20,}\b", readme)
     pins = (RECIPE / "requirements.txt").read_text().splitlines()
     assert pins[0].startswith("#")
