@@ -2,7 +2,7 @@
 
 This recipe traces Perplexity's Agent API through the `openai` Python SDK's Responses interface at `https://api.perplexity.ai/v1`. It uses the existing `traceai-openai` instrumentor without a provider-specific package.
 
-Search results are not traced as citations or retriever spans; they appear only inside raw `output.value` on non-streamed calls.
+Search results are not traced as citations or retriever spans; they can appear inside raw `output.value` on non-streamed calls and on streams without answer text.
 
 ## Install
 
@@ -25,7 +25,8 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `FI_API_KEY` | Yes | Future AGI API key. Goes to the tracer only. |
 | `FI_SECRET_KEY` | Yes | Future AGI secret key. Goes to the tracer only. |
 | `PERPLEXITY_API_KEY` | Yes | Perplexity key. Goes to the OpenAI client only. |
-| `PERPLEXITY_MODEL` | Yes, unless using `--model` | A model id from Perplexity's Agent API models page. The compatibility example uses `openai/gpt-5.6-sol`. |
+| `PERPLEXITY_MODEL` | Yes, unless using `--model` | An ID from the [Agent API models page](https://docs.perplexity.ai/docs/agent-api/models). This example uses `openai/gpt-6-luna` ($0.10/M input, $0.50/M output for small contexts, checked 2026-10-28). |
+| `FI_PROJECT_NAME` | No | Future AGI project; defaults to `perplexity-agent-api`. |
 | `PERPLEXITY_BASE_URL` | No | SDK base URL override. Defaults to `https://api.perplexity.ai/v1`. |
 | `FI_BASE_URL` | No | Future AGI collector origin. Defaults to `https://api.futureagi.com`. |
 | `FI_HIDE_INPUTS` | No | Set to `true` to hide prompt text in exported spans. |
@@ -41,7 +42,8 @@ From this example directory, replace the placeholders with your keys:
 export FI_API_KEY="placeholder-fi-key"
 export FI_SECRET_KEY="placeholder-fi-secret"
 export PERPLEXITY_API_KEY="placeholder-perplexity-key"
-export PERPLEXITY_MODEL="openai/gpt-5.6-sol"
+export FI_PROJECT_NAME="${FI_PROJECT_NAME:-perplexity-agent-api}"
+export PERPLEXITY_MODEL="openai/gpt-6-luna"
 python src/app.py
 python src/app.py --stream
 ```
@@ -59,7 +61,8 @@ from fi_instrumentation.fi_types import ProjectType
 from openai import OpenAI
 from traceai_openai import OpenAIInstrumentor
 
-provider = register(project_name="perplexity-agent-api", project_type=ProjectType.OBSERVE,
+provider = register(project_name=os.environ.get("FI_PROJECT_NAME") or "perplexity-agent-api",
+                    project_type=ProjectType.OBSERVE,
                     set_global_tracer_provider=False, verbose=False)
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 client = OpenAI(api_key=os.environ["PERPLEXITY_API_KEY"],
@@ -78,9 +81,9 @@ The fixtures produce one span named `Response` per call, with `gen_ai.span.kind=
 
 Up to `traceai-openai` 0.1.10, the provider field is `openai` (`gen_ai.provider.name`), the shared instrumentor's label for calls made through the OpenAI SDK. Later versions (future-agi/traceAI#249) say `perplexity` for `api.perplexity.ai`; other base URLs keep `openai`.
 
-Token counts appear in `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` and `gen_ai.usage.total_tokens` when the response includes usage. `gen_ai.usage.input_tokens.cache_read` and `gen_ai.usage.output_tokens.reasoning` appear when the response includes those details. Missing usage is omitted, never filled with zero. For streaming, the instrumentor takes the answer and token counts from the full response in `response.completed`. The fixture exports 17 input tokens, 11 output tokens, 28 total tokens, 9 cache-read tokens and 4 reasoning tokens on both successful paths. HTTP 401 produces an ERROR span with an exception event.
+Token counts appear in `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` and `gen_ai.usage.total_tokens` when the response includes usage. `gen_ai.usage.output_tokens.reasoning` appears when `output_tokens_details.reasoning_tokens` is supplied. `gen_ai.usage.input_tokens.cache_read` is read from `input_tokens_details.cached_tokens`, and the shared wrapper currently requires `output_tokens_details` to be present as well. Missing usage is omitted, never filled with zero. For streaming, the instrumentor takes the answer and token counts from the full response in `response.completed`. The fixture exports 17 input tokens, 11 output tokens, 28 total tokens, 9 cache-read tokens and 4 reasoning tokens on both successful paths. HTTP 401 produces an ERROR span with an exception event.
 
-Search-result URLs and snippets appear inside `output.value` on non-streamed calls; streamed `output.value` contains only the answer text. The non-streamed value is the shared instrumentor's raw response representation (Python repr text up to 0.1.10, JSON in later versions), which includes the `search_results` item and the response's `instructions` field. Search queries and instructions appear in non-streamed `output.value`; their markers are absent from all streamed span attributes in the fixture. Search results can therefore reach Future AGI inside raw output. There are no citation attributes or retriever spans. The tests verify that `FI_HIDE_OUTPUTS=true` removes the answer text, search queries, search-result URLs and snippets, and instructions from the exported span, with an unmasked control. The nested `usage.cost` object round-trips inside raw non-streamed output; it has no dedicated cost mapping.
+Search-result URLs and snippets appear inside `output.value` on non-streamed calls. Streamed `output.value` contains answer text when present; a completed response with no answer text falls back to the raw response and may include search data and instructions. Use `FI_HIDE_OUTPUTS=true` on both paths for output privacy. The non-streamed value is the shared instrumentor's raw response representation (Python repr text up to 0.1.10, JSON in later versions), which includes the `search_results` item and the response's `instructions` field. Search queries and instructions appear in non-streamed `output.value`; their markers are absent from all streamed span attributes in the fixture. Search results can therefore reach Future AGI inside raw output. There are no citation attributes or retriever spans. The tests verify that `FI_HIDE_OUTPUTS=true` removes the answer text, search queries, search-result URLs and snippets, and instructions from the exported span, with an unmasked control. The nested `usage.cost` object round-trips inside raw non-streamed output; it has no dedicated cost mapping.
 
 With OpenAI 3.24.0, the extra `search_results` item parses and `response.output_text` returns the message text. Serializing that item emits Pydantic warnings; it does not prevent the fixture span from exporting.
 
@@ -88,7 +91,7 @@ With OpenAI 3.24.0, the extra `search_results` item parses and `response.output_
 
 Perplexity documents the [Agent API through the OpenAI SDK's Responses interface](https://docs.perplexity.ai/docs/agent-api/openai-compatibility). The canonical Agent API endpoint is `/v1/agent`; `/v1/responses` is its OpenAI SDK alias. `client.responses.create` uses that alias automatically. Pass the base URL `https://api.perplexity.ai/v1`, rather than an endpoint path.
 
-Perplexity also documents presets through the OpenAI SDK with `extra_body={"preset": ...}`; this recipe passes a model id and was not tested with presets. In one MockTransport preset fixture with no request model, one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`; this does not establish preset support. With older SDKs such as `openai` 1.69.0, `responses.create` requires `model`, so a preset-only call raises `TypeError` before any request is sent.
+Perplexity also documents presets through the OpenAI SDK with `extra_body={"preset": ...}`; this recipe's CLI passes a model ID rather than selecting a preset. In one MockTransport preset fixture with no request model, one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`; this does not establish preset support. With older SDKs such as `openai` 1.69.0, `responses.create` requires `model`, so a preset-only call raises `TypeError` before any request is sent.
 
 Sonar Chat Completions support ended on 27 September 2026. Synchronous and streaming requests keep working because they are being reformulated as Agent API requests, rolling out by model; asynchronous Sonar requests are no longer supported. New code should use the Agent API. See the [Sonar migration overview](https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview).
 
@@ -104,7 +107,7 @@ Sonar Chat Completions support ended on 27 September 2026. Synchronous and strea
 | Perplexity URLs with a query or fragment | Remove the query or fragment from `PERPLEXITY_BASE_URL`. |
 | Any URL with embedded credentials | Remove userinfo; pass the Perplexity key to the client. |
 
-Host checks also catch upper-case and trailing-dot spellings. The documented base URL with or without a trailing slash is allowed unchanged. Loopback URLs are allowed for tests.
+Host checks also catch upper-case and trailing-dot spellings. The Perplexity host allows exactly `/v1` or `/v1/`; repeated slashes, encoded separators and other paths are refused. Whitespace, control characters, Unicode or invalid IDNA hosts, malformed ports, host backslashes, percent-encoding, empty labels, and URL credentials are refused before tracing on every host. For internationalised proxy hosts, use punycode. Valid proxy and loopback URLs retain their spelling and paths; no URL is rewritten.
 
 ## Privacy
 
@@ -123,7 +126,6 @@ Perplexity still receives the prompt. Future AGI masking does not change Perplex
 - Async or background runs.
 - Citation attributes or retriever spans.
 - `usage.cost` mapping.
-- Live provider calls. This recipe was not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API and in-process fixtures.
 
 The fixtures include Perplexity's `search_results` item first, followed by the assistant message. They check SDK parsing and `response.output_text`. They do not establish compatibility with other response shapes or models.
 

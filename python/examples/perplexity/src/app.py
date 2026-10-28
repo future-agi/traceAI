@@ -18,13 +18,25 @@ MODEL_ENV = "PERPLEXITY_MODEL"
 
 def check_base_url(url: str) -> str:
     """Reject documented endpoint mix-ups without changing an allowed URL."""
+    if any(char.isspace() or not char.isprintable() for char in url):
+        raise ValueError(f"{BASE_URL_ENV}: remove whitespace or control characters.")
     try:
         parsed = urlsplit(url)
+        host = parsed.hostname
+        parsed.port  # Reject malformed ports before tracing.
     except ValueError:
         raise ValueError(f"{BASE_URL_ENV}: use a valid SDK base URL.") from None
     if parsed.username is not None or parsed.password is not None:
         raise ValueError(f"{BASE_URL_ENV}: remove URL credentials; pass the key to the client.")
-    if (parsed.hostname or "").lower().rstrip(".") == "api.perplexity.ai":
+    if not host or parsed.scheme not in ("http", "https"):
+        raise ValueError(f"{BASE_URL_ENV}: use an absolute HTTP(S) SDK base URL.")
+    if "\\" in host or "%" in host or "" in (host[:-1] if host.endswith(".") else host).split("."):
+        raise ValueError(f"{BASE_URL_ENV}: invalid host spelling.")
+    try:
+        host.lower().encode("ascii").decode("idna")
+    except UnicodeError:
+        raise ValueError(f"{BASE_URL_ENV}: use a plain ASCII host with valid IDNA.") from None
+    if host.lower().rstrip(".") == "api.perplexity.ai":
         if parsed.scheme != "https":
             raise ValueError(
                 f"{BASE_URL_ENV}: use https://api.perplexity.ai/v1 with "
@@ -35,7 +47,7 @@ def check_base_url(url: str) -> str:
                 f"{BASE_URL_ENV}: remove the query or fragment; use "
                 "https://api.perplexity.ai/v1 with client.responses.create."
             )
-        path = parsed.path.rstrip("/")
+        path = parsed.path.removesuffix("/")
         if not path:
             raise ValueError(
                 f"{BASE_URL_ENV}: that root was the Sonar Chat Completions base URL, whose support "
@@ -55,6 +67,11 @@ def check_base_url(url: str) -> str:
                 f"{BASE_URL_ENV}: the Router API is a separate private-preview product, not covered "
                 "here; use https://api.perplexity.ai/v1 with client.responses.create."
             )
+        if parsed.path not in ("/v1", "/v1/"):
+            raise ValueError(
+                f"{BASE_URL_ENV}: use exactly https://api.perplexity.ai/v1 or /v1/ "
+                "with client.responses.create; other base paths are refused."
+            )
     return url
 
 
@@ -72,7 +89,7 @@ def make_client(
 
 def setup_tracing(project_name: str | None = None):
     provider = register(
-        project_name=project_name or "perplexity-agent-api",
+        project_name=project_name or os.environ.get("FI_PROJECT_NAME") or "perplexity-agent-api",
         project_type=ProjectType.OBSERVE,
         set_global_tracer_provider=False,
         verbose=False,

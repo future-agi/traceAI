@@ -249,16 +249,15 @@ def test_preset_fixture(tracing):
 
     with tracing() as (receiver, provider, project):
         with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
-            try:
-                response = client.responses.create(input=prompt, extra_body={"preset": "low"})
-            except TypeError as error:
-                # Older SDKs (for example openai 1.69.0) require `model` on responses.create,
-                # so a preset-only call fails in the SDK before any request or span.
-                assert "model" in str(error)
+            if openai.__version__ == "1.69.0":
+                # The pinned floor requires model; newer SDKs must exercise the request.
+                with pytest.raises(TypeError, match="model"):
+                    client.responses.create(input=prompt, extra_body={"preset": "low"})
                 assert requests == []
                 assert provider.force_flush()
                 assert receiver.spans() == [] and receiver.requests() == []
                 return
+            response = client.responses.create(input=prompt, extra_body={"preset": "low"})
             assert response.output_text == fake.ANSWER
             assert response.model == fake.RESPONSE_MODEL
         assert len(requests) == 1
@@ -307,7 +306,7 @@ def test_authentication_error(tracing):
         with pytest.raises(openai.AuthenticationError, match="Invalid API key"):
             _call(handler)
         span, attrs = _assert_export(receiver, provider, project, error=True)
-        assert "AuthenticationError" in span["status"]["message"]
+        assert "Invalid API key" in span["status"]["message"]
         exceptions = [event for event in span["events"] if event["name"] == "exception"]
         assert len(exceptions) == 1
         assert "Invalid API key" in json.dumps(exceptions)
@@ -346,6 +345,33 @@ def test_hide_outputs_with_control(tracing, monkeypatch, stream):
                 assert (marker in json.dumps(span)) is (not hidden and not stream)
 
 
+@pytest.mark.parametrize("hidden", [False, True], ids=["visible", "hidden"])
+def test_empty_text_stream_raw_fallback(tracing, monkeypatch, hidden):
+    monkeypatch.setenv("FI_HIDE_OUTPUTS", str(hidden).lower())
+    completed = fake.response_fixture()
+    completed["output"] = completed["output"][:1]  # Search data, but no assistant text.
+    event = {"type": "response.completed", "sequence_number": 0, "response": completed}
+    payload = f"event: response.completed\ndata: {json.dumps(event)}\n\ndata: [DONE]\n\n".encode()
+    with tracing() as (receiver, provider, project):
+        with app.make_client(http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=payload)
+        ))) as client:
+            list(client.responses.create(model=fake.REQUEST_MODEL, input="empty stream", stream=True))
+        span, attrs = _assert_export(receiver, provider, project)
+        _assert_usage(attrs)
+        for marker in (fake.SEARCH_URL, fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
+            assert (marker in json.dumps(span)) is (not hidden)
+
+
+def test_cache_details_require_output_details(tracing):
+    response = fake.response_fixture()
+    response["usage"].pop("output_tokens_details")
+    with tracing() as (receiver, provider, project):
+        assert _call(lambda request: httpx.Response(200, json=response)) == fake.ANSWER
+        _, attrs = _assert_export(receiver, provider, project)
+        _assert_usage(attrs, details=False)
+
+
 def _child_environment(receiver, fake_server, tmp_path):
     environment = os.environ.copy()
     # These follow the actual imports, so published wheels work too.
@@ -356,6 +382,7 @@ def _child_environment(receiver, fake_server, tmp_path):
         Path(sys.modules[Receiver.__module__].__file__).resolve().parent.parent,
     ]
     environment.update({
+        "FI_PROJECT_NAME": "perplexity-fixture-project-override",
         "PYTHONPATH": os.pathsep.join(dict.fromkeys(str(path) for path in roots)),
         "PYTHONDONTWRITEBYTECODE": "1",
         "FI_BASE_URL": receiver.origin,
@@ -413,7 +440,7 @@ def test_subprocess_app(tmp_path, stream, cli_model):
         assert export["path"] == "/tracer/v1/traces"
         assert export["headers"]["x-api-key"] == FI_KEY
         assert export["headers"]["x-secret-key"] == FI_SECRET
-        assert export["resource_attributes"][0]["project_name"] == "perplexity-agent-api"
+        assert export["resource_attributes"][0]["project_name"] == "perplexity-fixture-project-override"
         assert VENDOR_KEY not in json.dumps(span)
         assert VENDOR_KEY not in json.dumps(export)
 
@@ -478,7 +505,6 @@ def test_check_base_url_refusals(host, path, reason):
     assert "client.responses.create" in message
     if reason == "Sonar Chat Completions":
         assert "27 September 2026" in message
-    assert url == f"https://{host}{path}"
 
 
 @pytest.mark.parametrize("url", [
@@ -578,11 +604,16 @@ def test_readme_pins():
     assert "on successful non-streamed and streamed calls records the model returned by the response" in readme
     assert "Failed calls record the model you sent" in readme
     assert "requested model remains in `gen_ai.request.parameters` on all three paths" in readme
-    assert "Search results are not traced as citations or retriever spans; they appear only inside raw `output.value` on non-streamed calls." in readme
-    assert "Search-result URLs and snippets appear inside `output.value` on non-streamed calls; streamed `output.value` contains only the answer text." in readme
+    assert "Search results are not traced as citations or retriever spans" in readme
+    assert "a completed response with no answer text falls back to the raw response" in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "perplexity-agent-api"' in readme
+    assert 'export FI_PROJECT_NAME="${FI_PROJECT_NAME:-perplexity-agent-api}"' in readme
+    assert 'export PERPLEXITY_MODEL="openai/gpt-6-luna"' in readme
+    assert "https://docs.perplexity.ai/docs/agent-api/models" in readme
     assert "gen_ai.usage.input_tokens.cache_read" in readme
     assert "gen_ai.usage.output_tokens.reasoning" in readme
-    assert "when the response includes those details" in readme
+    assert "input_tokens_details.cached_tokens" in readme
+    assert "requires `output_tokens_details` to be present as well" in readme
     assert "The nested `usage.cost` object round-trips inside raw non-streamed output" in readme
     assert 'presets through the OpenAI SDK with `extra_body={"preset": ...}`' in readme
     assert "one span exported with the response model, while `preset` was absent from `gen_ai.request.parameters`" in readme
