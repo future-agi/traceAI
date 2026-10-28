@@ -16,7 +16,7 @@ Or install the packages directly:
 pip install traceAI-openai fi-instrumentation-otel openai
 ```
 
-The requirements pin `openai==3.24.0`, `traceAI-openai==0.1.10`, and `fi-instrumentation-otel==1.1.0`. The test suite also passes on the `traceai-openai` SDK floor, `openai==1.69.0` (see Tested versions).
+The requirements pin `openai==3.24.0`, `traceAI-openai==0.1.10`, and `fi-instrumentation-otel==1.1.0`. The `traceai-openai` SDK floor is `openai==1.69.0`.
 
 ## Configure
 
@@ -97,7 +97,7 @@ For Unity Gateway model services, use `/ai-gateway/mlflow/v1` and send your mode
 
 ### Serving endpoints
 
-For Model Serving serving endpoints, use `/serving-endpoints` and send your endpoint name as `model`. These two suffixes select different surfaces. Do not combine them. The token comes from `DATABRICKS_TOKEN`; keep it in a secret store.
+For Model Serving serving endpoints, use `/serving-endpoints` and send your endpoint name as `model`. These two suffixes select different surfaces. Do not combine them. The token comes from `DATABRICKS_TOKEN`; the SDK sends `Authorization: Bearer <token>`. Keep it in a secret store. Databricks recommends machine-to-machine OAuth for production workloads.
 
 `model` is the model service or endpoint name, not a frozen foundation-model id. A pricing row keyed by a foundation-model id will not match an endpoint name. An endpoint name needs a matching pricing row for cost lookup.
 
@@ -111,7 +111,7 @@ The gateway fixture produces one `CreateEmbeddingResponse` span with `gen_ai.spa
 
 ### Inside the workspace
 
-`databricks_openai.DatabricksOpenAI` 0.17.1 subclasses `openai.OpenAI` without overriding its request method, so `traceai-openai` wraps it the same way; this recipe does not test it. This is a source-checked observation. The helper is not a recipe dependency.
+This recipe constructs the stock `openai.OpenAI` client directly; `databricks-openai` is not a recipe dependency.
 
 ## Privacy
 
@@ -125,9 +125,8 @@ The embedding fixture pins exported input text separately. These chat masking te
 - The MLflow Deployments SDK and Databricks-internal MLflow trace forwarding.
 - Agent / Genie code and other agent frameworks.
 - The Gemini/Anthropic gateway native APIs.
-- `DatabricksOpenAI` execution; the helper is source-checked only.
-- Direct REST invocation calls, workspace provisioning, and live workspace calls.
-- Not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API.
+- The `DatabricksOpenAI` helper.
+- Direct REST invocation calls and workspace provisioning.
 
 The fixtures use these syntactic test hosts, not real ones, with `httpx.MockTransport`:
 
@@ -167,10 +166,16 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
   pytest python/examples/databricks/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
 ```
 
-Tested versions (for the floor row, change `openai==3.24.0` to `openai==1.69.0` in the repository-source command):
+Dependency variants for local checks (for the floor row, change `openai==3.24.0` to `openai==1.69.0` in the repository-source command):
 
-| Python | `openai` | traceAI packages | Result |
+| Python | `openai` | traceAI packages | Local check configuration |
 |---|---|---|---|
-| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
-| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
-| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
+| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Commands above |
+| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Commands above |
+| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Commands above |
+
+## Official API references
+
+- [Query model services](https://docs.databricks.com/aws/en/ai-gateway/query-model-services)
+- [Migrate to Unity Gateway](https://docs.databricks.com/aws/en/ai-gateway/migrate-to-unity-gateway)
+- [Foundation Model REST API](https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference)

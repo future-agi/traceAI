@@ -644,7 +644,7 @@ def test_readme_and_requirement_pins():
     assert "the provider field says `openai`" in readme
     assert "Databricks workspace hosts must use `https://`" in readme
     assert "example.staging.cloud.databricks.com is a placeholder, not a real host." in readme
-    assert "`databricks_openai.DatabricksOpenAI` 0.17.1 subclasses `openai.OpenAI` without overriding its request method, so `traceai-openai` wraps it the same way; this recipe does not test it." in readme
+    assert "This recipe constructs the stock `openai.OpenAI` client directly" in readme
     assert "A pricing row keyed by a foundation-model id will not match an endpoint name." in readme
     assert "Embeddings, only when the endpoint task is embeddings" in readme
     assert "gen_ai.request.model" in readme
