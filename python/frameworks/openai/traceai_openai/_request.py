@@ -3,12 +3,10 @@ from abc import ABC
 from contextlib import contextmanager
 from itertools import chain
 from types import ModuleType
-from typing import Any, Awaitable, Callable, Iterable, Iterator, Mapping, Tuple
+from typing import Any, Awaitable, Callable, Iterable, Iterator, Mapping, Optional, Tuple
 
-from fi_instrumentation import get_attributes_from_context
+from fi_instrumentation import TraceConfig, get_attributes_from_context
 from fi_instrumentation.fi_types import (
-    FiLLMProviderValues,
-    FiLLMSystemValues,
     FiSpanKindValues,
     SpanAttributes,
 )
@@ -18,6 +16,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
+from traceai_openai._providers import provider_from_host
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
@@ -89,15 +88,23 @@ class _WithOpenAI(ABC):
         "_request_attributes_extractor",
         "_response_attributes_extractor",
         "_response_accumulator_factories",
+        "_config",
     )
 
-    def __init__(self, openai: ModuleType, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        openai: ModuleType,
+        *args: Any,
+        config: Optional[TraceConfig] = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._openai = openai
+        self._config = config if config is not None else TraceConfig()
         self._stream_types = (openai.Stream, openai.AsyncStream)
         self._request_attributes_extractor = _RequestAttributesExtractor(openai=openai)
         self._response_attributes_extractor = _ResponseAttributesExtractor(
-            openai=openai
+            openai=openai, config=self._config
         )
 
         def responses_accumulator(request_parameters: _RequestParameters) -> Any:
@@ -133,18 +140,12 @@ class _WithOpenAI(ABC):
     def _get_attributes_from_instance(
         self, instance: Any
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        if (
-            not (base_url := getattr(instance, "base_url", None))
-            or not (host := getattr(base_url, "host", None))
-            or not isinstance(host, str)
-        ):
-            return
-        if host.endswith("api.openai.com"):
-            yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.OPENAI.value
-        elif host.endswith("openai.azure.com"):
-            yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.AZURE.value
-        elif host.endswith("googleapis.com"):
-            yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.GOOGLE.value
+        # The provider is the vendor behind the client's base_url, not the SDK:
+        # known OpenAI-compatible hosts get their own label, anything else "openai".
+        base_url = getattr(instance, "base_url", None)
+        yield SpanAttributes.GEN_AI_PROVIDER_NAME, provider_from_host(
+            getattr(base_url, "host", None)
+        )
 
     def _get_attributes_from_request(
         self,
@@ -152,7 +153,10 @@ class _WithOpenAI(ABC):
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_SPAN_KIND, self._get_span_kind(cast_to=cast_to)
-        yield SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMSystemValues.OPENAI.value
+        # Record the requested model up front so streamed and failed calls carry it;
+        # a successful non-streamed response overwrites it with the served model.
+        if isinstance(model := request_parameters.get("model"), str) and model:
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         try:
             yield from _as_input_attributes(
                 _io_value_and_type(request_parameters),
@@ -243,6 +247,18 @@ class _WithOpenAI(ABC):
             )
             return response
 
+    def _raw_embeddings_json(self, response: CreateEmbeddingResponse) -> str:
+        """The raw embeddings response; vectors are replaced by their dimension
+        count when FI_HIDE_EMBEDDING_VECTORS / hide_embedding_vectors is set."""
+        raw = response.to_dict()
+        if self._config.hide_embedding_vectors or self._config.hide_outputs:
+            for item in raw.get("data") or []:
+                if isinstance(item, dict) and "embedding" in item:
+                    vector = item.pop("embedding")
+                    if isinstance(vector, list):
+                        item["dimensions"] = len(vector)
+        return safe_json_dumps(raw)
+
     def response_to_dict(self, response: Any) -> Any:
         if hasattr(response, "to_dict") and callable(response.to_dict):
             return response.to_dict()
@@ -302,9 +318,9 @@ class _Request(_WithTracer, _WithOpenAI):
                 response = wrapped(*args, **kwargs)
 
                 if isinstance(response, CreateEmbeddingResponse):
-                    embedding = response.to_dict()
                     with_span.set_attribute(
-                        SpanAttributes.EMBEDDING_EMBEDDINGS, safe_json_dumps(embedding)
+                        SpanAttributes.EMBEDDING_EMBEDDINGS,
+                        self._raw_embeddings_json(response),
                     )
 
                 # Add output data to span attributes after getting response
@@ -344,8 +360,10 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
         try:
             cast_to, request_parameters = _parse_request_args(args)
             # Extract input data more robustly
-            input_data = request_parameters.get(
-                "messages", request_parameters.get("prompt")
+            input_data = (
+                request_parameters.get("messages")
+                or request_parameters.get("prompt")
+                or request_parameters.get("input")
             )
             llm_tools = request_parameters.get("tools")
 
@@ -377,9 +395,9 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                 response = await wrapped(*args, **kwargs)
 
                 if isinstance(response, CreateEmbeddingResponse):
-                    embedding = response.to_dict()
                     with_span.set_attribute(
-                        SpanAttributes.EMBEDDING_EMBEDDINGS, safe_json_dumps(embedding)
+                        SpanAttributes.EMBEDDING_EMBEDDINGS,
+                        self._raw_embeddings_json(response),
                     )
 
                 add_io_to_span_attributes(
