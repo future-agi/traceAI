@@ -59,9 +59,12 @@ jobs:
         working-directory: typescript
         run: timeout 180 pnpm --filter @traceai/voltagent test
       - name: Real VoltAgent exporter contract (offline model)
+        # Corepack resolves packageManager from cwd before pnpm reads --dir.
+        # Keep nested contract builds inside the pinned TypeScript workspace.
+        working-directory: typescript
         run: |
           python -m pip install pytest protobuf opentelemetry-proto jsonschema requests
-          PYTHONPATH=python/tests python -m pytest typescript/packages/traceai_voltagent/contract -q --noconftest -p no:cacheprovider -o addopts=''
+          PYTHONPATH=../python/tests python -m pytest packages/traceai_voltagent/contract -q --noconftest -p no:cacheprovider -o addopts=''
       - name: Build installable tarball without changing lockfile
         working-directory: typescript/packages/traceai_voltagent
         run: |
