@@ -2,9 +2,20 @@
  * Tests for OpenAI Agents instrumentation.
  */
 
-import { OpenAIAgentsInstrumentation, FITracingProcessor, isPatched } from "../instrumentation";
+import {
+  OpenAIAgentsInstrumentation,
+  FITracingProcessor,
+  isPatched,
+  SUPPORTED_AGENTS_VERSIONS,
+  _resetPatchedStateForTesting,
+} from "../instrumentation";
 import { VERSION } from "../version";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { FITracer } from "@traceai/fi-core";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
 describe("OpenAIAgentsInstrumentation", () => {
@@ -28,7 +39,7 @@ describe("OpenAIAgentsInstrumentation", () => {
 
   describe("VERSION", () => {
     it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.1.0");
+      expect(VERSION).toBe("0.2.1");
     });
   });
 
@@ -59,6 +70,59 @@ describe("OpenAIAgentsInstrumentation", () => {
     it("should return false when not patched", () => {
       instrumentation.disable();
       expect(isPatched()).toBe(false);
+    });
+  });
+
+  describe("processor registration", () => {
+    function fakeAgentsModule() {
+      return {
+        setTraceProcessors: jest.fn(),
+        addTraceProcessor: jest.fn(),
+      } as unknown as Parameters<OpenAIAgentsInstrumentation["manuallyInstrument"]>[0] & {
+        setTraceProcessors: jest.Mock;
+        addTraceProcessor: jest.Mock;
+      };
+    }
+
+    afterEach(() => {
+      _resetPatchedStateForTesting();
+    });
+
+    it("replaces the SDK's trace processors by default", () => {
+      _resetPatchedStateForTesting();
+      const inst = new OpenAIAgentsInstrumentation();
+      inst.setTracerProvider(tracerProvider);
+      const agentsModule = fakeAgentsModule();
+      inst.manuallyInstrument(agentsModule);
+      expect(agentsModule.setTraceProcessors).toHaveBeenCalledTimes(1);
+      expect(agentsModule.addTraceProcessor).not.toHaveBeenCalled();
+      inst.disable();
+    });
+
+    it("keeps the SDK's default exporter when exclusiveProcessor is false", () => {
+      _resetPatchedStateForTesting();
+      const inst = new OpenAIAgentsInstrumentation({ exclusiveProcessor: false });
+      inst.setTracerProvider(tracerProvider);
+      const agentsModule = fakeAgentsModule();
+      inst.manuallyInstrument(agentsModule);
+      expect(agentsModule.addTraceProcessor).toHaveBeenCalledTimes(1);
+      expect(agentsModule.setTraceProcessors).not.toHaveBeenCalled();
+      inst.disable();
+    });
+
+    it("accepts a non-extensible module object such as an ES module namespace", () => {
+      _resetPatchedStateForTesting();
+      const inst = new OpenAIAgentsInstrumentation();
+      inst.setTracerProvider(tracerProvider);
+      const agentsModule = Object.preventExtensions(fakeAgentsModule());
+      expect(() => inst.manuallyInstrument(agentsModule)).not.toThrow();
+      expect(agentsModule.setTraceProcessors).toHaveBeenCalledTimes(1);
+      expect(isPatched()).toBe(true);
+      inst.disable();
+    });
+
+    it("declares the tested @openai/agents range for the require hook", () => {
+      expect(SUPPORTED_AGENTS_VERSIONS).toEqual([">=0.4.0 <0.22.0"]);
     });
   });
 });
@@ -159,10 +223,10 @@ describe("FITracingProcessor", () => {
           type: "generation",
           name: "LLM Call",
           model: "gpt-4",
-          modelConfig: { temperature: 0.7 },
+          model_config: { temperature: 0.7 },
           input: [{ role: "user", content: "Hello" }],
           output: [{ role: "assistant", content: "Hi there!" }],
-          usage: { inputTokens: 5, outputTokens: 3 },
+          usage: { input_tokens: 5, output_tokens: 3 },
         },
       };
 
@@ -173,6 +237,47 @@ describe("FITracingProcessor", () => {
       const spans = memoryExporter.getFinishedSpans();
       expect(spans.length).toBe(2);
       expect(spans[0].name).toBe("LLM Call");
+      expect(spans[0].attributes["gen_ai.request.model"]).toBe("gpt-4");
+      expect(spans[0].attributes["gen_ai.request.parameters"]).toBe(
+        JSON.stringify({ temperature: 0.7 })
+      );
+      expect(spans[0].attributes["gen_ai.usage.input_tokens"]).toBe(5);
+      expect(spans[0].attributes["gen_ai.usage.output_tokens"]).toBe(3);
+      expect(spans[0].attributes["gen_ai.usage.total_tokens"]).toBe(8);
+    });
+
+    it("should read token counts from a chat completion when usage is absent", () => {
+      const trace = { traceId: "test-trace-4b", name: "Agent Run" };
+      processor.onTraceStart(trace);
+
+      const generationSpan = {
+        spanId: "span-3b",
+        traceId: "test-trace-4b",
+        startedAt: new Date().toISOString(),
+        spanData: {
+          type: "generation",
+          model: "gpt-4.1-mini",
+          input: [{ role: "user", content: "Hello" }],
+          output: [
+            {
+              object: "chat.completion",
+              choices: [{ message: { role: "assistant", content: "Hi there!" } }],
+              usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+            },
+          ],
+        },
+      };
+
+      processor.onSpanStart(generationSpan);
+      processor.onSpanEnd(generationSpan);
+      processor.onTraceEnd(trace);
+
+      const [generation, root] = memoryExporter.getFinishedSpans();
+      expect(generation.attributes["output.value"]).toBe("Hi there!");
+      expect(generation.attributes["gen_ai.usage.input_tokens"]).toBe(4);
+      expect(generation.attributes["gen_ai.usage.output_tokens"]).toBe(2);
+      expect(generation.attributes["gen_ai.usage.total_tokens"]).toBe(6);
+      expect(root.attributes["output.value"]).toBe("Hi there!");
     });
 
     it("should handle handoff spans", () => {
@@ -185,18 +290,28 @@ describe("FITracingProcessor", () => {
         startedAt: new Date().toISOString(),
         spanData: {
           type: "handoff",
-          fromAgent: "Assistant",
-          toAgent: "Specialist",
+          from_agent: "Assistant",
+          to_agent: "Specialist",
         },
+      };
+      const specialistSpan = {
+        spanId: "span-4b",
+        traceId: "test-trace-5",
+        startedAt: new Date().toISOString(),
+        spanData: { type: "agent", name: "Specialist" },
       };
 
       processor.onSpanStart(handoffSpan);
       processor.onSpanEnd(handoffSpan);
+      processor.onSpanStart(specialistSpan);
+      processor.onSpanEnd(specialistSpan);
       processor.onTraceEnd(trace);
 
       const spans = memoryExporter.getFinishedSpans();
-      expect(spans.length).toBe(2);
+      expect(spans.length).toBe(3);
       expect(spans[0].name).toBe("handoff to Specialist");
+      expect(spans[1].attributes["graph.node.id"]).toBe("Specialist");
+      expect(spans[1].attributes["graph.node.parent_id"]).toBe("Assistant");
     });
 
     it("should handle response spans with input/output", () => {
@@ -209,14 +324,18 @@ describe("FITracingProcessor", () => {
         startedAt: new Date().toISOString(),
         spanData: {
           type: "response",
-          input: "What is the weather?",
-          response: {
+          response_id: "resp_1",
+          _input: "What is the weather?",
+          _response: {
+            id: "resp_1",
+            model: "gpt-4.1-mini",
             output: [
               {
                 type: "message",
                 content: [{ type: "output_text", text: "The weather is sunny." }],
               },
             ],
+            usage: { input_tokens: 9, output_tokens: 5, total_tokens: 14 },
           },
         },
       };
@@ -227,6 +346,14 @@ describe("FITracingProcessor", () => {
 
       const spans = memoryExporter.getFinishedSpans();
       expect(spans.length).toBe(2);
+      const [response, root] = spans;
+      expect(response.attributes["input.value"]).toBe("What is the weather?");
+      expect(response.attributes["output.value"]).toBe("The weather is sunny.");
+      expect(response.attributes["gen_ai.request.model"]).toBe("gpt-4.1-mini");
+      expect(response.attributes["gen_ai.usage.input_tokens"]).toBe(9);
+      expect(response.attributes["gen_ai.usage.output_tokens"]).toBe(5);
+      expect(root.attributes["input.value"]).toBe("What is the weather?");
+      expect(root.attributes["output.value"]).toBe("The weather is sunny.");
     });
 
     it("should set error status on span error", () => {
@@ -251,6 +378,47 @@ describe("FITracingProcessor", () => {
       const spans = memoryExporter.getFinishedSpans();
       expect(spans.length).toBe(2);
       expect(spans[0].status.code).toBe(2); // SpanStatusCode.ERROR
+      // The description is the error message only; `data` goes to the exception event
+      expect(spans[0].status.message).toBe("Tool failed");
+      expect(spans[0].attributes["error.type"]).toBe("AgentSpanError");
+      const exception = spans[0].events.find((e) => e.name === "exception");
+      expect(exception?.attributes?.["exception.type"]).toBe("AgentSpanError");
+      expect(exception?.attributes?.["exception.message"]).toBe(
+        "Tool failed: Connection timeout",
+      );
+    });
+
+    it("should hide error details when inputs are hidden", () => {
+      const hiddenExporter = new InMemorySpanExporter();
+      const hiddenProvider = new BasicTracerProvider({
+        spanProcessors: [new SimpleSpanProcessor(hiddenExporter)],
+      });
+      const hiddenProcessor = new FITracingProcessor(
+        new FITracer({
+          tracer: hiddenProvider.getTracer("test"),
+          traceConfig: { hideInputs: true },
+        }),
+      );
+      const trace = { traceId: "test-trace-hidden", name: "Hidden Trace" };
+      hiddenProcessor.onTraceStart(trace);
+      const errorSpan = {
+        spanId: "span-hidden",
+        traceId: "test-trace-hidden",
+        startedAt: new Date().toISOString(),
+        spanData: { type: "function", name: "failing_tool" },
+        error: { message: "Tool failed", data: { error: "secret prompt text" } },
+      };
+      hiddenProcessor.onSpanStart(errorSpan);
+      hiddenProcessor.onSpanEnd(errorSpan);
+      hiddenProcessor.onTraceEnd(trace);
+
+      const [span] = hiddenExporter.getFinishedSpans();
+      expect(span.status).toEqual({ code: 2 });
+      expect(span.attributes["error.type"]).toBe("AgentSpanError");
+      expect(span.events.find((e) => e.name === "exception")?.attributes).toEqual({
+        "exception.type": "AgentSpanError",
+      });
+      expect(JSON.stringify(span.events)).not.toContain("secret prompt text");
     });
   });
 

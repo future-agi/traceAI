@@ -15,6 +15,19 @@ export type TraceConfigOptions = {
   hideEmbeddingVectors?: boolean;
   base64ImageMaxLength?: number;
   piiRedaction?: boolean;
+  /**
+   * Hides error details on spans: the ERROR status keeps no description, and
+   * `exception.message`, `exception.stacktrace`, `error.message` and keys ending in
+   * `.exception.message` / `.exception.stacktrace` / `.error.message` / `.error_message` are
+   * dropped from span attributes and events. Everything else (`exception.type`,
+   * `exception.escaped`, `error.type`, custom attributes) is kept.
+   *
+   * Tri-state. When left unset (and `FI_HIDE_ERROR_DETAILS` is not set), it turns on
+   * whenever any of `hideInputs`, `hideOutputs`, `hideInputMessages`,
+   * `hideOutputMessages`, `hideInputText` or `hideOutputText` is on, because error text
+   * can quote the hidden content. An explicit `true` / `false` (option or env) wins.
+   */
+  hideErrorDetails?: boolean;
 };
 
 /**
@@ -54,6 +67,22 @@ type NumericTraceConfigFlag = {
   type: "number";
 };
 
+type OptionalBooleanTraceConfigFlag = {
+  /**
+   * No static default: when neither the option nor the environment variable is set,
+   * the value is derived from the rest of the resolved config
+   */
+  default: undefined;
+  /**
+   * The environment variable key to use to override the derived value
+   */
+  envKey: string;
+  /**
+   * The type of the flag
+   */
+  type: "optionalBoolean";
+};
+
 /**
  * The default and environment information for a value on the TraceConfig
  * Used to generate a full TraceConfig object
@@ -69,7 +98,10 @@ type NumericTraceConfigFlag = {
  * }
  * ```
  */
-export type TraceConfigFlag = BooleanTraceConfigFlag | NumericTraceConfigFlag;
+export type TraceConfigFlag =
+  | BooleanTraceConfigFlag
+  | NumericTraceConfigFlag
+  | OptionalBooleanTraceConfigFlag;
 
 /**
  * The arguments for a masking rule, used to determine if a value should be masked (redacted or omitted)

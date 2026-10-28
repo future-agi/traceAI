@@ -1,0 +1,8 @@
+# Read by Hermes' package manager when the plugin is enabled; not a package to build.
+[project]
+name = "futureagi-hermes-plugin"
+version = "0.1.0"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "traceAI-hermes-agent>=0.1.0,<0.2",
+]

@@ -1,0 +1,340 @@
+{
+ "type": "post_call_transcription_otel",
+ "event_timestamp": 1792453181,
+ "data": {
+  "conversation_id": "conv_LIVEC",
+  "agent_id": "agent_LIVE",
+  "branch_id": "agtbrch_LIVE",
+  "version_id": "agtvrsn_LIVE",
+  "environment": "production",
+  "otlp_traces": {
+   "resourceSpans": [
+    {
+     "resource": {
+      "attributes": [
+       {
+        "key": "service.name",
+        "value": {
+         "stringValue": "elevenlabs-convai"
+        }
+       },
+       {
+        "key": "elevenlabs.conversation_id",
+        "value": {
+         "stringValue": "conv_LIVEC"
+        }
+       },
+       {
+        "key": "elevenlabs.agent_id",
+        "value": {
+         "stringValue": "agent_LIVE"
+        }
+       }
+      ]
+     },
+     "scopeSpans": [
+      {
+       "scope": {
+        "name": "elevenlabs.convai",
+        "version": "1.0.0"
+       },
+       "spans": [
+        {
+         "traceId": "00000000000000000000000000123001",
+         "spanId": "0000000000123002",
+         "name": "elevenlabs.conversation",
+         "kind": 1,
+         "startTimeUnixNano": "1792453058000000000",
+         "endTimeUnixNano": "1792453179000000000",
+         "attributes": [
+          {
+           "key": "elevenlabs.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          },
+          {
+           "key": "elevenlabs.conversation_id",
+           "value": {
+            "stringValue": "conv_LIVEC"
+           }
+          },
+          {
+           "key": "elevenlabs.conversation_product",
+           "value": {
+            "stringValue": "agent"
+           }
+          },
+          {
+           "key": "elevenlabs.status",
+           "value": {
+            "stringValue": "done"
+           }
+          },
+          {
+           "key": "elevenlabs.session.duration_ms",
+           "value": {
+            "intValue": "121000"
+           }
+          },
+          {
+           "key": "elevenlabs.source",
+           "value": {
+            "stringValue": "post_call_webhook"
+           }
+          },
+          {
+           "key": "elevenlabs.environment",
+           "value": {
+            "stringValue": "production"
+           }
+          },
+          {
+           "key": "elevenlabs.cost",
+           "value": {
+            "intValue": "0"
+           }
+          },
+          {
+           "key": "elevenlabs.cost_fiat",
+           "value": {
+            "intValue": "0"
+           }
+          },
+          {
+           "key": "elevenlabs.authorization_method",
+           "value": {
+            "stringValue": "public"
+           }
+          },
+          {
+           "key": "elevenlabs.termination_reason",
+           "value": {
+            "stringValue": "Conversation has exceeded maximum duration"
+           }
+          },
+          {
+           "key": "elevenlabs.analysis.call_successful",
+           "value": {
+            "stringValue": "success"
+           }
+          },
+          {
+           "key": "elevenlabs.analysis.transcript_summary",
+           "value": {
+            "stringValue": "The agent initiated the conversation with a simple greeting."
+           }
+          },
+          {
+           "key": "elevenlabs.analysis.call_summary_title",
+           "value": {
+            "stringValue": "Greeting"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__agent_turns",
+           "value": {
+            "intValue": "1"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__current_agent_turns",
+           "value": {
+            "intValue": "1"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__current_subagent_turns",
+           "value": {
+            "intValue": "1"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__current_agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__conversation_id",
+           "value": {
+            "stringValue": "conv_LIVEC"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__call_duration_secs",
+           "value": {
+            "intValue": "121"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_utc",
+           "value": {
+            "stringValue": "2026-10-19T23:39:39.188655+00:00"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time",
+           "value": {
+            "stringValue": "Monday, 23:39 19 October 2026"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_date",
+           "value": {
+            "stringValue": "Monday, 19 October 2026"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_hour",
+           "value": {
+            "intValue": "23"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_minute",
+           "value": {
+            "intValue": "39"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__time_second",
+           "value": {
+            "intValue": "39"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__is_text_only",
+           "value": {
+            "boolValue": true
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__channel",
+           "value": {
+            "stringValue": "python_sdk"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__conversation_history",
+           "value": {
+            "stringValue": "{\"x-elevenlabs-history\": true, \"entries\": [{\"role\": \"agent\", \"message\": \"Hi.\"}]}"
+           }
+          },
+          {
+           "key": "elevenlabs.dynamic_variable.system__environment",
+           "value": {
+            "stringValue": "production"
+           }
+          },
+          {
+           "key": "elevenlabs.visited_agents.0.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.visited_agents.0.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        },
+        {
+         "traceId": "00000000000000000000000000123001",
+         "spanId": "0000000000123003",
+         "parentSpanId": "0000000000123002",
+         "name": "elevenlabs.recv.agent_response",
+         "kind": 1,
+         "startTimeUnixNano": "1792453058000000000",
+         "endTimeUnixNano": "1792453179000000000",
+         "attributes": [
+          {
+           "key": "elevenlabs.event.type",
+           "value": {
+            "stringValue": "agent"
+           }
+          },
+          {
+           "key": "elevenlabs.agent.text",
+           "value": {
+            "stringValue": "Hi."
+           }
+          },
+          {
+           "key": "elevenlabs.turn.index",
+           "value": {
+            "intValue": "0"
+           }
+          },
+          {
+           "key": "elevenlabs.producing_llm",
+           "value": {
+            "stringValue": "gpt-4o-mini"
+           }
+          },
+          {
+           "key": "elevenlabs.ignored_as_backchannel",
+           "value": {
+            "boolValue": false
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_id",
+           "value": {
+            "stringValue": "agent_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.branch_id",
+           "value": {
+            "stringValue": "agtbrch_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.version_id",
+           "value": {
+            "stringValue": "agtvrsn_LIVE"
+           }
+          },
+          {
+           "key": "elevenlabs.turn.agent_name",
+           "value": {
+            "stringValue": "live-test-agent"
+           }
+          },
+          {
+           "key": "elevenlabs.metric.convai_ttf_response_since_user_message_ms",
+           "value": {
+            "doubleValue": 1.8
+           }
+          }
+         ],
+         "status": {
+          "code": 1
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

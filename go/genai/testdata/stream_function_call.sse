@@ -1,0 +1,2 @@
+data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}, "id": "call_stream_1"}, "thoughtSignature": "c2lnbmF0dXJlLWZpeHR1cmU="}], "role": "model"}, "finishReason": "STOP", "index": 0}], "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 16, "totalTokenCount": 90, "thoughtsTokenCount": 24}, "modelVersion": "gemini-3.8-flash", "responseId": "fixture-stream-fc"}
+

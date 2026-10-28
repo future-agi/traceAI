@@ -1,0 +1,1 @@
+{"id":"msg_01FixtureText","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"It is sunny in Paris. OUTMARKER-c41e"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":12,"cache_creation_input_tokens":20,"cache_read_input_tokens":100,"output_tokens":9}}

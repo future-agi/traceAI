@@ -37,10 +37,10 @@ Your agent calls an LLM, retrieves context, invokes a tool, and returns an answe
 
 **traceAI** captures every LLM call, prompt, token count, retrieval step, and agent decision as structured OpenTelemetry traces. Your traces live natively in Datadog, Grafana, Future AGI, Jaeger, or any OTel-compatible backend. No new vendor. No new dashboard.
 
-- **Drop-in instrumentation** for 50+ AI frameworks across 4 languages
+- **Drop-in instrumentation** for 50+ AI frameworks across 5 languages
 - **OpenTelemetry-native** - works with any OTel-compatible backend
 - **Semantic conventions** for LLM calls, agents, tools, retrieval, and vector databases
-- **Python, TypeScript, Java, and C#** with consistent APIs
+- **Python, TypeScript, Java, Go, and C#** with consistent APIs
 
 ---
 
@@ -56,7 +56,9 @@ Your agent calls an LLM, retrieves context, invokes a tool, and returns an answe
   - [Python](#python)
   - [TypeScript](#typescript)
   - [Java](#java)
+  - [Go](#go)
   - [C#](#c)
+  - [Integration recipes](#integration-recipes)
 - [Compatibility Matrix](#compatibility-matrix)
 - [Architecture](#architecture)
 - [Roadmap](#roadmap)
@@ -71,7 +73,7 @@ Your agent calls an LLM, retrieves context, invokes a tool, and returns an answe
 |---------|-------------|
 | **Standardized Tracing** | Maps AI workflows to consistent OpenTelemetry spans and attributes |
 | **Drop-in Setup** | Add 3 lines to your existing code - no refactoring needed |
-| **Multi-Framework** | 50+ integrations across Python, TypeScript, Java, and C# |
+| **Multi-Framework** | 50+ integrations across Python, TypeScript, Java, Go, and C# |
 | **Vendor Agnostic** | Works with any OpenTelemetry-compatible backend |
 | **Rich Context** | Captures prompts, completions, tokens, model params, tool calls, and more |
 | **Production-grade** | Async support, streaming, error handling, and low-overhead tracing |
@@ -218,277 +220,367 @@ var tracer = TraceAI.Register(opts =>
 
 ## Supported Frameworks
 
+Catalog links point to the integration source and setup guidance in this repository.
+
 ### Python
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`fi-instrumentation-otel`](https://pypi.org/project/fi-instrumentation-otel/) | Core instrumentation library | [![PyPI](https://img.shields.io/pypi/v/fi-instrumentation-otel)](https://pypi.org/project/fi-instrumentation-otel/) |
+| Package | Description |
+|---------|-------------|
+| [`fi-instrumentation-otel`](python/) | Core instrumentation library |
+| [`traceai`](python/traceai/) | One-line setup SDK |
 
 #### LLM Providers
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`traceAI-openai`](https://pypi.org/project/traceAI-openai/) | OpenAI | [![PyPI](https://img.shields.io/pypi/v/traceAI-openai)](https://pypi.org/project/traceAI-openai/) |
-| [`traceAI-anthropic`](https://pypi.org/project/traceAI-anthropic/) | Anthropic | [![PyPI](https://img.shields.io/pypi/v/traceAI-anthropic)](https://pypi.org/project/traceAI-anthropic/) |
-| [`traceAI-google-genai`](https://pypi.org/project/traceAI-google-genai/) | Google Generative AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-google-genai)](https://pypi.org/project/traceAI-google-genai/) |
-| [`traceAI-vertexai`](https://pypi.org/project/traceAI-vertexai/) | Google Vertex AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-vertexai)](https://pypi.org/project/traceAI-vertexai/) |
-| [`traceAI-bedrock`](https://pypi.org/project/traceAI-bedrock/) | AWS Bedrock | [![PyPI](https://img.shields.io/pypi/v/traceAI-bedrock)](https://pypi.org/project/traceAI-bedrock/) |
-| [`traceAI-mistralai`](https://pypi.org/project/traceAI-mistralai/) | Mistral AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-mistralai)](https://pypi.org/project/traceAI-mistralai/) |
-| [`traceAI-groq`](https://pypi.org/project/traceAI-groq/) | Groq | [![PyPI](https://img.shields.io/pypi/v/traceAI-groq)](https://pypi.org/project/traceAI-groq/) |
-| [`traceAI-litellm`](https://pypi.org/project/traceAI-litellm/) | LiteLLM | [![PyPI](https://img.shields.io/pypi/v/traceAI-litellm)](https://pypi.org/project/traceAI-litellm/) |
-| [`traceAI-cohere`](https://pypi.org/project/traceAI-cohere/) | Cohere | [![PyPI](https://img.shields.io/pypi/v/traceAI-cohere)](https://pypi.org/project/traceAI-cohere/) |
-| [`traceAI-ollama`](https://pypi.org/project/traceAI-ollama/) | Ollama | [![PyPI](https://img.shields.io/pypi/v/traceAI-ollama)](https://pypi.org/project/traceAI-ollama/) |
-| [`traceAI-together`](https://pypi.org/project/traceAI-together/) | Together AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-together)](https://pypi.org/project/traceAI-together/) |
-| [`traceAI-deepseek`](https://pypi.org/project/traceAI-deepseek/) | DeepSeek | [![PyPI](https://img.shields.io/pypi/v/traceAI-deepseek)](https://pypi.org/project/traceAI-deepseek/) |
-| [`traceAI-fireworks`](https://pypi.org/project/traceAI-fireworks/) | Fireworks AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-fireworks)](https://pypi.org/project/traceAI-fireworks/) |
-| [`traceAI-cerebras`](https://pypi.org/project/traceAI-cerebras/) | Cerebras | [![PyPI](https://img.shields.io/pypi/v/traceAI-cerebras)](https://pypi.org/project/traceAI-cerebras/) |
-| [`traceAI-huggingface`](https://pypi.org/project/traceAI-huggingface/) | HuggingFace | [![PyPI](https://img.shields.io/pypi/v/traceAI-huggingface)](https://pypi.org/project/traceAI-huggingface/) |
-| [`traceAI-xai`](https://pypi.org/project/traceAI-xai/) | xAI (Grok) | [![PyPI](https://img.shields.io/pypi/v/traceAI-xai)](https://pypi.org/project/traceAI-xai/) |
-| [`traceAI-vllm`](https://pypi.org/project/traceAI-vllm/) | vLLM | [![PyPI](https://img.shields.io/pypi/v/traceAI-vllm)](https://pypi.org/project/traceAI-vllm/) |
-| [`traceAI-minimax`](https://pypi.org/project/traceAI-minimax/) | MiniMax | [![PyPI](https://img.shields.io/pypi/v/traceAI-minimax)](https://pypi.org/project/traceAI-minimax/) |
+| Package | Integration |
+|---------|-------------|
+| [`traceAI-anthropic`](python/frameworks/anthropic/) | Anthropic |
+| [`traceAI-bedrock`](python/frameworks/bedrock/) | AWS Bedrock |
+| [`traceAI-cerebras`](python/frameworks/cerebras/) | Cerebras |
+| [`traceAI-cohere`](python/frameworks/cohere/) | Cohere |
+| [`traceAI-deepseek`](python/frameworks/deepseek/) | DeepSeek |
+| [`traceAI-fireworks`](python/frameworks/fireworks/) | Fireworks AI |
+| [`traceAI-google-genai-live`](python/frameworks/google-genai-live/) | Gemini Live |
+| [`traceAI-google-genai`](python/frameworks/google-genai/) | Google Gen AI |
+| [`traceAI-vertexai`](python/frameworks/vertexai/) | Google Vertex AI |
+| [`traceAI-groq`](python/frameworks/groq/) | Groq |
+| [`traceAI-huggingface`](python/frameworks/huggingface/) | Hugging Face |
+| [`traceAI-litellm`](python/frameworks/litellm/) | LiteLLM |
+| [`traceAI-minimax`](python/frameworks/minimax/) | MiniMax |
+| [`traceAI-mistralai`](python/frameworks/mistralai/) | Mistral AI |
+| [`traceAI-ollama`](python/frameworks/ollama/) | Ollama |
+| [`traceAI-openai`](python/frameworks/openai/) | OpenAI |
+| [`traceAI-openai-realtime`](python/frameworks/openai-realtime/) | OpenAI Realtime |
+| [`traceAI-replicate`](python/frameworks/replicate/) | Replicate |
+| [`traceAI-together`](python/frameworks/together/) | Together AI |
+| [`traceAI-vllm`](python/frameworks/vllm/) | vLLM |
+| [`traceAI-voyage`](python/frameworks/voyage/) | Voyage AI |
+| [`traceAI-xai`](python/frameworks/xai/) | xAI (Grok) |
 
 #### Agent Frameworks
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`traceAI-langchain`](https://pypi.org/project/traceAI-langchain/) | LangChain | [![PyPI](https://img.shields.io/pypi/v/traceAI-langchain)](https://pypi.org/project/traceAI-langchain/) |
-| [`traceAI-llamaindex`](https://pypi.org/project/traceAI-llamaindex/) | LlamaIndex | [![PyPI](https://img.shields.io/pypi/v/traceAI-llamaindex)](https://pypi.org/project/traceAI-llamaindex/) |
-| [`traceAI-crewai`](https://pypi.org/project/traceAI-crewai/) | CrewAI | [![PyPI](https://img.shields.io/pypi/v/traceAI-crewai)](https://pypi.org/project/traceAI-crewai/) |
-| [`traceAI-openai-agents`](https://pypi.org/project/traceAI-openai-agents/) | OpenAI Agents | [![PyPI](https://img.shields.io/pypi/v/traceAI-openai-agents)](https://pypi.org/project/traceAI-openai-agents/) |
-| [`traceAI-smolagents`](https://pypi.org/project/traceAI-smolagents/) | SmolAgents | [![PyPI](https://img.shields.io/pypi/v/traceAI-smolagents)](https://pypi.org/project/traceAI-smolagents/) |
-| [`traceAI-autogen`](https://pypi.org/project/traceAI-autogen/) | AutoGen | [![PyPI](https://img.shields.io/pypi/v/traceAI-autogen)](https://pypi.org/project/traceAI-autogen/) |
-| [`traceAI-google-adk`](https://pypi.org/project/traceAI-google-adk/) | Google ADK | [![PyPI](https://img.shields.io/pypi/v/traceAI-google-adk)](https://pypi.org/project/traceAI-google-adk/) |
-| [`traceAI-agno`](https://pypi.org/project/traceAI-agno/) | Agno | [![PyPI](https://img.shields.io/pypi/v/traceAI-agno)](https://pypi.org/project/traceAI-agno/) |
-| [`traceAI-pydantic-ai`](https://pypi.org/project/traceAI-pydantic-ai/) | Pydantic AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-pydantic-ai)](https://pypi.org/project/traceAI-pydantic-ai/) |
-| [`traceAI-claude-agent-sdk`](https://pypi.org/project/traceAI-claude-agent-sdk/) | Claude Agent SDK | [![PyPI](https://img.shields.io/pypi/v/traceAI-claude-agent-sdk)](https://pypi.org/project/traceAI-claude-agent-sdk/) |
-| [`traceAI-strands`](https://pypi.org/project/traceAI-strands/) | AWS Strands Agents | [![PyPI](https://img.shields.io/pypi/v/traceAI-strands)](https://pypi.org/project/traceAI-strands/) |
-| [`traceAI-beeai`](https://pypi.org/project/traceAI-beeai/) | IBM BeeAI | [![PyPI](https://img.shields.io/pypi/v/traceAI-beeai)](https://pypi.org/project/traceAI-beeai/) |
+| Package | Integration |
+|---------|-------------|
+| [`traceAI-ag2`](python/frameworks/ag2/) | AG2 |
+| [`traceAI-ag2-classic`](python/frameworks/ag2-classic/) | AG2 Classic |
+| [`traceAI-a2a`](python/frameworks/a2a/) | Agent-to-Agent (A2A) |
+| [`traceai-agno`](python/frameworks/agno/) | Agno |
+| [`traceAI-autogen`](python/frameworks/autogen/) | AutoGen |
+| [`traceai-strands`](python/frameworks/strands/) | AWS Strands Agents |
+| [`traceai-claude-agent-sdk`](python/frameworks/claude-agent-sdk/) | Claude Agent SDK |
+| [`traceAI-crewai`](python/frameworks/crewai/) | CrewAI |
+| [`traceAI-elevenlabs-agents`](python/frameworks/elevenlabs-agents/) | ElevenLabs Agents |
+| [`traceAI-google-adk`](python/frameworks/google-adk/) | Google ADK |
+| [`traceAI-hermes-agent`](python/frameworks/hermes-agent/) | Hermes Agent |
+| [`traceai-beeai`](python/frameworks/beeai/) | IBM BeeAI |
+| [`traceAI-langchain`](python/frameworks/langchain/) | LangChain |
+| [`traceAI-llamaindex`](python/frameworks/llama_index/) | LlamaIndex |
+| [`traceAI-mcp-use`](python/frameworks/mcp-use/) | mcp-use |
+| [`traceAI-agent-framework`](python/frameworks/agent-framework/) | Microsoft Agent Framework |
+| [`traceAI-semantic-kernel`](python/frameworks/semantic-kernel/) | Microsoft Semantic Kernel |
+| [`traceAI-openai-agents`](python/frameworks/openai-agents/) | OpenAI Agents |
+| [`traceai-pydantic-ai`](python/frameworks/pydantic-ai/) | Pydantic AI |
+| [`traceAI-smolagents`](python/frameworks/smolagents/) | SmolAgents |
 
 #### Tools and Libraries
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`traceAI-haystack`](https://pypi.org/project/traceAI-haystack/) | Haystack | [![PyPI](https://img.shields.io/pypi/v/traceAI-haystack)](https://pypi.org/project/traceAI-haystack/) |
-| [`traceAI-dspy`](https://pypi.org/project/traceAI-dspy/) | DSPy | [![PyPI](https://img.shields.io/pypi/v/traceAI-dspy)](https://pypi.org/project/traceAI-dspy/) |
-| [`traceAI-guardrails`](https://pypi.org/project/traceAI-guardrails/) | Guardrails AI | [![PyPI](https://img.shields.io/pypi/v/traceAI-guardrails)](https://pypi.org/project/traceAI-guardrails/) |
-| [`traceAI-instructor`](https://pypi.org/project/traceAI-instructor/) | Instructor | [![PyPI](https://img.shields.io/pypi/v/traceAI-instructor)](https://pypi.org/project/traceAI-instructor/) |
-| [`traceAI-portkey`](https://pypi.org/project/traceAI-portkey/) | Portkey | [![PyPI](https://img.shields.io/pypi/v/traceAI-portkey)](https://pypi.org/project/traceAI-portkey/) |
-| [`traceAI-mcp`](https://pypi.org/project/traceAI-mcp/) | Model Context Protocol | [![PyPI](https://img.shields.io/pypi/v/traceAI-mcp)](https://pypi.org/project/traceAI-mcp/) |
-| [`traceAI-pipecat`](https://pypi.org/project/traceAI-pipecat/) | Pipecat (Voice AI) | [![PyPI](https://img.shields.io/pypi/v/traceAI-pipecat)](https://pypi.org/project/traceAI-pipecat/) |
-| [`traceAI-livekit`](https://pypi.org/project/traceAI-livekit/) | LiveKit (Real-time) | [![PyPI](https://img.shields.io/pypi/v/traceAI-livekit)](https://pypi.org/project/traceAI-livekit/) |
+| Package | Integration |
+|---------|-------------|
+| [`traceAI-DSPy`](python/frameworks/dspy/) | DSPy |
+| [`traceAI-exa`](python/frameworks/exa/) | Exa |
+| [`traceAI-firecrawl`](python/frameworks/firecrawl/) | Firecrawl |
+| [`traceAI-discoveryengine`](python/frameworks/discoveryengine/) | Google Discovery Engine (Vertex AI Search) |
+| [`traceAI-guardrails`](python/frameworks/guardrails/) | Guardrails AI |
+| [`traceAI-haystack`](python/frameworks/haystack/) | Haystack |
+| [`traceAI-instructor`](python/frameworks/instructor/) | Instructor |
+| [`traceAI-livekit`](python/frameworks/livekit/) | LiveKit |
+| [`traceAI-mcp`](python/frameworks/mcp/) | Model Context Protocol (MCP) |
+| [`traceAI-parallel`](python/frameworks/parallel/) | Parallel |
+| [`traceAI-pipecat`](python/frameworks/pipecat/) | Pipecat |
+| [`traceAI-portkey`](python/frameworks/portkey/) | Portkey |
+| [`traceAI-tavily`](python/frameworks/tavily/) | Tavily |
+| [`traceAI-typesafe`](python/frameworks/typesafe/) | TypeSafe |
 
 #### Vector Databases
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`traceAI-pinecone`](https://pypi.org/project/traceAI-pinecone/) | Pinecone | [![PyPI](https://img.shields.io/pypi/v/traceAI-pinecone)](https://pypi.org/project/traceAI-pinecone/) |
-| [`traceAI-chromadb`](https://pypi.org/project/traceAI-chromadb/) | ChromaDB | [![PyPI](https://img.shields.io/pypi/v/traceAI-chromadb)](https://pypi.org/project/traceAI-chromadb/) |
-| [`traceAI-qdrant`](https://pypi.org/project/traceAI-qdrant/) | Qdrant | [![PyPI](https://img.shields.io/pypi/v/traceAI-qdrant)](https://pypi.org/project/traceAI-qdrant/) |
-| [`traceAI-weaviate`](https://pypi.org/project/traceAI-weaviate/) | Weaviate | [![PyPI](https://img.shields.io/pypi/v/traceAI-weaviate)](https://pypi.org/project/traceAI-weaviate/) |
-| [`traceAI-milvus`](https://pypi.org/project/traceAI-milvus/) | Milvus | [![PyPI](https://img.shields.io/pypi/v/traceAI-milvus)](https://pypi.org/project/traceAI-milvus/) |
-| [`traceAI-lancedb`](https://pypi.org/project/traceAI-lancedb/) | LanceDB | [![PyPI](https://img.shields.io/pypi/v/traceAI-lancedb)](https://pypi.org/project/traceAI-lancedb/) |
-| [`traceAI-mongodb`](https://pypi.org/project/traceAI-mongodb/) | MongoDB Atlas Vector Search | [![PyPI](https://img.shields.io/pypi/v/traceAI-mongodb)](https://pypi.org/project/traceAI-mongodb/) |
-| [`traceAI-pgvector`](https://pypi.org/project/traceAI-pgvector/) | pgvector (PostgreSQL) | [![PyPI](https://img.shields.io/pypi/v/traceAI-pgvector)](https://pypi.org/project/traceAI-pgvector/) |
-| [`traceAI-redis`](https://pypi.org/project/traceAI-redis/) | Redis Vector Search | [![PyPI](https://img.shields.io/pypi/v/traceAI-redis)](https://pypi.org/project/traceAI-redis/) |
+| Package | Integration |
+|---------|-------------|
+| [`traceAI-chromadb`](python/frameworks/chromadb/) | ChromaDB |
+| [`traceAI-lancedb`](python/frameworks/lancedb/) | LanceDB |
+| [`traceAI-milvus`](python/frameworks/milvus/) | Milvus |
+| [`traceAI-mongodb`](python/frameworks/mongodb-vector/) | MongoDB Atlas Vector Search |
+| [`traceAI-pgvector`](python/frameworks/pgvector/) | pgvector |
+| [`traceAI-pinecone`](python/frameworks/pinecone/) | Pinecone |
+| [`traceAI-qdrant`](python/frameworks/qdrant/) | Qdrant |
+| [`traceAI-redis`](python/frameworks/redis-vector/) | Redis Vector Search |
+| [`traceAI-weaviate`](python/frameworks/weaviate/) | Weaviate |
 
 ---
 
 ### TypeScript
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`@traceai/fi-core`](https://www.npmjs.com/package/@traceai/fi-core) | Core instrumentation library | [![npm](https://img.shields.io/npm/v/@traceai/fi-core)](https://www.npmjs.com/package/@traceai/fi-core) |
-| [`@traceai/fi-semantic-conventions`](https://www.npmjs.com/package/@traceai/fi-semantic-conventions) | Semantic conventions | [![npm](https://img.shields.io/npm/v/@traceai/fi-semantic-conventions)](https://www.npmjs.com/package/@traceai/fi-semantic-conventions) |
+| Package | Description |
+|---------|-------------|
+| [`@traceai/fi-core`](typescript/packages/fi-core/) | Core instrumentation library |
+| [`@traceai/fi-semantic-conventions`](typescript/packages/fi-semantic-conventions/) | Semantic conventions |
 
 #### LLM Providers
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`@traceai/openai`](https://www.npmjs.com/package/@traceai/openai) | OpenAI | [![npm](https://img.shields.io/npm/v/@traceai/openai)](https://www.npmjs.com/package/@traceai/openai) |
-| [`@traceai/anthropic`](https://www.npmjs.com/package/@traceai/anthropic) | Anthropic | [![npm](https://img.shields.io/npm/v/@traceai/anthropic)](https://www.npmjs.com/package/@traceai/anthropic) |
-| [`@traceai/google-genai`](https://www.npmjs.com/package/@traceai/google-genai) | Google Generative AI | [![npm](https://img.shields.io/npm/v/@traceai/google-genai)](https://www.npmjs.com/package/@traceai/google-genai) |
-| [`@traceai/fi-instrumentation-vertexai`](https://www.npmjs.com/package/@traceai/fi-instrumentation-vertexai) | Google Vertex AI | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-vertexai)](https://www.npmjs.com/package/@traceai/fi-instrumentation-vertexai) |
-| [`@traceai/bedrock`](https://www.npmjs.com/package/@traceai/bedrock) | AWS Bedrock | [![npm](https://img.shields.io/npm/v/@traceai/bedrock)](https://www.npmjs.com/package/@traceai/bedrock) |
-| [`@traceai/mistral`](https://www.npmjs.com/package/@traceai/mistral) | Mistral AI | [![npm](https://img.shields.io/npm/v/@traceai/mistral)](https://www.npmjs.com/package/@traceai/mistral) |
-| [`@traceai/groq`](https://www.npmjs.com/package/@traceai/groq) | Groq | [![npm](https://img.shields.io/npm/v/@traceai/groq)](https://www.npmjs.com/package/@traceai/groq) |
-| [`@traceai/cohere`](https://www.npmjs.com/package/@traceai/cohere) | Cohere | [![npm](https://img.shields.io/npm/v/@traceai/cohere)](https://www.npmjs.com/package/@traceai/cohere) |
-| [`@traceai/ollama`](https://www.npmjs.com/package/@traceai/ollama) | Ollama | [![npm](https://img.shields.io/npm/v/@traceai/ollama)](https://www.npmjs.com/package/@traceai/ollama) |
-| [`@traceai/together`](https://www.npmjs.com/package/@traceai/together) | Together AI | [![npm](https://img.shields.io/npm/v/@traceai/together)](https://www.npmjs.com/package/@traceai/together) |
-| [`@traceai/deepseek`](https://www.npmjs.com/package/@traceai/deepseek) | DeepSeek | [![npm](https://img.shields.io/npm/v/@traceai/deepseek)](https://www.npmjs.com/package/@traceai/deepseek) |
-| [`@traceai/fireworks`](https://www.npmjs.com/package/@traceai/fireworks) | Fireworks AI | [![npm](https://img.shields.io/npm/v/@traceai/fireworks)](https://www.npmjs.com/package/@traceai/fireworks) |
-| [`@traceai/cerebras`](https://www.npmjs.com/package/@traceai/cerebras) | Cerebras | [![npm](https://img.shields.io/npm/v/@traceai/cerebras)](https://www.npmjs.com/package/@traceai/cerebras) |
-| [`@traceai/huggingface`](https://www.npmjs.com/package/@traceai/huggingface) | HuggingFace | [![npm](https://img.shields.io/npm/v/@traceai/huggingface)](https://www.npmjs.com/package/@traceai/huggingface) |
-| [`@traceai/xai`](https://www.npmjs.com/package/@traceai/xai) | xAI (Grok) | [![npm](https://img.shields.io/npm/v/@traceai/xai)](https://www.npmjs.com/package/@traceai/xai) |
-| [`@traceai/vllm`](https://www.npmjs.com/package/@traceai/vllm) | vLLM | [![npm](https://img.shields.io/npm/v/@traceai/vllm)](https://www.npmjs.com/package/@traceai/vllm) |
+| Package | Integration |
+|---------|-------------|
+| [`@traceai/anthropic`](typescript/packages/traceai_anthropic/) | Anthropic |
+| [`@traceai/bedrock`](typescript/packages/traceai_bedrock/) | AWS Bedrock |
+| [`@traceai/cerebras`](typescript/packages/traceai_cerebras/) | Cerebras |
+| [`@traceai/cohere`](typescript/packages/traceai_cohere/) | Cohere |
+| [`@traceai/deepseek`](typescript/packages/traceai_deepseek/) | DeepSeek |
+| [`@traceai/fireworks`](typescript/packages/traceai_fireworks/) | Fireworks AI |
+| [`@traceai/google-genai`](typescript/packages/traceai_google_genai/) | Google Gen AI |
+| [`@traceai/fi-instrumentation-vertexai`](typescript/packages/traceai_vertexai/) | Google Vertex AI |
+| [`@traceai/groq`](typescript/packages/traceai_groq/) | Groq |
+| [`@traceai/huggingface`](typescript/packages/traceai_huggingface/) | Hugging Face |
+| [`@traceai/mistral`](typescript/packages/traceai_mistral/) | Mistral AI |
+| [`@traceai/ollama`](typescript/packages/traceai_ollama/) | Ollama |
+| [`@traceai/openai`](typescript/packages/traceai_openai/) | OpenAI |
+| [`@traceai/together`](typescript/packages/traceai_together/) | Together AI |
+| [`@traceai/vllm`](typescript/packages/traceai_vllm/) | vLLM |
+| [`@traceai/xai`](typescript/packages/traceai_xai/) | xAI (Grok) |
 
 #### Agent Frameworks
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`@traceai/langchain`](https://www.npmjs.com/package/@traceai/langchain) | LangChain.js | [![npm](https://img.shields.io/npm/v/@traceai/langchain)](https://www.npmjs.com/package/@traceai/langchain) |
-| [`@traceai/llamaindex`](https://www.npmjs.com/package/@traceai/llamaindex) | LlamaIndex | [![npm](https://img.shields.io/npm/v/@traceai/llamaindex)](https://www.npmjs.com/package/@traceai/llamaindex) |
-| [`@traceai/openai-agents`](https://www.npmjs.com/package/@traceai/openai-agents) | OpenAI Agents | [![npm](https://img.shields.io/npm/v/@traceai/openai-agents)](https://www.npmjs.com/package/@traceai/openai-agents) |
-| [`@traceai/fi-instrumentation-google-adk`](https://www.npmjs.com/package/@traceai/fi-instrumentation-google-adk) | Google ADK | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-google-adk)](https://www.npmjs.com/package/@traceai/fi-instrumentation-google-adk) |
-| [`@traceai/mastra`](https://www.npmjs.com/package/@traceai/mastra) | Mastra | [![npm](https://img.shields.io/npm/v/@traceai/mastra)](https://www.npmjs.com/package/@traceai/mastra) |
-| [`@traceai/beeai`](https://www.npmjs.com/package/@traceai/beeai) | IBM BeeAI | [![npm](https://img.shields.io/npm/v/@traceai/beeai)](https://www.npmjs.com/package/@traceai/beeai) |
-| [`@traceai/strands`](https://www.npmjs.com/package/@traceai/strands) | AWS Strands Agents | [![npm](https://img.shields.io/npm/v/@traceai/strands)](https://www.npmjs.com/package/@traceai/strands) |
+| Package | Integration |
+|---------|-------------|
+| [`@traceai/strands`](typescript/packages/traceai_strands/) | AWS Strands Agents |
+| [`@traceai/claude-agent-sdk`](typescript/packages/traceai_claude_agent_sdk/) | Claude Agent SDK |
+| [`@traceai/codex-sdk`](typescript/packages/traceai_codex_sdk/) | Codex SDK |
+| [`@traceai/cursor-sdk`](typescript/packages/traceai_cursor_sdk/) | Cursor SDK |
+| [`@traceai/genkit`](typescript/packages/traceai_genkit/) | Firebase Genkit |
+| [`@traceai/fi-instrumentation-google-adk`](typescript/packages/traceai_google_adk/) | Google ADK |
+| [`@traceai/beeai`](typescript/packages/traceai_beeai/) | IBM BeeAI |
+| [`@traceai/langchain`](typescript/packages/traceai_langchain/) | LangChain |
+| [`@traceai/llamaindex`](typescript/packages/traceai_llamaindex/) | LlamaIndex |
+| [`@traceai/mastra`](typescript/packages/traceai_mastra/) | Mastra |
+| [`@traceai/openai-agents`](typescript/packages/traceai_openai_agents/) | OpenAI Agents |
+| [`@traceai/pi-coding-agent`](typescript/packages/traceai_pi_coding_agent/) | Pi Coding Agent |
+| [`@traceai/voltagent`](typescript/packages/traceai_voltagent/) | VoltAgent |
 
 #### Tools and Libraries
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`@traceai/vercel`](https://www.npmjs.com/package/@traceai/vercel) | Vercel AI SDK | [![npm](https://img.shields.io/npm/v/@traceai/vercel)](https://www.npmjs.com/package/@traceai/vercel) |
-| [`@traceai/guardrails`](https://www.npmjs.com/package/@traceai/guardrails) | Guardrails AI | [![npm](https://img.shields.io/npm/v/@traceai/guardrails)](https://www.npmjs.com/package/@traceai/guardrails) |
-| [`@traceai/instructor`](https://www.npmjs.com/package/@traceai/instructor) | Instructor | [![npm](https://img.shields.io/npm/v/@traceai/instructor)](https://www.npmjs.com/package/@traceai/instructor) |
-| [`@traceai/portkey`](https://www.npmjs.com/package/@traceai/portkey) | Portkey | [![npm](https://img.shields.io/npm/v/@traceai/portkey)](https://www.npmjs.com/package/@traceai/portkey) |
-| [`@traceai/mcp`](https://www.npmjs.com/package/@traceai/mcp) | Model Context Protocol | [![npm](https://img.shields.io/npm/v/@traceai/mcp)](https://www.npmjs.com/package/@traceai/mcp) |
-| [`@traceai/fi-instrumentation-pipecat`](https://www.npmjs.com/package/@traceai/fi-instrumentation-pipecat) | Pipecat (Voice AI) | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-pipecat)](https://www.npmjs.com/package/@traceai/fi-instrumentation-pipecat) |
-| [`@traceai/fi-instrumentation-livekit`](https://www.npmjs.com/package/@traceai/fi-instrumentation-livekit) | LiveKit (Real-time) | [![npm](https://img.shields.io/npm/v/@traceai/fi-instrumentation-livekit)](https://www.npmjs.com/package/@traceai/fi-instrumentation-livekit) |
+| Package | Integration |
+|---------|-------------|
+| [`@traceai/guardrails`](typescript/packages/traceai_guardrails/) | Guardrails AI |
+| [`@traceai/instructor`](typescript/packages/traceai_instructor/) | Instructor |
+| [`@traceai/fi-instrumentation-livekit`](typescript/packages/traceai_livekit/) | LiveKit |
+| [`@traceai/mcp`](typescript/packages/traceai_mcp/) | Model Context Protocol (MCP) |
+| [`@traceai/fi-instrumentation-pipecat`](typescript/packages/traceai_pipecat/) | Pipecat |
+| [`@traceai/portkey`](typescript/packages/traceai_portkey/) | Portkey |
+| [`@traceai/vercel`](typescript/packages/traceai_vercel/) | Vercel AI SDK |
 
 #### Vector Databases
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`@traceai/pinecone`](https://www.npmjs.com/package/@traceai/pinecone) | Pinecone | [![npm](https://img.shields.io/npm/v/@traceai/pinecone)](https://www.npmjs.com/package/@traceai/pinecone) |
-| [`@traceai/chromadb`](https://www.npmjs.com/package/@traceai/chromadb) | ChromaDB | [![npm](https://img.shields.io/npm/v/@traceai/chromadb)](https://www.npmjs.com/package/@traceai/chromadb) |
-| [`@traceai/qdrant`](https://www.npmjs.com/package/@traceai/qdrant) | Qdrant | [![npm](https://img.shields.io/npm/v/@traceai/qdrant)](https://www.npmjs.com/package/@traceai/qdrant) |
-| [`@traceai/weaviate`](https://www.npmjs.com/package/@traceai/weaviate) | Weaviate | [![npm](https://img.shields.io/npm/v/@traceai/weaviate)](https://www.npmjs.com/package/@traceai/weaviate) |
-| [`@traceai/milvus`](https://www.npmjs.com/package/@traceai/milvus) | Milvus | [![npm](https://img.shields.io/npm/v/@traceai/milvus)](https://www.npmjs.com/package/@traceai/milvus) |
-| [`@traceai/lancedb`](https://www.npmjs.com/package/@traceai/lancedb) | LanceDB | [![npm](https://img.shields.io/npm/v/@traceai/lancedb)](https://www.npmjs.com/package/@traceai/lancedb) |
-| [`@traceai/mongodb`](https://www.npmjs.com/package/@traceai/mongodb) | MongoDB Atlas Vector Search | [![npm](https://img.shields.io/npm/v/@traceai/mongodb)](https://www.npmjs.com/package/@traceai/mongodb) |
-| [`@traceai/pgvector`](https://www.npmjs.com/package/@traceai/pgvector) | pgvector (PostgreSQL) | [![npm](https://img.shields.io/npm/v/@traceai/pgvector)](https://www.npmjs.com/package/@traceai/pgvector) |
-| [`@traceai/redis`](https://www.npmjs.com/package/@traceai/redis) | Redis Vector Search | [![npm](https://img.shields.io/npm/v/@traceai/redis)](https://www.npmjs.com/package/@traceai/redis) |
+| Package | Integration |
+|---------|-------------|
+| [`@traceai/chromadb`](typescript/packages/traceai_chromadb/) | ChromaDB |
+| [`@traceai/lancedb`](typescript/packages/traceai_lancedb/) | LanceDB |
+| [`@traceai/milvus`](typescript/packages/traceai_milvus/) | Milvus |
+| [`@traceai/mongodb`](typescript/packages/traceai_mongodb/) | MongoDB Atlas Vector Search |
+| [`@traceai/pgvector`](typescript/packages/traceai_pgvector/) | pgvector |
+| [`@traceai/pinecone`](typescript/packages/traceai_pinecone/) | Pinecone |
+| [`@traceai/qdrant`](typescript/packages/traceai_qdrant/) | Qdrant |
+| [`@traceai/redis`](typescript/packages/traceai_redis/) | Redis Vector Search |
+| [`@traceai/weaviate`](typescript/packages/traceai_weaviate/) | Weaviate |
 
 ---
 
 ### Java
 
-Available via [JitPack](https://jitpack.io/#future-agi/traceAI). Add the JitPack repository:
-```xml
-<repositories>
-    <repository>
-        <id>jitpack.io</id>
-        <url>https://jitpack.io</url>
-    </repository>
-</repositories>
-```
+See the [Java SDK](java/) for Maven setup and package configuration.
 
 | Package | Description |
 |---------|-------------|
-| `traceai-java-core` | Core instrumentation library |
+| [`traceai-java-core`](java/traceai-java-core/) | Core instrumentation library |
 
 #### LLM Providers
 
-| Package | Description |
+| Package | Integration |
 |---------|-------------|
-| `traceai-java-openai` | OpenAI |
-| `traceai-java-azure-openai` | Azure OpenAI |
-| `traceai-java-anthropic` | Anthropic |
-| `traceai-java-google-genai` | Google Generative AI |
-| `traceai-java-cohere` | Cohere |
-| `traceai-java-ollama` | Ollama |
-| `traceai-java-bedrock` | AWS Bedrock |
-| `traceai-java-vertexai` | Google Vertex AI |
-| `traceai-java-watsonx` | IBM Watsonx |
+| [`traceai-java-anthropic`](java/traceai-java-anthropic/) | Anthropic |
+| [`traceai-java-bedrock`](java/traceai-java-bedrock/) | AWS Bedrock |
+| [`traceai-java-azure-openai`](java/traceai-java-azure-openai/) | Azure OpenAI |
+| [`traceai-java-cohere`](java/traceai-java-cohere/) | Cohere |
+| [`traceai-java-google-genai`](java/traceai-java-google-genai/) | Google Gen AI |
+| [`traceai-java-vertexai`](java/traceai-java-vertexai/) | Google Vertex AI |
+| [`traceai-java-watsonx`](java/traceai-java-watsonx/) | IBM watsonx |
+| [`traceai-java-ollama`](java/traceai-java-ollama/) | Ollama |
+| [`traceai-java-openai`](java/traceai-java-openai/) | OpenAI |
 
 #### Agent Frameworks
 
-| Package | Description |
+| Package | Integration |
 |---------|-------------|
-| `traceai-langchain4j` | LangChain4j |
-| `traceai-spring-ai` | Spring AI |
-| `traceai-spring-boot-starter` | Spring Boot Auto-Configuration |
-| `traceai-java-semantic-kernel` | Microsoft Semantic Kernel |
+| [`traceai-langchain4j`](java/traceai-langchain4j/) | LangChain4j |
+| [`traceai-java-semantic-kernel`](java/traceai-java-semantic-kernel/) | Microsoft Semantic Kernel |
+| [`traceai-spring-ai`](java/traceai-spring-ai/) | Spring AI |
+| [`traceai-spring-boot-starter`](java/traceai-spring-boot-starter/) | Spring Boot Auto-Configuration |
 
 #### Vector Databases
 
-| Package | Description |
+| Package | Integration |
 |---------|-------------|
-| `traceai-java-pinecone` | Pinecone |
-| `traceai-java-qdrant` | Qdrant |
-| `traceai-java-milvus` | Milvus |
-| `traceai-java-weaviate` | Weaviate |
-| `traceai-java-chromadb` | ChromaDB |
-| `traceai-java-mongodb` | MongoDB Atlas Vector Search |
-| `traceai-java-redis` | Redis Vector Search |
-| `traceai-java-azure-search` | Azure AI Search |
-| `traceai-java-pgvector` | pgvector (PostgreSQL) |
-| `traceai-java-elasticsearch` | Elasticsearch |
+| [`traceai-java-azure-search`](java/traceai-java-azure-search/) | Azure AI Search |
+| [`traceai-java-chromadb`](java/traceai-java-chromadb/) | ChromaDB |
+| [`traceai-java-elasticsearch`](java/traceai-java-elasticsearch/) | Elasticsearch |
+| [`traceai-java-milvus`](java/traceai-java-milvus/) | Milvus |
+| [`traceai-java-mongodb`](java/traceai-java-mongodb/) | MongoDB Atlas Vector Search |
+| [`traceai-java-pgvector`](java/traceai-java-pgvector/) | pgvector |
+| [`traceai-java-pinecone`](java/traceai-java-pinecone/) | Pinecone |
+| [`traceai-java-qdrant`](java/traceai-java-qdrant/) | Qdrant |
+| [`traceai-java-redis`](java/traceai-java-redis/) | Redis Vector Search |
+| [`traceai-java-weaviate`](java/traceai-java-weaviate/) | Weaviate |
+
+---
+
+### Go
+
+Go integrations use separate modules. Follow each module's README for SDK versions and setup.
+
+| Package | Integration |
+|---------|-------------|
+| [`github.com/future-agi/traceAI/go/a2a`](go/a2a/) | Agent-to-Agent (A2A) |
+| [`github.com/future-agi/traceAI/go/anthropic`](go/anthropic/) | Anthropic |
+| [`github.com/future-agi/traceAI/go/eino`](go/eino/) | Eino |
+| [`github.com/future-agi/traceAI/go/genai`](go/genai/) | Google Gen AI |
+| [`github.com/future-agi/traceAI/go/openai`](go/openai/) | OpenAI |
 
 ---
 
 ### C#
 
-Available on [NuGet](https://www.nuget.org/packages/fi-instrumentation-otel).
+| Package | Description |
+|---------|-------------|
+| [`fi-instrumentation-otel`](csharp/) | .NET instrumentation library |
 
-| Package | Description | Version |
-|---------|-------------|----------|
-| [`fi-instrumentation-otel`](https://www.nuget.org/packages/fi-instrumentation-otel) | Core instrumentation library | [![NuGet](https://img.shields.io/nuget/v/fi-instrumentation-otel)](https://www.nuget.org/packages/fi-instrumentation-otel) |
+---
+
+### Integration recipes
+
+These recipes reuse SDK instrumentation or configure a native tracing/export path; they are not separate provider packages.
+
+| Recipe | Guide |
+|--------|-------|
+| Anannas AI | [Setup](python/examples/anannas-ai/) |
+| Azure AI Foundry | [Setup](python/examples/azure-ai-foundry/) |
+| Cognee | [Setup](python/examples/cognee/) |
+| Databricks | [Setup](python/examples/databricks/) |
+| Doubleword | [Setup](python/examples/doubleword/) |
+| EverOS | [Setup](python/examples/everos/) |
+| Gradio | [Setup](python/examples/gradio/) |
+| LangSmith trace forwarding | [Setup](python/examples/langsmith/) |
+| NVIDIA DGX Cloud Lepton | [Setup](python/examples/lepton/) |
+| MLflow | [Setup](python/examples/mlflow/) |
+| OpenInference OTLP forwarding | [Setup](python/examples/openinference/) |
+| OpenInference instrumented application | [Setup](python/examples/openinference-live/) |
+| OpenLIT | [Setup](python/examples/openlit/) |
+| OpenLLMetry (Traceloop SDK) | [Setup](python/examples/openllmetry/) |
+| OrcaRouter | [Setup](python/examples/orcarouter/) |
+| PrismML Bonsai | [Setup](python/examples/prismml/) |
+| Deep Agents (via LangChain) | [Setup](python/frameworks/langchain/README.md#deep-agents) |
+| TanStack AI (TypeScript) | [Setup](typescript/examples/tanstack-ai/) |
+| Arconia (Java) | [Setup](java/examples/arconia-example/) |
+| Quarkus LangChain4j (Java) | [Setup](java/examples/quarkus-langchain4j-example/) |
+
+| Application integration | Guide |
+|-------------------------|-------|
+| openwebui | [Setup](integrations/openwebui/) |
 
 ---
 
 ## Compatibility Matrix
 
-| Category | Framework | Python | TypeScript | Java | C# |
-|----------|-----------|--------|------------|------|-----|
-| **LLM Providers** | OpenAI | ✅ | ✅ | ✅ | ✅ |
-| | Anthropic | ✅ | ✅ | ✅ | |
-| | AWS Bedrock | ✅ | ✅ | ✅ | |
-| | Google Vertex AI | ✅ | ✅ | ✅ | |
-| | Google Generative AI | ✅ | ✅ | ✅ | |
-| | Mistral AI | ✅ | ✅ | | |
-| | Groq | ✅ | ✅ | | |
-| | Cohere | ✅ | ✅ | ✅ | |
-| | Ollama | ✅ | ✅ | ✅ | |
-| | LiteLLM | ✅ | | | |
-| | Together AI | ✅ | ✅ | | |
-| | DeepSeek | ✅ | ✅ | | |
-| | Fireworks AI | ✅ | ✅ | | |
-| | Cerebras | ✅ | ✅ | | |
-| | HuggingFace | ✅ | ✅ | | |
-| | xAI (Grok) | ✅ | ✅ | | |
-| | vLLM | ✅ | ✅ | | |
-| | MiniMax | ✅ | | | |
-| | Azure OpenAI | | | ✅ | |
-| | IBM Watsonx | | | ✅ | |
-| **Agent Frameworks** | LangChain | ✅ | ✅ | | |
-| | LlamaIndex | ✅ | ✅ | | |
-| | CrewAI | ✅ | | | |
-| | AutoGen | ✅ | | | |
-| | OpenAI Agents | ✅ | ✅ | | |
-| | SmolAgents | ✅ | | | |
-| | Google ADK | ✅ | ✅ | | |
-| | Agno | ✅ | | | |
-| | Pydantic AI | ✅ | | | |
-| | Claude Agent SDK | ✅ | | | |
-| | AWS Strands Agents | ✅ | ✅ | | |
-| | IBM BeeAI | ✅ | ✅ | | |
-| | Mastra | | ✅ | | |
-| | LangChain4j | | | ✅ | |
-| | Spring AI | | | ✅ | |
-| | Semantic Kernel | | | ✅ | |
-| **Tools & Libraries** | Haystack | ✅ | | | |
-| | DSPy | ✅ | | | |
-| | Guardrails AI | ✅ | ✅ | | |
-| | Instructor | ✅ | ✅ | | |
-| | Portkey | ✅ | ✅ | | |
-| | Vercel AI SDK | | ✅ | | |
-| | MCP | ✅ | ✅ | | |
-| | Pipecat | ✅ | ✅ | | |
-| | LiveKit | ✅ | ✅ | | |
-| **Vector Databases** | Pinecone | ✅ | ✅ | ✅ | |
-| | ChromaDB | ✅ | ✅ | ✅ | |
-| | Qdrant | ✅ | ✅ | ✅ | |
-| | Weaviate | ✅ | ✅ | ✅ | |
-| | Milvus | ✅ | ✅ | ✅ | |
-| | LanceDB | ✅ | ✅ | | |
-| | MongoDB Atlas | ✅ | ✅ | ✅ | |
-| | pgvector | ✅ | ✅ | ✅ | |
-| | Redis | ✅ | ✅ | ✅ | |
-| | Azure AI Search | | | ✅ | |
-| | Elasticsearch | | | ✅ | |
+This matrix describes the framework-specific packages in the catalog. The [C# SDK](csharp/) provides generic tracing APIs. Recipes are listed separately above.
 
-> **Legend:** ✅ Supported | blank = not yet available
+| Category | Integration | Python | TypeScript | Java | Go |
+|----------|-------------|--------|------------|------|----|
+| **LLM Providers** | Anthropic | Yes | Yes | Yes | Yes |
+|  | AWS Bedrock | Yes | Yes | Yes |  |
+|  | Azure OpenAI |  |  | Yes |  |
+|  | Cerebras | Yes | Yes |  |  |
+|  | Cohere | Yes | Yes | Yes |  |
+|  | DeepSeek | Yes | Yes |  |  |
+|  | Fireworks AI | Yes | Yes |  |  |
+|  | Gemini Live | Yes |  |  |  |
+|  | Google Gen AI | Yes | Yes | Yes | Yes |
+|  | Google Vertex AI | Yes | Yes | Yes |  |
+|  | Groq | Yes | Yes |  |  |
+|  | Hugging Face | Yes | Yes |  |  |
+|  | IBM watsonx |  |  | Yes |  |
+|  | LiteLLM | Yes |  |  |  |
+|  | MiniMax | Yes |  |  |  |
+|  | Mistral AI | Yes | Yes |  |  |
+|  | Ollama | Yes | Yes | Yes |  |
+|  | OpenAI | Yes | Yes | Yes | Yes |
+|  | OpenAI Realtime | Yes |  |  |  |
+|  | Replicate | Yes |  |  |  |
+|  | Together AI | Yes | Yes |  |  |
+|  | vLLM | Yes | Yes |  |  |
+|  | Voyage AI | Yes |  |  |  |
+|  | xAI (Grok) | Yes | Yes |  |  |
+| **Agent Frameworks** | AG2 | Yes |  |  |  |
+|  | AG2 Classic | Yes |  |  |  |
+|  | Agent-to-Agent (A2A) | Yes |  |  | Yes |
+|  | Agno | Yes |  |  |  |
+|  | AutoGen | Yes |  |  |  |
+|  | AWS Strands Agents | Yes | Yes |  |  |
+|  | Claude Agent SDK | Yes | Yes |  |  |
+|  | Codex SDK |  | Yes |  |  |
+|  | CrewAI | Yes |  |  |  |
+|  | Cursor SDK |  | Yes |  |  |
+|  | Eino |  |  |  | Yes |
+|  | ElevenLabs Agents | Yes |  |  |  |
+|  | Firebase Genkit |  | Yes |  |  |
+|  | Google ADK | Yes | Yes |  |  |
+|  | Hermes Agent | Yes |  |  |  |
+|  | IBM BeeAI | Yes | Yes |  |  |
+|  | LangChain | Yes | Yes |  |  |
+|  | LangChain4j |  |  | Yes |  |
+|  | LlamaIndex | Yes | Yes |  |  |
+|  | Mastra |  | Yes |  |  |
+|  | mcp-use | Yes |  |  |  |
+|  | Microsoft Agent Framework | Yes |  |  |  |
+|  | Microsoft Semantic Kernel | Yes |  | Yes |  |
+|  | OpenAI Agents | Yes | Yes |  |  |
+|  | Pi Coding Agent |  | Yes |  |  |
+|  | Pydantic AI | Yes |  |  |  |
+|  | SmolAgents | Yes |  |  |  |
+|  | Spring AI |  |  | Yes |  |
+|  | Spring Boot Auto-Configuration |  |  | Yes |  |
+|  | VoltAgent |  | Yes |  |  |
+| **Tools and Libraries** | DSPy | Yes |  |  |  |
+|  | Exa | Yes |  |  |  |
+|  | Firecrawl | Yes |  |  |  |
+|  | Google Discovery Engine (Vertex AI Search) | Yes |  |  |  |
+|  | Guardrails AI | Yes | Yes |  |  |
+|  | Haystack | Yes |  |  |  |
+|  | Instructor | Yes | Yes |  |  |
+|  | LiveKit | Yes | Yes |  |  |
+|  | Model Context Protocol (MCP) | Yes | Yes |  |  |
+|  | Parallel | Yes |  |  |  |
+|  | Pipecat | Yes | Yes |  |  |
+|  | Portkey | Yes | Yes |  |  |
+|  | Tavily | Yes |  |  |  |
+|  | TypeSafe | Yes |  |  |  |
+|  | Vercel AI SDK |  | Yes |  |  |
+| **Vector Databases** | Azure AI Search |  |  | Yes |  |
+|  | ChromaDB | Yes | Yes | Yes |  |
+|  | Elasticsearch |  |  | Yes |  |
+|  | LanceDB | Yes | Yes |  |  |
+|  | Milvus | Yes | Yes | Yes |  |
+|  | MongoDB Atlas Vector Search | Yes | Yes | Yes |  |
+|  | pgvector | Yes | Yes | Yes |  |
+|  | Pinecone | Yes | Yes | Yes |  |
+|  | Qdrant | Yes | Yes | Yes |  |
+|  | Redis Vector Search | Yes | Yes | Yes |  |
+|  | Weaviate | Yes | Yes | Yes |  |
+
+Blank cells indicate no framework-specific package in that language.
 
 ---
 
@@ -584,7 +676,6 @@ All data follows [OpenTelemetry Semantic Conventions for GenAI](https://opentele
 
 ## Roadmap
 
-- **Go language support**
 - **Sampling strategies** for high-volume production environments
 - **Continuous semantic convention updates** as the OTel GenAI spec evolves
 - **Evaluation integration** connecting traces to quality measurement pipelines
