@@ -248,6 +248,7 @@ These examples reuse existing instrumentation or configure tracing adapters.
 |--------|-------|
 | Anannas AI | [Setup](examples/anannas-ai/) |
 | Azure AI Foundry | [Setup](examples/azure-ai-foundry/) |
+| Baseten Model APIs | [Setup](examples/baseten/) |
 | Cognee | [Setup](examples/cognee/) |
 | Databricks | [Setup](examples/databricks/) |
 | Doubleword | [Setup](examples/doubleword/) |

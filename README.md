@@ -468,6 +468,7 @@ These recipes reuse SDK instrumentation or configure a native tracing/export pat
 |--------|-------|
 | Anannas AI | [Setup](python/examples/anannas-ai/) |
 | Azure AI Foundry | [Setup](python/examples/azure-ai-foundry/) |
+| Baseten Model APIs | [Setup](python/examples/baseten/) |
 | Cognee | [Setup](python/examples/cognee/) |
 | Databricks | [Setup](python/examples/databricks/) |
 | Doubleword | [Setup](python/examples/doubleword/) |
