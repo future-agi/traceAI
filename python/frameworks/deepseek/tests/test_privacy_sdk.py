@@ -12,7 +12,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from traceai_deepseek import DeepSeekInstrumentor
 
 # Use the transport accepted by the installed OpenAI SDK (1.x and 3.x).
-from openai._base_client import httpx
+try:
+    from openai._base_client import httpx2 as httpx
+except ImportError:
+    from openai._base_client import httpx
 
 
 @pytest.mark.asyncio
