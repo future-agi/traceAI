@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Compatibility evidence index v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "inventory_revision", "fixture", "observations", "health", "inventory"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "inventory_revision": {"type": "string"},
+    "fixture": {"type": "boolean"},
+    "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+    "health": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "summary"],
+      "properties": {"id": {"type": "string"}, "summary": {"type": "string"}}
+    }},
+    "inventory": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "language", "distribution", "role", "qualification", "owner", "declared", "canary_enabled"],
+      "properties": {
+        "id": {"type": "string"}, "language": {"type": "string"}, "distribution": {"type": "string"},
+        "role": {"type": "string"}, "qualification": {"type": "object"}, "owner": {"type": "string"},
+        "declared": {"type": "array"}, "canary_enabled": {"type": "boolean"}
+      }
+    }}
+  },
+  "$defs": {
+    "status": {"enum": ["passed", "failed", "flaky", "quarantined", "blocked", "unsupported", "awaiting_eligibility", "not_tested", "stale"]},
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "integration_id", "language", "mode", "qualification", "status", "observed_status", "runtime", "packages", "requested", "discovery", "source_sha", "checked_at", "run_url", "run_id", "self_test", "selector", "suite_sha256", "scenarios", "dependency_lock", "failure", "install_command"],
+      "properties": {
+        "id": {"$ref": "#/$defs/sha"}, "integration_id": {"type": "string"}, "language": {"type": "string"},
+        "mode": {"enum": ["source", "published"]},
+        "qualification": {"enum": ["pilot_pending", "qualified", "known_broken", "unqualified", "deprecated", "retired"]},
+        "status": {"$ref": "#/$defs/status"}, "observed_status": {"$ref": "#/$defs/status"},
+        "runtime": {"type": "object"}, "packages": {"type": "array"}, "requested": {"type": "array"},
+        "discovery": {"type": "array"}, "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "checked_at": {"type": "string", "format": "date-time"}, "run_url": {"type": "string", "format": "uri"},
+        "run_id": {"type": "string"}, "self_test": {"type": "boolean"}, "selector": {"type": "string"},
+        "suite_sha256": {"$ref": "#/$defs/sha"}, "scenarios": {"type": "array", "items": {"type": "string"}},
+        "dependency_lock": {"type": ["object", "null"]}, "failure": {"type": ["object", "null"]},
+        "install_command": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
