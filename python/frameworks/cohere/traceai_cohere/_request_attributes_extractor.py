@@ -1,7 +1,7 @@
 import logging
-from typing import Any, Dict, Iterator, List, Mapping, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
-from fi_instrumentation import safe_json_dumps
+from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import (
     FiMimeTypeValues,
     FiSpanKindValues,
@@ -121,6 +121,9 @@ class _EmbedRequestAttributesExtractor:
 class _RerankRequestAttributesExtractor:
     """Extract span attributes from Cohere rerank request."""
 
+    def __init__(self, config: Optional[TraceConfig] = None) -> None:
+        self._config = config if config is not None else TraceConfig()
+
     def get_attributes_from_request(
         self, request_parameters: Mapping[str, Any]
     ) -> Iterator[Tuple[str, AttributeValue]]:
@@ -144,7 +147,10 @@ class _RerankRequestAttributesExtractor:
     ) -> Iterator[Tuple[str, AttributeValue]]:
         """Extract extra attributes."""
         query = request_parameters.get("query", "")
-        yield RerankerAttributes.RERANKER_QUERY, query
+        # This semantic alias is not covered by older core mask tables.
+        masked_query = self._config.mask(SpanAttributes.INPUT_VALUE, query)
+        if masked_query is not None:
+            yield RerankerAttributes.RERANKER_QUERY, masked_query
         yield SpanAttributes.INPUT_VALUE, query
 
         documents = request_parameters.get("documents", [])
