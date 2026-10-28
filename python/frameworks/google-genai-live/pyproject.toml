@@ -1,0 +1,48 @@
+[tool.poetry]
+name = "traceAI-google-genai-live"
+version = "0.1.0"
+description = "Future AGI tracing for Gemini Live sessions (google-genai client.aio.live.connect): one trace per session with turns, tool calls, interruptions and usage"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+packages = [
+    { include = "traceai_google_genai_live" },
+]
+keywords = ["opentelemetry", "gemini", "gemini-live", "google-genai", "voice", "realtime", "tracing", "observability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+
+[tool.poetry.dependencies]
+# fi-instrumentation-otel declares python <3.14.
+python = ">=3.10,<3.14"
+# Gemini Live is preview. AsyncLive.connect and the send_client_content /
+# send_realtime_input / send_tool_response / receive methods were confirmed at 2.28.0
+# and 2.31.0. The vendor removes Live.send and Live.start_stream before 3.0: pin below 3.
+google-genai = ">=2.28,<3"
+fi-instrumentation-otel = ">=0.1.11"
+opentelemetry-api = ">=1.29.0"
+opentelemetry-sdk = ">=1.29.0"
+opentelemetry-instrumentation = ">=0.50b0"
+wrapt = ">=1.15.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+pytest-asyncio = ">=0.23.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

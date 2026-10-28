@@ -17,6 +17,7 @@ from typing import (
     Type,
 )
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import (
     EmbeddingAttributes,
     MessageAttributes,
@@ -49,6 +50,7 @@ except ImportError:
 class _ResponseAttributesExtractor:
     __slots__ = (
         "_openai",
+        "_config",
         "_chat_completion_type",
         "_completion_type",
         "_create_embedding_response_type",
@@ -56,8 +58,9 @@ class _ResponseAttributesExtractor:
         "_responses_type",
     )
 
-    def __init__(self, openai: ModuleType) -> None:
+    def __init__(self, openai: ModuleType, config: Optional[TraceConfig] = None) -> None:
         self._openai = openai
+        self._config = config if config is not None else TraceConfig()
         self._chat_completion_type: Type["ChatCompletion"] = (
             openai.types.chat.ChatCompletion
         )
@@ -163,13 +166,22 @@ class _ResponseAttributesExtractor:
         # See https://github.com/openai/openai-python/blob/f1c7d714914e3321ca2e72839fe2d132a8646e7f/src/openai/types/embedding_create_params.py#L23  # noqa: E501
         if model := getattr(response, "model"):
             yield f"{SpanAttributes.EMBEDDING_MODEL_NAME}", model
+            # Also the span's model, so trace views and cost lookup see it.
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         if (data := getattr(response, "data", None)) and isinstance(data, Iterable):
-            for embedding in data:
-                if (index := getattr(embedding, "index", None)) is None:
-                    continue
-                for key, value in self._get_attributes_from_embedding(embedding):
-                    yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{key}", value
+            for position, embedding in enumerate(data):
+                # Some OpenAI-compatible servers (e.g. Gemini's) omit `index`;
+                # fall back to the item's position instead of dropping it.
+                index = getattr(embedding, "index", None)
+                if index is None:
+                    index = position
+                if not (self._config.hide_outputs or self._config.hide_embedding_vectors):
+                    for key, value in self._get_attributes_from_embedding(embedding):
+                        yield f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}.{key}", value
 
+        # Embedding text is input too; older fi-core releases only mask input.value.
+        if self._config.hide_inputs:
+            return
         embedding_input = request_parameters.get("input")
         for index, text in enumerate(_get_texts(embedding_input, model)):
             # FIXME: this step should move to request attributes extractor if decoding is not necessary.# noqa: E501

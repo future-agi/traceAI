@@ -534,7 +534,17 @@ class _ResponsesApiAttributes:
         prefix: str = "",
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield f"{prefix}{MessageAttributes.MESSAGE_ROLE}", obj.role
-        yield from cls._get_attributes_from_output_message_content_list(obj.content, prefix)
+        from openai.types import responses
+
+        content = list(obj.content or [])
+        if content and all(isinstance(item, responses.ResponseOutputText) for item in content):
+            # Text-only answers are one flat message.content, the same shape Chat
+            # Completions use, so trace viewers render them as the assistant text.
+            yield f"{prefix}{MessageAttributes.MESSAGE_CONTENT}", "".join(
+                item.text for item in content
+            )
+            return
+        yield from cls._get_attributes_from_output_message_content_list(content, prefix)
 
     @classmethod
     @stop_on_exception
