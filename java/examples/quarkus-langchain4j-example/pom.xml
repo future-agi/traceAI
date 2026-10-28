@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>ai.traceai.examples</groupId>
+    <artifactId>quarkus-langchain4j-example</artifactId>
+    <version>1.0.0</version>
+    <name>TraceAI Quarkus LangChain4j Example</name>
+    <description>Quarkus LangChain4j exporting its own OpenTelemetry spans to Future AGI. Configuration only, no traceAI module.</description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!--
+          Tested pairs (each extension release is built against one Quarkus platform version):
+            quarkus-langchain4j 1.14.2 + Quarkus 3.33.3.1   (default, latest stable on Maven Central 2026-10-15)
+            quarkus-langchain4j 1.8.2  + Quarkus 3.27.2     (-Dquarkus-langchain4j.version=1.8.2 -Dquarkus.platform.version=3.27.2)
+        -->
+        <quarkus-langchain4j.version>1.14.2</quarkus-langchain4j.version>
+        <quarkus.platform.version>3.33.3.1</quarkus.platform.version>
+        <opentelemetry-proto.version>1.11.1-alpha</opentelemetry-proto.version>
+        <!-- opentelemetry-proto 1.11.1-alpha is generated with protobuf 4.36.2; the Quarkus BOM manages an older runtime.
+             Test scope only: protobuf-java is not on the application's runtime classpath. -->
+        <protobuf-java.version>4.36.2</protobuf-java.version>
+        <surefire-plugin.version>3.5.4</surefire-plugin.version>
+        <compiler-plugin.version>3.14.1</compiler-plugin.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.quarkus.platform</groupId>
+                <artifactId>quarkus-bom</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkiverse.langchain4j</groupId>
+                <artifactId>quarkus-langchain4j-bom</artifactId>
+                <version>${quarkus-langchain4j.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- The AI service and one provider. Any OpenAI-compatible endpoint works through base-url. -->
+        <dependency>
+            <groupId>io.quarkiverse.langchain4j</groupId>
+            <artifactId>quarkus-langchain4j-openai</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Decodes the OTLP bytes the stand-in collector records. Test scope only. -->
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>${opentelemetry-proto.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>${protobuf-java.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <profiles>
+        <!--
+          quarkus-opentelemetry is what turns Quarkus LangChain4j spans on. It sits in a profile that is on unless
+          -DnoOtel is passed, so run_e2e.sh can prove the negative: without it, nothing is exported.
+        -->
+        <profile>
+            <id>otel</id>
+            <activation>
+                <property>
+                    <name>!noOtel</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>io.quarkus</groupId>
+                    <artifactId>quarkus-opentelemetry</artifactId>
+                </dependency>
+            </dependencies>
+        </profile>
+        <profile>
+            <id>no-otel</id>
+            <activation>
+                <property>
+                    <name>noOtel</name>
+                </property>
+            </activation>
+            <properties>
+                <!-- The OTLP tests need the extension; only the packaged app is used in this mode. -->
+                <skipTests>true</skipTests>
+            </properties>
+        </profile>
+        <!--
+          The PRD pin (quarkus-langchain4j 1.8.x) predates ToolSpanContributor (added in 1.12.0) and the current gen_ai
+          attribute names (1.11.0). -Dpre112 leaves ToolErrorStatus out so the app still builds; the tests assert the
+          1.14.x attributes, so they are skipped on that line.
+        -->
+        <profile>
+            <id>pre-1.12</id>
+            <activation>
+                <property>
+                    <name>pre112</name>
+                </property>
+            </activation>
+            <properties>
+                <skipTests>true</skipTests>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/ToolErrorStatus.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>io.quarkus.platform</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <extensions>true</extensions>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>build</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${compiler-plugin.version}</version>
+                <configuration>
+                    <parameters>true</parameters>
+                </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
