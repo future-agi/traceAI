@@ -115,6 +115,8 @@ def validate_plan(plan):
     if timestamp(plan["generated_at"]) - timestamp(plan["cooldown_cutoff"]) != dt.timedelta(hours=72):
         raise ValueError("Plan cutoff is not 72 hours")
     for case in plan["cases"]:
+        if case["runtime_identity"]["version"].split(".")[:2] != case["runtime"].split("."):
+            raise ValueError("Runtime label differs from actual frozen patch identity")
         if case["non_blocking"] != (case["selector"] in ("prerelease", "historical")):
             raise ValueError("Only explicit exploratory cells are non-blocking")
     return plan

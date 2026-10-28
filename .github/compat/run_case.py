@@ -300,6 +300,9 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                 " def pytest_deselected(self,items): self.deselected.extend(i.nodeid for i in items)\n"
                 " def pytest_collection_finish(self,session):\n"
                 "  pathlib.Path(sys.argv[1]).write_text(json.dumps(dict(nodes=sorted(i.nodeid for i in session.items),deselected=self.deselected)))\n"
+                " @pytest.hookimpl(trylast=True)\n"
+                " def pytest_sessionfinish(self,session,exitstatus):\n"
+                "  if exitstatus == 0 and not session.testsfailed and session.items and not self.deselected: session.exitstatus=0\n"
                 "raise SystemExit(pytest.main(sys.argv[2:],plugins=[Collection()]))\n")
             collect_argv = [python, "-I", "-c", collection_code, str(collected_path), *command[3:],
                             "--import-mode=importlib", "--rootdir=.", "-p", "pytest_asyncio.plugin", "--collect-only"]

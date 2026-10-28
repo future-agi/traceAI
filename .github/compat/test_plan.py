@@ -88,3 +88,19 @@ class PlanTests(unittest.TestCase):
             (root / "link").symlink_to("/tmp")
             with self.assertRaises(ValueError):
                 safe_path(root, "link/file")
+
+    def test_unusable_release_cannot_displace_usable_canary_and_patch_is_not_zero(self):
+        registry, discovery = inputs()
+        package = next(p for p in discovery['packages'] if p['name'] == 'openai')
+        def release(version, filename):
+            return pypi('openai', {'releases': {version: [dict(filename=filename, upload_time_iso_8601='2026-10-01T00:00:00Z',
+                yanked=False, requires_python='>=3.11.1')]}}, '2026-10-28T00:00:00Z')['releases'][0]
+        package['releases'].extend([release('3.25.0', 'openai-3.25.0.tar.gz'),
+            release('3.26.0', 'openai-3.26.0-cp311-cp311-win_amd64.whl')])
+        plan = generate(registry, discovery, SHA, SHA, NOW)
+        self.assertEqual(next(c for c in plan['cases'] if c['integration_id'] == 'python-openai')['requested'][0]['selected_version'], '3.24.0')
+        package['releases'].append(release('3.27.0', 'openai-3.27.0-py3-none-any.whl'))
+        plan = generate(registry, discovery, SHA, SHA, NOW)
+        case = next(c for c in plan['cases'] if c['integration_id'] == 'python-openai')
+        self.assertEqual(case['runtime_identity']['version'], '3.11.17')
+        self.assertEqual(case['requested'][0]['selected_version'], '3.27.0')

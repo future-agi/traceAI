@@ -41,6 +41,16 @@
       ],
       "resolution": null,
       "runtime": "3.11",
+      "runtime_identity": {
+        "arch": "x86_64",
+        "implementation": "cpython",
+        "os": "linux",
+        "tags": [
+          "py3-none-any",
+          "cp311-cp311-manylinux_2_17_x86_64"
+        ],
+        "version": "3.11.17"
+      },
       "selector": "latest_eligible"
     },
     {
@@ -99,6 +109,16 @@
       ],
       "resolution": null,
       "runtime": "3.11",
+      "runtime_identity": {
+        "arch": "x86_64",
+        "implementation": "cpython",
+        "os": "linux",
+        "tags": [
+          "py3-none-any",
+          "cp311-cp311-manylinux_2_17_x86_64"
+        ],
+        "version": "3.11.17"
+      },
       "selector": "latest_eligible"
     },
     {
@@ -141,6 +161,16 @@
       ],
       "resolution": null,
       "runtime": "3.11",
+      "runtime_identity": {
+        "arch": "x86_64",
+        "implementation": "cpython",
+        "os": "linux",
+        "tags": [
+          "py3-none-any",
+          "cp311-cp311-manylinux_2_17_x86_64"
+        ],
+        "version": "3.11.17"
+      },
       "selector": "latest_eligible"
     }
   ],
