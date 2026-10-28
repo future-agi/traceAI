@@ -94,7 +94,7 @@ in its response. Token usage appears only when the response has `usage`;
 missing usage is omitted, never reported as zero.
 
 With `traceai-openai` 0.1.10 and earlier, streamed calls record accumulated output text but have no `gen_ai.request.model` attribute.
-The default stream tested here returns no usage, so it exports
+The offline default-stream fixture returns no usage, so that fixture exports
 no `gen_ai.usage.*` attributes. Failed calls produce an error span with an
 exception event and no `gen_ai.request.model` attribute. On both, the model you
 requested is still visible inside the `gen_ai.request.parameters` JSON. These are
