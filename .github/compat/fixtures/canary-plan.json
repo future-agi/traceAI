@@ -1,0 +1,155 @@
+{
+  "cadence": "stable",
+  "cases": [
+    {
+      "case_id": "python-anthropic-source-latest_eligible-py311",
+      "discovery": [
+        {
+          "absolute_latest": "0.75.0",
+          "first_seen_at": "2026-10-28T00:00:00Z",
+          "latest_eligible": "0.75.0",
+          "name": "anthropic",
+          "published_at": "2025-11-24T20:41:43.587237Z",
+          "requested_version": "0.75.0",
+          "resolved_version": null,
+          "yanked": false
+        }
+      ],
+      "integration_id": "python-anthropic",
+      "mode": "source",
+      "non_blocking": false,
+      "problems": [],
+      "requested": [
+        {
+          "name": "anthropic",
+          "requirement": "anthropic==0.75.0",
+          "role": "upstream",
+          "selected_version": "0.75.0"
+        },
+        {
+          "name": "traceAI-anthropic",
+          "requirement": "traceAI-anthropic@source:1111111111111111111111111111111111111111",
+          "role": "instrumentation",
+          "selected_version": null
+        },
+        {
+          "name": "fi-instrumentation-otel",
+          "requirement": "fi-instrumentation-otel@source:1111111111111111111111111111111111111111",
+          "role": "core",
+          "selected_version": null
+        }
+      ],
+      "resolution": null,
+      "runtime": "3.11",
+      "selector": "latest_eligible"
+    },
+    {
+      "case_id": "python-langchain-source-latest_eligible-py311",
+      "discovery": [
+        {
+          "absolute_latest": "1.2.7",
+          "first_seen_at": "2026-10-28T00:00:00Z",
+          "latest_eligible": "1.2.7",
+          "name": "langchain-core",
+          "published_at": "2026-01-09T17:44:24.236426Z",
+          "requested_version": "1.2.7",
+          "resolved_version": null,
+          "yanked": false
+        },
+        {
+          "absolute_latest": "1.0.5",
+          "first_seen_at": "2026-10-28T00:00:00Z",
+          "latest_eligible": "1.0.5",
+          "name": "langgraph",
+          "published_at": "2025-12-12T23:05:46.499684Z",
+          "requested_version": "1.0.5",
+          "resolved_version": null,
+          "yanked": false
+        }
+      ],
+      "integration_id": "python-langchain",
+      "mode": "source",
+      "non_blocking": false,
+      "problems": [],
+      "requested": [
+        {
+          "name": "langchain-core",
+          "requirement": "langchain-core==1.2.7",
+          "role": "upstream",
+          "selected_version": "1.2.7"
+        },
+        {
+          "name": "langgraph",
+          "requirement": "langgraph==1.0.5",
+          "role": "companion",
+          "selected_version": "1.0.5"
+        },
+        {
+          "name": "traceAI-langchain",
+          "requirement": "traceAI-langchain@source:1111111111111111111111111111111111111111",
+          "role": "instrumentation",
+          "selected_version": null
+        },
+        {
+          "name": "fi-instrumentation-otel",
+          "requirement": "fi-instrumentation-otel@source:1111111111111111111111111111111111111111",
+          "role": "core",
+          "selected_version": null
+        }
+      ],
+      "resolution": null,
+      "runtime": "3.11",
+      "selector": "latest_eligible"
+    },
+    {
+      "case_id": "python-openai-source-latest_eligible-py311",
+      "discovery": [
+        {
+          "absolute_latest": "3.24.0",
+          "first_seen_at": "2026-10-28T00:00:00Z",
+          "latest_eligible": "3.24.0",
+          "name": "openai",
+          "published_at": "2026-10-02T15:55:16.228279Z",
+          "requested_version": "3.24.0",
+          "resolved_version": null,
+          "yanked": false
+        }
+      ],
+      "integration_id": "python-openai",
+      "mode": "source",
+      "non_blocking": false,
+      "problems": [],
+      "requested": [
+        {
+          "name": "openai",
+          "requirement": "openai==3.24.0",
+          "role": "upstream",
+          "selected_version": "3.24.0"
+        },
+        {
+          "name": "traceAI-openai",
+          "requirement": "traceAI-openai@source:1111111111111111111111111111111111111111",
+          "role": "instrumentation",
+          "selected_version": null
+        },
+        {
+          "name": "fi-instrumentation-otel",
+          "requirement": "fi-instrumentation-otel@source:1111111111111111111111111111111111111111",
+          "role": "core",
+          "selected_version": null
+        }
+      ],
+      "resolution": null,
+      "runtime": "3.11",
+      "selector": "latest_eligible"
+    }
+  ],
+  "cooldown_cutoff": "2026-10-25T00:00:00Z",
+  "cooldown_hours": 72,
+  "generated_at": "2026-10-28T00:00:00Z",
+  "registry_sha256": "3be5db8370339b1b774c130b4f5ee19006303ce2c8bbea291737db2ba08d8d2b",
+  "schema_version": 1,
+  "self_test": true,
+  "source_sha": "1111111111111111111111111111111111111111",
+  "workflow_sha": "1111111111111111111111111111111111111111"
+}
