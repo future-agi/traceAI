@@ -1,0 +1,9 @@
+{
+  "id": "chatcmpl-fixture-nousage",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "gpt-4.1-mini-2025-04-14",
+  "choices": [
+    {"index": 0, "message": {"role": "assistant", "content": "No usage block here."}, "finish_reason": "stop"}
+  ]
+}
