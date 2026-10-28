@@ -7,7 +7,6 @@
 # Each entry should name its follow-up (a ticket or PR) in the reason once one exists.
 # Format: <package name: its dir under python/frameworks, or traceai for python/traceai> | <reason in plain words>
 agno | 1 test expects gen_ai.system where the code now writes gen_ai.provider.name
-autogen | 17 tests (12 own, 5 core): the instrumentor no longer has _original_generate or _safe_json_dumps, traceai_autogen no longer exports _is_v04_available, and a dependency name
 bedrock | 1 test expects image.url where the code now writes message_content.image
 cerebras | 3 tests expect the reply text where the code now records the whole response
 cohere | 5 tests: llm.system and mock constants that no longer exist, and generated text that is no longer recorded

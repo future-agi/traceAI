@@ -203,180 +203,203 @@ def extract_usage_from_result(result: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def wrap_agent_on_messages(
-    original_method: Callable,
-    tracer: trace_api.Tracer,
-) -> Callable:
-    """Wrap an agent's on_messages method with tracing.
+def _agent_attributes(agent, messages):
+    info = extract_agent_info(agent)
+    attributes = {
+        "autogen.span_kind": "agent_run",
+        "autogen.run.id": str(uuid.uuid4()),
+        "autogen.agent.name": info["agent_name"],
+        "autogen.agent.type": info["agent_type"],
+    }
+    if info.get("model_name"):
+        attributes["gen_ai.request.model"] = info["model_name"]
+    if info.get("tool_count"):
+        attributes["autogen.agent.tool_count"] = info["tool_count"]
+    if messages:
+        attributes["autogen.input.message_count"] = len(messages)
+        last = extract_message_info(messages[-1])
+        attributes["autogen.input.last_message"] = last.get("content", "")
+        attributes["autogen.input.last_source"] = last.get("source", "")
+    return attributes
 
-    Args:
-        original_method: Original on_messages method
-        tracer: OpenTelemetry tracer
 
-    Returns:
-        Wrapped method
-    """
+def _record_agent_result(span, result):
+    if result is not None and hasattr(result, "chat_message"):
+        info = extract_message_info(result.chat_message)
+        span.set_attribute("autogen.output.message_type", info.get("message_type", ""))
+        span.set_attribute("autogen.output.content", info.get("content", ""))
+        if getattr(result, "inner_messages", None):
+            span.set_attribute("autogen.output.inner_message_count", len(result.inner_messages))
 
+
+def _team_attributes(team, task, method):
+    info = extract_team_info(team)
+    attributes = {
+        "autogen.span_kind": "team_run",
+        "autogen.run.id": str(uuid.uuid4()),
+        "autogen.team.type": info["team_type"],
+        "autogen.run.method": method,
+    }
+    for key in ("participant_count", "termination_condition", "max_turns"):
+        if info.get(key):
+            attributes[f"autogen.team.{key}"] = info[key]
+    if info.get("participants"):
+        attributes["autogen.team.participants"] = json.dumps(info["participants"])
+    if task:
+        attributes["autogen.task.content"] = safe_serialize(task, 1000)
+    return attributes
+
+
+def _record_team_result(span, result):
+    if result is None:
+        return
+    if hasattr(result, "messages"):
+        span.set_attribute("autogen.task.message_count", len(result.messages))
+    if hasattr(result, "stop_reason"):
+        span.set_attribute("autogen.task.stop_reason", str(result.stop_reason))
+    usage = extract_usage_from_result(result)
+    if usage:
+        for key, value in usage.items():
+            span.set_attribute(f"gen_ai.usage.{key}", value)
+
+
+def _record_error(span, error):
+    span.set_attribute("autogen.is_error", True)
+    span.set_attribute("autogen.error.type", type(error).__name__)
+    span.set_attribute("autogen.error.message", str(error))
+    span.set_status(Status(StatusCode.ERROR, str(error)))
+    span.record_exception(error)
+
+
+def _wrap_stream(original_method, tracer, name, attributes, record_result, kind):
     @functools.wraps(original_method)
-    async def async_wrapper(self, messages, cancellation_token=None):
-        run_id = str(uuid.uuid4())
-        agent_info = extract_agent_info(self)
-
-        attributes = {
-            "autogen.span_kind": "agent_run",
-            "autogen.run.id": run_id,
-            "autogen.agent.name": agent_info.get("agent_name", "unknown"),
-            "autogen.agent.type": agent_info.get("agent_type", "unknown"),
-        }
-
-        if agent_info.get("model_name"):
-            attributes["gen_ai.request.model"] = agent_info["model_name"]
-
-        if agent_info.get("tool_count"):
-            attributes["autogen.agent.tool_count"] = agent_info["tool_count"]
-
-        # Record input messages
-        if messages:
-            attributes["autogen.input.message_count"] = len(messages)
-            if len(messages) > 0:
-                first_msg = messages[-1]  # Most recent message
-                msg_info = extract_message_info(first_msg)
-                attributes["autogen.input.last_message"] = msg_info.get("content", "")
-                attributes["autogen.input.last_source"] = msg_info.get("source", "")
-
+    async def stream_wrapper(self, *args, **kwargs):
+        # A true async generator, not a coroutine returning an iterator. Attach
+        # context only while advancing/closing the SDK stream, NEVER across a
+        # yield into caller code (or another task may inherit the wrong parent).
+        span = tracer.start_span(name(self), kind=kind, attributes=attributes(self, args, kwargs))
         start_time = time.time()
+        stream = None
+        count = 0
+        ended = False
+        try:
+            with trace_api.use_span(span, end_on_exit=False, record_exception=False,
+                                    set_status_on_exception=False):
+                stream = original_method(self, *args, **kwargs).__aiter__()
+            while True:
+                try:
+                    with trace_api.use_span(span, end_on_exit=False, record_exception=False,
+                                            set_status_on_exception=False):
+                        item = await stream.__anext__()
+                except StopAsyncIteration:
+                    break
+                count += 1
+                record_result(span, item)
+                from autogen_agentchat.base import Response, TaskResult
+                if isinstance(item, (Response, TaskResult)):
+                    # on_messages() returns immediately on Response without
+                    # advancing the generator again. Finalize BEFORE yielding
+                    # this terminal item, rather than relying on async-gen GC.
+                    with trace_api.use_span(span, end_on_exit=False, record_exception=False,
+                                            set_status_on_exception=False):
+                        await stream.aclose()
+                    stream = None
+                    span.set_attribute("autogen.is_error", False)
+                    span.set_status(Status(StatusCode.OK))
+                    span.set_attribute("autogen.stream.message_count", count)
+                    span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
+                    span.end()
+                    ended = True
+                    yield item
+                    return
+                yield item
+            span.set_attribute("autogen.is_error", False)
+            span.set_status(Status(StatusCode.OK))
+        except GeneratorExit:
+            if not ended:
+                span.set_attribute("autogen.stream.closed_early", True)
+            raise
+        except BaseException as error:
+            _record_error(span, error)
+            raise
+        finally:
+            try:
+                if stream is not None and hasattr(stream, "aclose"):
+                    with trace_api.use_span(span, end_on_exit=False, record_exception=False,
+                                            set_status_on_exception=False):
+                        await stream.aclose()
+            finally:
+                if not ended:
+                    span.set_attribute("autogen.stream.message_count", count)
+                    span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
+                    span.end()
+    return stream_wrapper
 
+
+def wrap_agent_on_messages(original_method: Callable, tracer: trace_api.Tracer) -> Callable:
+    @functools.wraps(original_method)
+    async def async_wrapper(self, *args, **kwargs):
+        messages = kwargs.get("messages", args[0] if args else None)
+        start_time = time.time()
         with tracer.start_as_current_span(
-            f"{AGENT_ON_MESSAGES_SPAN_NAME}.{agent_info.get('agent_name', 'agent')}",
-            kind=SpanKind.INTERNAL,
-            attributes=attributes,
+            f"{AGENT_ON_MESSAGES_SPAN_NAME}.{getattr(self, 'name', 'agent')}",
+            kind=SpanKind.INTERNAL, attributes=_agent_attributes(self, messages),
+            record_exception=False, set_status_on_exception=False,
         ) as span:
             try:
-                result = await original_method(self, messages, cancellation_token)
-
-                duration_ms = (time.time() - start_time) * 1000
-                span.set_attribute("autogen.duration_ms", duration_ms)
-
-                # Record result
-                if result:
-                    if hasattr(result, "chat_message"):
-                        msg = result.chat_message
-                        msg_info = extract_message_info(msg)
-                        span.set_attribute("autogen.output.message_type", msg_info.get("message_type", ""))
-                        span.set_attribute("autogen.output.content", msg_info.get("content", ""))
-
-                    if hasattr(result, "inner_messages"):
-                        inner = result.inner_messages
-                        if inner:
-                            span.set_attribute("autogen.output.inner_message_count", len(inner))
-
+                result = await original_method(self, *args, **kwargs)
+                _record_agent_result(span, result)
                 span.set_attribute("autogen.is_error", False)
                 span.set_status(Status(StatusCode.OK))
-
                 return result
-
-            except Exception as e:
-                duration_ms = (time.time() - start_time) * 1000
-                span.set_attribute("autogen.duration_ms", duration_ms)
-                span.set_attribute("autogen.is_error", True)
-                span.set_attribute("autogen.error.type", type(e).__name__)
-                span.set_attribute("autogen.error.message", str(e))
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
+            except BaseException as error:
+                _record_error(span, error)
                 raise
-
+            finally:
+                span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
     return async_wrapper
 
 
-def wrap_team_run(
-    original_method: Callable,
-    tracer: trace_api.Tracer,
-    method_name: str = "run",
-) -> Callable:
-    """Wrap a team's run method with tracing.
+def wrap_agent_on_messages_stream(original_method: Callable, tracer: trace_api.Tracer) -> Callable:
+    return _wrap_stream(
+        original_method, tracer,
+        lambda agent: f"autogen.agent.on_messages_stream.{getattr(agent, 'name', 'agent')}",
+        lambda agent, args, kwargs: _agent_attributes(agent, kwargs.get("messages", args[0] if args else None)),
+        _record_agent_result, SpanKind.INTERNAL,
+    )
 
-    Args:
-        original_method: Original run method
-        tracer: OpenTelemetry tracer
-        method_name: Method name (run or run_stream)
 
-    Returns:
-        Wrapped method
-    """
+def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_name: str = "run") -> Callable:
+    if method_name == "run_stream":
+        return _wrap_stream(
+            original_method, tracer,
+            lambda team: f"{TEAM_RUN_STREAM_SPAN_NAME}.{type(team).__name__}",
+            lambda team, args, kwargs: _team_attributes(team, kwargs.get("task", args[0] if args else None), method_name),
+            _record_team_result, SpanKind.CLIENT,
+        )
 
     @functools.wraps(original_method)
-    async def async_wrapper(self, task, *args, **kwargs):
-        run_id = str(uuid.uuid4())
-        team_info = extract_team_info(self)
-
-        attributes = {
-            "autogen.span_kind": "team_run",
-            "autogen.run.id": run_id,
-            "autogen.team.type": team_info.get("team_type", "unknown"),
-            "autogen.run.method": method_name,
-        }
-
-        if team_info.get("participant_count"):
-            attributes["autogen.team.participant_count"] = team_info["participant_count"]
-
-        if team_info.get("participants"):
-            attributes["autogen.team.participants"] = json.dumps(team_info["participants"])
-
-        if team_info.get("termination_condition"):
-            attributes["autogen.team.termination_condition"] = team_info["termination_condition"]
-
-        if team_info.get("max_turns"):
-            attributes["autogen.team.max_turns"] = team_info["max_turns"]
-
-        # Record task
-        if task:
-            attributes["autogen.task.content"] = safe_serialize(task, 1000)
-
+    async def async_wrapper(self, *args, **kwargs):
+        task = kwargs.get("task", args[0] if args else None)
         start_time = time.time()
-
-        span_name = TEAM_RUN_SPAN_NAME if method_name == "run" else TEAM_RUN_STREAM_SPAN_NAME
-
         with tracer.start_as_current_span(
-            f"{span_name}.{team_info.get('team_type', 'team')}",
-            kind=SpanKind.CLIENT,
-            attributes=attributes,
+            f"{TEAM_RUN_SPAN_NAME}.{type(self).__name__}", kind=SpanKind.CLIENT,
+            attributes=_team_attributes(self, task, method_name),
+            record_exception=False, set_status_on_exception=False,
         ) as span:
             try:
-                result = await original_method(self, task, *args, **kwargs)
-
-                duration_ms = (time.time() - start_time) * 1000
-                span.set_attribute("autogen.duration_ms", duration_ms)
-
-                # Record result
-                if result:
-                    if hasattr(result, "messages"):
-                        span.set_attribute("autogen.task.message_count", len(result.messages))
-
-                    if hasattr(result, "stop_reason"):
-                        span.set_attribute("autogen.task.stop_reason", str(result.stop_reason))
-
-                    # Extract usage
-                    usage = extract_usage_from_result(result)
-                    if usage:
-                        span.set_attribute("gen_ai.usage.input_tokens", usage.get("input_tokens", 0))
-                        span.set_attribute("gen_ai.usage.output_tokens", usage.get("output_tokens", 0))
-                        span.set_attribute("gen_ai.usage.total_tokens", usage.get("total_tokens", 0))
-
+                # AgentChat's task is keyword-only and optional. Preserve the
+                # entire call shape, including task-less continuation.
+                result = await original_method(self, *args, **kwargs)
+                _record_team_result(span, result)
                 span.set_attribute("autogen.is_error", False)
                 span.set_status(Status(StatusCode.OK))
-
                 return result
-
-            except Exception as e:
-                duration_ms = (time.time() - start_time) * 1000
-                span.set_attribute("autogen.duration_ms", duration_ms)
-                span.set_attribute("autogen.is_error", True)
-                span.set_attribute("autogen.error.type", type(e).__name__)
-                span.set_attribute("autogen.error.message", str(e))
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
+            except BaseException as error:
+                _record_error(span, error)
                 raise
-
+            finally:
+                span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
     return async_wrapper
 
 

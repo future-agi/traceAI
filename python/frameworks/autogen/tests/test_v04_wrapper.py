@@ -322,8 +322,8 @@ class TestWrapTeamRun:
         span.__exit__ = MagicMock(return_value=None)
         tracer.start_as_current_span = MagicMock(return_value=span)
 
-        async def original_run_stream(self, task, *args, **kwargs):
-            return MagicMock()
+        async def original_run_stream(self, *, task=None, **kwargs):
+            yield task
 
         wrapped = wrap_team_run(original_run_stream, tracer, "run_stream")
 
@@ -334,11 +334,12 @@ class TestWrapTeamRun:
         team._max_turns = None
 
         async def run_test():
-            result = await wrapped(team, "Stream task")
-            return result
+            return [item async for item in wrapped(team, task="Stream task")]
 
         result = asyncio.run(run_test())
-        assert result is not None
+        assert result == ["Stream task"]
+        tracer.start_span.assert_called_once()
+        tracer.start_span.return_value.end.assert_called_once()
 
 
 class TestWrapToolExecution:

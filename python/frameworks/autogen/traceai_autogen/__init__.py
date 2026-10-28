@@ -1,15 +1,14 @@
-import json
 import logging
 from importlib import import_module
-from typing import Any, Callable, Collection, Dict, Optional
+from typing import Any, Collection, Optional
 
 from fi_instrumentation import FITracer, TraceConfig
-from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from opentelemetry.trace import Status, StatusCode
+from traceai_autogen._legacy import safe_json_dumps, wrap_legacy
 from traceai_autogen._v04_wrapper import (
     wrap_agent_on_messages,
+    wrap_agent_on_messages_stream,
     wrap_team_run,
     wrap_tool_execution,
 )
@@ -20,163 +19,130 @@ logger.addHandler(logging.NullHandler())
 
 _MODULE_V04_AGENTS = "autogen_agentchat.agents"
 _MODULE_V04_TEAMS = "autogen_agentchat.teams"
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 _instruments = ("autogen-agentchat>=0.4.0",)
 
 
+def _is_v02_available() -> bool:
+    try:
+        return hasattr(import_module("autogen"), "ConversableAgent")
+    except ImportError:
+        return False
+
+
+def _is_v04_available() -> bool:
+    try:
+        import_module(_MODULE_V04_AGENTS)
+        return True
+    except ImportError:
+        return False
+
+
 class AutogenInstrumentor(BaseInstrumentor):
-    """
-    An instrumentor for AutoGen v0.4+ (AgentChat).
-
-    Instruments:
-    - autogen_agentchat.agents: AssistantAgent, BaseChatAgent
-    - autogen_agentchat.teams: RoundRobinGroupChat, SelectorGroupChat, etc.
-    """
-
-    __slots__ = (
-        "_tracer",
-        "_v04_original_on_messages",
-        "_v04_original_team_run",
-        "_v04_original_team_run_stream",
-        "_v04_instrumented_classes",
-    )
+    """Instrument AgentChat and, when installed, legacy ConversableAgent."""
 
     def __init__(self) -> None:
         super().__init__()
-        self._v04_original_on_messages: Dict[type, Callable] = {}
-        self._v04_original_team_run: Dict[type, Callable] = {}
-        self._v04_original_team_run_stream: Dict[type, Callable] = {}
-        self._v04_instrumented_classes: list = []
+        # BaseInstrumentor is a singleton: constructing it again must not discard
+        # the originals needed by uninstrument().
+        if hasattr(self, "_tracer"):
+            return
         self._tracer = None
+        self._patches = {}
+        self._original_generate = None
+        self._original_initiate_chat = None
+        self._original_execute_function = None
+        self._v04_original_on_messages = {}
+        self._v04_original_team_run = {}
+        self._v04_original_team_run_stream = {}
+
+    _safe_json_dumps = staticmethod(safe_json_dumps)
 
     def instrumentation_dependencies(self) -> Collection[str]:
+        # Requirements name distributions, not import modules ("autogen" is not
+        # the distribution providing Microsoft's legacy 0.2 SDK).
         return _instruments
 
-    def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-        if not (config := kwargs.get("config")):
-            config = TraceConfig()
-        else:
-            assert isinstance(config, TraceConfig)
+    def _patch(self, cls, method, wrapper, originals=None):
+        # Patch the defining class once. Setting inherited methods on every team
+        # subclass double-wraps calls and changes the MRO after uninstrument().
+        owner = next((base for base in cls.__mro__ if method in vars(base)), None)
+        if owner is None or (owner, method) in self._patches:
+            return
+        original = vars(owner)[method]
+        self._patches[owner, method] = original
+        if originals is not None:
+            originals[owner] = original
+        setattr(owner, method, wrapper(original))
 
-        # All spans go through FITracer so TraceConfig (including
-        # hide_error_details) applies to them.
+    def _instrument(self, **kwargs: Any) -> None:
+        tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
+        config = kwargs.get("config") or TraceConfig()
+        assert isinstance(config, TraceConfig)
         self._tracer = FITracer(
-            trace_api.get_tracer(__name__, __version__, tracer_provider),
-            config=config,
+            trace_api.get_tracer(__name__, __version__, tracer_provider), config=config
         )
 
-        # Instrument agent classes
+        if _is_v02_available():
+            legacy = import_module("autogen").ConversableAgent
+            self._original_generate = legacy.generate_reply
+            self._original_initiate_chat = legacy.initiate_chat
+            self._original_execute_function = legacy.execute_function
+            for method in ("generate_reply", "initiate_chat", "execute_function",
+                           "a_generate_reply", "a_initiate_chat", "a_execute_function"):
+                self._patch(legacy, method, lambda original, method=method:
+                            wrap_legacy(original, self._tracer, method))
+
         try:
-            agents_module = import_module(_MODULE_V04_AGENTS)
+            agents = import_module(_MODULE_V04_AGENTS)
+            for cls in vars(agents).values():
+                if not isinstance(cls, type) or not issubclass(cls, agents.BaseChatAgent):
+                    continue
+                self._patch(cls, "on_messages",
+                            lambda original: wrap_agent_on_messages(original, self._tracer),
+                            self._v04_original_on_messages)
+                self._patch(cls, "on_messages_stream",
+                            lambda original: wrap_agent_on_messages_stream(original, self._tracer))
+        except ImportError:
+            logger.debug("AutoGen AgentChat agents not available")
 
-            if hasattr(agents_module, "BaseChatAgent"):
-                BaseChatAgent = agents_module.BaseChatAgent
-                if hasattr(BaseChatAgent, "on_messages"):
-                    self._v04_original_on_messages[BaseChatAgent] = BaseChatAgent.on_messages
-                    BaseChatAgent.on_messages = wrap_agent_on_messages(
-                        BaseChatAgent.on_messages, self._tracer
-                    )
-                    self._v04_instrumented_classes.append(("BaseChatAgent", BaseChatAgent))
-                    logger.debug("Instrumented BaseChatAgent.on_messages")
-
-            if hasattr(agents_module, "AssistantAgent"):
-                AssistantAgent = agents_module.AssistantAgent
-                self._v04_instrumented_classes.append(("AssistantAgent", AssistantAgent))
-                logger.debug("AssistantAgent tracked (inherits BaseChatAgent instrumentation)")
-
-        except ImportError as e:
-            logger.debug(f"Could not import autogen_agentchat.agents: {e}")
-
-        # Instrument team classes
         try:
-            teams_module = import_module(_MODULE_V04_TEAMS)
-
-            team_classes = [
-                "BaseGroupChat",
-                "RoundRobinGroupChat",
-                "SelectorGroupChat",
-                "Swarm",
-                "MagenticOneGroupChat",
-            ]
-
-            for class_name in team_classes:
-                if hasattr(teams_module, class_name):
-                    TeamClass = getattr(teams_module, class_name)
-
-                    if hasattr(TeamClass, "run"):
-                        if TeamClass not in self._v04_original_team_run:
-                            self._v04_original_team_run[TeamClass] = TeamClass.run
-                            TeamClass.run = wrap_team_run(TeamClass.run, self._tracer, "run")
-                            logger.debug(f"Instrumented {class_name}.run")
-
-                    if hasattr(TeamClass, "run_stream"):
-                        if TeamClass not in self._v04_original_team_run_stream:
-                            self._v04_original_team_run_stream[TeamClass] = TeamClass.run_stream
-                            TeamClass.run_stream = wrap_team_run(
-                                TeamClass.run_stream, self._tracer, "run_stream"
-                            )
-                            logger.debug(f"Instrumented {class_name}.run_stream")
-
-                    self._v04_instrumented_classes.append((class_name, TeamClass))
-
-        except ImportError as e:
-            logger.debug(f"Could not import autogen_agentchat.teams: {e}")
-
-        logger.info(f"AutoGen v0.4 instrumentation complete. "
-                   f"Instrumented {len(self._v04_instrumented_classes)} classes.")
+            teams = import_module(_MODULE_V04_TEAMS)
+            for name in ("BaseGroupChat", "RoundRobinGroupChat", "SelectorGroupChat",
+                         "Swarm", "MagenticOneGroupChat"):
+                cls = getattr(teams, name, None)
+                if not isinstance(cls, type):
+                    continue
+                self._patch(cls, "run",
+                            lambda original: wrap_team_run(original, self._tracer, "run"),
+                            self._v04_original_team_run)
+                self._patch(cls, "run_stream",
+                            lambda original: wrap_team_run(original, self._tracer, "run_stream"),
+                            self._v04_original_team_run_stream)
+        except ImportError:
+            logger.debug("AutoGen AgentChat teams not available")
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        """Restore original behavior."""
-        for agent_class, original_method in self._v04_original_on_messages.items():
-            if hasattr(agent_class, "on_messages"):
-                agent_class.on_messages = original_method
-
-        for team_class, original_method in self._v04_original_team_run.items():
-            if hasattr(team_class, "run"):
-                team_class.run = original_method
-
-        for team_class, original_method in self._v04_original_team_run_stream.items():
-            if hasattr(team_class, "run_stream"):
-                team_class.run_stream = original_method
-
+        for (cls, method), original in reversed(list(self._patches.items())):
+            setattr(cls, method, original)
+        self._patches.clear()
+        self._original_generate = None
+        self._original_initiate_chat = None
+        self._original_execute_function = None
         self._v04_original_on_messages.clear()
         self._v04_original_team_run.clear()
         self._v04_original_team_run_stream.clear()
-        self._v04_instrumented_classes.clear()
+        self._tracer = None
 
 
 def instrument_autogen(
     tracer_provider: Optional[Any] = None,
     config: Optional[TraceConfig] = None,
 ) -> AutogenInstrumentor:
-    """Convenience function to instrument AutoGen v0.4+.
-
-    Args:
-        tracer_provider: Optional OpenTelemetry tracer provider
-        config: Optional trace configuration
-
-    Returns:
-        The instrumentor instance
-
-    Example:
-        >>> from traceai_autogen import instrument_autogen
-        >>> instrumentor = instrument_autogen()
-        >>> from autogen_agentchat.agents import AssistantAgent
-        >>> from autogen_agentchat.teams import RoundRobinGroupChat
-        >>> agent = AssistantAgent("assistant", ...)
-        >>> team = RoundRobinGroupChat([agent], ...)
-        >>> await team.run(task="...")  # Automatically traced
-    """
+    """Instrument AgentChat and installed legacy ConversableAgent classes."""
     instrumentor = AutogenInstrumentor()
-    kwargs = {}
-    if tracer_provider:
-        kwargs["tracer_provider"] = tracer_provider
-    if config:
-        kwargs["config"] = config
-    instrumentor.instrument(**kwargs)
+    instrumentor.instrument(tracer_provider=tracer_provider, config=config)
     return instrumentor
 
 
