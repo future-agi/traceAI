@@ -278,6 +278,10 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                     row["resolved"].append({"name": wanted["name"], "role": wanted["role"], "version": version, "artifact_sha256": digest})
                 if version is None or wanted["selected_version"] is None or Version(version) != Version(wanted["selected_version"]):
                     raise ValueError("Requested/resolved mismatch: " + wanted["name"])
+            # Preserve the resolver's frozen tuple order as well as identities;
+            # PR1's strict plan reconciliation binds the complete original list.
+            order = {canonicalize_name(r["name"]): i for i, r in enumerate(resolution["resolved"])}
+            row["resolved"].sort(key=lambda r: order[canonicalize_name(r["name"])])
             for discovered in row["discovery"]:
                 discovered["resolved_version"] = installed.get(canonicalize_name(discovered["name"]))
             stage = "infrastructure"
