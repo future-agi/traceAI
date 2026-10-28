@@ -72,7 +72,16 @@ class _WithTracer(ABC):
             record_exception=False,
             set_status_on_exception=False,
         ) as span:
-            yield _WithSpan(span=span)
+            operation = _WithSpan(span=span)
+            try:
+                yield operation
+            except BaseException as exception:
+                # Cancellation derives from BaseException, not Exception. Preserve
+                # the original SDK/application exception and always export once.
+                if not operation.is_finished:
+                    operation.record_exception(exception)
+                    operation.finish_tracing(status=trace_api.Status(trace_api.StatusCode.ERROR))
+                raise
 
 
 class _BaseWrapper(_WithTracer):
@@ -151,12 +160,7 @@ class _CompletionsWrapper(_BaseWrapper):
                     ),
                 )
 
-            except Exception as exception:
-                print(f"Error in completion: {exception}")
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException:
                 raise
 
             streaming = kwargs.get("stream", False)
@@ -219,11 +223,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
             try:
                 response = await wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException:
                 raise
             span.set_status(trace_api.StatusCode.OK)
             streaming = kwargs.get("stream", False)
@@ -305,11 +305,7 @@ class _MessagesWrapper(_BaseWrapper):
                 # Add I/O to span attributes instead of sending separately
                 self._add_io_to_span_attributes(span=span, output_data=output_content)
 
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException:
                 raise
 
             streaming = kwargs.get("stream", False)
@@ -382,11 +378,7 @@ class _AsyncMessagesWrapper(_WithTracer):
             try:
                 response = await wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException:
                 raise
             streaming = kwargs.get("stream", False)
             if streaming:
@@ -454,11 +446,7 @@ class _MessagesCountTokensWrapper(_BaseWrapper):
             try:
                 response = wrapped(*args, **kwargs)
                 span.set_attributes(dict(_get_raw_output(response)))
-            except Exception as exception:
-                span.set_status(
-                    trace_api.Status(trace_api.StatusCode.ERROR, str(exception))
-                )
-                span.record_exception(exception)
+            except BaseException:
                 raise
 
             span.set_status(trace_api.StatusCode.OK)

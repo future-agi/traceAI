@@ -10,10 +10,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from validate import (ROOT, load_registry, validate_registry, validate_results,
                       judge_tests, failure_signature, junit_tests, safe_path,
-                      suite_digest, expected_test_nodes, invocation_tests, requested_version)
+                      suite_digest, expected_test_nodes, invocation_tests, requested_version,
+                      installed_distributions, native_distribution, sandbox_run)
 
 
 def fixture():
@@ -22,6 +24,22 @@ def fixture():
         ex['added'] = date.today().isoformat()
         ex['expires'] = (date.today() + timedelta(days=7)).isoformat()
     return data
+
+
+def write_invocations(case, artifacts, plan_sha):
+    directory = artifacts / 'invocations'
+    directory.mkdir(exist_ok=True)
+    collection = artifacts / 'locks/collection.json'
+    collection.write_text(json.dumps(dict(nodes=sorted(t['test_id'] for t in case['contract']['tests']), deselected=[], errors=[])))
+    def record(relative):
+        path = artifacts / relative
+        return dict(exit_code=0, timed_out=False, started_at=case['started_at'], completed_at=case['completed_at'],
+                    evidence_path=relative, evidence_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    manifest = dict(schema_version=1, case_id=case['case_id'], attempt=case['attempt'], source_sha=case['source_sha'],
+                    plan_sha256=plan_sha, collection=record('locks/collection.json'), contract=record(case['contract']['junit_paths'][0]))
+    path = directory / f'{case["case_id"]}-attempt-{case["attempt"]}.json'
+    path.write_text(json.dumps(manifest))
+    return path
 
 
 def result_fixture(artifact_root=None):
@@ -34,7 +52,8 @@ def result_fixture(artifact_root=None):
     case = dict(case_id='python-anthropic-floor', integration_id=target['id'], language='python',
                 source_sha='1'*40, mode='source', selector='floor', qualification='pilot_pending',
                 runtime=dict(implementation='cpython', version='3.11.9', os='linux', arch='x86_64'),
-                requested=requested, resolved=[dict(name=r['name'], role=r['role'], version=r['selected_version']) for r in requested],
+                requested=requested, resolved=[dict(name=r['name'], role=r['role'], version=r['selected_version'],
+                    artifact_sha256=hashlib.sha256(r['name'].encode()).hexdigest()) for r in requested],
                 discovery=[], dependency_lock=dict(format='pip-freeze', path='locks/freeze.txt', sha256='a'*64),
                 contract=dict(suite_sha256='a'*64, command=['python', '-m', 'pytest'], scenarios=['sync'],
                               junit_paths=['junit/tests.xml'], tests=[dict(test_id='.github/compat/contracts/test_anthropic.py::test_sync',
@@ -56,7 +75,7 @@ def result_fixture(artifact_root=None):
         artifact_root = Path(artifact_root)
         (artifact_root / 'locks').mkdir(exist_ok=True)
         (artifact_root / 'junit').mkdir(exist_ok=True)
-        lock = b'anthropic==0.41.0\n'
+        lock = ('\n'.join(r['name'] + '==' + r['version'] for r in case['resolved']) + '\ntransitive==1.0\n').encode()
         (artifact_root / 'locks/freeze.txt').write_bytes(lock)
         case['dependency_lock']['sha256'] = hashlib.sha256(lock).hexdigest()
         root = ET.Element('testsuites')
@@ -65,17 +84,47 @@ def result_fixture(artifact_root=None):
             path, name = node.split('::')
             ET.SubElement(suite, 'testcase', file=path, classname='test_anthropic', name=name, time='0.1')
         ET.ElementTree(root).write(artifact_root / 'junit/tests.xml')
+        (artifact_root / 'junit/tests.xml.exit-code').write_text('0\n')
+        write_invocations(case, artifact_root, run['plan_sha256'])
     return dict(schema_version=1, run=run, cases=[case]), registry
 
 
-def plan_fixture(data):
+def plan_fixture(data, artifacts):
     c = data['cases'][0]
+    distributions = [*c['resolved'], dict(name='transitive', version='1.0', artifact_sha256='b'*64)]
+    report = dict(version='1', install=[dict(metadata=dict(name=r['name'], version=r['version']),
+        download_info=dict(archive_info=dict(hashes=dict(sha256=r['artifact_sha256'])))) for r in distributions])
+    report_bytes = json.dumps(report).encode()
+    req_bytes = ('\n'.join(sorted(r['name'].lower().replace('_', '-') + '==' + r['version'] +
+        ' --hash=sha256:' + r['artifact_sha256'] for r in distributions)) + '\n').encode()
+    (artifacts / 'locks/resolution.report.json').write_bytes(report_bytes)
+    (artifacts / 'locks/resolution.txt').write_bytes(req_bytes)
+    resolution = dict(resolved=c['resolved'], report='locks/resolution.report.json',
+        report_sha256=hashlib.sha256(report_bytes).hexdigest(), requirements='locks/resolution.txt',
+        requirements_sha256=hashlib.sha256(req_bytes).hexdigest())
     plan = {key: data['run'][key] for key in ('source_sha', 'workflow_sha', 'cooldown_hours', 'cooldown_cutoff', 'self_test')}
     plan['cases'] = [{**{key: c[key] for key in ('case_id', 'integration_id', 'mode', 'selector', 'requested', 'discovery')},
-                      'runtime': '3.11', 'problems': [], 'resolution': {'resolved': c['resolved']}}]
+                      'runtime': '3.11', 'problems': [], 'resolution': resolution}]
     raw = json.dumps(plan).encode()
     data['run']['plan_sha256'] = hashlib.sha256(raw).hexdigest()
+    for case in data['cases']:
+        if case['contract']['junit_paths']:
+            write_invocations(case, artifacts, data['run']['plan_sha256'])
     return json.loads(raw), raw
+
+
+class SandboxTests(unittest.TestCase):
+    def test_namespace_failure_never_falls_back_to_host(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('validate.sys.platform', 'linux'), patch('validate.subprocess.run') as run:
+            run.return_value.returncode = 90
+            command = ['/trusted/venv/bin/python', '-I', '-m', 'pytest', 'test_contract.py']
+            self.assertEqual(sandbox_run(command, ROOT, Path(tmp) / 'probe.json'), 90)
+            run.assert_called_once()
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[:5], ['sudo', '--non-interactive', 'unshare', '--net', '--'])
+            self.assertEqual(argv[-len(command):], command)
+            self.assertIn('--no-new-privs', argv[7])
+            self.assertIn('child_external', argv[-len(command)-3])
 
 
 class RegistryTests(unittest.TestCase):
@@ -125,6 +174,23 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'drift'):
             validate_registry(data, ROOT)
 
+    def test_native_identity_drift_and_inherited_maven_group(self):
+        for language in ('java', 'csharp'):
+            registry = load_registry(ROOT)
+            target = next(t for t in registry['integrations'] if t['language'] == language)
+            target['distribution'] = 'wrong:identity' if language == 'java' else 'wrong-identity'
+            with self.subTest(language=language), self.assertRaisesRegex(ValueError, 'distribution drift'):
+                validate_registry(registry, ROOT)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'Inherited.csproj'
+            path.write_text('<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>')
+            self.assertEqual(native_distribution(path, 'csharp'), 'Inherited')
+            path.write_text('<Project><PropertyGroup><AssemblyName>Assembly</AssemblyName></PropertyGroup></Project>')
+            self.assertEqual(native_distribution(path, 'csharp'), 'Assembly')
+            pom = Path(tmp) / 'pom.xml'
+            pom.write_text('<project xmlns="http://maven.apache.org/POM/4.0.0"><parent><groupId>org.parent</groupId></parent><artifactId>child</artifactId></project>')
+            self.assertEqual(native_distribution(pom, 'java'), 'org.parent:child')
+
     def test_contract_free_target_cannot_be_qualified(self):
         data = load_registry(ROOT)
         t = next(t for t in data['integrations'] if not t['contract_test'])
@@ -165,6 +231,20 @@ class ScopeTests(unittest.TestCase):
 
     def test_exact_failure_is_degraded_not_compatible(self):
         self.assertEqual(self.judge(fixture()), 'quarantined')
+
+    def test_parameterized_exceptions_require_independent_nodes_and_signatures(self):
+        data = fixture()
+        original = data['target']['exceptions'][0]
+        other_node = original['test_ids'][0].replace('[param]', '[other]')
+        other_signature = failure_signature('failure', [other_node], 'RuntimeError: independent')
+        other = {**original, 'id': original['id'] + '-other', 'test_ids': [other_node], 'failure_signature': other_signature}
+        data['target']['exceptions'].append(other)
+        data['scoped'].append({**data['scoped'][0], 'test_id': other_node, 'failure_signature': other_signature})
+        self.assertEqual(self.judge(data), 'quarantined')
+        data['scoped'].pop()
+        with self.assertRaisesRegex(ValueError, 'did not execute'): self.judge(data)
+        original['test_ids'].append(other_node)
+        with self.assertRaisesRegex(ValueError, 'exactly one'): self.judge(data)
 
     def test_unrelated_failure_in_excepted_package_is_red(self):
         data = fixture()
@@ -369,7 +449,7 @@ class ResultTests(unittest.TestCase):
     def test_trusted_plan_binds_requests_discovery_source_and_runtime(self):
         for mutation in ('digest', 'request', 'source', 'runtime', 'discovery'):
             data, registry = result_fixture(self.artifacts)
-            plan, raw = plan_fixture(data)
+            plan, raw = plan_fixture(data, self.artifacts)
             self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
             if mutation == 'digest': data['run']['plan_sha256'] = 'b'*64
             if mutation == 'request': data['cases'][0]['requested'][0]['requirement'] = '>=0.1'
@@ -385,7 +465,7 @@ class ResultTests(unittest.TestCase):
         data, registry = result_fixture(self.artifacts)
         sha = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
         data['run']['source_sha'] = data['cases'][0]['source_sha'] = sha
-        _, raw = plan_fixture(data)
+        _, raw = plan_fixture(data, self.artifacts)
         (self.artifacts / 'compat-plan.json').write_bytes(raw)
         path = self.artifacts / 'results.json'
         path.write_text(json.dumps(data))
@@ -399,15 +479,115 @@ class ResultTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn('JUnit', result.stderr)
 
-    def test_retry_cannot_re_resolve_or_launder_flake(self):
+    def retry_fixture(self):
         data, registry = result_fixture(self.artifacts)
-        data['cases'].append(copy.deepcopy(data['cases'][0])); data['cases'][1]['attempt'] = 2
-        data['cases'][0]['status'] = 'failed'
+        second = copy.deepcopy(data['cases'][0])
+        second.update(attempt=2, status='flaky')
+        first = data['cases'][0]
+        first.update(status='blocked', resolved=[], dependency_lock=None,
+            failure=dict(kind='install', signature='a'*64, summary='Install failed before observations', test_ids=[]))
+        first['contract'].update(suite_sha256=hashlib.sha256(b'').hexdigest(), tests=[],
+            junit_paths=[], collected=0, executed=0, unexpected_skips=0, scenarios=[])
+        data['cases'].append(second)
+        write_invocations(second, self.artifacts, data['run']['plan_sha256'])
+        return data, registry
+
+    def test_retry_cannot_re_resolve_or_launder_flake(self):
+        data, registry = self.retry_fixture()
+        self.validate(data, registry)  # Previously unknown observations may populate.
+        data['cases'][1]['status'] = 'passed'
         with self.assertRaisesRegex(ValueError, 'flaky'): self.validate(data, registry)
         data['cases'][1]['status'] = 'flaky'
-        self.validate(data, registry)
-        data['cases'][1]['requested'][0]['selected_version'] = '999'
+        data['cases'][0]['resolved'] = [{**data['cases'][1]['resolved'][0], 'version': '999'}]
         with self.assertRaisesRegex(ValueError, 'immutable'): self.validate(data, registry)
+
+    def test_flaky_must_have_real_success_and_retained_failure(self):
+        for mutation in ('empty', 'partial', 'skipped', 'failed', 'no_failure', 'first_flaky'):
+            data, registry = self.retry_fixture()
+            first, second = data['cases']
+            contract = second['contract']
+            if mutation == 'empty': contract.update(tests=[], junit_paths=[], executed=0, collected=0)
+            if mutation == 'partial':
+                contract['tests'].pop(); contract['executed'] -= 1; contract['collected'] -= 1
+            if mutation == 'skipped':
+                contract['tests'][0]['outcome'] = 'skipped'; contract['unexpected_skips'] = 1; contract['executed'] -= 1
+            if mutation == 'failed': contract['tests'][0].update(outcome='failure', failure_signature='a'*64)
+            if mutation == 'no_failure': first['failure'] = None
+            if mutation == 'first_flaky': first['status'] = 'flaky'
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError): self.validate(data, registry)
+
+    def test_complete_frozen_lock_cannot_be_rehashed_into_another_environment(self):
+        for mutation in ('wrong_upstream', 'missing_core', 'missing_transitive', 'extra', 'duplicate', 'malformed'):
+            data, registry = result_fixture(self.artifacts)
+            plan, raw = plan_fixture(data, self.artifacts)
+            self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
+            lock = self.artifacts / 'locks/freeze.txt'
+            text = lock.read_text()
+            if mutation == 'wrong_upstream': text = text.replace('anthropic==0.41.0', 'anthropic==0.99.0')
+            if mutation == 'missing_core': text = text.replace('fi-instrumentation-otel==1.2.1\n', '')
+            if mutation == 'missing_transitive': text = text.replace('transitive==1.0\n', '')
+            if mutation == 'extra': text += 'unplanned==1.0\n'
+            if mutation == 'duplicate': text += 'TRANSITIVE==1.0\n'
+            if mutation == 'malformed': text += '--editable .\n'
+            lock.write_text(text)
+            data['cases'][0]['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'lock|freeze'):
+                self.validate(data, registry, expected_plan=plan, plan_bytes=raw)
+
+    def test_invocation_status_cannot_hide_runner_or_coverage_failure(self):
+        for status in (None, '1\n', '2\n', '3\n', '5\n', '-1\n', '0\n1\n'):
+            data, registry = result_fixture(self.artifacts)
+            sidecar = self.artifacts / 'junit/tests.xml.exit-code'
+            if status is None: sidecar.unlink()
+            else: sidecar.write_text(status)
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, 'invocation|runner'):
+                self.validate(data, registry)
+
+    def test_collection_invocations_and_manifest_identity_are_required(self):
+        for mutation in ('missing', 'nonzero', 'timeout', 'unknown_exit', 'source', 'plan', 'evidence', 'partial'):
+            data, registry = result_fixture(self.artifacts)
+            path = self.artifacts / f'invocations/{data["cases"][0]["case_id"]}-attempt-1.json'
+            manifest = json.loads(path.read_text())
+            if mutation == 'missing': path.unlink()
+            else:
+                if mutation == 'nonzero': manifest['collection']['exit_code'] = 1
+                if mutation == 'timeout': manifest['collection']['timed_out'] = True
+                if mutation == 'unknown_exit': manifest['collection']['exit_code'] = None
+                if mutation == 'source': manifest['source_sha'] = 'f'*40
+                if mutation == 'plan': manifest['plan_sha256'] = 'f'*64
+                if mutation == 'evidence': manifest['collection']['evidence_sha256'] = 'f'*64
+                if mutation == 'partial':
+                    collection = self.artifacts / 'locks/collection.json'
+                    collection.write_text(json.dumps(dict(nodes=[], deselected=[], errors=[])))
+                    manifest['collection']['evidence_sha256'] = hashlib.sha256(collection.read_bytes()).hexdigest()
+                path.write_text(json.dumps(manifest))
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'invocation'):
+                self.validate(data, registry)
+
+    def test_swapped_and_duplicate_distribution_roles_are_rejected(self):
+        for mutation in ('swap', 'duplicate'):
+            data, registry = result_fixture(self.artifacts)
+            for field in ('requested', 'resolved'):
+                rows = data['cases'][0][field]
+                if mutation == 'swap': rows[1]['role'], rows[2]['role'] = rows[2]['role'], rows[1]['role']
+                else: rows[2]['name'] = rows[1]['name']
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'role|identity'):
+                self.validate(data, registry)
+
+    def test_latest_eligible_stable_rejects_aged_prerelease_and_dev(self):
+        for version in ('2.0.0rc1', '2.0.0.dev1'):
+            data, registry = result_fixture(self.artifacts)
+            case = data['cases'][0]
+            case['selector'] = 'latest_eligible'
+            case['requested'][0].update(requirement='==' + version, selected_version=version)
+            case['resolved'][0]['version'] = version
+            case['discovery'] = [dict(name='anthropic', absolute_latest=version, latest_eligible=version,
+                requested_version=version, resolved_version=version, published_at='2026-10-24T00:00:00Z', first_seen_at=None, yanked=False)]
+            lock = self.artifacts / 'locks/freeze.txt'
+            lock.write_text(lock.read_text().replace('anthropic==0.41.0', 'anthropic==' + version))
+            case['dependency_lock']['sha256'] = hashlib.sha256(lock.read_bytes()).hexdigest()
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'prerelease/dev'):
+                self.validate(data, registry)
 
 
 if __name__ == '__main__':

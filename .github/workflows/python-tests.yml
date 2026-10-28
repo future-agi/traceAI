@@ -286,7 +286,8 @@ jobs:
           for test_file in $CONTRACT_TESTS; do
             ran=$((ran + 1))
             rc=0
-            "$venv_python" -m pytest "$test_file" -p no:cacheprovider --rootdir="$GITHUB_WORKSPACE" -o addopts= -o asyncio_mode=auto -o junit_family=xunit1 --junitxml="$JUNIT_DIR/contract-$ran.xml" || rc=$?
+            python3 "$GITHUB_WORKSPACE/.github/compat/validate.py" sandbox --cwd "$GITHUB_WORKSPACE" --probe-output "$JUNIT_DIR/contract-network-$ran.json" -- \
+              "$venv_python" -I -m pytest "$test_file" -p no:cacheprovider -p pytest_asyncio.plugin --rootdir="$GITHUB_WORKSPACE" -o addopts= -o asyncio_mode=auto -o junit_family=xunit1 --junitxml="$JUNIT_DIR/contract-$ran.xml" || rc=$?
             printf '%s\n' "$rc" > "$JUNIT_DIR/contract-$ran.xml.exit-code"
             status=$((rc > status ? rc : status))
           done

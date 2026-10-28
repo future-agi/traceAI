@@ -523,7 +523,7 @@
       "id": "java-arconia-example",
       "language": "java",
       "package_dir": "java/examples/arconia-example",
-      "distribution": "ai.traceai:arconia-example",
+      "distribution": "ai.traceai.examples:arconia-example",
       "role": "example",
       "upstream": [
         {
@@ -617,7 +617,7 @@
       "id": "java-quarkus-langchain4j-example",
       "language": "java",
       "package_dir": "java/examples/quarkus-langchain4j-example",
-      "distribution": "ai.traceai:quarkus-langchain4j-example",
+      "distribution": "ai.traceai.examples:quarkus-langchain4j-example",
       "role": "example",
       "upstream": [
         {

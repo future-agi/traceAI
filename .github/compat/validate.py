@@ -8,6 +8,7 @@ import argparse
 import ast
 from datetime import date, datetime, timedelta
 import math
+import os
 import subprocess
 import hashlib
 import json
@@ -21,6 +22,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -125,6 +127,46 @@ def equal_range(left, right):
     return sorted(re.sub(r'\s+', '', left).split(',')) == sorted(re.sub(r'\s+', '', right).split(','))
 
 
+def xml_metadata(path):
+    raw = Path(path).read_bytes()
+    require(b'<!DOCTYPE' not in raw and b'<!ENTITY' not in raw, 'unsafe XML metadata')
+    tree = ET.fromstring(raw)
+    for element in tree.iter():
+        element.tag = element.tag.split('}')[-1]
+    return tree
+
+
+def native_distribution(manifest, language):
+    """Read package identity without Maven/MSBuild execution or dependency loading."""
+    tree = xml_metadata(manifest)
+    if language == 'java':
+        group = tree.findtext('groupId') or tree.findtext('parent/groupId')
+        artifact = tree.findtext('artifactId')
+        properties = {e.tag: e.text for e in tree.findall('properties/*')}
+        properties.update({'project.groupId': group, 'pom.groupId': group,
+                           'project.artifactId': artifact, 'pom.artifactId': artifact,
+                           'project.parent.groupId': tree.findtext('parent/groupId')})
+        def expand(value, seen=()):
+            require(value is not None, 'missing Maven identity')
+            def replacement(match):
+                key = match[1]
+                require(key not in seen and key in properties, 'unresolved Maven identity property')
+                return expand(properties[key], (*seen, key))
+            return re.sub(r'\$\{([^}]+)\}', replacement, value)
+        return expand(group) + ':' + expand(artifact)
+    # NuGet defaults PackageId to AssemblyName, then the project basename.
+    for key in ('PackageId', 'AssemblyName'):
+        nodes = tree.findall('.//PropertyGroup/' + key)
+        if nodes:
+            require(len(nodes) == 1 and not nodes[0].get('Condition') and
+                    all(not group.get('Condition') for group in tree.findall('PropertyGroup') if nodes[0] in list(group)),
+                    'ambiguous conditional NuGet identity')
+            value = nodes[0].text
+            require(value and '$(' not in value, 'unresolved NuGet identity')
+            return value
+    return Path(manifest).stem
+
+
 def inventory(root):
     root = Path(root)
     paths = {p.parent.relative_to(root).as_posix() for pattern in [
@@ -138,6 +180,9 @@ def inventory(root):
 
 
 def validate_exception(ex, target, today=None):
+    # Signatures include the node ID. Sharing one signature across several nodes
+    # is incoherent; independent parameter cases require independent exceptions.
+    require(len(ex['test_ids']) == 1, 'exception requires exactly one test node/signature')
     today = today or date.today()
     added, expires = date.fromisoformat(ex['added']), date.fromisoformat(ex['expires'])
     require(added <= today < expires and 0 < (expires - added).days <= 14,
@@ -191,6 +236,9 @@ def validate_registry(data, root=None):
             elif target['language'] == 'go':
                 require(re.search(r'^module\s+' + re.escape(target['distribution']) + r'\s*$', manifest.read_text(), re.M),
                         f'{target["id"]}: module drift')
+            elif target['language'] in ('java', 'csharp'):
+                require(native_distribution(manifest, target['language']) == target['distribution'],
+                        f'{target["id"]}: distribution drift')
             runtime = target['runtimes']
             require(equal_range(observed(runtime['source'], root), runtime['declared']),
                     f'{target["id"]}: runtime metadata drift')
@@ -351,15 +399,142 @@ def timestamp(value):
     return parsed
 
 
-def reconcile_artifacts(case, artifact_root):
+def installed_distributions(raw, format):
+    """Parse only qualified lock adapters, never artifact commands or URLs."""
+    require(len(raw) <= 16 * 1024 * 1024, 'oversized dependency lock')
+    identities = {}
+    def add(name, version):
+        require(isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', name), 'malformed lock distribution')
+        require(isinstance(version, str) and version and str(Version(version)), 'malformed lock version')
+        name = canonicalize_name(name)
+        require(name not in identities, 'duplicate lock distribution')
+        identities[name] = version
+    if format == 'pip-freeze':
+        for line in raw.decode('utf-8').splitlines():
+            if not line or line.startswith('#'):
+                continue
+            match = re.fullmatch(r'([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s]+)', line)
+            require(match is not None, 'malformed/noncanonical pip-freeze entry')
+            add(match[1], match[2])
+    elif format == 'pip-report':
+        def unique_object(pairs):
+            obj = {}
+            for key, value in pairs:
+                require(key not in obj, 'duplicate pip-report JSON field')
+                obj[key] = value
+            return obj
+        report = json.loads(raw, object_pairs_hook=unique_object)
+        require(report.get('version') == '1' and isinstance(report.get('install'), list), 'malformed pip-report')
+        for item in report['install']:
+            require(isinstance(item, dict) and isinstance(item.get('metadata'), dict), 'malformed pip-report metadata')
+            add(item['metadata'].get('name'), item['metadata'].get('version'))
+    else:
+        raise ValueError('unqualified dependency lock adapter: ' + format)
+    require(identities, 'empty dependency lock')
+    return identities
+
+
+def preserved_resolution(case, resolution, artifact_root):
+    """Original report/requirements bytes are bound by the immutable plan."""
+    contents = {}
+    for key in ('report', 'requirements'):
+        relative = resolution[key]
+        path = safe_path(artifact_root, relative)
+        if not path.is_file():
+            # The collector retains complete per-attempt case uploads here.
+            relative = f'evidence/{case["case_id"]}/attempt-{case["attempt"]}/locks/' + PurePosixPath(relative).name
+            path = safe_path(artifact_root, relative)
+        require(path.is_file(), 'missing frozen ' + key)
+        contents[key] = path.read_bytes()
+        require(hashlib.sha256(contents[key]).hexdigest() == resolution[key + '_sha256'], 'frozen ' + key + ' digest mismatch')
+    expected = installed_distributions(contents['report'], 'pip-report')
+    report = json.loads(contents['report'])
+    requirements, digests = [], {}
+    for item in report['install']:
+        name = canonicalize_name(item['metadata']['name'])
+        digest = item['download_info']['archive_info']['hashes']['sha256']
+        require(isinstance(digest, str) and re.fullmatch(r'[0-9a-f]{64}', digest), 'malformed frozen artifact digest')
+        digests[name] = digest
+        requirements.append(f'{name}=={expected[name]} --hash=sha256:{digest}')
+    require(contents['requirements'].decode() == '\n'.join(sorted(requirements)) + '\n', 'frozen requirements/report disagree')
+    for row in case['resolved']:
+        name = canonicalize_name(row['name'])
+        require(expected.get(name) == row['version'] and
+                digests.get(name) == row.get('artifact_sha256'), 'resolved artifact not in frozen report')
+    return expected
+
+
+def reconcile_invocations(case, artifact_root, plan_sha256):
+    path = safe_path(artifact_root, f'invocations/{case["case_id"]}-attempt-{case["attempt"]}.json')
+    successful = case['status'] in ('passed', 'quarantined', 'flaky')
+    require(path.is_file(), 'missing invocation manifest')
+    require(path.stat().st_size <= 1024 * 1024, 'oversized invocation manifest')
+    manifest = json.loads(path.read_text())
+    require(manifest.get('schema_version') == 1 and manifest.get('case_id') == case['case_id'] and
+            manifest.get('attempt') == case['attempt'] and manifest.get('source_sha') == case['source_sha'] and
+            manifest.get('plan_sha256') == plan_sha256, 'invocation identity mismatch')
+    for name in ('collection', 'contract'):
+        record = manifest.get(name)
+        if record is None:
+            require(not successful, 'missing successful invocation: ' + name)
+            continue
+        code = record.get('exit_code')
+        require((code is None or type(code) is int) and type(record.get('timed_out')) is bool,
+                'invalid invocation status')
+        require(timestamp(record['completed_at']) >= timestamp(record['started_at']), 'invalid invocation chronology')
+        if successful:
+            require(not record['timed_out'] and type(code) is int and code in ((0,) if name == 'collection' else (0, 1)),
+                    'runner/collection invocation failure cannot attest success')
+        relative, digest = record.get('evidence_path'), record.get('evidence_sha256')
+        require((relative is None) == (digest is None), 'incomplete invocation evidence identity')
+        if relative is not None:
+            evidence = safe_path(artifact_root, relative)
+            require(evidence.is_file() and hashlib.sha256(evidence.read_bytes()).hexdigest() == digest,
+                    'invocation ' + ('JUnit' if name == 'contract' else 'collection') + ' evidence digest mismatch')
+            if name == 'contract':
+                require(case['contract']['junit_paths'] == [relative], 'invocation/JUnit path mismatch')
+                status_path = safe_path(artifact_root, relative + '.exit-code')
+                if successful:
+                    require(status_path.is_file() and status_path.read_text().strip() == str(code), 'invocation exit-code disagreement')
+            elif successful:
+                collected = json.loads(evidence.read_text())
+                require(collected.get('deselected') == [] and not collected.get('errors') and
+                        collected.get('nodes') == sorted(t['test_id'] for t in case['contract']['tests']),
+                        'invocation collection/JUnit completeness mismatch')
+        elif successful:
+            raise ValueError('missing successful invocation evidence')
+
+
+def reconcile_artifacts(case, artifact_root, resolution=None, plan_sha256=None):
     require(artifact_root is not None, 'execution evidence requires an artifact root')
     lock = case['dependency_lock']
     if lock:
         path = safe_path(artifact_root, lock['path'])
         require(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == lock['sha256'], 'lock digest mismatch')
+        require(case['language'] == 'python', 'native lock adapter not yet qualified')
+        installed = installed_distributions(path.read_bytes(), lock['format'])
+        for row in case['resolved']:
+            require(installed.get(canonicalize_name(row['name'])) == row['version'], 'installed lock/resolved mismatch')
+        if resolution is not None:
+            require(installed == preserved_resolution(case, resolution, artifact_root), 'complete installed lock/frozen resolution mismatch')
+    if plan_sha256 is not None:
+        reconcile_invocations(case, artifact_root, plan_sha256)
     paths = case['contract']['junit_paths']
     require(len(paths) == len(set(paths)), 'duplicate JUnit report')
-    observed_tests = [t for path in paths for t in junit_tests(safe_path(artifact_root, path))]
+    exits = []
+    for relative in paths:
+        sidecar = safe_path(artifact_root, relative + '.exit-code')
+        require(sidecar.is_file() and sidecar.stat().st_size <= 16, 'missing/malformed invocation exit-code sidecar')
+        text = sidecar.read_text()
+        require(re.fullmatch(r'(?:0|[1-9][0-9]{0,2})\n?', text) is not None, 'malformed invocation exit-code')
+        exits.append(int(text))
+    successful = case['status'] in ('passed', 'quarantined', 'flaky')
+    if paths and successful:
+        observed_tests = invocation_tests([safe_path(artifact_root, p) for p in paths], exits)
+    else:
+        observed_tests = [t for path in paths for t in junit_tests(safe_path(artifact_root, path))]
+        if any(exits):
+            require(case['failure'] is not None, 'failed invocation requires failure evidence')
     claimed = case['contract']['tests']
     require(len(observed_tests) == len(claimed) and len({t['test_id'] for t in observed_tests}) == len(observed_tests),
             'JUnit test count/identity mismatch')
@@ -386,7 +561,7 @@ def reconcile_plan(data, plan, raw):
         for field in ('integration_id', 'mode', 'selector', 'requested'):
             require(case[field] == trusted[field], f'trusted case {field} mismatch')
         require(case['runtime']['version'].split('.')[:2] == trusted['runtime'].split('.')[:2], 'trusted runtime mismatch')
-        if case['status'] in ('passed', 'quarantined'):
+        if case['status'] in ('passed', 'quarantined', 'flaky'):
             require(trusted['resolution'] is not None and not trusted['problems'], 'pass without trusted resolution')
             require(case['resolved'] == trusted['resolution']['resolved'], 'trusted resolved tuple mismatch')
         expected = [{**d, 'resolved_version': next((r['version'] for r in case['resolved'] if
@@ -432,7 +607,19 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
             require(target is not None, 'unregistered integration')
             require(case['language'] == target['language'] and case['qualification'] == target['qualification']['status'],
                     'qualification/language mismatch')
-        successful = case['status'] in ['passed', 'quarantined']
+        successful = case['status'] in ['passed', 'quarantined', 'flaky']
+        normalize = canonicalize_name if case['language'] == 'python' else lambda name: name
+        for field in ('requested', 'resolved'):
+            names = [normalize(r['name']) for r in case[field]]
+            require(len(names) == len(set(names)), 'duplicate distribution identity across roles')
+            if target:
+                roles = {normalize(target['distribution']): 'instrumentation'}
+                roles.update({normalize(t['distribution']): 'core' for t in registry['integrations']
+                              if t['language'] == target['language'] and t['role'] == 'core'})
+                roles.update({normalize(u['name']): 'upstream' if u['role'] == 'primary' else 'companion'
+                              for u in target['upstream']})
+                require(all(roles.get(normalize(r['name'])) == r['role'] for r in case[field]),
+                        'registered distribution role mismatch')
         resolved = {(canonicalize_name(r['name']) if case['language'] == 'python' else r['name'], r['role']): r['version'] for r in case['resolved']}
         require(len(resolved) == len(case['resolved']), 'duplicate resolved distribution')
         if successful:
@@ -471,12 +658,15 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
                         if case['selector'] == 'floor':
                             require(version == upstream['exact_floor'], 'selected version is not the exact registered floor')
                 verdict = judge_tests(tests, target, case['runtime'], case['resolved'])
-                require(verdict == case['status'], 'false pass/quarantine status')
+                require(verdict == ('passed' if case['status'] == 'flaky' else case['status']), 'false pass/quarantine/flaky status')
             else:
                 require(case['status'] != 'passed' or all(t['outcome'] == 'passed' for t in tests), 'pass with failures')
-            require(case['status'] != 'passed' or case['failure'] is None, 'pass with a failure')
-        if successful or contract['junit_paths']:
-            reconcile_artifacts(case, artifact_root)
+            require(case['status'] not in ('passed', 'flaky') or case['failure'] is None, 'pass with a failure')
+        if successful or contract['junit_paths'] or case['dependency_lock']:
+            resolution = None
+            if expected_plan is not None:
+                resolution = next(c['resolution'] for c in expected_plan['cases'] if c['case_id'] == case['case_id'])
+            reconcile_artifacts(case, artifact_root, resolution, run['plan_sha256'])
         discovery_names = [canonicalize_name(d['name']) if case['language'] == 'python' else d['name'] for d in case['discovery']]
         require(len(set(discovery_names)) == len(discovery_names), 'duplicate discovery package')
         if successful and case['selector'] == 'latest_eligible':
@@ -495,16 +685,35 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
                 if case['selector'] == 'latest_eligible':
                     require(discovery['absolute_latest'] is not None and discovery['latest_eligible'] is not None and
                             discovery['requested_version'] == discovery['latest_eligible'], 'false latest-eligible claim')
+                    if case['language'] == 'python':
+                        version = Version(discovery['latest_eligible'])
+                        require(not version.is_prerelease and not version.is_devrelease, 'stable latest-eligible cannot select prerelease/dev')
+        if successful and case['selector'] == 'prerelease':
+            require(target and 'prerelease' in target['canary']['selectors'], 'exploratory prerelease cell not registered')
     require(set(groups) == planned, 'missing planned evidence')
     for attempts in groups.values():
         attempts.sort(key=lambda c: c['attempt'])
         require(attempts[0]['attempt'] == 1, 'missing first attempt')
+        require(attempts[0]['status'] != 'flaky', 'flaky requires a prior retained failure')
         if len(attempts) > 1:
             first, second = attempts
-            for field in ['source_sha', 'integration_id', 'mode', 'selector', 'runtime', 'requested', 'resolved', 'dependency_lock']:
+            for field in ['source_sha', 'integration_id', 'mode', 'selector', 'runtime', 'requested']:
                 require(first[field] == second[field], f'retry changed immutable {field}')
-            require(first['contract']['suite_sha256'] == second['contract']['suite_sha256'], 'retry changed suite')
-            require(not (first['status'] in ['failed', 'blocked'] and second['status'] == 'passed'), 'fail-then-pass must be flaky')
+            # Missing observations may populate after an install/runner failure;
+            # every actually observed distribution and lock remains immutable.
+            later = {(canonicalize_name(r['name']), r['role']): r for r in second['resolved']}
+            require(all(later.get((canonicalize_name(r['name']), r['role'])) == r for r in first['resolved']),
+                    'retry changed immutable resolved observation')
+            if first['dependency_lock'] is not None:
+                require(first['dependency_lock'] == second['dependency_lock'], 'retry changed immutable dependency_lock')
+            unknown_suite = (not first['contract']['tests'] and not first['contract']['junit_paths'] and
+                             first['contract']['suite_sha256'] == hashlib.sha256(b'').hexdigest())
+            require(unknown_suite or first['contract']['suite_sha256'] == second['contract']['suite_sha256'], 'retry changed suite')
+            if second['status'] == 'flaky':
+                require(first['status'] in ('failed', 'blocked') and first['failure'] is not None,
+                        'flaky requires a retained genuine failure')
+            require(not (first['status'] in ['failed', 'blocked'] and second['status'] in ('passed', 'quarantined')),
+                    'fail-then-pass must be flaky')
     return data
 
 
@@ -590,6 +799,68 @@ def invocation_tests(paths, exits):
     return tests
 
 
+# Trusted workflow-only runner. Results ingestion never calls this function and
+# never interprets an artifact's command/reproduction arrays as executable argv.
+_NETWORK_BOOTSTRAP = r'''
+import json, os, pathlib, socket, subprocess, sys
+assert sys.platform == "linux"
+links = json.loads(subprocess.check_output(["ip", "-j", "link", "show"]))
+assert [link["ifname"] for link in links] == ["lo"]
+assert len(pathlib.Path("/proc/net/route").read_text().splitlines()) == 1
+status = pathlib.Path("/proc/self/status").read_text()
+assert "CapEff:\t0000000000000000" in status and "NoNewPrivs:\t1" in status
+code = """import socket
+for family, host in ((socket.AF_INET, '1.1.1.1'), (socket.AF_INET6, '2606:4700:4700::1111')):
+    for method in ('connect', 'connect_ex'):
+        with socket.socket(family, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.5)
+            try:
+                result = getattr(connection, method)((host, 443))
+            except OSError:
+                pass
+            else:
+                assert method == 'connect_ex' and result != 0, 'External connection succeeded'
+"""
+exec(code)
+subprocess.run([sys.executable, "-I", "-S", "-c", code], check=True)
+with socket.socket() as server:
+    server.bind(("127.0.0.1", 0)); server.listen(1); server.settimeout(5)
+    child = subprocess.Popen([sys.executable, "-I", "-S", "-c",
+        "import socket,sys; s=socket.create_connection(('127.0.0.1',int(sys.argv[1]))); s.sendall(b'loopback-ok'); s.close()",
+        str(server.getsockname()[1])])
+    connection, _ = server.accept()
+    with connection:
+        assert connection.recv(64) == b"loopback-ok"
+    assert child.wait(timeout=5) == 0
+pathlib.Path(sys.argv[1]).write_text(json.dumps(dict(network_isolation="passed", loopback="passed",
+    ipv4="denied", ipv6="denied", child_external="denied", child_loopback="passed", connect_ex="denied")))
+os.chdir(sys.argv[2])
+os.execvpe(sys.argv[3], sys.argv[3:], os.environ)
+'''
+
+
+def sandbox_run(command, cwd, output):
+    require(sys.platform == 'linux', 'Linux network namespace required; no host fallback')
+    require(command, 'missing trusted workflow command')
+    output = Path(output).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Only root sets up the empty namespace. Test/dependency code runs as the
+    # original unprivileged UID, no supplementary groups, capabilities or sudo.
+    script = r'''
+set -euo pipefail
+ip link set dev lo up
+uid=$1; gid=$2; python=$3; library=$4; bootstrap=$5; shift 5
+exec setpriv --reuid="$uid" --regid="$gid" --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+  env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/tmp PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 LD_LIBRARY_PATH="$library" \
+  FI_BASE_URL=http://127.0.0.1:9 FI_GRPC_URL=http://127.0.0.1:9 \
+  "$python" -I -S -c "$bootstrap" "$@"
+'''
+    return subprocess.run(['sudo', '--non-interactive', 'unshare', '--net', '--', '/bin/bash', '-c', script,
+        'compat-sandbox', str(os.getuid()), str(os.getgid()), sys.executable, os.environ.get('LD_LIBRARY_PATH', ''),
+        _NETWORK_BOOTSTRAP, str(output), str(Path(cwd).resolve()), *command], check=False).returncode
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -607,8 +878,15 @@ def main(argv=None):
                                  help='One status per --junit, in the same order; never an aggregated maximum')
         if name == 'fixture-gate':
             command.add_argument('kind', choices=['scoped', 'execution'])
+    sandbox = commands.add_parser('sandbox', help='Trusted workflow argv only, never artifact commands')
+    sandbox.add_argument('--cwd', required=True, type=Path)
+    sandbox.add_argument('--probe-output', required=True, type=Path)
+    sandbox.add_argument('argv', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     try:
+        if args.command == 'sandbox':
+            command = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
+            return sandbox_run(command, args.cwd, args.probe_output)
         if args.command == 'fixture-gate':
             fixture = json.loads((args.root / '.github/compat/fixtures/validation.json').read_text())
             target = fixture['target']

@@ -63,7 +63,7 @@ resolve its core/graph pair together, including historical constraints.
 ## Scoped exceptions
 
 The canonical exception list is `integrations[].exceptions`. Each entry has
-exact repository-relative test node IDs (including parameter suffixes),
+exactly one repository-relative test node ID (including its parameter suffix),
 upstream/runtime constraints, expected outcome and SHA-256 failure signature,
 a real GitHub issue, human owner, added/expiry dates and exit criteria. Maximum
 lifetime is 14 days. No wildcard IDs, fake issues or indefinite expiry.
@@ -81,12 +81,26 @@ traceback source line (which may contain an earlier unrelated assertion). All
 producers must use `validate.failure_signature` / `validate.junit_tests` so that
 quarantine matching and downstream evidence reconciliation use the same digest.
 Existing fingerprints require review when the diagnostic algorithm changes.
+A signature includes its exact node ID. Multiple parameterized nodes therefore
+need separate exception IDs and signatures, not one signature shared across nodes.
+The array-shaped `test_ids` field is retained for ABI compatibility, with length 1.
 
 Each Python invocation writes `<report>.xml.exit-code`. The verdict reconciles
 each status against its own JUnit **before** considering any exact exceptions.
 An all-passing suite with a coverage/runner exit of 1 remains red even if another
 suite has an exactly quarantined test failure. A maximum aggregate exit is only
 a display/checksum, never execution evidence.
+
+Canonical canary artifacts additionally preserve
+`invocations/<case_id>-attempt-<attempt>.json` (schema_version 1, case_id,
+attempt, source_sha, plan_sha256, collection, contract). Each invocation is null
+if never started; otherwise it records exit_code (integer or null), timed_out,
+started_at/completed_at, and nullable evidence_path/evidence_sha256. Every
+successful/flaky/quarantined case requires a successful full collection (exit 0,
+no deselection/errors) and independently reconciled contract invocation. A timeout,
+unknown exit, runner/session/coverage failure or absent manifest cannot attest
+success. Failed/blocked attempts keep their actual statuses. The collector copies
+these sidecars and the adjacent JUnit exit-code files into the aggregate.
 
 ## Results ABI
 
@@ -119,6 +133,26 @@ complete-suite coverage is checked at the function level. The caller supplies th
 trusted immutable source checkout and plan bytes; downloaded argv is never run.
 A passing JSON object without an artifact root is not execution evidence.
 
+Lock-byte hashes alone do not establish an installed environment. Qualified
+Python lock adapters are `pip-freeze` (complete `name==version` inventory) and
+`pip-report` version 1. Reject malformed, empty, duplicate and contradictory
+identities. Every observed instrumentation/core/upstream/companion version must
+match the installed snapshot; a strict plan-backed replay also reconciles the
+**complete** snapshot with the original resolution report and hash-pinned
+requirements, whose exact bytes/digests are bound by the plan. These files remain
+at their original `locks/` paths or beneath
+`evidence/<case_id>/attempt-<attempt>/locks/` in the aggregate. Other lock adapters
+remain unqualified, not silently treated as equivalent to Python. Registry roles
+are bound to normalized distribution names; roles cannot be swapped and the same
+identity cannot occur under multiple roles.
+
+`flaky` requires all the same successful execution validation as `passed`, plus a
+retained prior genuine failed/blocked attempt with failure evidence. It never
+means empty, skipped, partial or still failing. Previously unobserved installation
+fields (empty resolved tuple, null lock, empty pre-execution suite) may populate on
+retry; already observed identities, versions, lock and suite cannot change. The
+plan and requested selection remain immutable, and both attempts remain visible.
+
 The `results` CLI requires the original `compat-plan.json` beside `results.json`
 (or `--plan PATH`) and a `--root` checkout at the tested source SHA. Plan identity,
 requested tuples, resolved tuples, discovery and runtime are reconciled before a
@@ -131,7 +165,9 @@ Python requests are checked using PEP 440/508. Native non-Python requests are
 accepted only as exact pins, never reinterpreted with Python range semantics.
 Latest-eligible evidence requires the complete upstream/companion discovery set,
 non-yanked releases, a publication or first-seen timestamp at/before the immutable
-72-hour cutoff, and matching selected/resolved/latest-eligible versions. Existing
+72-hour cutoff, and matching selected/resolved/latest-eligible versions. Stable
+latest-eligible rejects PEP 440 prerelease/dev versions even when aged; these may
+run only in explicitly registered exploratory `prerelease` cells. Existing
 locked regression jobs do not claim floating-latest coverage.
 
 Initial counts/statuses are historical fixture data only. Production tests check
@@ -151,6 +187,16 @@ network namespace with only loopback brought up. Namespace setup failure is a
 failure, not permission to use the host network. Probe external denial and
 loopback availability before testing. Exporter URLs at `127.0.0.1:9` alone are
 not network isolation.
+
+Ordinary Python CI's registered offline contracts and the exact-SDK contract jobs
+invoke `validate.py sandbox` with workflow-owned argv. The trusted runner creates
+an empty Linux network namespace, brings up loopback, drops supplementary groups,
+capabilities and privilege escalation, and proves external IPv4/IPv6/connect_ex
+and descendant denial plus child loopback success before executing tests. Failure
+to set up/probe the namespace fails the invocation; no host-network fallback.
+This baseline runner is not a replacement for PR2's stronger clean-consumer,
+read-only filesystem sandbox. Artifact command/reproduction arrays remain data;
+the results CLI never sends them to either runner.
 
 `Compatibility canary` supports PR self-tests, branch `workflow_dispatch`, and
 one default-branch scheduler; it explicitly records the checked-out dev SHA.
