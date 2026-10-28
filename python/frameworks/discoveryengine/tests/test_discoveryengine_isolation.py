@@ -13,8 +13,10 @@ from _discoveryengine_support import (
     ANSWER_REFERENCES,
     FAIL_DENIED,
     METADATA_TOKEN,
+    NATIVE_ERROR_POLICY,
     SEARCH_RESULTS,
     FakeDiscoveryEngine,
+    assert_hidden_query_error,
     answer_client,
     answer_request,
     async_answer_client,
@@ -95,10 +97,10 @@ def test_a_query_that_cannot_be_read_keeps_no_server_text(fake, monkeypatch):
             search_client(fake).search(request=search_request(FAIL_DENIED))
 
     span = traced.one()
-    assert span.status.description == "PermissionDenied: " + REDACTED_VALUE
-    exception = [item for item in span.events if item.name == "exception"][0].attributes
-    assert exception["exception.message"] == REDACTED_VALUE
-    assert "exception.stacktrace" not in exception
+    assert_hidden_query_error(span, "google.api_core.exceptions.PermissionDenied")
+    if not NATIVE_ERROR_POLICY:
+        assert event(span, "exception")["exception.message"] == REDACTED_VALUE
+    assert FAIL_DENIED not in span.to_json()
     assert attrs(span)["discoveryengine.error.status"] == "PERMISSION_DENIED"
 
 

@@ -6,12 +6,15 @@ import asyncio
 
 import pytest
 from google.api_core import exceptions as core_exceptions
+from opentelemetry.trace import StatusCode
 
 from _discoveryengine_support import (
     FAIL_DENIED,
     FAIL_DETAILS,
+    NATIVE_ERROR_POLICY,
     SERVING_CONFIG,
     FakeDiscoveryEngine,
+    assert_hidden_query_error,
     answer_client,
     answer_request,
     async_search_client,
@@ -31,6 +34,13 @@ DENIED_QUERY = FAIL_DENIED + " ask about " + EMAIL
 # status detail the fake adds quotes it escaped (protobuf text format).
 QUOTED_QUERY = FAIL_DETAILS + " Zelda's \"quoted\" a\\b caf\xe9"
 QUOTED_DETAIL = r'Zelda\'s \"quoted\" a\\b caf' + "\xe9"
+OTHER_CONTENT_HIDE_FLAGS = (
+    "hide_outputs",
+    "hide_input_messages",
+    "hide_output_messages",
+    "hide_input_text",
+    "hide_output_text",
+)
 
 
 @pytest.fixture()
@@ -41,8 +51,9 @@ def fake():
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for name in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_PII_REDACTION"):
-        monkeypatch.delenv(name, raising=False)
+    flags = ("hide_inputs", "hide_error_details", "pii_redaction", *OTHER_CONTENT_HIDE_FLAGS)
+    for flag in flags:
+        monkeypatch.delenv("FI_" + flag.upper(), raising=False)
 
 
 def _error_texts(span):
@@ -88,11 +99,10 @@ def test_hide_inputs_removes_the_query_everywhere_including_error_text(fake, mon
     values = attrs(span)
     assert values["input.value"] == REDACTED_VALUE
     assert "gen_ai.retrieval.query" not in values
+    assert_hidden_query_error(span, "google.api_core.exceptions.PermissionDenied")
     for text in _error_texts(span):
-        assert text
         assert DENIED_QUERY not in text
         assert EMAIL not in text
-    assert REDACTED_VALUE in span.status.description
     assert DENIED_QUERY not in span.to_json()
 
 
@@ -118,11 +128,10 @@ def test_the_server_echo_of_the_query_includes_an_escaped_copy(fake):
 def test_escaped_copies_of_the_query_are_removed_from_error_text(fake, monkeypatch, source):
     options = _hidden_options(monkeypatch, source)
     span = _quoted(fake, options)
+    assert_hidden_query_error(span, "google.api_core.exceptions.InvalidArgument")
     for text in _error_texts(span):
-        assert text
         assert "Zelda" not in text
         assert "quoted" not in text
-        assert REDACTED_VALUE in text
     assert "Zelda" not in span.to_json()
 
 
@@ -149,10 +158,9 @@ def test_octal_escaped_copies_of_the_query_are_removed_from_error_text(fake, mon
             search_client(fake).search(request=search_request(CONTROL_QUERY))
     assert CONTROL_DETAIL in str(raised.value)
     span = traced.one()
+    assert_hidden_query_error(span, "google.api_core.exceptions.InvalidArgument")
     for text in _error_texts(span):
-        assert text
         assert "Zelda" not in text and "control" not in text, text
-        assert REDACTED_VALUE in text
     assert "Zelda" not in span.to_json()
 
 
@@ -197,6 +205,35 @@ def test_hide_outputs_changes_nothing_because_no_output_text_is_recorded(fake):
         answer_client(fake).answer_query(request=answer_request("same"))
 
     assert attrs(hidden.one()) == attrs(plain.one())
+
+
+@pytest.mark.parametrize("source", ["config", "env"])
+@pytest.mark.parametrize("flag", OTHER_CONTENT_HIDE_FLAGS)
+def test_other_content_hide_flags_follow_core_error_policy(fake, monkeypatch, flag, source):
+    # These flags do not hide a retrieval query, but native core derives error
+    # privacy from all content-hide flags, not only hide_inputs. No opt-out.
+    plain = _denied(fake, {})
+    options = {}
+    if source == "config":
+        options["config"] = _config(**{flag: True})
+    else:
+        monkeypatch.setenv("FI_" + flag.upper(), "true")
+    span = _denied(fake, options)
+    assert attrs(span)["input.value"] == DENIED_QUERY
+    assert attrs(span)["discoveryengine.error.code"] == 403
+    assert attrs(span)["discoveryengine.error.status"] == "PERMISSION_DENIED"
+    assert span.status.status_code is StatusCode.ERROR
+    assert [item.name for item in span.events] == ["exception"]
+    if NATIVE_ERROR_POLICY:
+        assert span.status.description is None
+        assert event(span, "exception") == {
+            "exception.type": "google.api_core.exceptions.PermissionDenied"
+        }
+    else:
+        assert span.status.description == plain.status.description
+        assert event(span, "exception") == event(plain, "exception")
+        for text in _error_texts(span):
+            assert DENIED_QUERY in text
 
 
 @pytest.mark.parametrize("source", ["config", "env"])
@@ -269,6 +306,7 @@ def test_async_calls_honour_the_same_settings(fake):
 
     span = traced.one()
     assert attrs(span)["input.value"] == REDACTED_VALUE
+    assert_hidden_query_error(span, "google.api_core.exceptions.PermissionDenied")
     assert DENIED_QUERY not in span.to_json()
 
 

@@ -19,6 +19,7 @@ from _discoveryengine_support import (
     FAIL_UNSEEN,
     METADATA_TOKEN,
     MINTED_TOKEN,
+    NATIVE_ERROR_POLICY,
     UNSEEN_ACCESS_TOKEN,
     UNSEEN_API_KEY,
     UNSEEN_REFRESH_TOKEN,
@@ -273,7 +274,11 @@ def test_retry_exhaustion_is_one_error_span_with_the_last_status(fake):
     # RetryError has no status of its own; the last attempt's is recorded.
     assert values["discoveryengine.error.status"] == "UNAVAILABLE"
     assert values["discoveryengine.error.code"] == 503
-    assert span.status.description.startswith("RetryError: Timeout of 0.3s exceeded")
+    exception = event(span, "exception")
+    assert exception["exception.type"] == "google.api_core.exceptions.RetryError"
+    assert exception["exception.message"].startswith("Timeout of 0.3s exceeded")
+    prefix = "" if NATIVE_ERROR_POLICY else "RetryError: "
+    assert span.status.description == prefix + exception["exception.message"]
     assert [item.name for item in span.events] == ["exception"]
 
 
