@@ -574,6 +574,101 @@ class ResultTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn('failure evidence', result.stderr)
 
+    def test_strict_cli_requires_failed_execution_provenance_before_flaky_recovery(self):
+        for kind in ('automation', 'infrastructure'):
+            for missing in (('contract',), ('collection',), ('collection', 'contract')):
+                data, _ = self.retained_retry_fixture()
+                first = data['cases'][0]
+                first['failure'].update(kind=kind, test_ids=[])
+                path = self.artifacts / f'invocations/{first["case_id"]}-attempt-1.json'
+                manifest = json.loads(path.read_text())
+                for name in missing:
+                    manifest[name] = None
+                path.write_text(json.dumps(manifest))
+                result = self.strict_cli(data)
+                with self.subTest(kind=kind, missing=missing):
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn('invocation', result.stderr)
+
+    def test_failed_and_blocked_execution_cannot_drop_digests_or_stage_consistency(self):
+        for status in ('failed', 'blocked'):
+            for mutation in ('contract_evidence', 'collection_evidence', 'collection_exit',
+                             'collection_timeout', 'collection_errors', 'collection_empty',
+                             'collection_duplicate', 'collection_missing_node', 'contract_early'):
+                data, _ = self.retained_retry_fixture()
+                self.set_first_failure_evidence(data)
+                first = data['cases'][0]
+                first['status'] = status
+                path = self.artifacts / f'invocations/{first["case_id"]}-attempt-1.json'
+                manifest = json.loads(path.read_text())
+                if mutation.endswith('_evidence'):
+                    manifest[mutation.split('_')[0]].update(evidence_path=None, evidence_sha256=None)
+                if mutation == 'collection_exit': manifest['collection']['exit_code'] = 1
+                if mutation == 'collection_timeout': manifest['collection']['timed_out'] = True
+                if mutation == 'contract_early': manifest['contract']['started_at'] = '2026-10-28T08:59:59Z'
+                if mutation in ('collection_errors', 'collection_empty', 'collection_duplicate', 'collection_missing_node'):
+                    evidence = self.artifacts / manifest['collection']['evidence_path']
+                    collected = json.loads(evidence.read_text())
+                    if mutation == 'collection_errors': collected['errors'] = ['ImportError: broken collection']
+                    if mutation == 'collection_empty': collected['nodes'] = []
+                    if mutation == 'collection_duplicate': collected['nodes'] *= 2
+                    if mutation == 'collection_missing_node': collected['nodes'].pop(0)
+                    evidence.write_text(json.dumps(collected))
+                    manifest['collection']['evidence_sha256'] = hashlib.sha256(evidence.read_bytes()).hexdigest()
+                path.write_text(json.dumps(manifest))
+                result = self.strict_cli(data)
+                with self.subTest(status=status, mutation=mutation):
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn('invocation', result.stderr)
+
+    def test_failed_execution_claims_cannot_hide_by_dropping_junit_and_lock(self):
+        for claim in ('tests', 'scenarios'):
+            data, registry = self.retained_retry_fixture()
+            first = data['cases'][0]
+            first.update(dependency_lock=None, failure={**first['failure'], 'kind': 'automation', 'test_ids': []})
+            first['contract']['junit_paths'] = []
+            if claim == 'scenarios':
+                first['contract'].update(tests=[], collected=0, executed=0, unexpected_skips=0)
+            path = self.artifacts / f'invocations/{first["case_id"]}-attempt-1.json'
+            manifest = json.loads(path.read_text())
+            manifest.update(collection=None, contract=None)
+            path.write_text(json.dumps(manifest))
+            with self.subTest(claim=claim), self.assertRaisesRegex(ValueError, 'invocation'):
+                self.validate(data, registry)
+
+    def test_real_failed_execution_without_retry_still_requires_invocation_records(self):
+        data, registry = self.retained_retry_fixture()
+        self.set_first_failure_evidence(data)
+        data['cases'].pop()
+        self.assertEqual(self.strict_cli(data).returncode, 0)
+        first = data['cases'][0]
+        path = self.artifacts / f'invocations/{first["case_id"]}-attempt-1.json'
+        manifest = json.loads(path.read_text())
+        manifest['contract'] = None
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, 'invocation'):
+            self.validate(data, registry)
+
+    def test_genuine_failed_collection_and_missing_junit_runner_remain_valid(self):
+        for stage in ('collection', 'contract'):
+            data, registry = self.retained_retry_fixture()
+            first = data['cases'][0]
+            first['failure'].update(kind=stage, test_ids=[])
+            path = self.artifacts / f'invocations/{first["case_id"]}-attempt-1.json'
+            manifest = json.loads(path.read_text())
+            if stage == 'collection':
+                manifest['collection']['exit_code'] = 2
+                manifest['contract'] = None
+                # A collection crash may genuinely leave no JSON report.
+                manifest['collection'].update(evidence_path=None, evidence_sha256=None)
+            else:
+                manifest['contract'].update(exit_code=3, evidence_path=None, evidence_sha256=None)
+            path.write_text(json.dumps(manifest))
+            first['contract'].update(tests=[], junit_paths=[], scenarios=[], collected=0, executed=0, unexpected_skips=0)
+            with self.subTest(stage=stage):
+                self.validate(data, registry)
+                self.assertEqual(self.strict_cli(data).returncode, 0)
+
     def test_strict_cli_rejects_fabricated_mismatch_without_installed_lock(self):
         data, _ = self.retained_retry_fixture()
         first = data['cases'][0]
@@ -617,6 +712,21 @@ class ResultTests(unittest.TestCase):
         first['failure']['test_ids'] = [first['contract']['tests'][0]['test_id']]
         with self.assertRaisesRegex(ValueError, 'failure evidence'):
             self.validate(data, registry)
+
+    def test_failed_timeout_and_signal_invocations_preserve_parent_shell_status(self):
+        for code, timed_out, shell_code in ((None, True, 124), (-9, False, 137)):
+            data, _ = self.retained_retry_fixture()
+            first = data['cases'][0]
+            first['failure']['test_ids'] = []
+            (self.artifacts / 'junit/tests.xml.exit-code').write_text(str(shell_code) + '\n')
+            path = self.artifacts / f'invocations/{first["case_id"]}-attempt-1.json'
+            manifest = json.loads(path.read_text())
+            manifest['contract'].update(exit_code=code, timed_out=timed_out)
+            path.write_text(json.dumps(manifest))
+            with self.subTest(code=code, timed_out=timed_out):
+                self.assertEqual(self.strict_cli(data).returncode, 0)
+            (self.artifacts / 'junit/tests.xml.exit-code').write_text('0\n')
+            self.assertEqual(self.strict_cli(data).returncode, 1)
 
     def retry_fixture(self):
         data, registry = result_fixture(self.artifacts)

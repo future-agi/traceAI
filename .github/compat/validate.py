@@ -473,18 +473,26 @@ def reconcile_invocations(case, artifact_root, plan_sha256):
     require(manifest.get('schema_version') == 1 and manifest.get('case_id') == case['case_id'] and
             manifest.get('attempt') == case['attempt'] and manifest.get('source_sha') == case['source_sha'] and
             manifest.get('plan_sha256') == plan_sha256, 'invocation identity mismatch')
+    retained = case['contract']
+    execution_observed = bool(retained['junit_paths'] or retained['tests'] or retained['scenarios'])
+    # Status is a conclusion, not permission to discard provenance. A retained
+    # execution (including a failed one) requires both authenticated stages.
+    execution_started = execution_observed or manifest.get('contract') is not None
+    collected = None
     for name in ('collection', 'contract'):
         record = manifest.get(name)
+        required = successful or execution_observed or (name == 'collection' and execution_started)
         if record is None:
-            require(not successful, 'missing successful invocation: ' + name)
+            require(not required, 'missing invocation record for retained execution: ' + name)
             continue
+        require(isinstance(record, dict), 'invalid invocation record')
         code = record.get('exit_code')
         require((code is None or type(code) is int) and type(record.get('timed_out')) is bool,
                 'invalid invocation status')
         require(timestamp(record['completed_at']) >= timestamp(record['started_at']), 'invalid invocation chronology')
-        if successful:
+        if successful or (name == 'collection' and execution_started):
             require(not record['timed_out'] and type(code) is int and code in ((0,) if name == 'collection' else (0, 1)),
-                    'runner/collection invocation failure cannot attest success')
+                    'runner/collection invocation failure cannot attest execution')
         relative, digest = record.get('evidence_path'), record.get('evidence_sha256')
         require((relative is None) == (digest is None), 'incomplete invocation evidence identity')
         if relative is not None:
@@ -492,16 +500,30 @@ def reconcile_invocations(case, artifact_root, plan_sha256):
             require(evidence.is_file() and hashlib.sha256(evidence.read_bytes()).hexdigest() == digest,
                     'invocation ' + ('JUnit' if name == 'contract' else 'collection') + ' evidence digest mismatch')
             if name == 'contract':
-                require(case['contract']['junit_paths'] == [relative], 'invocation/JUnit path mismatch')
+                require(retained['junit_paths'] == [relative], 'invocation/JUnit path mismatch')
                 status_path = safe_path(artifact_root, relative + '.exit-code')
-                require(status_path.is_file() and status_path.read_text().strip() == str(code), 'invocation exit-code disagreement')
-            elif successful:
+                shell_code = 124 if record['timed_out'] else (128 - code if code is not None and code < 0 else code)
+                require(shell_code is not None and status_path.is_file() and
+                        status_path.read_text().strip() == str(shell_code), 'invocation exit-code disagreement')
+            else:
                 collected = json.loads(evidence.read_text())
-                require(collected.get('deselected') == [] and not collected.get('errors') and
-                        collected.get('nodes') == sorted(t['test_id'] for t in case['contract']['tests']),
-                        'invocation collection/JUnit completeness mismatch')
-        elif successful:
-            raise ValueError('missing successful invocation evidence')
+                require(isinstance(collected, dict), 'invalid invocation collection evidence')
+        else:
+            require(not (successful or execution_observed or (name == 'collection' and execution_started)),
+                    'missing invocation evidence for retained execution: ' + name)
+    if execution_started:
+        collection, execution = manifest['collection'], manifest['contract']
+        nodes = collected.get('nodes') if collected is not None else None
+        require(isinstance(nodes, list) and nodes and all(isinstance(node, str) for node in nodes) and
+                len(nodes) == len(set(nodes)) and collected.get('deselected') == [] and not collected.get('errors'),
+                'invocation contract started without successful full collection')
+        require(timestamp(execution['started_at']) >= timestamp(collection['completed_at']),
+                'invocation contract started before collection completed')
+        observed = sorted(t['test_id'] for t in retained['tests'])
+        # A genuinely crashed contract may execute only part of the collected
+        # suite, but cannot execute nodes absent from its authenticated collection.
+        require(set(observed) <= set(nodes) and (not successful or observed == sorted(nodes)),
+                'invocation collection/JUnit completeness mismatch')
     return manifest
 
 
@@ -741,7 +763,7 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
             else:
                 require(case['status'] != 'passed' or all(t['outcome'] == 'passed' for t in tests), 'pass with failures')
             require(case['status'] not in ('passed', 'flaky') or case['failure'] is None, 'pass with a failure')
-        if successful or contract['junit_paths'] or case['dependency_lock'] or (case['failure'] is not None and case['failure']['kind'] in ('contract', 'requested_resolved_mismatch')):
+        if successful or tests or contract['scenarios'] or contract['junit_paths'] or case['dependency_lock'] or (case['failure'] is not None and case['failure']['kind'] in ('contract', 'requested_resolved_mismatch')):
             resolution = None
             if expected_plan is not None:
                 resolution = next(c['resolution'] for c in expected_plan['cases'] if c['case_id'] == case['case_id'])

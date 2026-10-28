@@ -99,8 +99,16 @@ started_at/completed_at, and nullable evidence_path/evidence_sha256. Every
 successful/flaky/quarantined case requires a successful full collection (exit 0,
 no deselection/errors) and independently reconciled contract invocation. A timeout,
 unknown exit, runner/session/coverage failure or absent manifest cannot attest
-success. Failed/blocked attempts keep their actual statuses. The collector copies
-these sidecars and the adjacent JUnit exit-code files into the aggregate.
+success. Failed/blocked attempts keep their actual statuses. Any retained JUnit,
+test outcomes or exercised scenarios require both invocation records and the
+original collection/JUnit evidence digests, regardless of the result's status.
+A started contract requires an earlier completed, exit-zero, nonempty and unique
+full collection without errors/deselection. Failed partial executions may retain
+a subset of collected nodes, never nodes missing from that collection. A genuine
+collection or runner crash before evidence exists may retain a null report, but
+cannot claim execution observations. Wholly UNKNOWN placeholders remain empty;
+never copy another attempt's evidence to fill absent provenance. The collector
+copies these sidecars and the adjacent JUnit exit-code files into the aggregate.
 
 ## Results ABI
 
