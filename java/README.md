@@ -357,8 +357,8 @@ traceai:
 | Module | Description | Integration |
 |--------|-------------|-------------|
 | `traceai-langchain4j` | LangChain4j instrumentation | `dev.langchain4j:langchain4j` |
-| `traceai-spring-ai` | Spring AI instrumentation | `org.springframework.ai:spring-ai-core` |
-| `traceai-spring-boot-starter` | Spring Boot auto-configuration | Spring Boot 3.x |
+| `traceai-spring-ai` | Spring AI 1.1.x instrumentation | `org.springframework.ai:spring-ai-model` (provided) |
+| `traceai-spring-boot-starter` | Spring Boot auto-configuration | Spring Boot 3.5.x |
 | `traceai-java-semantic-kernel` | Microsoft Semantic Kernel instrumentation | `com.microsoft.semantic-kernel:semantickernel-api` |
 
 ## Configuration

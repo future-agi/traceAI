@@ -63,12 +63,12 @@ public class SpringAIExampleApplication {
                 new Prompt("What is 2 + 2? Answer in one word.")
             );
 
-            System.out.println("Response: " + response.getResult().getOutput().getContent());
+            System.out.println("Response: " + response.getResult().getOutput().getText());
 
             if (response.getMetadata() != null && response.getMetadata().getUsage() != null) {
                 var usage = response.getMetadata().getUsage();
                 System.out.println("Tokens - Prompt: " + usage.getPromptTokens()
-                    + ", Generation: " + usage.getGenerationTokens());
+                    + ", Completion: " + usage.getCompletionTokens());
             }
 
             System.out.println("\nTraces are being exported to TraceAI.");
@@ -94,13 +94,13 @@ class ChatController {
     @GetMapping
     public String chat(@RequestParam String message) {
         var response = chatModel.call(new Prompt(message));
-        return response.getResult().getOutput().getContent();
+        return response.getResult().getOutput().getText();
     }
 
     @PostMapping
     public String chatPost(@RequestBody ChatRequest request) {
         var response = chatModel.call(new Prompt(request.message()));
-        return response.getResult().getOutput().getContent();
+        return response.getResult().getOutput().getText();
     }
 
     record ChatRequest(String message) {}
