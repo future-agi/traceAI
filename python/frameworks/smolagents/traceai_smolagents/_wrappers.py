@@ -1,3 +1,4 @@
+import sys
 from enum import Enum
 from functools import wraps
 from inspect import signature, isgeneratorfunction
@@ -220,10 +221,45 @@ class _StepWrapper:
         }
         if isgeneratorfunction(wrapped):
             def stream():
-                with self._tracer.start_as_current_span(span_name, attributes=attributes) as span:
-                    result = yield from wrapped(*args, **kwargs)
-                    finish(span, result)
-                    return result
+                span = self._tracer.start_span(span_name, attributes=attributes)
+                step_context = trace_api.set_span_in_context(span)
+                try:
+                    iterator = wrapped(*args, **kwargs)
+                    advance, advance_args = iterator.__next__, ()
+                    while True:
+                        # A generator suspends at yield. Make the step current
+                        # only inside the producer, never in its consumer.
+                        token = context_api.attach(step_context)
+                        try:
+                            item = advance(*advance_args)
+                        except StopIteration as stopped:
+                            finish(span, stopped.value)
+                            return stopped.value
+                        finally:
+                            context_api.detach(token)
+
+                        try:
+                            value = yield item
+                        except GeneratorExit:
+                            token = context_api.attach(step_context)
+                            try:
+                                iterator.close()
+                            finally:
+                                context_api.detach(token)
+                            raise
+                        except BaseException:
+                            advance, advance_args = iterator.throw, sys.exc_info()
+                        else:
+                            advance, advance_args = iterator.send, (value,)
+                except GeneratorExit:
+                    span.set_status(trace_api.StatusCode.OK)
+                    raise
+                except BaseException as exc:
+                    span.record_exception(exc)
+                    span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exc)))
+                    raise
+                finally:
+                    span.end()
             return stream()
         with self._tracer.start_as_current_span(span_name, attributes=attributes) as span:
             result = wrapped(*args, **kwargs)
