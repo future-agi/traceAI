@@ -165,6 +165,7 @@ Package names and links refer to the source in this repository.
 | [`traceAI-cohere`](../python/frameworks/cohere/) | Cohere |
 | [`traceAI-deepseek`](../python/frameworks/deepseek/) | DeepSeek |
 | [`traceAI-fireworks`](../python/frameworks/fireworks/) | Fireworks AI |
+| [`traceAI-google-genai-live`](../python/frameworks/google-genai-live/) | Gemini Live |
 | [`traceAI-google-genai`](../python/frameworks/google-genai/) | Google Gen AI |
 | [`traceAI-vertexai`](../python/frameworks/vertexai/) | Google Vertex AI |
 | [`traceAI-groq`](../python/frameworks/groq/) | Groq |

@@ -239,6 +239,7 @@ Catalog links point to the integration source and setup guidance in this reposit
 | [`traceAI-cohere`](python/frameworks/cohere/) | Cohere |
 | [`traceAI-deepseek`](python/frameworks/deepseek/) | DeepSeek |
 | [`traceAI-fireworks`](python/frameworks/fireworks/) | Fireworks AI |
+| [`traceAI-google-genai-live`](python/frameworks/google-genai-live/) | Gemini Live |
 | [`traceAI-google-genai`](python/frameworks/google-genai/) | Google Gen AI |
 | [`traceAI-vertexai`](python/frameworks/vertexai/) | Google Vertex AI |
 | [`traceAI-groq`](python/frameworks/groq/) | Groq |
@@ -350,6 +351,7 @@ Catalog links point to the integration source and setup guidance in this reposit
 | [`@traceai/strands`](typescript/packages/traceai_strands/) | AWS Strands Agents |
 | [`@traceai/claude-agent-sdk`](typescript/packages/traceai_claude_agent_sdk/) | Claude Agent SDK |
 | [`@traceai/codex-sdk`](typescript/packages/traceai_codex_sdk/) | Codex SDK |
+| [`@traceai/cursor-sdk`](typescript/packages/traceai_cursor_sdk/) | Cursor SDK |
 | [`@traceai/genkit`](typescript/packages/traceai_genkit/) | Firebase Genkit |
 | [`@traceai/fi-instrumentation-google-adk`](typescript/packages/traceai_google_adk/) | Google ADK |
 | [`@traceai/beeai`](typescript/packages/traceai_beeai/) | IBM BeeAI |
@@ -445,6 +447,7 @@ Go integrations use separate modules. Follow each module's README for SDK versio
 | [`github.com/future-agi/traceAI/go/a2a`](go/a2a/) | Agent-to-Agent (A2A) |
 | [`github.com/future-agi/traceAI/go/anthropic`](go/anthropic/) | Anthropic |
 | [`github.com/future-agi/traceAI/go/eino`](go/eino/) | Eino |
+| [`github.com/future-agi/traceAI/go/genai`](go/genai/) | Google Gen AI |
 | [`github.com/future-agi/traceAI/go/openai`](go/openai/) | OpenAI |
 
 ---
@@ -503,7 +506,8 @@ This matrix describes the framework-specific packages in the catalog. The [C# SD
 |  | Cohere | Yes | Yes | Yes |  |
 |  | DeepSeek | Yes | Yes |  |  |
 |  | Fireworks AI | Yes | Yes |  |  |
-|  | Google Gen AI | Yes | Yes | Yes |  |
+|  | Gemini Live | Yes |  |  |  |
+|  | Google Gen AI | Yes | Yes | Yes | Yes |
 |  | Google Vertex AI | Yes | Yes | Yes |  |
 |  | Groq | Yes | Yes |  |  |
 |  | Hugging Face | Yes | Yes |  |  |
@@ -528,6 +532,7 @@ This matrix describes the framework-specific packages in the catalog. The [C# SD
 |  | Claude Agent SDK | Yes | Yes |  |  |
 |  | Codex SDK |  | Yes |  |  |
 |  | CrewAI | Yes |  |  |  |
+|  | Cursor SDK |  | Yes |  |  |
 |  | Eino |  |  |  | Yes |
 |  | ElevenLabs Agents | Yes |  |  |  |
 |  | Firebase Genkit |  | Yes |  |  |
