@@ -3,47 +3,264 @@
   "title": "Frozen compatibility plan",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "source_sha", "workflow_sha", "registry_sha256", "generated_at", "cooldown_hours", "cooldown_cutoff", "cadence", "self_test", "cases"],
+  "required": [
+    "schema_version",
+    "source_sha",
+    "workflow_sha",
+    "registry_sha256",
+    "generated_at",
+    "cooldown_hours",
+    "cooldown_cutoff",
+    "cadence",
+    "self_test",
+    "cases"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
-    "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "workflow_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "registry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "generated_at": {"type": "string", "format": "date-time"},
-    "cooldown_hours": {"const": 72},
-    "cooldown_cutoff": {"type": "string", "format": "date-time"},
-    "cadence": {"enum": ["stable", "weekly"]},
-    "self_test": {"type": "boolean"},
-    "cases": {"type": "array", "minItems": 1, "maxItems": 48, "items": {"$ref": "#/$defs/case"}}
+    "schema_version": {
+      "const": 1
+    },
+    "source_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "workflow_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "registry_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cooldown_hours": {
+      "const": 72
+    },
+    "cooldown_cutoff": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cadence": {
+      "enum": [
+        "stable",
+        "weekly"
+      ]
+    },
+    "self_test": {
+      "type": "boolean"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 48,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
   },
   "$defs": {
     "case": {
-      "type": "object", "additionalProperties": false,
-      "required": ["case_id", "integration_id", "mode", "selector", "runtime", "non_blocking", "requested", "discovery", "problems", "resolution"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "integration_id",
+        "mode",
+        "selector",
+        "runtime",
+        "non_blocking",
+        "requested",
+        "discovery",
+        "problems",
+        "resolution",
+        "runtime_identity"
+      ],
       "properties": {
-        "case_id": {"type": "string", "pattern": "^[a-zA-Z0-9._-]+$"},
-        "integration_id": {"type": "string", "pattern": "^python-[a-z0-9._-]+$"},
-        "mode": {"enum": ["source", "published"]},
-        "selector": {"enum": ["floor", "latest_eligible", "prerelease", "historical"]},
-        "runtime": {"type": "string", "pattern": "^3\\.[0-9]+$"},
-        "non_blocking": {"type": "boolean"},
-        "requested": {"type": "array", "minItems": 3, "items": {"type": "object", "additionalProperties": false, "required": ["name", "role", "requirement", "selected_version"], "properties": {
-          "name": {"type": "string", "minLength": 1}, "role": {"enum": ["upstream", "companion", "instrumentation", "core"]},
-          "requirement": {"type": "string", "minLength": 1}, "selected_version": {"type": ["string", "null"]}
-        }}},
-        "discovery": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["name", "absolute_latest", "latest_eligible", "requested_version", "resolved_version", "published_at", "first_seen_at", "yanked"]}},
-        "problems": {"type": "array", "items": {"type": "string"}},
-        "resolution": {"oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": false,
-          "required": ["resolved", "report", "requirements", "requirements_sha256", "wheelhouse", "report_sha256"],
-          "properties": {
-            "resolved": {"type": "array", "minItems": 3, "items": {"type": "object", "required": ["name", "role", "version", "artifact_sha256"]}},
-            "report": {"$ref": "#/$defs/path"}, "requirements": {"$ref": "#/$defs/path"}, "wheelhouse": {"$ref": "#/$defs/path"},
-            "requirements_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "case_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]+$"
+        },
+        "integration_id": {
+          "type": "string",
+          "pattern": "^python-[a-z0-9._-]+$"
+        },
+        "mode": {
+          "enum": [
+            "source",
+            "published"
+          ]
+        },
+        "selector": {
+          "enum": [
+            "floor",
+            "latest_eligible",
+            "prerelease",
+            "historical"
+          ]
+        },
+        "runtime": {
+          "type": "string",
+          "pattern": "^3\\.[0-9]+$"
+        },
+        "non_blocking": {
+          "type": "boolean"
+        },
+        "requested": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "role",
+              "requirement",
+              "selected_version"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "enum": [
+                  "upstream",
+                  "companion",
+                  "instrumentation",
+                  "core"
+                ]
+              },
+              "requirement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "selected_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
-        }]}
+        },
+        "discovery": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "absolute_latest",
+              "latest_eligible",
+              "requested_version",
+              "resolved_version",
+              "published_at",
+              "first_seen_at",
+              "yanked"
+            ]
+          }
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resolution": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "resolved",
+                "report",
+                "requirements",
+                "requirements_sha256",
+                "wheelhouse",
+                "report_sha256"
+              ],
+              "properties": {
+                "resolved": {
+                  "type": "array",
+                  "minItems": 3,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "role",
+                      "version",
+                      "artifact_sha256"
+                    ]
+                  }
+                },
+                "report": {
+                  "$ref": "#/$defs/path"
+                },
+                "requirements": {
+                  "$ref": "#/$defs/path"
+                },
+                "wheelhouse": {
+                  "$ref": "#/$defs/path"
+                },
+                "requirements_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "report_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          ]
+        },
+        "runtime_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "implementation",
+            "version",
+            "os",
+            "arch",
+            "tags"
+          ],
+          "properties": {
+            "implementation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "os": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^3\\.[0-9]+\\.[0-9]+$"
+            },
+            "tags": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
       }
     },
-    "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"}
+    "path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+    }
   }
 }

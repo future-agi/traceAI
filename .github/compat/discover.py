@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 from packaging.specifiers import SpecifierSet
+from packaging.utils import parse_wheel_filename, InvalidWheelFilename
 from packaging.version import InvalidVersion, Version
 
 UTC = dt.timezone.utc
@@ -148,19 +149,34 @@ def live(ecosystem, name, seen_at):
     raise ValueError(f"Discovery deferred for {ecosystem}")
 
 
-def eligible(release, cutoff, runtime="3.11"):
+def usable_artifact(artifact, cutoff, runtime):
+    """Binary-only execution: age/yank/Python eligibility applies to a usable wheel.
+
+    A minor string cannot prove Requires-Python eligibility; selection needs the
+    exact interpreter patch and its actual PEP 425 platform/ABI tags.
+    """
+    if not isinstance(runtime, dict) or not runtime.get("tags") or len(runtime["version"].split(".")) != 3:
+        raise ValueError("Exact runtime identity and platform tags required")
+    try:
+        _, _, _, tags = parse_wheel_filename(artifact["filename"])
+    except InvalidWheelFilename:
+        return False
+    return (not artifact["yanked"] and bool(artifact["published_at"])
+            and timestamp(artifact["published_at"]) <= cutoff
+            and bool({str(t) for t in tags} & set(runtime["tags"]))
+            and (not artifact["requires_python"] or SpecifierSet(artifact["requires_python"]).contains(runtime["version"])))
+
+
+def eligible(release, cutoff, runtime=None):
     if release["yanked"]:
         return False
     if "artifacts" in release:
-        # Age must apply to the usable file, not the oldest (possibly yanked) sdist.
-        return any(not f["yanked"] and f["published_at"] and timestamp(f["published_at"]) <= cutoff
-                   and (not f["requires_python"] or SpecifierSet(f["requires_python"]).contains(runtime))
-                   for f in release["artifacts"])
+        return any(usable_artifact(f, cutoff, runtime) for f in release["artifacts"])
     date = release["published_at"] or release.get("first_seen_at")
     return bool(date and timestamp(date) <= cutoff)
 
 
-def summarize(package, cutoff, runtime="3.11", specifier=None):
+def summarize(package, cutoff, runtime=None, specifier=None):
     versions = package["releases"]
     stable = [v for v in versions if not v["prerelease"] and not v["yanked"]]
     allowed = [v for v in stable if eligible(v, cutoff, runtime)]

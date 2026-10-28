@@ -26,7 +26,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from discover import UTC, iso
-from plan import clean_env, safe_path, sha256, validate_plan, write_json
+from plan import clean_env, safe_path, sha256, validate_plan, write_json, semantic_validator, runtime_identity
 
 
 def now():
@@ -49,6 +49,19 @@ def failure(kind, summary, ids=()):
     # Otherwise large multi-test failures can collapse distinct later assertions.
     signature = sha256(json.dumps([kind, test_ids, summary], separators=(",", ":")).encode())
     return {"kind": kind, "signature": signature, "summary": summary[:2000], "test_ids": test_ids}
+
+
+def aggregate_failure(details, ids, fallback="pytest failed"):
+    result = failure("contract", " | ".join(d["summary"] for d in details) or fallback, ids)
+    # Never hash the truncated display summaries. Per-test signatures retain the
+    # complete normalized diagnostics and exact identity, in deterministic order.
+    result["signature"] = sha256(json.dumps(["contract", sorted(set(ids)),
+        sorted(d["signature"] for d in details)], separators=(",", ":")).encode())
+    return result
+
+
+def sandbox(root, output, toolchain, consumer, command):
+    return ["bash", str(root / "block_network.sh"), str(root), str(output), str(toolchain), str(consumer), *command]
 
 
 def run_header(plan, plan_bytes):
@@ -186,7 +199,7 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
     try:
         if case["problems"] or not case["resolution"]:
             raise ValueError("Resolution blocked: " + "; ".join(case["problems"] or ["No complete frozen resolution"]))
-        if platform.python_version_tuple()[:2] != tuple(case["runtime"].split(".")):
+        if runtime_identity(sys.executable) != case["runtime_identity"]:
             raise ValueError("Execution runtime does not match plan")
         current = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
         if current != plan["source_sha"]:
@@ -206,9 +219,8 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
         stage = "install"
         with tempfile.TemporaryDirectory(prefix="traceai-consumer-") as temporary:
             temporary = Path(temporary)
-            # Namespace root has no host DAC override and cannot read runner-private
-            # workspaces. Expose only this disposable consumer read-only by mode;
-            # the sole writable shared path is its random JUnit output directory.
+            # Dependency code sees only these disposable mounts and a clean
+            # interpreter/toolchain; every post-install invocation uses sandbox().
             temporary.chmod(0o755)
             isolated_blocker = temporary / "block_network.sh"
             shutil.copyfile(blocker, isolated_blocker)
@@ -216,16 +228,23 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             consumer.mkdir()
             row["contract"]["suite_sha256"] = copy_suite(root, consumer, files)
             venv = temporary / "venv"
-            subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, env=clean_env(), timeout=120)
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True, env=clean_env(), timeout=120)
             python = str(venv / "bin/python")
-            install = [python, "-I", "-m", "pip", "install", "--no-index", "--no-deps", "--require-hashes", "--find-links",
+            install = [sys.executable, "-I", "-m", "pip", "--python", python, "install", "--no-index", "--no-deps", "--require-hashes", "--find-links",
                        str(safe_path(plan_dir, resolution["wheelhouse"])), "-r", str(safe_path(plan_dir, resolution["requirements"]))]
             with (output / "install.log").open("w") as log:
                 subprocess.run(install, cwd=consumer, env=clean_env(), stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
-            actual = json.loads(subprocess.check_output([python, "-I", "-c", "import importlib.metadata as m,json; print(json.dumps({d.metadata['Name']: d.version for d in m.distributions()}))"],
-                                                       cwd=consumer, env=clean_env(), text=True))
-            installed = {canonicalize_name(n): v for n, v in actual.items()}
-            freeze = subprocess.check_output([python, "-I", "-m", "pip", "freeze", "--all"], cwd=consumer, env=clean_env())
+            shared_output = temporary / "junit-output"
+            shared_output.mkdir(mode=0o777)
+            shared_output.chmod(0o777)
+            toolchain = Path(sys.base_prefix).resolve()
+            inventory = [python, "-I", "-c", "import importlib.metadata as m,json; print(json.dumps({d.metadata['Name']: d.version for d in m.distributions()}))"]
+            with (output / "inventory-sandbox.log").open("w") as log:
+                actual = json.loads(subprocess.check_output(sandbox(temporary, shared_output, toolchain, consumer, inventory),
+                    cwd=consumer, env=clean_env(), stderr=log, text=True, timeout=120))
+                installed = {canonicalize_name(n): v for n, v in actual.items()}
+                freeze = subprocess.check_output(sandbox(temporary, shared_output, toolchain, consumer,
+                    [python, "-I", "-m", "pip", "freeze", "--all"]), cwd=consumer, env=clean_env(), stderr=log, timeout=120)
             # Retry identity includes the lock's relative path, not only its digest.
             freeze_path = lock_dir / (case["case_id"] + ".freeze.txt")
             freeze_path.write_bytes(freeze)
@@ -233,10 +252,11 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             stage = "requested_resolved_mismatch"
             # Compare every distribution in the complete report, not only direct pins.
             report = json.loads(safe_path(plan_dir, resolution["report"]).read_text())
-            for item in report["install"]:
-                metadata = item["metadata"]
-                if installed.get(canonicalize_name(metadata["name"])) != metadata["version"]:
-                    raise ValueError("Frozen complete dependency resolution changed: " + metadata["name"])
+            expected = {canonicalize_name(item["metadata"]["name"]): item["metadata"]["version"] for item in report["install"]}
+            # A fresh --without-pip consumer has no bootstrapped distributions.
+            # The frozen resolution includes pip itself for inventory tooling.
+            if installed != expected:
+                raise ValueError("Frozen complete dependency resolution changed")
             for wanted in row["requested"]:
                 version = installed.get(canonicalize_name(wanted["name"]))
                 if version is not None:
@@ -253,14 +273,11 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             command = contract["command"]
             if command[:3] != ["python", "-m", "pytest"]:
                 raise ValueError("Pilot runner accepts only trusted Python pytest contracts")
-            shared_output = temporary / "junit-output"
-            shared_output.mkdir(mode=0o777)
-            shared_output.chmod(0o777)  # No credentials/source/install paths are writable here.
             isolated_junit = shared_output / path.name
-            argv = [python, "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-o", "junit_family=legacy", "--junitxml=" + str(isolated_junit)]
-            row["contract"]["command"] = ["python", "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-o", "junit_family=legacy", "--junitxml=" + path.relative_to(output).as_posix()]
+            argv = [python, "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-p", "pytest_asyncio.plugin", "-o", "junit_family=legacy", "--junitxml=" + str(isolated_junit)]
+            row["contract"]["command"] = ["python", "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-p", "pytest_asyncio.plugin", "-o", "junit_family=legacy", "--junitxml=" + path.relative_to(output).as_posix()]
             with (output / "contract.log").open("w") as log:
-                process = subprocess.run(["bash", str(isolated_blocker), python, *argv], cwd=consumer, env=clean_env(), stdout=log,
+                process = subprocess.run(sandbox(temporary, shared_output, toolchain, consumer, argv), cwd=consumer, env=clean_env(), stdout=log,
                                          stderr=subprocess.STDOUT, timeout=600)
             if isolated_junit.is_symlink():
                 raise ValueError("Symlink JUnit is forbidden")
@@ -286,10 +303,11 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             bad = [t for t in tests if t["outcome"] in ("failure", "error")]
             if bad or process.returncode:
                 row["status"] = "quarantined" if bad and all(t["exception_id"] for t in bad) else "failed"
-                row["failure"] = failure("contract", " | ".join(d["summary"] for d in details) or f"pytest exit {process.returncode}", [t["test_id"] for t in bad])
+                row["failure"] = aggregate_failure(details, [t["test_id"] for t in bad], f"pytest exit {process.returncode}")
             else:
-                row["status"] = "passed"
                 row["contract"]["scenarios"] = contract["scenarios"]
+                semantic_validator(root).validate_contract(row, target, root)
+                row["status"] = "passed"
     except (ValueError, OSError, subprocess.SubprocessError, ET.ParseError, KeyError) as error:
         kind = locals().get("stage", "resolution")
         row["status"] = "blocked" if kind in ("resolution", "install", "infrastructure") else "failed"
@@ -333,23 +351,15 @@ def main():
             missing = empty_case(case, plan, target)
             missing["failure"] = failure("automation", "Original planned case upload was missing")
             history = [missing]
+    # The first artifact is immutable. A killed retry cannot replace it. Its
+    # independent result is merged chronologically by the collector.
     row = execute(root, folder, case, plan, target, output, Path(__file__).with_name("block_network.sh"), 2 if history else 1)
-    if history:
-        for path in args.previous.rglob("*"):
-            if path.is_file() and path.name != "results.json":
-                relative = path.relative_to(args.previous).as_posix()
-                destination = safe_path(output, relative)
-                if destination.exists() and destination.read_bytes() != path.read_bytes():
-                    destination = safe_path(output, "history/attempt1/" + relative)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                if not destination.exists():
-                    shutil.copyfile(path, destination)
-        if row["status"] == "passed" and history[-1]["status"] != "passed":
-            row["status"] = "flaky"
-            row["notes"].append("Original failure preserved; a retry pass is not ordinary compatibility green.")
+    if history and row["status"] == "passed" and history[-1]["status"] != "passed":
+        row["status"] = "flaky"
+        row["notes"].append("Original failure preserved in the immutable attempt-1 artifact.")
     header = run_header(plan, raw)
     header["completed_at"] = row["completed_at"]
-    write_json(output / "results.json", {"schema_version": 1, "run": header, "cases": history + [row]})
+    write_json(output / "results.json", {"schema_version": 1, "run": header, "cases": [row]})
     print(json.dumps({"case_id": case["case_id"], "status": row["status"], "failure": row["failure"]}))
     return 0 if row["status"] == "passed" else 1
 

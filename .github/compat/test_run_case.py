@@ -4,8 +4,7 @@ import unittest
 from pathlib import Path
 
 from run_case import apply_exceptions, copy_suite, execute, failure, junit, normalize, suite_files
-from test_plan import NOW, ROOT, SHA, inputs
-from plan import generate
+from test_plan import NOW, ROOT, SHA, inputs, generate
 
 
 class RunnerTests(unittest.TestCase):
@@ -66,3 +65,68 @@ class RunnerTests(unittest.TestCase):
                 path.write_text(xml)
                 with self.assertRaises(ValueError):
                     junit(path)
+
+    def test_case_aggregation_retains_complete_per_test_signatures(self):
+        from run_case import aggregate_failure
+        prefix = 'AssertionError: ' + 'same ' * 500
+        a = failure('contract', prefix + 'missing model', ['tests/test.py::test_sdk'])
+        b = failure('contract', prefix + 'missing usage', ['tests/test.py::test_sdk'])
+        self.assertEqual(a['summary'], b['summary'])
+        self.assertNotEqual(aggregate_failure([a], a['test_ids'])['signature'],
+                            aggregate_failure([b], b['test_ids'])['signature'])
+        self.assertEqual(aggregate_failure([a, b], a['test_ids'])['signature'],
+                         aggregate_failure([b, a], a['test_ids'])['signature'])
+
+    @unittest.skipUnless(__import__('sys').platform == 'linux', 'Linux CI proves the kernel boundary')
+    def test_dependency_startup_hook_sees_unprivileged_isolated_filesystem_and_sockets(self):
+        import os
+        import shutil
+        import socket
+        import subprocess
+        import sys
+        from run_case import sandbox
+        self.assertIsNotNone(shutil.which('bwrap'), 'Sandbox must be installed; no host fallback')
+        with tempfile.TemporaryDirectory(prefix='compat-host-private-') as outside:
+            outside = Path(outside)
+            marker = outside / 'private-marker'
+            marker.write_text('host-only marker')
+            marker.chmod(0o600)
+            server = socket.socket(socket.AF_UNIX)
+            server.bind(str(outside / 'private.sock')); server.listen(1)
+            try:
+                with tempfile.TemporaryDirectory(prefix='compat-hook-') as temporary:
+                    root = Path(temporary); root.chmod(0o755)
+                    shutil.copyfile(ROOT / '.github/compat/block_network.sh', root / 'block_network.sh')
+                    consumer, output, venv = root / 'consumer', root / 'output', root / 'venv'
+                    consumer.mkdir(); output.mkdir(mode=0o777); output.chmod(0o777)
+                    subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(venv)], check=True)
+                    python = venv / 'bin/python'
+                    site = venv / 'lib' / ('python' + '.'.join(map(str, sys.version_info[:2]))) / 'site-packages'
+                    hook = '''import json, pathlib, socket
+mapping = pathlib.Path('/proc/self/uid_map').read_text().split()
+assert mapping == ['0', '65534', '1'], mapping
+assert not pathlib.Path(MARKER).exists(), 'Host private file visible'
+s = socket.socket(socket.AF_UNIX)
+try:
+    s.connect(SOCKET)
+except OSError:
+    pass
+else:
+    raise AssertionError('Host pathname socket reachable')
+finally:
+    s.close()
+pathlib.Path(OUTPUT).write_text(json.dumps(dict(host_uid=65534, private_file='absent', host_socket='denied')))
+'''.replace('MARKER', repr(str(marker))).replace('SOCKET', repr(str(outside / 'private.sock'))).replace('OUTPUT', repr(str(output / 'startup.json')))
+                    (site / 'compat_hook.py').write_text(hook)
+                    (site / 'startup.pth').write_text('import compat_hook\n')
+                    # This is dependency startup code, not a test fixture imported
+                    # after Python has already had an opportunity to exfiltrate.
+                    for command in ([str(python), '-I', '-c', 'import importlib.metadata; print("inventory")'],
+                                    [str(python), '-I', '-c', 'import runpy; print("freeze")']):
+                        result = subprocess.run(sandbox(root, output, Path(sys.base_prefix).resolve(), consumer, command),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, timeout=60)
+                        self.assertIn('"host_uid": 65534', result.stderr)
+                        self.assertEqual(json.loads((output / 'startup.json').read_text())['host_socket'], 'denied')
+                    self.assertFalse((root / 'escape-write').exists())
+            finally:
+                server.close()

@@ -5,12 +5,19 @@ import unittest
 from pathlib import Path
 
 from discover import discover, pypi, timestamp
-from plan import generate, safe_path, verify_metadata
+from plan import generate as generate_plan, safe_path, verify_metadata
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).with_name("fixtures")
 NOW = timestamp("2026-10-28T00:00:00Z")
 SHA = "1" * 40
+RUNTIMES = {v: dict(version=v + ".17", implementation="cpython", os="linux", arch="x86_64",
+    tags=["py3-none-any", "cp" + v.replace(".", "") + "-cp" + v.replace(".", "") + "-manylinux_2_17_x86_64"])
+    for v in ("3.10", "3.11", "3.13")}
+
+
+def generate(*args, **kwargs):
+    return generate_plan(*args, runtime_identities=RUNTIMES, **kwargs)
 
 
 def inputs():
@@ -23,7 +30,7 @@ class PlanTests(unittest.TestCase):
         registry, discovery = inputs()
         before = generate(registry, discovery, SHA, SHA, NOW)
         package = next(p for p in discovery["packages"] if p["name"] == "openai")
-        raw = {"releases": {"3.25.0": [{"filename": "openai.whl", "upload_time_iso_8601": "2026-10-24T00:00:00Z",
+        raw = {"releases": {"3.25.0": [{"filename": "openai-3.25.0-py3-none-any.whl", "upload_time_iso_8601": "2026-10-24T00:00:00Z",
                                        "requires_python": ">=3.10", "yanked": False}]}}
         package["releases"].extend(pypi("openai", raw, "2026-10-28T00:00:00Z")["releases"])
         after = generate(registry, discovery, SHA, SHA, NOW)

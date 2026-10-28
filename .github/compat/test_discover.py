@@ -3,6 +3,8 @@ import json
 import unittest
 from pathlib import Path
 
+from test_plan import RUNTIMES
+
 from discover import eligible, go, go_escape, npm, pypi, semver, summarize, timestamp
 
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -13,7 +15,7 @@ CUTOFF = timestamp("2026-10-25T00:00:00Z")
 class DiscoveryTests(unittest.TestCase):
     def test_artifact_cooldown_yank_and_runtime(self):
         def file(date, yanked=False, python=">=3.10"):
-            return dict(filename="sdk.whl", upload_time_iso_8601=date, yanked=yanked, requires_python=python)
+            return dict(filename="sdk-1.0.0-py3-none-any.whl", upload_time_iso_8601=date, yanked=yanked, requires_python=python)
         data = {"releases": {
             "1.9.0": [file("2026-10-01T00:00:00Z")],
             "1.10.0": [file("2026-10-01T00:00:00Z", True), file("2026-10-27T00:00:00Z")],
@@ -21,16 +23,16 @@ class DiscoveryTests(unittest.TestCase):
             "1.12.0": [file("2026-10-01T00:00:00Z", True)],
             "2.0.0rc1": [file("2026-10-01T00:00:00Z")], "garbage": []}}
         package = pypi("sdk", data, SEEN)
-        summary = summarize(package, CUTOFF, "3.11")
+        summary = summarize(package, CUTOFF, RUNTIMES["3.11"])
         self.assertEqual(summary["absolute_latest"], "1.11.0")
         self.assertEqual(summary["latest_eligible"], "1.9.0")
-        self.assertEqual(summarize(package, CUTOFF, "3.13")["latest_eligible"], "1.11.0")
-        self.assertFalse(eligible(package["releases"][1], CUTOFF))
+        self.assertEqual(summarize(package, CUTOFF, RUNTIMES["3.13"])["latest_eligible"], "1.11.0")
+        self.assertFalse(eligible(package["releases"][1], CUTOFF, RUNTIMES["3.11"]))
 
     def test_missing_pypi_publication_is_not_invented(self):
-        package = pypi("sdk", {"releases": {"1.0.0": [{"filename": "sdk.whl"}]}}, SEEN)
+        package = pypi("sdk", {"releases": {"1.0.0": [{"filename": "sdk-1.0.0-py3-none-any.whl"}]}}, SEEN)
         self.assertIsNone(package["releases"][0]["published_at"])
-        self.assertFalse(eligible(package["releases"][0], CUTOFF))
+        self.assertFalse(eligible(package["releases"][0], CUTOFF, RUNTIMES["3.11"]))
 
     def test_npm_semver_latest_tag_is_independent_and_engines_preserved(self):
         raw = json.loads((FIXTURES / "npm.json").read_text())["@example/sdk"]
@@ -60,3 +62,19 @@ class DiscoveryTests(unittest.TestCase):
         for version in ("1.0.0-01", "1.0.0-rc..1", "01.0.0", "1.0"):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 semver(version)
+
+    def test_binary_usable_artifact_and_actual_patch_selection(self):
+        def file(filename, python='>=3.11.1', date='2026-10-01T00:00:00Z', yanked=False):
+            return dict(filename=filename, requires_python=python, upload_time_iso_8601=date, yanked=yanked)
+        data = {'releases': {
+            '1.0.0': [file('sdk-1.0.0-py3-none-any.whl')],
+            '1.1.0': [file('sdk-1.1.0.tar.gz')],
+            '1.2.0': [file('sdk-1.2.0-cp311-cp311-win_amd64.whl')],
+            '1.3.0': [file('sdk-1.3.0.tar.gz'), file('sdk-1.3.0-py3-none-any.whl', date='2026-10-27T00:00:00Z')],
+            '1.4.0': [file('sdk-1.4.0-py3-none-any.whl', yanked=True)]}}
+        package = pypi('sdk', data, SEEN)
+        summary = summarize(package, CUTOFF, RUNTIMES['3.11'])
+        self.assertEqual(summary['absolute_latest'], '1.3.0')
+        self.assertEqual(summary['latest_eligible'], '1.0.0')
+        with self.assertRaisesRegex(ValueError, 'Exact runtime'):
+            summarize(package, CUTOFF, '3.11')

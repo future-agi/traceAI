@@ -30,9 +30,35 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 
-from discover import UTC, eligible, fetch, iso, summarize, timestamp
+from discover import UTC, eligible, fetch, iso, summarize, timestamp, usable_artifact
 
-TOOLS = ["pytest==8.3.5", "pytest-asyncio==0.25.3", "httpx==0.28.1"]
+
+def runtime_identity(python):
+    # The clean setup interpreter has pip, not necessarily packaging installed.
+    code = ("import json,platform; from pip._vendor.packaging.tags import sys_tags; "
+            "print(json.dumps(dict(version=platform.python_version(),implementation=platform.python_implementation().lower(),"
+            "os=platform.system().lower(),arch=platform.machine(),tags=[str(t) for t in sys_tags()])))")
+    return json.loads(subprocess.check_output([python, "-I", "-c", code], text=True, env=clean_env()))
+
+
+def semantic_validator(root):
+    """Use PR1's current semantic contract interface, not a divergent validator.
+
+    Source is an immutable trusted repository checkout, never artifact code. The
+    pending foundation lacks this interface and is explicitly blocked.
+    """
+    import importlib.util
+    path = root / ".github/compat/validate.py"
+    if not path.is_file():
+        raise ValueError("PR1 semantic contract validator is required")
+    if sys.version_info < (3, 11):
+        sys.modules.setdefault("tomllib", tomllib)
+    spec = importlib.util.spec_from_file_location("compat_source_validation", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+TOOLS = ["pip==25.0.1", "pytest==8.3.5", "pytest-asyncio==0.25.3", "httpx==0.28.1"]
 MAX_CASES = 48
 
 
@@ -113,7 +139,7 @@ def verify_metadata(registry, root):
                 raise ValueError(f"Registry declaration drift: {target['id']} {dep['name']}")
 
 
-def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", self_test=False, allowlist=None):
+def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", self_test=False, allowlist=None, runtime_identities=None):
     if not re.fullmatch("[0-9a-f]{40}", source_sha) or not re.fullmatch("[0-9a-f]{40}", workflow_sha):
         raise ValueError("Immutable source/workflow SHAs required")
     cutoff = now - dt.timedelta(hours=72)
@@ -143,7 +169,10 @@ def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", 
                 raise ValueError("Exploratory allowlist must name the complete upstream tuple")
             selectors.append("prerelease")
         for runtime in runtimes:
-            if not SpecifierSet(target["runtimes"]["declared"]).contains(runtime):
+            identity = (runtime_identities or {}).get(runtime)
+            if not identity or identity["version"].split(".")[:2] != runtime.split("."):
+                raise ValueError("Actual runtime patch/platform identity required for " + runtime)
+            if not SpecifierSet(target["runtimes"]["declared"]).contains(identity["version"]):
                 continue
             for selector in selectors:
                 modes = ["source"]
@@ -155,16 +184,16 @@ def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", 
                     selected, records, problems = [], [], []
                     for dep in target["upstream"]:
                         package = packages[canonicalize_name(dep["name"])]
-                        summary = summarize(package, cutoff, runtime, dep["declared_range"])
+                        summary = summarize(package, cutoff, identity, dep["declared_range"])
                         version = summary["latest_eligible"]
                         if selector == "floor":
                             version = dep["exact_floor"]
                         elif selector == "prerelease":
-                            choices = [r for r in package["releases"] if eligible(r, cutoff, runtime)
+                            choices = [r for r in package["releases"] if eligible(r, cutoff, identity)
                                        and SpecifierSet(explorations[dep["name"]]).contains(r["version"], prereleases=True)]
                             version = choices[-1]["version"] if choices else None
                         release = next((r for r in package["releases"] if r["version"] == version), None)
-                        if not release or not eligible(release, cutoff, runtime):
+                        if not release or not eligible(release, cutoff, identity):
                             problems.append(f"{dep['name']}: exact {selector} selection unavailable/ineligible")
                         if dep["declared_range"] is None:
                             problems.append(f"{dep['name']}: undeclared support range")
@@ -180,7 +209,7 @@ def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", 
                             version = None  # Filled from built wheel METADATA, not an inferred version.
                         else:
                             p = packages[canonicalize_name(entry["distribution"])]
-                            version = summarize(p, cutoff, runtime)["latest_eligible"]
+                            version = summarize(p, cutoff, identity)["latest_eligible"]
                             if version is None:
                                 problems.append(f"No eligible published {entry['distribution']}")
                         selected.append({"name": entry["distribution"], "role": role,
@@ -191,7 +220,8 @@ def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", 
                         actual_selector = "historical"  # Explicit stable next-major/other exploratory tuple, not a prerelease claim.
                     case_id = f"{target['id']}-{package_mode}-{actual_selector}-py{runtime.replace('.', '')}"
                     cases.append({"case_id": case_id, "integration_id": target["id"], "mode": package_mode,
-                                  "selector": actual_selector, "runtime": runtime, "non_blocking": selector == "prerelease",
+                                  "selector": actual_selector, "runtime": runtime, "runtime_identity": identity,
+                                  "non_blocking": selector == "prerelease",
                                   "requested": selected, "discovery": records, "problems": problems,
                                   "resolution": None})
     if not cases or len(cases) > MAX_CASES:
@@ -254,7 +284,7 @@ def resolve(case, root, output, built, python):
     data = json.loads(report.read_text())
     snapshot = json.loads((output / "discovery.json").read_text())
     packages = {canonicalize_name(p["name"]): p for p in snapshot["packages"]}
-    cutoff = timestamp(snapshot["discovered_at"]) - dt.timedelta(hours=72)
+    cutoff = timestamp(snapshot["discovered_at"]) - dt.timedelta(hours=72)  # same frozen planning instant
     names, lock, resolved = set(), [], []
     for item in data["install"]:
         name, version = canonicalize_name(item["metadata"]["name"]), item["metadata"]["version"]
@@ -272,10 +302,8 @@ def resolve(case, root, output, built, python):
         if wanted and not (case["mode"] == "source" and wanted["role"] in ("core", "instrumentation")):
             release = next((r for r in packages[name]["releases"] if Version(r["version"]) == Version(version)), None)
             artifact = next((f for f in release["artifacts"] if f["filename"] == filename and f["sha256"] == digest), None) if release else None
-            if not artifact or artifact["yanked"] or not artifact["published_at"] or timestamp(artifact["published_at"]) > cutoff:
-                raise ValueError("Resolved upstream artifact is yanked, unknown, or inside the 72-hour cooldown")
-            if artifact["requires_python"] and not SpecifierSet(artifact["requires_python"]).contains(case["runtime"]):
-                raise ValueError("Resolved upstream artifact excludes the planned Python runtime")
+            if not artifact or not usable_artifact(artifact, cutoff, case["runtime_identity"]):
+                raise ValueError("Resolved upstream artifact is unusable/yanked/unknown or inside the 72-hour cooldown")
         if parsed.scheme == "file":
             source = Path(urllib.parse.unquote(parsed.path)).resolve()
             if not source.is_relative_to((output / "built").resolve()):
@@ -326,11 +354,19 @@ def main():
     raw = (args.root / ".github/compat/registry.json").read_bytes()
     registry = json.loads(raw)
     verify_metadata(registry, args.root)
-    now = timestamp(args.now) if args.now else dt.datetime.now(UTC)
+    discovery = json.loads(args.discovery.read_text())
+    now = timestamp(discovery["discovered_at"])
+    if args.now and timestamp(args.now) != now:
+        raise ValueError("Discovery and planning must use one frozen eligibility cutoff")
+    pythons = dict(p.split("=", 1) for p in args.python)
+    identities = {version: runtime_identity(path) for version, path in pythons.items()}
+    if not identities:
+        identity = runtime_identity(sys.executable)
+        identities[".".join(identity["version"].split(".")[:2])] = identity
     source = subprocess.check_output(["git", "-C", str(args.root), "rev-parse", "HEAD"], text=True).strip()
     workflow = os.environ.get("GITHUB_WORKFLOW_SHA", source)
-    plan = generate(registry, json.loads(args.discovery.read_text()), source, workflow, now, args.mode, args.self_test,
-                    json.loads(args.allowlist.read_text()) if args.allowlist else None)
+    plan = generate(registry, discovery, source, workflow, now, args.mode, args.self_test,
+                    json.loads(args.allowlist.read_text()) if args.allowlist else None, identities)
     plan["registry_sha256"] = sha256(raw)
     (args.out / "registry.json").write_bytes(raw)
     shutil.copyfile(args.discovery, args.out / "discovery.json")
@@ -345,10 +381,8 @@ def main():
         for case in plan["cases"]:
             try:
                 interpreter = pythons.get(case["runtime"], sys.executable)
-                actual = subprocess.check_output([interpreter, "-c", "import sys; print('.'.join(map(str,sys.version_info[:2])))"],
-                                                 text=True, env=clean_env()).strip()
-                if actual != case["runtime"]:
-                    raise ValueError("Resolver runtime does not match planned runtime")
+                if runtime_identity(interpreter) != case["runtime_identity"]:
+                    raise ValueError("Resolver runtime does not match frozen patch/platform identity")
                 resolve(case, args.root, args.out, built, interpreter)
             except (ValueError, subprocess.SubprocessError, OSError) as error:
                 case["problems"].append(str(error))

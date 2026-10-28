@@ -62,6 +62,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install 'packaging==24.2' 'jsonschema==4.23.0' 'tomli==2.2.1'
+      - run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap
       - name: Fixture and negative controls (no external calls)
         run: python .github/compat/selftest.py
 
@@ -186,8 +187,10 @@ jobs:
         continue-on-error: true # Missing first upload is recorded as an automation failure.
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: compatibility-case-${{ matrix.case_id }}
+          name: compatibility-case-${{ matrix.case_id }}-attempt-1
           path: previous
+      - name: Install filesystem and network sandbox
+        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap
       - name: Offline hash-locked install and loopback-only real-SDK contract
         env:
           CASE_ID: ${{ matrix.case_id }}
@@ -200,11 +203,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: compatibility-case-${{ matrix.case_id }}
+          name: compatibility-case-${{ matrix.case_id }}-attempt-${{ github.run_attempt }}
           path: result/
           if-no-files-found: error
           retention-days: 30
-          overwrite: ${{ github.run_attempt > 1 }} # Previous attempts are inside this artifact.
+          # Immutable: a killed retry cannot delete or replace attempt 1.
 
   collect:
     name: Compatibility results
@@ -212,6 +215,9 @@ jobs:
     needs: [selftest, plan, case]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # Only the collector may read authoritative job-attempt metadata.
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -231,8 +237,18 @@ jobs:
         with:
           pattern: compatibility-case-*
           path: cases
+      - name: Trusted source contract from the original plan
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Reconcile every job attempt (including failures before artifact upload)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=all&per_page=100" > jobs.json
       - name: Aggregate without dropping missing or failed cases
-        run: python .github/compat/collect_results.py --plan-dir "$PWD/plan" --artifacts "$PWD/cases" --out "$PWD/aggregate"
+        run: python .github/compat/collect_results.py --plan-dir "$PWD/plan" --artifacts "$PWD/cases" --out "$PWD/aggregate" --source-root "$PWD/source" --jobs "$PWD/jobs.json"
       - name: Canonical results ABI for the separate, trusted reporter
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
