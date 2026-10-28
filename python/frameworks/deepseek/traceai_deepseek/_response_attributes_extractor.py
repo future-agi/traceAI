@@ -19,8 +19,8 @@ class _OutputAttributesExtractor:
     def _output_alias(
         self, key: str, value: AttributeValue
     ) -> Iterator[Tuple[str, AttributeValue]]:
-        # Preserve provider aliases by default, but treat their payloads as output
-        # message text. Older cores do not know the provider-specific key names.
+        # Preserve reasoning/alias keys by default, but treat their payloads as
+        # output message text. Older cores do not recognize these text keys.
         masked = self._config.mask(
             f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}",
             value,
@@ -98,7 +98,10 @@ class _ChatCompletionResponseAttributesExtractor(_OutputAttributesExtractor):
             # DeepSeek R1 specific: reasoning_content
             reasoning_content = message.get("reasoning_content", "")
             if reasoning_content:
-                yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{i}.reasoning_content", reasoning_content
+                yield from self._output_alias(
+                    f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.{i}.reasoning_content",
+                    reasoning_content,
+                )
                 yield from self._output_alias("deepseek.reasoning_content", reasoning_content)
 
             # Tool calls
@@ -241,7 +244,9 @@ class _StreamingChatCompletionResponseExtractor(_OutputAttributesExtractor):
 
         # Reasoning content (DeepSeek R1)
         if reasoning:
-            yield f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.reasoning_content", reasoning
+            yield from self._output_alias(
+                f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.reasoning_content", reasoning
+            )
             yield from self._output_alias("deepseek.reasoning_content", reasoning)
             yield from self._output_alias("deepseek.output_reasoning", reasoning)
 

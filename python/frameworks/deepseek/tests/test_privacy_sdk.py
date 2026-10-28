@@ -21,10 +21,11 @@ except ImportError:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("hide_outputs", [False, True])
+@pytest.mark.parametrize("hide_content", [False, True])
+@pytest.mark.parametrize("policy", ["hide_outputs", "hide_output_messages", "hide_output_text"])
 @pytest.mark.parametrize("configuration", ["explicit", "environment"])
 async def test_reasoning_and_tool_output_privacy(
-    monkeypatch, asynchronous, streaming, hide_outputs, configuration
+    monkeypatch, asynchronous, streaming, hide_content, policy, configuration
 ):
     answer = "PRIVATE_ANSWER_3481"
     reasoning = "PRIVATE_REASONING_4729"
@@ -62,11 +63,13 @@ async def test_reasoning_and_tool_output_privacy(
                                   headers={"content-type": "text/event-stream"})
         return httpx.Response(200, json=body)
 
-    monkeypatch.setenv("FI_HIDE_OUTPUTS", str(hide_outputs).lower())
+    environment_flag = "FI_" + policy.upper()
+    monkeypatch.setenv(environment_flag, str(hide_content).lower())
     config = None
     if configuration == "explicit":
-        monkeypatch.setenv("FI_HIDE_OUTPUTS", str(not hide_outputs).lower())
-        config = TraceConfig(hide_outputs=hide_outputs)
+        # Explicit True and False must both take precedence over the environment.
+        monkeypatch.setenv(environment_flag, str(not hide_content).lower())
+        config = TraceConfig(**{policy: hide_content})
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -111,16 +114,36 @@ async def test_reasoning_and_tool_output_privacy(
         assert attributes["gen_ai.usage.output_tokens"] == 5
         assert attributes["deepseek.reasoning_tokens"] == 2
         assert attributes["deepseek.tool_calls_count"] == 1
-        if hide_outputs:
-            assert attributes["output.value"] == REDACTED_VALUE
-            assert not any(key.startswith("gen_ai.output.messages") for key in attributes)
+        reasoning_keys = (
+            "gen_ai.output.messages.0.reasoning_content",
+            "deepseek.reasoning_content",
+            "deepseek.output_reasoning",
+        )
+        tool_key = "deepseek.tool_calls.0.function.arguments"
+        content_key = "gen_ai.output.messages.0.message.content"
+        if hide_content:
+            if policy == "hide_outputs":
+                assert attributes["output.value"] == REDACTED_VALUE
+            if policy == "hide_output_text":
+                for key in (*reasoning_keys, tool_key, content_key):
+                    assert attributes[key] == REDACTED_VALUE
+            else:
+                assert not any(key.startswith("gen_ai.output.messages") for key in attributes)
+                for key in (*reasoning_keys, tool_key):
+                    assert key not in attributes
+            # Text/message policies intentionally do not hide the separate raw
+            # output.value field. Everything else must be free of private output.
+            masked_attributes = dict(attributes)
+            if policy != "hide_outputs":
+                masked_attributes.pop("output.value")
             for private in (answer, reasoning, arguments, "PRIVATE_TOOL_ARGUMENTS_6823"):
-                assert private not in json.dumps(attributes)
+                assert private not in json.dumps(masked_attributes)
         else:
-            assert attributes["deepseek.reasoning_content"] == reasoning
-            assert attributes["deepseek.output_reasoning"] == reasoning
-            assert attributes["deepseek.tool_calls.0.function.arguments"] == arguments
-            assert attributes["gen_ai.output.messages.0.message.content"] == answer
+            for key in reasoning_keys:
+                assert attributes[key] == reasoning
+            assert attributes[tool_key] == arguments
+            assert attributes[content_key] == answer
+        if not hide_content or policy != "hide_outputs":
             payload = json.loads(attributes["output.value"])
             output = payload if streaming else payload["choices"][0]["message"]
             assert output["content"] == answer

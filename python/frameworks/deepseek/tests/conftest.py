@@ -1,6 +1,16 @@
 """Offline fixtures using the installed core and OpenTelemetry packages."""
 
+from dataclasses import fields
+
 import pytest
+from fi_instrumentation import TraceConfig
+
+
+@pytest.fixture(autouse=True)
+def clean_privacy_environment(monkeypatch):
+    """Each test opts into its policy instead of inheriting a developer's flags."""
+    for field in fields(TraceConfig):
+        monkeypatch.delenv(field.metadata["env_var"], raising=False)
 
 
 @pytest.fixture(autouse=True)
