@@ -151,8 +151,17 @@ mismatch, never replace actual observations with intended versions. This cannot
 attest passed/quarantined/flaky compatibility.
 
 `flaky` requires all the same successful execution validation as `passed`, plus a
-retained prior genuine failed/blocked attempt with failure evidence. It never
-means empty, skipped, partial or still failing. Previously unobserved installation
+retained prior genuine failed/blocked attempt with failure evidence. The validator
+reconciles failed attempts too: claimed contract failure IDs must be exactly the
+original JUnit failure/error IDs, and a contract failure needs an observed failed
+invocation, failed/skipped test, or incomplete collected execution. A successful
+full collection and all-passing exit-zero execution cannot be relabelled as a
+contract/collection/install/resolution failure to fabricate flaky recovery. A real
+runner failure beside passing JUnit remains failed, with no invented failing test
+IDs. Exit-code sidecars must agree with manifests on failed as well as successful
+attempts. Genuinely unobserved pre-execution failures and wholly UNKNOWN later
+uploads retain the narrow rules below; no observations are copied or fabricated.
+`flaky` never means empty, skipped, partial or still failing. Previously unobserved installation
 fields (empty resolved tuple, null lock, empty pre-execution suite) may populate on
 retry; already observed identities, versions, lock and suite cannot change. The
 plan and requested selection remain immutable, and both attempts remain visible.

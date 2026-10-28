@@ -57,18 +57,11 @@ class _Stream(ObjectProxy):  # type: ignore
         self._finish_tracing(trace_api.Status(trace_api.StatusCode.ERROR))
 
     def __iter__(self):
-        try:
-            for item in self.__wrapped__:
-                self._response_accumulator.process_chunk(item)
-                yield item
-        except GeneratorExit:
-            self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
-            raise
-        except BaseException as exception:
-            self._error(exception)
-            raise
-        else:
-            self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+        # SDK Stream is its own iterator. A generator here has an independent
+        # lifetime: next(iter(stream)) disposes that temporary generator without
+        # closing the still-usable SDK stream. Only __next__ exhaustion/error or
+        # explicit stream close/context exit may finish the operation span.
+        return self
 
     def __next__(self):
         try:
@@ -82,19 +75,10 @@ class _Stream(ObjectProxy):  # type: ignore
         self._response_accumulator.process_chunk(item)
         return item
 
-    async def __aiter__(self):
-        try:
-            async for item in self.__wrapped__:
-                self._response_accumulator.process_chunk(item)
-                yield item
-        except GeneratorExit:
-            self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
-            raise
-        except BaseException as exception:
-            self._error(exception)
-            raise
-        else:
-            self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+    def __aiter__(self):
+        # As with sync iteration, abandoning an iterator is not an SDK close.
+        # Cancellation raised by an actual advance is handled in __anext__.
+        return self
 
     async def __anext__(self):
         try:

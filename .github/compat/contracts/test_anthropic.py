@@ -1,5 +1,6 @@
 """Anthropic SDK execution over MockTransport, not mocked Messages.create."""
 import asyncio
+import gc
 import json
 
 import anthropic
@@ -191,6 +192,105 @@ def test_error_privacy_preserves_application_exception(instrument, capsys, caplo
 
 def event_bytes(event):
     return f'event: {event["type"]}\ndata: {json.dumps(event)}\n\n'.encode()
+
+
+def resumable_stream_body(*, fail=False):
+    events = [
+        {'type': 'message_start', 'message': {**message(), 'content': [], 'stop_reason': None}},
+        {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
+        {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': ANSWER}},
+        {'type': 'content_block_stop', 'index': 0},
+    ]
+    if fail:
+        events.append({'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'offline-later-error'}})
+    else:
+        events.extend([
+            {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
+             'usage': {'output_tokens': 2}},
+            {'type': 'message_stop'},
+        ])
+    return b''.join(event_bytes(event) for event in events)
+
+
+def assert_resumed_output_and_usage(exporter):
+    span = only_span(exporter)
+    assert span.status.status_code == StatusCode.OK
+    assert span.attributes['gen_ai.output.messages.0.message.content'] == ANSWER
+    assert span.attributes['gen_ai.usage.input_tokens'] == 4
+    assert span.attributes['gen_ai.usage.output_tokens'] == 2
+    assert span.attributes['gen_ai.usage.total_tokens'] == 6
+
+
+def test_sync_temporary_iterator_disposal_preserves_resumable_stream(instrument):
+    _, exporter = instrument()
+    with sdk(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'},
+                                     content=resumable_stream_body())) as client:
+        stream = client.messages.create(stream=True, **arguments())
+        # Discard only the iterator, not the SDK stream/response. The next
+        # iteration must still accumulate the remaining output and final usage.
+        assert next(iter(stream)).type == 'message_start'
+        gc.collect()
+        assert not exporter.get_finished_spans()
+        remaining = list(stream)
+        assert remaining[-1].type == 'message_stop'
+        assert_resumed_output_and_usage(exporter)
+        stream.close()
+    assert_resumed_output_and_usage(exporter)
+
+
+def test_sync_temporary_iterator_disposal_preserves_later_sdk_error(instrument):
+    _, exporter = instrument()
+    with sdk(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'},
+                                     content=resumable_stream_body(fail=True))) as client:
+        stream = client.messages.create(stream=True, **arguments())
+        assert next(iter(stream)).type == 'message_start'
+        gc.collect()
+        assert not exporter.get_finished_spans()
+        with pytest.raises(anthropic.APIError, match='offline-later-error'):
+            list(stream)
+        assert only_span(exporter).status.status_code == StatusCode.ERROR
+        stream.close()
+    assert only_span(exporter).status.status_code == StatusCode.ERROR
+
+
+def test_async_temporary_iterator_disposal_preserves_resumable_stream(instrument):
+    _, exporter = instrument()
+    async def run():
+        async with sdk(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'},
+                                               content=resumable_stream_body()), True) as client:
+            stream = await client.messages.create(stream=True, **arguments())
+            assert (await anext(aiter(stream))).type == 'message_start'
+            gc.collect()
+            # Python schedules finalization of abandoned async generators.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not exporter.get_finished_spans()
+            remaining = [event async for event in stream]
+            assert remaining[-1].type == 'message_stop'
+            assert_resumed_output_and_usage(exporter)
+            await stream.close()
+    asyncio.run(run())
+    assert_resumed_output_and_usage(exporter)
+
+
+def test_async_temporary_iterator_disposal_preserves_later_sdk_error(instrument):
+    _, exporter = instrument()
+    async def run():
+        async with sdk(lambda _: httpx.Response(200, headers={'content-type': 'text/event-stream'},
+                                               content=resumable_stream_body(fail=True)), True) as client:
+            stream = await client.messages.create(stream=True, **arguments())
+            assert (await anext(aiter(stream))).type == 'message_start'
+            gc.collect()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not exporter.get_finished_spans()
+            with pytest.raises(anthropic.APIError, match='offline-later-error'):
+                async for _ in stream:
+                    pass
+            assert only_span(exporter).status.status_code == StatusCode.ERROR
+            await stream.close()
+    asyncio.run(run())
+    assert only_span(exporter).status.status_code == StatusCode.ERROR
 
 
 def test_stream_error_completes_exactly_once(instrument):

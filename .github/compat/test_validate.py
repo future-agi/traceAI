@@ -522,6 +522,84 @@ class ResultTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn('compatibility:', result.stderr)
 
+    def retained_retry_fixture(self):
+        data, registry = result_fixture(self.artifacts)
+        first = data['cases'][0]
+        sha = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+        data['run']['source_sha'] = first['source_sha'] = sha
+        second = copy.deepcopy(first)
+        second.update(attempt=2, status='flaky')
+        second['contract']['junit_paths'] = ['junit/retry.xml']
+        (self.artifacts / 'junit/retry.xml').write_bytes((self.artifacts / 'junit/tests.xml').read_bytes())
+        (self.artifacts / 'junit/retry.xml.exit-code').write_text('0\n')
+        first.update(status='failed', failure=dict(kind='contract', signature='a'*64,
+            summary='Claimed first contract failure', test_ids=[first['contract']['tests'][0]['test_id']]))
+        data['cases'].append(second)
+        _, raw = plan_fixture(data, self.artifacts)
+        (self.artifacts / 'compat-plan.json').write_bytes(raw)
+        return data, registry
+
+    def strict_cli(self, data):
+        path = self.artifacts / 'results.json'
+        path.write_text(json.dumps(data))
+        return subprocess.run([sys.executable, '-I', str(ROOT / '.github/compat/validate.py'),
+            'results', str(path), '--root', str(ROOT)], capture_output=True, text=True)
+
+    def set_first_failure_evidence(self, data):
+        case = data['cases'][0]
+        path = self.artifacts / case['contract']['junit_paths'][0]
+        tree = ET.parse(path)
+        node = next(tree.iter('testcase'))
+        ET.SubElement(node, 'failure', message='RuntimeError: real first-attempt incompatibility')
+        tree.write(path)
+        case['contract']['tests'] = junit_tests(path)
+        case['failure']['test_ids'] = [case['contract']['tests'][0]['test_id']]
+        (self.artifacts / (case['contract']['junit_paths'][0] + '.exit-code')).write_text('1\n')
+        manifest_path = write_invocations(case, self.artifacts, data['run']['plan_sha256'])
+        manifest = json.loads(manifest_path.read_text())
+        manifest['contract']['exit_code'] = 1
+        manifest_path.write_text(json.dumps(manifest))
+
+    def test_strict_cli_rejects_fabricated_first_failure_despite_valid_flaky_retry(self):
+        for kind, claimed_ids in (('contract', True), ('contract', False), ('collection', False),
+                                  ('install', False), ('resolution', False), ('automation', False),
+                                  ('infrastructure', False), ('requested_resolved_mismatch', False)):
+            data, _ = self.retained_retry_fixture()
+            failure = data['cases'][0]['failure']
+            failure['kind'] = kind
+            if not claimed_ids:
+                failure['test_ids'] = []
+            result = self.strict_cli(data)
+            with self.subTest(kind=kind, claimed_ids=claimed_ids):
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('failure evidence', result.stderr)
+
+    def test_failed_test_ids_must_match_actual_failed_nodes_not_passing_or_missing_nodes(self):
+        data, registry = self.retained_retry_fixture()
+        self.set_first_failure_evidence(data)
+        # Genuine retained failure followed by a full, frozen successful retry.
+        self.assertEqual(self.strict_cli(data).returncode, 0)
+        actual = data['cases'][0]['failure']['test_ids']
+        for claimed in ([], [data['cases'][0]['contract']['tests'][1]['test_id']],
+                        ['test_missing.py::test_missing'], actual + actual):
+            data['cases'][0]['failure']['test_ids'] = claimed
+            with self.subTest(claimed=claimed), self.assertRaisesRegex(ValueError, 'failure evidence'):
+                self.validate(data, registry)
+
+    def test_real_failed_runner_with_passing_junit_is_retained_not_fabricated_as_test_failure(self):
+        data, registry = self.retained_retry_fixture()
+        first = data['cases'][0]
+        first['failure']['test_ids'] = []
+        (self.artifacts / 'junit/tests.xml.exit-code').write_text('1\n')
+        path = self.artifacts / f'invocations/{first["case_id"]}-attempt-1.json'
+        manifest = json.loads(path.read_text())
+        manifest['contract']['exit_code'] = 1
+        path.write_text(json.dumps(manifest))
+        self.validate(data, registry)
+        first['failure']['test_ids'] = [first['contract']['tests'][0]['test_id']]
+        with self.assertRaisesRegex(ValueError, 'failure evidence'):
+            self.validate(data, registry)
+
     def retry_fixture(self):
         data, registry = result_fixture(self.artifacts)
         second = copy.deepcopy(data['cases'][0])

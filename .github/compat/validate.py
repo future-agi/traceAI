@@ -494,8 +494,7 @@ def reconcile_invocations(case, artifact_root, plan_sha256):
             if name == 'contract':
                 require(case['contract']['junit_paths'] == [relative], 'invocation/JUnit path mismatch')
                 status_path = safe_path(artifact_root, relative + '.exit-code')
-                if successful:
-                    require(status_path.is_file() and status_path.read_text().strip() == str(code), 'invocation exit-code disagreement')
+                require(status_path.is_file() and status_path.read_text().strip() == str(code), 'invocation exit-code disagreement')
             elif successful:
                 collected = json.loads(evidence.read_text())
                 require(collected.get('deselected') == [] and not collected.get('errors') and
@@ -503,6 +502,68 @@ def reconcile_invocations(case, artifact_root, plan_sha256):
                         'invocation collection/JUnit completeness mismatch')
         elif successful:
             raise ValueError('missing successful invocation evidence')
+    return manifest
+
+
+def reconcile_failure(case, manifest, observed_tests, artifact_root):
+    """A failure label is not evidence that a successful attempt actually failed.
+
+    Keep real pre-execution failures UNKNOWN. Once execution has been observed,
+    reconcile the claimed failure stage and exact failing IDs with the original
+    invocation/JUnit rather than letting it justify invented flaky recovery.
+    """
+    if case['status'] not in ('failed', 'blocked'):
+        return
+    failure = case['failure']
+    require(failure is not None, 'failure evidence missing for failed/blocked case')
+    claimed = failure['test_ids']
+    require(len(claimed) == len(set(claimed)), 'failure evidence has duplicate test IDs')
+    collection, execution = manifest.get('collection'), manifest.get('contract')
+    bad = {t['test_id'] for t in observed_tests if t['outcome'] in ('failure', 'error')}
+    if observed_tests and failure['kind'] != 'collection':
+        require(set(claimed) == bad, 'failure evidence test IDs disagree with original JUnit')
+    if bad and execution is not None:
+        require(execution['timed_out'] or execution['exit_code'] != 0,
+                'failure evidence contradicts successful invocation')
+    if failure['kind'] in ('install', 'resolution'):
+        require(not observed_tests and collection is None and execution is None,
+                'failure evidence contradicts claimed pre-execution stage')
+    elif failure['kind'] == 'contract':
+        require(execution is not None, 'contract failure evidence requires an actual invocation')
+        require(set(claimed) == bad, 'contract failure evidence test IDs disagree with original JUnit')
+        invocation_failed = execution['timed_out'] or execution['exit_code'] != 0
+        skipped = any(t['outcome'] == 'skipped' for t in observed_tests)
+        partial = False
+        if collection and collection.get('evidence_path'):
+            collected = json.loads(safe_path(artifact_root, collection['evidence_path']).read_text())
+            partial = set(collected.get('nodes', [])) != {t['test_id'] for t in observed_tests}
+        require(bad or skipped or invocation_failed or partial,
+                'contract failure evidence contradicts preserved successful execution')
+    elif failure['kind'] in ('automation', 'infrastructure'):
+        # Collector failures synthesize UNKNOWN observations; they must not turn
+        # a fully preserved successful execution into an invented earlier flake.
+        complete_pass = (observed_tests and all(t['outcome'] == 'passed' for t in observed_tests) and
+            execution is not None and not execution['timed_out'] and execution['exit_code'] == 0 and
+            collection is not None and not collection['timed_out'] and collection['exit_code'] == 0 and
+            collection.get('evidence_path') is not None)
+        if complete_pass:
+            collected = json.loads(safe_path(artifact_root, collection['evidence_path']).read_text())
+            require(collected.get('errors') or collected.get('deselected') or
+                    set(collected.get('nodes', [])) != {t['test_id'] for t in observed_tests},
+                    'automation/infrastructure failure evidence contradicts preserved successful execution')
+    elif failure['kind'] == 'collection':
+        # A missing report may be genuinely unobserved. A preserved successful
+        # full collection followed by passing execution cannot be called failure.
+        if collection is not None:
+            failed = collection['timed_out'] or collection['exit_code'] != 0
+            if collection.get('evidence_path'):
+                collected = json.loads(safe_path(artifact_root, collection['evidence_path']).read_text())
+                nodes = collected.get('nodes', [])
+                failed = failed or bool(collected.get('errors') or collected.get('deselected')) or not nodes or len(nodes) != len(set(nodes))
+            else:
+                failed = True  # malformed/missing collection output
+            require(failed or any(t['outcome'] == 'error' for t in observed_tests),
+                    'collection failure evidence contradicts preserved successful collection')
 
 
 def reconcile_artifacts(case, artifact_root, resolution=None, plan_sha256=None):
@@ -520,11 +581,15 @@ def reconcile_artifacts(case, artifact_root, resolution=None, plan_sha256=None):
                         case['failure']['kind'] == 'requested_resolved_mismatch')
             frozen = preserved_resolution(case, resolution, artifact_root, observed_mismatch=mismatch)
             require(installed == frozen or mismatch, 'complete installed lock/frozen resolution mismatch')
+            if mismatch:
+                require(installed != frozen or any(installed.get(canonicalize_name(r['name'])) != r['selected_version']
+                        for r in case['requested']), 'requested/resolved failure evidence contradicts frozen installation')
             # A truthful failed install-mismatch row retains the actual complete
             # inventory, not a fictional copy of the intended frozen environment.
             # It can never attest passed/quarantined/flaky compatibility.
+    manifest = None
     if plan_sha256 is not None:
-        reconcile_invocations(case, artifact_root, plan_sha256)
+        manifest = reconcile_invocations(case, artifact_root, plan_sha256)
     paths = case['contract']['junit_paths']
     require(len(paths) == len(set(paths)), 'duplicate JUnit report')
     exits = []
@@ -551,6 +616,8 @@ def reconcile_artifacts(case, artifact_root, resolution=None, plan_sha256=None):
         require(all(test[k] == row[k] for k in ('outcome', 'failure_signature')) and
                 abs(test['duration_seconds'] - row['duration_seconds']) <= 0.000001,
                 f'JUnit outcome/signature/duration mismatch: {test["test_id"]}')
+    if manifest is not None:
+        reconcile_failure(case, manifest, observed_tests, artifact_root)
 
 
 def reconcile_plan(data, plan, raw):
@@ -668,7 +735,7 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
             else:
                 require(case['status'] != 'passed' or all(t['outcome'] == 'passed' for t in tests), 'pass with failures')
             require(case['status'] not in ('passed', 'flaky') or case['failure'] is None, 'pass with a failure')
-        if successful or contract['junit_paths'] or case['dependency_lock']:
+        if successful or contract['junit_paths'] or case['dependency_lock'] or (case['failure'] is not None and case['failure']['kind'] == 'contract'):
             resolution = None
             if expected_plan is not None:
                 resolution = next(c['resolution'] for c in expected_plan['cases'] if c['case_id'] == case['case_id'])
