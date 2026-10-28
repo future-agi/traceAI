@@ -201,7 +201,8 @@ class TestRealWorldIntegration:
             assert len(agent_spans) >= 1
 
             span = agent_spans[0]
-            assert {s.attributes["pydantic_ai.run.method"] for s in agent_spans} == {"run", "run_sync"}
+            assert len(agent_spans) == 1
+            assert span.attributes["pydantic_ai.run.method"] == "run_sync"
 
         finally:
             instrumentor.uninstrument()
@@ -304,12 +305,13 @@ class TestRealWorldIntegration:
             spans = exporter.get_finished_spans()
             agent_spans = [s for s in spans if "agent.run" in s.name]
 
-            assert len(agent_spans) == 2  # run_sync delegates to run
+            # run_sync's internal run delegation is one logical operation.
+            assert len(agent_spans) == 1
             usage = result.usage() if callable(result.usage) else result.usage
             assert usage.input_tokens > 0
-            for span in agent_spans:
-                assert span.attributes["gen_ai.usage.input_tokens"] == usage.input_tokens
-                assert span.attributes["gen_ai.usage.output_tokens"] == usage.output_tokens
+            assert sum(s.attributes["gen_ai.usage.input_tokens"] for s in agent_spans) == usage.input_tokens
+            assert sum(s.attributes["gen_ai.usage.output_tokens"] for s in agent_spans) == usage.output_tokens
+            assert sum(s.attributes["gen_ai.usage.total_tokens"] for s in agent_spans) == usage.total_tokens
 
         finally:
             instrumentor.uninstrument()
@@ -343,7 +345,7 @@ class TestRealWorldIntegration:
             agent_spans = [s for s in spans if "agent.run" in s.name]
 
             assert caught.value is error
-            assert len(agent_spans) == 2
+            assert len(agent_spans) == 1
             for span in agent_spans:
                 assert span.attributes["pydantic_ai.is_error"] is True
                 assert span.status.status_code.name == "ERROR"

@@ -9,6 +9,7 @@ import json
 import logging
 import time
 import uuid
+from contextvars import ContextVar
 from typing import Any, Callable, Dict, Optional, TypeVar, Union
 
 from opentelemetry import trace as trace_api
@@ -28,6 +29,10 @@ T = TypeVar("T")
 AGENT_RUN_SPAN_NAME = "pydantic_ai.agent.run"
 MODEL_REQUEST_SPAN_NAME = "pydantic_ai.model.request"
 TOOL_CALL_SPAN_NAME = "pydantic_ai.tool.call"
+
+# run_sync delegates to run in a copied async context. Suppress only that
+# delegation, not nested agent operations or tracing in unrelated tasks.
+_SYNC_DELEGATION: ContextVar[Any] = ContextVar("pydantic_ai_sync_delegation", default=None)
 
 
 def safe_serialize(obj: Any, max_length: int = 2000) -> str:
@@ -86,21 +91,10 @@ def extract_model_info(agent: Any) -> Dict[str, Any]:
     return info
 
 
-def extract_usage(result: Any) -> Optional[Dict[str, Any]]:
-    """Extract usage information from a run result.
-
-    Args:
-        result: RunResult or similar object
-
-    Returns:
-        Dict with usage info or None
-    """
-    usage = getattr(result, "usage", None)
-    if callable(usage):
-        usage = usage()
-    if not usage:
+def _usage_values(usage: Any) -> Optional[Dict[str, Any]]:
+    """Copy counters, including historical Usage field names."""
+    if usage is None:
         return None
-
     return {
         "input_tokens": getattr(usage, "request_tokens", 0)
         or getattr(usage, "input_tokens", 0),
@@ -109,6 +103,88 @@ def extract_usage(result: Any) -> Optional[Dict[str, Any]]:
         "total_tokens": getattr(usage, "total_tokens", 0),
         "requests": getattr(usage, "requests", 0),
     }
+
+
+def extract_usage(
+    result: Any, previous_usage: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """Extract this run's usage, excluding the caller's existing budget."""
+    usage = getattr(result, "usage", None)
+    if callable(usage):
+        usage = usage()
+    values = _usage_values(usage)
+    if values is not None and previous_usage is not None:
+        return {key: value - previous_usage[key] for key, value in values.items()}
+    return values
+
+
+def _run_attributes(
+    agent: Any, args: tuple, kwargs: dict, method_name: str
+) -> Dict[str, Any]:
+    """Keep sync and async operation attributes identical."""
+    # Generate run ID
+    run_id = str(uuid.uuid4())
+
+    # Extract prompt
+    prompt = ""
+    if args:
+        prompt = safe_serialize(args[0])
+    elif "user_prompt" in kwargs:
+        prompt = safe_serialize(kwargs["user_prompt"])
+
+    # Get model info
+    model_info = extract_model_info(agent)
+
+    # Build attributes
+    attributes = {
+        PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.AGENT_RUN.value,
+        PydanticAIAttributes.RUN_ID: run_id,
+        PydanticAIAttributes.RUN_METHOD: method_name,
+        PydanticAIAttributes.RUN_PROMPT: prompt,
+    }
+
+    # Add agent info
+    if hasattr(agent, "name") and agent.name:
+        attributes[PydanticAIAttributes.GEN_AI_AGENT_NAME] = agent.name
+
+    # Add model info
+    if model_info.get("model_name"):
+        attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
+    if model_info.get("model_provider"):
+        attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
+
+    # Add instructions if available
+    instructions = getattr(agent, "instructions", None)
+    if instructions:
+        if callable(instructions):
+            try:
+                instr_str = str(instructions)
+            except Exception:
+                instr_str = "<dynamic>"
+        else:
+            instr_str = safe_serialize(instructions, 500)
+        attributes[PydanticAIAttributes.AGENT_INSTRUCTIONS] = instr_str
+
+    # Add result type info
+    result_type = (
+        kwargs.get("output_type")
+        or getattr(agent, "result_type", None)
+        or getattr(agent, "output_type", None)
+    )
+    if result_type and result_type is not str:
+        attributes[PydanticAIAttributes.AGENT_RESULT_TYPE] = str(result_type)
+        attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = True
+    else:
+        attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = False
+
+    # Check for message history
+    message_history = kwargs.get("message_history")
+    if message_history:
+        attributes[PydanticAIAttributes.RUN_MESSAGE_HISTORY_LENGTH] = len(
+            message_history
+        )
+
+    return attributes
 
 
 def wrap_agent_run(
@@ -129,63 +205,15 @@ def wrap_agent_run(
 
     @functools.wraps(original_method)
     async def async_wrapper(self, *args, **kwargs):
-        # Generate run ID
-        run_id = str(uuid.uuid4())
+        if method_name == "run" and _SYNC_DELEGATION.get() is self:
+            token = _SYNC_DELEGATION.set(None)
+            try:
+                return await original_method(self, *args, **kwargs)
+            finally:
+                _SYNC_DELEGATION.reset(token)
 
-        # Extract prompt
-        prompt = ""
-        if args:
-            prompt = safe_serialize(args[0])
-        elif "user_prompt" in kwargs:
-            prompt = safe_serialize(kwargs["user_prompt"])
-
-        # Get model info
-        model_info = extract_model_info(self)
-
-        # Build attributes
-        attributes = {
-            PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.AGENT_RUN.value,
-            PydanticAIAttributes.RUN_ID: run_id,
-            PydanticAIAttributes.RUN_METHOD: method_name,
-            PydanticAIAttributes.RUN_PROMPT: prompt,
-        }
-
-        # Add agent info
-        if hasattr(self, "name") and self.name:
-            attributes[PydanticAIAttributes.GEN_AI_AGENT_NAME] = self.name
-
-        # Add model info
-        if model_info.get("model_name"):
-            attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
-        if model_info.get("model_provider"):
-            attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
-
-        # Add instructions if available
-        instructions = getattr(self, "instructions", None)
-        if instructions:
-            if callable(instructions):
-                try:
-                    instr_str = str(instructions)
-                except Exception:
-                    instr_str = "<dynamic>"
-            else:
-                instr_str = safe_serialize(instructions, 500)
-            attributes[PydanticAIAttributes.AGENT_INSTRUCTIONS] = instr_str
-
-        # Add result type info
-        result_type = getattr(self, "result_type", None) or getattr(self, "output_type", None)
-        if result_type and result_type is not str:
-            attributes[PydanticAIAttributes.AGENT_RESULT_TYPE] = str(result_type)
-            attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = True
-        else:
-            attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = False
-
-        # Check for message history
-        message_history = kwargs.get("message_history")
-        if message_history:
-            attributes[PydanticAIAttributes.RUN_MESSAGE_HISTORY_LENGTH] = len(
-                message_history
-            )
+        attributes = _run_attributes(self, args, kwargs, method_name)
+        previous_usage = _usage_values(kwargs.get("usage"))
 
         start_time = time.time()
 
@@ -202,7 +230,7 @@ def wrap_agent_run(
                 span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
 
                 # Extract and record usage
-                usage = extract_usage(result)
+                usage = extract_usage(result, previous_usage)
                 if usage:
                     span.set_attribute(
                         PydanticAIAttributes.USAGE_INPUT_TOKENS,
@@ -242,32 +270,8 @@ def wrap_agent_run(
 
     @functools.wraps(original_method)
     def sync_wrapper(self, *args, **kwargs):
-        # Generate run ID
-        run_id = str(uuid.uuid4())
-
-        # Extract prompt
-        prompt = ""
-        if args:
-            prompt = safe_serialize(args[0])
-        elif "user_prompt" in kwargs:
-            prompt = safe_serialize(kwargs["user_prompt"])
-
-        # Get model info
-        model_info = extract_model_info(self)
-
-        # Build attributes
-        attributes = {
-            PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.AGENT_RUN.value,
-            PydanticAIAttributes.RUN_ID: run_id,
-            PydanticAIAttributes.RUN_METHOD: method_name,
-            PydanticAIAttributes.RUN_PROMPT: prompt,
-        }
-
-        # Add model info
-        if model_info.get("model_name"):
-            attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
-        if model_info.get("model_provider"):
-            attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
+        attributes = _run_attributes(self, args, kwargs, method_name)
+        previous_usage = _usage_values(kwargs.get("usage"))
 
         start_time = time.time()
 
@@ -277,14 +281,18 @@ def wrap_agent_run(
             attributes=attributes,
         ) as span:
             try:
-                result = original_method(self, *args, **kwargs)
+                token = _SYNC_DELEGATION.set(self)
+                try:
+                    result = original_method(self, *args, **kwargs)
+                finally:
+                    _SYNC_DELEGATION.reset(token)
 
                 # Record result
                 duration_ms = (time.time() - start_time) * 1000
                 span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
 
                 # Extract and record usage
-                usage = extract_usage(result)
+                usage = extract_usage(result, previous_usage)
                 if usage:
                     span.set_attribute(
                         PydanticAIAttributes.USAGE_INPUT_TOKENS,
@@ -293,6 +301,18 @@ def wrap_agent_run(
                     span.set_attribute(
                         PydanticAIAttributes.USAGE_OUTPUT_TOKENS,
                         usage.get("output_tokens", 0),
+                    )
+                    span.set_attribute(
+                        PydanticAIAttributes.USAGE_TOTAL_TOKENS,
+                        usage.get("total_tokens", 0),
+                    )
+
+                output = getattr(result, "output", None)
+                if output is None:
+                    output = getattr(result, "data", None)
+                if output is not None:
+                    span.set_attribute(
+                        PydanticAIAttributes.RUN_RESULT, safe_serialize(output)
                     )
 
                 span.set_attribute(PydanticAIAttributes.IS_ERROR, False)
