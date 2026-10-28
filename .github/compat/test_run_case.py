@@ -208,3 +208,18 @@ pathlib.Path(OUTPUT).write_text(json.dumps(dict(host_uid=65534, private_file='ab
         self.assertEqual(row['status'], 'quarantined')
         self.assertEqual(row['contract']['scenarios'], ['real-sdk', 'privacy'])
         validator.validate_contract.assert_called_once()
+
+    def test_source_sha_is_checked_before_loading_any_source_validator_code(self):
+        from unittest.mock import patch
+        import sys
+        import run_case
+        from test_collect_results import evidence
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, _, output, _, data = evidence(Path(temporary))
+            argv = ['run_case', '--root', str(plan / 'source'), '--plan-dir', str(plan),
+                    '--case-id', data['cases'][0]['case_id'], '--out', str(output)]
+            with patch.object(sys, 'argv', argv), patch('run_case.subprocess.check_output', return_value='2' * 40), \
+                 patch('run_case.semantic_validator', side_effect=AssertionError('must not load mismatched source code')) as validator:
+                with self.assertRaisesRegex(ValueError, 'Source SHA does not match frozen plan'):
+                    run_case.main()
+                validator.assert_not_called()

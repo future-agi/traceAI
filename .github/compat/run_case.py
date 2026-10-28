@@ -445,6 +445,9 @@ def main():
         raise ValueError("Registry artifact digest mismatch")
     if registry_raw != safe_path(root, ".github/compat/registry.json").read_bytes():
         raise ValueError("Registry snapshot differs from immutable source registry")
+    current = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    if current != plan["source_sha"]:
+        raise ValueError("Source SHA does not match frozen plan")
     registry = semantic_validator(root).validate_registry(json.loads(registry_raw), root)
     target = next(t for t in registry["integrations"] if t["id"] == case["integration_id"])
     history = []
