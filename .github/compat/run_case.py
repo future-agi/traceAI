@@ -254,8 +254,8 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             shared_output.mkdir(mode=0o777)
             shared_output.chmod(0o777)  # No credentials/source/install paths are writable here.
             isolated_junit = shared_output / path.name
-            argv = [python, "-I", *command[1:], "--import-mode=importlib", "-o", "junit_family=legacy", "--junitxml=" + str(isolated_junit)]
-            row["contract"]["command"] = ["python", "-I", *command[1:], "--import-mode=importlib", "-o", "junit_family=legacy", "--junitxml=" + path.relative_to(output).as_posix()]
+            argv = [python, "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-o", "junit_family=legacy", "--junitxml=" + str(isolated_junit)]
+            row["contract"]["command"] = ["python", "-I", *command[1:], "--import-mode=importlib", "--rootdir=.", "-o", "junit_family=legacy", "--junitxml=" + path.relative_to(output).as_posix()]
             with (output / "contract.log").open("w") as log:
                 process = subprocess.run(["bash", str(isolated_blocker), python, *argv], cwd=consumer, env=clean_env(), stdout=log,
                                          stderr=subprocess.STDOUT, timeout=600)

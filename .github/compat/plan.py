@@ -89,7 +89,7 @@ def validate_plan(plan):
     if timestamp(plan["generated_at"]) - timestamp(plan["cooldown_cutoff"]) != dt.timedelta(hours=72):
         raise ValueError("Plan cutoff is not 72 hours")
     for case in plan["cases"]:
-        if case["non_blocking"] != (case["selector"] == "prerelease"):
+        if case["non_blocking"] != (case["selector"] in ("prerelease", "historical")):
             raise ValueError("Only explicit exploratory cells are non-blocking")
     return plan
 
@@ -117,6 +117,9 @@ def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", 
     if not re.fullmatch("[0-9a-f]{40}", source_sha) or not re.fullmatch("[0-9a-f]{40}", workflow_sha):
         raise ValueError("Immutable source/workflow SHAs required")
     cutoff = now - dt.timedelta(hours=72)
+    enabled_ids = {t["id"] for t in registry["integrations"] if t["canary"]["enabled"]}
+    if allowlist and (mode != "weekly" or not isinstance(allowlist, dict) or set(allowlist) - enabled_ids):
+        raise ValueError("Exploration requires weekly mode and explicitly enabled integration IDs")
     packages = {canonicalize_name(p["name"]): p for p in discovery["packages"] if p["ecosystem"] == "pypi"}
     core = next(t for t in registry["integrations"] if t["language"] == "python" and t["role"] == "core")
     cases = []
@@ -183,9 +186,12 @@ def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", 
                         selected.append({"name": entry["distribution"], "role": role,
                                          "requirement": entry["distribution"] + ("==" + version if version else "@source:" + source_sha),
                                          "selected_version": version})
-                    case_id = f"{target['id']}-{package_mode}-{selector}-py{runtime.replace('.', '')}"
+                    actual_selector = selector
+                    if selector == "prerelease" and not any(r["selected_version"] and Version(r["selected_version"]).is_prerelease for r in selected[:len(target["upstream"])]):
+                        actual_selector = "historical"  # Explicit stable next-major/other exploratory tuple, not a prerelease claim.
+                    case_id = f"{target['id']}-{package_mode}-{actual_selector}-py{runtime.replace('.', '')}"
                     cases.append({"case_id": case_id, "integration_id": target["id"], "mode": package_mode,
-                                  "selector": selector, "runtime": runtime, "non_blocking": selector == "prerelease",
+                                  "selector": actual_selector, "runtime": runtime, "non_blocking": selector == "prerelease",
                                   "requested": selected, "discovery": records, "problems": problems,
                                   "resolution": None})
     if not cases or len(cases) > MAX_CASES:

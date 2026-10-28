@@ -59,7 +59,7 @@ class PlanTests(unittest.TestCase):
     def test_exploration_is_allowlisted_complete_tuple_and_nonblocking(self):
         registry, discovery = inputs()
         exploratory = generate(registry, discovery, SHA, SHA, NOW, "weekly", allowlist={"python-openai": {"openai": ">=3"}})
-        cases = [c for c in exploratory["cases"] if c["selector"] == "prerelease"]
+        cases = [c for c in exploratory["cases"] if c["selector"] == "historical"]
         self.assertEqual(len(cases), 3)
         self.assertTrue(all(c["non_blocking"] for c in cases))
         with self.assertRaises(ValueError):

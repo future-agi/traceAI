@@ -13,6 +13,10 @@ on:
         type: choice
         options: [stable, weekly]
         default: stable
+      exploratory_allowlist:
+        description: 'Weekly only: JSON of integration IDs to complete upstream specifier maps; default disabled'
+        type: string
+        default: '{}'
       source_ref:
         description: Source commit/ref to build (resolved once to immutable SHA)
         type: string
@@ -32,7 +36,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: compatibility-canary-${{ github.event_name == 'schedule' && github.event.schedule || github.ref }}-${{ inputs.mode || 'auto' }}
+  group: compatibility-canary-${{ github.event_name == 'schedule' && github.event.schedule || github.head_ref || github.ref_name }}-${{ inputs.mode || 'auto' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 defaults:
@@ -107,6 +111,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_SELF_TEST: ${{ inputs.self_test }}
+          EXPLORATORY_ALLOWLIST: ${{ inputs.exploratory_allowlist || '{}' }}
           GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}
           PY310: ${{ steps.py310.outputs.python-path }}
           PY311: ${{ steps.py311.outputs.python-path }}
@@ -119,9 +124,11 @@ jobs:
             fixture=(--fixtures "$PWD/tools/.github/compat/fixtures")
             self_test=(--self-test)
           fi
+          python -c 'import json,os,pathlib; pathlib.Path(os.environ["RUNNER_TEMP"],"allowlist.json").write_text(json.dumps(json.loads(os.environ["EXPLORATORY_ALLOWLIST"])))'
           python tools/.github/compat/discover.py --root "$PWD/source" --output "$RUNNER_TEMP/discovery.json" "${fixture[@]}"
           python tools/.github/compat/plan.py --root "$PWD/source" --out "$PWD/plan" \
             --discovery "$RUNNER_TEMP/discovery.json" --mode "$mode" "${self_test[@]}" --resolve \
+            --allowlist "$RUNNER_TEMP/allowlist.json" \
             --python "3.10=$PY310" --python "3.11=$PY311" --python "3.13=$PY313"
       - name: Preserve exact plan bytes, registry, discovery, wheels and full reports
         if: github.run_attempt == 1

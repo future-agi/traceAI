@@ -24,7 +24,7 @@
         "case_id": {"type": "string", "pattern": "^[a-zA-Z0-9._-]+$"},
         "integration_id": {"type": "string", "pattern": "^python-[a-z0-9._-]+$"},
         "mode": {"enum": ["source", "published"]},
-        "selector": {"enum": ["floor", "latest_eligible", "prerelease"]},
+        "selector": {"enum": ["floor", "latest_eligible", "prerelease", "historical"]},
         "runtime": {"type": "string", "pattern": "^3\\.[0-9]+$"},
         "non_blocking": {"type": "boolean"},
         "requested": {"type": "array", "minItems": 3, "items": {"type": "object", "additionalProperties": false, "required": ["name", "role", "requirement", "selected_version"], "properties": {
