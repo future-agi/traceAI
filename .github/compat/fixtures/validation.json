@@ -54,15 +54,14 @@
       "failure_signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "exception_id": null,
       "duration_seconds": 0.01
-    }
-  ],
-  "execution": [
+    },
     {
-      "test_id": "python/frameworks/fixture/tests/test_contract.py::test_known[param]",
+      "test_id": "python/frameworks/fixture/tests/test_contract.py::test_unrelated_regression",
       "outcome": "failure",
       "failure_signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "exception_id": null,
       "duration_seconds": 0.01
     }
-  ]
+  ],
+  "execution": []
 }
