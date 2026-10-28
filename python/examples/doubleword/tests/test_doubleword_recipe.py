@@ -298,7 +298,14 @@ def test_errors_export_error_span_and_exception(journey, status, error_class):
         span, attrs = only_span(receiver, provider)
         assert span["name"] == "ChatCompletion"
         assert span["status"]["code"] == "STATUS_CODE_ERROR"
-        assert error_class.__name__ in span["status"]["message"]
+        # Current fi-core keeps the error type in exception.type and removes
+        # its redundant status prefix; published 1.1.0 retains that prefix.
+        expected_status = str(caught.value)
+        if not hasattr(fi_instrumentation.TraceConfig, "hide_error_details"):
+            expected_status = f"{error_class.__name__}: {expected_status}"
+        assert span["status"]["message"] == expected_status
+        [exception] = [event for event in span["events"] if event["name"] == "exception"]
+        assert attributes(exception)["exception.type"] == f"{error_class.__module__}.{error_class.__qualname__}"
         assert attrs["gen_ai.span.kind"] == "LLM"
         assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
         assert any(event["name"] == "exception" for event in span["events"])
