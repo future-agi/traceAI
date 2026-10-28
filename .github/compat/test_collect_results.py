@@ -215,3 +215,14 @@ class CollectorTests(unittest.TestCase):
             self.assertTrue(blocked)
             self.assertEqual((folder / 'results.json').read_bytes(), before)
             self.assertEqual([(r['attempt'], r['status']) for r in result['cases']], [(1, 'passed'), (2, 'blocked')])
+
+    def test_full_collection_rejects_partial_execution_even_when_function_check_allows_it(self):
+        def mutate(data, folder):
+            contract = data['cases'][0]['contract']
+            contract.update(tests=contract['tests'][:1], collected=1, executed=1)
+            path, name = IDS[0].split('::')
+            (folder / 'junit/attempt1.xml').write_text(f'<testsuite><testcase file="{path}" name="{name}" time="0.1"/></testsuite>')
+        # Function-level AST validation alone cannot detect a deselected parameter.
+        with patch('collect_results.semantic_validator', return_value=SimpleNamespace(validate_contract=lambda *args: None)):
+            result = self.run_control(mutate)
+        self.assertIn('full collected identities', result['cases'][0]['failure']['summary'])

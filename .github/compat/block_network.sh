@@ -56,7 +56,6 @@ exec unshare --user --map-users=65534,0,1 --map-groups=65534,0,1 --setuid=0 --se
   /bin/bash -c '
     set -euo pipefail
     root=$1; output=$2; toolchain=$3; shift 3
-    namei -l "$toolchain/bin/python3" >&2
     # -S: mandatory probes use only the clean toolchain, never dependency .pth.
     "$toolchain/bin/python3" -I -S - "$root" "$output" <<'\''PY'\''
 import json, os, pathlib, socket, subprocess, sys

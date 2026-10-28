@@ -88,11 +88,16 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNotNone(shutil.which('bwrap'), 'Sandbox must be installed; no host fallback')
         with tempfile.TemporaryDirectory(prefix='compat-host-private-') as outside:
             outside = Path(outside)
-            marker = outside / 'private-marker'
+            # These world-accessible fixture paths would remain reachable across
+            # a netns alone. Their absence proves the filesystem boundary, not
+            # merely ordinary DAC denial to host nobody.
+            outside.chmod(0o755)
+            marker = outside / 'world-readable-host-marker'
             marker.write_text('host-only marker')
-            marker.chmod(0o600)
+            marker.chmod(0o644)
             server = socket.socket(socket.AF_UNIX)
             server.bind(str(outside / 'private.sock')); server.listen(1)
+            (outside / 'private.sock').chmod(0o777)
             try:
                 with tempfile.TemporaryDirectory(prefix='compat-hook-') as temporary:
                     root = Path(temporary); root.chmod(0o755)
