@@ -17,6 +17,10 @@ from traceai_strands import configure_strands_tracing
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
     project_name="strands-tools-agent",
+    # set_global_tracer_provider=True is required: Strands creates its spans from
+    # OpenTelemetry's global tracer provider, so without it no Strands span reaches
+    # this provider and nothing is sent to Future AGI.
+    set_global_tracer_provider=True,
 )
 
 # Configure Strands to use TraceAI
