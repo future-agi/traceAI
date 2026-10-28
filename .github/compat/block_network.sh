@@ -24,19 +24,20 @@ if [[ "${1:-}" != --inside ]]; then
   args=(--die-with-parent --new-session --unshare-pid --unshare-net --unshare-ipc --unshare-uts
     --cap-add CAP_NET_ADMIN --cap-add CAP_SYS_ADMIN --cap-add CAP_SETUID --cap-add CAP_SETGID --cap-add CAP_SETPCAP
     --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /sbin /sbin --ro-bind /lib /lib
-    --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run --tmpfs /home
+    --proc /proc --dev /dev --perms 1777 --tmpfs /tmp --tmpfs /run --perms 1777 --tmpfs /home
     --dir /etc --ro-bind "$root/passwd" /etc/passwd --ro-bind "$root/group" /etc/group
     --ro-bind "$root/subuid" /etc/subuid --ro-bind "$root/subgid" /etc/subgid
     --ro-bind "$root" "$root" --bind "$output" "$output"
-    --ro-bind "$toolchain" "$toolchain" --chdir "$cwd" --clearenv
+    --chdir "$cwd" --clearenv
     --setenv PATH /usr/sbin:/usr/bin:/sbin:/bin)
   # bwrap creates implicit mount parents mode 0700. Make the interpreter's
   # synthetic parent directories traversable by the mapped disposable UID.
-  parent=$(dirname "$toolchain")
+  parents=(); parent=$(dirname "$toolchain")
   while [[ "$parent" != / ]]; do
-    args+=(--perms 0755 --dir "$parent")
+    parents=(--perms 0755 --dir "$parent" "${parents[@]}")
     parent=$(dirname "$parent")
   done
+  args+=("${parents[@]}" --ro-bind "$toolchain" "$toolchain")
   [[ ! -e /lib64 ]] || args+=(--ro-bind /lib64 /lib64)
   [[ ! -d /etc/ssl/certs ]] || args+=(--ro-bind /etc/ssl/certs /etc/ssl/certs)
   exec sudo --non-interactive env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \

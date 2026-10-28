@@ -290,6 +290,30 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             isolated_junit = shared_output / path.name
             argv = [python, *contract_command(contract, str(isolated_junit))[1:]]
             row["contract"]["command"] = contract_command(contract, path.relative_to(output).as_posix())
+            # Independently collect the full exact parametrized identity set in
+            # the same frozen environment. Partial/deselected execution cannot
+            # inherit scenario claims from a single executed function/parameter.
+            collected_path = shared_output / "collection.json"
+            collection_code = ("import json,pathlib,pytest,sys\n"
+                "class Collection:\n"
+                " def __init__(self): self.deselected=[]\n"
+                " def pytest_deselected(self,items): self.deselected.extend(i.nodeid for i in items)\n"
+                " def pytest_collection_finish(self,session):\n"
+                "  pathlib.Path(sys.argv[1]).write_text(json.dumps(dict(nodes=sorted(i.nodeid for i in session.items),deselected=self.deselected)))\n"
+                "raise SystemExit(pytest.main(sys.argv[2:],plugins=[Collection()]))\n")
+            collect_argv = [python, "-I", "-c", collection_code, str(collected_path), *command[3:],
+                            "--import-mode=importlib", "--rootdir=.", "-p", "pytest_asyncio.plugin", "--collect-only"]
+            with (output / "collection.log").open("w") as log:
+                collected = subprocess.run(sandbox(temporary, shared_output, toolchain, consumer, collect_argv),
+                    cwd=consumer, env=clean_env(), stdout=log, stderr=subprocess.STDOUT, timeout=600)
+            stage = "collection"
+            if collected.returncode or not collected_path.is_file() or collected_path.is_symlink():
+                raise ValueError("Full contract collection failed; see collection.log")
+            collection = json.loads(collected_path.read_text())
+            if collection["deselected"] or not collection["nodes"] or len(collection["nodes"]) != len(set(collection["nodes"])):
+                raise ValueError("Empty/deselected/duplicate full contract collection")
+            shutil.copyfile(collected_path, lock_dir / (case["case_id"] + ".collection.json"))
+            stage = "infrastructure"
             with (output / "contract.log").open("w") as log:
                 process = subprocess.run(sandbox(temporary, shared_output, toolchain, consumer, argv), cwd=consumer, env=clean_env(), stdout=log,
                                          stderr=subprocess.STDOUT, timeout=600)
@@ -308,6 +332,8 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                 raise ValueError(f"Runner crashed (exit {process.returncode}); exceptions cannot waive crashes")
             if process.returncode in (2, 3, 4, 5) or any(d["kind"] == "collection" for d in details):
                 raise ValueError(f"Collection/runner failure (pytest exit {process.returncode})")
+            if sorted(t["test_id"] for t in tests) != collection["nodes"]:
+                raise ValueError("Partial/deselected contract execution differs from full collection")
             if row["contract"]["executed"] < contract["minimum_executed"]:
                 raise ValueError("Empty/insufficient contract execution")
             if row["contract"]["unexpected_skips"]:
@@ -319,8 +345,9 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
                 row["status"] = "quarantined" if bad and all(t["exception_id"] for t in bad) else "failed"
                 row["failure"] = aggregate_failure(details, [t["test_id"] for t in bad], f"pytest exit {process.returncode}")
             else:
+                candidate = {**row, "contract": {**row["contract"], "scenarios": contract["scenarios"]}}
+                semantic_validator(root).validate_contract(candidate, target, root)
                 row["contract"]["scenarios"] = contract["scenarios"]
-                semantic_validator(root).validate_contract(row, target, root)
                 row["status"] = "passed"
     except (ValueError, OSError, subprocess.SubprocessError, ET.ParseError, KeyError) as error:
         kind = locals().get("stage", "resolution")

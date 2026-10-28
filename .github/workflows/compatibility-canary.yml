@@ -150,7 +150,7 @@ jobs:
           p = validate_plan(json.load(open('plan/compat-plan.json')))
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write('source_sha=' + p['source_sha'] + '\n')
-              f.write('matrix=' + json.dumps({'include': [{'case_id': c['case_id'], 'python': c['runtime'], 'non_blocking': c['non_blocking']} for c in p['cases']]}) + '\n')
+              f.write('matrix=' + json.dumps({'include': [{'case_id': c['case_id'], 'python': c['runtime_identity']['version'], 'non_blocking': c['non_blocking']} for c in p['cases']]}) + '\n')
           PY
 
   case:

@@ -390,7 +390,7 @@ def main():
     write_json(args.out / "compat-plan.json", plan)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
-            stream.write("matrix=" + json.dumps({"include": [{"case_id": c["case_id"], "python": c["runtime"],
+            stream.write("matrix=" + json.dumps({"include": [{"case_id": c["case_id"], "python": c["runtime_identity"]["version"],
                                                               "non_blocking": c["non_blocking"]} for c in plan["cases"]]}) + "\n")
             stream.write("source_sha=" + source + "\n")
 

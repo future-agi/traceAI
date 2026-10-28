@@ -58,6 +58,7 @@ def evidence(directory):
     for key in ("report", "requirements"):
         shutil.copyfile(plan_dir / selected["resolution"][key], case_dir / selected["resolution"][key])
     (case_dir / "locks/case.freeze.txt").write_text(freeze)
+    write_json(case_dir / ("locks/" + selected["case_id"] + ".collection.json"), dict(nodes=sorted(IDS), deselected=[]))
     (case_dir / "junit/attempt1.xml").write_text('<testsuite>' + ''.join(
         f'<testcase file="{node.split("::")[0]}" name="{node.split("::")[1]}" time="0.1"/>' for node in IDS) + '</testsuite>')
     result = {"schema_version": 1, "run": run_header(plan, raw), "cases": [row]}

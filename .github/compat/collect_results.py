@@ -224,6 +224,9 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
                     semantic_validator(source_root).validate_contract(row, target, source_root)
                     if len(row["contract"]["junit_paths"]) != 1 or row["contract"]["command"] != contract_command(target["contract_test"], row["contract"]["junit_paths"][0]):
                         raise ValueError("Exact trusted contract command mismatch")
+                    collection = json.loads(safe_path(folder, "locks/" + case_id + ".collection.json").read_text())
+                    if collection["deselected"] or collection["nodes"] != sorted(t["test_id"] for t in row["contract"]["tests"]):
+                        raise ValueError("Partial/deselected execution differs from full collected identities")
                     frozen_environment(plan_dir, folder, selected, row)
                 references = list(row["contract"]["junit_paths"])
                 validator = semantic_validator(source_root) if source_root is not None else None
