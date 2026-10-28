@@ -63,7 +63,8 @@ from app import check_base_url
 base_url = check_base_url(os.environ["LEPTON_ENDPOINT_URL"])
 api_key = os.environ["LEPTON_API_TOKEN"]
 model = os.environ["LEPTON_MODEL"]
-provider = register(project_name="lepton-openai-recipe", project_type=ProjectType.OBSERVE, set_global_tracer_provider=False, verbose=False)
+provider = register(project_name=os.environ.get("FI_PROJECT_NAME") or "lepton-openai-recipe",
+                    project_type=ProjectType.OBSERVE, set_global_tracer_provider=False, verbose=False)
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 client = OpenAI(base_url=base_url, api_key=api_key)
 response = client.chat.completions.create(model=model, messages=[{"role": "user", "content": "What is a comet?"}])

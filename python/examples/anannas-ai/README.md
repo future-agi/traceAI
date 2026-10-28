@@ -1,6 +1,6 @@
 # Anannas AI (OpenAI-compatible) with traceAI
 
-Trace Chat Completions through the official `openai` Python SDK at `https://api.anannas.ai/v1` ([Anannas quickstart](https://docs.anannas.ai/)). This recipe uses the existing [`traceAI-openai`](../../frameworks/openai/) instrumentor; no Anannas package is needed.
+Trace Chat Completions through the official `openai` Python SDK at `https://api.anannas.ai/v1` ([Anannas quickstart](https://docs.anannas.ai/quickstart)). This recipe uses the existing [`traceAI-openai`](../../frameworks/openai/) instrumentor; no Anannas package is needed.
 
 ## Install
 
@@ -30,7 +30,7 @@ pip install traceAI-openai fi-instrumentation-otel openai
 | `FI_HIDE_INPUTS` | No | Set to `true` to mask input attributes. |
 | `FI_HIDE_OUTPUTS` | No | Set to `true` to mask output attributes. |
 
-Anannas key, bearer authentication, and model examples come from the [Anannas quickstart](https://docs.anannas.ai/). Future AGI keys go only to the tracer as `X-Api-Key` and `X-Secret-Key`. The vendor key goes only to the OpenAI client.
+Anannas key, bearer authentication, and model examples come from the [Anannas quickstart](https://docs.anannas.ai/quickstart). Future AGI keys go only to the tracer as `X-Api-Key` and `X-Secret-Key`. The vendor key goes only to the OpenAI client.
 
 Missing or empty `ANANNAS_MODEL` (without `--model`) or `ANANNAS_API_KEY` exits 2 before tracing. Invalid `ANANNAS_BASE_URL` also exits 2 before tracing. The recipe does not check the Future AGI keys.
 
@@ -39,7 +39,7 @@ Missing or empty `ANANNAS_MODEL` (without `--model`) or `ANANNAS_API_KEY` exits 
 ```bash
 export FI_API_KEY="placeholder-fi-api-key"
 export FI_SECRET_KEY="placeholder-fi-secret-key"
-export FI_PROJECT_NAME="anannas-ai-example"
+export FI_PROJECT_NAME="${FI_PROJECT_NAME:-anannas-ai}"
 export ANANNAS_API_KEY="placeholder-anannas-key"
 export ANANNAS_MODEL="openai/gpt-5-mini"
 python src/app.py
@@ -78,7 +78,7 @@ The fixtures export one `ChatCompletion` span per completed test call, with `gen
 
 Current `traceAI-openai` behavior is:
 
-- For a successful non-streamed call, `gen_ai.request.model` is the model ID the provider returns. The test requests `openai/gpt-5-mini` and returns the synthetic fixture ID `openai/gpt-5-mini-2026-09-01`; the dated ID lands in `gen_ai.request.model`. The response example in the [Anannas quickstart](https://docs.anannas.ai/) echoes the requested `openai/gpt-5-mini`, so on a real call the two are usually the same; the fixture differs on purpose so the tests can tell them apart.
+- For a successful non-streamed call, `gen_ai.request.model` is the model ID the provider returns. The test requests `openai/gpt-5-mini` and returns the synthetic fixture ID `openai/gpt-5-mini-2026-09-01`; the dated ID lands in `gen_ai.request.model`. The response example in the [Anannas quickstart](https://docs.anannas.ai/quickstart) echoes the requested `openai/gpt-5-mini`, so on a real call the two are usually the same; the fixture differs on purpose so the tests can tell them apart.
 - With invocation parameters enabled, `gen_ai.request.parameters` keeps the requested ID, including its provider prefix. Up to `traceai-openai` 0.1.10, streaming and failed calls omit `gen_ai.request.model`, while retaining that requested ID in parameters; later versions also record it as the span model.
 - `output.value` is assistant content. Streaming accumulates the text through the same instrumentor. A stream with no text records `''`, with no raw-response fallback.
 - When usage is supplied, tests pin `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and `gen_ai.usage.total_tokens`. Missing usage omits all three; it is unknown, never zero. The default stream fixture has no usage. A final usage chunk with `stream_options={"include_usage": True}` supplies the same three attributes in the fixture test.
@@ -88,13 +88,13 @@ Cost lookup keyed on the requested model name may miss a different returned name
 
 ## Provider specifics
 
-The [Anannas quickstart](https://docs.anannas.ai/) examples use `https://api.anannas.ai/v1`, the default here. The recipe also accepts `https://anannas.ai/v1` with the same URL rules. The main-site [API page](https://anannas.ai/docs) documents that alternate host with unprefixed model IDs such as `claude-sonnet-4`; it is a separate configuration. When selecting that host, choose a model from its own `GET /v1/models` response rather than assuming the default host's prefixed IDs are interchangeable. The recipe passes your ID through unchanged.
+The [Anannas quickstart](https://docs.anannas.ai/quickstart) examples use `https://api.anannas.ai/v1`, the default here. The recipe also accepts `https://anannas.ai/v1` with the same URL rules. The main-site [API page](https://anannas.ai/docs) documents that alternate host with unprefixed model IDs such as `claude-sonnet-4`; it is a separate configuration. When selecting that host, choose a model from its own `GET /v1/models` response rather than assuming the default host's prefixed IDs are interchangeable. The recipe passes your ID through unchanged.
 
-Model IDs use the form `provider/model-name`, such as `openai/gpt-5-mini` or `anthropic/claude-3-sonnet`. Anannas documents `POST /v1/chat/completions`, `GET /v1/models`, bearer authentication, and SSE streaming with `stream: true` ([Anannas quickstart](https://docs.anannas.ai/)). This recipe uses only Chat Completions and preserves model IDs.
+Model IDs use the form `provider/model-name`, such as `openai/gpt-5-mini` or `anthropic/claude-3-sonnet`. Anannas documents `POST /v1/chat/completions`, `GET /v1/models`, bearer authentication, and SSE streaming with `stream: true` ([Anannas quickstart](https://docs.anannas.ai/quickstart)). This recipe uses only Chat Completions and preserves model IDs.
 
 Both Anannas hosts require HTTPS and exactly `/v1` or `/v1/`. Root URLs, endpoint paths such as `/v1/chat/completions` and `/v1/models`, other paths, queries, and fragments are refused. Whitespace, control characters, Unicode or invalid IDNA hosts, hosts with a backslash, `%` or an empty label, and URL credentials are refused before tracing, for every host. Unicode hosts are refused even for proxies because Unicode dots can spell an Anannas host and skip its rules; for an internationalised proxy host, use its punycode (`xn--`) form. Valid proxy and loopback URLs keep their supplied spelling and paths.
 
-Anannas documents 400, 401, 402, 429, and 500 errors with `{"error": {"message": "...", "type": "invalid_request_error"}}`; 402 means insufficient credits ([Anannas quickstart](https://docs.anannas.ai/)). Tests cover 401 and 402. Native OTLP or trace export is not documented in the [Anannas quickstart](https://docs.anannas.ai/) (checked 2026-10-06), so client-side tracing with `traceAI-openai` is the supported path: uninstrumented calls to Anannas are not traced, and the Anannas dashboard is not imported.
+Anannas documents 400, 401, 402, 429, and 500 errors with `{"error": {"message": "...", "type": "invalid_request_error"}}`; 402 means insufficient credits ([Anannas quickstart](https://docs.anannas.ai/quickstart)). Tests cover 401 and 402. Native OTLP or trace export is not documented in the [Anannas quickstart](https://docs.anannas.ai/quickstart) (checked 2026-10-06), so client-side tracing with `traceAI-openai` is the supported path: uninstrumented calls to Anannas are not traced, and the Anannas dashboard is not imported.
 
 ## Privacy
 

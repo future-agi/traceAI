@@ -258,11 +258,12 @@ def test_stream_text_model_gap_and_usage(journey, include_usage):
         assert_key_separation(requests[0], receiver)
 
 
-def test_async_flex_native_parameter_reaches_body_and_span(journey):
+@pytest.mark.parametrize("use_extra_body", [False, True], ids=["native-keyword", "extra-body"])
+def test_async_flex_parameter_reaches_chat_body(journey, use_extra_body):
     signature = inspect.signature(openai.resources.chat.completions.Completions.create)
     # service_tier is a native keyword on every tested SDK (1.69.0 floor and 3.24.0).
-    # The claim pinned here is the runtime behaviour: the value reaches the body and
-    # the span parameters. Type annotations differ between SDK versions and are not pinned.
+    # Both forms reach the HTTP body; the native keyword also reaches span parameters.
+    # Type annotations differ between SDK versions and are not pinned.
     assert "service_tier" in signature.parameters
     requests = []
 
@@ -271,13 +272,18 @@ def test_async_flex_native_parameter_reaches_body_and_span(journey):
         return httpx.Response(200, json=completion())
 
     with journey() as (receiver, provider, _), mock_client(handler) as client:
-        client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Flex control"}], service_tier="flex")
+        options = {"extra_body": {"service_tier": "flex"}} if use_extra_body else {"service_tier": "flex"}
+        client.chat.completions.create(model=MODEL, messages=[{"role": "user", "content": "Flex control"}], **options)
         _, attrs = only_span(receiver, provider)
         assert len(requests) == 1
         assert str(requests[0].url) == "https://api.doubleword.ai/v1/chat/completions"
         assert json.loads(requests[0].content)["service_tier"] == "flex"
         params = json.loads(attrs["gen_ai.request.parameters"])
-        assert params["service_tier"] == "flex"
+        if use_extra_body:
+            # The instrumentor reads json_data before the SDK merges extra_json.
+            assert "service_tier" not in params
+        else:
+            assert params["service_tier"] == "flex"
         assert params["model"] == MODEL
         assert attrs["gen_ai.request.model"] == RETURNED_MODEL
         assert_key_separation(requests[0], receiver)
@@ -650,6 +656,23 @@ def test_loopback_guard_refuses_real_host_before_dns(operation):
         assert receiver.spans() == []
 
 
+@pytest.mark.parametrize("operation", ["connect", "connect_ex"])
+@pytest.mark.parametrize("address", ["", b"", "/tmp/recipe-guard.sock", b"/tmp/recipe-guard.sock"])
+def test_loopback_guard_refuses_non_tuple_addresses(operation, address, tmp_path):
+    env = dict(os.environ)
+    env.update({
+        "PYTHONPATH": str(RECIPE / "tests/loopback_guard"),
+        "LOOPBACK_GUARD_LOG": str(tmp_path / "guard.log"),
+        "LOOPBACK_GUARD_READY": str(tmp_path / "guard.ready"),
+    })
+    code = f"import socket; socket.socket().{operation}({address!r})"
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    assert "loopback guard refused non-loopback host" in result.stderr
+    assert (tmp_path / "guard.ready").read_text() == "installed\n"
+    assert (tmp_path / "guard.log").read_text() == "Refused non-loopback host\n"
+
+
 def test_readme_requirements_and_public_contract():
     readme = (RECIPE / "README.md").read_text()
     assert readme.startswith("# Doubleword (OpenAI-compatible) with traceAI")
@@ -661,6 +684,8 @@ def test_readme_requirements_and_public_contract():
     assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "doubleword-example"' in readme
     assert "gen_ai.request.model" in readme
     assert "service_tier=\"flex\"" in readme
+    assert 'extra_body={"service_tier": "flex"}' in readme
+    assert f'export DOUBLEWORD_MODEL="{MODEL}"' in readme
     assert "embedding.embeddings" in readme
     assert "verbose=False" in readme
     assert "TBD" not in readme

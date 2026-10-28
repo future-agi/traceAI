@@ -37,7 +37,7 @@ Choose one of these two different surfaces. Replace `<workspace-host>` with the 
 | Unity Gateway model services | `https://<workspace-host>/ai-gateway/mlflow/v1` | `system.ai.claude-sonnet-4-5` |
 | Model Serving serving endpoints | `https://<workspace-host>/serving-endpoints` | `openai-chat-endpoint` |
 
-Use your own model service or endpoint name. Both names above are examples. `DATABRICKS_BASE_URL` is required and replaces the base URL for either surface.
+Use your own model service or endpoint name. Both names above are examples. `DATABRICKS_BASE_URL` is required and replaces the base URL for either surface. On Databricks workspace hosts, these paths accept at most one trailing slash; repeated trailing slashes are refused.
 
 ## Run
 
@@ -124,7 +124,7 @@ The embedding fixture pins exported input text separately. These chat masking te
 - SQL `ai_query` and AI Functions.
 - The MLflow Deployments SDK and Databricks-internal MLflow trace forwarding.
 - Agent / Genie code and other agent frameworks.
-- The Gemini/Anthropic gateway native APIs.
+- The Gemini/Anthropic gateway native APIs, and the OpenAI provider-native `/ai-gateway/openai/v1` surface. The app refuses these paths; it uses the unified `/ai-gateway/mlflow/v1` surface or `/serving-endpoints` instead ([migration guide](https://docs.databricks.com/aws/en/ai-gateway/migrate-to-unity-gateway)).
 - The `DatabricksOpenAI` helper.
 - Direct REST invocation calls and workspace provisioning.
 

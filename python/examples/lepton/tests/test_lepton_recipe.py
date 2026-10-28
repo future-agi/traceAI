@@ -730,6 +730,7 @@ def test_readme_and_requirements_pin_customer_contract():
     ):
         assert text in readme
     assert "TBD" not in readme
+    assert 'project_name=os.environ.get("FI_PROJECT_NAME") or "lepton-openai-recipe"' in readme
     assert "*.lepton.run" not in readme
     assert "Do not guess `/v1`" not in readme
     assert "The OpenAI SDK requires a non-empty API key" not in readme

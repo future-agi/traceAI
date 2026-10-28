@@ -34,13 +34,13 @@ On `api.doubleword.ai`, the URL must use HTTPS and the path must be exactly `/v1
 
 ## Run
 
-Run from this directory. Replace the model placeholder with an available catalog id; it is not a callable model name.
+Run from this directory. Replace the key placeholders with your own keys. The example uses `deepseek-ai/DeepSeek-V4-Flash`, listed in Doubleword's [API reference](https://doubleword.ai/llms.txt); choose a model available to your account from the [catalog](https://docs.doubleword.ai/inference-api/models) or `client.models.list()`.
 
 ```bash
 export FI_API_KEY="placeholder-futureagi-api-key"
 export FI_SECRET_KEY="placeholder-futureagi-secret-key"
 export DOUBLEWORD_API_KEY="placeholder-doubleword-key"
-export DOUBLEWORD_MODEL="placeholder-catalog-model"
+export DOUBLEWORD_MODEL="deepseek-ai/DeepSeek-V4-Flash"
 export DOUBLEWORD_BASE_URL="https://api.doubleword.ai/v1"
 python src/app.py
 python src/app.py --stream
@@ -91,11 +91,18 @@ The OpenAI SDK sends `Authorization: Bearer <key>`. Choose a model ID from the
 pass the exact returned ID, including its organization prefix. For dedicated
 realtime deployments, Doubleword supplies your organization-specific model names.
 
-Doubleword documents async inference separately through the Responses API with
-`service_tier="flex"`, or through its Autobatcher. The Chat Completions CLI here
-does not select an async tier. Self-serve realtime uses shared, concurrency-limited
-capacity; dedicated realtime is a separate deployment option. A 429 with
-`inflight_limit_exceeded` indicates the account's per-model concurrency limit.
+Doubleword's [API reference](https://doubleword.ai/llms.txt) also documents async
+inference on `client.chat.completions.create(...)` with
+`extra_body={"service_tier": "flex"}`. The SDK versions covered by the fixtures
+also accept the native `service_tier="flex"` keyword. Both forms reach the Chat
+Completions request body in the fixtures; only the native keyword is captured in
+`gen_ai.request.parameters` by the instrumentor. The Chat Completions CLI here
+does not select an async tier. Doubleword separately documents
+[Responses API async inference](https://docs.doubleword.ai/inference-api/async-inference)
+and Autobatcher; those are not the only ways to select flex. Self-serve realtime
+uses shared, concurrency-limited capacity; dedicated realtime is a separate
+deployment option. A 429 with `inflight_limit_exceeded` indicates the account's
+per-model concurrency limit.
 
 The same [API reference](https://doubleword.ai/llms.txt) lists embeddings. An OpenAI-shaped embedding fixture at `/v1/embeddings` produces a `CreateEmbeddingResponse` span with `gen_ai.span.kind=EMBEDDING` and provider `openai` (`doubleword` in later versions). The model id from the response appears in `embedding.model_name`; up to 0.1.10 `gen_ai.request.model` is absent, and later versions set it too. Requested model parameters and input/total token counts are recorded.
 
