@@ -1,5 +1,6 @@
 ## [Unreleased]
 ### Fixed
+- Embeddings respect `hide_inputs` for indexed input text and `hide_outputs` for both raw and indexed vectors, including with older fi-core releases.
 - Chat streams used with `with` / `async with` retain the traced iterator and finish once on exhaustion or early context exit; context-body errors mark an unfinished span as ERROR.
 - Streamed and failed Chat Completions spans now carry `gen_ai.request.model` (the requested model); a successful non-streamed response still records the served model.
 - `gen_ai.provider.name` follows the client's `base_url` host for a small, explicit set of OpenAI-compatible vendors (Azure, Google, Vertex AI, DeepSeek, xAI, Mistral, Anthropic, Baseten, DashScope, Databricks, Lepton, Perplexity, OrcaRouter, Anannas, Doubleword). Unknown hosts, proxies and loopback servers keep `openai`. Previously the label was always `openai`, even for Azure and Google hosts.

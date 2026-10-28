@@ -104,7 +104,7 @@ class _WithOpenAI(ABC):
         self._stream_types = (openai.Stream, openai.AsyncStream)
         self._request_attributes_extractor = _RequestAttributesExtractor(openai=openai)
         self._response_attributes_extractor = _ResponseAttributesExtractor(
-            openai=openai
+            openai=openai, config=self._config
         )
 
         def responses_accumulator(request_parameters: _RequestParameters) -> Any:
@@ -251,7 +251,7 @@ class _WithOpenAI(ABC):
         """The raw embeddings response; vectors are replaced by their dimension
         count when FI_HIDE_EMBEDDING_VECTORS / hide_embedding_vectors is set."""
         raw = response.to_dict()
-        if self._config.hide_embedding_vectors:
+        if self._config.hide_embedding_vectors or self._config.hide_outputs:
             for item in raw.get("data") or []:
                 if isinstance(item, dict) and "embedding" in item:
                     vector = item.pop("embedding")

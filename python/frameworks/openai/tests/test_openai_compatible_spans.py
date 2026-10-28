@@ -347,3 +347,19 @@ def test_embedding_with_usage_keeps_token_attributes(make_tracer):
     _, attrs = embed(make_tracer=make_tracer)
     assert attrs["gen_ai.usage.input_tokens"] == 3
     assert attrs["gen_ai.usage.total_tokens"] == 3
+
+
+def test_hide_inputs_hides_embedding_text_as_well_as_input_value(make_tracer):
+    _, attrs = embed(TraceConfig(hide_inputs=True), make_tracer=make_tracer)
+    assert "A short example." not in json.dumps(attrs)
+    assert "embedding.embeddings.0.embedding.text" not in attrs
+    assert attrs["gen_ai.usage.input_tokens"] == 3
+
+
+def test_hide_outputs_hides_embedding_vectors_in_all_copies(make_tracer):
+    _, attrs = embed(TraceConfig(hide_outputs=True), make_tracer=make_tracer)
+    assert "0.25" not in json.dumps(attrs)
+    assert "embedding.embeddings.0.embedding.vector" not in attrs
+    assert "embedding" not in json.loads(attrs["embedding.embeddings"])["data"][0]
+    assert attrs["output.value"] == "__REDACTED__"
+    assert attrs["embedding.embeddings.0.embedding.text"] == "A short example."
