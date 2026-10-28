@@ -481,7 +481,9 @@ These recipes reuse SDK instrumentation or configure a native tracing/export pat
 | OpenLIT | [Setup](python/examples/openlit/) |
 | OpenLLMetry (Traceloop SDK) | [Setup](python/examples/openllmetry/) |
 | OrcaRouter | [Setup](python/examples/orcarouter/) |
+| Perplexity Agent API | [Setup](python/examples/perplexity/) |
 | PrismML Bonsai | [Setup](python/examples/prismml/) |
+| Qwen (Alibaba Cloud Model Studio) | [Setup](python/examples/qwen/) |
 | Deep Agents (via LangChain) | [Setup](python/frameworks/langchain/README.md#deep-agents) |
 | TanStack AI (TypeScript) | [Setup](typescript/examples/tanstack-ai/) |
 | Arconia (Java) | [Setup](java/examples/arconia-example/) |
