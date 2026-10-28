@@ -23,6 +23,7 @@ import urllib.request
 import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from datetime import datetime, timedelta, timezone
 
 # -I excludes CWD and user site packages; only these trusted sibling modules are
@@ -61,27 +62,34 @@ def extract_archive(data, destination):
     """Never call extractall on an untrusted dependency job's archive."""
     if len(data) > MAX_ARCHIVE or any(destination.iterdir()):
         raise ValueError("oversized archive or nonempty extraction destination")
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        infos = archive.infolist()
-        if len(infos) > MAX_FILES or sum(i.file_size for i in infos) > MAX_EXPANDED:
-            raise ValueError("archive exceeds file/expanded-size limit")
-        names = set()
-        for info in infos:
-            # Directory records are optional but must also be safe and unique.
-            relative = info.filename.rstrip("/")
-            path = safe_path(destination, relative)
-            folded = unicodedata.normalize("NFC", relative).casefold()
-            if folded in names or stat.S_ISLNK(info.external_attr >> 16) or info.flag_bits & 1:
-                raise ValueError("duplicate, symlink or encrypted archive member")
-            names.add(folded)
-            if info.is_dir():
-                path.mkdir(parents=True, exist_ok=True)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                content = archive.read(info)
-                if len(content) != info.file_size:
-                    raise ValueError("truncated archive member")
-                path.write_bytes(content)
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            infos = archive.infolist()
+            if len(infos) > MAX_FILES or sum(i.file_size for i in infos) > MAX_EXPANDED:
+                raise ValueError("archive exceeds file/expanded-size limit")
+            names = set()
+            for info in infos:
+                # Only the methods used by Actions artifacts are admitted. Do not
+                # instantiate additional decompressors for attacker-chosen codecs.
+                if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                    raise ValueError("unsupported archive compression")
+                relative = info.filename.rstrip("/")
+                path = safe_path(destination, relative)
+                folded = unicodedata.normalize("NFC", relative).casefold()
+                if folded in names or stat.S_ISLNK(info.external_attr >> 16) or info.flag_bits & 1:
+                    raise ValueError("duplicate, symlink or encrypted archive member")
+                names.add(folded)
+                if info.is_dir():
+                    path.mkdir(parents=True, exist_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    content = archive.read(info)
+                    if len(content) != info.file_size:
+                        raise ValueError("truncated archive member")
+                    path.write_bytes(content)
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError, RuntimeError, EOFError, zlib.error):
+        # A bad run must not abort validation/rendering of unrelated healthy runs.
+        raise ValueError("malformed archive or compressed member") from None
 
 
 def load_json(path, limit=8 * 1024 * 1024):
@@ -90,13 +98,40 @@ def load_json(path, limit=8 * 1024 * 1024):
     return decode_json(path.read_bytes(), limit)
 
 
+def collection_limits(data):
+    """Bound work before JSON Schema (including uniqueItems/branch validation).
+
+    The byte/depth limits at decoding are not enough: a tiny array of empty
+    objects can produce thousands of errors. Traverse iteratively and never
+    retain errors, schema contexts or copies of artifact collections.
+    """
+    limits = {"cases": 512, "planned_case_ids": 256, "tests": 10000,
+              "requested": 4096, "resolved": 4096, "discovery": 4096,
+              "junit_paths": 512, "integrations": 512}
+    stack, nodes = [(data, "", 0)], 0
+    while stack:
+        value, key, depth = stack.pop()
+        nodes += 1
+        if nodes > 150000 or depth > 64:
+            raise ValueError("JSON exceeds collection limit")
+        if isinstance(value, (dict, list)):
+            bound = limits.get(key, 16384 if isinstance(value, list) else 4096)
+            if len(value) > bound:
+                raise ValueError("JSON exceeds collection limit")
+            if isinstance(value, dict):
+                stack.extend((v, k, depth + 1) for k, v in value.items())
+            else:
+                stack.extend((v, "", depth + 1) for v in value)
+
+
 def schema_validate(data, filename):
     from jsonschema import Draft202012Validator, FormatChecker
+    collection_limits(data)
     validator = Draft202012Validator(load_json(ROOT / ".github/compat" / filename), format_checker=FormatChecker())
-    errors = sorted(validator.iter_errors(data), key=lambda e: str(list(e.path)))
-    if errors:
+    error = next(validator.iter_errors(data), None)
+    if error is not None:
         # Do not print artifact data or failed values into logs.
-        raise ValueError(f"{filename}: invalid data at {list(errors[0].path)} ({errors[0].validator})")
+        raise ValueError(f"{filename}: invalid data at {list(error.path)} ({error.validator})")
 
 
 def placeholder(case):
@@ -110,10 +145,12 @@ def placeholder(case):
 def validate_plan_snapshot(raw):
     """Validate the ABI fields we consume before indexing any plan content."""
     plan = decode_json(raw)
+    collection_limits(plan)
     if not isinstance(plan, dict) or any(key not in plan for key in
             ("source_sha", "workflow_sha", "self_test", "cases")):
         raise ValueError("invalid retained plan shape")
-    if not isinstance(plan["cases"], list) or not plan["cases"] or not isinstance(plan["self_test"], bool):
+    if (not isinstance(plan["cases"], list) or not plan["cases"] or len(plan["cases"]) > 256
+            or not isinstance(plan["self_test"], bool)):
         raise ValueError("invalid retained plan cases/self-test")
     ids = set()
     for selected in plan["cases"]:
@@ -459,8 +496,8 @@ def verify_provenance(bundle, metadata, api):
         raise ValueError("tested source is not in trusted dev ancestry")
 
 
-def canonical_validate(bundle, registry, artifact_root, plan_bytes, source_root):
-    """Use PR1's trusted implementation, never a validator from tested source."""
+def trusted_validator():
+    """Load executable code only from the separately trusted reporter checkout."""
     path = Path(__file__).with_name("validate.py")
     if not path.is_file():
         raise ValueError("canonical validator must be absorbed before production reporting")
@@ -468,6 +505,17 @@ def canonical_validate(bundle, registry, artifact_root, plan_bytes, source_root)
         spec = importlib.util.spec_from_file_location("compat_trusted_validator", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        return module
+    except ImportError:
+        raise ValueError("canonical validator dependency is unavailable") from None
+
+
+def canonical_validate(bundle, registry, artifact_root, plan_bytes, source_root):
+    """Use PR1's trusted implementation, never a validator from tested source."""
+    collection_limits(bundle)
+    collection_limits(registry)
+    try:
+        module = trusted_validator()
         plan = validate_plan_snapshot(plan_bytes)
         return module.validate_results(bundle, registry, expected_source_sha=plan["source_sha"],
                                        expected_case_ids=[c["case_id"] for c in plan["cases"]],
@@ -477,6 +525,34 @@ def canonical_validate(bundle, registry, artifact_root, plan_bytes, source_root)
         raise ValueError("canonical evidence exceeds nesting limit") from None
     except ImportError:
         raise ValueError("canonical validator dependency is unavailable") from None
+
+
+def snapshot_registry(api, source_sha, destination):
+    """Authenticate historical declaration data, but execute today's validator.
+
+    Changes in current qualification/contract configuration cannot rewrite what
+    an older producer was actually asked to execute. Customer qualification is
+    still taken from the current registry by the publisher, never from artifacts.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise ValueError("invalid source registry commit")
+    relative = ".github/compat/registry.json"
+    blob = api.request(f"/repos/{REPO}/contents/{relative}?ref={source_sha}")
+    if (blob.get("encoding") != "base64" or blob.get("type") != "file" or blob.get("path") != relative
+            or not re.fullmatch(r"[0-9a-f]{40}", blob.get("sha", ""))
+            or not isinstance(blob.get("size"), int) or not 0 < blob["size"] <= 8 * 1024 * 1024):
+        raise ValueError("invalid historical registry blob")
+    content = base64.b64decode(blob["content"].replace("\n", ""), validate=True)
+    actual = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+    if actual != blob["sha"] or len(content) != blob["size"]:
+        raise ValueError("historical registry blob identity mismatch")
+    registry = decode_json(content)
+    schema_validate(registry, "registry.schema.json")
+    trusted_validator().validate_registry(registry)
+    path = safe_path(destination, relative)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return registry
 
 
 def snapshot_source(api, bundle, registry, destination):
@@ -535,6 +611,28 @@ def github_results(api, registry, now, selected_run=None, *, plans=None):
     runs = api.pages("actions/workflows/compatibility-canary.yml/runs?status=completed&created=%3E%3D" + since,
                      "workflow_runs", max_pages=5)
     bundles, errors = [], []
+    # The run list's created filter refers to the ORIGINAL execution, even when
+    # a month-old ID was rerun today. Artifact upload times are independent of
+    # that date. Discover recent aggregates too, then authenticate each run in
+    # exactly the same path as an explicit selection. No durable browser cache
+    # or unauthenticated remembered run IDs are involved.
+    discovered = {str(r["id"]) for r in runs}
+    for artifact in api.pages("actions/artifacts?name=compatibility-results", "artifacts", max_pages=5):
+        if (artifact.get("name") != "compatibility-results" or artifact.get("expired", True)
+                or not artifact.get("created_at") or timestamp(artifact["created_at"]) < now - timedelta(days=16)):
+            continue
+        ident = str((artifact.get("workflow_run") or {}).get("id", ""))
+        if not re.fullmatch(r"[1-9][0-9]*", ident) or ident in discovered:
+            continue
+        discovered.add(ident)
+        try:
+            meta = api.request(f"/repos/{REPO}/actions/runs/{ident}")
+            if str(meta.get("id")) != ident:
+                raise ValueError("discovered run identity mismatch")
+            runs.append(meta)
+        except (ValueError, KeyError, TypeError, OSError):
+            errors.append({"id": f"requested-run:{ident}",
+                           "summary": f"Recently uploaded aggregate run {ident} is unavailable; no execution was inferred."})
     if selected_run:
         if not re.fullmatch(r"[1-9][0-9]*", str(selected_run)):
             raise ValueError("requested run ID must be a positive integer")
@@ -581,11 +679,12 @@ def github_results(api, registry, now, selected_run=None, *, plans=None):
                         raise ValueError("requested run is a self-test, not production evidence")
                     continue
                 raw = safe_path(root, "compat-plan.json").read_bytes()
-                validate_bundle(bundle, registry, now, artifact_root=root, plan_bytes=raw)
                 verify_provenance(bundle, meta, api)
                 with tempfile.TemporaryDirectory(prefix="compat-trusted-suite-") as source:
-                    source_root = snapshot_source(api, bundle, registry, Path(source))
-                    canonical_validate(bundle, registry, root, raw, source_root)
+                    historical = snapshot_registry(api, bundle["run"]["source_sha"], Path(source))
+                    validate_bundle(bundle, historical, now, artifact_root=root, plan_bytes=raw)
+                    source_root = snapshot_source(api, bundle, historical, Path(source))
+                    canonical_validate(bundle, historical, root, raw, source_root)
                 if plans is not None:
                     plans[bundle["run"]["run_id"]] = validate_plan_snapshot(raw)
                 bundles.append(bundle)
@@ -622,10 +721,10 @@ def apply_actions(api, actions):
 
 def write_outputs(output, runs, registry, now, issues=(), extra_health=(), fixture=False, baseline=False, *, plans=None):
     output.mkdir(parents=True, exist_ok=True)
-    index = build_index(runs, registry, now, fixture=fixture)
-    index["health"] += list(extra_health)
-    incidents = reconcile(runs, issues, registry, now, index["health"], plans=plans)
-    index["health"] += incidents["health"]
+    health = heartbeat(runs, registry, now) + list(extra_health)
+    incidents = reconcile(runs, issues, registry, now, health, plans=plans)
+    index = build_index(runs, registry, now, fixture=fixture, states=incidents["states"], issues=issues)
+    index["health"] = health + incidents["health"]
     outputs = {"results-index.json": index, "incident-actions.json": {"dry_run": True, "actions": incidents["actions"]},
                "remediation-handoff.json": incidents["handoffs"], "release-notes.json": release_notes(index)}
     schema_validate(index, "results-index.schema.json")
@@ -662,8 +761,11 @@ def main():
         root = args.artifact_root.resolve()
         bundle = load_json(safe_path(root, "results.json"))
         raw = safe_path(root, "compat-plan.json").read_bytes()
-        validate_bundle(bundle, registry, now, artifact_root=root, plan_bytes=raw)
-        canonical_validate(bundle, registry, root, raw, args.source_root.resolve())
+        historical = load_json(safe_path(args.source_root.resolve(), ".github/compat/registry.json"))
+        schema_validate(historical, "registry.schema.json")
+        trusted_validator().validate_registry(historical)
+        validate_bundle(bundle, historical, now, artifact_root=root, plan_bytes=raw)
+        canonical_validate(bundle, historical, root, raw, args.source_root.resolve())
         plans[bundle["run"]["run_id"]] = validate_plan_snapshot(raw)
         runs = [bundle]
     elif args.github:

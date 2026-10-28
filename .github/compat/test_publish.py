@@ -120,6 +120,21 @@ class PublishTests(unittest.TestCase):
         self.assertTrue(all('release_pending' not in i for i in notes['inputs']))
         self.assertTrue(all('exact_packages' in i and 'confirm_before_release' in i for i in notes['inputs']))
 
+    def test_different_environment_and_build_identities_do_not_overwrite_failures(self):
+        for field in ('lock', 'source', 'artifact'):
+            failed, passed = copy.deepcopy(RUNS[1]), copy.deepcopy(RUNS[-1])
+            failed['cases'][0]['mode'] = passed['cases'][0]['mode'] = 'source'
+            if field == 'lock':
+                passed['cases'][0]['dependency_lock']['sha256'] = 'b' * 64
+            elif field == 'source':
+                passed['cases'][0]['source_sha'] = passed['run']['source_sha'] = 'b' * 40
+            else:
+                passed['cases'][0]['resolved'][0]['artifact_sha256'] = 'b' * 64
+            with self.subTest(field=field):
+                rows = build_index([failed, passed], REGISTRY, NOW)['observations']
+                self.assertEqual(len(rows), 2)
+                self.assertEqual({r['observed_status'] for r in rows}, {'failed', 'passed'})
+
     def test_fixture_golden_matches(self):
         page = render_markdown(build_index(RUNS, REGISTRY, NOW, fixture=True))
         self.assertEqual(page, (HERE / 'fixtures/expected-compatibility.md').read_text())

@@ -442,12 +442,37 @@ class HeartbeatTests(unittest.TestCase):
         self.assertTrue(any(a['id'].endswith(':weekly') for a in heartbeat([bundle], self.enabled(), NOW)))
 
     def test_health_repeats_do_not_spam_and_fresh_health_closes(self):
-        health = [dict(id='heartbeat:example:daily', summary='Missing example run')]
+        health = [dict(id='heartbeat:python-openai:weekly', summary='Missing complete weekly run')]
         first = reconcile([], [], REGISTRY, NOW, health)['actions'][0]
         issue = issue_for(first)
         self.assertEqual(reconcile([], [issue], REGISTRY, NOW, health)['actions'], [])
-        closed = reconcile([], [issue], REGISTRY, NOW, [])['actions'][0]
+        # An absent alert without new execution is not a successful heartbeat.
+        self.assertEqual(reconcile([], [issue], REGISTRY, NOW, [])['actions'], [])
+        complete = self.complete_weekly('2026-10-27T04:00:00Z')
+        closed = reconcile([complete], [issue], REGISTRY, NOW, [])['actions'][0]
         self.assertEqual(closed['state'], 'closed')
+
+    def test_weekly_deadline_is_eight_days_since_last_complete_scope(self):
+        complete = self.complete_weekly('2026-10-18T04:00:00Z')
+        for at, stale in [('2026-10-25T23:00:00Z', False), ('2026-10-26T04:00:00Z', True),
+                          ('2026-10-28T12:00:00Z', True)]:
+            with self.subTest(at=at):
+                alerts = heartbeat([complete], self.enabled(), timestamp(at))
+                self.assertEqual(any(a['id'].endswith(':weekly') for a in alerts), stale)
+
+    def test_health_omission_without_recovery_evidence_does_not_close(self):
+        for ident in ('requested-run:1007', 'invalid-run:1007', 'unknown:incident'):
+            alert = dict(id=ident, summary='Evidence unavailable')
+            action = reconcile([], [], REGISTRY, NOW, [alert])['actions'][0]
+            issue = issue_for(action)
+            result = reconcile([], [issue], REGISTRY, NOW)
+            self.assertEqual(next(s for s in result['states'] if s['key'] == action['key'])['status'], 'open')
+            self.assertFalse(any(a['notification'] == 'recovery' for a in result['actions']))
+            if ident.startswith(('requested-run:', 'invalid-run:')):
+                # A different validated run is not recovery of this specific run.
+                self.assertFalse(any(a['state'] == 'closed' for a in reconcile([RUNS[0]], [issue], REGISTRY, NOW)['actions']))
+                recovered = reconcile([RUNS[-1]], [issue], REGISTRY, NOW)['actions']
+                self.assertTrue(any(a['key'] == action['key'] and a['state'] == 'closed' for a in recovered))
 
     def test_expired_exception_is_explicit(self):
         for expires in ('2026-10-27', '2026-10-28'):

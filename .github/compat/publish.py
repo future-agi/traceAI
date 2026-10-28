@@ -4,10 +4,39 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from incidents import digest, heartbeat, iso, name_key, scope_key, text, timestamp
+from incidents import digest, heartbeat, iso, name_key, parse_issue, reporter_owned, text, timestamp
 
 
-def build_index(runs, registry, now, *, fixture=False):
+def known_bad_rows(states, registry, now, issues):
+    """Durable failures are evidence references, never newly observed executions.
+
+    Only reconciled current evidence and schema-valid bot-owned incident state
+    reach this function. Expiration of a download/discovery window cannot erase
+    an unrecovered tuple. Keep age and missing retained artifacts explicit.
+    """
+    numbers = {}
+    for issue in issues:
+        if reporter_owned(issue):
+            state = parse_issue(issue)
+            if state:
+                numbers[state["key"]] = issue["number"]
+    targets = {t["id"]: t for t in registry["integrations"]}
+    rows = []
+    for state in states:
+        if state["kind"] != "compatibility" or state["status"] == "recovered":
+            continue
+        failed_at = max((s["failure"]["at"] for s in state["scopes"].values()), key=timestamp)
+        rows.append({"id": state["key"], "integration_id": state["integration_id"],
+                     "language": targets[state["integration_id"]]["language"], "tuple": [list(p) for p in state["tuple"]],
+                     "status": state["status"], "signature": state["signature"], "summary": state["summary"],
+                     "issue_number": numbers.get(state["key"]), "last_failure": failed_at,
+                     "age_days": round(max(0, (now - timestamp(failed_at)).total_seconds() / 86400), 3),
+                     "scopes": [{"suite_sha256": scope["suite"], "evidence": scope["failure"]}
+                                for _, scope in sorted(state["scopes"].items())]})
+    return sorted(rows, key=lambda r: (r["integration_id"], r["id"]))
+
+
+def build_index(runs, registry, now, *, fixture=False, states=(), issues=()):
     targets = {t["id"]: t for t in registry["integrations"]}
     rows = {}
     for bundle in sorted(runs, key=lambda b: timestamp(b["run"]["completed_at"])):
@@ -15,9 +44,13 @@ def build_index(runs, registry, now, *, fixture=False):
         for case in bundle["cases"]:
             packages = sorted(case["resolved"], key=lambda p: (p["role"], p["name"]))
             actual = {(name_key(p["name"], case["language"]), p["role"]): p["version"] for p in packages}
+            lock = case["dependency_lock"]
             identity = [case["integration_id"], case["mode"], case["runtime"],
-                        [(name_key(p["name"], case["language"]), p["role"], p["version"]) for p in packages],
-                        case["contract"]["suite_sha256"]]
+                        [(name_key(p["name"], case["language"]), p["role"], p["version"], p.get("artifact_sha256"))
+                         for p in packages],
+                        {"source_build": case["source_sha"] if case["mode"] == "source" else None,
+                         "lock": {k: lock[k] for k in ("format", "sha256")} if lock else None,
+                         "self_test": run["self_test"]}, case["contract"]["suite_sha256"]]
             if not actual or any(actual.get((name_key(p["name"], case["language"]), p["role"])) != p["selected_version"]
                                  for p in case["requested"]):
                 identity.append({"unresolved_selection": sorted(
@@ -28,6 +61,7 @@ def build_index(runs, registry, now, *, fixture=False):
                 continue
             rows[key] = {"id": key, "integration_id": case["integration_id"], "language": case["language"],
                          "mode": case["mode"], "qualification": targets[case["integration_id"]]["qualification"]["status"],
+                         "evidence_qualification": case["qualification"],
                          "status": case["status"], "observed_status": case["status"], "runtime": case["runtime"],
                          "packages": packages, "requested": case["requested"], "discovery": case["discovery"],
                          "source_sha": case["source_sha"], "checked_at": case["completed_at"],
@@ -61,7 +95,7 @@ def build_index(runs, registry, now, *, fixture=False):
             row["status"] = "stale"
     return {"schema_version": 1, "generated_at": iso(now), "inventory_revision": registry["inventory_revision"],
             "fixture": fixture, "observations": sorted(rows.values(), key=lambda r: (r["integration_id"], r["mode"], r["id"])),
-            "health": health, "inventory": [
+            "known_bad": known_bad_rows(states, registry, now, issues), "health": health, "inventory": [
                 {"id": t["id"], "language": t["language"], "distribution": t["distribution"],
                  "role": t["role"], "qualification": t["qualification"], "owner": t["owner"],
                  "declared": [{"name": p["name"], "range": p["declared_range"]} for p in t["upstream"]],
@@ -88,7 +122,8 @@ def render_markdown(index, *, baseline=False):
         lines += ["No observed combinations yet.", ""]
     for row in index["observations"]:
         lines += [f"### {text(row['integration_id'])} — {row['mode']} / {row['status']}", "",
-                  f"- Qualification: **{row['qualification']}**; last checked: **{row['checked_at']}**; "
+                  f"- Current qualification: **{row['qualification']}**; evidence-time qualification: **{row['evidence_qualification']}**; "
+                  f"last checked: **{row['checked_at']}**; "
                   f"[evidence]({row['run_url']})" + (" (**self-test, not a support claim**)" if row["self_test"] else ""),
                   f"- Runtime/OS: `{text(json.dumps(row['runtime'], sort_keys=True))}`; selector: `{row['selector']}`.",
                   f"- Source SHA: `{row['source_sha']}`; contract: `{row['suite_sha256']}`.",
@@ -109,6 +144,22 @@ def render_markdown(index, *, baseline=False):
             lines += ["", "Exact tested install (retain the full lock from the evidence for transitive reproducibility):", "",
                       "```sh", row["install_command"], "```"]
         lines += [""]
+    if index["known_bad"]:
+        lines += ["## Unrecovered known-bad tuples", "",
+                  "These durable incident references remain actionable even after an original artifact ages out of discovery or retention. "
+                  "They are not fresh observations; age does not imply recovery or erase a released gap.", ""]
+        for bad in index["known_bad"]:
+            issue = (f"[incident #{bad['issue_number']}](https://github.com/future-agi/traceAI/issues/{bad['issue_number']})"
+                     if bad["issue_number"] else "incident write pending (dry-run)")
+            lines += [f"### {text(bad['integration_id'])} — {bad['status']} / aged {bad['age_days']} days", "",
+                      f"- Exact upstream tuple: `{text(json.dumps(bad['tuple']))}`; {issue}.",
+                      f"- Last failure: **{bad['last_failure']}**; signature `{bad['signature']}`; {text(bad['summary'])}."]
+            for scope in bad["scopes"]:
+                ev = scope["evidence"]
+                lines += [f"- {ev['mode']} / `{text(json.dumps(ev['runtime'], sort_keys=True))}`; "
+                          f"[retained evidence reference]({ev['url']}); suite `{scope['suite_sha256']}`; "
+                          f"lock `{text(json.dumps(ev['dependency_lock']))}`; source `{ev['source_sha']}`."]
+            lines += [""]
     lines += ["## Qualification inventory", "",
               "This includes known-broken and unqualified gaps, shared/core packages and separately labelled example checks. "
               "A Go/Maven pin is a baseline, not an inferred minimum. Java/.NET floating qualification is deferred.", "",
@@ -125,7 +176,7 @@ def render_markdown(index, *, baseline=False):
               "- Main is the default branch. Cron definitions merged only into dev are dormant. "
               "An operator must separately promote trusted canary/reporter implementation to main and observe a real scheduled run. "
               "Branch self-tests and manual dry runs are not proof of active scheduling.",
-              "- Missing expected weekday/Sunday evidence is a heartbeat incident after the 36-hour daily / eight-day weekly grace; "
+              "- Missing expected weekday/Sunday evidence is a heartbeat incident after the daily due time plus 36 hours / eight days since the last complete weekly scope; "
               "Saturday alone is not a missed sweep. Weekly completeness requires source floor/latest at the representative "
               "and boundary runtimes plus the published representative consumer; a lone cell cannot clear it. "
               "Missing other cells does not erase a fresh exact observation. Expired exceptions are automation failures.",
@@ -145,13 +196,18 @@ def render_markdown(index, *, baseline=False):
               "do not relabel a changed suite with the old digest or remove failed-test/scenario coverage.",
               "- Production and offline artifact ingestion require the shared canonical validator after PR1 absorption, including "
               "per-invocation status and complete frozen resolution evidence. Production fetches registered suite files at the authenticated "
-              "source commit for static hashing/AST checks only; tested-source code and artifact commands are never imported or executed. "
+              "source commit, including its authenticated registry, for static hashing/AST checks only; current trusted code validates historical "
+              "evidence against that historical registry, while current qualification remains separate. Tested-source code and artifact commands are never imported or executed. "
               "The separately trusted canary collector binds the aggregate to its original plan; the aggregate's copied plan alone is not independent provenance.",
               "- `release-notes.json` contains exact support/failure inputs, not an automatically approved support-policy change. "
               "Confirm published fix versions, support additions, exclusions and floor/cap/privacy changes before release.",
               "- Normal production dry-run artifacts read existing incident and repair-PR context with read-only permissions; "
               "only the separately guarded apply job can write issues. Explicit retained run IDs bypass discovery age limits, "
-              "but their actual attempt execution timestamps still govern freshness; unavailable/rejected requested evidence is a health error.",
+              "but their actual attempt execution timestamps still govern freshness; recent aggregate upload discovery also retains fresh reruns of old IDs "
+              "in subsequent scheduled reports. Unavailable/rejected requested evidence is a health error, never recovered merely by omission.",
+              "- Exact environment keys include dependency-lock digests, source-build identity and resolved artifact digests. "
+              "Unrecovered known-bad tuples remain in customer outputs as aged incident evidence references after downloads expire; "
+              "only validated bot-owned state is accepted, not public marker copies. Health recovery requires type-specific positive evidence.",
               "- Agents receive a human-claimed handoff with a one-open-repair-PR marker guard. "
               "This reporter never starts an agent, invokes vendors, spends money, opens repair PRs, pushes code or merges. "
               "Slack/Linear delivery is disabled; GitHub issues are canonical.",

@@ -10,6 +10,20 @@
     "inventory_revision": {"type": "string"},
     "fixture": {"type": "boolean"},
     "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+    "known_bad": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "integration_id", "language", "tuple", "status", "signature", "summary", "issue_number", "last_failure", "age_days", "scopes"],
+      "properties": {
+        "id": {"$ref": "#/$defs/sha"}, "integration_id": {"type": "string"}, "language": {"type": "string"},
+        "tuple": {"type": "array", "minItems": 1, "items": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "string"}}},
+        "status": {"enum": ["open", "release_pending"]}, "signature": {"$ref": "#/$defs/sha"}, "summary": {"type": "string"},
+        "issue_number": {"type": ["integer", "null"], "minimum": 1}, "last_failure": {"type": "string", "format": "date-time"},
+        "age_days": {"type": "number", "minimum": 0}, "scopes": {"type": "array", "minItems": 1, "items": {
+          "type": "object", "additionalProperties": false, "required": ["suite_sha256", "evidence"],
+          "properties": {"suite_sha256": {"$ref": "#/$defs/sha"}, "evidence": {"type": "object"}}
+        }}
+      }
+    }},
     "health": {"type": "array", "items": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "summary"],
@@ -35,6 +49,7 @@
         "id": {"$ref": "#/$defs/sha"}, "integration_id": {"type": "string"}, "language": {"type": "string"},
         "mode": {"enum": ["source", "published"]},
         "qualification": {"enum": ["pilot_pending", "qualified", "known_broken", "unqualified", "deprecated", "retired"]},
+        "evidence_qualification": {"enum": ["pilot_pending", "qualified", "known_broken", "unqualified", "deprecated", "retired"]},
         "status": {"$ref": "#/$defs/status"}, "observed_status": {"$ref": "#/$defs/status"},
         "runtime": {"type": "object"}, "packages": {"type": "array"}, "requested": {"type": "array"},
         "discovery": {"type": "array"}, "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},

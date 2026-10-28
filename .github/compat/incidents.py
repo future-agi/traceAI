@@ -155,7 +155,7 @@ def state_validator():
                         "source_watermark": {"anyOf": [watermark, {"type": "null"}]}}
     properties = {"version": {"const": 1}, "key": sha, "kind": {"enum": ["compatibility", "health"]},
                   "owner": string, "status": {"enum": ["open", "release_pending", "recovered"]},
-                  "first_seen": date, "last_seen": date, "summary": string,
+                  "first_seen": date, "last_seen": date, "summary": string, "health_id": string,
                   "integration_id": string, "signature": sha,
                   "classification": {"enum": ["resolution-install", "infra", "upstream-api-change", "contract-regression"]},
                   "tuple": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {
@@ -195,6 +195,8 @@ def parse_issue(issue):
                 return None
         state = decode_json(raw, MAX_STATE)
         if not state_validator().is_valid(state) or timestamp(state["first_seen"]) > timestamp(state["last_seen"]):
+            return None
+        if state["kind"] == "health" and "health_id" in state and state["key"] != digest(["health", state["health_id"]]):
             return None
         if state["kind"] == "compatibility":
             if state["key"] != digest([state["integration_id"], state["tuple"], state["signature"]]):
@@ -306,6 +308,56 @@ def body_for(state):
     if len(rendered.encode()) > 60000:
         raise ValueError("incident body exceeds safe GitHub limit")
     return rendered
+
+
+def health_recovered(state, runs, issues, registry, now, states):
+    """Omission is not evidence. Each health type has a positive recovery test.
+
+    Legacy records lack health_id. Compare their stable digest to candidate
+    identifiers we can actually prove; otherwise leave them open for review.
+    """
+    def matches(ident):
+        return state["key"] == digest(["health", ident])
+    for bundle in runs:
+        if bundle["run"]["self_test"]:
+            continue
+        for prefix in ("requested-run:", "invalid-run:"):
+            if matches(prefix + bundle["run"]["run_id"]):
+                return True  # This exact run has now passed trusted validation.
+    stale = {a["id"] for a in heartbeat(runs, registry, now)}
+    for target in registry["integrations"]:
+        if not target["canary"]["enabled"]:
+            continue
+        for cadence in ("daily", "weekly"):
+            ident = f"heartbeat:{target['id']}:{cadence}"
+            observed = any(not r["run"]["self_test"] and any(c["integration_id"] == target["id"] for c in r["cases"])
+                           for r in runs)
+            if matches(ident) and observed and ident not in stale:
+                return True
+    ident = state.get("health_id", "")
+    if ident.startswith("exception:"):
+        exc_id = ident.removeprefix("exception:")
+        exceptions = [e for t in registry["integrations"] for e in t["exceptions"] if e["id"] == exc_id]
+        return not exceptions or all(datetime.fromisoformat(e["expires"]).date() > now.date() for e in exceptions)
+    for issue in issues:
+        if not reporter_owned(issue):
+            continue
+        parsed = parse_issue(issue)
+        if matches(f"issue-state:{issue['number']}") and parsed is not None:
+            return True
+    for candidate in states.values():
+        key = candidate["key"]
+        if matches("issue-conflict:" + key):
+            # Reconciliation retains this key only when exactly one valid record
+            # exists; conflicting/malformed records are isolated before this test.
+            return True
+        if matches("incident-size:" + key):
+            try:
+                body_for(candidate)
+                return True
+            except ValueError:
+                return False
+    return False
 
 
 def reconcile(runs, issues, registry, now, health=(), *, plans=None):
@@ -475,12 +527,14 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
         key = digest(["health", alert["id"]])
         active_health.add(key)
         state = states.setdefault(key, {"version": 1, "key": key, "kind": "health", "first_seen": iso(now), "owner": "nik13"})
+        state["health_id"] = alert["id"]
         # Do not generate a write just to bump a heartbeat timestamp every day.
         if state.get("status") != "open" or state.get("summary") != alert["summary"]:
             state.update(status="open", summary=alert["summary"], last_seen=iso(now))
     for key, state in sorted(states.items()):
         if state["kind"] == "health":
-            if key not in active_health and state["status"] != "recovered":
+            if (key not in active_health and state["status"] != "recovered"
+                    and health_recovered(state, runs, issues, registry, now, states)):
                 state.update(status="recovered", last_seen=iso(now))
             queue(state)
     return {"actions": actions, "handoffs": handoffs, "states": list(states.values()), "health": record_health}
@@ -520,12 +574,17 @@ def heartbeat(runs, registry, now):
             # been satisfied by a later complete observation. A Saturday gap alone
             # cannot create an alert after a complete Friday run.
             missed = False
-            for days in range(18):
-                due = (now - timedelta(days=days)).replace(hour=3, minute=17, second=0, microsecond=0)
-                scheduled = due.weekday() in (0, 1, 2, 3, 4, 6) if cadence == "daily" else due.weekday() == 6
-                if scheduled and due + grace <= now and (last is None or last < due):
-                    missed = True
-                    break
+            if cadence == "weekly":
+                # Eight days is the maximum AGE of a complete scope, not eight
+                # additional days after the next Sunday (~15 days in total).
+                # A complete Sunday remains fresh throughout the next weekend.
+                missed = last is None or last + grace <= now
+            else:
+                for days in range(18):
+                    due = (now - timedelta(days=days)).replace(hour=3, minute=17, second=0, microsecond=0)
+                    if due.weekday() in (0, 1, 2, 3, 4, 6) and due + grace <= now and (last is None or last < due):
+                        missed = True
+                        break
             if missed:
                 alerts.append({"id": f"heartbeat:{target['id']}:{cadence}",
                                "summary": f"Stale/missing {cadence} canary evidence for {target['id']} "

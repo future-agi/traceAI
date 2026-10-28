@@ -410,6 +410,31 @@ class CanonicalBoundaryTests(unittest.TestCase):
         self.assertIn(RUNS[-1]['run']['source_sha'], api.paths[0])
         self.assertEqual(len(api.paths), 2)
 
+    def test_historical_registry_is_authenticated_data_validated_by_current_code(self):
+        import base64
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from report import snapshot_registry
+        content = json.dumps(REGISTRY).encode()
+        sha = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+        class API:
+            def __init__(self, corrupt=False):
+                self.paths, self.corrupt = [], corrupt
+            def request(self, path):
+                self.paths.append(path)
+                return dict(type='file', path='.github/compat/registry.json', encoding='base64', size=len(content),
+                            sha=sha, content=base64.b64encode(content + (b'x' if self.corrupt else b'')).decode())
+        validator = SimpleNamespace(validate_registry=Mock(return_value=REGISTRY))
+        api = API()
+        with tempfile.TemporaryDirectory() as tmp, patch('report.trusted_validator', return_value=validator):
+            registry = snapshot_registry(api, 'a' * 40, Path(tmp))
+            self.assertEqual(registry, REGISTRY)
+            self.assertEqual((Path(tmp) / '.github/compat/registry.json').read_bytes(), content)
+        validator.validate_registry.assert_called_once_with(REGISTRY)
+        self.assertEqual(api.paths, [f'/repos/{REPO}/contents/.github/compat/registry.json?ref=' + 'a' * 40])
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, 'identity mismatch'):
+            snapshot_registry(API(True), 'a' * 40, Path(tmp))
+
     def test_symlink_or_tampered_source_snapshot_is_rejected(self):
         for mode, corrupt in [('120000', False), ('100644', True)]:
             api, registry = self.source_api(mode, corrupt)
@@ -424,6 +449,7 @@ class ProvenanceTests(unittest.TestCase):
         # its exact public ABI; integration replay uses the actual PR1 module.
         self.strict = self.enterContext(patch('report.canonical_validate'))
         self.snapshot = self.enterContext(patch('report.snapshot_source', side_effect=lambda api, bundle, registry, root: root))
+        self.registry_snapshot = self.enterContext(patch('report.snapshot_registry', return_value=REGISTRY))
 
     def metadata(self):
         run = RUNS[-1]['run']
@@ -512,6 +538,8 @@ class ProvenanceTests(unittest.TestCase):
         metadata = [dict(base, id=id, html_url=f'https://github.com/{REPO}/actions/runs/{id}') for id in archives]
         class API:
             def pages(self, path, key, **kwargs):
+                if path.startswith('actions/artifacts?'):
+                    return []
                 if path.startswith('actions/workflows/'):
                     return metadata
                 id = int(path.split('/')[2])
@@ -534,6 +562,8 @@ class ProvenanceTests(unittest.TestCase):
                     dict(self.metadata(), id=2000, html_url=f'https://github.com/{REPO}/actions/runs/2000', created_at='2026-10-28T04:00:00Z')]
         class API:
             def pages(self, path, key, **kwargs):
+                if path.startswith('actions/artifacts?'):
+                    return []
                 if path.startswith('actions/workflows/'):
                     return metadata
                 id = int(path.split('/')[2])
@@ -613,6 +643,86 @@ class ProvenanceTests(unittest.TestCase):
                 row = build_index(bundles, REGISTRY, NOW)['observations'][0]
                 self.assertEqual(row['status'], 'passed' if recent else 'stale')
 
+    def test_historical_evidence_uses_source_registry_not_current_qualification_or_suite(self):
+        _, archive = bundle_archive(RUNS[-1])
+        current = copy.deepcopy(REGISTRY)
+        target = next(t for t in current['integrations'] if t['id'] == 'python-openai')
+        target['qualification'].update(status='qualified', evidence=['reviewed current qualification'])
+        target['contract_test']['paths'] = ['tests/new_contract.py']
+        meta = dict(self.metadata(), created_at='2026-10-28T04:00:00Z')
+        class API:
+            def pages(self, path, key, **kwargs):
+                if path.startswith('actions/artifacts?'):
+                    return []
+                if path.startswith('actions/workflows/'):
+                    return [meta]
+                return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archive), id=123)]
+            def request(self, path, **kwargs):
+                return archive if path.endswith('/zip') else {'status': 'ahead'}
+        bundles, errors = github_results(API(), current, NOW)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(bundles), 1)
+        self.assertEqual(self.strict.call_args.args[1], REGISTRY)
+        self.assertEqual(self.snapshot.call_args.args[2], REGISTRY)
+        self.registry_snapshot.assert_called_once()
+        # Evidence identity remains historical; a source record cannot self-promote.
+        self.assertEqual(bundles[0]['cases'][0]['qualification'], 'pilot_pending')
+        from publish import build_index
+        self.assertEqual(build_index(bundles, current, NOW)['observations'][0]['qualification'], 'qualified')
+
+    def test_scheduled_discovery_rediscovers_old_run_with_recent_artifact(self):
+        healthy, archive = bundle_archive(RUNS[-1])
+        meta = dict(self.metadata(), created_at='2026-09-01T00:00:00Z',
+                    run_started_at=healthy['run']['started_at'])
+        artifact = dict(name='compatibility-results', expired=False, size_in_bytes=len(archive), id=123,
+                        created_at='2026-10-28T05:01:00Z', workflow_run=dict(id=1007))
+        paths = []
+        class API:
+            def pages(self, path, key, **kwargs):
+                paths.append(path)
+                if path.startswith('actions/workflows/'):
+                    return []  # created_at filtering excludes the old original run
+                return [artifact]
+            def request(self, path, **kwargs):
+                if path.endswith('/zip'):
+                    return archive
+                if '/compare/' in path:
+                    return {'status': 'ahead'}
+                return meta
+        # First explicit ingestion followed by ordinary scheduled discovery.
+        for selected in ('1007', None):
+            bundles, errors = github_results(API(), REGISTRY, NOW, selected_run=selected)
+            self.assertEqual(errors, [])
+            self.assertEqual([b['run']['run_id'] for b in bundles], ['1007'])
+        self.assertTrue(any(p.startswith('actions/artifacts?') for p in paths))
+
+    def test_malformed_compression_is_isolated_from_healthy_runs(self):
+        import struct
+        _, archive = bundle_archive(RUNS[-1])
+        broken = bytearray(archive)
+        struct.pack_into('<H', broken, broken.index(b'PK\x03\x04') + 8, 99)
+        struct.pack_into('<H', broken, broken.index(b'PK\x01\x02') + 10, 99)
+        metadata = [dict(self.metadata(), created_at='2026-10-28T04:00:00Z'),
+                    dict(self.metadata(), id=2000, html_url=f'https://github.com/{REPO}/actions/runs/2000',
+                         created_at='2026-10-28T04:00:00Z')]
+        class API:
+            def pages(self, path, key, **kwargs):
+                if path.startswith('actions/artifacts?'):
+                    return []
+                if path.startswith('actions/artifacts?'):
+                    return []
+                if path.startswith('actions/workflows/'):
+                    return metadata
+                ident = int(path.split('/')[2])
+                return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archive), id=ident)]
+            def request(self, path, **kwargs):
+                if path.endswith('/zip'):
+                    return archive if '/1007/' in path else bytes(broken)
+                return {'status': 'ahead'}
+        bundles, errors = github_results(API(), REGISTRY, NOW)
+        self.assertEqual([b['run']['run_id'] for b in bundles], ['1007'])
+        self.assertEqual([e['id'] for e in errors], ['invalid-run:2000'])
+
     def test_unavailable_rejected_or_expired_requested_evidence_is_explicit_health(self):
         for kind in ('unavailable', 'branch', 'expired', 'wrong-id'):
             meta = dict(self.metadata(), created_at='2026-09-01T00:00:00Z')
@@ -681,6 +791,34 @@ class ProvenanceTests(unittest.TestCase):
             self.assertTrue(any('exceeds' in a['body'] for a in actions))
             self.assertTrue((Path(tmp) / 'compatibility.md').is_file())
 
+    def test_unresolved_incident_remains_in_customer_outputs_after_artifact_history_expires(self):
+        from incidents import REPORTER_USER, reconcile
+        failed = copy.deepcopy(RUNS[1])
+        action = reconcile([failed], [], REGISTRY, NOW)['actions'][0]
+        issue = dict(number=42, body=action['body'], state=action['state'], labels=action['labels'], user=dict(REPORTER_USER))
+        later = timestamp('2026-11-28T12:00:00Z')
+        with tempfile.TemporaryDirectory() as tmp:
+            result = write_outputs(Path(tmp), [], REGISTRY, later, [issue])
+            index = json.loads((Path(tmp) / 'results-index.json').read_text())
+            page = (Path(tmp) / 'compatibility.md').read_text()
+        self.assertEqual(index['observations'], [])
+        self.assertEqual(len(index['known_bad']), 1)
+        bad = index['known_bad'][0]
+        self.assertEqual(bad['status'], 'open')
+        self.assertEqual(bad['tuple'], [['openai', 'upstream', '1.93.1']])
+        self.assertEqual(bad['issue_number'], 42)
+        self.assertGreater(bad['age_days'], 30)
+        self.assertEqual(bad['scopes'][0]['evidence']['run_id'], failed['run']['run_id'])
+        self.assertIn('Unrecovered known-bad tuples', page)
+        self.assertIn('1.93.1', page)
+        self.assertIn('aged', page)
+        self.assertEqual(len(result['handoffs']), 1)
+        # A copied public marker must not inject a customer known-bad record.
+        issue['user'] = dict(id=123, login='outsider', type='User')
+        with tempfile.TemporaryDirectory() as tmp:
+            write_outputs(Path(tmp), [], REGISTRY, later, [issue])
+            self.assertEqual(json.loads((Path(tmp) / 'results-index.json').read_text())['known_bad'], [])
+
     def test_issue_writer_only_upserts_labels_and_issues_and_preserves_human_labels(self):
         class FakeAPI:
             def __init__(self):
@@ -713,6 +851,49 @@ class ProvenanceTests(unittest.TestCase):
                                      headers={'Authorization':'Bearer not-a-real-token'})
         redirected = SafeRedirect().redirect_request(req, None, 302, '', {}, 'https://example.blob.core.windows.net/file')
         self.assertFalse(redirected.has_header('Authorization'))
+
+
+class ResourceBoundaryTests(unittest.TestCase):
+    def test_schema_stops_after_first_error(self):
+        from jsonschema import Draft202012Validator
+        original = Draft202012Validator.iter_errors
+        yielded = []
+        def counted(validator, *args, **kwargs):
+            for error in original(validator, *args, **kwargs):
+                yielded.append(error)
+                yield error
+        from report import schema_validate
+        data = dict(schema_version=1, run=RUNS[-1]['run'], cases=[{} for _ in range(500)])
+        with patch.object(Draft202012Validator, 'iter_errors', counted), self.assertRaises(ValueError):
+            schema_validate(data, 'results.schema.json')
+        self.assertEqual(len(yielded), 1)
+
+    def test_collection_limits_precede_schema_iteration(self):
+        from jsonschema import Draft202012Validator
+        from report import schema_validate
+        invalid = [dict(cases=[{}] * 513), dict(run=dict(planned_case_ids=['x'] * 257)),
+                   dict(cases=[dict(contract=dict(tests=[{}] * 10001))])]
+        for data in invalid:
+            with self.subTest(data_size=len(str(data))), patch.object(Draft202012Validator, 'iter_errors') as iterate:
+                with self.assertRaisesRegex(ValueError, 'collection limit'):
+                    schema_validate(data, 'results.schema.json')
+                iterate.assert_not_called()
+
+    def test_zip_compression_and_deflate_failures_are_validation_errors(self):
+        import struct
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('results.json', 'content' * 100)
+        valid = data.getvalue()
+        unsupported = bytearray(valid)
+        struct.pack_into('<H', unsupported, unsupported.index(b'PK\x03\x04') + 8, 99)
+        struct.pack_into('<H', unsupported, unsupported.index(b'PK\x01\x02') + 10, 99)
+        broken = bytearray(valid)
+        offset = 30 + len('results.json')
+        broken[offset:offset + 4] = b'\xff\xff\xff\xff'
+        for raw in (bytes(unsupported), bytes(broken)):
+            with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+                extract_archive(raw, Path(tmp))
 
 
 if __name__ == '__main__':
