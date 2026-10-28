@@ -55,12 +55,12 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
         wrap_function_wrapper(
             module=_MODULE,
             name="OpenAI.request",
-            wrapper=_Request(tracer=tracer, openai=openai),
+            wrapper=_Request(tracer=tracer, openai=openai, config=config),
         )
         wrap_function_wrapper(
             module=_MODULE,
             name="AsyncOpenAI.request",
-            wrapper=_AsyncRequest(tracer=tracer, openai=openai),
+            wrapper=_AsyncRequest(tracer=tracer, openai=openai, config=config),
         )
         if Protect is not None:
             self._original_protect = Protect.protect
