@@ -204,6 +204,12 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
         stage = "install"
         with tempfile.TemporaryDirectory(prefix="traceai-consumer-") as temporary:
             temporary = Path(temporary)
+            # Namespace root has no host DAC override and cannot read runner-private
+            # workspaces. Expose only this disposable consumer read-only by mode;
+            # the sole writable shared path is its random JUnit output directory.
+            temporary.chmod(0o755)
+            isolated_blocker = temporary / "block_network.sh"
+            shutil.copyfile(blocker, isolated_blocker)
             consumer = temporary / "consumer"
             consumer.mkdir()
             row["contract"]["suite_sha256"] = copy_suite(root, consumer, files)
@@ -244,13 +250,20 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             command = contract["command"]
             if command[:3] != ["python", "-m", "pytest"]:
                 raise ValueError("Pilot runner accepts only trusted Python pytest contracts")
-            argv = [python, "-I", *command[1:], "--import-mode=importlib", "-o", "junit_family=legacy", "--junitxml=" + str(path)]
+            shared_output = temporary / "junit-output"
+            shared_output.mkdir(mode=0o777)
+            shared_output.chmod(0o777)  # No credentials/source/install paths are writable here.
+            isolated_junit = shared_output / path.name
+            argv = [python, "-I", *command[1:], "--import-mode=importlib", "-o", "junit_family=legacy", "--junitxml=" + str(isolated_junit)]
             row["contract"]["command"] = ["python", "-I", *command[1:], "--import-mode=importlib", "-o", "junit_family=legacy", "--junitxml=" + path.relative_to(output).as_posix()]
             with (output / "contract.log").open("w") as log:
-                process = subprocess.run(["bash", str(blocker), python, *argv], cwd=consumer, env=clean_env(), stdout=log,
+                process = subprocess.run(["bash", str(isolated_blocker), python, *argv], cwd=consumer, env=clean_env(), stdout=log,
                                          stderr=subprocess.STDOUT, timeout=600)
-            if not path.exists():
+            if isolated_junit.is_symlink():
+                raise ValueError("Symlink JUnit is forbidden")
+            if not isolated_junit.is_file():
                 raise ValueError(f"Missing JUnit (runner/namespace exit {process.returncode}); see contract.log")
+            shutil.copyfile(isolated_junit, path)
             stage = "collection"
             tests, details = junit(path)
             row["contract"].update(tests=tests, collected=len(tests), executed=sum(t["outcome"] != "skipped" for t in tests),
