@@ -659,7 +659,7 @@ def test_readme_requirements_and_public_contract():
     assert "TBD" not in readme
     assert "https://doubleword.ai/llms.txt" in readme
     assert "https://app.doubleword.ai/api-keys" in readme
-    assert "not suitable for production workloads" in readme
+    assert "shared, concurrency-limited" in readme
     for py_path in ("python/examples/doubleword/src:python:python/frameworks/openai:python/tests", "python/examples/doubleword/src:python/tests"):
         assert f'PYTHONPATH="{py_path}"' in readme
     assert readme.count("pytest python/examples/doubleword/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs") == 2

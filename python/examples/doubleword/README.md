@@ -4,7 +4,7 @@ Trace Chat Completions through the official `openai` Python SDK at Doubleword's 
 
 ## Install
 
-From this directory, install the tested pins:
+From this directory, install the dependency pins:
 
 ```bash
 pip install -r requirements.txt
@@ -85,15 +85,17 @@ Cost is unknown when the pricing table has no matching model. If a provider reso
 
 ## Provider specifics
 
-Doubleword documents the following tiers in its [API reference](https://doubleword.ai/llms.txt):
+This recipe uses synchronous Chat Completions at `https://api.doubleword.ai/v1`.
+The OpenAI SDK sends `Authorization: Bearer <key>`. Choose a model ID from the
+[model catalog](https://docs.doubleword.ai/inference-api/models) or `client.models.list()`;
+pass the exact returned ID, including its organization prefix. For dedicated
+realtime deployments, Doubleword supplies your organization-specific model names.
 
-| Tier | What this recipe covers |
-|---|---|
-| Realtime | OpenAI-compatible request and stream fixtures. Doubleword says the self-serve endpoint is "designed for development and testing" and "not suitable for production workloads". |
-| Async | A standard request with `service_tier="flex"`. The fixture confirms the value reaches both the request body and `gen_ai.request.parameters`. |
-| Dedicated Realtime | Doubleword's production tier; deployments are outside this recipe. |
-
-Both tested SDK versions (the 1.69.0 floor and 3.24.0) accept the native `service_tier` parameter and send `flex` unchanged; the test checks the transmitted value and the recorded parameter. Older SDK type annotations may not list `flex`; that does not change the request.
+Doubleword documents async inference separately through the Responses API with
+`service_tier="flex"`, or through its Autobatcher. The Chat Completions CLI here
+does not select an async tier. Self-serve realtime uses shared, concurrency-limited
+capacity; dedicated realtime is a separate deployment option. A 429 with
+`inflight_limit_exceeded` indicates the account's per-model concurrency limit.
 
 The same [API reference](https://doubleword.ai/llms.txt) lists embeddings. An OpenAI-shaped embedding fixture at `/v1/embeddings` produces a `CreateEmbeddingResponse` span with `gen_ai.span.kind=EMBEDDING` and provider `openai` (`doubleword` in later versions). The model id from the response appears in `embedding.model_name`; up to 0.1.10 `gen_ai.request.model` is absent, and later versions set it too. Requested model parameters and input/total token counts are recorded.
 
@@ -110,8 +112,7 @@ Embedding spans also export raw response JSON under `embedding.embeddings`, vect
 The Batch API is not covered by this recipe ([Doubleword API reference](https://doubleword.ai/llms.txt)).
 
 - The Anthropic-compatible Messages API and Dedicated deployments are outside this recipe ([Doubleword API reference](https://doubleword.ai/llms.txt)).
-- Responses API, tools, structured outputs, cancellation, console imports, and pricing-table changes are not tested here.
-- This recipe was not tested against the live provider (no paid call); the tests use a local fake of the OpenAI API and in-process fixtures. Streaming and embeddings results establish OpenAI-shaped fixture compatibility.
+- Responses API, tools, structured outputs, cancellation, console imports, and pricing-table changes are outside this recipe.
 
 ## Tests
 
@@ -146,10 +147,17 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 \
   pytest python/examples/doubleword/tests -q -p no:cacheprovider --noconftest -o addopts= -rfEs
 ```
 
-| Python | `openai` | traceAI packages | Result |
+| Python | `openai` | traceAI packages | Local check configuration |
 |---|---|---|---|
-| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Full suite |
-| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Full suite |
-| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Full suite |
+| 3.10, 3.11, 3.12, 3.13 | 3.24.0 | `traceai-openai` and `fi_instrumentation` from this repository | Commands above |
+| 3.11 | 1.69.0 (the `traceai-openai` floor) | from this repository | Commands above |
+| 3.11 | 3.24.0 | published `traceAI-openai==0.1.10` and `fi-instrumentation-otel==1.1.0` from PyPI | Commands above |
 
 The chat fixtures use `deepseek-ai/DeepSeek-V4-Flash`, a model id listed in Doubleword's [API reference](https://doubleword.ai/llms.txt). Its current catalog availability is not asserted. The dated response model and embedding model are synthetic fixture ids.
+
+## Official API references
+
+- [Realtime inference](https://docs.doubleword.ai/inference-api/realtime-inference)
+- [API keys](https://docs.doubleword.ai/inference-api/creating-an-api-key)
+- [Model catalog](https://docs.doubleword.ai/inference-api/models)
+- [Async Responses API](https://docs.doubleword.ai/inference-api/async-inference)
