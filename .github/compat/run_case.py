@@ -235,6 +235,8 @@ def invoke(command, *, cwd, log, evidence, retained, output, timeout=600):
         record["exit_code"] = process.returncode
     except subprocess.TimeoutExpired:
         record["timed_out"] = True
+    except OSError as error:
+        record["error"] = normalize(str(error))[:2000]
     finally:
         record["completed_at"] = now()
         if evidence.is_file() and not evidence.is_symlink():
@@ -441,7 +443,9 @@ def main():
     registry_raw = (folder / "registry.json").read_bytes()
     if sha256(registry_raw) != plan["registry_sha256"]:
         raise ValueError("Registry artifact digest mismatch")
-    registry = json.loads(registry_raw)
+    if registry_raw != safe_path(root, ".github/compat/registry.json").read_bytes():
+        raise ValueError("Registry snapshot differs from immutable source registry")
+    registry = semantic_validator(root).validate_registry(json.loads(registry_raw), root)
     target = next(t for t in registry["integrations"] if t["id"] == case["integration_id"])
     history = []
     if int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")) > 1:

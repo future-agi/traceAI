@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -222,7 +223,7 @@ def invocation_references(folder, row, plan, raw, validator):
     return references
 
 
-def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, source_root, validator):
+def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, source_root, validator, previous, output):
     validator.reconcile_plan(data, plan, raw)
     if row["qualification"] != target["qualification"]["status"] or row["language"] != target["language"]:
         raise ValueError("Artifact cannot promote qualification/change language")
@@ -236,19 +237,27 @@ def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, 
     if verdict != ("passed" if row["status"] == "flaky" else row["status"]):
         raise ValueError("False pass/quarantine status")
     references = invocation_references(folder, row, plan, raw, validator)
-    # Reuse PR1's entire source-bound discovery/support/outcome semantics. A local
-    # one-attempt validation envelope isolates this attempt from malformed siblings;
-    # it is never published and never changes the immutable plan or reported rows.
-    probe = copy.deepcopy(row)
-    probe["attempt"] = 1
-    if probe["status"] == "flaky":
-        probe["status"] = "passed"
-    peers = [probe if c["case_id"] == selected["case_id"] else
-             blocked_attempt(c, plan, next(t for t in registry["integrations"] if t["id"] == c["integration_id"]), 1,
-                             "Independent attempt validation placeholder") for c in plan["cases"]]
-    validator.validate_results({"schema_version": 1, "run": data["run"], "cases": peers}, registry,
-                               expected_source_sha=plan["source_sha"], source_root=source_root, artifact_root=folder,
-                               expected_plan=plan, plan_bytes=raw)
+    # Reuse PR1's complete discovery/support/invocation semantics with the REAL
+    # attempt identities and retained history. Never re-label attempt 2 as 1 or
+    # manufacture an exit status/manifest just to satisfy a validation envelope.
+    peers = [blocked_attempt(c, plan, next(t for t in registry["integrations"] if t["id"] == c["integration_id"]),
+                             1, "Independent integration validation placeholder")
+             for c in plan["cases"] if c["case_id"] != selected["case_id"]]
+    peers.extend(previous + [row])
+    with tempfile.TemporaryDirectory(prefix="compat-validate-attempt-") as temporary:
+        stage = Path(temporary)
+        shutil.copytree(output, stage, dirs_exist_ok=True)
+        # The source of previous references is the already-validated aggregate;
+        # current references and complete frozen reports come from this attempt.
+        current = set(references + row["contract"]["junit_paths"])
+        if row["dependency_lock"]:
+            current.add(row["dependency_lock"]["path"])
+        current.update(p.relative_to(folder).as_posix() for p in (folder / "locks").rglob("*") if p.is_file())
+        for relative in current:
+            copy_reference(folder, stage, relative)
+        validator.validate_results({"schema_version": 1, "run": data["run"], "cases": peers}, registry,
+                                   expected_source_sha=plan["source_sha"], source_root=source_root, artifact_root=stage,
+                                   expected_plan=plan, plan_bytes=raw)
     return references
 
 
@@ -263,10 +272,14 @@ def copy_reference(folder, output, relative):
 
 
 def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None):
-    check_tree(plan_dir)
-    raw = (plan_dir / "compat-plan.json").read_bytes()
+    # Wheels in a weekly plan can exceed the result-artifact budget; the
+    # collector reads only bounded metadata, never opens/executes wheel contents.
+    metadata_paths = [safe_path(plan_dir, name) for name in ("compat-plan.json", "registry.json")]
+    if any(not p.is_file() or p.stat().st_size > MAX_FILE for p in metadata_paths):
+        raise ValueError("Missing/oversized plan metadata")
+    raw = metadata_paths[0].read_bytes()
     plan = validate_plan(json.loads(raw))
-    registry_bytes = (plan_dir / "registry.json").read_bytes()
+    registry_bytes = metadata_paths[1].read_bytes()
     if sha256(registry_bytes) != plan["registry_sha256"]:
         raise ValueError("Registry snapshot identity mismatch")
     if source_root is None:
@@ -324,7 +337,11 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
                 for field in ("plan_sha256", "source_sha", "workflow_sha", "planned_case_ids", "self_test", "cooldown_cutoff", "run_id"):
                     if data["run"][field] != run_header(plan, raw)[field]:
                         raise ValueError("Artifact run/plan identity mismatch: " + field)
-                references = canonical_attempt(data, row, selected, target, plan, raw, registry, folder, source_root, validator)
+                if cases and cases[0]["status"] != "passed" and row["status"] == "passed":
+                    row = copy.deepcopy(row)
+                    row["status"] = "flaky"
+                    row["notes"].append("Earlier attempt was not a validated pass.")
+                references = canonical_attempt(data, row, selected, target, plan, raw, registry, folder, source_root, validator, cases, output)
                 if row["status"] in ("passed", "flaky", "quarantined"):
                     frozen_environment(plan_dir, folder, selected, row)
                 observed = [t for relative in row["contract"]["junit_paths"] for t in junit(safe_path(folder, relative), validator)[0]]
@@ -356,11 +373,6 @@ def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None)
                     raise ValueError(job_error)
                 if attempt == wanted and job and row["status"] == "passed" and job.get("conclusion") != "success":
                     raise ValueError("Current job did not succeed: " + str(job.get("conclusion")))
-                if cases and cases[0]["status"] != "passed" and row["status"] == "passed":
-                    # A malformed/missing original is a failed history, not green.
-                    row = copy.deepcopy(row)
-                    row["status"] = "flaky"
-                    row["notes"].append("Earlier attempt was not a validated pass.")
                 cases.append(row)
             except (ValueError, KeyError, TypeError, OSError, ET.ParseError, jsonschema.ValidationError) as error:
                 cases.append(blocked_attempt(selected, plan, target, attempt, str(error)))
