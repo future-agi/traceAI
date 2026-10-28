@@ -152,6 +152,12 @@ means empty, skipped, partial or still failing. Previously unobserved installati
 fields (empty resolved tuple, null lock, empty pre-execution suite) may populate on
 retry; already observed identities, versions, lock and suite cannot change. The
 plan and requested selection remain immutable, and both attempts remain visible.
+If a **later** upload is missing/malformed, a wholly unobserved synthesized
+`blocked`/`automation` retry (empty resolved/suite/JUnit/scenarios, null lock) is
+also allowed. It is UNKNOWN, not a contradictory empty installation. The first
+attempt remains intact; never copy its installed observations or JUnit into the
+retry. Partial observations, genuinely changed versions/locks, claimed suites or
+successful statuses cannot use this narrowly scoped unknown-retry rule.
 
 The `results` CLI requires the original `compat-plan.json` beside `results.json`
 (or `--plan PATH`) and a `--root` checkout at the tested source SHA. Plan identity,

@@ -544,6 +544,46 @@ class ResultTests(unittest.TestCase):
         data['cases'][0]['resolved'] = [{**data['cases'][1]['resolved'][0], 'version': '999'}]
         with self.assertRaisesRegex(ValueError, 'immutable'): self.validate(data, registry)
 
+    def test_valid_first_attempt_then_wholly_unknown_blocked_retry_is_preserved(self):
+        data, registry = result_fixture(self.artifacts)
+        first = copy.deepcopy(data['cases'][0])
+        second = copy.deepcopy(first)
+        second.update(attempt=2, status='blocked', resolved=[], dependency_lock=None,
+            failure=dict(kind='automation', signature='a'*64, summary='Malformed/missing retry upload; no observations', test_ids=[]))
+        second['contract'].update(suite_sha256=hashlib.sha256(b'').hexdigest(), tests=[], junit_paths=[],
+            scenarios=[], collected=0, executed=0, unexpected_skips=0)
+        data['cases'].append(second)
+        self.validate(data, registry)
+        self.assertEqual(data['cases'][0], first)
+        self.assertEqual(second['resolved'], [])
+        self.assertIsNone(second['dependency_lock'])
+        for mutation in ('partial_observation', 'wrong_kind', 'wrong_status', 'claimed_suite'):
+            changed = copy.deepcopy(data)
+            retry = changed['cases'][1]
+            if mutation == 'partial_observation': retry['resolved'] = [copy.deepcopy(first['resolved'][0])]
+            if mutation == 'wrong_kind': retry['failure']['kind'] = 'install'
+            if mutation == 'wrong_status': retry['status'] = 'failed'
+            if mutation == 'claimed_suite': retry['contract']['suite_sha256'] = first['contract']['suite_sha256']
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'immutable'):
+                self.validate(changed, registry)
+
+    def test_valid_first_and_identical_valid_retry_are_accepted_but_changed_observations_fail(self):
+        data, registry = result_fixture(self.artifacts)
+        second = copy.deepcopy(data['cases'][0]); second['attempt'] = 2
+        data['cases'].append(second)
+        write_invocations(second, self.artifacts, data['run']['plan_sha256'])
+        self.validate(data, registry)
+        # Retain the old successful evidence while a second attempt truthfully
+        # observes a different installation. This is changed, not UNKNOWN.
+        second.update(status='blocked', failure=dict(kind='requested_resolved_mismatch', signature='a'*64,
+            summary='Different installed upstream observed', test_ids=[]))
+        second['resolved'][0]['version'] = '0.99.0'
+        lock = self.artifacts / 'locks/retry.freeze.txt'
+        lock.write_text((self.artifacts / 'locks/freeze.txt').read_text().replace('anthropic==0.41.0', 'anthropic==0.99.0'))
+        second['dependency_lock'] = dict(format='pip-freeze', path='locks/retry.freeze.txt', sha256=hashlib.sha256(lock.read_bytes()).hexdigest())
+        with self.assertRaisesRegex(ValueError, 'immutable resolved observation'):
+            self.validate(data, registry)
+
     def test_flaky_must_have_real_success_and_retained_failure(self):
         for mutation in ('empty', 'partial', 'skipped', 'failed', 'no_failure', 'first_flaky'):
             data, registry = self.retry_fixture()

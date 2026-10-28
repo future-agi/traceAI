@@ -699,16 +699,27 @@ def validate_results(data, registry=None, expected_source_sha=None, expected_cas
             first, second = attempts
             for field in ['source_sha', 'integration_id', 'mode', 'selector', 'runtime', 'requested']:
                 require(first[field] == second[field], f'retry changed immutable {field}')
-            # Missing observations may populate after an install/runner failure;
-            # every actually observed distribution and lock remains immutable.
+            # A missing/malformed retry upload is not a new observation of an
+            # empty installed environment. Preserve attempt 1 and admit only a
+            # wholly unknown, explicitly blocked automation retry; do not copy
+            # old observations/JUnit into it or permit partial/changed evidence.
+            later_contract = second['contract']
+            unknown_retry = (second['status'] == 'blocked' and second['failure'] is not None and
+                second['failure']['kind'] == 'automation' and not second['resolved'] and
+                second['dependency_lock'] is None and not later_contract['tests'] and
+                not later_contract['junit_paths'] and not later_contract['scenarios'] and
+                later_contract['collected'] == later_contract['executed'] == later_contract['unexpected_skips'] == 0 and
+                later_contract['suite_sha256'] == hashlib.sha256(b'').hexdigest())
+            # Missing first observations may populate after install/runner failure.
+            # Every observation actually present in both attempts stays immutable.
             later = {(canonicalize_name(r['name']), r['role']): r for r in second['resolved']}
-            require(all(later.get((canonicalize_name(r['name']), r['role'])) == r for r in first['resolved']),
+            require(unknown_retry or all(later.get((canonicalize_name(r['name']), r['role'])) == r for r in first['resolved']),
                     'retry changed immutable resolved observation')
-            if first['dependency_lock'] is not None:
+            if first['dependency_lock'] is not None and not unknown_retry:
                 require(first['dependency_lock'] == second['dependency_lock'], 'retry changed immutable dependency_lock')
             unknown_suite = (not first['contract']['tests'] and not first['contract']['junit_paths'] and
                              first['contract']['suite_sha256'] == hashlib.sha256(b'').hexdigest())
-            require(unknown_suite or first['contract']['suite_sha256'] == second['contract']['suite_sha256'], 'retry changed suite')
+            require(unknown_retry or unknown_suite or first['contract']['suite_sha256'] == second['contract']['suite_sha256'], 'retry changed suite')
             if second['status'] == 'flaky':
                 require(first['status'] in ('failed', 'blocked') and first['failure'] is not None,
                         'flaky requires a retained genuine failure')
