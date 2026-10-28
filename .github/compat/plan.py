@@ -61,6 +61,20 @@ def semantic_validator(root):
 TOOLS = ["pip==25.0.1", "pytest==8.3.5", "pytest-asyncio==0.25.3", "httpx==0.28.1"]
 MAX_CASES = 48
 
+# An exact graph-1.0.5 tuple, not a support cap or a replacement primary/floor.
+# PyPI graph 1.0.5 permits prebuilt >=1.0.2,<1.1.0 and checkpoint >=2.1,<4.
+# Prebuilt 1.0.10 imports ExecutionInfo/ServerInfo absent from graph 1.0.5;
+# 1.0.5 uses the available Runtime API. Preserve original failed locks as history.
+LANGGRAPH_105_COMPANIONS = [
+    {"name": "langgraph-prebuilt", "version": "1.0.5", "rule": "langgraph-1.0.5-runtime-api"},
+    {"name": "langgraph-checkpoint", "version": "3.0.1", "rule": "langgraph-1.0.5-runtime-api"},
+]
+
+
+def coupled_companions(case):
+    graph = next((r["selected_version"] for r in case["requested"] if canonicalize_name(r["name"]) == "langgraph"), None)
+    return [dict(r) for r in LANGGRAPH_105_COMPANIONS] if case["integration_id"] == "python-langchain" and graph == "1.0.5" else []
+
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -119,6 +133,8 @@ def validate_plan(plan):
             raise ValueError("Runtime label differs from actual frozen patch identity")
         if case["non_blocking"] != (case["selector"] in ("prerelease", "historical")):
             raise ValueError("Only explicit exploratory cells are non-blocking")
+        if "coupled_companions" in case and case["coupled_companions"] != coupled_companions(case):
+            raise ValueError("Coupled companion rule differs from trusted planner")
     return plan
 
 
@@ -226,6 +242,10 @@ def generate(registry, discovery, source_sha, workflow_sha, now, mode="stable", 
                                   "non_blocking": selector == "prerelease",
                                   "requested": selected, "discovery": records, "problems": problems,
                                   "resolution": None})
+    for case in cases:
+        companions = coupled_companions(case)
+        if companions:
+            case["coupled_companions"] = companions
     if not cases or len(cases) > MAX_CASES:
         raise ValueError("Empty or unbounded canary matrix")
     return {"schema_version": 1, "source_sha": source_sha, "workflow_sha": workflow_sha,
@@ -278,8 +298,12 @@ def resolve(case, root, output, built, python):
             requirements.append(str(path))
         else:
             requirements.append(req["requirement"])
-    # Resolve LangChain core/graph together as the exact selected tuple, including
-    # exact historical floors. An impossible pair remains blocked; never bump it.
+    # Freeze evidenced coupled companions without altering any requested primary
+    # or floor. An impossible tuple remains blocked; no silent resolver fallback.
+    companions = case.get("coupled_companions", [])
+    if companions != coupled_companions(case):
+        raise ValueError("Missing/changed coupled companion rule")
+    requirements.extend(r["name"] + "==" + r["version"] for r in companions)
     command = [python, "-m", "pip", "install", "--dry-run", "--ignore-installed", "--only-binary=:all:",
                "--report", str(report), *requirements, *TOOLS]
     run(command, output, output / (case["case_id"] + "-resolve.log"))
@@ -301,7 +325,10 @@ def resolve(case, root, output, built, python):
             raise ValueError("Non-wheel or unhashed resolution")
         destination = folder / filename
         wanted = next((r for r in case["requested"] if canonicalize_name(r["name"]) == name), None)
-        if wanted and not (case["mode"] == "source" and wanted["role"] in ("core", "instrumentation")):
+        companion = next((r for r in companions if canonicalize_name(r["name"]) == name), None)
+        if companion and Version(version) != Version(companion["version"]):
+            raise ValueError("Coupled companion resolution mismatch")
+        if companion or (wanted and not (case["mode"] == "source" and wanted["role"] in ("core", "instrumentation"))):
             release = next((r for r in packages[name]["releases"] if Version(r["version"]) == Version(version)), None)
             artifact = next((f for f in release["artifacts"] if f["filename"] == filename and f["sha256"] == digest), None) if release else None
             if not artifact or not usable_artifact(artifact, cutoff, case["runtime_identity"]):

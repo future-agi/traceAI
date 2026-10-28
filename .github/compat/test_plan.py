@@ -104,3 +104,17 @@ class PlanTests(unittest.TestCase):
         case = next(c for c in plan['cases'] if c['integration_id'] == 'python-openai')
         self.assertEqual(case['runtime_identity']['version'], '3.11.17')
         self.assertEqual(case['requested'][0]['selected_version'], '3.27.0')
+
+    def test_langgraph_coupled_companions_do_not_change_primary_or_floor(self):
+        from plan import coupled_companions
+        registry, discovery = inputs()
+        cases = generate(registry, discovery, SHA, SHA, NOW, 'weekly')['cases']
+        graph = next(c for c in cases if c['integration_id'] == 'python-langchain' and c['selector'] == 'latest_eligible')
+        self.assertEqual([r['selected_version'] for r in graph['requested'][:2]], ['1.2.7', '1.0.5'])
+        self.assertEqual([(r['name'], r['version']) for r in graph['coupled_companions']],
+                         [('langgraph-prebuilt', '1.0.5'), ('langgraph-checkpoint', '3.0.1')])
+        floor = next(c for c in cases if c['integration_id'] == 'python-langchain' and c['selector'] == 'floor')
+        self.assertEqual([r['selected_version'] for r in floor['requested'][:2]], ['0.2.43', '0.2.0'])
+        self.assertNotIn('coupled_companions', floor)
+        graph['requested'][1]['selected_version'] = '1.2.17'
+        self.assertEqual(coupled_companions(graph), [])

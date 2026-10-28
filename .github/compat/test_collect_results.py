@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from collect_results import collect, validate_case
 from plan import sha256, write_json
-from run_case import empty_case, failure, run_header, contract_command
+from run_case import empty_case, failure, run_header, contract_command, invocation_path, junit
 from test_plan import NOW, SHA, inputs, generate, RUNTIMES
 
 SCHEMA = json.loads(Path(__file__).with_name("results.schema.json").read_text())
@@ -48,6 +48,9 @@ def evidence(directory):
     selected["resolution"] = {"resolved": row["resolved"], "report": "locks/case.report.json", "requirements": "locks/case.txt",
         "report_sha256": sha256((plan_dir / "locks/case.report.json").read_bytes()), "requirements_sha256": sha256(requirements.encode()), "wheelhouse": "wheels/case"}
     write_json(plan_dir / "registry.json", registry)
+    source = plan_dir / "source/.github/compat"
+    source.mkdir(parents=True)
+    shutil.copyfile(plan_dir / "registry.json", source / "registry.json")
     plan["registry_sha256"] = sha256((plan_dir / "registry.json").read_bytes())
     write_json(plan_dir / "compat-plan.json", plan)
     raw = (plan_dir / "compat-plan.json").read_bytes()
@@ -58,9 +61,19 @@ def evidence(directory):
     for key in ("report", "requirements"):
         shutil.copyfile(plan_dir / selected["resolution"][key], case_dir / selected["resolution"][key])
     (case_dir / "locks/case.freeze.txt").write_text(freeze)
-    write_json(case_dir / ("locks/" + selected["case_id"] + ".collection.json"), dict(nodes=sorted(IDS), deselected=[]))
+    collection_path = "locks/" + selected["case_id"] + "-attempt1.collection.json"
+    write_json(case_dir / collection_path, dict(nodes=sorted(IDS), deselected=[], errors=[]))
     (case_dir / "junit/attempt1.xml").write_text('<testsuite>' + ''.join(
         f'<testcase file="{node.split("::")[0]}" name="{node.split("::")[1]}" time="0.1"/>' for node in IDS) + '</testsuite>')
+    for discovered in row["discovery"]:
+        discovered["resolved_version"] = next(r["version"] for r in row["resolved"] if r["name"] == discovered["name"])
+    (case_dir / 'junit/attempt1.xml.exit-code').write_text('0\n')
+    (case_dir / (collection_path + '.exit-code')).write_text('0\n')
+    invocation = dict(exit_code=0, timed_out=False, started_at=plan["generated_at"], completed_at=plan["generated_at"])
+    write_json(case_dir / invocation_path(selected["case_id"], 1), dict(schema_version=1, case_id=selected["case_id"], attempt=1,
+        source_sha=plan["source_sha"], plan_sha256=sha256(raw),
+        collection={**invocation, "evidence_path": collection_path, "evidence_sha256": sha256((case_dir / collection_path).read_bytes())},
+        contract={**invocation, "evidence_path": "junit/attempt1.xml", "evidence_sha256": sha256((case_dir / "junit/attempt1.xml").read_bytes())}))
     result = {"schema_version": 1, "run": run_header(plan, raw), "cases": [row]}
     write_json(case_dir / "results.json", result)
     return plan_dir, artifacts, output, case_dir, result
@@ -71,7 +84,7 @@ def semantic_check(row, target, root):
     # the real PR1 interface from the immutable source checkout, not this mock.
     if row["contract"]["suite_sha256"] != "f" * 64:
         raise ValueError("trusted suite digest mismatch")
-    if row["contract"]["command"] != contract_command(target["contract_test"], "junit/attempt1.xml"):
+    if row["contract"]["command"] != contract_command(target["contract_test"], row["contract"]["junit_paths"][0]):
         raise ValueError("registered contract command mismatch")
     if {t["test_id"] for t in row["contract"]["tests"]} != set(IDS):
         raise ValueError("registered contract test nodes mismatch")
@@ -79,16 +92,43 @@ def semantic_check(row, target, root):
         raise ValueError("registered scenarios mismatch")
 
 
+def reconcile(data, plan, raw):
+    for row in data['cases']:
+        selected = next(c for c in plan['cases'] if c['case_id'] == row['case_id'])
+        expected = [{**d, 'resolved_version': next((r['version'] for r in row['resolved'] if r['name'] == d['name']), None)} for d in selected['discovery']]
+        if row['discovery'] != expected:
+            raise ValueError('trusted discovery mismatch')
+
+
+def invocation_tests(paths, exits):
+    tests = [t for path in paths for t in junit(path)[0]]
+    if exits not in ([0], [1]) or (exits == [0]) != all(t['outcome'] == 'passed' for t in tests):
+        raise ValueError('runner/JUnit outcome mismatch')
+    return tests
+
+
+def judge(tests, target, runtime, resolved):
+    if any(t['outcome'] != 'passed' or t.get('exception_id') for t in tests):
+        raise ValueError('unmatched failure/false exception attribution')
+    return 'passed'
+
+
+def trusted_validator():
+    return SimpleNamespace(validate_contract=semantic_check, validate_registry=lambda data, root: data,
+        reconcile_plan=reconcile, judge_tests=judge, invocation_tests=invocation_tests,
+        validate_results=lambda *args, **kwargs: None, junit_tests=lambda path: junit(path)[0])
+
+
 class CollectorTests(unittest.TestCase):
     def setUp(self):
-        self.mock = patch("collect_results.semantic_validator", return_value=SimpleNamespace(validate_contract=semantic_check))
+        self.mock = patch("collect_results.semantic_validator", return_value=trusted_validator())
         self.mock.start(); self.addCleanup(self.mock.stop)
         self.env = patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"})
         self.env.start(); self.addCleanup(self.env.stop)
         os.environ.pop("GITHUB_RUN_ID", None)
 
     def collect(self, plan, artifacts, output, **kwargs):
-        return collect(plan, artifacts, output, SCHEMA, source_root=plan, **kwargs)
+        return collect(plan, artifacts, output, SCHEMA, source_root=plan / 'source', **kwargs)
 
     def run_control(self, mutate):
         with tempfile.TemporaryDirectory() as temporary:
@@ -167,7 +207,7 @@ class CollectorTests(unittest.TestCase):
 
     def test_pass_claim_with_changed_junit_fails_closed(self):
         result = self.run_control(lambda data, folder: (folder / "junit/attempt1.xml").write_text('<testsuite/>'))
-        self.assertIn("do not match original JUnit", result["cases"][0]["failure"]["summary"])
+        self.assertIn("Invocation evidence digest mismatch", result["cases"][0]["failure"]["summary"])
 
     def test_artifact_symlinks_fail_closed(self):
         self.run_control(lambda data, folder: (folder / "evil").symlink_to("/tmp"))
@@ -223,7 +263,9 @@ class CollectorTests(unittest.TestCase):
             path, name = IDS[0].split('::')
             (folder / 'junit/attempt1.xml').write_text(f'<testsuite><testcase file="{path}" name="{name}" time="0.1"/></testsuite>')
         # Function-level AST validation alone cannot detect a deselected parameter.
-        with patch('collect_results.semantic_validator', return_value=SimpleNamespace(validate_contract=lambda *args: None)):
+        validator = trusted_validator()
+        validator.validate_contract = lambda *args: None
+        with patch('collect_results.semantic_validator', return_value=validator):
             result = self.run_control(mutate)
         self.assertIn('full collected identities', result['cases'][0]['failure']['summary'])
 
@@ -243,3 +285,77 @@ class CollectorTests(unittest.TestCase):
                     result, blocked = self.collect(plan, artifacts, output, jobs=[old, clone])
                 self.assertEqual(bool(blocked), changed is not None)
                 self.assertEqual(result['cases'][-1]['status'], 'passed' if changed is None else 'blocked')
+
+    def test_complete_registry_bytes_are_bound_before_contract_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, artifacts, output, _, _ = evidence(Path(temporary))
+            registry = json.loads((plan / 'registry.json').read_text())
+            target = next(t for t in registry['integrations'] if t['id'] == 'python-openai')
+            target['contract_test']['paths'] = target['contract_test']['paths'][:1]
+            write_json(plan / 'registry.json', registry)
+            frozen = json.loads((plan / 'compat-plan.json').read_text())
+            frozen['registry_sha256'] = sha256((plan / 'registry.json').read_bytes())
+            write_json(plan / 'compat-plan.json', frozen)
+            with self.assertRaisesRegex(ValueError, 'immutable source registry'):
+                self.collect(plan, artifacts, output)
+
+    def test_discovery_reconciliation_cannot_be_replaced_by_direct_pin_equality(self):
+        for mutation in (dict(yanked=True), dict(latest_eligible='99.0.0'), dict(resolved_version='0.0.0'),
+                         dict(published_at='2026-10-28T00:00:00Z')):
+            with self.subTest(mutation=mutation):
+                result = self.run_control(lambda d, f: d['cases'][0]['discovery'][0].update(mutation))
+                self.assertIn('trusted discovery mismatch', result['cases'][0]['failure']['summary'])
+
+    def test_unregistered_quarantine_is_not_accepted(self):
+        def mutate(data, folder):
+            data['cases'][0]['status'] = 'quarantined'
+            data['cases'][0]['contract']['tests'][0]['exception_id'] = 'invented'
+        result = self.run_control(mutate)
+        self.assertIn('false exception attribution', result['cases'][0]['failure']['summary'])
+
+    def test_missing_or_nonzero_invocation_exit_evidence_blocks_passing_junit(self):
+        def change_exit(data, folder):
+            relative = invocation_path(data['cases'][0]['case_id'], 1)
+            status = json.loads((folder / relative).read_text())
+            status['contract']['exit_code'] = 1
+            write_json(folder / relative, status)
+            (folder / 'junit/attempt1.xml.exit-code').write_text('1\n')
+        for mutate in (lambda d, f: (f / 'junit/attempt1.xml.exit-code').unlink(), change_exit):
+            result = self.run_control(mutate)
+            self.assertEqual(result['cases'][0]['status'], 'blocked')
+
+    def test_root_junit_and_invocation_statuses_are_copied_together(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, artifacts, output, folder, data = evidence(Path(temporary))
+            result, bad = self.collect(plan, artifacts, output)
+            self.assertFalse(bad)
+            for relative in ('junit/attempt1.xml', 'junit/attempt1.xml.exit-code',
+                             invocation_path(data['cases'][0]['case_id'], 1)):
+                self.assertEqual((folder / relative).read_bytes(), (output / relative).read_bytes())
+
+    def test_malformed_attempts_are_independent_and_every_planned_row_is_emitted(self):
+        for malformed in (1, 2):
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as temporary:
+                plan, artifacts, output, first, data = evidence(Path(temporary))
+                second = artifacts / first.name.replace('attempt-1', 'attempt-2')
+                shutil.copytree(first, second)
+                retry = copy.deepcopy(data)
+                retry['run']['run_attempt'] = 2
+                retry['cases'][0]['attempt'] = 2
+                write_json(second / 'results.json', retry)
+                old = second / invocation_path(data['cases'][0]['case_id'], 1)
+                status = json.loads(old.read_text()); old.unlink()
+                status['attempt'] = 2
+                write_json(second / invocation_path(data['cases'][0]['case_id'], 2), status)
+                (first if malformed == 1 else second).joinpath('results.json').write_text('{broken')
+                with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+                    result, bad = self.collect(plan, artifacts, output)
+                self.assertTrue(bad)
+                self.assertTrue((output / 'results.json').is_file())
+                self.assertEqual([r['attempt'] for r in result['cases']], [1, 2])
+                self.assertEqual([r['status'] for r in result['cases']],
+                                 ['blocked', 'flaky'] if malformed == 1 else ['passed', 'blocked'])
+                healthy = result['cases'][1 if malformed == 1 else 0]
+                self.assertEqual(healthy['contract']['junit_paths'], ['junit/attempt1.xml'])
+                self.assertEqual((output / 'junit/attempt1.xml').read_bytes(),
+                                 (second if malformed == 1 else first).joinpath('junit/attempt1.xml').read_bytes())

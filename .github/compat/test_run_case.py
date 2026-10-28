@@ -136,3 +136,75 @@ pathlib.Path(OUTPUT).write_text(json.dumps(dict(host_uid=65534, private_file='ab
                     self.assertFalse((root / 'escape-write').exists())
             finally:
                 server.close()
+
+    def test_parent_retains_nonzero_exit_even_with_passing_junit(self):
+        import subprocess
+        from unittest.mock import patch
+        from run_case import invoke
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); source = root / 'sandbox.xml'; source.write_text('<testsuite/>')
+            retained = root / 'junit/test.xml'
+            with patch('run_case.subprocess.run', return_value=subprocess.CompletedProcess([], 7)):
+                record = invoke(['not-executed'], cwd=root, log=root / 'run.log', evidence=source,
+                                retained=retained, output=root)
+            self.assertEqual(record['exit_code'], 7)
+            self.assertEqual(Path(str(retained) + '.exit-code').read_text(), '7\n')
+            self.assertEqual(retained.read_bytes(), source.read_bytes())
+
+    def test_collection_diagnostics_retain_affected_identity_and_distinct_signatures(self):
+        import subprocess
+        import sys
+        from run_case import COLLECTION_CODE, collection_failure
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            signatures = []
+            for missing in ('_error_description', 'GatewayError'):
+                (root / 'test_import.py').write_text('raise ImportError("cannot import name ' + missing + '")\n')
+                output = root / 'collection.json'
+                process = subprocess.run([sys.executable, '-I', '-c', COLLECTION_CODE, str(output),
+                    'test_import.py', '--rootdir=.', '-c', '/dev/null', '--collect-only'], cwd=root,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                self.assertNotEqual(process.returncode, 0)
+                data = json.loads(output.read_text())
+                self.assertEqual(data['errors'][0]['test_id'], 'test_import.py')
+                self.assertIn(missing, data['errors'][0]['diagnostic'])
+                diagnostic = collection_failure(data, root / 'absent.log')
+                self.assertEqual(diagnostic['test_ids'], ['test_import.py'])
+                self.assertIn(missing, diagnostic['summary'])
+                signatures.append(diagnostic['signature'])
+            self.assertNotEqual(*signatures)
+
+    def test_canonical_exception_semantics_are_delegated_before_attribution(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        ex = {'id': 'exact', 'test_ids': ['tests/test.py::test_sdk[old]']}
+        target = {'exceptions': [ex]}
+        tests = [dict(test_id=ex['test_ids'][0], outcome='failure', exception_id=None)]
+        validator = SimpleNamespace(validate_exception=Mock(), judge_tests=Mock(return_value='quarantined'),
+                                    applicable=Mock(return_value=True))
+        self.assertEqual(apply_exceptions(tests, target, [], {}, validator), 'quarantined')
+        validator.validate_exception.assert_called_once_with(ex, target)
+        validator.judge_tests.assert_called_once_with(tests, target, {}, [])
+        self.assertEqual(tests[0]['exception_id'], 'exact')
+        # Expiry, omitted parameters, overlap and signatures are all canonical
+        # failures. None can attach an exception before PR1 has accepted the set.
+        for message in ('expired', 'excepted test did not execute', 'overlap', 'unmatched signature'):
+            tests[0]['exception_id'] = None
+            validator.judge_tests.side_effect = ValueError(message)
+            with self.assertRaisesRegex(ValueError, message):
+                apply_exceptions(tests, target, [], {}, validator)
+            self.assertIsNone(tests[0]['exception_id'])
+
+    def test_complete_quarantined_suite_has_exercised_scenarios(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from run_case import finish_contract
+        target = dict(exceptions=[], contract_test=dict(scenarios=['real-sdk', 'privacy'], minimum_executed=1))
+        row = dict(contract=dict(tests=[dict(test_id='tests/test.py::test_sdk', outcome='failure')], executed=1,
+                                 unexpected_skips=0, scenarios=[]), resolved=[], runtime={}, notes=[], failure=None)
+        validator = SimpleNamespace(validate_contract=Mock(), judge_tests=Mock(return_value='quarantined'))
+        with patch('run_case.semantic_validator', return_value=validator):
+            finish_contract(row, target, ROOT, dict(nodes=['tests/test.py::test_sdk'], deselected=[]), 1, [])
+        self.assertEqual(row['status'], 'quarantined')
+        self.assertEqual(row['contract']['scenarios'], ['real-sdk', 'privacy'])
+        validator.validate_contract.assert_called_once()

@@ -197,6 +197,10 @@ def discover(registry, now, fixtures=None):
                 raise ValueError("Enabled discovery adapter is deferred")
             for dependency in target["upstream"]:
                 names.add((eco, dependency["name"]))
+            if target["id"] == "python-langchain":
+                # Explicit planner-side graph-1.0.5 companion rule; retain their
+                # registry metadata for the same artifact/cooldown checks.
+                names.update(("pypi", name) for name in ("langgraph-prebuilt", "langgraph-checkpoint"))
             if "published" in target["canary"]["modes"]:
                 names.add((eco, target["distribution"]))
     # Published instrumentation and core must both be selected, never source core.

@@ -162,6 +162,19 @@
             ]
           }
         },
+        "coupled_companions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "version", "rule"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "version": {"type": "string", "minLength": 1},
+              "rule": {"const": "langgraph-1.0.5-runtime-api"}
+            }
+          }
+        },
         "problems": {
           "type": "array",
           "items": {

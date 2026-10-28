@@ -8,6 +8,7 @@ All failure paths emit a schema-v1 row, including missing suite/JUnit and instal
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -27,6 +28,26 @@ from packaging.version import Version
 
 from discover import UTC, iso
 from plan import clean_env, safe_path, sha256, validate_plan, write_json, semantic_validator, runtime_identity
+
+
+COLLECTION_CODE = r'''import json,pathlib,pytest,re,sys
+class Collection:
+ def __init__(self): self.deselected=[]; self.errors=[]
+ def pytest_deselected(self,items): self.deselected.extend(i.nodeid for i in items)
+ def pytest_collectreport(self,report):
+  if report.failed and len(self.errors)<64:
+   text=str(report.longrepr)
+   lines=[line.strip() for line in text.splitlines() if re.match(r'^(?:E\s+)?[\w.]+(?:Error|Exception|Failure):',line.strip())]
+   self.errors.append(dict(test_id=report.nodeid,diagnostic=('\n'.join(lines) or text)[-16384:]))
+ def write(self,session):
+  pathlib.Path(sys.argv[1]).write_text(json.dumps(dict(nodes=sorted(i.nodeid for i in session.items),deselected=self.deselected,errors=self.errors)))
+ def pytest_collection_finish(self,session): self.write(session)
+ @pytest.hookimpl(trylast=True)
+ def pytest_sessionfinish(self,session,exitstatus):
+  self.write(session)
+  if exitstatus == 0 and not session.testsfailed and session.items and not self.deselected and not self.errors: session.exitstatus=0
+raise SystemExit(pytest.main(sys.argv[2:],plugins=[Collection()]))
+'''
 
 
 def now():
@@ -85,9 +106,8 @@ def empty_case(case, plan, target):
     return {"case_id": case["case_id"], "integration_id": case["integration_id"], "language": target["language"],
             "source_sha": plan["source_sha"], "mode": case["mode"], "selector": case["selector"],
             "qualification": target["qualification"]["status"],
-            "runtime": {"implementation": platform.python_implementation().lower(), "version": platform.python_version(),
-                        "os": platform.system().lower(), "arch": platform.machine()},
-            "requested": case["requested"], "resolved": [], "discovery": case["discovery"], "dependency_lock": None,
+            "runtime": {k: case["runtime_identity"][k] for k in ("implementation", "version", "os", "arch")},
+            "requested": copy.deepcopy(case["requested"]), "resolved": [], "discovery": copy.deepcopy(case["discovery"]), "dependency_lock": None,
             "contract": {"suite_sha256": sha256(b""), "command": ["python", "-m", "pytest"], "scenarios": [],
                          "junit_paths": [], "tests": [], "collected": 0, "executed": 0, "unexpected_skips": 0},
             "status": "blocked", "failure": None, "started_at": now(), "completed_at": now(), "attempt": 1,
@@ -182,33 +202,101 @@ def junit(path, validator=None):
     return tests, details
 
 
-def apply_exceptions(tests, exceptions, resolved, runtime, today):
-    """Exact exceptions only; collection, install, skip and runner failures bypass this."""
-    versions = {canonicalize_name(r["name"]): r["version"] for r in resolved}
-    for exception in exceptions:
-        if not exception["issue"].startswith("https://github.com/future-agi/traceAI/issues/"):
-            raise ValueError("Exception requires a real issue")
-        added, expires = dt.date.fromisoformat(exception["added"]), dt.date.fromisoformat(exception["expires"])
-        if expires < today or added > today or not 0 <= (expires - added).days <= 14:
-            raise ValueError("Expired/invalid exact exception")
-        if exception["runtime_constraints"]["implementation"].lower() != runtime["implementation"].lower():
-            continue
-        if not SpecifierSet(exception["runtime_constraints"]["specifier"]).contains(runtime["version"]):
-            continue
-        if not all(canonicalize_name(c["name"]) in versions and SpecifierSet(c["specifier"]).contains(versions[canonicalize_name(c["name"])] )
-                   for c in exception["upstream_constraints"]):
-            continue
-        for test in tests:
-            if test["test_id"] in exception["test_ids"]:
-                if test["outcome"] == "passed":
-                    raise ValueError("Unexpected pass: remove exact exception " + exception["id"])
-                if test["outcome"] == exception["expected_outcome"] and test["failure_signature"] == exception["failure_signature"]:
+def apply_exceptions(tests, target, resolved, runtime, validator):
+    """PR1 owns expiry, completeness, overlap, outcome/signature and attribution."""
+    for exception in target["exceptions"]:
+        validator.validate_exception(exception, target)
+    verdict = validator.judge_tests(tests, target, runtime, resolved)
+    # Only attach attribution AFTER the canonical verdict accepted every node.
+    for exception in target["exceptions"]:
+        if validator.applicable(exception, runtime, resolved):
+            for test in tests:
+                if test["test_id"] in exception["test_ids"]:
                     test["exception_id"] = exception["id"]
+    return verdict
+
+
+def invocation_path(case_id, attempt):
+    return f"invocations/{case_id}-attempt-{attempt}.json"
+
+
+def invoke(command, *, cwd, log, evidence, retained, output, timeout=600):
+    """The parent records the sandbox process exit; dependencies cannot write it.
+
+    Output/JUnit alone cannot prove that pytest (or the sandbox) exited cleanly.
+    Retain even timeout/crash outcomes; never synthesize a successful exit.
+    """
+    record = dict(exit_code=None, timed_out=False, started_at=now(), completed_at=None,
+                  evidence_path=None, evidence_sha256=None)
+    try:
+        with log.open("w") as stream:
+            process = subprocess.run(command, cwd=cwd, env=clean_env(), stdout=stream,
+                                     stderr=subprocess.STDOUT, timeout=timeout)
+        record["exit_code"] = process.returncode
+    except subprocess.TimeoutExpired:
+        record["timed_out"] = True
+    finally:
+        record["completed_at"] = now()
+        if evidence.is_file() and not evidence.is_symlink():
+            retained.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(evidence, retained)
+            record["evidence_path"] = retained.relative_to(output).as_posix()
+            record["evidence_sha256"] = sha256(retained.read_bytes())
+            # PR1's additive public convention: one immutable parent-written
+            # exit-code sidecar per original JUnit (also retained for collection).
+            code = record["exit_code"]
+            shell_code = 124 if record["timed_out"] else (128 - code if code is not None and code < 0 else code)
+            if shell_code is not None:
+                Path(str(retained) + ".exit-code").write_text(str(shell_code) + "\n")
+    return record
+
+
+def collection_failure(collection, log):
+    """Bounded actual terminal diagnostics, including affected module/node IDs."""
+    errors = collection.get("errors", [])
+    ids = sorted({e["test_id"] for e in errors if e.get("test_id")})
+    diagnostics = [e["diagnostic"] for e in errors if e.get("diagnostic")]
+    if not diagnostics:
+        # A crash before the plugin can emit structured errors still retains its
+        # actual terminal diagnostic, not one generic 'collection failed' key.
+        content = log.read_bytes()[-32768:].decode(errors="replace") if log.is_file() else ""
+        diagnostics = [line.strip() for line in content.splitlines()
+                       if re.match(r"^(?:E\\s+)?[\\w.]+(?:Error|Exception|Failure):", line.strip())]
+    return failure("collection", " | ".join(diagnostics) or "Collection produced no terminal diagnostic; see collection.log", ids)
+
+
+def finish_contract(row, target, root, collection, exit_code, details):
+    """Completeness/scenario coverage is independent of pass versus quarantine."""
+    contract = target["contract_test"]
+    tests = row["contract"]["tests"]
+    if sorted(t["test_id"] for t in tests) != collection["nodes"] or collection["deselected"] or collection.get("errors"):
+        raise ValueError("Partial/deselected contract execution differs from full collection")
+    if row["contract"]["executed"] < contract["minimum_executed"] or row["contract"]["unexpected_skips"]:
+        raise ValueError("Empty/insufficient/skipped contract execution")
+    validator = semantic_validator(root)
+    candidate = {**row, "contract": {**row["contract"], "scenarios": contract["scenarios"]}}
+    validator.validate_contract(candidate, target, root)
+    row["contract"]["scenarios"] = list(contract["scenarios"])
+    bad = [t for t in tests if t["outcome"] in ("failure", "error")]
+    if type(exit_code) is not int or exit_code not in (0, 1) or (exit_code == 0) != (not bad):
+        raise ValueError(f"Runner/JUnit outcome mismatch (exit {exit_code}); not waivable")
+    try:
+        row["status"] = apply_exceptions(tests, target, row["resolved"], row["runtime"], validator)
+    except ValueError as error:
+        row["status"] = "failed"
+        row["notes"].append(normalize(str(error))[:2000])
+        row["failure"] = aggregate_failure(details, [t["test_id"] for t in bad], str(error))
+        return
+    if bad:
+        row["failure"] = aggregate_failure(details, [t["test_id"] for t in bad])
 
 
 def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
     row = empty_case(case, plan, target)
     row["attempt"] = attempt
+    raw = (plan_dir / "compat-plan.json").read_bytes() if (plan_dir / "compat-plan.json").is_file() else b""
+    invocations = dict(schema_version=1, case_id=case["case_id"], attempt=attempt,
+                       source_sha=plan["source_sha"], plan_sha256=sha256(raw), collection=None, contract=None)
     try:
         if case["problems"] or not case["resolution"]:
             raise ValueError("Resolution blocked: " + "; ".join(case["problems"] or ["No complete frozen resolution"]))
@@ -298,69 +386,42 @@ def execute(root, plan_dir, case, plan, target, output, blocker, attempt=1):
             # the same frozen environment. Partial/deselected execution cannot
             # inherit scenario claims from a single executed function/parameter.
             collected_path = shared_output / "collection.json"
-            collection_code = ("import json,pathlib,pytest,sys\n"
-                "class Collection:\n"
-                " def __init__(self): self.deselected=[]\n"
-                " def pytest_deselected(self,items): self.deselected.extend(i.nodeid for i in items)\n"
-                " def pytest_collection_finish(self,session):\n"
-                "  pathlib.Path(sys.argv[1]).write_text(json.dumps(dict(nodes=sorted(i.nodeid for i in session.items),deselected=self.deselected)))\n"
-                " @pytest.hookimpl(trylast=True)\n"
-                " def pytest_sessionfinish(self,session,exitstatus):\n"
-                "  if exitstatus == 0 and not session.testsfailed and session.items and not self.deselected: session.exitstatus=0\n"
-                "raise SystemExit(pytest.main(sys.argv[2:],plugins=[Collection()]))\n")
-            collect_argv = [python, "-I", "-c", collection_code, str(collected_path), *command[3:],
+            collect_argv = [python, "-I", "-c", COLLECTION_CODE, str(collected_path), *command[3:],
                             "--import-mode=importlib", "--rootdir=.", "-p", "pytest_asyncio.plugin", "--collect-only"]
-            with (output / "collection.log").open("w") as log:
-                collected = subprocess.run(sandbox(temporary, shared_output, toolchain, consumer, collect_argv),
-                    cwd=consumer, env=clean_env(), stdout=log, stderr=subprocess.STDOUT, timeout=600)
+            collection_evidence = lock_dir / (case["case_id"] + f"-attempt{attempt}.collection.json")
+            invocations["collection"] = invoke(sandbox(temporary, shared_output, toolchain, consumer, collect_argv),
+                cwd=consumer, log=output / "collection.log", evidence=collected_path, retained=collection_evidence, output=output)
+            write_json(output / invocation_path(case["case_id"], attempt), invocations)
             stage = "collection"
-            if collected.returncode or not collected_path.is_file() or collected_path.is_symlink():
-                raise ValueError("Full contract collection failed; see collection.log")
-            collection = json.loads(collected_path.read_text())
-            if collection["deselected"] or not collection["nodes"] or len(collection["nodes"]) != len(set(collection["nodes"])):
-                raise ValueError("Empty/deselected/duplicate full contract collection")
-            shutil.copyfile(collected_path, lock_dir / (case["case_id"] + ".collection.json"))
+            collection = json.loads(collection_evidence.read_text()) if collection_evidence.is_file() else {}
+            if invocations["collection"]["exit_code"] != 0 or invocations["collection"]["timed_out"] or not collection:
+                row["status"] = "failed"
+                row["failure"] = collection_failure(collection, output / "collection.log")
+                return row
+            if collection["deselected"] or collection.get("errors") or not collection["nodes"] or len(collection["nodes"]) != len(set(collection["nodes"])):
+                raise ValueError("Empty/deselected/duplicate/errored full contract collection")
             stage = "infrastructure"
-            with (output / "contract.log").open("w") as log:
-                process = subprocess.run(sandbox(temporary, shared_output, toolchain, consumer, argv), cwd=consumer, env=clean_env(), stdout=log,
-                                         stderr=subprocess.STDOUT, timeout=600)
+            invocations["contract"] = invoke(sandbox(temporary, shared_output, toolchain, consumer, argv),
+                cwd=consumer, log=output / "contract.log", evidence=isolated_junit, retained=path, output=output)
+            write_json(output / invocation_path(case["case_id"], attempt), invocations)
             if isolated_junit.is_symlink():
                 raise ValueError("Symlink JUnit is forbidden")
-            if not isolated_junit.is_file():
-                raise ValueError(f"Missing JUnit (runner/namespace exit {process.returncode}); see contract.log")
-            shutil.copyfile(isolated_junit, path)
+            if not path.is_file():
+                raise ValueError(f"Missing JUnit (runner/namespace exit {invocations['contract']['exit_code']}); see contract.log")
             stage = "collection"
             tests, details = junit(path, semantic_validator(root))
             row["contract"].update(tests=tests, collected=len(tests), executed=sum(t["outcome"] != "skipped" for t in tests),
                                    unexpected_skips=sum(t["outcome"] == "skipped" for t in tests),
                                    junit_paths=[path.relative_to(output).as_posix()])
-            if process.returncode not in (0, 1, 2, 3, 4, 5):
-                stage = "infrastructure"
-                raise ValueError(f"Runner crashed (exit {process.returncode}); exceptions cannot waive crashes")
-            if process.returncode in (2, 3, 4, 5) or any(d["kind"] == "collection" for d in details):
-                raise ValueError(f"Collection/runner failure (pytest exit {process.returncode})")
-            if sorted(t["test_id"] for t in tests) != collection["nodes"]:
-                raise ValueError("Partial/deselected contract execution differs from full collection")
-            if row["contract"]["executed"] < contract["minimum_executed"]:
-                raise ValueError("Empty/insufficient contract execution")
-            if row["contract"]["unexpected_skips"]:
-                raise ValueError("Unexpected skipped/xfail contract tests")
             stage = "contract"
-            apply_exceptions(tests, target["exceptions"], row["resolved"], row["runtime"], dt.datetime.now(UTC).date())
-            bad = [t for t in tests if t["outcome"] in ("failure", "error")]
-            if bad or process.returncode:
-                row["status"] = "quarantined" if bad and all(t["exception_id"] for t in bad) else "failed"
-                row["failure"] = aggregate_failure(details, [t["test_id"] for t in bad], f"pytest exit {process.returncode}")
-            else:
-                candidate = {**row, "contract": {**row["contract"], "scenarios": contract["scenarios"]}}
-                semantic_validator(root).validate_contract(candidate, target, root)
-                row["contract"]["scenarios"] = contract["scenarios"]
-                row["status"] = "passed"
+            finish_contract(row, target, root, collection, invocations["contract"]["exit_code"], details)
     except (ValueError, OSError, subprocess.SubprocessError, ET.ParseError, KeyError) as error:
         kind = locals().get("stage", "resolution")
         row["status"] = "blocked" if kind in ("resolution", "install", "infrastructure") else "failed"
         row["failure"] = failure(kind, str(error), [t["test_id"] for t in row["contract"]["tests"] if t["outcome"] in ("error", "failure")])
-    row["completed_at"] = now()
+    finally:
+        row["completed_at"] = now()
+        write_json(output / invocation_path(case["case_id"], attempt), invocations)
     return row
 
 
@@ -389,15 +450,17 @@ def main():
         if args.previous is None:
             raise ValueError("Retry must preserve previous evidence")
         from collect_results import check_tree, validate_case
-        if (args.previous / "results.json").is_file():
+        try:
             check_tree(args.previous)
             schema = json.loads(Path(__file__).with_name("results.schema.json").read_text())
             history = validate_case(json.loads((args.previous / "results.json").read_text()), plan, raw, case, schema)
             if len(history) != 1:
                 raise ValueError("Previous artifact already contains a retry")
-        else:
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            # The immutable original remains untouched. Run the retry, but its
+            # success can only be flaky until the original history is valid.
             missing = empty_case(case, plan, target)
-            missing["failure"] = failure("automation", "Original planned case upload was missing")
+            missing["failure"] = failure("automation", "Original planned case upload missing/invalid: " + str(error))
             history = [missing]
     # The first artifact is immutable. A killed retry cannot replace it. Its
     # independent result is merged chronologically by the collector.
