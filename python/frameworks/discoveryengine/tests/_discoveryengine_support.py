@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import grpc
+from fi_instrumentation import REDACTED_VALUE, TraceConfig
 from google.cloud.discoveryengine_v1.types import (
     Answer,
     AnswerQueryRequest,
@@ -67,6 +68,13 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+
+# Published core 1.1.0 retains the instrumentor's redacted error text. Newer
+# core derives error-detail hiding from content-hide flags and normalizes
+# redundant exception-type prefixes. Detect the API, not a version string:
+# source installs may still carry the published package's version number.
+NATIVE_ERROR_POLICY = hasattr(TraceConfig(), "hide_error_details")
 
 SEARCH_SERVICE = "google.cloud.discoveryengine.v1.SearchService"
 CONVERSATION_SERVICE = "google.cloud.discoveryengine.v1.ConversationalSearchService"
@@ -599,3 +607,24 @@ def event(span: ReadableSpan, name: str) -> Optional[Dict[str, Any]]:
         if item.name == name:
             return dict(item.attributes or {})
     return None
+
+
+def assert_hidden_query_error(span: ReadableSpan, exception_type: str) -> None:
+    """Pin both core contracts: absent details, or nonempty redacted text.
+
+    Never accept an arbitrary empty message as evidence of masking on legacy
+    core, or a placeholder where native core must remove the field entirely.
+    """
+    assert span.status.status_code is StatusCode.ERROR
+    assert [item.name for item in span.events] == ["exception"]
+    exception = event(span, "exception")
+    assert exception is not None
+    assert exception["exception.type"] == exception_type
+    if NATIVE_ERROR_POLICY:
+        assert span.status.description is None
+        assert exception == {"exception.type": exception_type}
+    else:
+        assert sorted(exception) == ["exception.message", "exception.type"]
+        message = exception["exception.message"]
+        assert REDACTED_VALUE in message
+        assert span.status.description == exception_type.rsplit(".", 1)[-1] + ": " + message

@@ -25,9 +25,11 @@ from _discoveryengine_support import (
     ANSWER_TEXT,
     CONTENT_MARKERS,
     DOCUMENT_TITLE,
+    NATIVE_ERROR_POLICY,
     SERVING_CONFIG,
     SESSION_NAME,
     SNIPPET,
+    assert_hidden_query_error,
     attrs,
     event,
     instrumented,
@@ -240,8 +242,12 @@ def test_a_rest_error_records_the_status_from_the_json_body(endpoint):
     assert values["discoveryengine.error.status"] == "PERMISSION_DENIED"
     assert values["discoveryengine.error.code"] == 403
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description.startswith("Forbidden: 403 POST ")
-    assert sorted(event(span, "exception")) == ["exception.message", "exception.type"]
+    exception = event(span, "exception")
+    assert exception["exception.type"] == "google.api_core.exceptions.Forbidden"
+    assert exception["exception.message"].startswith("403 POST ")
+    prefix = "" if NATIVE_ERROR_POLICY else "Forbidden: "
+    assert span.status.description == prefix + exception["exception.message"]
+    assert sorted(exception) == ["exception.message", "exception.type"]
     # Default: the query is recorded, so the server's echo of it stays.
     assert QUERY in span.status.description
 
@@ -256,7 +262,7 @@ def test_with_hide_inputs_the_query_is_removed_from_rest_error_text(endpoint, mo
     span = traced.one()
     assert attrs(span)["input.value"] == REDACTED_VALUE
     assert "gen_ai.retrieval.query" not in attrs(span)
-    assert REDACTED_VALUE in span.status.description
+    assert_hidden_query_error(span, "google.api_core.exceptions.Forbidden")
     assert QUERY not in traced.wire()
 
 
@@ -317,6 +323,10 @@ def test_live_rest_error_bodies_record_status_and_code(endpoint, key, operation,
     assert values["gen_ai.retrieval.query"] == query
     assert "discoveryengine.result_count" not in values
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description.startswith("{0}: {1} POST ".format(error_class.__name__, code))
+    exception = event(span, "exception")
+    assert exception["exception.type"] == "google.api_core.exceptions." + error_class.__name__
+    assert exception["exception.message"].startswith("{0} POST ".format(code))
+    prefix = "" if NATIVE_ERROR_POLICY else error_class.__name__ + ": "
+    assert span.status.description == prefix + exception["exception.message"]
     assert LIVE_ERRORS[key][1]["error"]["message"] in span.status.description
-    assert sorted(event(span, "exception")) == ["exception.message", "exception.type"]
+    assert sorted(exception) == ["exception.message", "exception.type"]
