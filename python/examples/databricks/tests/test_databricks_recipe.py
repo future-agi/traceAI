@@ -441,6 +441,11 @@ for host in (
         ("/ai-gateway/gemini", "native APIs"),
         ("/ai-gateway/anthropic", "native APIs"),
         ("/api/2.0/serving-endpoints", "Unsupported"),
+        ("/ai-gateway/openai/v1", "Unsupported"),
+        ("/ai-gateway/mlflow/v1//", "Unsupported"),
+        ("/ai-gateway/mlflow/v1///", "Unsupported"),
+        ("/serving-endpoints//", "Unsupported"),
+        ("/serving-endpoints///", "Unsupported"),
     ):
         REFUSED.append((f"https://{host}{path}", reason))
 # Plain http to a Databricks workspace would send the token in cleartext before any redirect.

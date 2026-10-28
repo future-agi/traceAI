@@ -21,12 +21,12 @@ def _check(host):
 
 
 def _guard_connect(self, address):
-    _check(address[0])
+    _check(address[0] if isinstance(address, tuple) else address)
     return _connect(self, address)
 
 
 def _guard_connect_ex(self, address):
-    _check(address[0])
+    _check(address[0] if isinstance(address, tuple) else address)
     return _connect_ex(self, address)
 
 

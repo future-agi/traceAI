@@ -50,7 +50,7 @@ def check_base_url(url: str) -> str:
         raise ValueError(f"Databricks workspace URLs must use https; {suffixes} in {BASE_URL_ENV}.")
     if host.endswith(_HOST_SUFFIXES) and (parts.query or parts.fragment):
         raise ValueError(f"Remove the query or fragment; {suffixes} in {BASE_URL_ENV}.")
-    if host.endswith(_HOST_SUFFIXES) and parts.path.rstrip("/") not in _PATHS:
+    if host.endswith(_HOST_SUFFIXES) and parts.path.removesuffix("/") not in _PATHS:
         reason = "Unsupported Databricks SDK base URL"
         if parts.path.startswith("/serving-endpoints/") and parts.path.rstrip("/").endswith(
             "/invocations"

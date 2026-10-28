@@ -647,6 +647,8 @@ def test_readme_requirements_and_customer_facing_pins():
     ):
         assert text in readme
     assert "TBD" not in readme
+    assert "](https://docs.anannas.ai/)" not in readme
+    assert 'export FI_PROJECT_NAME="${FI_PROJECT_NAME:-anannas-ai}"' in readme
     assert "https://api.anannas.ai/v1/" in readme  # SDK appends the trailing slash.
     assert "APIStatusError" in readme and "AuthenticationError" in readme
     sections = ["## Install", "## Configure", "## Run", "## Code", "## What you see in Future AGI", "## Provider specifics", "## Privacy", "## Limits / not covered", "## Tests"]
