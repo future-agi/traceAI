@@ -100,12 +100,24 @@ def instrument(
     tracer_provider: trace_api.TracerProvider,
     in_memory_span_exporter: InMemorySpanExporter,
 ) -> Generator[None, None, None]:
-    SmolagentsInstrumentor().instrument(
-        tracer_provider=tracer_provider, skip_dep_check=True
-    )
-    yield
-    SmolagentsInstrumentor().uninstrument()
-    in_memory_span_exporter.clear()
+    import smolagents
+    from smolagents import local_python_executor
+
+    classes = {value for value in vars(smolagents).values() if isinstance(value, type)}
+    method_names = {"run", "step", "_step_stream", "__call__", "generate"}
+    originals = {cls: {name: value for name, value in vars(cls).items() if name in method_names}
+                 for cls in classes}
+    original_timeout = getattr(local_python_executor, "timeout", None)
+    SmolagentsInstrumentor().instrument(tracer_provider=tracer_provider)
+    try:
+        yield
+    finally:
+        SmolagentsInstrumentor().uninstrument()
+        for cls, methods in originals.items():
+            assert {name for name in vars(cls) if name in method_names} == methods.keys()
+            assert all(vars(cls)[name] is original for name, original in methods.items())
+        assert getattr(local_python_executor, "timeout", None) is original_timeout
+        in_memory_span_exporter.clear()
 
 
 @pytest.fixture
@@ -594,3 +606,41 @@ TOOL_JSON_SCHEMA = ToolAttributes.TOOL_JSON_SCHEMA
 TOOL_CALL_FUNCTION_ARGUMENTS_JSON = ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON
 TOOL_CALL_FUNCTION_NAME = ToolCallAttributes.TOOL_CALL_FUNCTION_NAME
 TOOL_CALL_ID = ToolCallAttributes.TOOL_CALL_ID
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_timeout_wrapper_preserves_context_result_and_exception(raises):
+    from concurrent.futures import ThreadPoolExecutor
+    from opentelemetry import context
+    from traceai_smolagents._wrappers import _TimeoutWrapper
+
+    marker = object()
+    failure = ValueError("offline timeout worker failure")
+
+    def timeout(seconds):
+        def decorate(function):
+            def invoke(*args, **kwargs):
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    return executor.submit(function, *args, **kwargs).result(timeout=seconds)
+            return invoke
+        return decorate
+
+    def work(value):
+        assert context.get_value("test-parent") is marker
+        if raises:
+            raise failure
+        return value
+
+    wrapped = _TimeoutWrapper()(timeout, None, (5,), {})(work)
+    token = context.attach(context.set_value("test-parent", marker))
+    try:
+        if raises:
+            with pytest.raises(ValueError) as caught:
+                wrapped(42)
+            assert caught.value is failure
+        else:
+            assert wrapped(42) == 42
+        assert context.get_value("test-parent") is marker
+    finally:
+        context.detach(token)
+    assert context.get_value("test-parent") is None
