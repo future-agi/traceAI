@@ -122,7 +122,7 @@ class TestLangChainInstrumentor:
         
         assert isinstance(dependencies, tuple)
         assert "langchain_core >= 0.1.0" in dependencies
-        assert len(dependencies) == 2
+        assert dependencies == ("langchain_core >= 0.1.0",)
 
     def test_instrument_basic(self, tracer_provider, config):
         """Test basic instrumentation setup."""
@@ -425,21 +425,24 @@ class TestFiTracer:
         result = tracer._extract_content(data)
         assert len(result) == 2
 
-    def test_send_span_data_to_api(self, fi_tracer_instance):
-        """Test sending span data to API."""
-        tracer = FiTracer(fi_tracer_instance)
-        mock_span = MagicMock()
-        mock_span.context.span_id = 12345
-        
-        input_data = {"content": "Input text"}
-        output_data = {"content": "Output text"}
-        
-        tracer._send_span_data_to_api(mock_span, input_data, output_data)
-        
-        # Should set output attribute on span
-        mock_span.set_attributes.assert_called_once()
-        call_args = mock_span.set_attributes.call_args[0][0]
-        assert "fi.llm.output" in call_args
+    def test_span_io_uses_canonical_attributes(self, tracer_provider):
+        """Real spans carry I/O once, not the removed fi.llm.output mirror."""
+        from traceai_langchain._tracer import _update_span
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        exporter = InMemorySpanExporter()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = FITracer(tracer_provider.get_tracer(__name__), config=TraceConfig())
+        run = Run(id=uuid4(), name="chain", run_type="chain", serialized={},
+                  inputs={"input": "Input text"}, outputs={"output": "Output text"},
+                  start_time=datetime.now(timezone.utc))
+        with tracer.start_as_current_span("chain") as span:
+            _update_span(span, run, {})
+        attrs = exporter.get_finished_spans()[0].attributes
+        assert "Input text" in attrs["input.value"]
+        assert "Output text" in attrs["output.value"]
+        assert "fi.llm.output" not in attrs
+        assert "raw.output" not in attrs
 
     def test_error_handlers(self, fi_tracer_instance):
         """Test error handlers for different run types."""
@@ -566,18 +569,27 @@ class TestTracerHelperFunctions:
         # Most likely defaults to CHAIN or UNKNOWN
         assert result in [FiSpanKindValues.CHAIN, FiSpanKindValues.UNKNOWN]
 
-    def test_record_exception(self):
-        """Test exception recording on spans."""
+    @pytest.mark.parametrize("hidden", [False, True])
+    def test_record_exception(self, tracer_provider, hidden):
+        """Exercise the real core wrapper and the legacy fallback, not a mock."""
         from traceai_langchain._tracer import _record_exception
-        
-        mock_span = MagicMock()
-        error = ValueError("Test error")
-        
-        _record_exception(mock_span, error)
-        
-        # Should record exception - the exact status setting behavior may vary
-        mock_span.record_exception.assert_called_once_with(error)
-        # Note: set_status may or may not be called depending on implementation
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        exporter = InMemorySpanExporter()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = FITracer(tracer_provider.get_tracer(__name__),
+                          config=TraceConfig(hide_inputs=hidden))
+        with tracer.start_as_current_span("error") as span:
+            _record_exception(span, ValueError("Test error"))
+        [event] = exporter.get_finished_spans()[0].events
+        assert event.name == "exception"
+        assert event.attributes["exception.type"] == "ValueError"
+        if hidden:
+            assert "exception.message" not in event.attributes
+            assert "exception.stacktrace" not in event.attributes
+        else:
+            assert event.attributes["exception.message"] == "Test error"
+            assert "ValueError: Test error" in event.attributes["exception.stacktrace"]
 
     def test_convert_io_basic(self):
         """Test basic IO conversion."""
