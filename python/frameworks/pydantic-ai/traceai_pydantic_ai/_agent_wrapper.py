@@ -121,13 +121,19 @@ def _sum_usage(samples):
 class _OperationUsage:
     def __init__(self, budget):
         self.budget = budget
-        self.previous = _usage_values(budget)
         self.samples = []
 
     def extract(self, result):
         if self.samples:
             return _sum_usage(self.samples)
-        return extract_usage(result, self.previous)
+        values = _response_usage(result)
+        if values is not None:
+            return values
+        if self.budget is not None:
+            # No attributable measurements is not permission to count other
+            # operations' changes to the same mutable aggregate.
+            return {}
+        return extract_usage(result)
 
 
 _ACTIVE_USAGE: ContextVar[Any] = ContextVar("pydantic_ai_operation_usage", default=None)
@@ -150,17 +156,24 @@ def wrap_legacy_usage_incr(original):
     return incr
 
 
-def extract_usage(
-    result: Any, previous_usage: Optional[Dict[str, Any]] = None
-) -> Optional[Dict[str, Any]]:
-    """Prefer run-local response counters over a mutable aggregate budget."""
+def _response_usage(result):
     new_messages = getattr(result, "new_messages", None)
     if callable(new_messages):
         messages = new_messages()
         if isinstance(messages, (list, tuple)):
             responses = [m for m in messages if getattr(m, "kind", None) == "response"]
-            if responses and all(getattr(m, "usage", None) is not None for m in responses):
+            if all(getattr(m, "usage", None) is not None for m in responses):
                 return _sum_usage(_usage_values(m.usage) for m in responses)
+    return None
+
+
+def extract_usage(
+    result: Any, previous_usage: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """Prefer run-local response counters over a mutable aggregate budget."""
+    values = _response_usage(result)
+    if values is not None:
+        return values
 
     # Historical SDKs expose usage() and no counters on ModelResponse. Shared
     # budgets use _OperationUsage samples above; unshared results are run-local.

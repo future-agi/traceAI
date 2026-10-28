@@ -84,6 +84,23 @@ def test_unknown_usage_is_not_invented():
         "input_tokens", "output_tokens", "total_tokens"))
 
 
+@pytest.mark.parametrize("has_messages", [True, False])
+def test_missing_measurements_never_fall_back_to_a_shared_aggregate(has_messages):
+    from types import SimpleNamespace
+    from traceai_pydantic_ai._agent_wrapper import _OperationUsage
+    shared = run_usage()
+    operation = _OperationUsage(shared)
+    # Another operation modifies the aggregate while this one does no request.
+    if hasattr(shared, "input_tokens"):
+        shared.input_tokens = 100
+    else:
+        shared.request_tokens = 100
+    result = SimpleNamespace(usage=shared)
+    if has_messages:
+        result.new_messages = lambda: []
+    assert operation.extract(result) == {}
+
+
 def test_overlapping_shared_budget_exports_only_each_runs_responses(traces):
     async def execute():
         second_started, release_second = asyncio.Event(), asyncio.Event()
