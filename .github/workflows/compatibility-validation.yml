@@ -114,9 +114,10 @@ jobs:
           # including for child processes; FI_BASE_URL alone is not isolation.
           sudo --preserve-env=FI_BASE_URL,FI_GRPC_URL unshare --net bash -euo pipefail -c '
             ip link set lo up
-            test "$(ls /sys/class/net | tr "\n" " ")" = "lo "
+            test "$(ip -o link show | cut -d: -f2 | tr -d " ")" = "lo"
+            export LD_LIBRARY_PATH="$5"
             exec "$1" -m pytest "$2/.github/compat/contracts/$3" -q -p no:cacheprovider --rootdir="$2" -o addopts= -o asyncio_mode=auto -o junit_family=xunit1 --junitxml="$4/contract.xml"
-          ' bash "$RUNNER_TEMP/contract-env/bin/python" "$GITHUB_WORKSPACE" "$SUITE" "$RUNNER_TEMP"
+          ' bash "$RUNNER_TEMP/contract-env/bin/python" "$GITHUB_WORKSPACE" "$SUITE" "$RUNNER_TEMP" "${LD_LIBRARY_PATH:-}"
       - name: Preserve floor execution evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

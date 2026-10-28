@@ -175,8 +175,6 @@ jobs:
       matrix:
         package: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      JUNIT_DIR: ${{ runner.temp }}/junit
-      TEST_CONTEXT: ${{ runner.temp }}/python-test-context.json
       PKG_DIR: ${{ matrix.package.dir }}
       # Both backends get their environment at <package dir>/.venv.
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
@@ -243,6 +241,8 @@ jobs:
         id: tests
         continue-on-error: true
         env:
+          JUNIT_DIR: ${{ runner.temp }}/junit
+          TEST_CONTEXT: ${{ runner.temp }}/python-test-context.json
           PKG_NAME: ${{ matrix.package.name }}
           OWN_TESTS: ${{ matrix.package.own_tests }}
           CORE_TESTS: ${{ join(matrix.package.core_tests, ' ') }}
@@ -298,6 +298,8 @@ jobs:
       - name: Known-broken verdict
         if: always()
         env:
+          JUNIT_DIR: ${{ runner.temp }}/junit
+          TEST_CONTEXT: ${{ runner.temp }}/python-test-context.json
           PKG_NAME: ${{ matrix.package.name }}
           REASON: ${{ matrix.package.known_broken_reason }}
           INTEGRATION_ID: ${{ matrix.package.integration_id }}
