@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced streaming support
 - Performance optimizations
 
+### Python
+
+#### fi-instrumentation-otel (Core)
+- 🐛 Fix issue where SpanAttributes.INPUT_VALUE was overwritten multiple times, causing loss of context for multi-message inputs (fixes #151)
+
 ---
 
 ## [2025-07-08]
