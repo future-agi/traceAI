@@ -105,7 +105,7 @@ dependencies {
 
 Add your provider SDK as in the Central example. To choose another commit, check its [JitPack build status](https://jitpack.io/#future-agi/traceAI) first and replace the commit version. A successful build is necessary but not sufficient: verify that your external application resolves and compiles against that exact commit. For commits containing this BOM, maintainers can run `python3 -I java/scripts/test_consumers.py --jitpack-version <sha>` from the repository root; it uses a fresh Maven repository and checks both the README and BOM consumers. Do not mix Central and JitPack copies of the same instrumentation on one classpath.
 
-JitPack uses the opt-in `jitpack` Maven profile to install self-contained POMs with resolved dependency management and no parent reference. This avoids JitPack's root-artifact remapping leaving child modules dependent on an unavailable `traceai-java-parent`. Normal builds and the Central `release` profile keep the original `com.futureagi` POMs.
+JitPack uses the opt-in `jitpack` Maven profile to install self-contained POMs with resolved dependency management and no parent reference. This avoids JitPack's root-artifact remapping leaving child modules dependent on an unavailable `traceai-java-parent`. Its install hook then prepares internal dependencies **and BOM dependency management** for the exact JitPack group and commit/tag, since JitPack does not rewrite managed dependencies itself. Normal builds and the Central `release` profile keep the original `com.futureagi` POMs.
 
 ## Send your first trace
 

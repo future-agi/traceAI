@@ -10,6 +10,7 @@ The generated projects live outside the reactor and do not inherit its POM.
 import argparse
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import tempfile
 import textwrap
@@ -48,6 +49,40 @@ def check_jitpack_poms(version):
             assert artifacts == expected, "flattened BOM lost SDK version alignment"
             for dep in managed:
                 assert dep.findtext("m:scope", "", NS) != "test", "BOM leaks test scope"
+    # JitPack does not remap dependencyManagement itself. Exercise our final
+    # harvesting step on copies and verify both the BOM and direct dependencies.
+    prepare = runpy.run_path(str(ROOT / "scripts/prepare_jitpack.py"))["prepare"]
+    with tempfile.TemporaryDirectory(prefix="traceai-jitpack-poms-") as temp:
+        repo = Path(temp)
+        staged = []
+        for directory in directories:
+            artifact = ET.parse(directory / "pom.xml").getroot().findtext("m:artifactId", namespaces=NS)
+            path = repo / "com/futureagi" / artifact / version / f"{artifact}-{version}.pom"
+            path.parent.mkdir(parents=True)
+            path.write_bytes((directory / "target/jitpack-pom.xml").read_bytes())
+            staged.append(path)
+        group, commit = "com.github.future-agi.traceAI", "consumer-regression-sha"
+        assert prepare(repo, group, commit) == len(directories)
+        for path in staged:
+            pom = ET.parse(path).getroot()
+            assert pom.findtext("m:groupId", namespaces=NS) == "com.futureagi", path
+            assert pom.findtext("m:version", namespaces=NS) == version, path
+            for dep in pom.findall(".//m:dependency", NS):
+                dep_group = dep.findtext("m:groupId", namespaces=NS)
+                assert dep_group != "com.futureagi", f"unmapped internal dependency: {path}"
+                if dep_group == group:
+                    assert dep.findtext("m:version", namespaces=NS) == commit, path
+        # Refuse non-flattened Central POMs without partially changing any file.
+        child = repo / "com/futureagi/traceai-bom" / version / f"traceai-bom-{version}.pom"
+        child.write_bytes((ROOT / "traceai-bom/pom.xml").read_bytes())
+        before = {path: path.read_bytes() for path in staged}
+        try:
+            prepare(repo, group, commit)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("JitPack preparation accepted an original Central POM")
+        assert all(path.read_bytes() == content for path, content in before.items())
     return len(directories)
 
 
