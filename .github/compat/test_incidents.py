@@ -154,6 +154,19 @@ class ResumeRecoveryTests(unittest.TestCase):
                 self.assertEqual(len(next(iter(old['scopes'].values()))['source_passes']), 2)
                 self.assertFalse(any(a['key'] == first['key'] for a in result['actions']))
 
+    def test_legacy_source_passes_without_watermark_still_reject_older_regressions(self):
+        first = lifecycle(RUNS[:5])['actions'][0]
+        state = parse_issue(first)
+        next(iter(state['scopes'].values())).pop('source_watermark')
+        issue = issue_for(dict(first, body=body_for(state)))
+        self.assertIsNotNone(parse_issue(issue))
+        for at, expected in [('2026-10-27T05:00:00Z', 'release_pending'), ('2026-10-28T06:00:00Z', 'open')]:
+            regression = self.source_regression()
+            regression['cases'][0]['completed_at'] = at
+            result = lifecycle([regression], [issue])
+            with self.subTest(at=at):
+                self.assertEqual(next(s for s in result['states'] if s['key'] == first['key'])['status'], expected)
+
     def test_collection_and_exact_node_source_regressions_invalidate_each_other(self):
         # Collection-module identities and assertion-node identities overlap only
         # within that canonical module, never via a loose filename prefix.

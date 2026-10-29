@@ -496,7 +496,12 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
                         affected = (covered_failed_ids(bad, case["failure"]["test_ids"])
                                     or covered_failed_ids(case["failure"], bad["test_ids"]))
                         source_mark = other.get("source_watermark")
-                        if affected and (source_mark is None or at >= timestamp(source_mark[3])):
+                        source_times = [timestamp(p["at"]) for p in other["source_passes"]]
+                        if source_mark:
+                            source_times.append(timestamp(source_mark[3]))
+                        # Legacy valid state may retain passes without the newer
+                        # optional watermark. Their timestamps still fence replay.
+                        if affected and (not source_times or at >= max(source_times)):
                             other["source_passes"] = []
                             other["source_watermark"] = observation
                             prior["last_seen"] = max(prior["last_seen"], case["completed_at"], key=timestamp)
