@@ -1,6 +1,6 @@
 {
   "name": "@traceai/fi-instrumentation-pipecat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for Pipecat voice AI pipeline SDK",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",

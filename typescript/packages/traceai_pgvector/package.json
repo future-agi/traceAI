@@ -1,6 +1,6 @@
 {
   "name": "@traceai/pgvector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceAI instrumentation for pgvector (PostgreSQL vector extension)",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",

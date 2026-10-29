@@ -1,6 +1,6 @@
 {
   "name": "@traceai/mongodb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TraceAI instrumentation for MongoDB Atlas Vector Search",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",

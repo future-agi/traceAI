@@ -1,6 +1,6 @@
 {
   "name": "@traceai/strands",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for AWS Strands Agents SDK",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
