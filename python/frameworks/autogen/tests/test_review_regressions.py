@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from importlib.metadata import version
 
 import pytest
 from autogen_agentchat.agents import AssistantAgent, SocietyOfMindAgent, UserProxyAgent
@@ -82,27 +83,40 @@ async def test_real_agentchat_error_details_privacy(spans, monkeypatch, team, st
     exporter, provider, instrumentor = spans
     failure = ValueError("private-model-diagnostic")
     message = TextMessage(content="unchanged-task", source="user")
+    # 0.4.5 logs background participant errors and returns a partial TaskResult;
+    # 0.7.5 propagates them as RuntimeError. Assert BOTH exact native contracts:
+    # instrumentation must not introduce a new exception on the historical SDK.
+    historical_partial_result = team and version("autogen-agentchat") == "0.4.5"
+
+    async def call():
+        assistant = AssistantAgent("assistant", model_client=LocalModel(error=failure))
+        if team:
+            chat = RoundRobinGroupChat([assistant], max_turns=1)
+            if streaming:
+                items = [item async for item in chat.run_stream(task=message)]
+                return items[-1]
+            return await chat.run(task=message)
+        if streaming:
+            items = [item async for item in assistant.on_messages_stream([message], CancellationToken())]
+            return items[-1]
+        return await assistant.on_messages([message], CancellationToken())
 
     async def exercise():
-        assistant = AssistantAgent("assistant", model_client=LocalModel(error=failure))
-        with pytest.raises(Exception) as caught:
-            if team:
-                chat = RoundRobinGroupChat([assistant], max_turns=1)
-                if streaming:
-                    async for _ in chat.run_stream(task=message):
-                        pass
-                else:
-                    await chat.run(task=message)
-            elif streaming:
-                async for _ in assistant.on_messages_stream([message], CancellationToken()):
-                    pass
-            else:
-                await assistant.on_messages([message], CancellationToken())
+        if historical_partial_result:
+            result = await call()
+            assert isinstance(result, TaskResult)
+            assert result.messages == [message]
+            assert result.messages[0] is message
+            assert result.stop_reason is None
+            outcome = (TaskResult, result.stop_reason)
+        else:
+            with pytest.raises(Exception) as caught:
+                await call()
+            # Newer teams wrap model errors; direct agents preserve identity.
+            assert "private-model-diagnostic" in str(caught.value)
+            outcome = (type(caught.value), caught.value is failure)
         assert message.content == "unchanged-task"
-        # Teams wrap model errors in their own RuntimeError. Preserve that SDK
-        # behavior too, rather than forcing the underlying model exception out.
-        assert "private-model-diagnostic" in str(caught.value)
-        return type(caught.value), caught.value is failure
+        return outcome
 
     instrumentor.uninstrument()
     native = await exercise()
@@ -118,7 +132,17 @@ async def test_real_agentchat_error_details_privacy(spans, monkeypatch, team, st
         assert actual == (ValueError, True)
     finished = [s for s in exporter.get_finished_spans() if s.name.startswith("autogen.")]
     assert finished
-    for span in finished:
+    errors = [s for s in finished if s.status.status_code == StatusCode.ERROR]
+    assert errors
+    if historical_partial_result:
+        team_spans = [s for s in finished if s.name.startswith("autogen.team.")]
+        assert len(team_spans) == (1 if streaming else 2)
+        assert all(s.status.status_code == StatusCode.OK for s in team_spans)
+        assert len(errors) == 1
+        assert errors[0].name == "autogen.agent.on_messages_stream.assistant"
+    else:
+        assert len(errors) == len(finished)
+    for span in errors:
         assert span.status.status_code == StatusCode.ERROR
         assert span.attributes["autogen.is_error"] is True
         assert span.attributes["autogen.error.type"] in ("ValueError", "RuntimeError")
