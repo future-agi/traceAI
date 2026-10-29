@@ -15,6 +15,7 @@ from fi_instrumentation.fi_types import (
 )
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+from wrapt import ObjectProxy
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ def _get_step_input(method: Callable[..., Any], *args: Any, **kwargs: Any) -> st
         name: arguments[name]
         for name in (
             "index", "output_schema", "instructions", "prompt", "msg_history",
-            "prompt_params", "output",
+            "messages", "prompt_params", "output",
         )
         if name in arguments
     }
@@ -264,6 +265,39 @@ class _GuardCallWrapper(_WithTracer):
         return response
 
 
+class _GuardrailsSpan(ObjectProxy):
+    """Keep SDK-native telemetry on our span behind the canonical privacy policy.
+
+    Guardrails writes OpenInference llm.* attributes to the current span even
+    when its own tracing is disabled. The shared FI span governs canonical
+    message attributes, not those legacy aliases. Interpose only while this
+    prompt hook is active; do not mutate the SDK's telemetry functions or affect
+    unrelated tracers, application spans, or concurrent calls.
+    """
+
+    def set_attribute(self, key: str, value: AttributeValue) -> None:
+        if key == "llm.model_name":
+            key = SpanAttributes.GEN_AI_REQUEST_MODEL
+        elif key == "llm.token_count.prompt":
+            key = PROMPT_TOKENS
+        elif key == "llm.token_count.completion":
+            key = COMPLETION_TOKENS
+        elif key == "llm.token_count.total":
+            key = SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS
+        elif key.startswith("llm."):
+            # Legacy messages, opaque invocation parameters, prompt templates
+            # and function calls duplicate payloads or mixed SDK state. Some
+            # SDKs even write a synthesized default prompt over real messages.
+            # Keep our actual inputs/returned outputs in canonical fields rather
+            # than accepting a second ungoverned (or contradictory) copy.
+            return
+        self.__wrapped__.set_attribute(key, value)
+
+    def set_attributes(self, attributes: Mapping[str, AttributeValue]) -> None:
+        for key, value in attributes.items():
+            self.set_attribute(key, value)
+
+
 class _PromptCallableWrapper(_WithTracer):
     @contextmanager
     def _trace_call(self, wrapped, instance, args, kwargs):
@@ -277,13 +311,20 @@ class _PromptCallableWrapper(_WithTracer):
             try:
                 span.set_attributes(dict(get_attributes_from_context()))
                 span.set_attribute(INPUT_VALUE, _get_raw_input(args, **kwargs))
-                if messages := kwargs.get("msg_history"):
+                if messages := kwargs.get("messages") or kwargs.get("msg_history"):
                     for key, value in _get_llm_input_messages(messages):
                         span.set_attribute(key, value)
             except Exception:
                 logger.debug("Failed to extract prompt attributes", exc_info=True)
             try:
-                yield span
+                # Preserve the span identity/parentage and restore the caller's
+                # exact context after sync return, await, cancellation or error.
+                # The outer FI context owns status/exception handling and end().
+                with trace_api.use_span(
+                    _GuardrailsSpan(span), end_on_exit=False,
+                    record_exception=False, set_status_on_exception=False,
+                ):
+                    yield span
             except Exception as exception:
                 span.set_status(
                     trace_api.Status(trace_api.StatusCode.ERROR, str(exception))

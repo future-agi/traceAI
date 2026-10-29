@@ -1140,5 +1140,270 @@ def test_step_input_projection_never_serializes_history(monkeypatch, positional)
     assert consumed == [True]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("hide_inputs,hide_outputs", [(False, False), (True, False), (False, True), (True, True)])
+async def test_installed_complete_guard_current_messages_and_privacy(
+    installed_guardrails, monkeypatch, asynchronous, hide_inputs, hide_outputs,
+):
+    """Exercise real messages-based SDKs and the retained prompt-based floor."""
+    from inspect import signature
+    from guardrails import Guard, AsyncGuard
+
+    # Guardrails renamed its local configuration and current-prompt API after
+    # 0.5.0. Exercise the installed API, never skip a supported release or replace
+    # the SDK method being instrumented. Modern cells must take the messages path.
+    messages_api = "messages" in signature(Guard.__call__).parameters
+    if messages_api:
+        from guardrails.classes.rc import RC
+        monkeypatch.setattr(RC, "load", lambda *args, **kwargs: RC(
+            enable_metrics=False, use_remote_inferencing=False,
+        ))
+    else:
+        from guardrails.classes.credentials import Credentials
+        monkeypatch.setattr(Credentials, "from_rc_file", lambda: Credentials(
+            no_metrics=True, enable_metrics=False, use_remote_inferencing=False,
+        ))
+
+    question, answer = "private-current-message-question", "private-current-message-answer"
+    messages = [{"role": "user", "content": question}]
+    observed = []
+
+    def respond(*args, messages=None, **kwargs):
+        if messages_api:
+            assert args == ()
+            assert messages == [{"role": "user", "content": question}]
+            observed.append(messages)
+        else:
+            assert args == (question,)
+            observed.append(args[0])
+        return answer
+
+    async def async_respond(*args, messages=None, **kwargs):
+        return respond(*args, messages=messages, **kwargs)
+
+    async def invoke():
+        guard = AsyncGuard() if asynchronous else Guard()
+        guard.configure(allow_metrics_collection=False)
+        inputs = {"messages": messages} if messages_api else {"prompt": question}
+        result = guard(llm_api=async_respond if asynchronous else respond,
+                       num_reasks=0, **inputs)
+        if asynchronous:
+            result = await result
+        assert guard.history.last.iterations.last.raw_output == answer
+        return result.raw_llm_output, result.validated_output, result.validation_passed
+
+    baseline = await invoke()
+    exporter = installed_guardrails(hide_inputs=hide_inputs, hide_outputs=hide_outputs)
+    assert await invoke() == baseline == (answer, answer, True)
+    assert observed == ([messages, messages] if messages_api else [question, question])
+    spans = exporter.get_finished_spans()
+    assert len(spans) == (1 if asynchronous else 2)
+    prompt, = [span for span in spans if span.attributes["gen_ai.span.kind"] == "LLM"]
+    if asynchronous:
+        assert prompt.parent is None
+    else:
+        runner, = [span for span in spans if span.name == "Runner.step"]
+        assert runner.parent is None
+        assert prompt.parent.span_id == runner.context.span_id
+        if not hide_inputs:
+            inputs = json.loads(runner.attributes["input.value"])
+            if messages_api:
+                assert inputs["messages"] == messages
+            else:
+                assert inputs["prompt"] == question
+            assert "call_log" not in inputs and "api" not in inputs
+
+    for span in spans:
+        assert span.status.status_code == StatusCode.OK
+        attrs = dict(span.attributes)
+        # Check every exported attribute, not only canonical fields. Native SDK
+        # llm.* attributes must not provide a second ungoverned copy of payloads.
+        for key, value in attrs.items():
+            if question in str(value):
+                assert not hide_inputs
+                assert key == "input.value" or key.startswith("gen_ai.input.messages.")
+            if answer in str(value):
+                assert not hide_outputs
+                assert key == "output.value" or key.startswith("gen_ai.output.messages.")
+        assert not any(key.startswith("llm.") for key in attrs)
+        if hide_inputs:
+            assert question not in json.dumps(attrs)
+        else:
+            assert question in attrs["input.value"]
+        if hide_outputs:
+            assert answer not in json.dumps(attrs)
+        else:
+            assert answer in attrs["output.value"]
+        if hide_inputs:
+            assert attrs["input.value"] == "__REDACTED__"
+        if hide_outputs:
+            assert attrs["output.value"] == "__REDACTED__"
+    if not hide_inputs and messages_api:
+        assert prompt.attributes["gen_ai.input.messages.0.message.content"] == question
+    if not hide_outputs:
+        assert prompt.attributes["gen_ai.output.messages.0.message.content"] == answer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("hide_inputs,hide_outputs", [(False, False), (True, False), (False, True), (True, True)])
+async def test_installed_prompt_native_payload_filter_is_scoped(
+    installed_guardrails, asynchronous, hide_inputs, hide_outputs,
+):
+    from guardrails.llm_providers import PromptCallableBase, AsyncPromptCallableBase
+    from guardrails.classes.llm.llm_response import LLMResponse
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    question, answer, diagnostic = "native-private-question", "native-private-answer", "opaque-sdk-state"
+    response = LLMResponse(output=answer, prompt_token_count=3, response_token_count=5)
+    app_exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(app_exporter))
+    tracer = provider.get_tracer(__name__)
+
+    def backend():
+        current = trace_api.get_current_span()
+        # Cover both native setter APIs and all opaque legacy payload families.
+        current.set_attribute("llm.input_messages.0.message.content", question)
+        current.set_attributes({
+            "llm.output_messages.0.message.content": answer,
+            "llm.invocation_parameters": json.dumps({"messages": question, "state": diagnostic}),
+            "llm.prompt_template.template": diagnostic,
+            "llm.prompt_template.variables": diagnostic,
+            "llm.function_call": diagnostic,
+            "llm.model_name": "local-model",
+            "llm.token_count.prompt": 3,
+            "llm.token_count.completion": 5,
+            "llm.token_count.total": 8,
+        })
+        with tracer.start_as_current_span("downstream") as child:
+            child.set_attribute("application.attribute", "retained")
+        assert trace_api.get_current_span() is current
+        return response
+
+    class LocalPrompt(PromptCallableBase):
+        def _invoke_llm(self, *args, **kwargs):
+            return backend()
+
+    class LocalAsyncPrompt(AsyncPromptCallableBase):
+        async def invoke_llm(self, *args, **kwargs):
+            return backend()
+
+    exporter = installed_guardrails(hide_inputs=hide_inputs, hide_outputs=hide_outputs)
+    original = context_api.get_current()
+    try:
+        with tracer.start_as_current_span("application") as parent:
+            parent.set_attribute("llm.invocation_parameters", "application-owned")
+            kwargs = {"msg_history": [{"role": "user", "content": question}]}
+            result = await LocalAsyncPrompt()(**kwargs) if asynchronous else LocalPrompt()(**kwargs)
+            assert result is response
+            assert trace_api.get_current_span() is parent
+        assert context_api.get_current() is original
+        span, = exporter.get_finished_spans()
+        child, application = app_exporter.get_finished_spans()
+        assert span.parent.span_id == application.context.span_id
+        assert child.parent.span_id == span.context.span_id
+        assert child.attributes["application.attribute"] == "retained"
+        assert application.attributes["llm.invocation_parameters"] == "application-owned"
+        attrs = dict(span.attributes)
+        assert span.status.status_code == StatusCode.OK
+        assert attrs["gen_ai.request.model"] == "local-model"
+        assert attrs["gen_ai.usage.input_tokens"] == 3
+        assert attrs["gen_ai.usage.output_tokens"] == 5
+        assert attrs["gen_ai.usage.total_tokens"] == 8
+        assert not any(key.startswith("llm.") for key in attrs)
+        assert diagnostic not in json.dumps(attrs)
+        if hide_inputs:
+            assert question not in json.dumps(attrs)
+        else:
+            assert question in attrs["input.value"]
+        if hide_outputs:
+            assert answer not in json.dumps(attrs)
+        else:
+            assert answer in attrs["output.value"]
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_installed_native_filter_restores_context_on_failure(
+    installed_guardrails, asynchronous, cancelled,
+):
+    import asyncio
+    from guardrails.llm_providers import PromptCallableBase, AsyncPromptCallableBase
+
+    failure = asyncio.CancelledError("local cancellation") if cancelled else ValueError("local failure")
+
+    def backend():
+        trace_api.get_current_span().set_attribute("llm.invocation_parameters", "private-native-state")
+        raise failure
+
+    class LocalPrompt(PromptCallableBase):
+        def _invoke_llm(self, *args, **kwargs):
+            return backend()
+
+    class LocalAsyncPrompt(AsyncPromptCallableBase):
+        async def invoke_llm(self, *args, **kwargs):
+            return backend()
+
+    async def invoke():
+        if asynchronous:
+            await LocalAsyncPrompt()()
+        else:
+            LocalPrompt()()
+
+    expected = asyncio.CancelledError if cancelled else Exception
+    with pytest.raises(expected) as baseline:
+        await invoke()
+    exporter = installed_guardrails(hide_inputs=True, hide_outputs=True)
+    original = context_api.get_current()
+    with pytest.raises(type(baseline.value)) as observed:
+        await invoke()
+    assert str(observed.value) == str(baseline.value)
+    if cancelled:
+        assert observed.value is failure
+    assert context_api.get_current() is original
+    span, = exporter.get_finished_spans()
+    assert "private-native-state" not in json.dumps(dict(span.attributes))
+    if not cancelled:
+        assert span.status.status_code == StatusCode.ERROR
+
+
+@pytest.mark.parametrize("positional", [False, True])
+def test_step_current_messages_projection_excludes_diagnostics(monkeypatch, positional):
+    from guardrails.classes.history.call import Call
+    from guardrails.classes.history.call_inputs import CallInputs
+    from guardrails.prompt import Prompt
+    from traceai_guardrails._wrap_guard_call import _get_step_input
+
+    history = Call(inputs=CallInputs(metadata={"application": "kept"}))
+
+    def forbidden_serializer(*args, **kwargs):
+        raise AssertionError("Current messages must not serialize diagnostic history")
+
+    monkeypatch.setattr(Call, "to_dict", forbidden_serializer)
+    def step(index, output_schema, call_log, *, messages, api, prompt_params):
+        pass
+
+    messages = [{"role": "user", "content": [Prompt("current-message"),
+                 {"text": Prompt("nested-message"), "enabled": False}]}]
+    args = (0, {"type": "string"}, history) if positional else ()
+    kwargs = {"messages": messages, "api": object(), "prompt_params": {"count": 0}}
+    if not positional:
+        kwargs.update(index=0, output_schema={"type": "string"}, call_log=history)
+    assert json.loads(_get_step_input(step, *args, **kwargs)) == {
+        "index": 0, "output_schema": {"type": "string"},
+        "messages": [{"role": "user", "content": ["current-message",
+                      {"text": "nested-message", "enabled": False}]}],
+        "prompt_params": {"count": 0}, "metadata": {"application": "kept"},
+    }
+    assert isinstance(messages[0]["content"][0], Prompt)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
