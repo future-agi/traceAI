@@ -111,6 +111,39 @@ def _get_raw_input(args: Any, **kwargs: Any) -> str:
     )
 
 
+def _get_step_input(method: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
+    """Capture current Runner.step inputs without traversing its Call history."""
+    from guardrails.prompt.base_prompt import BasePrompt
+
+    arguments = signature(method).bind(*args, **kwargs).arguments
+    # call_log is a mutable diagnostic accumulator, not an application input.
+    # On a reask its serializers include earlier outputs, validator logs and
+    # arbitrary result metadata. The API callable also owns internal SDK state.
+    inputs = {
+        name: arguments[name]
+        for name in (
+            "index", "output_schema", "instructions", "prompt", "msg_history",
+            "prompt_params", "output",
+        )
+        if name in arguments
+    }
+    if (call_log := arguments.get("call_log")) is not None:
+        # Preserve explicitly supplied application metadata, not the runner's
+        # metadata accumulator (which validators can augment during execution).
+        inputs["metadata"] = call_log.inputs.metadata
+
+    def project(value: Any) -> Any:
+        if isinstance(value, BasePrompt):
+            return value.source
+        if isinstance(value, dict):
+            return {key: project(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [project(item) for item in value]
+        return value
+
+    return safe_json_dumps(project(inputs), cls=SafeJSONEncoder)
+
+
 def _get_raw_output(response: Any) -> str:
     """Serialize output payloads, never the mixed input/output step history."""
     from guardrails.classes.history.iteration import Iteration
@@ -317,15 +350,7 @@ class _ParseCallableWrapper(_WithTracer):
                 _flatten(
                     {
                         GEN_AI_SPAN_KIND: GUARDRAIL,
-                        INPUT_VALUE: _get_input_value(
-                            wrapped,
-                            *args,
-                            **kwargs,
-                        ),
-                        INPUT_VALUE: _get_raw_input(
-                            args,
-                            **kwargs,
-                        ),
+                        INPUT_VALUE: _get_step_input(wrapped, *args, **kwargs),
                     }
                 )
             ),

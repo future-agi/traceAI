@@ -962,5 +962,183 @@ def test_installed_complete_guard_privacy(
                              "guardedOutput": corrected if validation == "fix" else answer}
 
 
+@pytest.mark.parametrize("hide_inputs,hide_outputs", [(False, False), (True, False), (False, True), (True, True)])
+def test_installed_complete_guard_reask_privacy(
+    installed_guardrails, monkeypatch, hide_inputs, hide_outputs,
+):
+    """Reasks capture current inputs, not earlier validation/history objects."""
+    from guardrails import Guard
+    from guardrails.classes.credentials import Credentials
+    from guardrails.classes.validation.validation_result import PassResult, FailResult
+    from guardrails.types import OnFailAction
+    from guardrails.validator_base import Validator, validators_registry
+
+    monkeypatch.setattr(Credentials, "from_rc_file", lambda: Credentials(
+        no_metrics=True, enable_metrics=False, use_remote_inferencing=False,
+    ))
+    question = "private-reask-question"
+    application_metadata = {"context": "private-reask-input-metadata",
+                            "metadata": {"application_field": "kept"},
+                            "count": 0, "enabled": False}
+    first_answer, final_answer = "first-local-answer", "final-local-answer"
+    private_results = {first_answer: "private-failed-validator-metadata",
+                       final_answer: "private-passed-validator-metadata"}
+    llm_calls, validation_calls = [], []
+
+    class LocalValidator(Validator):
+        rail_alias = "test/local-reask-privacy"
+
+        def validate(self, value, metadata):
+            assert metadata["context"] == application_metadata["context"]
+            validation_calls.append(value)
+            private = {"nested": {"api_key": private_results[value]}}
+            if value == first_answer:
+                return FailResult(error_message="Please correct the answer", metadata=private)
+            return PassResult(metadata=private)
+
+    monkeypatch.setitem(validators_registry, LocalValidator.rail_alias, LocalValidator)
+
+    def invoke():
+        answers = iter((first_answer, final_answer))
+
+        def respond(prompt, **kwargs):
+            llm_calls.append(prompt)
+            return next(answers)
+
+        guard = Guard()
+        guard.configure(allow_metrics_collection=False)
+        guard.use(LocalValidator(on_fail=OnFailAction.REASK, use_local=True))
+        result = guard(llm_api=respond, prompt="${question}",
+                       prompt_params={"question": question},
+                       metadata=application_metadata.copy(), num_reasks=1)
+        iterations = guard.history.last.iterations
+        assert len(iterations) == 2
+        assert guard.history.last.inputs.metadata == application_metadata
+        for iteration, answer in zip(iterations, (first_answer, final_answer)):
+            log, = iteration.outputs.validator_logs
+            # Private diagnostics remain available to the application. The
+            # repair must not mutate history to remove them from telemetry.
+            assert log.validation_result.metadata == {
+                "nested": {"api_key": private_results[answer]},
+            }
+            assert iteration.raw_output == answer
+        assert iterations[0].outputs.reasks
+        assert not iterations[1].outputs.reasks
+        return result.raw_llm_output, result.validated_output, result.validation_passed
+
+    baseline = invoke()
+    exporter = installed_guardrails(hide_inputs=hide_inputs, hide_outputs=hide_outputs)
+    assert invoke() == baseline == (final_answer, final_answer, True)
+    assert validation_calls == [first_answer, final_answer] * 2
+    assert len(llm_calls) == 4
+    assert llm_calls[:2] == llm_calls[2:]
+    assert llm_calls[0] == question
+    assert first_answer in llm_calls[1]  # This is a genuine current reask prompt.
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 6
+    runners = [span for span in spans if span.name == "Runner.step"]
+    assert len(runners) == 2
+    for runner in runners:
+        assert runner.parent is None
+        children = [span for span in spans if span.parent is not None
+                    and span.parent.span_id == runner.context.span_id]
+        assert len(children) == 2
+        assert sorted(span.attributes["gen_ai.span.kind"] for span in children) == ["GUARDRAIL", "LLM"]
+    for span in spans:
+        assert span.status.status_code == StatusCode.OK
+        attrs = dict(span.attributes)
+        serialized = json.dumps(attrs)
+        assert all(secret not in serialized for secret in private_results.values())
+        assert "raw.input" not in attrs and "raw.output" not in attrs
+        for key, value in attrs.items():
+            if question in str(value) or application_metadata["context"] in str(value):
+                assert not hide_inputs
+                assert key == "input.value" or key.startswith("gen_ai.input.messages.")
+        if hide_inputs:
+            assert attrs["input.value"] == "__REDACTED__"
+            assert not any(key.startswith("gen_ai.input.messages.") for key in attrs)
+        if hide_outputs:
+            assert attrs["output.value"] == "__REDACTED__"
+            assert not any(key.startswith("gen_ai.output.messages.") for key in attrs)
+    for index, runner in enumerate(runners):
+        if not hide_inputs:
+            inputs = json.loads(runner.attributes["input.value"])
+            assert inputs["index"] == index
+            assert inputs["prompt_params"] == {"question": question}
+            assert inputs["metadata"] == application_metadata
+            assert "call_log" not in inputs and "api" not in inputs
+            assert inputs["prompt"] == ("${question}" if index == 0 else llm_calls[1])
+            assert not any(key in runner.attributes["input.value"] for key in (
+                "validatorLogs", "validationResponse", "failResults", "iterations",
+            ))
+        if not hide_outputs:
+            assert json.loads(runner.attributes["output.value"])["response"] == {
+                "rawOutput": first_answer if index == 0 else final_answer,
+                "guardedOutput": None if index == 0 else final_answer,
+            }
+
+
+@pytest.mark.parametrize("positional", [False, True])
+def test_step_input_projection_never_serializes_history(monkeypatch, positional):
+    from guardrails.classes.history.call import Call
+    from guardrails.classes.history.call_inputs import CallInputs
+    from guardrails.classes.history.iteration import Iteration
+    from guardrails.classes.history.outputs import Outputs
+    from guardrails.classes.llm.llm_response import LLMResponse
+    from guardrails.prompt import Prompt, Instructions
+
+    consumed = []
+
+    def chunks():
+        consumed.append(True)
+        yield "unconsumed-answer"
+
+    response = LLMResponse(output="", stream_output=chunks())
+    original_stream = response.stream_output
+    iteration = Iteration(call_id="local", index=0,
+                          outputs=Outputs(llm_response_info=response))
+    metadata = {"context": "application-metadata", "count": 0, "enabled": False}
+    history = Call(inputs=CallInputs(metadata=metadata, prompt_params={"old": "unused"}))
+    history.iterations.push(iteration)
+
+    def forbidden_serializer(*args, **kwargs):
+        raise AssertionError("Mixed history serializers must never be invoked")
+
+    for cls in (Call, CallInputs, Iteration, Outputs, LLMResponse):
+        monkeypatch.setattr(cls, "to_dict", forbidden_serializer)
+
+    def step(index, output_schema, call_log, *, api, instructions, prompt,
+             msg_history=None, prompt_params=None, output=None):
+        assert index == 1
+        assert call_log is history
+        return iteration
+
+    args = (1, {"type": "string"}, history) if positional else ()
+    kwargs = {"api": object(), "instructions": Instructions("current-instructions"),
+              "prompt": Prompt("current-prompt"),
+              "msg_history": [{"role": "user", "content": Prompt("current-message")}],
+              "prompt_params": {"current": "parameter"}, "output": "provided-output"}
+    if not positional:
+        kwargs.update(index=1, output_schema={"type": "string"}, call_log=history)
+    tracer = MagicMock(spec=trace_api.Tracer)
+    wrapper = _ParseCallableWrapper(tracer=tracer)
+    assert wrapper(step, None, args, kwargs) is iteration
+    attrs = tracer.start_as_current_span.call_args.kwargs["attributes"]
+    assert json.loads(attrs["input.value"]) == {
+        "index": 1, "output_schema": {"type": "string"},
+        "instructions": "current-instructions", "prompt": "current-prompt",
+        "msg_history": [{"role": "user", "content": "current-message"}],
+        "prompt_params": {"current": "parameter"}, "output": "provided-output",
+        "metadata": metadata,
+    }
+    assert consumed == []
+    assert response.stream_output is original_stream
+    assert history.iterations.last is iteration
+    assert history.inputs.prompt_params == {"old": "unused"}
+    assert list(original_stream) == ["unconsumed-answer"]
+    assert consumed == [True]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
