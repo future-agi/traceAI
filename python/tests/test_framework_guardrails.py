@@ -827,5 +827,140 @@ def test_installed_validation_survives_telemetry_extraction_failure(installed_gu
     assert span.status.status_code == StatusCode.OK
 
 
+def test_iteration_output_projection_does_not_serialize_history_or_consume_stream(monkeypatch):
+    from guardrails.classes.history.iteration import Iteration
+    from guardrails.classes.history.inputs import Inputs
+    from guardrails.classes.history.outputs import Outputs
+    from guardrails.classes.llm.llm_response import LLMResponse
+
+    consumed = []
+
+    def chunks():
+        consumed.append(True)
+        yield "unconsumed-answer"
+
+    iterator = chunks()
+    output = {"metadata": {"application_field": "kept"}, "count": 0}
+    response = LLMResponse(output="", stream_output=iterator)
+    iteration = Iteration(call_id="local", index=0,
+                          inputs=Inputs(metadata={"secret": "private-history"}),
+                          outputs=Outputs(llm_response_info=response, guarded_output=output))
+    original_output = iteration.outputs.guarded_output
+    original_stream = response.stream_output
+
+    def forbidden_serializer(*args, **kwargs):
+        raise AssertionError("Mixed history serializers must never be invoked")
+
+    for cls in (Iteration, Outputs, LLMResponse):
+        monkeypatch.setattr(cls, "to_dict", forbidden_serializer)
+    assert json.loads(_get_raw_output(iteration)) == {
+        "response": {"rawOutput": "", "guardedOutput": output},
+    }
+    assert consumed == []
+    assert iteration.inputs.metadata == {"secret": "private-history"}
+    assert iteration.outputs.guarded_output is original_output
+    assert response.stream_output is original_stream
+    assert list(original_stream) == ["unconsumed-answer"]
+    assert consumed == [True]
+
+
+@pytest.mark.parametrize("hide_inputs,hide_outputs", [(False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("validation", ["none", "pass", "fix"])
+def test_installed_complete_guard_privacy(
+    installed_guardrails, monkeypatch, hide_inputs, hide_outputs, validation,
+):
+    """Runner.step must not re-export inputs or validator metadata as output."""
+    from guardrails import Guard
+    from guardrails.classes.credentials import Credentials
+    from guardrails.classes.validation.validation_result import PassResult, FailResult
+    from guardrails.types import OnFailAction
+    from guardrails.validator_base import Validator, validators_registry
+
+    monkeypatch.setattr(Credentials, "from_rc_file", lambda: Credentials(
+        no_metrics=True, enable_metrics=False, use_remote_inferencing=False,
+    ))
+    question = "private-prompt-variable"
+    input_metadata = "private-input-metadata"
+    validator_metadata = "private-validator-metadata"
+    answer = "original-local-answer"
+    corrected = "corrected-local-answer"
+    validation_calls = []
+    llm_calls = []
+
+    class LocalValidator(Validator):
+        rail_alias = "test/local-privacy"
+
+        def validate(self, value, metadata):
+            assert value == answer
+            assert metadata["context"] == input_metadata
+            validation_calls.append(value)
+            private = {"nested": {"secret": validator_metadata}}
+            if validation == "fix":
+                return FailResult(error_message="local correction", fix_value=corrected,
+                                  metadata=private)
+            return PassResult(metadata=private)
+
+    monkeypatch.setitem(validators_registry, LocalValidator.rail_alias, LocalValidator)
+
+    def respond(prompt, **kwargs):
+        assert prompt == question
+        llm_calls.append(prompt)
+        return answer
+
+    def invoke():
+        guard = Guard()
+        guard.configure(allow_metrics_collection=False)
+        if validation != "none":
+            guard.use(LocalValidator(on_fail=OnFailAction.FIX, use_local=True))
+        result = guard(llm_api=respond, prompt="${question}",
+                       prompt_params={"question": question},
+                       metadata={"context": input_metadata}, num_reasks=0)
+        iteration, = guard.history.last.iterations
+        if validation != "none":
+            # The real SDK retains the private result metadata in history; the
+            # instrumentation must not export it by serializing that history.
+            log, = iteration.outputs.validator_logs
+            assert log.validation_result.metadata["nested"]["secret"] == validator_metadata
+        return (result.raw_llm_output, result.validated_output, result.validation_passed)
+
+    baseline = invoke()  # Compare with the same complete uninstrumented Guard.
+    exporter = installed_guardrails(hide_inputs=hide_inputs, hide_outputs=hide_outputs)
+    assert invoke() == baseline == (answer, corrected if validation == "fix" else answer, True)
+    assert llm_calls == [question, question]
+    assert validation_calls == ([] if validation == "none" else [answer, answer])
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == (2 if validation == "none" else 3)
+    runner, = [span for span in spans if span.name == "Runner.step"]
+    assert runner.parent is None
+    assert all(span.parent.span_id == runner.context.span_id
+               for span in spans if span is not runner)
+    for span in spans:
+        assert span.status.status_code == StatusCode.OK
+        attrs = dict(span.attributes)
+        serialized = json.dumps(attrs)
+        assert validator_metadata not in serialized
+        assert "raw.input" not in attrs and "raw.output" not in attrs
+        # Prompt parameters and input metadata belong exclusively to input
+        # attributes, regardless of whether output capture is enabled.
+        for key, value in attrs.items():
+            if question in str(value) or input_metadata in str(value):
+                assert not hide_inputs
+                assert key == "input.value" or key.startswith("gen_ai.input.messages.")
+        if hide_inputs:
+            assert attrs["input.value"] == "__REDACTED__"
+        if hide_outputs:
+            assert attrs["output.value"] == "__REDACTED__"
+            assert not any(key.startswith("gen_ai.output.messages.") for key in attrs)
+
+    if not hide_inputs:
+        assert question in runner.attributes["input.value"]
+        assert input_metadata in runner.attributes["input.value"]
+    if not hide_outputs:
+        projected = json.loads(runner.attributes["output.value"])["response"]
+        assert projected == {"rawOutput": answer,
+                             "guardedOutput": corrected if validation == "fix" else answer}
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

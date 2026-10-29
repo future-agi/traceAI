@@ -112,17 +112,23 @@ def _get_raw_input(args: Any, **kwargs: Any) -> str:
 
 
 def _get_raw_output(response: Any) -> str:
-    """
-    Parses a method call's inputs into a JSON string. Ensures a consistent
-    output regardless of whether the those inputs are passed as positional or
-    keyword arguments.
-    """
-    return safe_json_dumps(
-        {
-            "response": _to_dict(response),
-        },
-        cls=SafeJSONEncoder,
-    )
+    """Serialize output payloads, never the mixed input/output step history."""
+    from guardrails.classes.history.iteration import Iteration
+
+    if isinstance(response, Iteration):
+        # Iteration.to_dict() includes prompt parameters and input metadata.
+        # Even response.outputs.to_dict() includes arbitrary validator metadata,
+        # reask diagnostics and potentially consuming LLMResponse serializers.
+        # Project only the materialized application outputs: input privacy must
+        # work independently of output privacy, and validator metadata is not
+        # an output payload. Do not mutate the history returned to the caller.
+        output = {
+            "rawOutput": response.raw_output,
+            "guardedOutput": response.guarded_output,
+        }
+    else:
+        output = _to_dict(response)
+    return safe_json_dumps({"response": output}, cls=SafeJSONEncoder)
 
 
 def _to_dict(result: Any) -> Any:
