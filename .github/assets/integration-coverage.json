@@ -40,6 +40,10 @@
       "reason": "shared SDK / semantic conventions"
     },
     {
+      "manifest": "java/traceai-bom/pom.xml",
+      "reason": "dependency-management / aggregator POM; not an integration"
+    },
+    {
       "manifest": "java/traceai-java-core/pom.xml",
       "reason": "shared SDK / BOM / example; not an integration"
     },
