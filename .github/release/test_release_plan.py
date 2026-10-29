@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -71,8 +72,8 @@ class PlanTests(unittest.TestCase):
 
     def test_plan_skips_published_versions(self):
         have = {"traceAI-openai": {"0.1.9", "0.1.10"}, "fi-instrumentation-otel": {"1.0.0"}, "@traceai/openai": None}
-        release_plan.published_versions = lambda p: have.get(p["name"], set())
-        p = release_plan.plan(self.packages, {"skip": {}}, only={"traceAI-openai", "fi-instrumentation-otel", "@traceai/openai"})
+        with patch.object(release_plan, 'published_versions', side_effect=lambda p: have.get(p["name"], set())):
+            p = release_plan.plan(self.packages, {"skip": {}}, only={"traceAI-openai", "fi-instrumentation-otel", "@traceai/openai"})
         self.assertEqual([e["name"] for e in p["python"]], ["fi-instrumentation-otel"])
         self.assertEqual([(e["name"], e["first_release"]) for e in p["typescript"]], [("@traceai/openai", True)])
         self.assertEqual(p["skipped"], [{"name": "traceAI-openai", "reason": "0.1.10 is already published"}])

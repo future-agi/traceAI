@@ -90,29 +90,29 @@ Create structure similar to existing packages, then update `pnpm-workspace.yaml`
 
 ## Releasing
 
-A release is a pull request, like any other change. For the package you are releasing:
+Use Conventional Commit PR titles **and commits** (`fix(openai): ...`, `feat: ...`).
+Send changes to **dev**. A maintainer moves dev to **main**; release-please then maintains
+one release PR with per-package version bumps and changelogs. Do not hand-bump routine
+changes. Merging the release PR publishes the changed versions through the build/verify/
+publish pipeline, with Python and npm core packages first.
 
-1. Bump `version` in its `pyproject.toml` (Python) or `package.json` (TypeScript). If the package
-   carries a `__version__` (in `version.py` or `__init__.py`), set it to the same value: CI fails
-   when the two disagree (`python3 .github/release/release_plan.py --check`).
-2. Add the version's section to the package's `CHANGELOG.md` (`## [x.y.z] - YYYY-MM-DD`); it
-   becomes the text of the GitHub release.
-3. Merge to `dev`, and `dev` to `main` as usual.
+The publisher is the only owner of tags and GitHub releases; release-please does not tag.
+Python, npm, Java (Maven Central under `com.futureagi`), Go module tags and NuGet are covered.
+Go begins at 0.1.0. JitPack remains available for Java commit previews.
 
-When `main` changes, the [Release](.github/workflows/release.yml) workflow publishes every package
-whose version is not on PyPI or npm yet: it builds the package, checks the distribution, installs it
-in a clean environment and imports it, publishes it (the two core packages first), waits until the
-registry serves the version, tags the commit (`traceai-livekit-v0.1.2`, `npm-traceai-openai-v0.1.13`)
-and creates the GitHub release. A pull request that touches a version only shows what would be
-published, in the run summary. `Actions > Release > Run workflow` releases by hand (optionally a
-few named packages, or as a dry run).
+See [RELEASING.md](RELEASING.md) for the one-time owner checklist, exact secret names,
+PyPI trusted publishers (**workflow `release.yml`, not `release-python.yml`**), manual
+recovery and dry runs. Pull requests never publish; workflow dispatch defaults to a dry
+run and only main is eligible to publish. The workflow never auto-merges a release PR.
 
-Publishing needs credentials that an owner sets once: a PyPI trusted publisher on each project
-(workflow `release-python.yml` of this repository) plus the repository variable
-`PYPI_TRUSTED_PUBLISHING=true`, or the secret `PYPI_API_TOKEN`; and the secret `NPM_TOKEN` with
-publish rights on `@traceai`. Until then the workflow builds, checks and keeps the artifacts, and
-warns that nothing was published. Packages that must never be published are listed, with the
-reason, in `.github/release/config.json`. Java (JitPack from git tags) and C# are released by hand.
+When adding a package, add its release-please config and manifest entries, and Python
+runtime-version `extra-files`/markers if applicable. Validate locally:
+
+```bash
+python3 -m unittest discover -s .github/release -p 'test_*.py'
+python3 .github/release/release_plan.py --check
+python3 .github/release/release_plan.py --offline
+```
 
 ## Guidelines
 

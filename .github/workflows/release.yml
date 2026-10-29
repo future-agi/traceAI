@@ -1,181 +1,258 @@
-# Release: publish every package whose version is not on its registry yet.
-#
-# Releasing stays a normal pull request: bump `version` in the package's pyproject.toml or
-# package.json and add the CHANGELOG entry. Once that reaches main, this workflow (per package,
-# in parallel, the two cores first):
-#   1. builds the package and checks the distribution (twine check / pnpm pack);
-#   2. installs the built artifact in a clean environment and imports it, and checks that the
-#      installed version equals the one in the repository;
-#   3. publishes it to PyPI (trusted publishing, or PYPI_API_TOKEN) or npm (NPM_TOKEN, with provenance);
-#   4. waits until the registry serves that version;
-#   5. tags the commit (`<pypi name>-v<version>`, e.g. traceai-livekit-v0.1.2, or
-#      `npm-<name>-v<version>`) and creates the GitHub release from the package's CHANGELOG section.
-#
-# Until the registry credentials are set up, every run does steps 1 and 2 and uploads the
-# artifacts, then stops with a warning: nothing is published and nothing is tagged. Publishing
-# turns on per ecosystem:
-#   PyPI  the repository variable PYPI_TRUSTED_PUBLISHING=true (a trusted publisher on each PyPI
-#         project pointing at this repository and release-python.yml), or the secret PYPI_API_TOKEN;
-#   npm   the secret NPM_TOKEN (publish rights on the @traceai scope).
-# The pull_request trigger only checks: that every package's __version__ agrees with its
-# pyproject.toml, and what the push to main would publish (shown in the run summary).
-# Java (JitPack builds from tags) and C# are not covered. The planner is .github/release/release_plan.py.
+# Builds on Tanmay's #300 plan -> verify -> publish -> tag/release pipeline.
+# release-please ONLY maintains a release PR. Publishers exclusively own tags/releases.
 name: Release
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main, dev]
     paths:
-      - python/pyproject.toml
-      - python/traceai/pyproject.toml
-      - python/frameworks/*/pyproject.toml
+      - python/**/pyproject.toml
       - python/**/version.py
       - python/**/__init__.py
       - typescript/packages/*/package.json
+      - java/**/pom.xml
+      - go/**
+      - csharp/**/*.csproj
       - .github/release/**
-      - .github/workflows/release.yml
-      - .github/workflows/release-python.yml
-      - .github/workflows/release-typescript.yml
+      - .github/workflows/release*.yml
+      - release-please-config.json
+      - .release-please-manifest.json
   workflow_dispatch:
     inputs:
       packages:
-        description: Package names to release, space-separated (empty = every package whose version is not published)
+        description: Space-separated package names (empty = all unfinished releases)
         type: string
         default: ''
       dry_run:
-        description: Build and check only; publish nothing, tag nothing
+        description: Build and verify only; no uploads, tags, releases or PR changes
         type: boolean
-        default: false
-
+        default: true
 permissions:
   contents: read
-
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
 defaults:
   run:
     shell: bash
-
 jobs:
   plan:
     name: Plan
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       python_core: ${{ steps.plan.outputs.python_core }}
       python: ${{ steps.plan.outputs.python }}
+      typescript_semantic: ${{ steps.plan.outputs.typescript_semantic }}
       typescript_core: ${{ steps.plan.outputs.typescript_core }}
       typescript: ${{ steps.plan.outputs.typescript }}
-      publish_python: ${{ steps.gates.outputs.publish_python }}
-      publish_typescript: ${{ steps.gates.outputs.publish_typescript }}
+      java: ${{ steps.plan.outputs.java }}
+      go: ${{ steps.plan.outputs.go }}
+      nuget: ${{ steps.plan.outputs.nuget }}
+      publish_python: ${{ steps.gates.outputs.python }}
+      publish_typescript: ${{ steps.gates.outputs.typescript }}
+      publish_java: ${{ steps.gates.outputs.java }}
+      publish_go: ${{ steps.gates.outputs.go }}
+      publish_nuget: ${{ steps.gates.outputs.nuget }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
-
-      - name: Test the planner
+          python-version: '3.12'
+      - name: Test all release scripts
         run: python3 -m unittest discover -s .github/release -p 'test_*.py'
-
-      - name: Every __version__ agrees with its pyproject.toml
+      - name: Test real release-please strategies offline
+        run: |
+          npm install --prefix "$RUNNER_TEMP/release-please-test" --ignore-scripts --no-audit --no-fund release-please@17.11.2
+          NODE_PATH="$RUNNER_TEMP/release-please-test/node_modules" node .github/release/test_release_strategies.cjs
+      - name: Validate runtime versions and release-please coverage
         run: python3 .github/release/release_plan.py --check
-
-      - name: Work out what is not published yet
+      - name: Query registries and reconcile incomplete releases
         id: plan
         env:
           ONLY: ${{ inputs.packages }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # shellcheck disable=SC2086
-          python3 .github/release/release_plan.py ${ONLY:+--only $ONLY} > "$RUNNER_TEMP/plan.json"
-          jq . "$RUNNER_TEMP/plan.json"
-          {
-            echo "python_core=$(jq -c '[.python[] | select(.core)]' "$RUNNER_TEMP/plan.json")"
-            echo "python=$(jq -c '[.python[] | select(.core | not)]' "$RUNNER_TEMP/plan.json")"
-            echo "typescript_core=$(jq -c '[.typescript[] | select(.core)]' "$RUNNER_TEMP/plan.json")"
-            echo "typescript=$(jq -c '[.typescript[] | select(.core | not)]' "$RUNNER_TEMP/plan.json")"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "### Release plan"
-            echo
-            if [ "$(jq '(.python | length) + (.typescript | length)' "$RUNNER_TEMP/plan.json")" = 0 ]; then
-              echo "Every package version is already published. Nothing to do."
-            else
-              echo "| Package | Version | First release? |"
-              echo "|---|---|---|"
-              jq -r '(.python + .typescript)[] | "| \(.name) | \(.version) | \(if .first_release then "yes" else "no" end) |"' "$RUNNER_TEMP/plan.json"
-            fi
-            echo
-            echo "<details><summary>Skipped</summary>"
-            echo
-            jq -r '.skipped[] | "- \(.name): \(.reason)"' "$RUNNER_TEMP/plan.json"
-            echo
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Decide whether publishing is on
+          args=()
+          if [ -n "$ONLY" ]; then read -ra names <<< "$ONLY"; args=(--only "${names[@]}"); fi
+          python3 .github/release/release_plan.py --include-published "${args[@]}" > "$RUNNER_TEMP/plan.json"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' > "$RUNNER_TEMP/releases.txt"
+          python3 .github/release/workflow_plan.py "$RUNNER_TEMP/plan.json" "$RUNNER_TEMP/releases.txt"
+          cat "$RUNNER_TEMP/plan.json"
+      - name: Keep the plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-plan
+          path: ${{ runner.temp }}/plan.json
+      - name: Credential and event gates
         id: gates
         env:
-          # Secrets cannot be read in a job-level `if`; an empty value means "not set".
-          HAS_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
-          PYPI_TRUSTED: ${{ vars.PYPI_TRUSTED_PUBLISHING == 'true' }}
-          HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
-          IS_RELEASE_EVENT: ${{ github.event_name != 'pull_request' && inputs.dry_run != true }}
+          RELEASE_EVENT: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.dry_run != true }}
+          PYPI: ${{ secrets.PYPI_API_TOKEN != '' || vars.PYPI_TRUSTED_PUBLISHING == 'true' }}
+          NPM: ${{ secrets.NPM_TOKEN != '' }}
+          MAVEN: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' && secrets.MAVEN_GPG_PRIVATE_KEY != '' && secrets.MAVEN_GPG_PASSPHRASE != '' }}
+          NUGET: ${{ secrets.NUGET_API_KEY != '' }}
         run: |
-          py=false; ts=false
-          if [ "$IS_RELEASE_EVENT" = true ]; then
-            if [ "$HAS_PYPI_TOKEN" = true ] || [ "$PYPI_TRUSTED" = true ]; then py=true; fi
-            if [ "$HAS_NPM_TOKEN" = true ]; then ts=true; fi
-          fi
-          echo "publish_python=$py" >> "$GITHUB_OUTPUT"
-          echo "publish_typescript=$ts" >> "$GITHUB_OUTPUT"
-          if [ "$IS_RELEASE_EVENT" = true ]; then
-            [ "$py" = true ] || echo "::warning title=PyPI publishing is off::set the repository variable PYPI_TRUSTED_PUBLISHING=true (after adding a trusted publisher on each PyPI project for release-python.yml) or the secret PYPI_API_TOKEN. Python packages are built and checked only."
-            [ "$ts" = true ] || echo "::warning title=npm publishing is off::set the secret NPM_TOKEN (publish rights on @traceai). TypeScript packages are built and checked only."
-          else
-            echo "Check only (${{ github.event_name }}${{ inputs.dry_run == true && ', dry run' || '' }}): nothing is published."
-          fi
-          echo "Publish: python=$py typescript=$ts" >> "$GITHUB_STEP_SUMMARY"
-
-  python-core:
-    name: Python core
+          for eco in python typescript java go nuget; do
+            enabled=false
+            case "$eco" in
+              python) available=$PYPI;; typescript) available=$NPM;; java) available=$MAVEN;; go) available=true;; nuget) available=$NUGET;;
+            esac
+            if [ "$RELEASE_EVENT" = true ] && [ "$available" = true ]; then enabled=true; fi
+            echo "$eco=$enabled" >> "$GITHUB_OUTPUT"
+            echo "- $eco publishing: $enabled" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$RELEASE_EVENT" = true ] && [ "$available" != true ]; then
+              echo "::warning::$eco publishing disabled: complete the RELEASING.md checklist. Builds still run."
+            fi
+          done
+  python-core-build:
+    name: Build python-core
     needs: plan
-    if: needs.plan.outputs.python_core != '[]'
+    if: >-
+      github.event_name != 'pull_request' && needs.plan.outputs.python_core != '[]'
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     uses: ./.github/workflows/release-python.yml
     with:
       packages: ${{ needs.plan.outputs.python_core }}
-      publish: ${{ needs.plan.outputs.publish_python == 'true' }}
-    secrets: inherit
-
-  python:
-    name: Python
-    needs: [plan, python-core]
-    # The core (fi-instrumentation-otel) must be on PyPI before a package that needs its new version.
+  python-core:
+    name: Publish python-core
+    needs: [plan, python-core-build]
     if: >-
-      !cancelled() && needs.plan.result == 'success'
-      && (needs.python-core.result == 'success' || needs.python-core.result == 'skipped')
-      && needs.plan.outputs.python != '[]'
+      !cancelled() && needs.python-core-build.result == 'success'
+      && needs.plan.outputs.publish_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.python_core) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      TAG: ${{ matrix.tag }}
+      CHANGELOG: ${{ matrix.changelog }}
+      REGISTRY_PUBLISHED: ${{ matrix.registry_published }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist
+      - name: Publish the verified distributions (top-level workflow for OIDC)
+        if: '!matrix.registry_published'
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
+        with:
+          packages-dir: ${{ runner.temp }}/dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          print-hash: true
+      - name: Verify public registry availability
+        run: |
+          python3 -m venv "$RUNNER_TEMP/verify"
+          for attempt in $(seq 1 20); do
+            if "$RUNNER_TEMP/verify/bin/pip" install --quiet --no-deps --no-cache-dir "$NAME==$VERSION" 2>/dev/null; then exit 0; fi
+            echo "attempt $attempt: $NAME==$VERSION is not served yet"
+            sleep 30
+          done
+          echo "::error::PyPI has not served $NAME==$VERSION after ten minutes; rerun Release"
+          exit 1
+      - name: Tag and create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/release/github_release.py --install "pip install $NAME==$VERSION" --dist "$RUNNER_TEMP/dist"
+  python-build:
+    name: Build python
+    needs: [plan, python-core-build, python-core]
+    if: >-
+      !cancelled() && github.event_name != 'pull_request' && needs.plan.result == 'success' && (needs.python-core-build.result == 'success' || needs.python-core-build.result == 'skipped') && (needs.python-core.result == 'success' || needs.python-core.result == 'skipped') && needs.plan.outputs.python != '[]'
+    permissions:
+      contents: read
     uses: ./.github/workflows/release-python.yml
     with:
       packages: ${{ needs.plan.outputs.python }}
-      publish: ${{ needs.plan.outputs.publish_python == 'true' }}
+  python:
+    name: Publish python
+    needs: [plan, python-build]
+    if: >-
+      !cancelled() && needs.python-build.result == 'success'
+      && needs.plan.outputs.publish_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.python) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      TAG: ${{ matrix.tag }}
+      CHANGELOG: ${{ matrix.changelog }}
+      REGISTRY_PUBLISHED: ${{ matrix.registry_published }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist
+      - name: Publish the verified distributions (top-level workflow for OIDC)
+        if: '!matrix.registry_published'
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
+        with:
+          packages-dir: ${{ runner.temp }}/dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          print-hash: true
+      - name: Verify public registry availability
+        run: |
+          python3 -m venv "$RUNNER_TEMP/verify"
+          for attempt in $(seq 1 20); do
+            if "$RUNNER_TEMP/verify/bin/pip" install --quiet --no-deps --no-cache-dir "$NAME==$VERSION" 2>/dev/null; then exit 0; fi
+            echo "attempt $attempt: $NAME==$VERSION is not served yet"
+            sleep 30
+          done
+          echo "::error::PyPI has not served $NAME==$VERSION after ten minutes; rerun Release"
+          exit 1
+      - name: Tag and create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/release/github_release.py --install "pip install $NAME==$VERSION" --dist "$RUNNER_TEMP/dist"
+  typescript-semantic:
+    name: TypeScript semantic conventions
+    needs: plan
+    if: github.event_name != 'pull_request' && needs.plan.outputs.typescript_semantic != '[]'
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/release-typescript.yml
+    with:
+      packages: ${{ needs.plan.outputs.typescript_semantic }}
+      publish: ${{ needs.plan.outputs.publish_typescript == 'true' }}
     secrets: inherit
-
   typescript-core:
     name: TypeScript core
-    needs: plan
-    if: needs.plan.outputs.typescript_core != '[]'
+    needs: [plan, typescript-semantic]
+    if: >-
+      !cancelled() && github.event_name != 'pull_request' && needs.plan.result == 'success'
+      && (needs.typescript-semantic.result == 'success' || needs.typescript-semantic.result == 'skipped')
+      && needs.plan.outputs.typescript_core != '[]'
     permissions:
       contents: write
       id-token: write
@@ -184,12 +261,12 @@ jobs:
       packages: ${{ needs.plan.outputs.typescript_core }}
       publish: ${{ needs.plan.outputs.publish_typescript == 'true' }}
     secrets: inherit
-
   typescript:
     name: TypeScript
-    needs: [plan, typescript-core]
+    needs: [plan, typescript-semantic, typescript-core]
     if: >-
-      !cancelled() && needs.plan.result == 'success'
+      !cancelled() && github.event_name != 'pull_request' && needs.plan.result == 'success'
+      && (needs.typescript-semantic.result == 'success' || needs.typescript-semantic.result == 'skipped')
       && (needs.typescript-core.result == 'success' || needs.typescript-core.result == 'skipped')
       && needs.plan.outputs.typescript != '[]'
     permissions:
@@ -200,12 +277,38 @@ jobs:
       packages: ${{ needs.plan.outputs.typescript }}
       publish: ${{ needs.plan.outputs.publish_typescript == 'true' }}
     secrets: inherit
-
+  java:
+    needs: plan
+    if: github.event_name != 'pull_request' && needs.plan.outputs.java != '[]'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-java.yml
+    with:
+      packages: ${{ needs.plan.outputs.java }}
+      publish: ${{ needs.plan.outputs.publish_java == 'true' }}
+    secrets: inherit
+  go:
+    needs: plan
+    if: github.event_name != 'pull_request' && needs.plan.outputs.go != '[]'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-go.yml
+    with:
+      packages: ${{ needs.plan.outputs.go }}
+      publish: ${{ needs.plan.outputs.publish_go == 'true' }}
+  nuget:
+    needs: plan
+    if: github.event_name != 'pull_request' && needs.plan.outputs.nuget != '[]'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-nuget.yml
+    with:
+      packages: ${{ needs.plan.outputs.nuget }}
+      publish: ${{ needs.plan.outputs.publish_nuget == 'true' }}
+    secrets: inherit
   release:
-    # The one check to require: red when any package failed, green when every planned package
-    # went through (a package set that was empty counts as green).
     name: Release
-    needs: [plan, python-core, python, typescript-core, typescript]
+    needs: [plan, python-core-build, python-core, python-build, python, typescript-semantic, typescript-core, typescript, java, go, nuget]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -215,7 +318,30 @@ jobs:
           RESULTS: ${{ toJson(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          if echo "$RESULTS" | jq -e '[.[] | .result] | any(. == "failure" or . == "cancelled")' > /dev/null; then
-            echo "::error title=Release failed::see the failed package jobs above"
-            exit 1
-          fi
+          if echo "$RESULTS" | jq -e '[.[] | .result] | any(. == "failure" or . == "cancelled")' > /dev/null; then exit 1; fi
+  release-pr:
+    name: Maintain one release PR
+    needs: [plan, release]
+    if: >-
+      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Clear pending label only after all manifest versions have verified releases
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+        run: python3 .github/release/complete_release.py
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0 (Arize reference)
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          target-branch: main
+          skip-github-release: true
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -39,16 +39,21 @@ jobs:
       DIR: ${{ matrix.dir }}
       TAG: ${{ matrix.tag }}
       CHANGELOG: ${{ matrix.changelog }}
+      REGISTRY_PUBLISHED: ${{ matrix.registry_published }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Where the distributions go
         run: echo "DIST=$RUNNER_TEMP/dist" >> "$GITHUB_ENV"
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           package_json_file: typescript/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Configure npm registry
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           registry-url: https://registry.npmjs.org
@@ -86,7 +91,7 @@ jobs:
           [ "$got" = "$VERSION" ] || { echo "::error::installed $NAME is $got, expected $VERSION"; exit 1; }
 
       - name: Keep the tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.tag }}
           path: ${{ runner.temp }}/dist/*
@@ -97,11 +102,11 @@ jobs:
         run: echo "::notice title=${{ matrix.name }} ${{ matrix.version }} not published::built and checked only (publishing is off or this is a dry run)"
 
       - name: Publish to npm
-        if: inputs.publish
+        if: inputs.publish && !matrix.registry_published
         working-directory: typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm --filter "$NAME" publish --no-git-checks --access public --provenance
+        run: npm publish "$DIST"/*.tgz --access public --provenance
 
       - name: Wait until npm serves the version
         if: inputs.publish
@@ -117,17 +122,8 @@ jobs:
           echo "::error title=$NAME $VERSION not on npm::published, but the registry did not serve it after 10 minutes"
           exit 1
 
-      - name: Tag and create the GitHub release
+      - name: Tag and create the GitHub release (publisher is the sole tag owner)
         if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "release $TAG already exists"
-            exit 0
-          fi
-          python3 .github/release/release_notes.py "$NAME" "$VERSION" ${CHANGELOG:+--changelog "$CHANGELOG"} \
-            --install "npm install $NAME@$VERSION" > "$RUNNER_TEMP/notes.md"
-          cat "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "$NAME $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "$DIST"/*
-          echo "- [$NAME $VERSION](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG) published to npm" >> "$GITHUB_STEP_SUMMARY"
+        run: python3 .github/release/github_release.py --install "npm install $NAME@$VERSION" --dist "$DIST"
