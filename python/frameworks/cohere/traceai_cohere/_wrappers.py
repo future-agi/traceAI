@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
 
 import opentelemetry.context as context_api
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
+from fi_instrumentation import TraceConfig, get_attributes_from_context, safe_json_dumps
 from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
@@ -33,6 +33,9 @@ class _WithTracer(ABC):
     def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        # Use the exact FITracer config: explicit options override environment values.
+        config = getattr(tracer, "_self_config", None)
+        self._config = config if isinstance(config, TraceConfig) else TraceConfig()
 
     @contextmanager
     def _start_as_current_span(
@@ -382,7 +385,7 @@ class _RerankWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RerankRequestAttributesExtractor()
+        self._request_extractor = _RerankRequestAttributesExtractor(config=self._config)
         self._response_extractor = _RerankResponseAttributesExtractor()
 
     def __call__(
@@ -436,7 +439,7 @@ class _AsyncRerankWrapper(_WithTracer):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._request_extractor = _RerankRequestAttributesExtractor()
+        self._request_extractor = _RerankRequestAttributesExtractor(config=self._config)
         self._response_extractor = _RerankResponseAttributesExtractor()
 
     async def __call__(
