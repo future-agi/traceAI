@@ -94,3 +94,91 @@ def test_real_legacy_content_privacy(spans):
     assert span.status.status_code == StatusCode.OK
     assert "private-input" not in span.to_json()
     assert "private-output" not in span.to_json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("failure_kind", ["missing", "invalid", "throwing"])
+@pytest.mark.parametrize("hidden", [False, True])
+async def test_real_legacy_failed_tool_is_error_and_preserves_tuple(spans, asynchronous, failure_kind, hidden):
+    exporter, provider, instrumentor = spans
+    instrumentor.uninstrument()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(hide_outputs=hidden))
+    assistant = legacy("assistant")
+    def fail(value):
+        raise ValueError("private-tool-diagnostic")
+    async def async_fail(value):
+        return fail(value)
+    assistant.register_function({"fail": async_fail if asynchronous else fail})
+    call = {"name": "absent" if failure_kind == "missing" else "fail",
+            "arguments": "not-json-private" if failure_kind == "invalid" else '{"value": 1}'}
+    # Obtain the SDK's exact result with the same real hook uninstrumented.
+    instrumentor.uninstrument()
+    original_call = dict(call)
+    expected = await assistant.a_execute_function(call) if asynchronous else assistant.execute_function(call)
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(hide_outputs=hidden))
+    result = await assistant.a_execute_function(call) if asynchronous else assistant.execute_function(call)
+    assert result == expected
+    assert result[0] is False
+    assert call == original_call
+    span, = exporter.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["autogen.is_error"] is True
+    assert len(span.events) == 1
+    assert span.events[0].name == "exception"
+    if hidden:
+        assert result[1]["content"] not in span.to_json()
+        assert span.status.description is None
+    else:
+        assert span.status.description == result[1]["content"]
+        assert span.events[0].attributes["exception.message"] == result[1]["content"]
+        assert json.loads(span.attributes["output.value"]) == [False, result[1]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("hidden", [False, True])
+async def test_real_legacy_sender_history_observed_without_injecting_messages(spans, asynchronous, hidden):
+    exporter, provider, instrumentor = spans
+    instrumentor.uninstrument()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(hide_inputs=hidden))
+    assistant, peer = legacy("assistant"), legacy("peer")
+    assistant.receive("private-sender-input", sender=peer, request_reply=False, silent=True)
+    before = [dict(message) for message in assistant.chat_messages[peer]]
+    if asynchronous:
+        result = await assistant.a_generate_reply(sender=peer)
+    else:
+        result = assistant.generate_reply(messages=None, sender=peer)
+    assert result == "legacy reply"
+    assert assistant.chat_messages[peer] == before
+    span, = exporter.get_finished_spans()
+    if hidden:
+        assert "private-sender-input" not in span.to_json()
+    else:
+        assert json.loads(span.attributes["input.value"]) == before
+    assert json.loads(span.attributes["output.value"]) == result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("hidden", [False, True])
+async def test_real_legacy_chat_output_from_result_or_old_history(spans, asynchronous, hidden):
+    exporter, provider, instrumentor = spans
+    instrumentor.uninstrument()
+    instrumentor.instrument(tracer_provider=provider, config=TraceConfig(hide_outputs=hidden))
+    assistant = legacy("assistant", reply="private-final-reply")
+    user = legacy("user", max_consecutive_auto_reply=0)
+    if asynchronous:
+        result = await user.a_initiate_chat(assistant, message="hello", max_turns=1, silent=True)
+    else:
+        result = user.initiate_chat(assistant, message="hello", max_turns=1, silent=True)
+    if "max_turns" not in inspect.signature(ConversableAgent.initiate_chat).parameters:
+        assert result is None
+    else:
+        assert result.chat_history == user.chat_messages[assistant]
+    assert user.chat_messages[assistant][-1]["content"] == "private-final-reply"
+    chat_span, = [s for s in exporter.get_finished_spans() if s.name.endswith("initiate_chat")]
+    if hidden:
+        assert "private-final-reply" not in chat_span.to_json()
+    else:
+        assert json.loads(chat_span.attributes["output.value"]) == "private-final-reply"

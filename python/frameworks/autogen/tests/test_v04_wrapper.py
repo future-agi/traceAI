@@ -342,8 +342,11 @@ class TestWrapTeamRun:
             stream = wrapped(team, task="Stream task")
             first = await anext(stream)
             last = await anext(stream)
-            assert exhausted == [True]
+            assert exhausted == []  # terminal delivery cannot prefetch SDK cleanup
             tracer.start_span.return_value.end.assert_called_once()
+            with pytest.raises(StopAsyncIteration):
+                await anext(stream)
+            assert exhausted == [True]  # cleanup runs only when requested
             await stream.aclose()
             return [first, last]
 

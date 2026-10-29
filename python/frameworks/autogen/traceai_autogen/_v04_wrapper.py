@@ -14,7 +14,9 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
-from opentelemetry import trace as trace_api
+from fi_instrumentation import TraceConfig
+from fi_instrumentation.fi_types import SpanAttributes
+from opentelemetry import context as context_api, trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
 logger = logging.getLogger(__name__)
@@ -203,7 +205,21 @@ def extract_usage_from_result(result: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _agent_attributes(agent, messages):
+def _mask_content(config, value, output=False):
+    """Keep historical aliases, but apply the canonical content policy first.
+
+    Aliases are not recognized by FITracer itself. Both the value and message
+    policies apply so a narrower hide-text/messages flag cannot leak via them.
+    """
+    message_key = (SpanAttributes.GEN_AI_OUTPUT_MESSAGES if output else
+                   SpanAttributes.GEN_AI_INPUT_MESSAGES) + ".0.content"
+    masked = config.mask(message_key, value)
+    if masked is None:
+        return "__REDACTED__"
+    return config.mask(SpanAttributes.OUTPUT_VALUE if output else SpanAttributes.INPUT_VALUE, masked)
+
+
+def _agent_attributes(agent, messages, config):
     info = extract_agent_info(agent)
     attributes = {
         "autogen.span_kind": "agent_run",
@@ -218,21 +234,21 @@ def _agent_attributes(agent, messages):
     if messages:
         attributes["autogen.input.message_count"] = len(messages)
         last = extract_message_info(messages[-1])
-        attributes["autogen.input.last_message"] = last.get("content", "")
+        attributes["autogen.input.last_message"] = _mask_content(config, last.get("content", ""))
         attributes["autogen.input.last_source"] = last.get("source", "")
     return attributes
 
 
-def _record_agent_result(span, result):
+def _record_agent_result(span, result, config):
     if result is not None and hasattr(result, "chat_message"):
         info = extract_message_info(result.chat_message)
         span.set_attribute("autogen.output.message_type", info.get("message_type", ""))
-        span.set_attribute("autogen.output.content", info.get("content", ""))
+        span.set_attribute("autogen.output.content", _mask_content(config, info.get("content", ""), output=True))
         if getattr(result, "inner_messages", None):
             span.set_attribute("autogen.output.inner_message_count", len(result.inner_messages))
 
 
-def _team_attributes(team, task, method):
+def _team_attributes(team, task, method, config):
     info = extract_team_info(team)
     attributes = {
         "autogen.span_kind": "team_run",
@@ -246,7 +262,7 @@ def _team_attributes(team, task, method):
     if info.get("participants"):
         attributes["autogen.team.participants"] = json.dumps(info["participants"])
     if task:
-        attributes["autogen.task.content"] = safe_serialize(task, 1000)
+        attributes["autogen.task.content"] = _mask_content(config, safe_serialize(task, 1000))
     return attributes
 
 
@@ -274,92 +290,99 @@ def _record_error(span, error):
 def _wrap_stream(original_method, tracer, name, attributes, record_result, kind):
     @functools.wraps(original_method)
     async def stream_wrapper(self, *args, **kwargs):
-        # A true async generator, not a coroutine returning an iterator. Attach
-        # context only while advancing/closing the SDK stream, NEVER across a
-        # yield into caller code (or another task may inherit the wrong parent).
+        # Remain a true async generator, forwarding each consumer operation once.
+        # No prefetch: Response may precede slow/failing SDK post-yield cleanup.
         span = tracer.start_span(name(self), kind=kind, attributes=attributes(self, args, kwargs))
         start_time = time.time()
         stream = None
         count = 0
         ended = False
-        missing = object()
-        pending = missing
+        producer_context = trace_api.set_span_in_context(span)
+
+        def finish():
+            nonlocal ended
+            if not ended:
+                span.set_attribute("autogen.stream.message_count", count)
+                span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
+                span.end()
+                ended = True
+
+        async def advance(operation, *values):
+            nonlocal producer_context
+            # Preserve an SDK child context suspended across its yield, but
+            # always restore this consumer's context at the proxy boundary.
+            token = context_api.attach(producer_context)
+            try:
+                return await operation(*values)
+            finally:
+                producer_context = context_api.get_current()
+                context_api.detach(token)
+
         try:
-            with trace_api.use_span(span, end_on_exit=False, record_exception=False,
-                                    set_status_on_exception=False):
-                stream = original_method(self, *args, **kwargs).__aiter__()
+            stream = original_method(self, *args, **kwargs).__aiter__()
+            operation, values = stream.__anext__, ()
             while True:
                 try:
-                    if pending is not missing:
-                        item, pending = pending, missing
-                    else:
-                        with trace_api.use_span(span, end_on_exit=False, record_exception=False,
-                                                set_status_on_exception=False):
-                            item = await stream.__anext__()
+                    item = await advance(operation, *values)
                 except StopAsyncIteration:
-                    break
-                count += 1
-                record_result(span, item)
-                from autogen_agentchat.base import Response, TaskResult
-                if isinstance(item, (Response, TaskResult)):
-                    # on_messages() returns immediately on Response without
-                    # advancing the generator again. Finalize BEFORE yielding
-                    # this terminal item, rather than relying on async-gen GC.
-                    try:
-                        with trace_api.use_span(span, end_on_exit=False, record_exception=False,
-                                                set_status_on_exception=False):
-                            # Exhaust the final yield naturally: aclose() here
-                            # would interrupt the SDK's nested async-for cleanup.
-                            pending = await stream.__anext__()
-                    except StopAsyncIteration:
-                        stream = None
+                    stream = None
+                    if not ended:
                         span.set_attribute("autogen.is_error", False)
                         span.set_status(Status(StatusCode.OK))
-                        span.set_attribute("autogen.stream.message_count", count)
-                        span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
-                        span.end()
-                        ended = True
-                        yield item
-                        return
-                    # Preserve even a nonstandard SDK's post-result items.
-                    # They are buffered, never silently discarded.
-                yield item
-            span.set_attribute("autogen.is_error", False)
-            span.set_status(Status(StatusCode.OK))
+                    break
+                count += 1
+                if not ended:
+                    record_result(span, item)
+                    from autogen_agentchat.base import Response, TaskResult
+                    if isinstance(item, (Response, TaskResult)):
+                        # Logical result completes tracing, NOT iteration. Some
+                        # on_messages callers return without resuming the stream.
+                        # Leave post-result work suspended until asked to resume.
+                        span.set_attribute("autogen.is_error", False)
+                        span.set_status(Status(StatusCode.OK))
+                        finish()
+                try:
+                    sent = yield item
+                except BaseException as error:
+                    # This includes GeneratorExit: forwarding the injection lets
+                    # the SDK catch it for athrow(), while Python's aclose()
+                    # still enforces its native "must not yield" rule.
+                    if isinstance(error, GeneratorExit) and not ended:
+                        span.set_attribute("autogen.stream.closed_early", True)
+                    operation, values = stream.athrow, (error,)
+                else:
+                    operation, values = (stream.__anext__, ()) if sent is None else (stream.asend, (sent,))
         except GeneratorExit:
             if not ended:
                 span.set_attribute("autogen.stream.closed_early", True)
             raise
         except BaseException as error:
-            _record_error(span, error)
+            if not ended:
+                _record_error(span, error)
             raise
         finally:
             try:
                 if stream is not None and hasattr(stream, "aclose"):
-                    with trace_api.use_span(span, end_on_exit=False, record_exception=False,
-                                            set_status_on_exception=False):
-                        await stream.aclose()
+                    await advance(stream.aclose)
             finally:
-                if not ended:
-                    span.set_attribute("autogen.stream.message_count", count)
-                    span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
-                    span.end()
+                finish()
     return stream_wrapper
 
 
-def wrap_agent_on_messages(original_method: Callable, tracer: trace_api.Tracer) -> Callable:
+def wrap_agent_on_messages(original_method: Callable, tracer: trace_api.Tracer, config=None) -> Callable:
+    config = config or TraceConfig()
     @functools.wraps(original_method)
     async def async_wrapper(self, *args, **kwargs):
         messages = kwargs.get("messages", args[0] if args else None)
         start_time = time.time()
         with tracer.start_as_current_span(
             f"{AGENT_ON_MESSAGES_SPAN_NAME}.{getattr(self, 'name', 'agent')}",
-            kind=SpanKind.INTERNAL, attributes=_agent_attributes(self, messages),
+            kind=SpanKind.INTERNAL, attributes=_agent_attributes(self, messages, config),
             record_exception=False, set_status_on_exception=False,
         ) as span:
             try:
                 result = await original_method(self, *args, **kwargs)
-                _record_agent_result(span, result)
+                _record_agent_result(span, result, config)
                 span.set_attribute("autogen.is_error", False)
                 span.set_status(Status(StatusCode.OK))
                 return result
@@ -371,21 +394,23 @@ def wrap_agent_on_messages(original_method: Callable, tracer: trace_api.Tracer) 
     return async_wrapper
 
 
-def wrap_agent_on_messages_stream(original_method: Callable, tracer: trace_api.Tracer) -> Callable:
+def wrap_agent_on_messages_stream(original_method: Callable, tracer: trace_api.Tracer, config=None) -> Callable:
+    config = config or TraceConfig()
     return _wrap_stream(
         original_method, tracer,
         lambda agent: f"autogen.agent.on_messages_stream.{getattr(agent, 'name', 'agent')}",
-        lambda agent, args, kwargs: _agent_attributes(agent, kwargs.get("messages", args[0] if args else None)),
-        _record_agent_result, SpanKind.INTERNAL,
+        lambda agent, args, kwargs: _agent_attributes(agent, kwargs.get("messages", args[0] if args else None), config),
+        lambda span, result: _record_agent_result(span, result, config), SpanKind.INTERNAL,
     )
 
 
-def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_name: str = "run") -> Callable:
+def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_name: str = "run", config=None) -> Callable:
+    config = config or TraceConfig()
     if method_name == "run_stream":
         return _wrap_stream(
             original_method, tracer,
             lambda team: f"{TEAM_RUN_STREAM_SPAN_NAME}.{type(team).__name__}",
-            lambda team, args, kwargs: _team_attributes(team, kwargs.get("task", args[0] if args else None), method_name),
+            lambda team, args, kwargs: _team_attributes(team, kwargs.get("task", args[0] if args else None), method_name, config),
             _record_team_result, SpanKind.CLIENT,
         )
 
@@ -395,7 +420,7 @@ def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_na
         start_time = time.time()
         with tracer.start_as_current_span(
             f"{TEAM_RUN_SPAN_NAME}.{type(self).__name__}", kind=SpanKind.CLIENT,
-            attributes=_team_attributes(self, task, method_name),
+            attributes=_team_attributes(self, task, method_name, config),
             record_exception=False, set_status_on_exception=False,
         ) as span:
             try:

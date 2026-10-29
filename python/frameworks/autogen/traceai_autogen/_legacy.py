@@ -4,6 +4,7 @@ import functools
 import inspect
 import json
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import SpanAttributes
 from opentelemetry.trace import Status, StatusCode
 
@@ -15,9 +16,25 @@ def safe_json_dumps(value):
         return json.dumps(str(value))
 
 
-def wrap_legacy(original, tracer, method):
+def _history(agent, peer):
+    # Read through the public conversation view without creating a defaultdict
+    # entry, changing messages, or injecting a messages argument into the SDK.
+    histories = getattr(agent, "chat_messages", None)
+    return histories.get(peer) if histories is not None else None
+
+
+def wrap_legacy(original, tracer, method, config=None):
     # Bind for observation only: never rewrite, drop or inject SDK arguments.
     signature = inspect.signature(original)
+    config = config or TraceConfig()
+    # Older published core releases mask I/O but not error events/status. Apply
+    # the same derived error-detail policy here without requiring a core upgrade.
+    hide_error_details = getattr(config, "hide_error_details", None)
+    if hide_error_details is None:
+        hide_error_details = any(getattr(config, flag, False) for flag in (
+            "hide_inputs", "hide_outputs", "hide_input_messages", "hide_output_messages",
+            "hide_input_text", "hide_output_text",
+        ))
 
     def observe(agent, args, kwargs):
         try:
@@ -33,6 +50,8 @@ def wrap_legacy(original, tracer, method):
             value = bound.get("message", extras.get("message"))
         else:
             value = bound.get("messages")
+            if value is None:
+                value = _history(agent, bound.get("sender"))
         attributes = {
             SpanAttributes.GEN_AI_SPAN_KIND: "TOOL" if method.endswith("execute_function") else "AGENT",
             SpanAttributes.INPUT_VALUE: safe_json_dumps(value),
@@ -42,31 +61,48 @@ def wrap_legacy(original, tracer, method):
         if method.endswith("execute_function"):
             name = value.get("name", "unknown") if isinstance(value, dict) else str(value)
             attributes[SpanAttributes.GEN_AI_TOOL_NAME] = name
-        return attributes
+        return attributes, bound
 
-    def finish(span, result):
+    def finish(span, result, agent, bound):
         history = getattr(result, "chat_history", None)
+        if result is None and method.endswith("initiate_chat"):
+            # pyautogen 0.2.0 has no ChatResult return, but both peers retain the
+            # completed conversation. Observe the initiating agent's peer view.
+            history = _history(agent, bound.get("recipient"))
         output = history[-1].get("content") if history else result
         span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(output))
         span.set_attribute(SpanAttributes.OUTPUT_MIME_TYPE, "application/json")
-        span.set_status(Status(StatusCode.OK))
+        if (method.endswith("execute_function") and isinstance(result, tuple)
+                and len(result) == 2 and result[0] is False):
+            # The SDK catches missing functions, bad arguments and user function
+            # exceptions and returns a failure tuple instead of raising. Record
+            # the diagnostic through FITracer's error policy; never raise it or
+            # replace the application's original return value.
+            payload = result[1]
+            diagnostic = str(payload.get("content", "Function execution failed")) if isinstance(payload, dict) else str(payload)
+            span.set_attribute("autogen.is_error", True)
+            span.set_status(Status(StatusCode.ERROR, None if hide_error_details else diagnostic))
+            if hide_error_details:
+                span.add_event("exception", {"exception.type": "RuntimeError"})
+            else:
+                span.record_exception(RuntimeError(diagnostic))
+        else:
+            span.set_status(Status(StatusCode.OK))
 
     @functools.wraps(original)
     def sync_wrapper(self, *args, **kwargs):
-        with tracer.start_as_current_span(
-            f"autogen.{method}", attributes=observe(self, args, kwargs)
-        ) as span:
+        attributes, bound = observe(self, args, kwargs)
+        with tracer.start_as_current_span(f"autogen.{method}", attributes=attributes) as span:
             result = original(self, *args, **kwargs)
-            finish(span, result)
+            finish(span, result, self, bound)
             return result
 
     @functools.wraps(original)
     async def async_wrapper(self, *args, **kwargs):
-        with tracer.start_as_current_span(
-            f"autogen.{method}", attributes=observe(self, args, kwargs)
-        ) as span:
+        attributes, bound = observe(self, args, kwargs)
+        with tracer.start_as_current_span(f"autogen.{method}", attributes=attributes) as span:
             result = await original(self, *args, **kwargs)
-            finish(span, result)
+            finish(span, result, self, bound)
             return result
 
     return async_wrapper if inspect.iscoroutinefunction(original) else sync_wrapper

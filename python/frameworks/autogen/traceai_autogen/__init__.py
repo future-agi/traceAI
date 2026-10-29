@@ -92,7 +92,7 @@ class AutogenInstrumentor(BaseInstrumentor):
             for method in ("generate_reply", "initiate_chat", "execute_function",
                            "a_generate_reply", "a_initiate_chat", "a_execute_function"):
                 self._patch(legacy, method, lambda original, method=method:
-                            wrap_legacy(original, self._tracer, method))
+                            wrap_legacy(original, self._tracer, method, config))
 
         try:
             agents = import_module(_MODULE_V04_AGENTS)
@@ -100,10 +100,10 @@ class AutogenInstrumentor(BaseInstrumentor):
                 if not isinstance(cls, type) or not issubclass(cls, agents.BaseChatAgent):
                     continue
                 self._patch(cls, "on_messages",
-                            lambda original: wrap_agent_on_messages(original, self._tracer),
+                            lambda original: wrap_agent_on_messages(original, self._tracer, config),
                             self._v04_original_on_messages)
                 self._patch(cls, "on_messages_stream",
-                            lambda original: wrap_agent_on_messages_stream(original, self._tracer))
+                            lambda original: wrap_agent_on_messages_stream(original, self._tracer, config))
         except ImportError:
             logger.debug("AutoGen AgentChat agents not available")
 
@@ -115,10 +115,10 @@ class AutogenInstrumentor(BaseInstrumentor):
                 if not isinstance(cls, type):
                     continue
                 self._patch(cls, "run",
-                            lambda original: wrap_team_run(original, self._tracer, "run"),
+                            lambda original: wrap_team_run(original, self._tracer, "run", config),
                             self._v04_original_team_run)
                 self._patch(cls, "run_stream",
-                            lambda original: wrap_team_run(original, self._tracer, "run_stream"),
+                            lambda original: wrap_team_run(original, self._tracer, "run_stream", config),
                             self._v04_original_team_run_stream)
         except ImportError:
             logger.debug("AutoGen AgentChat teams not available")
