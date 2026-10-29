@@ -3,13 +3,11 @@
   "version": "0.1.0",
   "description": "OpenTelemetry instrumentation for Guardrails AI",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
-  "esnext": "./dist/esnext/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },

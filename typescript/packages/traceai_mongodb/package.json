@@ -3,12 +3,11 @@
   "version": "0.1.0",
   "description": "TraceAI instrumentation for MongoDB Atlas Vector Search",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },
