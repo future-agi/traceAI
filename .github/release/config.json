@@ -3,5 +3,24 @@
   "skip": {
     "traceai": "the PyPI name traceai belongs to another publisher; the package has no registry name yet",
     "futureagi-hermes-plugin": "Hermes plugin dependency manifest, explicitly not a buildable distribution"
-  }
+  },
+  "_pypi_bootstrap_comment": "PyPI allows only three pending trusted publishers per organization, so these first-time projects are created by their first upload with the PYPI_BOOTSTRAP_TOKEN secret instead. Only a package in this list that has never been published uses the token. After the first release: add each project to the futureagi organization, add its trusted publisher (release.yml, blank environment), delete the token on PyPI and the secret, and empty this list.",
+  "pypi_bootstrap_token": [
+    "traceAI-ag2",
+    "traceAI-discoveryengine",
+    "traceAI-elevenlabs-agents",
+    "traceAI-exa",
+    "traceAI-firecrawl",
+    "traceAI-google-genai-live",
+    "traceAI-hermes-agent",
+    "traceAI-mcp-use",
+    "traceAI-minimax",
+    "traceAI-openai-realtime",
+    "traceAI-parallel",
+    "traceAI-replicate",
+    "traceAI-semantic-kernel",
+    "traceAI-tavily",
+    "traceAI-typesafe",
+    "traceAI-voyage"
+  ]
 }
