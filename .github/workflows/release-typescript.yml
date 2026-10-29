@@ -1,0 +1,133 @@
+# Called by release.yml for a set of TypeScript packages (one job per package). Installs the
+# workspace, builds the package with its workspace dependencies, packs it, installs the tarball
+# in a clean project and loads it (CommonJS and ESM), then (when `publish` is true) publishes to
+# npm with provenance, waits for the version to be served, tags the commit and creates the GitHub
+# release from the package's CHANGELOG. See release.yml for the whole picture.
+name: Release (TypeScript packages)
+
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: JSON array of planner entries ({name, version, dir, tag, changelog, ...})
+        type: string
+        required: true
+      publish:
+        description: Publish to npm, tag and create the GitHub release (false = build and check only)
+        type: boolean
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package:
+    name: ${{ matrix.name }} ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write   # the tag and the GitHub release
+      id-token: write   # npm provenance
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.packages) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      DIR: ${{ matrix.dir }}
+      TAG: ${{ matrix.tag }}
+      CHANGELOG: ${{ matrix.changelog }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Where the distributions go
+        run: echo "DIST=$RUNNER_TEMP/dist" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install the workspace
+        working-directory: typescript
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: The version in package.json is the planned one
+        run: |
+          got=$(node -p "require('./$DIR/package.json').version")
+          [ "$got" = "$VERSION" ] || { echo "::error::$DIR/package.json says $got, the plan says $VERSION"; exit 1; }
+
+      - name: Build the package and the workspace packages it depends on
+        working-directory: typescript
+        run: pnpm --filter "${NAME}..." run build
+
+      - name: Pack
+        working-directory: typescript
+        run: |
+          mkdir -p "$DIST"
+          pnpm --filter "$NAME" pack --pack-destination "$DIST"
+          ls -l "$DIST"
+
+      - name: Install the tarball in a clean project and load it
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir smoke && cd smoke && npm init -y > /dev/null
+          npm install --no-audit --no-fund "$DIST"/*.tgz
+          node -e "const m = require(process.env.NAME); console.log('require ok:', Object.keys(m).length, 'exports')"
+          node --input-type=module -e "import(process.env.NAME).then((m) => console.log('import ok:', Object.keys(m).length, 'exports'))"
+          got=$(node -p "require('./node_modules/$NAME/package.json').version")
+          [ "$got" = "$VERSION" ] || { echo "::error::installed $NAME is $got, expected $VERSION"; exit 1; }
+
+      - name: Keep the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.tag }}
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+      - name: Not publishing
+        if: inputs.publish != true
+        run: echo "::notice title=${{ matrix.name }} ${{ matrix.version }} not published::built and checked only (publishing is off or this is a dry run)"
+
+      - name: Publish to npm
+        if: inputs.publish
+        working-directory: typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm --filter "$NAME" publish --no-git-checks --access public --provenance
+
+      - name: Wait until npm serves the version
+        if: inputs.publish
+        run: |
+          for attempt in $(seq 1 20); do
+            if [ "$(npm view "$NAME@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+              echo "$NAME@$VERSION is on npm"
+              exit 0
+            fi
+            echo "attempt $attempt: not served yet"
+            sleep 30
+          done
+          echo "::error title=$NAME $VERSION not on npm::published, but the registry did not serve it after 10 minutes"
+          exit 1
+
+      - name: Tag and create the GitHub release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          python3 .github/release/release_notes.py "$NAME" "$VERSION" ${CHANGELOG:+--changelog "$CHANGELOG"} \
+            --install "npm install $NAME@$VERSION" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$NAME $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "$DIST"/*
+          echo "- [$NAME $VERSION](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/$TAG) published to npm" >> "$GITHUB_STEP_SUMMARY"
