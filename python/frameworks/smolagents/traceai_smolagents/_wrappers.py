@@ -230,21 +230,37 @@ class _StepWrapper:
                     # the iterator. It belongs to the producer's Step too.
                     token = context_api.attach(producer_context)
                     try:
-                        iterator = wrapped(*args, **kwargs)
+                        iterator = iter(wrapped(*args, **kwargs))
                     finally:
                         producer_context = context_api.get_current()
                         context_api.detach(token)
-                    advance, advance_args = iterator.__next__, ()
+                    value, thrown = None, None
                     while True:
                         # Resume the producer's latest context, including any
                         # still-open child span or attached values at its yield.
-                        # The consumer retains its own unrelated context.
+                        # Protocol lookups belong to the producer as well.
                         token = context_api.attach(producer_context)
                         try:
-                            item = advance(*advance_args)
-                        except StopIteration as stopped:
-                            finish(span, stopped.value)
-                            return stopped.value
+                            if thrown is not None:
+                                try:
+                                    advance = iterator.throw
+                                except AttributeError:
+                                    # Like yield from, an iterator without throw
+                                    # propagates the consumer's original error.
+                                    raise thrown[1]
+                                advance_args = thrown
+                            elif value is None:
+                                # Unwrapping the callable does not prove that its
+                                # decorator returned a generator. next/send(None)
+                                # must work for ordinary iterators such as map.
+                                advance, advance_args = next, (iterator,)
+                            else:
+                                advance, advance_args = iterator.send, (value,)
+                            try:
+                                item = advance(*advance_args)
+                            except StopIteration as stopped:
+                                finish(span, stopped.value)
+                                return stopped.value
                         finally:
                             producer_context = context_api.get_current()
                             context_api.detach(token)
@@ -254,14 +270,19 @@ class _StepWrapper:
                         except GeneratorExit:
                             token = context_api.attach(producer_context)
                             try:
-                                iterator.close()
+                                try:
+                                    close = iterator.close
+                                except AttributeError:
+                                    pass
+                                else:
+                                    close()
                             finally:
                                 context_api.detach(token)
                             raise
                         except BaseException:
-                            advance, advance_args = iterator.throw, sys.exc_info()
+                            thrown = sys.exc_info()
                         else:
-                            advance, advance_args = iterator.send, (value,)
+                            thrown = None
                 except GeneratorExit:
                     span.set_status(trace_api.StatusCode.OK)
                     raise
