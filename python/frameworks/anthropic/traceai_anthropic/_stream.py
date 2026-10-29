@@ -1,3 +1,4 @@
+import inspect
 from collections import defaultdict
 from copy import deepcopy
 from typing import (
@@ -42,69 +43,136 @@ if TYPE_CHECKING:
 
 
 class _Stream(ObjectProxy):  # type: ignore
-    __slots__ = (
-        "_response_accumulator",
-        "_with_span",
-        "_is_finished",
-    )
+    __slots__ = ("_response_accumulator", "_with_span")
 
-    def __init__(
-        self,
-        stream: "Stream[Completion]",
-        with_span: _WithSpan,
-    ) -> None:
+    def __init__(self, stream, with_span: _WithSpan) -> None:
         super().__init__(stream)
         self._response_accumulator = _ResponseAccumulator()
         self._with_span = with_span
 
-    def __iter__(self) -> Iterator["Completion"]:
-        try:
-            for item in self.__wrapped__:
-                self._response_accumulator.process_chunk(item)
-                yield item
-        except Exception as exception:
-            status = trace_api.Status(
-                status_code=trace_api.StatusCode.ERROR,
-                description=f"{type(exception).__name__}: {exception}",
-            )
-            self._with_span.record_exception(exception)
-            self._finish_tracing(status=status)
-            raise
-        status = trace_api.Status(
-            status_code=trace_api.StatusCode.OK,
-        )
-        self._finish_tracing(status=status)
+    def _error(self, exception: BaseException) -> None:
+        if self._with_span.is_finished:
+            return
+        self._with_span.record_exception(exception)
+        self._finish_tracing(trace_api.Status(trace_api.StatusCode.ERROR))
 
-    async def __aiter__(self) -> AsyncIterator["Completion"]:
-        try:
-            async for item in self.__wrapped__:
-                self._response_accumulator.process_chunk(item)
-                yield item
-        except Exception as exception:
-            status = trace_api.Status(
-                status_code=trace_api.StatusCode.ERROR,
-                description=f"{type(exception).__name__}: {exception}",
-            )
-            self._with_span.record_exception(exception)
-            self._finish_tracing(status=status)
-            raise
-        # completed without exception
-        status = trace_api.Status(
-            status_code=trace_api.StatusCode.OK,
-        )
-        self._finish_tracing(status=status)
+    def __iter__(self):
+        # SDK Stream is its own iterator. A generator here has an independent
+        # lifetime: next(iter(stream)) disposes that temporary generator without
+        # closing the still-usable SDK stream. Only __next__ exhaustion/error or
+        # explicit stream close/context exit may finish the operation span.
+        return self
 
-    def _finish_tracing(
-        self,
-        status: Optional[trace_api.Status] = None,
-    ) -> None:
-        _finish_tracing(
-            with_span=self._with_span,
-            has_attributes=_ResponseExtractor(
-                response_accumulator=self._response_accumulator
-            ),
-            status=status,
-        )
+    def __next__(self):
+        try:
+            item = next(self.__wrapped__)
+        except StopIteration:
+            self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+            raise
+        except BaseException as exception:
+            self._error(exception)
+            raise
+        try:
+            self._response_accumulator.process_chunk(item)
+        except BaseException as exception:
+            # An accumulator failure is terminal for this advance too. Finish
+            # ERROR now, not OK when the caller subsequently closes the stream.
+            self._error(exception)
+            raise
+        return item
+
+    def __aiter__(self):
+        # As with sync iteration, abandoning an iterator is not an SDK close.
+        # Cancellation raised by an actual advance is handled in __anext__.
+        return self
+
+    async def __anext__(self):
+        try:
+            item = await self.__wrapped__.__anext__()
+        except StopAsyncIteration:
+            self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+            raise
+        except BaseException as exception:
+            self._error(exception)
+            raise
+        try:
+            self._response_accumulator.process_chunk(item)
+        except BaseException as exception:
+            # An accumulator failure is terminal for this advance too. Finish
+            # ERROR now, not OK when the caller subsequently closes the stream.
+            self._error(exception)
+            raise
+        return item
+
+    def close(self):
+        # Historical AsyncStream calls its async method close(), not aclose().
+        try:
+            result = self.__wrapped__.close()
+        except BaseException as exception:
+            self._error(exception)
+            raise
+        if inspect.isawaitable(result):
+            return self._await_close(result)
+        self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+        return result
+
+    async def _await_close(self, result):
+        try:
+            value = await result
+        except BaseException as exception:
+            self._error(exception)
+            raise
+        self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+        return value
+
+    async def aclose(self):
+        method = getattr(self.__wrapped__, "aclose", None) or self.__wrapped__.close
+        try:
+            result = method()
+            if inspect.isawaitable(result):
+                result = await result
+        except BaseException as exception:
+            self._error(exception)
+            raise
+        self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+        return result
+
+    def __enter__(self):
+        self.__wrapped__.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            return self.__wrapped__.__exit__(exc_type, exc, traceback)
+        except BaseException as exception:
+            self._error(exception)
+            raise
+        finally:
+            if exc is not None:
+                self._error(exc)
+            else:
+                self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+
+    async def __aenter__(self):
+        await self.__wrapped__.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        try:
+            return await self.__wrapped__.__aexit__(exc_type, exc, traceback)
+        except BaseException as exception:
+            self._error(exception)
+            raise
+        finally:
+            if exc is not None:
+                self._error(exc)
+            else:
+                self._finish_tracing(trace_api.Status(trace_api.StatusCode.OK))
+
+    def _finish_tracing(self, status=None) -> None:
+        if not self._with_span.is_finished:
+            _finish_tracing(self._with_span,
+                _ResponseExtractor(self._response_accumulator), status)
 
 
 class _ResponseAccumulator:
@@ -159,83 +227,15 @@ class _ResponseExtractor:
             yield SpanAttributes.GEN_AI_OUTPUT_MESSAGES, completion
 
 
-class _MessagesStream(ObjectProxy):  # type: ignore
-    __slots__ = (
-        "_response_accumulator",
-        "_with_span",
-        "_is_finished",
-    )
-
-    def __init__(
-        self,
-        stream: "Stream[RawMessageStreamEvent]",
-        with_span: _WithSpan,
-    ) -> None:
-        super().__init__(stream)
+class _MessagesStream(_Stream):
+    def __init__(self, stream, with_span: _WithSpan) -> None:
+        super().__init__(stream, with_span)
         self._response_accumulator = _MessageResponseAccumulator()
-        self._with_span = with_span
 
-    def __iter__(self) -> Iterator["RawMessageStreamEvent"]:
-        try:
-            for item in self.__wrapped__:
-                self._response_accumulator.process_chunk(item)
-                yield item
-        except Exception as exception:
-            status = trace_api.Status(
-                status_code=trace_api.StatusCode.ERROR,
-                description=f"{type(exception).__name__}: {exception}",
-            )
-            self._with_span.record_exception(exception)
-            self._finish_tracing(status=status)
-            raise
-        status = trace_api.Status(
-            status_code=trace_api.StatusCode.OK,
-        )
-        self._finish_tracing(status=status)
-
-    async def __aiter__(self) -> AsyncIterator["RawMessageStreamEvent"]:
-        try:
-            async for item in self.__wrapped__:
-                self._response_accumulator.process_chunk(item)
-                yield item
-        except Exception as exception:
-            status = trace_api.Status(
-                status_code=trace_api.StatusCode.ERROR,
-                description=f"{type(exception).__name__}: {exception}",
-            )
-            self._with_span.record_exception(exception)
-            self._finish_tracing(status=status)
-            raise
-        # completed without exception
-        status = trace_api.Status(
-            status_code=trace_api.StatusCode.OK,
-        )
-        self._finish_tracing(status=status)
-
-    async def aclose(self):
-        await self.__wrapped__.aclose()
-        if not self._is_finished:
-            self._is_finished = True
-            status = trace_api.Status(status_code=trace_api.StatusCode.OK)
-            self._finish_tracing(status=status)
-
-    def __del__(self):
-        if not getattr(self, "_is_finished", False):
-            self._is_finished = True
-            status = trace_api.Status(status_code=trace_api.StatusCode.OK)
-            self._finish_tracing(status=status)
-
-    def _finish_tracing(
-        self,
-        status: Optional[trace_api.Status] = None,
-    ) -> None:
-        _finish_tracing(
-            with_span=self._with_span,
-            has_attributes=_MessageResponseExtractor(
-                response_accumulator=self._response_accumulator
-            ),
-            status=status,
-        )
+    def _finish_tracing(self, status=None) -> None:
+        if not self._with_span.is_finished:
+            _finish_tracing(self._with_span,
+                _MessageResponseExtractor(self._response_accumulator), status)
 
 
 class _MessageResponseAccumulator:
@@ -297,7 +297,10 @@ class _MessageResponseAccumulator:
         elif isinstance(chunk, RawContentBlockStartEvent):
             self._current_content_block_type = chunk.content_block
         elif isinstance(chunk, RawContentBlockDeltaEvent):
-            if isinstance(self._current_content_block_type, TextBlock):
+            # Citation/signature/thinking deltas are valid SDK events, not text
+            # or partial tool JSON. Pass them through unchanged without reading
+            # fields that belong only to another delta variant.
+            if isinstance(self._current_content_block_type, TextBlock) and chunk.delta.type == "text_delta":
                 value = {
                     "messages": {
                         "index": str(self._current_message_idx),
@@ -309,7 +312,7 @@ class _MessageResponseAccumulator:
                     }
                 }
                 self._values += value
-            elif isinstance(self._current_content_block_type, ToolUseBlock):
+            elif isinstance(self._current_content_block_type, ToolUseBlock) and chunk.delta.type == "input_json_delta":
                 value = {
                     "messages": {
                         "index": str(self._current_message_idx),

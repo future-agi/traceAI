@@ -35,9 +35,10 @@ Each package entry carries ``name``, ``dir``, ``backend`` ("poetry" or "hatch"),
 (the ``python/tests/test_framework_*.py`` files that belong to the package),
 ``known_broken`` and ``known_broken_reason`` (from ``.github/python-tests-known-broken.txt``:
 one ``<package dir name> | <reason>`` line per package; ``#`` comments and blank lines are
-ignored; the reason is "" for a package that is not listed). The workflow lets a listed
-package's tests fail without failing the check, fails when a listed package passes, and fails
-on any failed install, listed or not.
+ignored; the reason is "" for a package that is not listed). These fields are provenance
+only: package-wide failure waivers are forbidden. Every entry also joins the canonical
+compatibility registry's integration_id, qualification and exception_ids. The verdict
+consumes exact JUnit outcomes, signatures and the actual upstream/runtime environment.
 
 Paths from git are used exactly as written (stdin lines are stripped). Standard library only,
 plus git for --diff and --all. It fails loudly (non-zero exit, message on stderr) on a
@@ -53,6 +54,7 @@ job counts as green, so a plan of 0 packages from a broken input would pass unse
 """
 
 import argparse
+import importlib.util
 import json
 import re
 import subprocess
@@ -71,7 +73,7 @@ CI_FILES = (
     ".github/workflows/python-tests.yml",
     KNOWN_BROKEN_FILE,
 )
-CI_PREFIXES = (".github/scripts/",)
+CI_PREFIXES = (".github/scripts/", ".github/compat/")
 # Directories under python/frameworks/ that are not packages and need no pyproject.toml.
 NON_PACKAGE_DIRS = ("tests_e2e",)
 CORE_PATHS = ("python/pyproject.toml", "python/poetry.lock")
@@ -210,9 +212,38 @@ def package_for_test_file(rel_path, packages):
     return name
 
 
+def load_registry(root):
+    spec = importlib.util.spec_from_file_location('compat_validation', REPO_ROOT / '.github/compat/validate.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        return module.load_registry(root)
+    except (ValueError, OSError) as exc:
+        raise PlanError(f'compatibility registry: {exc}') from exc
+
+
 def plan(changed, root=REPO_ROOT):
     changed = [path for path in changed if path]
     packages = discover_packages(root)
+    registry = load_registry(root)
+    by_dir = {target['package_dir']: target for target in registry['integrations']}
+    for package in packages.values():
+        target = by_dir.get(package['dir'])
+        if target is None:
+            raise PlanError(f'{package["dir"]}: missing compatibility registry entry')
+        contract = target['contract_test'] or {}
+        paths = contract.get('paths', [])
+        # Real-SDK pilot contracts can live inside their package. Their location
+        # does not relax the registered loopback-only boundary.
+        isolated = [p for p in paths if contract.get('network') == 'loopback-only' and
+                    (target['canary']['pilot'] or p.startswith('.github/compat/contracts/'))]
+        own_files = sorted({p.relative_to(root).as_posix()
+                            for p in (root / package['dir'] / 'tests').rglob('*.py')
+                            if p.name.startswith('test_') or p.name.endswith('_test.py')})
+        own_paths = [p for p in own_files if not any(p == c or p.startswith(c + '/') for c in isolated)]
+        package.update(integration_id=target['id'], qualification=target['qualification']['status'],
+                       exception_ids=[ex['id'] for ex in target['exceptions']],
+                       contract_tests=isolated, own_test_paths=own_paths, own_tests=bool(own_paths))
 
     # Every test_framework file on disk belongs to a package (and fails loudly if not),
     # whether or not this change touches it.

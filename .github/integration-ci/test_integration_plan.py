@@ -4,6 +4,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+import json
+from unittest import mock
+import integration_plan
 
 from integration_plan import TARGETS, WORKFLOW, PlanError, plan, changed_paths
 
@@ -13,6 +16,10 @@ class IntegrationPlanTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.registry = json.loads((integration_plan.ROOT / '.github/compat/registry.json').read_text())
+        patcher = mock.patch.object(integration_plan, 'load_registry', return_value=self.registry)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tests = {}
         for name, language, directory, manifest in TARGETS:
             package = self.root / directory
@@ -26,7 +33,8 @@ class IntegrationPlanTests(unittest.TestCase):
             self.tests[name] = test_path
 
     def names(self, paths, **kwargs):
-        return {p['name'] for matrix in plan(paths, self.root, **kwargs).values() for p in matrix}
+        result = plan(paths, self.root, **kwargs)
+        return {p['name'] for language in ['typescript', 'go', 'java'] for p in result[language]}
 
     def test_every_owned_path_selects_its_own_target(self):
         for name, _, directory, manifest in TARGETS:
@@ -59,8 +67,8 @@ class IntegrationPlanTests(unittest.TestCase):
     def test_target_not_yet_landed_is_ignored(self):
         for _, _, directory, _ in TARGETS[1:]:
             shutil.rmtree(self.root / directory)
-        self.assertEqual(self.names([WORKFLOW]), {'codex-sdk'})
-        self.assertEqual(self.names(['go/a2a/interceptor.go']), set())
+        self.assertEqual(self.names([WORKFLOW]), {TARGETS[0][0]})
+        self.assertEqual(self.names([TARGETS[-1][2] + '/changed']), set())
 
     def test_entirely_deleted_target_is_ignored(self):
         shutil.rmtree(self.root / 'go/openai')
@@ -78,6 +86,16 @@ class IntegrationPlanTests(unittest.TestCase):
                 with self.assertRaisesRegex(PlanError, 'no tests'):
                     plan([WORKFLOW], self.root)
                 self.tests[name].touch()
+
+    def test_registry_has_no_second_inventory_and_surfaces_unexecuted_dependants(self):
+        result = plan(['typescript/packages/fi-core/src/index.ts'], self.root)
+        gaps = {t['integration_id']: t for t in result['coverage_gaps']}
+        self.assertIn('typescript-openai', gaps)
+        self.assertEqual(gaps['typescript-openai']['execution'], 'not_tested')
+        self.assertNotIn('typescript-codex-sdk', gaps)
+        self.assertEqual(result['typescript'][0]['qualification'], 'unqualified')
+        result = plan(['.github/compat/registry.json'], self.root)
+        self.assertEqual(sum(len(result[k]) for k in ['typescript', 'go', 'java']), len(TARGETS))
 
     def test_duplicate_paths_do_not_duplicate_jobs(self):
         result = plan(['go/openai/go.mod'] * 5, self.root)

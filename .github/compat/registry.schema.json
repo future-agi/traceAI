@@ -1,0 +1,657 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/future-agi/traceAI/blob/dev/.github/compat/registry.schema.json",
+  "title": "Compatibility registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "inventory_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cooldown_hours": {
+          "const": 72
+        },
+        "max_exception_days": {
+          "const": 14
+        },
+        "default_branch": {
+          "const": "main"
+        },
+        "source_branch": {
+          "const": "dev"
+        },
+        "pilot_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "owner",
+        "cooldown_hours",
+        "max_exception_days",
+        "default_branch",
+        "source_branch",
+        "pilot_ids"
+      ]
+    },
+    "integrations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/integration"
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "inventory_revision",
+    "defaults",
+    "integrations"
+  ],
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "metadata",
+            "runtime",
+            "dev",
+            "optional",
+            "inferred"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "key",
+        "kind"
+      ]
+    },
+    "exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]+$"
+        },
+        "test_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[^*?\\[\\]]+::[^*?]+$"
+          }
+        },
+        "upstream_constraints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "specifier": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "name",
+              "specifier"
+            ]
+          },
+          "minItems": 1
+        },
+        "runtime_constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "implementation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "specifier": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "implementation",
+            "specifier"
+          ]
+        },
+        "expected_outcome": {
+          "enum": [
+            "failure",
+            "error"
+          ]
+        },
+        "failure_signature": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issue": {
+          "type": "string",
+          "pattern": "^https://github\\.com/future-agi/traceAI/issues/[1-9][0-9]*$"
+        },
+        "added": {
+          "type": "string",
+          "format": "date"
+        },
+        "expires": {
+          "type": "string",
+          "format": "date"
+        },
+        "exit_criteria": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "test_ids",
+        "upstream_constraints",
+        "runtime_constraints",
+        "expected_outcome",
+        "failure_signature",
+        "owner",
+        "issue",
+        "added",
+        "expires",
+        "exit_criteria"
+      ]
+    },
+    "integration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(python|typescript|go|java|csharp)-[a-z0-9][a-z0-9._-]*$"
+        },
+        "language": {
+          "enum": [
+            "python",
+            "typescript",
+            "go",
+            "java",
+            "csharp"
+          ]
+        },
+        "package_dir": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+        },
+        "distribution": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": [
+            "instrumentation",
+            "core",
+            "umbrella",
+            "example"
+          ]
+        },
+        "upstream": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "enum": [
+                  "primary",
+                  "companion"
+                ]
+              },
+              "declared_range": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "range_source": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+                  },
+                  "key": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "enum": [
+                      "metadata",
+                      "runtime",
+                      "dev",
+                      "optional",
+                      "inferred"
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "key",
+                  "kind"
+                ]
+              },
+              "runtime_range": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runtime_range_source": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+                      },
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "kind": {
+                        "enum": [
+                          "metadata",
+                          "runtime",
+                          "dev",
+                          "optional",
+                          "inferred"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "key",
+                      "kind"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "exact_floor": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "role",
+              "declared_range",
+              "range_source",
+              "runtime_range",
+              "runtime_range_source",
+              "exact_floor"
+            ]
+          },
+          "minItems": 0
+        },
+        "declared_range_source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "enum": [
+                "metadata",
+                "runtime",
+                "dev",
+                "optional",
+                "inferred"
+              ]
+            }
+          },
+          "required": [
+            "path",
+            "key",
+            "kind"
+          ]
+        },
+        "runtimes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "implementation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "declared": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+                },
+                "key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "metadata",
+                    "runtime",
+                    "dev",
+                    "optional",
+                    "inferred"
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "key",
+                "kind"
+              ]
+            },
+            "representative": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 0
+            },
+            "boundaries": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 0
+            }
+          },
+          "required": [
+            "implementation",
+            "declared",
+            "source",
+            "representative",
+            "boundaries"
+          ]
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "pilot_pending",
+                "qualified",
+                "known_broken",
+                "unqualified",
+                "deprecated",
+                "retired"
+              ]
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 0
+            },
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 0
+            }
+          },
+          "required": [
+            "status",
+            "reasons",
+            "evidence"
+          ]
+        },
+        "canary": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "pilot": {
+              "type": "boolean"
+            },
+            "modes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "source",
+                  "published"
+                ]
+              }
+            },
+            "selectors": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "locked",
+                  "floor",
+                  "latest_eligible",
+                  "prerelease",
+                  "historical"
+                ]
+              }
+            }
+          },
+          "required": [
+            "enabled",
+            "pilot",
+            "modes",
+            "selectors"
+          ]
+        },
+        "contract_test": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "cwd": {
+                  "type": "string",
+                  "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+                },
+                "paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+                  },
+                  "minItems": 1
+                },
+                "minimum_executed": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "unexpected_skips": {
+                  "const": "fail"
+                },
+                "network": {
+                  "const": "loopback-only"
+                },
+                "scenarios": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "command",
+                "cwd",
+                "paths",
+                "minimum_executed",
+                "unexpected_skips",
+                "network",
+                "scenarios"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exceptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/exception"
+          },
+          "minItems": 0
+        },
+        "legacy_known_broken_reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "regression_ci": {
+          "type": "boolean",
+          "description": "Explicitly wired into legacy integration-tests.yml; contract presence alone is not execution evidence. Optional, defaults false."
+        }
+      },
+      "required": [
+        "id",
+        "language",
+        "package_dir",
+        "distribution",
+        "role",
+        "upstream",
+        "declared_range_source",
+        "runtimes",
+        "tier",
+        "owner",
+        "qualification",
+        "canary",
+        "contract_test",
+        "exceptions",
+        "legacy_known_broken_reason",
+        "notes"
+      ]
+    }
+  }
+}
