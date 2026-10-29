@@ -42,7 +42,16 @@ Import the BOM once, then add the instrumentation you need:
 </dependencies>
 ```
 
-Without the BOM, specify `<version>1.0.0</version>` on each traceAI dependency. For Spring Boot auto-configuration, use `traceai-spring-boot-starter` instead of `traceai-java-openai`.
+Without the BOM, specify `<version>1.0.0</version>` on each traceAI dependency. For Spring Boot auto-configuration, **add** `traceai-spring-boot-starter` alongside `traceai-java-openai` and the OpenAI SDK shown above:
+
+```xml
+<dependency>
+    <groupId>com.futureagi</groupId>
+    <artifactId>traceai-spring-boot-starter</artifactId>
+</dependency>
+```
+
+The starter configures traceAI and Spring AI; it does not include the direct OpenAI SDK wrapper used in the quickstart. Keep both traceAI dependencies when calling `TracedOpenAIClient`.
 
 ### Gradle
 
@@ -55,7 +64,7 @@ dependencies {
     implementation platform('com.futureagi:traceai-bom:1.0.0')
     implementation 'com.futureagi:traceai-java-openai'
     implementation 'com.openai:openai-java:0.8.0'
-    // Spring Boot applications can instead use:
+    // For Spring Boot auto-configuration, add this as well (do not replace OpenAI):
     // implementation 'com.futureagi:traceai-spring-boot-starter'
 }
 ```
@@ -94,7 +103,9 @@ dependencies {
 }
 ```
 
-Add your provider SDK as in the Central example. To choose another commit, check its [JitPack build status](https://jitpack.io/#future-agi/traceAI) first and replace the commit version. Do not mix Central and JitPack copies of the same instrumentation on one classpath.
+Add your provider SDK as in the Central example. To choose another commit, check its [JitPack build status](https://jitpack.io/#future-agi/traceAI) first and replace the commit version. A successful build is necessary but not sufficient: verify that your external application resolves and compiles against that exact commit. For commits containing this BOM, maintainers can run `python3 -I java/scripts/test_consumers.py --jitpack-version <sha>` from the repository root; it uses a fresh Maven repository and checks both the README and BOM consumers. Do not mix Central and JitPack copies of the same instrumentation on one classpath.
+
+JitPack uses the opt-in `jitpack` Maven profile to install self-contained POMs with resolved dependency management and no parent reference. This avoids JitPack's root-artifact remapping leaving child modules dependent on an unavailable `traceai-java-parent`. Normal builds and the Central `release` profile keep the original `com.futureagi` POMs.
 
 ## Send your first trace
 
@@ -219,7 +230,7 @@ mvn -B -ntp verify
 mvn -B -ntp install
 ```
 
-`verify` runs the SDK reactor's tests. Examples are separate applications, not published modules. A local `install` makes the `com.futureagi` coordinates available for the example commands above.
+`verify` runs the SDK reactor's tests. Examples are separate applications, not published modules. A local `install` makes the `com.futureagi` coordinates available for the example commands above. After installing, run `python3 -I scripts/test_consumers.py` to compile independent applications using the README OpenAI snippet, the additive Spring Boot dependencies, and BOM-managed libraries on the main classpath. CI repeats these checks for both the normal and JitPack POMs.
 
 ### Validate release artifacts without publishing
 

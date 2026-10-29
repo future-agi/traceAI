@@ -3,4 +3,4 @@
 jdk:
   - openjdk21
 install:
-  - mvn -B -ntp -f java/pom.xml -DskipTests install
+  - mvn -B -ntp -f java/pom.xml -P jitpack -DskipTests install
