@@ -225,6 +225,8 @@ class _StepWrapper:
             def stream():
                 span = self._tracer.start_span(span_name, attributes=attributes)
                 producer_context = trace_api.set_span_in_context(span)
+                iterator = advance = close = None
+                advance_args = ()
                 try:
                     # An outer decorator executes eagerly while constructing
                     # the iterator. It belongs to the producer's Step too.
@@ -277,6 +279,7 @@ class _StepWrapper:
                                 else:
                                     close()
                             finally:
+                                producer_context = context_api.get_current()
                                 context_api.detach(token)
                             raise
                         except BaseException:
@@ -291,7 +294,18 @@ class _StepWrapper:
                     span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exc)))
                     raise
                 finally:
-                    span.end()
+                    # Dropping an iterator (e.g. map) with no close method can
+                    # finalize its suspended generator. Release every owned
+                    # protocol reference under the producer's latest context,
+                    # not later when this proxy frame unwinds in the consumer.
+                    token = context_api.attach(producer_context)
+                    try:
+                        close = advance = None
+                        advance_args = ()
+                        iterator = None
+                    finally:
+                        context_api.detach(token)
+                        span.end()
             return stream()
         with self._tracer.start_as_current_span(span_name, attributes=attributes) as span:
             result = wrapped(*args, **kwargs)
