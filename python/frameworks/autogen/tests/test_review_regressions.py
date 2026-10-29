@@ -21,17 +21,23 @@ from .test_sdk_contract import LocalModel, spans
 @pytest.mark.parametrize("team", [False, True])
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("environment", [False, True])
+@pytest.mark.parametrize("policy", ["values", "messages", "text"])
 @pytest.mark.parametrize("hide_inputs,hide_outputs", [(False, False), (True, False), (False, True), (True, True)])
 async def test_real_agentchat_independent_io_privacy(spans, monkeypatch, team, streaming,
-                                                   environment, hide_inputs, hide_outputs):
+                                                   environment, policy, hide_inputs, hide_outputs):
     exporter, provider, instrumentor = spans
     instrumentor.uninstrument()
+    input_flag, output_flag = {
+        "values": ("hide_inputs", "hide_outputs"),
+        "messages": ("hide_input_messages", "hide_output_messages"),
+        "text": ("hide_input_text", "hide_output_text"),
+    }[policy]
     if environment:
-        monkeypatch.setenv("FI_HIDE_INPUTS", str(hide_inputs).lower())
-        monkeypatch.setenv("FI_HIDE_OUTPUTS", str(hide_outputs).lower())
+        monkeypatch.setenv("FI_" + input_flag.upper(), str(hide_inputs).lower())
+        monkeypatch.setenv("FI_" + output_flag.upper(), str(hide_outputs).lower())
         config = TraceConfig()
     else:
-        config = TraceConfig(hide_inputs=hide_inputs, hide_outputs=hide_outputs)
+        config = TraceConfig(**{input_flag: hide_inputs, output_flag: hide_outputs})
     instrumentor.instrument(tracer_provider=provider, config=config)
     message = TextMessage(content="private-input", source="user")
     assistant = AssistantAgent("assistant", model_client=LocalModel())
@@ -64,6 +70,73 @@ async def test_real_agentchat_independent_io_privacy(spans, monkeypatch, team, s
     assert ("private-input" in payload) is not hide_inputs
     assert ("offline reply" in payload) is not hide_outputs
     assert all(span.status.status_code == StatusCode.OK for span in finished if span.name.startswith("autogen."))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("environment", [False, True])
+@pytest.mark.parametrize("flag", [None, "hide_inputs", "hide_outputs", "hide_input_messages",
+                                 "hide_output_messages", "hide_input_text", "hide_output_text"])
+async def test_real_agentchat_error_details_privacy(spans, monkeypatch, team, streaming, environment, flag):
+    exporter, provider, instrumentor = spans
+    failure = ValueError("private-model-diagnostic")
+    message = TextMessage(content="unchanged-task", source="user")
+
+    async def exercise():
+        assistant = AssistantAgent("assistant", model_client=LocalModel(error=failure))
+        with pytest.raises(Exception) as caught:
+            if team:
+                chat = RoundRobinGroupChat([assistant], max_turns=1)
+                if streaming:
+                    async for _ in chat.run_stream(task=message):
+                        pass
+                else:
+                    await chat.run(task=message)
+            elif streaming:
+                async for _ in assistant.on_messages_stream([message], CancellationToken()):
+                    pass
+            else:
+                await assistant.on_messages([message], CancellationToken())
+        assert message.content == "unchanged-task"
+        # Teams wrap model errors in their own RuntimeError. Preserve that SDK
+        # behavior too, rather than forcing the underlying model exception out.
+        assert "private-model-diagnostic" in str(caught.value)
+        return type(caught.value), caught.value is failure
+
+    instrumentor.uninstrument()
+    native = await exercise()
+    if flag and environment:
+        monkeypatch.setenv("FI_" + flag.upper(), "true")
+        config = TraceConfig()
+    else:
+        config = TraceConfig(**({flag: True} if flag else {}))
+    instrumentor.instrument(tracer_provider=provider, config=config)
+    actual = await exercise()
+    assert actual == native
+    if not team:
+        assert actual == (ValueError, True)
+    finished = [s for s in exporter.get_finished_spans() if s.name.startswith("autogen.")]
+    assert finished
+    for span in finished:
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.attributes["autogen.is_error"] is True
+        assert span.attributes["autogen.error.type"] in ("ValueError", "RuntimeError")
+        events = [e for e in span.events if e.name == "exception"]
+        assert len(events) == 1
+        assert events[0].attributes["exception.type"].endswith(span.attributes["autogen.error.type"])
+        payload = span.to_json()
+        assert ("private-model-diagnostic" in payload) is (flag is None)
+        if flag:
+            assert span.status.description is None
+            assert "autogen.error.message" not in span.attributes
+            assert "exception.message" not in events[0].attributes
+            assert "exception.stacktrace" not in events[0].attributes
+        else:
+            assert "private-model-diagnostic" in span.attributes["autogen.error.message"]
+            assert "private-model-diagnostic" in span.status.description
+            assert "private-model-diagnostic" in events[0].attributes["exception.message"]
+        assert span.end_time
 
 
 @pytest.mark.asyncio
@@ -107,9 +180,81 @@ async def test_real_society_delivers_response_before_post_yield_reset(spans, res
                 with pytest.raises(StopAsyncIteration):
                     await resume
             assert trace.get_current_span() is caller
+            finished = [s for s in exporter.get_finished_spans() if s.name.startswith("autogen.")]
+            errors = [s for s in finished if s.status.status_code == StatusCode.ERROR]
+            if reset_failure:
+                assert len(errors) == 1
+                cleanup = errors[0]
+                logical = next(s for s in finished if s.name == "autogen.agent.on_messages_stream.society")
+                assert cleanup.name == logical.name + ".cleanup"
+                assert cleanup.parent.span_id == logical.context.span_id
+                assert [link.context for link in cleanup.links] == [logical.context]
+                assert cleanup.attributes["autogen.error.type"] == "RuntimeError"
+                assert cleanup.status.description == "post-response-reset"
+                events = [e for e in cleanup.events if e.name == "exception"]
+                assert len(events) == 1
+                assert events[0].attributes["exception.message"] == str(failure)
+                assert "RuntimeError: post-response-reset" in events[0].attributes["exception.stacktrace"]
+                assert cleanup.end_time
+            else:
+                assert not errors
+                assert not any(s.name.endswith(".cleanup") for s in finished)
         finally:
             release.set()
             await stream.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["anext", "athrow", "aclose"])
+@pytest.mark.parametrize("hide_details", [False, True])
+async def test_post_result_cleanup_error_is_linked_and_private(spans, operation, hide_details):
+    from types import SimpleNamespace
+    from fi_instrumentation import FITracer
+    from traceai_autogen._v04_wrapper import wrap_agent_on_messages_stream
+    exporter, provider, _ = spans
+    config = TraceConfig(hide_outputs=hide_details)
+    tracer = provider.get_tracer(__name__)
+    failure = RuntimeError("private-cleanup-diagnostic")
+    result = Response(chat_message=TextMessage(content="result", source="assistant"))
+    cleaned = []
+
+    async def original(self):
+        try:
+            yield result
+        finally:
+            cleaned.append(True)
+            raise failure
+
+    wrapped = wrap_agent_on_messages_stream(original, FITracer(tracer, config=config), config)
+    with tracer.start_as_current_span("consumer") as caller:
+        stream = wrapped(SimpleNamespace(name="cleanup-test"))
+        assert await anext(stream) is result
+        assert not cleaned
+        assert trace.get_current_span() is caller
+        logical = next(s for s in exporter.get_finished_spans() if s.name.startswith("autogen."))
+        assert logical.status.status_code == StatusCode.OK
+        with pytest.raises(RuntimeError) as caught:
+            if operation == "anext":
+                await anext(stream)
+            elif operation == "athrow":
+                await stream.athrow(ValueError("injection"))
+            else:
+                await stream.aclose()
+        assert caught.value is failure
+        assert trace.get_current_span() is caller
+        await stream.aclose()
+    assert cleaned == [True]
+    cleanup, = [s for s in exporter.get_finished_spans() if s.name.endswith(".cleanup")]
+    assert cleanup.parent.span_id == logical.context.span_id
+    assert [link.context for link in cleanup.links] == [logical.context]
+    assert cleanup.attributes["autogen.stream.cleanup"] is True
+    assert cleanup.status.status_code == StatusCode.ERROR
+    assert cleanup.attributes["autogen.error.type"] == "RuntimeError"
+    events = [e for e in cleanup.events if e.name == "exception"]
+    assert len(events) == 1
+    assert events[0].attributes["exception.type"].endswith("RuntimeError")
+    assert ("private-cleanup-diagnostic" in cleanup.to_json()) is not hide_details
+    assert cleanup.end_time
 
 
 @pytest.mark.asyncio

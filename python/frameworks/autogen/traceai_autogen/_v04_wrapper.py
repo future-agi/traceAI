@@ -15,7 +15,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from fi_instrumentation import TraceConfig
-from fi_instrumentation.fi_types import SpanAttributes
+from fi_instrumentation.fi_types import MessageAttributes, SpanAttributes
 from opentelemetry import context as context_api, trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
@@ -212,7 +212,7 @@ def _mask_content(config, value, output=False):
     policies apply so a narrower hide-text/messages flag cannot leak via them.
     """
     message_key = (SpanAttributes.GEN_AI_OUTPUT_MESSAGES if output else
-                   SpanAttributes.GEN_AI_INPUT_MESSAGES) + ".0.content"
+                   SpanAttributes.GEN_AI_INPUT_MESSAGES) + ".0." + MessageAttributes.MESSAGE_CONTENT
     masked = config.mask(message_key, value)
     if masked is None:
         return "__REDACTED__"
@@ -280,15 +280,28 @@ def _record_team_result(span, result, config):
             span.set_attribute(f"gen_ai.usage.{key}", value)
 
 
-def _record_error(span, error):
+def _record_error(span, error, config):
+    # Supported published cores predate FITracer's event/status sanitization.
+    # Apply the derived policy locally, respecting explicit overrides on newer
+    # cores, without upgrading the dependency or changing the SDK exception.
+    hide_details = getattr(config, "hide_error_details", None)
+    if hide_details is None:
+        hide_details = any(getattr(config, flag, False) for flag in (
+            "hide_inputs", "hide_outputs", "hide_input_messages", "hide_output_messages",
+            "hide_input_text", "hide_output_text",
+        ))
     span.set_attribute("autogen.is_error", True)
     span.set_attribute("autogen.error.type", type(error).__name__)
-    span.set_attribute("autogen.error.message", str(error))
-    span.set_status(Status(StatusCode.ERROR, str(error)))
-    span.record_exception(error)
+    if hide_details:
+        span.set_status(Status(StatusCode.ERROR))
+        span.add_event("exception", {"exception.type": type(error).__name__})
+    else:
+        span.set_attribute("autogen.error.message", str(error))
+        span.set_status(Status(StatusCode.ERROR, str(error)))
+        span.record_exception(error)
 
 
-def _wrap_stream(original_method, tracer, name, attributes, record_result, kind):
+def _wrap_stream(original_method, tracer, name, attributes, record_result, kind, config):
     @functools.wraps(original_method)
     async def stream_wrapper(self, *args, **kwargs):
         # Remain a true async generator, forwarding each consumer operation once.
@@ -307,6 +320,25 @@ def _wrap_stream(original_method, tracer, name, attributes, record_result, kind)
                 span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
                 span.end()
                 ended = True
+
+        def record_error(error):
+            if not ended:
+                _record_error(span, error, config)
+                return
+            # Convenience on_messages callers may abandon iteration at Response,
+            # so the logical result must already be exported. A later requested
+            # advance/close can still fail: retain that failure on a linked child
+            # rather than mutating an ended span or prefetching SDK cleanup.
+            cleanup = tracer.start_span(
+                name(self) + ".cleanup", kind=SpanKind.INTERNAL,
+                context=trace_api.set_span_in_context(span),
+                links=[trace_api.Link(span.get_span_context())],
+                attributes={"autogen.stream.cleanup": True},
+            )
+            try:
+                _record_error(cleanup, error, config)
+            finally:
+                cleanup.end()
 
         async def advance(operation, *values):
             nonlocal producer_context
@@ -358,13 +390,15 @@ def _wrap_stream(original_method, tracer, name, attributes, record_result, kind)
                 span.set_attribute("autogen.stream.closed_early", True)
             raise
         except BaseException as error:
-            if not ended:
-                _record_error(span, error)
+            record_error(error)
             raise
         finally:
             try:
                 if stream is not None and hasattr(stream, "aclose"):
                     await advance(stream.aclose)
+            except BaseException as error:
+                record_error(error)
+                raise
             finally:
                 finish()
     return stream_wrapper
@@ -388,7 +422,7 @@ def wrap_agent_on_messages(original_method: Callable, tracer: trace_api.Tracer, 
                 span.set_status(Status(StatusCode.OK))
                 return result
             except BaseException as error:
-                _record_error(span, error)
+                _record_error(span, error, config)
                 raise
             finally:
                 span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
@@ -401,7 +435,7 @@ def wrap_agent_on_messages_stream(original_method: Callable, tracer: trace_api.T
         original_method, tracer,
         lambda agent: f"autogen.agent.on_messages_stream.{getattr(agent, 'name', 'agent')}",
         lambda agent, args, kwargs: _agent_attributes(agent, kwargs.get("messages", args[0] if args else None), config),
-        lambda span, result: _record_agent_result(span, result, config), SpanKind.INTERNAL,
+        lambda span, result: _record_agent_result(span, result, config), SpanKind.INTERNAL, config,
     )
 
 
@@ -412,7 +446,7 @@ def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_na
             original_method, tracer,
             lambda team: f"{TEAM_RUN_STREAM_SPAN_NAME}.{type(team).__name__}",
             lambda team, args, kwargs: _team_attributes(team, kwargs.get("task", args[0] if args else None), method_name, config),
-            lambda span, result: _record_team_result(span, result, config), SpanKind.CLIENT,
+            lambda span, result: _record_team_result(span, result, config), SpanKind.CLIENT, config,
         )
 
     @functools.wraps(original_method)
@@ -433,7 +467,7 @@ def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_na
                 span.set_status(Status(StatusCode.OK))
                 return result
             except BaseException as error:
-                _record_error(span, error)
+                _record_error(span, error, config)
                 raise
             finally:
                 span.set_attribute("autogen.duration_ms", (time.time() - start_time) * 1000)
