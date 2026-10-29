@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""Fail-closed reconciliation of immutable attempt artifacts and Actions jobs.
+
+The source registry, frozen plan, installed environment, invocation statuses and
+original JUnit are independent bindings. Artifacts are data, never executable argv.
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import jsonschema
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+from plan import safe_path, sha256, validate_plan, write_json, semantic_validator, bounded_json
+from run_case import empty_case, failure, junit, now, run_header, contract_command, invocation_path
+
+MAX_FILE = 32 * 1024 * 1024
+MAX_TOTAL = 128 * 1024 * 1024
+
+
+def check_tree(root):
+    total = count = 0
+    if root.is_symlink():
+        raise ValueError("Symlinks are forbidden in evidence")
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("Symlinks are forbidden in evidence")
+        if path.is_file():
+            count += 1
+            size = path.stat().st_size
+            if size > MAX_FILE or count > 4096:
+                raise ValueError("Oversized evidence file/count")
+            total += size
+            if total > MAX_TOTAL:
+                raise ValueError("Oversized evidence tree")
+        elif not path.is_dir():
+            raise ValueError("Non-regular evidence file")
+
+
+def validate_case(data, plan, raw, selected, schema, *, independent=False):
+    jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(data)
+    header = data["run"]
+    if header["plan_sha256"] != sha256(raw) or header["source_sha"] != plan["source_sha"] or header["workflow_sha"] != plan["workflow_sha"]:
+        raise ValueError("Source/workflow/plan identity mismatch")
+    expected_ids = [c["case_id"] for c in plan["cases"]]
+    if header["planned_case_ids"] != expected_ids or header["self_test"] != plan["self_test"] or header["cooldown_cutoff"] != plan["cooldown_cutoff"]:
+        raise ValueError("Run planning identity mismatch")
+    if os.environ.get("GITHUB_RUN_ID") and header["run_id"] != os.environ["GITHUB_RUN_ID"]:
+        raise ValueError("Wrong Actions run identity")
+    rows = sorted(data["cases"], key=lambda c: c["attempt"])
+    if not rows or len(rows) > 2 or any(c["case_id"] != selected["case_id"] for c in rows):
+        raise ValueError("Expected one case (at most two preserved attempts)")
+    if independent:
+        if len(rows) != 1 or rows[0]["attempt"] not in (1, 2):
+            raise ValueError("Expected one independent attempt")
+    elif [c["attempt"] for c in rows] != list(range(1, len(rows) + 1)):
+        raise ValueError("Duplicate/missing attempt")
+    for row in rows:
+        if row["source_sha"] != plan["source_sha"] or row["integration_id"] != selected["integration_id"]:
+            raise ValueError("Case source/integration mismatch")
+        if row["requested"] != selected["requested"] or row["selector"] != selected["selector"] or row["mode"] != selected["mode"]:
+            raise ValueError("Requested plan selection changed")
+        identity = selected["runtime_identity"]
+        if any(row["runtime"][k] != identity[k] for k in ("version", "implementation", "os", "arch")):
+            raise ValueError("Execution runtime differs from frozen patch/platform identity")
+        contract = row["contract"]
+        tests = contract["tests"]
+        if len({t["test_id"] for t in tests}) != len(tests) or contract["collected"] != len(tests):
+            raise ValueError("Duplicate/inconsistent test counts")
+        if contract["executed"] != sum(t["outcome"] != "skipped" for t in tests) or contract["unexpected_skips"] != sum(t["outcome"] == "skipped" for t in tests):
+            raise ValueError("Inconsistent execution/skip counts")
+        if row["status"] in ("passed", "flaky", "quarantined"):
+            if not selected["resolution"] or selected["problems"]:
+                raise ValueError("Pass without successful frozen resolution")
+            if not row["dependency_lock"] or not contract["junit_paths"] or not contract["executed"] or contract["unexpected_skips"]:
+                raise ValueError("Empty/skipped/lockless/JUnit-less pass")
+            if row["status"] != "quarantined" and any(t["outcome"] != "passed" for t in tests):
+                raise ValueError("Failing tests cannot pass")
+            resolved = {canonicalize_name(r["name"]): r for r in row["resolved"]}
+            if len(resolved) != len(row["resolved"]):
+                raise ValueError("Duplicate resolved dependency")
+            for requested in selected["requested"]:
+                actual = resolved.get(canonicalize_name(requested["name"]))
+                if not actual or actual["role"] != requested["role"] or not requested["selected_version"] or Version(actual["version"]) != Version(requested["selected_version"]):
+                    raise ValueError("requested_resolved_mismatch: cannot report latest pass")
+            frozen = {canonicalize_name(r["name"]): r for r in selected["resolution"]["resolved"]}
+            if resolved != frozen:
+                raise ValueError("Resolved artifact identities differ from frozen plan")
+            if row["status"] == "passed" and row["failure"] is not None:
+                raise ValueError("False pass with failure")
+    if len(rows) == 2:
+        first, second = rows
+        if first["status"] != "passed" and second["status"] == "passed":
+            raise ValueError("Fail-then-pass must be labelled flaky")
+        if first["resolved"] and second["resolved"] and first["resolved"] != second["resolved"]:
+            raise ValueError("Retry changed frozen resolved tuple")
+        if first["dependency_lock"] and second["dependency_lock"] and first["dependency_lock"] != second["dependency_lock"]:
+            raise ValueError("Retry changed complete dependency lock")
+    return rows
+
+
+def pip_resolution_report(content):
+    """Check decoded report shapes before invoking shared semantic consumers."""
+    report = bounded_json(content)
+    if (not isinstance(report, dict) or report.get("version") != "1"
+            or not isinstance(report.get("install"), list) or not report["install"]):
+        raise ValueError("Malformed pip resolution report")
+    for item in report["install"]:
+        if not isinstance(item, dict) or not isinstance(item.get("metadata"), dict):
+            raise ValueError("Malformed pip resolution report metadata")
+        if any(not isinstance(item["metadata"].get(k), str) or not item["metadata"][k] for k in ("name", "version")):
+            raise ValueError("Malformed pip resolution report identity")
+        download = item.get("download_info")
+        archive = download.get("archive_info") if isinstance(download, dict) else None
+        hashes = archive.get("hashes") if isinstance(archive, dict) else None
+        if not isinstance(hashes, dict) or not isinstance(hashes.get("sha256"), str):
+            raise ValueError("Malformed pip resolution report artifact")
+    return report
+
+
+def frozen_environment(plan_dir, folder, selected, row):
+    resolution = selected["resolution"]
+    if not resolution or selected["problems"]:
+        raise ValueError("Pass without successful resolution")
+    for key, digest in (("requirements", "requirements_sha256"), ("report", "report_sha256")):
+        content = safe_path(plan_dir, resolution[key]).read_bytes()
+        copied = safe_path(folder, "locks/" + Path(resolution[key]).name).read_bytes()
+        if sha256(content) != resolution[digest] or copied != content:
+            raise ValueError("Frozen report/requirements digest mismatch")
+    report = pip_resolution_report(safe_path(plan_dir, resolution["report"]).read_bytes())
+    expected, locks, artifacts = {}, [], {}
+    for item in report["install"]:
+        name = canonicalize_name(item["metadata"]["name"])
+        version = item["metadata"]["version"]
+        digest = item["download_info"]["archive_info"]["hashes"]["sha256"]
+        if name in expected or not re.fullmatch("[0-9a-f]{64}", digest):
+            raise ValueError("Invalid/duplicate frozen distribution")
+        expected[name] = version
+        artifacts[name] = digest
+        locks.append(f"{name}=={version} --hash=sha256:{digest}")
+    if safe_path(plan_dir, resolution["requirements"]).read_text() != "\n".join(sorted(locks)) + "\n":
+        raise ValueError("Frozen requirements/report disagree")
+    for companion in selected.get("coupled_companions", []):
+        if expected.get(canonicalize_name(companion["name"])) != companion["version"]:
+            raise ValueError("Frozen coupled companion differs from evidenced planner rule")
+    for resolved in row["resolved"]:
+        name = canonicalize_name(resolved["name"])
+        if expected.get(name) != resolved["version"] or artifacts.get(name) != resolved.get("artifact_sha256"):
+            raise ValueError("Resolved artifact identity not in frozen report")
+    lock = row["dependency_lock"]
+    if lock["format"] != "pip-freeze":
+        raise ValueError("Expected complete pip-freeze inventory")
+    content = safe_path(folder, lock["path"]).read_bytes()
+    if sha256(content) != lock["sha256"]:
+        raise ValueError("Dependency lock digest mismatch")
+    actual = {}
+    for line in content.decode().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(r"([A-Za-z0-9._-]+)==([^\s]+)", line)
+        if not match or canonicalize_name(match[1]) in actual:
+            raise ValueError("Noncanonical/duplicate installed freeze entry")
+        actual[canonicalize_name(match[1])] = match[2]
+    if actual != expected:
+        raise ValueError("Complete installed distribution set differs from frozen resolution")
+
+
+def current_job(jobs, case_id):
+    matches = [j for j in jobs if j.get("name") == "Canary (" + case_id + ")"]
+    if not matches:
+        raise ValueError("Planned case absent from Actions job attempts")
+    latest = max(matches, key=lambda j: (int(j["run_attempt"]), int(j["id"])))
+    if latest.get("status") != "completed":
+        raise ValueError("Current case job has not completed")
+    # GitHub clones successful, NOT-rerun jobs into the new attempt with new IDs
+    # and run_attempt, but the old execution timestamps/steps/runner.
+    trace = ("started_at", "completed_at", "steps", "runner_id", "head_sha")
+    if (latest.get("conclusion") == "success" and all(latest.get(k) for k in trace)
+            and latest.get("created_at") and latest["completed_at"] < latest["created_at"]):
+        originals = [j for j in matches if int(j["run_attempt"]) < int(latest["run_attempt"])
+                     and j.get("status") == "completed" and j.get("conclusion") == "success"
+                     and j.get("created_at") and j["created_at"] <= j.get("started_at", "")
+                     and all(j.get(k) == latest[k] for k in trace)]
+        if originals:
+            return max(originals, key=lambda j: int(j["run_attempt"]))
+    return latest
+
+
+def blocked_attempt(selected, plan, target, attempt, message):
+    row = empty_case(selected, plan, target)
+    row["attempt"] = attempt
+    row["runtime"] = {k: selected["runtime_identity"][k] for k in ("version", "implementation", "os", "arch")}
+    row["failure"] = failure("automation", message)
+    row["completed_at"] = now()
+    return row
+
+
+def invocation_manifest(folder, row, plan, raw):
+    """Validate decoded sidecar shapes before any consumer dereferences them.
+
+    Null nested records are real unstarted invocations, never successful exits.
+    Malformed evidence blocks only this attempt; raw history is already retained.
+    PR1 remains responsible for the shared semantic invocation verdict.
+    """
+    status = bounded_json(safe_path(folder, invocation_path(row["case_id"], row["attempt"])).read_text())
+    if not isinstance(status, dict):
+        raise ValueError("Invocation manifest must be an object")
+    for field, expected in (("schema_version", 1), ("case_id", row["case_id"]), ("attempt", row["attempt"]),
+                            ("source_sha", plan["source_sha"]), ("plan_sha256", sha256(raw))):
+        if type(status.get(field)) is not type(expected) or status[field] != expected:
+            raise ValueError("Invocation identity mismatch: " + field)
+    for kind in ("collection", "contract"):
+        if kind not in status:
+            raise ValueError("Missing " + kind + " invocation record")
+        invocation = status[kind]
+        if invocation is None:
+            continue
+        if not isinstance(invocation, dict):
+            raise ValueError(kind + " invocation must be an object or null")
+        if ("exit_code" not in invocation or (invocation["exit_code"] is not None and type(invocation["exit_code"]) is not int)
+                or type(invocation.get("timed_out")) is not bool
+                or any(not isinstance(invocation.get(k), str) for k in ("started_at", "completed_at"))):
+            raise ValueError("Malformed " + kind + " invocation outcome")
+        path, digest = invocation.get("evidence_path"), invocation.get("evidence_sha256")
+        if "evidence_path" not in invocation or "evidence_sha256" not in invocation:
+            raise ValueError("Missing " + kind + " evidence fields")
+        if path is None and digest is None:
+            continue
+        if not isinstance(path, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("Malformed " + kind + " evidence reference")
+        safe_path(folder, path)
+    return status
+
+
+def invocation_references(folder, row, plan, raw, validator):
+    """Retain authentic failure evidence too; only successes require clean exits."""
+    relative = invocation_path(row["case_id"], row["attempt"])
+    passing = row["status"] in ("passed", "flaky", "quarantined")
+    if not safe_path(folder, relative).is_file() and not passing:
+        return []  # Canonical reconciliation still rejects missing observed evidence.
+    status = invocation_manifest(folder, row, plan, raw)
+    references = [relative]
+    for kind in ("collection", "contract"):
+        invocation = status[kind]
+        if invocation is None:
+            if passing:
+                raise ValueError("Missing " + kind + " invocation")
+            continue
+        code = invocation["exit_code"]
+        if passing:
+            if type(code) is not int or invocation["timed_out"]:
+                raise ValueError("Incomplete/timed-out " + kind + " invocation")
+            if (kind == "collection" and code != 0) or (kind == "contract" and code not in (0, 1)):
+                raise ValueError("Collection/runner failure cannot attest compatibility")
+        path = invocation["evidence_path"]
+        if path is None and not passing:
+            continue
+        content = safe_path(folder, path).read_bytes()
+        if sha256(content) != invocation["evidence_sha256"]:
+            raise ValueError("Invocation evidence digest mismatch")
+        references.append(path)
+        sidecar = path + ".exit-code"
+        if passing or safe_path(folder, sidecar).is_file():
+            shell_code = 124 if invocation["timed_out"] else (128 - code if code is not None and code < 0 else code)
+            if safe_path(folder, sidecar).read_text() != str(shell_code) + "\n":
+                raise ValueError("Invocation/exit-code sidecar mismatch")
+            references.append(sidecar)
+        if kind == "collection":
+            collection = bounded_json(content)
+            if (not isinstance(collection, dict)
+                    or any(not isinstance(collection.get(k), list) for k in ("nodes", "deselected", "errors"))
+                    or any(not isinstance(node, str) for k in ("nodes", "deselected") for node in collection[k])
+                    or any(not isinstance(error, dict) or not isinstance(error.get("test_id"), str)
+                           or not isinstance(error.get("diagnostic"), str) for error in collection["errors"])):
+                raise ValueError("Malformed collection evidence")
+            if passing and (collection["deselected"] or collection["errors"] or collection["nodes"] != sorted(t["test_id"] for t in row["contract"]["tests"])):
+                raise ValueError("Partial/deselected execution differs from full collected identities")
+        else:
+            if row["contract"]["junit_paths"] != [path]:
+                raise ValueError("Invocation/JUnit reference mismatch")
+            if passing:
+                validator.invocation_tests([safe_path(folder, path)], [code])
+    return references
+
+
+def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, source_root, validator, previous, output):
+    # The shared ABI supports more formats than this Python producer emits.
+    # Enforce the producer boundary for failed attempts too, BEFORE a consumer
+    # can dispatch to an artifact-selected adapter and dereference decoded JSON.
+    if row["dependency_lock"] and row["dependency_lock"]["format"] != "pip-freeze":
+        raise ValueError("Expected complete pip-freeze inventory")
+    validator.reconcile_plan(data, plan, raw)
+    if row["qualification"] != target["qualification"]["status"] or row["language"] != target["language"]:
+        raise ValueError("Artifact cannot promote qualification/change language")
+    passing = row["status"] in ("passed", "flaky", "quarantined")
+    if passing:
+        validator.validate_contract(row, target, source_root)
+        if len(row["contract"]["junit_paths"]) != 1 or row["contract"]["command"] != contract_command(target["contract_test"], row["contract"]["junit_paths"][0]):
+            raise ValueError("Exact trusted contract command mismatch")
+        verdict = validator.judge_tests(row["contract"]["tests"], target, row["runtime"], row["resolved"])
+        if verdict != ("passed" if row["status"] == "flaky" else row["status"]):
+            raise ValueError("False pass/quarantine status")
+    references = invocation_references(folder, row, plan, raw, validator)
+    # Reuse PR1's complete discovery/support/invocation semantics with the REAL
+    # attempt identities and retained history. Never re-label attempt 2 as 1 or
+    # manufacture an exit status/manifest just to satisfy a validation envelope.
+    peers = [blocked_attempt(c, plan, next(t for t in registry["integrations"] if t["id"] == c["integration_id"]),
+                             1, "Independent integration validation placeholder")
+             for c in plan["cases"] if c["case_id"] != selected["case_id"]]
+    peers.extend(previous + [row])
+    with tempfile.TemporaryDirectory(prefix="compat-validate-attempt-") as temporary:
+        stage = Path(temporary)
+        shutil.copytree(output, stage, dirs_exist_ok=True)
+        # The source of previous references is the already-validated aggregate;
+        # current references and complete frozen reports come from this attempt.
+        current = set(references + row["contract"]["junit_paths"])
+        if row["dependency_lock"]:
+            current.add(row["dependency_lock"]["path"])
+        current.update(p.relative_to(folder).as_posix() for p in (folder / "locks").rglob("*") if p.is_file())
+        report_path = "locks/" + Path(selected["resolution"]["report"]).name if selected["resolution"] else None
+        for relative in current:
+            if relative == report_path or relative.endswith(".report.json"):
+                pip_resolution_report(safe_path(folder, relative).read_bytes())
+            elif relative.endswith(".json"):
+                bounded_json(safe_path(folder, relative).read_bytes())
+            copy_reference(folder, stage, relative)
+        # Failure rows are reconciled BEFORE any root reference is accepted. A
+        # genuine failed invocation stays failed; malformed evidence alone becomes
+        # UNKNOWN/blocked and cannot poison otherwise healthy aggregate rows.
+        if not passing and invocation_path(row["case_id"], row["attempt"]) in references:
+            validator.reconcile_invocations(row, stage, sha256(raw))
+        validator.validate_results({"schema_version": 1, "run": data["run"], "cases": peers}, registry,
+                                   expected_source_sha=plan["source_sha"], source_root=source_root, artifact_root=stage,
+                                   expected_plan=plan, plan_bytes=raw)
+    return references
+
+
+def copy_reference(folder, output, relative):
+    source, destination = safe_path(folder, relative), safe_path(output, relative)
+    if destination.exists():
+        if source.read_bytes() != destination.read_bytes():
+            raise ValueError("Conflicting immutable evidence reference")
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+
+def collect(plan_dir, artifacts, output, schema, *, source_root=None, jobs=None):
+    # Wheels in a weekly plan can exceed the result-artifact budget; the
+    # collector reads only bounded metadata, never opens/executes wheel contents.
+    metadata_paths = [safe_path(plan_dir, name) for name in ("compat-plan.json", "registry.json")]
+    if any(not p.is_file() or p.stat().st_size > MAX_FILE for p in metadata_paths):
+        raise ValueError("Missing/oversized plan metadata")
+    raw = metadata_paths[0].read_bytes()
+    plan = validate_plan(bounded_json(raw))
+    registry_bytes = metadata_paths[1].read_bytes()
+    if sha256(registry_bytes) != plan["registry_sha256"]:
+        raise ValueError("Registry snapshot identity mismatch")
+    if source_root is None:
+        raise ValueError("Trusted source checkout required")
+    # Bind COMPLETE bytes before taking any target/contract/exception from them.
+    if registry_bytes != safe_path(source_root, ".github/compat/registry.json").read_bytes():
+        raise ValueError("Registry snapshot differs from immutable source registry")
+    validator = semantic_validator(source_root)
+    registry = validator.validate_registry(bounded_json(registry_bytes), source_root)
+    targets = {t["id"]: t for t in registry["integrations"]}
+    if os.environ.get("GITHUB_RUN_ID") and jobs is None:
+        raise ValueError("Actions job-attempt reconciliation is mandatory in CI")
+    output.mkdir(parents=True, exist_ok=False)
+    (output / "compat-plan.json").write_bytes(raw)
+    shutil.copyfile(plan_dir / "registry.json", output / "registry.json")
+    if (plan_dir / "discovery.json").is_file():
+        shutil.copyfile(plan_dir / "discovery.json", output / "discovery.json")
+    # Enumerate every permitted directory BEFORE parsing a single attempt. A bad
+    # first artifact must not prevent recognition/retention of a healthy retry.
+    metadata, expected_dirs = {}, set()
+    for selected in plan["cases"]:
+        cid = selected["case_id"]
+        try:
+            job = current_job(jobs, cid) if jobs is not None else None
+            wanted = int(job["run_attempt"]) if job else int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
+            if wanted not in (1, 2):
+                raise ValueError("Only one immutable retry is permitted")
+            metadata[cid] = (job, wanted, None)
+        except (ValueError, KeyError, TypeError) as error:
+            wanted = 2 if os.environ.get("GITHUB_RUN_ATTEMPT") == "2" else 1
+            metadata[cid] = (None, wanted, str(error))
+        expected_dirs.update(f"compatibility-case-{cid}-attempt-{a}" for a in range(1, wanted + 1))
+    rows, blocked = [], []
+    for selected in plan["cases"]:
+        cid = selected["case_id"]
+        target = targets[selected["integration_id"]]
+        job, wanted, job_error = metadata[cid]
+        cases = []
+        for attempt in range(1, wanted + 1):
+            folder = safe_path(artifacts, f"compatibility-case-{cid}-attempt-{attempt}")
+            try:
+                if not folder.is_dir() or not (folder / "results.json").is_file():
+                    raise ValueError(f"Missing planned attempt {attempt} upload; current job evidence is blocked")
+                check_tree(folder)
+                # Keep original raw history even if its claims are malformed.
+                for path in folder.rglob("*"):
+                    if path.is_file():
+                        destination = safe_path(output, f"evidence/{cid}/attempt-{attempt}/" + path.relative_to(folder).as_posix())
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(path, destination)
+                data = bounded_json((folder / "results.json").read_text())
+                row = validate_case(data, plan, raw, selected, schema, independent=True)[0]
+                if row["attempt"] != attempt or data["run"]["run_attempt"] != attempt:
+                    raise ValueError("Artifact attempt/name mismatch")
+                for field in ("plan_sha256", "source_sha", "workflow_sha", "planned_case_ids", "self_test", "cooldown_cutoff", "run_id"):
+                    if data["run"][field] != run_header(plan, raw)[field]:
+                        raise ValueError("Artifact run/plan identity mismatch: " + field)
+                if cases and cases[0]["status"] != "passed" and row["status"] == "passed":
+                    row = copy.deepcopy(row)
+                    row["status"] = "flaky"
+                    row["notes"].append("Earlier attempt was not a validated pass.")
+                references = canonical_attempt(data, row, selected, target, plan, raw, registry, folder, source_root, validator, cases, output)
+                if row["status"] in ("passed", "flaky", "quarantined"):
+                    frozen_environment(plan_dir, folder, selected, row)
+                observed = [t for relative in row["contract"]["junit_paths"] for t in junit(safe_path(folder, relative), validator)[0]]
+                if observed != [{**t, "exception_id": None} for t in row["contract"]["tests"]]:
+                    raise ValueError("Reported outcomes do not match original JUnit")
+                paths = set(target["contract_test"]["paths"]) if target["contract_test"] else set()
+                if any(t["test_id"].split("::", 1)[0] not in paths for t in observed):
+                    raise ValueError("JUnit test ID is not repository-relative to the planned contract")
+                references.extend(row["contract"]["junit_paths"])
+                references.extend(p + ".exit-code" for p in row["contract"]["junit_paths"])
+                lock = row["dependency_lock"]
+                if lock:
+                    if sha256(safe_path(folder, lock["path"]).read_bytes()) != lock["sha256"]:
+                        raise ValueError("Dependency lock absent or digest mismatch")
+                    references.append(lock["path"])
+                for relative in sorted(set(references)):
+                    copy_reference(folder, output, relative)
+                if attempt == wanted and job_error:
+                    raise ValueError(job_error)
+                if attempt == wanted and job and row["status"] == "passed" and job.get("conclusion") != "success":
+                    raise ValueError("Current job did not succeed: " + str(job.get("conclusion")))
+                cases.append(row)
+            except (ValueError, KeyError, TypeError, OSError, ET.ParseError, jsonschema.ValidationError) as error:
+                cases.append(blocked_attempt(selected, plan, target, attempt, str(error)))
+        rows.extend(cases)
+        if cases[-1]["status"] != "passed" and not selected["non_blocking"]:
+            blocked.append(cid)
+    result = {"schema_version": 1, "run": run_header(plan, raw), "cases": rows}
+    jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(result)
+    write_json(output / "results.json", result)
+    try:
+        validator.validate_results(result, registry, expected_source_sha=plan["source_sha"],
+                                   artifact_root=output, source_root=source_root,
+                                   expected_plan=plan, plan_bytes=raw)
+    except (ValueError, KeyError, OSError) as error:
+        # Never drop rows merely because a strict consumer found another defect.
+        # Retain the canonical validation failure and fail the aggregate job.
+        write_json(output / "validation-errors.json", {"error": str(error)})
+        blocked.append("__canonical_validation__")
+    unexpected = [p.name for p in artifacts.iterdir() if p.name not in expected_dirs] if artifacts.exists() else []
+    if unexpected:
+        raise ValueError("Unplanned/duplicate artifact directories: " + ", ".join(sorted(unexpected)))
+    return result, blocked
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--plan-dir", type=Path, required=True)
+    parser.add_argument("--artifacts", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--jobs", type=Path, required=True, help="Trusted REST jobs?filter=all snapshot, all pages")
+    args = parser.parse_args()
+    plan = bounded_json((args.plan_dir / "compat-plan.json").read_text())
+    source_sha = subprocess.check_output(["git", "-C", str(args.source_root), "rev-parse", "HEAD"], text=True).strip()
+    if source_sha != plan["source_sha"]:
+        raise ValueError("Trusted contract checkout does not match frozen source SHA")
+    schema = bounded_json(Path(__file__).with_name("results.schema.json").read_text())
+    pages = bounded_json(args.jobs.read_text())
+    jobs = [j for page in pages for j in page["jobs"]]
+    _, bad = collect(args.plan_dir.resolve(), args.artifacts.resolve(), args.out.resolve(), schema,
+                     source_root=args.source_root.resolve(), jobs=jobs)
+    shutil.copyfile(args.jobs, args.out / "actions-jobs.json")
+    print(json.dumps({"blocking_cases": bad}))
+    return int(bool(bad))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
