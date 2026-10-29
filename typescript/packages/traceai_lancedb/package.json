@@ -19,8 +19,18 @@
     "test": "jest",
     "lint": "eslint . --ext .ts"
   },
-  "keywords": ["traceai", "opentelemetry", "instrumentation", "lancedb", "vector-database"],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "keywords": [
+    "traceai",
+    "opentelemetry",
+    "instrumentation",
+    "lancedb",
+    "vector-database",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm"
+  ],
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.7.0",
@@ -42,7 +52,21 @@
     "@lancedb/lancedb": ">=0.1.0"
   },
   "peerDependenciesMeta": {
-    "@lancedb/lancedb": { "optional": true }
+    "@lancedb/lancedb": {
+      "optional": true
+    }
   },
-  "files": ["dist", "README.md"]
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_lancedb"
+  }
 }

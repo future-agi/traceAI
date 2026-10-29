@@ -34,13 +34,16 @@
     "real-time",
     "voice",
     "video",
-    "observability"
+    "observability",
+    "traceai",
+    "futureagi",
+    "llm"
   ],
-  "author": "FutureAGI",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/futureagi/traceai.git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
     "directory": "typescript/packages/traceai_livekit"
   },
   "dependencies": {
@@ -76,5 +79,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/livekit",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
   }
 }

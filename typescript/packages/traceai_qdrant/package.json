@@ -54,10 +54,19 @@
     "typescript",
     "qdrant",
     "vector-database",
-    "tracing"
+    "tracing",
+    "traceai",
+    "futureagi",
+    "observability",
+    "llm"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "license": "Apache-2.0"
 }

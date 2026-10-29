@@ -19,8 +19,19 @@
     "test": "jest",
     "lint": "eslint . --ext .ts"
   },
-  "keywords": ["traceai", "opentelemetry", "instrumentation", "redis", "redisearch", "vector-search"],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "keywords": [
+    "traceai",
+    "opentelemetry",
+    "instrumentation",
+    "redis",
+    "redisearch",
+    "vector-search",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm"
+  ],
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.7.0",
@@ -42,7 +53,21 @@
     "redis": ">=4.0.0"
   },
   "peerDependenciesMeta": {
-    "redis": { "optional": true }
+    "redis": {
+      "optional": true
+    }
   },
-  "files": ["dist", "README.md"]
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_redis"
+  }
 }

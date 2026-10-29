@@ -35,7 +35,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_vercel#readme",
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/vercel",
   "dependencies": {
     "@opentelemetry/core": "^1.30.1",
     "@traceai/fi-semantic-conventions": "workspace:^"
@@ -56,10 +56,16 @@
     "instrumentation",
     "typescript",
     "openai",
-    "vercel"
+    "vercel",
+    "traceai",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }
