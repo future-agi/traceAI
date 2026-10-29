@@ -84,6 +84,76 @@ def test_real_legacy_error_identity_and_span(spans):
     assert span.events[0].attributes["exception.message"] == "private-error"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["generate_reply", "a_generate_reply", "initiate_chat", "a_initiate_chat"])
+@pytest.mark.parametrize("flag", [None, "hide_inputs", "hide_outputs", "hide_input_messages",
+                                  "hide_output_messages", "hide_input_text", "hide_output_text"])
+@pytest.mark.parametrize("environment", [False, True])
+async def test_real_legacy_raised_error_privacy(spans, operation, flag, environment, monkeypatch):
+    exporter, provider, instrumentor = spans
+    instrumentor.uninstrument()
+    failure = ValueError("private-legacy-raised-diagnostic")
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    async def async_fail(*args, **kwargs):
+        raise failure
+
+    async def call():
+        assistant = legacy("assistant")
+        assistant.register_reply([ConversableAgent, None],
+                                 async_fail if operation.startswith("a_") else fail, position=0)
+        if operation.endswith("initiate_chat"):
+            target = legacy("user", max_consecutive_auto_reply=0)
+            args = (assistant,)
+            kwargs = dict(message="ordinary-task", max_turns=1, silent=True)
+        else:
+            target, args = assistant, ()
+            kwargs = dict(messages=[{"role": "user", "content": "ordinary-task"}])
+        with pytest.raises(ValueError) as caught:
+            if operation.startswith("a_"):
+                await getattr(target, operation)(*args, **kwargs)
+            else:
+                getattr(target, operation)(*args, **kwargs)
+        assert caught.value is failure
+
+    # Run the same real SDK boundary natively, then instrument it. No SDK method
+    # is replaced and the public reply extension raises the identical exception.
+    await call()
+    assert not exporter.get_finished_spans()
+    if flag and environment:
+        monkeypatch.setenv("FI_" + flag.upper(), "true")
+        config = TraceConfig()
+    else:
+        config = TraceConfig(**({flag: True} if flag else {}))
+    instrumentor.instrument(tracer_provider=provider, config=config)
+    from opentelemetry import trace
+    with provider.get_tracer(__name__).start_as_current_span("caller") as caller:
+        await call()
+        assert trace.get_current_span() is caller
+        finished = exporter.get_finished_spans()
+        assert len(finished) == (2 if operation.endswith("initiate_chat") else 1)
+        assert all(span.name.startswith("autogen.") for span in finished)
+        assert finished[-1].parent.span_id == caller.get_span_context().span_id
+        if len(finished) == 2:
+            assert finished[0].parent.span_id == finished[1].context.span_id
+        for span in finished:
+            assert span.status.status_code == StatusCode.ERROR
+            event, = span.events
+            assert event.name == "exception"
+            assert event.attributes["exception.type"] == "ValueError"
+            if flag:
+                assert span.status.description is None
+                assert "exception.message" not in event.attributes
+                assert "exception.stacktrace" not in event.attributes
+                assert "private-legacy-raised-diagnostic" not in span.to_json()
+            else:
+                assert "private-legacy-raised-diagnostic" in span.status.description
+                assert event.attributes["exception.message"] == str(failure)
+                assert "private-legacy-raised-diagnostic" in event.attributes["exception.stacktrace"]
+
+
 def test_real_legacy_content_privacy(spans):
     exporter, provider, instrumentor = spans
     instrumentor.uninstrument()

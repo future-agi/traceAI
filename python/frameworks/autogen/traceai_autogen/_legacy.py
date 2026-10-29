@@ -63,6 +63,17 @@ def wrap_legacy(original, tracer, method, config=None):
             attributes[SpanAttributes.GEN_AI_TOOL_NAME] = name
         return attributes, bound
 
+    def record_error(span, error):
+        # Do not delegate raised errors to the OTel context manager: supported
+        # published cores do not sanitize its automatic status/exception data.
+        span.set_attribute("autogen.is_error", True)
+        span.set_attribute("autogen.error.type", type(error).__name__)
+        span.set_status(Status(StatusCode.ERROR, None if hide_error_details else str(error)))
+        if hide_error_details:
+            span.add_event("exception", {"exception.type": type(error).__name__})
+        else:
+            span.record_exception(error)
+
     def finish(span, result, agent, bound):
         history = getattr(result, "chat_history", None)
         if result is None and method.endswith("initiate_chat"):
@@ -80,29 +91,38 @@ def wrap_legacy(original, tracer, method, config=None):
             # replace the application's original return value.
             payload = result[1]
             diagnostic = str(payload.get("content", "Function execution failed")) if isinstance(payload, dict) else str(payload)
-            span.set_attribute("autogen.is_error", True)
-            span.set_status(Status(StatusCode.ERROR, None if hide_error_details else diagnostic))
-            if hide_error_details:
-                span.add_event("exception", {"exception.type": "RuntimeError"})
-            else:
-                span.record_exception(RuntimeError(diagnostic))
+            record_error(span, RuntimeError(diagnostic))
         else:
             span.set_status(Status(StatusCode.OK))
 
     @functools.wraps(original)
     def sync_wrapper(self, *args, **kwargs):
         attributes, bound = observe(self, args, kwargs)
-        with tracer.start_as_current_span(f"autogen.{method}", attributes=attributes) as span:
-            result = original(self, *args, **kwargs)
-            finish(span, result, self, bound)
-            return result
+        with tracer.start_as_current_span(
+            f"autogen.{method}", attributes=attributes,
+            record_exception=False, set_status_on_exception=False,
+        ) as span:
+            try:
+                result = original(self, *args, **kwargs)
+                finish(span, result, self, bound)
+                return result
+            except Exception as error:
+                record_error(span, error)
+                raise
 
     @functools.wraps(original)
     async def async_wrapper(self, *args, **kwargs):
         attributes, bound = observe(self, args, kwargs)
-        with tracer.start_as_current_span(f"autogen.{method}", attributes=attributes) as span:
-            result = await original(self, *args, **kwargs)
-            finish(span, result, self, bound)
-            return result
+        with tracer.start_as_current_span(
+            f"autogen.{method}", attributes=attributes,
+            record_exception=False, set_status_on_exception=False,
+        ) as span:
+            try:
+                result = await original(self, *args, **kwargs)
+                finish(span, result, self, bound)
+                return result
+            except Exception as error:
+                record_error(span, error)
+                raise
 
     return async_wrapper if inspect.iscoroutinefunction(original) else sync_wrapper
