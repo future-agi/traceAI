@@ -5,7 +5,6 @@ Provides OpenTelemetry instrumentation for Qdrant vector database operations.
 """
 
 import logging
-from importlib import import_module
 from typing import Any, Collection
 
 from opentelemetry import trace as trace_api
@@ -32,15 +31,7 @@ _MODULE = "qdrant_client"
 class QdrantInstrumentor(BaseInstrumentor):
     """OpenTelemetry instrumentor for Qdrant vector database."""
 
-    __slots__ = (
-        "_original_query_points",
-        "_original_query",
-        "_original_upsert",
-        "_original_delete",
-        "_original_retrieve",
-        "_original_scroll",
-        "_original_count",
-    )
+    __slots__ = ("_original_methods",)
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -57,34 +48,34 @@ class QdrantInstrumentor(BaseInstrumentor):
             logger.warning("Could not import QdrantClient")
             return
 
-        self._original_query_points = QdrantClient.query_points
-        self._original_query = QdrantClient.query
-        self._original_upsert = QdrantClient.upsert
-        self._original_delete = QdrantClient.delete
-        self._original_retrieve = QdrantClient.retrieve
-        self._original_scroll = QdrantClient.scroll
-        self._original_count = QdrantClient.count
-
-        wrap_function_wrapper(_MODULE, "QdrantClient.query_points", QueryPointsWrapper(tracer=tracer))
-        wrap_function_wrapper(_MODULE, "QdrantClient.query", QueryPointsWrapper(tracer=tracer))
-        wrap_function_wrapper(_MODULE, "QdrantClient.upsert", UpsertWrapper(tracer=tracer))
-        wrap_function_wrapper(_MODULE, "QdrantClient.delete", DeleteWrapper(tracer=tracer))
-        wrap_function_wrapper(_MODULE, "QdrantClient.retrieve", RetrieveWrapper(tracer=tracer))
-        wrap_function_wrapper(_MODULE, "QdrantClient.scroll", ScrollWrapper(tracer=tracer))
-        wrap_function_wrapper(_MODULE, "QdrantClient.count", CountWrapper(tracer=tracer))
+        # Query APIs vary by SDK version (and the optional fastembed extra).
+        # In particular query_points replaced search, and query is not always
+        # present. Only patch methods the installed client actually exposes.
+        self._original_methods = {}
+        for name, wrapper in (
+            ("query_points", QueryPointsWrapper),
+            ("query", QueryPointsWrapper),
+            ("search", QueryPointsWrapper),
+            ("upsert", UpsertWrapper),
+            ("delete", DeleteWrapper),
+            ("retrieve", RetrieveWrapper),
+            ("scroll", ScrollWrapper),
+            ("count", CountWrapper),
+        ):
+            original = getattr(QdrantClient, name, None)
+            if original is not None:
+                self._original_methods[name] = original
+                query_kwargs = {"method_name": name} if wrapper is QueryPointsWrapper else {}
+                wrap_function_wrapper(_MODULE, f"QdrantClient.{name}", wrapper(tracer=tracer, **query_kwargs))
 
         logger.debug("Qdrant instrumentation enabled")
 
     def _uninstrument(self, **kwargs: Any) -> None:
         from qdrant_client import QdrantClient
 
-        QdrantClient.query_points = self._original_query_points
-        QdrantClient.query = self._original_query
-        QdrantClient.upsert = self._original_upsert
-        QdrantClient.delete = self._original_delete
-        QdrantClient.retrieve = self._original_retrieve
-        QdrantClient.scroll = self._original_scroll
-        QdrantClient.count = self._original_count
+        for name, original in self._original_methods.items():
+            setattr(QdrantClient, name, original)
+        self._original_methods.clear()
 
 
 __all__ = ["QdrantInstrumentor", "__version__"]
