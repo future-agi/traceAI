@@ -23,9 +23,9 @@ Trace LLM calls, agents, tools, and retrieval. Keep your application code and yo
 </div>
 
 <p align="center">
-  <img src=".github/assets/trace-preview-compact.png" alt="A real LlamaIndex trace in Future AGI: nested retrieval and embedding spans beside the captured request." width="840">
+  <img src=".github/assets/trace-preview-compact.png" alt="A real SDK guide assistant trace in Future AGI: five nested agent, tool, chain and LLM spans, a populated agent graph, 500 captured tokens and nonzero cost beside the request and answer." width="840">
 </p>
-<p align="center"><sub>A LlamaIndex request in Future AGI. Trace tree, retrieval, and captured context in one view.</sub></p>
+<p align="center"><sub>A real traced SDK guide assistant: five spans, 500 tokens, and server-computed cost. <a href=".github/assets/trace-preview-provenance.json">Capture and reproduction details</a>.</sub></p>
 
 - **Start at the SDK boundary.** Instrument supported clients and frameworks instead of adding logging around each call.
 - **Follow the request.** Connect model calls, retrieval, and tool execution with OpenTelemetry spans and context.
