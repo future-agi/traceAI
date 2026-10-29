@@ -168,7 +168,8 @@ public class Quickstart {
             .build());
         try {
             var client = new TracedOpenAIClient(OpenAIOkHttpClient.builder()
-                .baseUrl(System.getenv().getOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"))
+                .baseUrl(System.getenv().getOrDefault(
+                    "OPENAI_BASE_URL", "https://api.openai.com/v1"))
                 .apiKey(System.getenv("OPENAI_API_KEY")).build());
             var response = client.createChatCompletion(ChatCompletionCreateParams.builder()
                 .model(System.getenv("OPENAI_MODEL"))
