@@ -188,6 +188,9 @@ jobs:
       !cancelled() && needs.python-build.result == 'success'
       && needs.plan.outputs.publish_python == 'true'
     runs-on: ubuntu-latest
+    # One environment per project: PyPI allows only one pending trusted publisher per
+    # (repository, workflow, environment), so first-time projects need distinct environments.
+    environment: pypi-${{ matrix.name }}
     timeout-minutes: 20
     permissions:
       contents: write
