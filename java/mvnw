@@ -226,12 +226,14 @@ if [ -n "${distributionSha256Sum-}" ]; then
     echo "Checksum validation is not supported for maven-mvnd." >&2
     echo "Please disable validation by removing 'distributionSha256Sum' from your maven-wrapper.properties." >&2
     exit 1
-  elif command -v sha256sum >/dev/null; then
-    if echo "$distributionSha256Sum  $TMP_DOWNLOAD_DIR/$distributionUrlName" | sha256sum -c >/dev/null 2>&1; then
-      distributionSha256Result=true
-    fi
+  # Prefer portable shasum: macOS also ships a sha256sum command, but its
+  # check mode does not accept the GNU-style standard input used below.
   elif command -v shasum >/dev/null; then
     if echo "$distributionSha256Sum  $TMP_DOWNLOAD_DIR/$distributionUrlName" | shasum -a 256 -c >/dev/null 2>&1; then
+      distributionSha256Result=true
+    fi
+  elif command -v sha256sum >/dev/null; then
+    if echo "$distributionSha256Sum  $TMP_DOWNLOAD_DIR/$distributionUrlName" | sha256sum -c >/dev/null 2>&1; then
       distributionSha256Result=true
     fi
   else
