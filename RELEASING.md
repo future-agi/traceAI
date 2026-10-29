@@ -74,9 +74,12 @@ Sources: [PyPI publisher setup](https://docs.pypi.org/trusted-publishers/adding-
 
 ### npm
 
-- [ ] Add **`NPM_TOKEN`**, an automation-capable granular access token with publish permission for the intended **`@traceai`** packages and permission to create any new package names. Configure the required 2FA bypass for automation under your npm policy. Track its expiry and rotate it before expiry.
-- [ ] Publishing uses `npm publish <verified tarball> --access public --provenance` on a GitHub-hosted Linux runner with `id-token: write`. This is token authentication plus provenance; it does not claim npm Trusted Publishing/OIDC authentication is configured.
-- [ ] Confirm the token's account has the necessary package/scope ownership. Already-published names are never renamed.
+- [x] **`NPM_TOKEN`** (set 2026-10-29): granular token `traceai-github-release`, read and write on the `@traceai` scope only, bypass 2FA, **expires 2027-01-27**. It publishes the first release, including first-time package names, which cannot have a trusted publisher until they exist.
+- [ ] **Move to npm trusted publishing before January 2027.** npm removes direct publishing with 2FA-bypass tokens then. The workflow already installs npm 11.21.1 and has `id-token: write` in both the caller and the reusable job. npm tries OIDC first and falls back to the token.
+  - **Timing:** a new npm trusted publisher expires if it is not used within **2 days**, so configure them right before a release, not in advance.
+  - **Per package:** for each `@traceai` package, go to Settings → Trusted publisher → GitHub Actions and enter owner `future-agi`, repository `traceAI`, workflow **`release.yml`** (npm checks the calling workflow when `workflow_call` is used), with no environment. Allow `npm publish`.
+  - **After a successful OIDC release:** set each package's publishing access to "Require two-factor authentication and disallow tokens", then revoke the token and delete the `NPM_TOKEN` secret.
+- [ ] Publishing uses `npm publish <verified tarball> --access public --provenance` on a GitHub-hosted Linux runner. `package.json` `repository.url` must match the GitHub repository for trusted publishing. Already-published names are never renamed.
 
 ### Maven Central: primary Java distribution
 
