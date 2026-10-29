@@ -7,7 +7,7 @@ OpenTelemetry instrumentation for Pipecat voice AI pipeline SDK. Part of traceAI
 ## Install
 
 ```sh
-npm install @traceai/fi-instrumentation-pipecat @traceai/fi-core @opentelemetry/instrumentation
+npm install @traceai/fi-instrumentation-pipecat @traceai/fi-core @opentelemetry/instrumentation @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
 npm install @pipecat-ai/client-js@"^0.3.0"
 ```
 
@@ -15,14 +15,12 @@ The SDK ranges above match this instrumentor's module-version filters. Install
 only the SDKs your application uses. For Future AGI export, set `FI_API_KEY` and
 `FI_SECRET_KEY` in your environment; keep provider credentials outside source code.
 
-## Current packaging limitation
+## Package entry points
 
-This source revision builds successfully, but its package entry points still
-refer to `dist/index.js` and `dist/esm/index.js`; the compiler emits
-`dist/src/index.js` and `dist/esm/src/index.js` instead. Importing the package by
-name therefore fails until those entry points are corrected. The setup below
-shows the initialization API, but is **not a working install recipe for this
-revision**. Registry metadata changes alone do not fix this packaging issue.
+This source revision fixes the package entry points. Both CommonJS `require()`
+and native Node ESM `import` use the same CommonJS implementation; this avoids
+broken, extensionless ESM build imports. The corrected packages still need a
+patch release. A previously published `0.1.0` tarball is not changed by this README.
 
 ## Quick start
 
@@ -30,7 +28,12 @@ Load this setup **before** loading the SDK you want to instrument. This CommonJS
 example registers tracing; it does not make a provider request.
 
 ```javascript
+const { context } = require("@opentelemetry/api");
+const { AsyncLocalStorageContextManager } = require("@opentelemetry/context-async-hooks");
 const { register, ProjectType } = require("@traceai/fi-core");
+// Standalone process only: if your OTel SDK already installs a context manager,
+// reuse it instead of registering another one.
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 const { registerInstrumentations } = require("@opentelemetry/instrumentation");
 const { PipecatInstrumentation } = require("@traceai/fi-instrumentation-pipecat");
 const tracerProvider = register({
@@ -42,6 +45,8 @@ registerInstrumentations({
 });
 ```
 
+`register()` installs a tracer provider, not an async context manager. The
+explicit context manager above keeps nested asynchronous calls in one trace.
 Run your application's SDK calls after this setup. Call
 `await tracerProvider.shutdown()` when the application finishes to flush pending
 spans. For ESM, follow the documentation for your OpenTelemetry loader and SDK

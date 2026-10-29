@@ -7,7 +7,7 @@ OpenTelemetry instrumentation for AWS Bedrock. Part of traceAI, Future AGI's Ope
 ## Install
 
 ```sh
-npm install @traceai/bedrock @traceai/fi-core @opentelemetry/instrumentation
+npm install @traceai/bedrock @traceai/fi-core @opentelemetry/instrumentation @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
 npm install @aws-sdk/client-bedrock-runtime@"^3.0.0"
 ```
 
@@ -21,7 +21,12 @@ Load this setup **before** loading the SDK you want to instrument. This CommonJS
 example registers tracing; it does not make a provider request.
 
 ```javascript
+const { context } = require("@opentelemetry/api");
+const { AsyncLocalStorageContextManager } = require("@opentelemetry/context-async-hooks");
 const { register, ProjectType } = require("@traceai/fi-core");
+// Standalone process only: if your OTel SDK already installs a context manager,
+// reuse it instead of registering another one.
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 const { registerInstrumentations } = require("@opentelemetry/instrumentation");
 const { BedrockInstrumentation } = require("@traceai/bedrock");
 const tracerProvider = register({
@@ -33,6 +38,8 @@ registerInstrumentations({
 });
 ```
 
+`register()` installs a tracer provider, not an async context manager. The
+explicit context manager above keeps nested asynchronous calls in one trace.
 Run your application's SDK calls after this setup. Call
 `await tracerProvider.shutdown()` when the application finishes to flush pending
 spans. For ESM, follow the documentation for your OpenTelemetry loader and SDK

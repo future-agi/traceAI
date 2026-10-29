@@ -24,7 +24,7 @@ describe("package", () => {
     const sibling = manifest(join(PKG_DIR, "../traceai_anthropic"));
     expect(ours.repository).toEqual({ ...(sibling.repository as object), directory: "typescript/packages/traceai_codex_sdk" });
     expect(ours.bugs).toEqual(sibling.bugs);
-    expect(ours.homepage).toBe((sibling.homepage as string).replace("traceai_anthropic", "traceai_codex_sdk"));
+    expect(ours.homepage).toBe("https://docs.futureagi.com/docs/tracing");
   });
 
   it("keeps the SDK a peer dependency, never a runtime dependency", () => {
