@@ -1,0 +1,887 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "35f2e3dc364676fa5bdab1e71ae500daf9efc00c",
+  "bump-patch-for-minor-pre-major": true,
+  "separate-pull-requests": false,
+  "sequential-calls": true,
+  "include-component-in-tag": true,
+  "include-v-in-tag": true,
+  "tag-separator": "-",
+  "pull-request-title-pattern": "chore${scope}: release${component} ${version}",
+  "packages": {
+    "python/frameworks/a2a": {
+      "release-type": "python",
+      "component": "traceai-a2a",
+      "package-name": "traceAI-a2a",
+      "extra-files": [
+        "traceai_a2a/version.py"
+      ]
+    },
+    "python/frameworks/ag2": {
+      "release-type": "python",
+      "component": "traceai-ag2",
+      "package-name": "traceAI-ag2",
+      "extra-files": [
+        "traceai_ag2/version.py"
+      ]
+    },
+    "python/frameworks/ag2-classic": {
+      "release-type": "python",
+      "component": "traceai-ag2-classic",
+      "package-name": "traceAI-ag2-classic",
+      "extra-files": [
+        "traceai_ag2_classic/version.py"
+      ]
+    },
+    "python/frameworks/agent-framework": {
+      "release-type": "python",
+      "component": "traceai-agent-framework",
+      "package-name": "traceAI-agent-framework",
+      "extra-files": [
+        "traceai_agent_framework/version.py"
+      ]
+    },
+    "python/frameworks/agno": {
+      "release-type": "python",
+      "component": "traceai-agno",
+      "package-name": "traceai-agno",
+      "extra-files": [
+        "traceai_agno/__init__.py"
+      ]
+    },
+    "python/frameworks/anthropic": {
+      "release-type": "python",
+      "component": "traceai-anthropic",
+      "package-name": "traceAI-anthropic",
+      "extra-files": [
+        "traceai_anthropic/version.py"
+      ]
+    },
+    "python/frameworks/autogen": {
+      "release-type": "python",
+      "component": "traceai-autogen",
+      "package-name": "traceAI-autogen",
+      "extra-files": [
+        "traceai_autogen/__init__.py",
+        "traceai_autogen/version.py"
+      ]
+    },
+    "python/frameworks/bedrock": {
+      "release-type": "python",
+      "component": "traceai-bedrock",
+      "package-name": "traceAI-bedrock",
+      "extra-files": [
+        "traceai_bedrock/version.py"
+      ]
+    },
+    "python/frameworks/beeai": {
+      "release-type": "python",
+      "component": "traceai-beeai",
+      "package-name": "traceai-beeai",
+      "extra-files": [
+        "traceai_beeai/__init__.py"
+      ]
+    },
+    "python/frameworks/cerebras": {
+      "release-type": "python",
+      "component": "traceai-cerebras",
+      "package-name": "traceAI-cerebras",
+      "extra-files": [
+        "traceai_cerebras/version.py"
+      ]
+    },
+    "python/frameworks/chromadb": {
+      "release-type": "python",
+      "component": "traceai-chromadb",
+      "package-name": "traceAI-chromadb",
+      "extra-files": [
+        "traceai_chromadb/version.py"
+      ]
+    },
+    "python/frameworks/claude-agent-sdk": {
+      "release-type": "python",
+      "component": "traceai-claude-agent-sdk",
+      "package-name": "traceai-claude-agent-sdk",
+      "extra-files": [
+        "traceai_claude_agent_sdk/__init__.py"
+      ]
+    },
+    "python/frameworks/cohere": {
+      "release-type": "python",
+      "component": "traceai-cohere",
+      "package-name": "traceAI-cohere",
+      "extra-files": [
+        "traceai_cohere/version.py"
+      ]
+    },
+    "python/frameworks/crewai": {
+      "release-type": "python",
+      "component": "traceai-crewai",
+      "package-name": "traceAI-crewai",
+      "extra-files": [
+        "traceai_crewai/version.py"
+      ]
+    },
+    "python/frameworks/deepseek": {
+      "release-type": "python",
+      "component": "traceai-deepseek",
+      "package-name": "traceAI-deepseek",
+      "extra-files": [
+        "traceai_deepseek/version.py"
+      ]
+    },
+    "python/frameworks/discoveryengine": {
+      "release-type": "python",
+      "component": "traceai-discoveryengine",
+      "package-name": "traceAI-discoveryengine",
+      "extra-files": [
+        "traceai_discoveryengine/version.py"
+      ]
+    },
+    "python/frameworks/dspy": {
+      "release-type": "python",
+      "component": "traceai-dspy",
+      "package-name": "traceAI-DSPy",
+      "extra-files": [
+        "traceai_dspy/version.py"
+      ]
+    },
+    "python/frameworks/elevenlabs-agents": {
+      "release-type": "python",
+      "component": "traceai-elevenlabs-agents",
+      "package-name": "traceAI-elevenlabs-agents",
+      "extra-files": [
+        "traceai_elevenlabs_agents/version.py"
+      ]
+    },
+    "python/frameworks/exa": {
+      "release-type": "python",
+      "component": "traceai-exa",
+      "package-name": "traceAI-exa",
+      "extra-files": [
+        "traceai_exa/version.py"
+      ]
+    },
+    "python/frameworks/firecrawl": {
+      "release-type": "python",
+      "component": "traceai-firecrawl",
+      "package-name": "traceAI-firecrawl",
+      "extra-files": [
+        "traceai_firecrawl/version.py"
+      ]
+    },
+    "python/frameworks/fireworks": {
+      "release-type": "python",
+      "component": "traceai-fireworks",
+      "package-name": "traceAI-fireworks",
+      "extra-files": [
+        "traceai_fireworks/version.py"
+      ]
+    },
+    "python/frameworks/google-adk": {
+      "release-type": "python",
+      "component": "traceai-google-adk",
+      "package-name": "traceAI-google-adk",
+      "extra-files": [
+        "traceai_google_adk/version.py"
+      ]
+    },
+    "python/frameworks/google-genai": {
+      "release-type": "python",
+      "component": "traceai-google-genai",
+      "package-name": "traceAI-google-genai",
+      "extra-files": [
+        "traceai_google_genai/version.py"
+      ]
+    },
+    "python/frameworks/google-genai-live": {
+      "release-type": "python",
+      "component": "traceai-google-genai-live",
+      "package-name": "traceAI-google-genai-live",
+      "extra-files": [
+        "traceai_google_genai_live/version.py"
+      ]
+    },
+    "python/frameworks/groq": {
+      "release-type": "python",
+      "component": "traceai-groq",
+      "package-name": "traceAI-groq",
+      "extra-files": [
+        "traceai_groq/version.py"
+      ]
+    },
+    "python/frameworks/guardrails": {
+      "release-type": "python",
+      "component": "traceai-guardrails",
+      "package-name": "traceAI-guardrails",
+      "extra-files": [
+        "traceai_guardrails/version.py"
+      ]
+    },
+    "python/frameworks/haystack": {
+      "release-type": "python",
+      "component": "traceai-haystack",
+      "package-name": "traceAI-haystack",
+      "extra-files": [
+        "traceai_haystack/version.py"
+      ]
+    },
+    "python/frameworks/hermes-agent/hermes-plugin/futureagi": {
+      "release-type": "python",
+      "component": "futureagi-hermes-plugin",
+      "package-name": "futureagi-hermes-plugin",
+      "skip-github-release": true,
+      "extra-files": [],
+      "exclude-paths": [
+        "python/frameworks/hermes-agent/hermes-plugin/futureagi"
+      ]
+    },
+    "python/frameworks/hermes-agent": {
+      "release-type": "python",
+      "component": "traceai-hermes-agent",
+      "package-name": "traceAI-hermes-agent",
+      "extra-files": [
+        "traceai_hermes_agent/version.py"
+      ]
+    },
+    "python/frameworks/huggingface": {
+      "release-type": "python",
+      "component": "traceai-huggingface",
+      "package-name": "traceAI-huggingface",
+      "extra-files": [
+        "traceai_huggingface/version.py"
+      ]
+    },
+    "python/frameworks/instructor": {
+      "release-type": "python",
+      "component": "traceai-instructor",
+      "package-name": "traceAI-instructor",
+      "extra-files": [
+        "traceai_instructor/version.py"
+      ]
+    },
+    "python/frameworks/lancedb": {
+      "release-type": "python",
+      "component": "traceai-lancedb",
+      "package-name": "traceAI-lancedb",
+      "extra-files": [
+        "traceai_lancedb/version.py"
+      ]
+    },
+    "python/frameworks/langchain": {
+      "release-type": "python",
+      "component": "traceai-langchain",
+      "package-name": "traceAI-langchain",
+      "extra-files": [
+        "traceai_langchain/version.py"
+      ]
+    },
+    "python/frameworks/litellm": {
+      "release-type": "python",
+      "component": "traceai-litellm",
+      "package-name": "traceAI-litellm",
+      "extra-files": [
+        "traceai_litellm/version.py"
+      ]
+    },
+    "python/frameworks/livekit": {
+      "release-type": "python",
+      "component": "traceai-livekit",
+      "package-name": "traceAI-livekit",
+      "extra-files": [
+        "traceai_livekit/__init__.py"
+      ]
+    },
+    "python/frameworks/llama_index": {
+      "release-type": "python",
+      "component": "traceai-llamaindex",
+      "package-name": "traceAI-llamaindex",
+      "extra-files": [
+        "traceai_llamaindex/version.py"
+      ]
+    },
+    "python/frameworks/mcp": {
+      "release-type": "python",
+      "component": "traceai-mcp",
+      "package-name": "traceAI-mcp",
+      "extra-files": [
+        "traceai_mcp/version.py"
+      ]
+    },
+    "python/frameworks/mcp-use": {
+      "release-type": "python",
+      "component": "traceai-mcp-use",
+      "package-name": "traceAI-mcp-use",
+      "extra-files": [
+        "traceai_mcp_use/version.py"
+      ]
+    },
+    "python/frameworks/milvus": {
+      "release-type": "python",
+      "component": "traceai-milvus",
+      "package-name": "traceAI-milvus",
+      "extra-files": [
+        "traceai_milvus/version.py"
+      ]
+    },
+    "python/frameworks/minimax": {
+      "release-type": "python",
+      "component": "traceai-minimax",
+      "package-name": "traceAI-minimax",
+      "extra-files": [
+        "traceai_minimax/version.py"
+      ]
+    },
+    "python/frameworks/mistralai": {
+      "release-type": "python",
+      "component": "traceai-mistralai",
+      "package-name": "traceAI-mistralai",
+      "extra-files": [
+        "traceai_mistralai/version.py"
+      ]
+    },
+    "python/frameworks/mongodb-vector": {
+      "release-type": "python",
+      "component": "traceai-mongodb",
+      "package-name": "traceAI-mongodb",
+      "extra-files": [
+        "traceai_mongodb/version.py"
+      ]
+    },
+    "python/frameworks/ollama": {
+      "release-type": "python",
+      "component": "traceai-ollama",
+      "package-name": "traceAI-ollama",
+      "extra-files": [
+        "traceai_ollama/version.py"
+      ]
+    },
+    "python/frameworks/openai": {
+      "release-type": "python",
+      "component": "traceai-openai",
+      "package-name": "traceAI-openai",
+      "extra-files": [
+        "traceai_openai/version.py"
+      ]
+    },
+    "python/frameworks/openai-agents": {
+      "release-type": "python",
+      "component": "traceai-openai-agents",
+      "package-name": "traceAI-openai-agents",
+      "extra-files": [
+        "traceai_openai_agents/version.py"
+      ]
+    },
+    "python/frameworks/openai-realtime": {
+      "release-type": "python",
+      "component": "traceai-openai-realtime",
+      "package-name": "traceAI-openai-realtime",
+      "extra-files": [
+        "traceai_openai_realtime/version.py"
+      ]
+    },
+    "python/frameworks/parallel": {
+      "release-type": "python",
+      "component": "traceai-parallel",
+      "package-name": "traceAI-parallel",
+      "extra-files": [
+        "traceai_parallel/version.py"
+      ]
+    },
+    "python/frameworks/pgvector": {
+      "release-type": "python",
+      "component": "traceai-pgvector",
+      "package-name": "traceAI-pgvector",
+      "extra-files": [
+        "traceai_pgvector/version.py"
+      ]
+    },
+    "python/frameworks/pinecone": {
+      "release-type": "python",
+      "component": "traceai-pinecone",
+      "package-name": "traceAI-pinecone",
+      "extra-files": [
+        "traceai_pinecone/version.py"
+      ]
+    },
+    "python/frameworks/pipecat": {
+      "release-type": "python",
+      "component": "traceai-pipecat",
+      "package-name": "traceAI-pipecat",
+      "extra-files": [
+        "traceai_pipecat/__init__.py",
+        "traceai_pipecat/version.py"
+      ]
+    },
+    "python/frameworks/portkey": {
+      "release-type": "python",
+      "component": "traceai-portkey",
+      "package-name": "traceAI-portkey",
+      "extra-files": [
+        "traceai_portkey/version.py"
+      ]
+    },
+    "python/frameworks/pydantic-ai": {
+      "release-type": "python",
+      "component": "traceai-pydantic-ai",
+      "package-name": "traceai-pydantic-ai",
+      "extra-files": [
+        "traceai_pydantic_ai/__init__.py"
+      ]
+    },
+    "python/frameworks/qdrant": {
+      "release-type": "python",
+      "component": "traceai-qdrant",
+      "package-name": "traceAI-qdrant",
+      "extra-files": [
+        "traceai_qdrant/version.py"
+      ]
+    },
+    "python/frameworks/redis-vector": {
+      "release-type": "python",
+      "component": "traceai-redis",
+      "package-name": "traceAI-redis",
+      "extra-files": [
+        "traceai_redis/version.py"
+      ]
+    },
+    "python/frameworks/replicate": {
+      "release-type": "python",
+      "component": "traceai-replicate",
+      "package-name": "traceAI-replicate",
+      "extra-files": [
+        "traceai_replicate/version.py"
+      ]
+    },
+    "python/frameworks/semantic-kernel": {
+      "release-type": "python",
+      "component": "traceai-semantic-kernel",
+      "package-name": "traceAI-semantic-kernel",
+      "extra-files": [
+        "traceai_semantic_kernel/version.py"
+      ]
+    },
+    "python/frameworks/smolagents": {
+      "release-type": "python",
+      "component": "traceai-smolagents",
+      "package-name": "traceAI-smolagents",
+      "extra-files": [
+        "traceai_smolagents/version.py"
+      ]
+    },
+    "python/frameworks/strands": {
+      "release-type": "python",
+      "component": "traceai-strands",
+      "package-name": "traceai-strands",
+      "extra-files": [
+        "traceai_strands/__init__.py"
+      ]
+    },
+    "python/frameworks/tavily": {
+      "release-type": "python",
+      "component": "traceai-tavily",
+      "package-name": "traceAI-tavily",
+      "extra-files": [
+        "traceai_tavily/version.py"
+      ]
+    },
+    "python/frameworks/together": {
+      "release-type": "python",
+      "component": "traceai-together",
+      "package-name": "traceAI-together",
+      "extra-files": [
+        "traceai_together/version.py"
+      ]
+    },
+    "python/frameworks/typesafe": {
+      "release-type": "python",
+      "component": "traceai-typesafe",
+      "package-name": "traceAI-typesafe",
+      "extra-files": [
+        "traceai_typesafe/version.py"
+      ]
+    },
+    "python/frameworks/vertexai": {
+      "release-type": "python",
+      "component": "traceai-vertexai",
+      "package-name": "traceAI-vertexai",
+      "extra-files": [
+        "traceai_vertexai/version.py"
+      ]
+    },
+    "python/frameworks/vllm": {
+      "release-type": "python",
+      "component": "traceai-vllm",
+      "package-name": "traceAI-vllm",
+      "extra-files": [
+        "traceai_vllm/version.py"
+      ]
+    },
+    "python/frameworks/voyage": {
+      "release-type": "python",
+      "component": "traceai-voyage",
+      "package-name": "traceAI-voyage",
+      "extra-files": [
+        "traceai_voyage/version.py"
+      ]
+    },
+    "python/frameworks/weaviate": {
+      "release-type": "python",
+      "component": "traceai-weaviate",
+      "package-name": "traceAI-weaviate",
+      "extra-files": [
+        "traceai_weaviate/version.py"
+      ]
+    },
+    "python/frameworks/xai": {
+      "release-type": "python",
+      "component": "traceai-xai",
+      "package-name": "traceAI-xai",
+      "extra-files": [
+        "traceai_xai/version.py"
+      ]
+    },
+    "python/traceai": {
+      "release-type": "python",
+      "component": "traceai",
+      "package-name": "traceai",
+      "skip-github-release": true,
+      "extra-files": [],
+      "exclude-paths": [
+        "python/traceai"
+      ]
+    },
+    "typescript/packages/fi-core": {
+      "release-type": "node",
+      "component": "npm-traceai-fi-core",
+      "package-name": "@traceai/fi-core"
+    },
+    "typescript/packages/fi-semantic-conventions": {
+      "release-type": "node",
+      "component": "npm-traceai-fi-semantic-conventions",
+      "package-name": "@traceai/fi-semantic-conventions"
+    },
+    "typescript/packages/traceai_anthropic": {
+      "release-type": "node",
+      "component": "npm-traceai-anthropic",
+      "package-name": "@traceai/anthropic"
+    },
+    "typescript/packages/traceai_bedrock": {
+      "release-type": "node",
+      "component": "npm-traceai-bedrock",
+      "package-name": "@traceai/bedrock"
+    },
+    "typescript/packages/traceai_beeai": {
+      "release-type": "node",
+      "component": "npm-traceai-beeai",
+      "package-name": "@traceai/beeai"
+    },
+    "typescript/packages/traceai_cerebras": {
+      "release-type": "node",
+      "component": "npm-traceai-cerebras",
+      "package-name": "@traceai/cerebras"
+    },
+    "typescript/packages/traceai_chromadb": {
+      "release-type": "node",
+      "component": "npm-traceai-chromadb",
+      "package-name": "@traceai/chromadb"
+    },
+    "typescript/packages/traceai_claude_agent_sdk": {
+      "release-type": "node",
+      "component": "npm-traceai-claude-agent-sdk",
+      "package-name": "@traceai/claude-agent-sdk"
+    },
+    "typescript/packages/traceai_codex_sdk": {
+      "release-type": "node",
+      "component": "npm-traceai-codex-sdk",
+      "package-name": "@traceai/codex-sdk"
+    },
+    "typescript/packages/traceai_cohere": {
+      "release-type": "node",
+      "component": "npm-traceai-cohere",
+      "package-name": "@traceai/cohere"
+    },
+    "typescript/packages/traceai_cursor_sdk": {
+      "release-type": "node",
+      "component": "npm-traceai-cursor-sdk",
+      "package-name": "@traceai/cursor-sdk"
+    },
+    "typescript/packages/traceai_deepseek": {
+      "release-type": "node",
+      "component": "npm-traceai-deepseek",
+      "package-name": "@traceai/deepseek"
+    },
+    "typescript/packages/traceai_fireworks": {
+      "release-type": "node",
+      "component": "npm-traceai-fireworks",
+      "package-name": "@traceai/fireworks"
+    },
+    "typescript/packages/traceai_genkit": {
+      "release-type": "node",
+      "component": "npm-traceai-genkit",
+      "package-name": "@traceai/genkit"
+    },
+    "typescript/packages/traceai_google_adk": {
+      "release-type": "node",
+      "component": "npm-traceai-fi-instrumentation-google-adk",
+      "package-name": "@traceai/fi-instrumentation-google-adk"
+    },
+    "typescript/packages/traceai_google_genai": {
+      "release-type": "node",
+      "component": "npm-traceai-google-genai",
+      "package-name": "@traceai/google-genai"
+    },
+    "typescript/packages/traceai_groq": {
+      "release-type": "node",
+      "component": "npm-traceai-groq",
+      "package-name": "@traceai/groq"
+    },
+    "typescript/packages/traceai_guardrails": {
+      "release-type": "node",
+      "component": "npm-traceai-guardrails",
+      "package-name": "@traceai/guardrails"
+    },
+    "typescript/packages/traceai_huggingface": {
+      "release-type": "node",
+      "component": "npm-traceai-huggingface",
+      "package-name": "@traceai/huggingface"
+    },
+    "typescript/packages/traceai_instructor": {
+      "release-type": "node",
+      "component": "npm-traceai-instructor",
+      "package-name": "@traceai/instructor"
+    },
+    "typescript/packages/traceai_lancedb": {
+      "release-type": "node",
+      "component": "npm-traceai-lancedb",
+      "package-name": "@traceai/lancedb"
+    },
+    "typescript/packages/traceai_langchain": {
+      "release-type": "node",
+      "component": "npm-traceai-langchain",
+      "package-name": "@traceai/langchain"
+    },
+    "typescript/packages/traceai_livekit": {
+      "release-type": "node",
+      "component": "npm-traceai-fi-instrumentation-livekit",
+      "package-name": "@traceai/fi-instrumentation-livekit"
+    },
+    "typescript/packages/traceai_llamaindex": {
+      "release-type": "node",
+      "component": "npm-traceai-llamaindex",
+      "package-name": "@traceai/llamaindex"
+    },
+    "typescript/packages/traceai_mastra": {
+      "release-type": "node",
+      "component": "npm-traceai-mastra",
+      "package-name": "@traceai/mastra"
+    },
+    "typescript/packages/traceai_mcp": {
+      "release-type": "node",
+      "component": "npm-traceai-mcp",
+      "package-name": "@traceai/mcp"
+    },
+    "typescript/packages/traceai_milvus": {
+      "release-type": "node",
+      "component": "npm-traceai-milvus",
+      "package-name": "@traceai/milvus"
+    },
+    "typescript/packages/traceai_mistral": {
+      "release-type": "node",
+      "component": "npm-traceai-mistral",
+      "package-name": "@traceai/mistral"
+    },
+    "typescript/packages/traceai_mongodb": {
+      "release-type": "node",
+      "component": "npm-traceai-mongodb",
+      "package-name": "@traceai/mongodb"
+    },
+    "typescript/packages/traceai_ollama": {
+      "release-type": "node",
+      "component": "npm-traceai-ollama",
+      "package-name": "@traceai/ollama"
+    },
+    "typescript/packages/traceai_openai": {
+      "release-type": "node",
+      "component": "npm-traceai-openai",
+      "package-name": "@traceai/openai"
+    },
+    "typescript/packages/traceai_openai_agents": {
+      "release-type": "node",
+      "component": "npm-traceai-openai-agents",
+      "package-name": "@traceai/openai-agents"
+    },
+    "typescript/packages/traceai_pgvector": {
+      "release-type": "node",
+      "component": "npm-traceai-pgvector",
+      "package-name": "@traceai/pgvector"
+    },
+    "typescript/packages/traceai_pi_coding_agent": {
+      "release-type": "node",
+      "component": "npm-traceai-pi-coding-agent",
+      "package-name": "@traceai/pi-coding-agent"
+    },
+    "typescript/packages/traceai_pinecone": {
+      "release-type": "node",
+      "component": "npm-traceai-pinecone",
+      "package-name": "@traceai/pinecone"
+    },
+    "typescript/packages/traceai_pipecat": {
+      "release-type": "node",
+      "component": "npm-traceai-fi-instrumentation-pipecat",
+      "package-name": "@traceai/fi-instrumentation-pipecat"
+    },
+    "typescript/packages/traceai_portkey": {
+      "release-type": "node",
+      "component": "npm-traceai-portkey",
+      "package-name": "@traceai/portkey"
+    },
+    "typescript/packages/traceai_qdrant": {
+      "release-type": "node",
+      "component": "npm-traceai-qdrant",
+      "package-name": "@traceai/qdrant"
+    },
+    "typescript/packages/traceai_redis": {
+      "release-type": "node",
+      "component": "npm-traceai-redis",
+      "package-name": "@traceai/redis"
+    },
+    "typescript/packages/traceai_strands": {
+      "release-type": "node",
+      "component": "npm-traceai-strands",
+      "package-name": "@traceai/strands"
+    },
+    "typescript/packages/traceai_together": {
+      "release-type": "node",
+      "component": "npm-traceai-together",
+      "package-name": "@traceai/together"
+    },
+    "typescript/packages/traceai_vercel": {
+      "release-type": "node",
+      "component": "npm-traceai-vercel",
+      "package-name": "@traceai/vercel"
+    },
+    "typescript/packages/traceai_vertexai": {
+      "release-type": "node",
+      "component": "npm-traceai-fi-instrumentation-vertexai",
+      "package-name": "@traceai/fi-instrumentation-vertexai"
+    },
+    "typescript/packages/traceai_vllm": {
+      "release-type": "node",
+      "component": "npm-traceai-vllm",
+      "package-name": "@traceai/vllm"
+    },
+    "typescript/packages/traceai_voltagent": {
+      "release-type": "node",
+      "component": "npm-traceai-voltagent",
+      "package-name": "@traceai/voltagent"
+    },
+    "typescript/packages/traceai_weaviate": {
+      "release-type": "node",
+      "component": "npm-traceai-weaviate",
+      "package-name": "@traceai/weaviate"
+    },
+    "typescript/packages/traceai_xai": {
+      "release-type": "node",
+      "component": "npm-traceai-xai",
+      "package-name": "@traceai/xai"
+    },
+    "java": {
+      "release-type": "maven",
+      "component": "java",
+      "package-name": "com.futureagi:traceai-java-parent",
+      "skip-snapshot": true
+    },
+    "go/a2a": {
+      "release-type": "go",
+      "component": "go/a2a",
+      "package-name": "github.com/future-agi/traceAI/go/a2a",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "go/anthropic": {
+      "release-type": "go",
+      "component": "go/anthropic",
+      "package-name": "github.com/future-agi/traceAI/go/anthropic",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "go/eino": {
+      "release-type": "go",
+      "component": "go/eino",
+      "package-name": "github.com/future-agi/traceAI/go/eino",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "go/genai": {
+      "release-type": "go",
+      "component": "go/genai",
+      "package-name": "github.com/future-agi/traceAI/go/genai",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "go/openai": {
+      "release-type": "go",
+      "component": "go/openai",
+      "package-name": "github.com/future-agi/traceAI/go/openai",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
+    "csharp/src/FIInstrumentation": {
+      "release-type": "simple",
+      "component": "nuget-fi-instrumentation-otel",
+      "package-name": "fi-instrumentation-otel",
+      "extra-files": [
+        {
+          "type": "xml",
+          "path": "FIInstrumentation.csproj",
+          "xpath": "/Project/PropertyGroup/Version"
+        }
+      ]
+    },
+    "python": {
+      "release-type": "simple",
+      "component": "fi-instrumentation-otel",
+      "package-name": "fi-instrumentation-otel",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "pyproject.toml",
+          "jsonpath": "$.tool.poetry.version"
+        },
+        "fi_instrumentation/instrumentation/version.py"
+      ],
+      "changelog-path": "CHANGELOG.md",
+      "exclude-paths": [
+        "python/frameworks",
+        "python/traceai"
+      ],
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Features"
+        },
+        {
+          "type": "fix",
+          "section": "Bug Fixes"
+        },
+        {
+          "type": "perf",
+          "section": "Performance Improvements"
+        },
+        {
+          "type": "deps",
+          "section": "Dependencies"
+        },
+        {
+          "type": "revert",
+          "section": "Reverts"
+        },
+        {
+          "type": "docs",
+          "section": "Documentation"
+        }
+      ]
+    }
+  }
+}

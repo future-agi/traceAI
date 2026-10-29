@@ -1,0 +1,7 @@
+{
+  "_comment": "Packages release.yml never publishes, with the reason. Everything else under python/, python/frameworks/ and typescript/packages/ is published when its version is not on its registry.",
+  "skip": {
+    "traceai": "the PyPI name traceai belongs to another publisher; the package has no registry name yet",
+    "futureagi-hermes-plugin": "Hermes plugin dependency manifest, explicitly not a buildable distribution"
+  }
+}
