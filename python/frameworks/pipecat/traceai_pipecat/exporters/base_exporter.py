@@ -336,6 +336,109 @@ def _sanitize_metadata(value, hide_input, hide_output, input_transcript):
         return None
 
 
+# Native Pipecat content is JSON inside a single input/message attribute, not
+# the flattened image attributes recognized by TraceConfig.mask. Sanitize that
+# structure before retaining raw aliases or producing the canonical copies.
+_IMAGE_URL_KEY = (
+    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0."
+    "message.contents.0.message_content.image.image.url"
+)
+_REDACTED = "__REDACTED__"
+
+
+def _mask_image(value, config):
+    if config.hide_input_images:
+        return _REDACTED
+    if isinstance(value, str):
+        return config.mask(_IMAGE_URL_KEY, value)
+    if isinstance(value, dict):
+        # OpenAI image_url objects retain non-content options such as detail.
+        return {key: _mask_image(item, config) if key == "url" else item
+                for key, item in value.items()}
+    return value
+
+
+def _sanitize_images(value, config):
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return value
+        sanitized = _sanitize_images(decoded, config)
+        return value if sanitized == decoded else _ensure_json_string(sanitized)
+    if isinstance(value, list):
+        return [_sanitize_images(item, config) if isinstance(item, (dict, list)) else item
+                for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    # Do not redact plain text merely because it contains a URL. Only actual
+    # image content blocks/fields are images; neighboring text stays observable.
+    if value.get("type") in ("image", "input_image") and config.hide_input_images:
+        return _REDACTED
+    result = {}
+    for key, item in value.items():
+        if key in ("image_url", "image"):
+            result[key] = _mask_image(item, config)
+        elif key in ("inline_data", "inlineData", "file_data", "fileData", "source") and isinstance(item, dict):
+            mime = item.get("mime_type", item.get("mimeType", item.get("media_type", "")))
+            if isinstance(mime, str) and mime.startswith("image/"):
+                if config.hide_input_images:
+                    result[key] = _REDACTED
+                else:
+                    result[key] = dict(item)
+                    data = item.get("data")
+                    if isinstance(data, str):
+                        url = f"data:{mime};base64,{data}"
+                        masked = config.mask(_IMAGE_URL_KEY, url)
+                        if masked != url:
+                            result[key]["data"] = masked
+            else:
+                result[key] = _sanitize_images(item, config)
+        elif isinstance(item, (dict, list)):
+            result[key] = _sanitize_images(item, config)
+        else:
+            result[key] = item
+    return result
+
+
+def _is_invocation_key(key):
+    return (key.startswith("gen_ai.request.") and key != "gen_ai.request.model"
+            or key.startswith("settings.") or key in ("settings", "stream", "tool_choice"))
+
+
+def _sanitize_native_policy(key, value, config):
+    if config.hide_llm_invocation_parameters and _is_invocation_key(key):
+        return None
+    native_key = key.split(".", 1)[1] if key.startswith(("session.", "settings.")) else key
+    if native_key in _INPUT_ALIASES or key.startswith("gen_ai.input.messages."):
+        return _sanitize_images(value, config)
+    if key != "metadata":
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return value
+    else:
+        decoded = value
+
+    def sanitize(obj):
+        if isinstance(obj, dict):
+            result = {}
+            for nested_key, item in obj.items():
+                masked = _sanitize_native_policy(nested_key, item, config)
+                if masked is not None:
+                    result[nested_key] = sanitize(masked) if nested_key not in _OUTPUT_ALIASES else masked
+            return result
+        if isinstance(obj, list):
+            return [sanitize(item) for item in obj]
+        return obj
+
+    sanitized = sanitize(decoded)
+    return value if sanitized == decoded else _ensure_json_string(sanitized)
+
+
 class BaseMappedSpanExporter(SpanExporter):
     """Map native SDK spans and apply the same privacy policy as FITracer.
 
@@ -359,25 +462,26 @@ class BaseMappedSpanExporter(SpanExporter):
         super().__init__(*args, **kwargs)
 
     def _mask_attributes(self, attributes):
-        return {key: masked for key, value in attributes.items()
-                if not (self._hide_error_details and _is_error_detail(key))
-                and (masked := self._config.mask(key, value)) is not None}
-
-    def _convert_attributes(self, attributes):
-        mapped = _map_attributes_to_fi_conventions(dict(attributes or {}))
         config = self._config
         hide_input = config.hide_inputs or config.hide_input_text or config.hide_input_messages
         hide_output = config.hide_outputs or config.hide_output_text or config.hide_output_messages
-        input_transcript = mapped.get("transcript.is_input") is True
-        mapped = {key: value for key, value in mapped.items()
-                  if not _hidden_content_key(key, hide_input, hide_output, input_transcript)}
-        if (hide_input or hide_output) and "metadata" in mapped:
-            metadata = _sanitize_metadata(mapped["metadata"], hide_input, hide_output, input_transcript)
-            if metadata is None:
-                mapped.pop("metadata")
-            else:
-                mapped["metadata"] = metadata
-        return self._mask_attributes(mapped)
+        input_transcript = attributes.get("transcript.is_input") is True
+        masked = {}
+        for key, value in attributes.items():
+            if (self._hide_error_details and _is_error_detail(key)
+                    or _hidden_content_key(key, hide_input, hide_output, input_transcript)):
+                continue
+            if key == "metadata" and (hide_input or hide_output):
+                value = _sanitize_metadata(value, hide_input, hide_output, input_transcript)
+            value = _sanitize_native_policy(key, value, config)
+            if value is not None:
+                value = config.mask(key, value)
+            if value is not None:
+                masked[key] = value
+        return masked
+
+    def _convert_attributes(self, attributes):
+        return self._mask_attributes(_map_attributes_to_fi_conventions(dict(attributes or {})))
 
     def export(self, spans) -> SpanExportResult:
         converted = []
