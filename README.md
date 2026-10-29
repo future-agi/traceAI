@@ -347,14 +347,10 @@ Brand marks identify integrations, not partnerships or endorsements. [Asset sour
 
 ## OpenTelemetry, without a new tracing stack
 
-```mermaid
-flowchart LR
-    App["Your AI application"] --> SDK["traceAI instrumentors / wrappers"]
-    SDK --> OTel["OpenTelemetry spans + context"]
-    OTel --> Exporter["Your span processors + exporter"]
-    Exporter --> FI["Future AGI"]
-    Exporter --> Other["Your OTLP collector or backend"]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/architecture-dark.svg">
+  <img src=".github/assets/architecture-light.svg" alt="Application calls flow through traceAI into OpenTelemetry spans, your span processors and exporter, then Future AGI or another OTLP backend." width="100%">
+</picture>
 
 - **Use your existing provider.** Python and TypeScript instrumentors accept an OpenTelemetry tracer provider; Go middleware accepts one through `WithTracerProvider`. The examples above configure Future AGI, not a mandatory export destination.
 - **Keep standard transport.** SDKs use OpenTelemetry span processing and OTLP exporters. With your own provider and exporter, configure the destination and authentication for your backend; Future AGI keys are only needed for Future AGI.
