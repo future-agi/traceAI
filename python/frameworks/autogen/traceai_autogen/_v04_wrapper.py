@@ -266,13 +266,14 @@ def _team_attributes(team, task, method, config):
     return attributes
 
 
-def _record_team_result(span, result):
+def _record_team_result(span, result, config):
     if result is None:
         return
     if hasattr(result, "messages"):
         span.set_attribute("autogen.task.message_count", len(result.messages))
     if hasattr(result, "stop_reason"):
-        span.set_attribute("autogen.task.stop_reason", str(result.stop_reason))
+        # TextMentionTermination quotes model text in the stop reason too.
+        span.set_attribute("autogen.task.stop_reason", _mask_content(config, str(result.stop_reason), output=True))
     usage = extract_usage_from_result(result)
     if usage:
         for key, value in usage.items():
@@ -411,7 +412,7 @@ def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_na
             original_method, tracer,
             lambda team: f"{TEAM_RUN_STREAM_SPAN_NAME}.{type(team).__name__}",
             lambda team, args, kwargs: _team_attributes(team, kwargs.get("task", args[0] if args else None), method_name, config),
-            _record_team_result, SpanKind.CLIENT,
+            lambda span, result: _record_team_result(span, result, config), SpanKind.CLIENT,
         )
 
     @functools.wraps(original_method)
@@ -427,7 +428,7 @@ def wrap_team_run(original_method: Callable, tracer: trace_api.Tracer, method_na
                 # AgentChat's task is keyword-only and optional. Preserve the
                 # entire call shape, including task-less continuation.
                 result = await original_method(self, *args, **kwargs)
-                _record_team_result(span, result)
+                _record_team_result(span, result, config)
                 span.set_attribute("autogen.is_error", False)
                 span.set_status(Status(StatusCode.OK))
                 return result

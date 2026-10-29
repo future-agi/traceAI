@@ -6,6 +6,7 @@ import json
 import pytest
 from autogen_agentchat.agents import AssistantAgent, SocietyOfMindAgent, UserProxyAgent
 from autogen_agentchat.base import Response, TaskResult
+from autogen_agentchat.conditions import TextMentionTermination
 from autogen_agentchat.messages import TextMessage
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_core import CancellationToken
@@ -35,7 +36,8 @@ async def test_real_agentchat_independent_io_privacy(spans, monkeypatch, team, s
     message = TextMessage(content="private-input", source="user")
     assistant = AssistantAgent("assistant", model_client=LocalModel())
     if team:
-        chat = RoundRobinGroupChat([assistant], max_turns=1)
+        chat = RoundRobinGroupChat([assistant], max_turns=1,
+                                   termination_condition=TextMentionTermination("offline reply"))
         if streaming:
             items = [item async for item in chat.run_stream(task=message)]
             result = items[-1]
