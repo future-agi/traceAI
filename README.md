@@ -1,7 +1,7 @@
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/traceai-dark.png">
-    <img src=".github/assets/traceai-light.png" alt="traceAI" width="280">
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/traceai-wordmark-dark.png">
+    <img src=".github/assets/traceai-wordmark-light.png" alt="traceAI" width="280">
   </picture>
 
 **OpenTelemetry tracing for AI applications.**
@@ -21,7 +21,7 @@ Trace LLM calls, agents, tools, and retrieval. Keep your application code and yo
 </div>
 
 <p align="center">
-  <img src=".github/assets/trace-preview.png" alt="A real LlamaIndex trace in Future AGI: nested retrieval and embedding spans beside the captured request." width="840">
+  <img src=".github/assets/trace-preview-compact.png" alt="A real LlamaIndex trace in Future AGI: nested retrieval and embedding spans beside the captured request." width="840">
 </p>
 <p align="center"><sub>A LlamaIndex request in Future AGI. Trace tree, retrieval, and captured context in one view.</sub></p>
 
@@ -306,34 +306,34 @@ Choose a guide for setup and language coverage. Framework support differs by SDK
 
 ### Model providers
 
-[<img src=".github/assets/integrations/openai.svg" width="20" height="20" alt=""> OpenAI](https://docs.futureagi.com/docs/integrations/traceai/openai) · [<img src=".github/assets/integrations/anthropic.svg" width="20" height="20" alt=""> Anthropic](https://docs.futureagi.com/docs/integrations/traceai/anthropic) · [<img src=".github/assets/integrations/google.svg" width="20" height="20" alt=""> Gemini](https://docs.futureagi.com/docs/integrations/traceai/google_genai) · [<img src=".github/assets/integrations/bedrock.svg" width="20" height="20" alt=""> Bedrock](https://docs.futureagi.com/docs/integrations/traceai/bedrock)
+[<img src=".github/assets/integrations/openai-tile.svg" width="24" height="24" alt=""> OpenAI](https://docs.futureagi.com/docs/integrations/traceai/openai) · [<img src=".github/assets/integrations/anthropic-tile.svg" width="24" height="24" alt=""> Anthropic](https://docs.futureagi.com/docs/integrations/traceai/anthropic) · [<img src=".github/assets/integrations/google-tile.svg" width="24" height="24" alt=""> Gemini](https://docs.futureagi.com/docs/integrations/traceai/google_genai) · [<img src=".github/assets/integrations/bedrock-tile.svg" width="24" height="24" alt=""> Bedrock](https://docs.futureagi.com/docs/integrations/traceai/bedrock)
 
 ### Agents and RAG
 
-[<img src=".github/assets/integrations/langchain.svg" width="20" height="20" alt=""> LangChain](https://docs.futureagi.com/docs/integrations/traceai/langchain) · [<img src=".github/assets/integrations/langgraph.svg" width="20" height="20" alt=""> LangGraph](https://docs.futureagi.com/docs/integrations/traceai/langgraph) · [<img src=".github/assets/integrations/llamaindex.svg" width="20" height="20" alt=""> LlamaIndex](https://docs.futureagi.com/docs/integrations/traceai/llamaindex) · [<img src=".github/assets/integrations/crewai.svg" width="20" height="20" alt=""> CrewAI](https://docs.futureagi.com/docs/integrations/traceai/crewai)
+[<img src=".github/assets/integrations/langchain-tile.svg" width="24" height="24" alt=""> LangChain](https://docs.futureagi.com/docs/integrations/traceai/langchain) · [<img src=".github/assets/integrations/langgraph-tile.svg" width="24" height="24" alt=""> LangGraph](https://docs.futureagi.com/docs/integrations/traceai/langgraph) · [<img src=".github/assets/integrations/llamaindex-tile.svg" width="24" height="24" alt=""> LlamaIndex](https://docs.futureagi.com/docs/integrations/traceai/llamaindex) · [<img src=".github/assets/integrations/crewai-tile.svg" width="24" height="24" alt=""> CrewAI](https://docs.futureagi.com/docs/integrations/traceai/crewai)
 
 ### Tools and structured output
 
-[<img src=".github/assets/integrations/mcp.svg" width="20" height="20" alt=""> MCP](https://docs.futureagi.com/docs/integrations/traceai/mcp) · [Instructor](https://docs.futureagi.com/docs/integrations/traceai/instructor) · [<img src=".github/assets/integrations/guardrails.svg" width="20" height="20" alt=""> Guardrails AI](https://docs.futureagi.com/docs/integrations/traceai/guardrails) · [<img src=".github/assets/integrations/dspy.svg" width="20" height="20" alt=""> DSPy](https://docs.futureagi.com/docs/integrations/traceai/dspy)
+[<img src=".github/assets/integrations/mcp-tile.svg" width="24" height="24" alt=""> MCP](https://docs.futureagi.com/docs/integrations/traceai/mcp) · [Instructor](https://docs.futureagi.com/docs/integrations/traceai/instructor) · [<img src=".github/assets/integrations/guardrails-tile.svg" width="24" height="24" alt=""> Guardrails AI](https://docs.futureagi.com/docs/integrations/traceai/guardrails) · [<img src=".github/assets/integrations/dspy-tile.svg" width="24" height="24" alt=""> DSPy](https://docs.futureagi.com/docs/integrations/traceai/dspy)
 
 ### Voice and real-time
 
-[<img src=".github/assets/integrations/livekit.svg" width="20" height="20" alt=""> LiveKit](https://docs.futureagi.com/docs/integrations/traceai/livekit) · [<img src=".github/assets/integrations/pipecat.svg" width="20" height="20" alt=""> Pipecat](https://docs.futureagi.com/docs/integrations/traceai/pipecat)
+[<img src=".github/assets/integrations/livekit-tile.svg" width="24" height="24" alt=""> LiveKit](https://docs.futureagi.com/docs/integrations/traceai/livekit) · [<img src=".github/assets/integrations/pipecat-tile.svg" width="24" height="24" alt=""> Pipecat](https://docs.futureagi.com/docs/integrations/traceai/pipecat)
 
 ### Java frameworks and vector stores
 
-[<img src=".github/assets/integrations/spring.svg" width="20" height="20" alt=""> Spring Boot](https://docs.futureagi.com/docs/integrations/traceai/spring-boot) · [Java frameworks](https://docs.futureagi.com/docs/integrations/traceai/java/frameworks) · [<img src=".github/assets/integrations/pinecone.png" width="20" height="20" alt=""> Pinecone](https://docs.futureagi.com/docs/integrations/traceai/java/pinecone) · [Vector databases](https://docs.futureagi.com/docs/integrations/traceai/java/vector-databases)
+[<img src=".github/assets/integrations/spring-tile.svg" width="24" height="24" alt=""> Spring Boot](https://docs.futureagi.com/docs/integrations/traceai/spring-boot) · [Java frameworks](https://docs.futureagi.com/docs/integrations/traceai/java/frameworks) · [<img src=".github/assets/integrations/pinecone-tile.png" width="24" height="24" alt=""> Pinecone](https://docs.futureagi.com/docs/integrations/traceai/java/pinecone) · [Vector databases](https://docs.futureagi.com/docs/integrations/traceai/java/vector-databases)
 
 <details>
 <summary><strong>More providers, agent frameworks, and interoperability guides</strong></summary>
 
 **More models**
 
-[<img src=".github/assets/integrations/groq.svg" width="20" height="20" alt=""> Groq](https://docs.futureagi.com/docs/integrations/traceai/groq) · [<img src=".github/assets/integrations/mistral.svg" width="20" height="20" alt=""> Mistral](https://docs.futureagi.com/docs/integrations/traceai/mistralai) · [<img src=".github/assets/integrations/cohere.svg" width="20" height="20" alt=""> Cohere (Java)](https://docs.futureagi.com/docs/integrations/traceai/java/cohere) · [<img src=".github/assets/integrations/together.svg" width="20" height="20" alt=""> Together AI](https://docs.futureagi.com/docs/integrations/traceai/togetherai) · [<img src=".github/assets/integrations/vertexai.svg" width="20" height="20" alt=""> Vertex AI](https://docs.futureagi.com/docs/integrations/traceai/vertexai) · [<img src=".github/assets/integrations/ollama.svg" width="20" height="20" alt=""> Ollama](https://docs.futureagi.com/docs/integrations/traceai/ollama) · [<img src=".github/assets/integrations/litellm.svg" width="20" height="20" alt=""> LiteLLM](https://docs.futureagi.com/docs/integrations/traceai/litellm)
+[<img src=".github/assets/integrations/groq-tile.svg" width="24" height="24" alt=""> Groq](https://docs.futureagi.com/docs/integrations/traceai/groq) · [<img src=".github/assets/integrations/mistral-tile.svg" width="24" height="24" alt=""> Mistral](https://docs.futureagi.com/docs/integrations/traceai/mistralai) · [<img src=".github/assets/integrations/cohere-tile.svg" width="24" height="24" alt=""> Cohere (Java)](https://docs.futureagi.com/docs/integrations/traceai/java/cohere) · [<img src=".github/assets/integrations/together-tile.svg" width="24" height="24" alt=""> Together AI](https://docs.futureagi.com/docs/integrations/traceai/togetherai) · [<img src=".github/assets/integrations/vertexai-tile.svg" width="24" height="24" alt=""> Vertex AI](https://docs.futureagi.com/docs/integrations/traceai/vertexai) · [<img src=".github/assets/integrations/ollama-tile.svg" width="24" height="24" alt=""> Ollama](https://docs.futureagi.com/docs/integrations/traceai/ollama) · [<img src=".github/assets/integrations/litellm-tile.svg" width="24" height="24" alt=""> LiteLLM](https://docs.futureagi.com/docs/integrations/traceai/litellm)
 
 **More frameworks**
 
-[<img src=".github/assets/integrations/google.svg" width="20" height="20" alt=""> Google ADK](https://docs.futureagi.com/docs/integrations/traceai/google_adk) · [<img src=".github/assets/integrations/openai.svg" width="20" height="20" alt=""> OpenAI Agents](https://docs.futureagi.com/docs/integrations/traceai/openai_agents) · [<img src=".github/assets/integrations/autogen.png" width="20" height="20" alt=""> AutoGen](https://docs.futureagi.com/docs/integrations/traceai/autogen) · [SmolAgents](https://docs.futureagi.com/docs/integrations/traceai/smol_agents) · [<img src=".github/assets/integrations/mastra.svg" width="20" height="20" alt=""> Mastra](https://docs.futureagi.com/docs/integrations/traceai/mastra) · [<img src=".github/assets/integrations/vercel.svg" width="20" height="20" alt=""> Vercel AI SDK](https://docs.futureagi.com/docs/integrations/traceai/vercel) · [<img src=".github/assets/integrations/haystack.svg" width="20" height="20" alt=""> Haystack](https://docs.futureagi.com/docs/integrations/traceai/haystack)
+[<img src=".github/assets/integrations/google-tile.svg" width="24" height="24" alt=""> Google ADK](https://docs.futureagi.com/docs/integrations/traceai/google_adk) · [<img src=".github/assets/integrations/openai-tile.svg" width="24" height="24" alt=""> OpenAI Agents](https://docs.futureagi.com/docs/integrations/traceai/openai_agents) · [<img src=".github/assets/integrations/autogen-tile.png" width="24" height="24" alt=""> AutoGen](https://docs.futureagi.com/docs/integrations/traceai/autogen) · [SmolAgents](https://docs.futureagi.com/docs/integrations/traceai/smol_agents) · [<img src=".github/assets/integrations/mastra-tile.svg" width="24" height="24" alt=""> Mastra](https://docs.futureagi.com/docs/integrations/traceai/mastra) · [<img src=".github/assets/integrations/vercel-tile.svg" width="24" height="24" alt=""> Vercel AI SDK](https://docs.futureagi.com/docs/integrations/traceai/vercel) · [<img src=".github/assets/integrations/haystack-tile.svg" width="24" height="24" alt=""> Haystack](https://docs.futureagi.com/docs/integrations/traceai/haystack)
 
 **Bring existing telemetry**
 
