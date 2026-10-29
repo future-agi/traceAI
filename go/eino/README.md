@@ -12,8 +12,8 @@ agent run is one trace.
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/eino` (package `traceaieino`) |
-| Eino | `github.com/cloudwego/eino` v0.9.19 or later (the `go.mod` minimum); tested on v0.9.21, the latest stable on 2026-10-16, and v0.9.19 |
-| Go | 1.26 or later (OpenTelemetry Go v1.47.0 requires it); tested on 1.26.9 and 1.27.2 |
+| Eino | `github.com/cloudwego/eino` v0.9.19 or later (the `go.mod` minimum) |
+| Go | 1.26.0 or later, the common minimum across traceAI Go modules |
 | Tested components | ADK `ChatModelAgent` through `adk.Runner` (streamed and not), `compose` graphs and chains, chat model nodes (the eino-ext OpenAI component and test models), `ToolsNode` and `InferTool` tools, lambdas (invoke, stream, collect), retriever, embedding and prompt callbacks |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and Eino. No exporter is built in. |
 
@@ -23,6 +23,10 @@ model provider is behind it. It does not replace or use Eino's own Langfuse, APM
 (`eino-ext/callbacks/*`); they can stay registered next to it.
 
 ## Install
+
+**Release availability:** the command below is for tagged releases. Until the first
+`go/eino/v0.1.0` tag exists, use `@dev` instead of `@latest`. See the
+[Go SDK index](../README.md) for all modules and the release scheme.
 
 ```sh
 go get github.com/future-agi/traceAI/go/eino@latest
@@ -177,7 +181,10 @@ bytes, credentials and component configuration are never copied, and the module 
 ## Test
 
 ```sh
+go mod tidy -diff
+go vet ./...
 go test -race ./...
+go build -o /tmp/traceai-eino-example ./example
 ```
 
 The tests run real Eino graphs, chains, lambdas, `ToolsNode` and ADK `ChatModelAgent` runs with a scripted chat

@@ -14,17 +14,20 @@ client := anthropic.NewClient(option.WithMiddleware(traceaianthropic.Middleware(
 | | |
 | --- | --- |
 | Module | `github.com/future-agi/traceAI/go/anthropic`, package `traceaianthropic` |
-| Tested with | anthropic-sdk-go v1.82.0 (latest on 2026-10-16), Go 1.24.3 and Go 1.27.2, OpenTelemetry Go v1.33.0 (module minimum) and v1.47.0 |
-| Requires | anthropic-sdk-go v1.82.0 or later and Go 1.24 or later. `go get` raises an older SDK to v1.82.0 |
+| SDK | `github.com/anthropics/anthropic-sdk-go` v1.82.0 (the `go.mod` minimum) |
+| Go | 1.26.0 or later, the common minimum across traceAI Go modules |
+| Requires | anthropic-sdk-go v1.82.0 or later and Go 1.26.0 or later. `go get` raises an older SDK to v1.82.0 |
 | Depends on | anthropic-sdk-go and the OpenTelemetry API. The example also uses the OpenTelemetry SDK and the OTLP/HTTP exporter |
 | Status | Alpha, pre-1.0 |
 
 ## Install
 
-Until the first `go/anthropic/v*` release tag, install from the `dev` branch:
+**Release availability:** the command below is for tagged releases. Until the first
+`go/anthropic/v0.1.0` tag exists, use `@dev` instead of `@latest`. See the
+[Go SDK index](../README.md) for all modules and the release scheme.
 
 ```bash
-go get github.com/future-agi/traceAI/go/anthropic@dev
+go get github.com/future-agi/traceAI/go/anthropic@latest
 ```
 
 ## Set up
@@ -146,7 +149,10 @@ These calls went through a local Anthropic-compatible proxy (CLIProxy), not dire
 ## Tests
 
 ```bash
+go mod tidy -diff
+go vet ./...
 go test -race ./...
+go build -o /tmp/traceai-anthropic-example ./example
 ```
 
 The tests run the real SDK against `httptest` servers with recorded Messages
