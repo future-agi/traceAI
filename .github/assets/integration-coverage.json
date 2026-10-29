@@ -7,7 +7,7 @@
     "Go",
     "C#"
   ],
-  "method": "Union of normalized framework families from 65 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs do not count. C# has one manual-span core SDK and no framework auto-instrumentors.",
+  "method": "Union of normalized framework families from 65 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
   "normalization": {
     "ag2-classic": "ag2",
     "google-genai-live": "google-genai",
@@ -41,7 +41,7 @@
     },
     {
       "manifest": "java/traceai-java-core/pom.xml",
-      "reason": "shared core SDK"
+      "reason": "shared SDK / BOM / example; not an integration"
     },
     {
       "manifest": "csharp/src/FIInstrumentation/FIInstrumentation.csproj",

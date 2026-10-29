@@ -16,7 +16,7 @@
       "sourceFile": "/images/integrations/anthropic.svg",
       "file": "anthropic-tile.svg",
       "sourceSha256": "beb820c718c4990d55dd8c4e167b94f6b3fa534223fe135b05277dc6f1c9d594",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "autogen": {
       "kind": "brand",
@@ -31,7 +31,7 @@
       "sourceFile": "/images/integrations/autogen.png",
       "file": "autogen-tile.png",
       "sourceSha256": "7afceb1aa32e7282635579dd9420a16e014db467f515b050a301f5cc046168da",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "bedrock": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/bedrock-color.svg",
@@ -46,7 +46,7 @@
       "sourceFile": "/images/integrations/bedrock.svg",
       "file": "bedrock-tile.svg",
       "sourceSha256": "edf993745cb0c437fc1439c3288da33656f3709261677799233c4456290b9c62",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "cohere": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/cohere-color.svg",
@@ -61,7 +61,7 @@
       "sourceFile": "/images/integrations/cohere.svg",
       "file": "cohere-tile.svg",
       "sourceSha256": "2db2d6fec46735d48ea3fcf69dc7115a023e76e350e5a13af26feb55518d38cd",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "crewai": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/crewai-color.svg",
@@ -76,7 +76,7 @@
       "sourceFile": "/images/integrations/crewai.svg",
       "file": "crewai-tile.svg",
       "sourceSha256": "bad1ffd588bc0b05a562e1e930316f1840e36387b8f40439b23619fc3c61014a",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "dspy": {
       "source": "https://raw.githubusercontent.com/stanfordnlp/dspy/b8588f10fd7c2af03cba9f45f002b8442bfcbde4/docs/docs/static/dspy-logo.svg",
@@ -91,7 +91,7 @@
       "sourceFile": "/images/integrations/dspy.svg",
       "file": "dspy-tile.svg",
       "sourceSha256": "86e95129fbf34ba8918dd85f7fc40f4f88dad5954766e304d26355e35038eaff",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "google": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/google-color.svg",
@@ -106,7 +106,7 @@
       "sourceFile": "/images/integrations/google.svg",
       "file": "google-tile.svg",
       "sourceSha256": "8582e1c1988d90e7ec222583b41a056d7144a78cc94997f1c8a08255bb19b830",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "groq": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/groq.svg",
@@ -121,7 +121,7 @@
       "sourceFile": "/images/integrations/groq.svg",
       "file": "groq-tile.svg",
       "sourceSha256": "dcd19bb9a2267ff39fea03542712ee2f5b157fd15c6850b13cd14bbf27a94d09",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "guardrails": {
       "source": "https://raw.githubusercontent.com/guardrails-ai/guardrails/06d0ff2c5f9bcb493d976b76f885e37e41ce845d/docs/assets/logo.svg",
@@ -136,7 +136,7 @@
       "sourceFile": "/images/integrations/guardrails.svg",
       "file": "guardrails-tile.svg",
       "sourceSha256": "8655a06d6ca45f79c378b3c9352919bb8cd89aeb798631363fe69ddcba9b41fd",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "haystack": {
       "source": "https://unpkg.com/simple-icons@16.36.0/icons/haystack.svg",
@@ -151,7 +151,7 @@
       "sourceFile": "/images/integrations/haystack.svg",
       "file": "haystack-tile.svg",
       "sourceSha256": "b59f13bc72ce39ff4a394aeaf424b4aba13995a151803dcdbe357d56462c2445",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "langchain": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/langchain-color.svg",
@@ -166,7 +166,7 @@
       "sourceFile": "/images/integrations/langchain.svg",
       "file": "langchain-tile.svg",
       "sourceSha256": "7e07e85b8e54d37011828a287dfdf26a458319f3ca16390cdd79ecf9fc409d9c",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "langgraph": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/langgraph-color.svg",
@@ -181,7 +181,7 @@
       "sourceFile": "/images/integrations/langgraph.svg",
       "file": "langgraph-tile.svg",
       "sourceSha256": "0a8c1aacab853778c6a7c7ea38a1764922e4ddde2458dbd0a9285c27406daade",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "litellm": {
       "kind": "brand",
@@ -196,7 +196,7 @@
       "sourceFile": "/images/integrations/litellm.svg",
       "file": "litellm-tile.svg",
       "sourceSha256": "6e70710cef8f61b4206e581b256a3ffec43789441227d393c58a5d8b8cd6cc00",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "livekit": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/livekit-color.svg",
@@ -211,7 +211,7 @@
       "sourceFile": "/images/integrations/livekit.svg",
       "file": "livekit-tile.svg",
       "sourceSha256": "7a70941843d4ac4bea2772902b8ba37c73126f2c7cc35806aa9dc1268707fcae",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "llamaindex": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/llamaindex-color.svg",
@@ -226,7 +226,7 @@
       "sourceFile": "/images/integrations/llamaindex.svg",
       "file": "llamaindex-tile.svg",
       "sourceSha256": "0b9f24f66f45bd8848ab455a9b229276336ee4131e081613d3293adfbf51060d",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "mastra": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/mastra.svg",
@@ -241,7 +241,7 @@
       "sourceFile": "/images/integrations/mastra.svg",
       "file": "mastra-tile.svg",
       "sourceSha256": "7f74baf26a1072b3e9519119f9987697a3d4dc1b3e2a599c267c321f78c20bd8",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "mcp": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/mcp.svg",
@@ -256,7 +256,7 @@
       "sourceFile": "/images/integrations/mcp.svg",
       "file": "mcp-tile.svg",
       "sourceSha256": "8a394e4a3ac8275296b5254197984c8ea52a4de65a41866d6eaa82007010caa3",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "mistral": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/mistral-color.svg",
@@ -271,7 +271,7 @@
       "sourceFile": "/images/integrations/mistral.svg",
       "file": "mistral-tile.svg",
       "sourceSha256": "6049e85052e133b300bada98180013af0519910f7390338beba9b0632b84e5ee",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "ollama": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/ollama.svg",
@@ -286,7 +286,7 @@
       "sourceFile": "/images/integrations/ollama.svg",
       "file": "ollama-tile.svg",
       "sourceSha256": "926be9d84c6a1e05c855dfe32ac915abf6f5957067801d92ca3fd83742381746",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "openai": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/openai.svg",
@@ -301,22 +301,16 @@
       "sourceFile": "/images/integrations/openai.svg",
       "file": "openai-tile.svg",
       "sourceSha256": "49fe1fc96618f09d0ff78ff5f03f28812a213dad113d29f4f1133b1fa4e56fda",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "pinecone": {
-      "source": "https://raw.githubusercontent.com/pinecone-io/pinecone-ts-client/21a1c9a1d2dd62d5a639e6b037fe9ff8c0a7963b/assets/favicon-32x32.png",
-      "project": "https://github.com/pinecone-io/pinecone-ts-client",
-      "license": "Repository license: Apache-2.0; trademark rights excluded. Used only to identify the integration.",
-      "originalSha256": "09a6dfb79ee019690b149964648575fba81e6eec8b3fd329c178e77ad4ad2631",
-      "sha256": "e05a501d10fc5502cee7d98b7dc1d427641b2fa2de0a9788415698ae6fc766eb",
-      "kind": "brand",
+      "kind": "text initial, not a brand mark",
+      "source": "Original traceAI documentation artwork",
+      "license": "Apache-2.0 (repository license); Pinecone name identifies the integration, with no endorsement implied",
+      "file": "pinecone-tile.svg",
+      "sha256": "1d6cca876547b118e178caa78d0fa0ecddd7f36e3c67437dbba21f6b083cc795",
       "tile": "uniform light",
-      "licenseFile": "/images/integrations/licenses/pinecone-io--pinecone-ts-client.txt",
-      "licenseSource": "https://github.com/pinecone-io/pinecone-ts-client/blob/main/LICENSE",
-      "sourceFile": "/images/integrations/pinecone.png",
-      "file": "pinecone-tile.png",
-      "sourceSha256": "93e7f70e331adfe25d7a2f4c7ee40c4d18e7d45ab33412032fbb25de80ba9e25",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Dark P text initial on the same #f6f8fa surface and #d0d7de border as the other integration tiles. Replaces the unreadable raster; not a recreation of the Pinecone logo."
     },
     "pipecat": {
       "source": "https://unpkg.com/simple-icons@16.36.0/icons/pipecat.svg",
@@ -331,7 +325,7 @@
       "sourceFile": "/images/integrations/pipecat.svg",
       "file": "pipecat-tile.svg",
       "sourceSha256": "1e8ccde851505df74972b93c815c6d55e40b04d080efadb81fefb8dfef13baaa",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "spring": {
       "source": "https://unpkg.com/simple-icons@16.36.0/icons/spring.svg",
@@ -346,7 +340,7 @@
       "sourceFile": "/images/integrations/spring.svg",
       "file": "spring-tile.svg",
       "sourceSha256": "4753b48f8b3b798ef45a3c0908bf7e67a8435bef1f6afd4543ae7d0ecf4a5ec7",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "together": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/together-color.svg",
@@ -361,7 +355,7 @@
       "sourceFile": "/images/integrations/together.svg",
       "file": "together-tile.svg",
       "sourceSha256": "4cbe17d054174f4dc4c0faa053cf94fb99d81a65c4c216f988754b632c47ea1a",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "vercel": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/vercel.svg",
@@ -376,7 +370,7 @@
       "sourceFile": "/images/integrations/vercel.svg",
       "file": "vercel-tile.svg",
       "sourceSha256": "f3f5c4ff4154449daca023d91c534c1155abc9df9ebfdcdd1eb14344c0113156",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     },
     "vertexai": {
       "source": "https://unpkg.com/@lobehub/icons-static-svg@1.101.0/icons/vertexai-color.svg",
@@ -391,7 +385,7 @@
       "sourceFile": "/images/integrations/vertexai.svg",
       "file": "vertexai-tile.svg",
       "sourceSha256": "505d339ab5da59a1fbf0b97faa20b0b8c60391fdb0068c25c9fd72578e76d86b",
-      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Pinecone white background is transparent. Other source colors unchanged."
+      "treatment": "Original mark on a uniform #f6f8fa tile with #d0d7de border; explicit dark currentColor. LiveKit white leg becomes #24292f; LiteLLM is pinned to its original light-mode blue #0117be (no internal dark-mode override). Other source colors unchanged."
     }
   }
 }

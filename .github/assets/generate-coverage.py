@@ -85,12 +85,22 @@ parent = ET.parse(ROOT / "java/pom.xml").getroot()
 for element in parent.findall("m:modules/m:module", ns):
     module = element.text
     path = ROOT / "java" / module / "pom.xml"
-    name = ET.parse(path).getroot().findtext("m:artifactId", namespaces=ns)
-    if name == "traceai-java-core":
-        excluded.append({"manifest": str(path.relative_to(ROOT)), "reason": "shared core SDK"})
-        continue
+    pom = ET.parse(path).getroot()
+    name = pom.findtext("m:artifactId", namespaces=ns)
     key = re.sub(r"^traceai-(?:java-)?", "", name)
-    add("Java", key, path, name)
+    # POM-only modules manage dependencies / aggregate builds, not integrations.
+    # Example and shared modules can also be jars; exclude by role, not a list
+    # of current artifactIds. Unknown integration names must still fail in add().
+    packaging = pom.findtext("m:packaging", default="jar", namespaces=ns)
+    roles = set(re.split(r"[-_/]", module) + key.split("-"))
+    if packaging == "pom":
+        reason = "dependency-management / aggregator POM; not an integration"
+    elif roles & {"core", "bom", "example", "examples"}:
+        reason = "shared SDK / BOM / example; not an integration"
+    else:
+        add("Java", key, path, name)
+        continue
+    excluded.append({"manifest": str(path.relative_to(ROOT)), "reason": reason})
 for path in sorted(ROOT.glob("go/*/go.mod")):
     name = re.search(r"^module\s+(\S+)", path.read_text(), re.M)[1]
     add("Go", path.parent.name, path, name)
@@ -158,7 +168,7 @@ readme.write_text(text)
 summary = {
     "integration_families": count,
     "languages": LANGS,
-    "method": "Union of normalized framework families from 65 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs do not count. C# has one manual-span core SDK and no framework auto-instrumentors.",
+    "method": f"Union of normalized framework families from {len(raw['Python'])} Python framework manifests, {len(raw['TypeScript'])} TypeScript instrumentor manifests, {len(raw['Java'])} Java integration modules and {len(raw['Go'])} Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
     "normalization": ALIASES,
     "package_counts_in_matrix": {lang: len(items) for lang, items in raw.items()},
     "excluded_shared_packages": excluded,

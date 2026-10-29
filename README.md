@@ -147,7 +147,7 @@ Add these dependencies to your `pom.xml`. The OpenAI client is a provided depend
 </dependency>
 ```
 
-Save this class as `Quickstart.java` in your Maven project's `src/main/java` directory. Compile with `mvn compile` and run it with your Java application's usual launcher.
+Save this class as `Quickstart.java` in your Maven project's `src/main/java` directory. Compile with `mvn compile` and run it with your Java application's usual launcher. The explicit `TraceConfig.baseUrl` enables Cloud export; if you remove it, set `FI_BASE_URL=https://api.futureagi.com` in the environment instead. Separately, `OPENAI_BASE_URL` is optional and changes only the model API endpoint (OpenAI by default).
 
 ```java
 import ai.traceai.TraceAI;
@@ -161,12 +161,14 @@ import com.openai.models.ChatCompletionUserMessageParam;
 public class Quickstart {
     public static void main(String[] args) {
         TraceAI.init(TraceConfig.builder()
+            .baseUrl("https://api.futureagi.com")
             .apiKey(System.getenv("FI_API_KEY"))
             .secretKey(System.getenv("FI_SECRET_KEY"))
             .projectName("traceai-quickstart")
             .build());
         try {
             var client = new TracedOpenAIClient(OpenAIOkHttpClient.builder()
+                .baseUrl(System.getenv().getOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"))
                 .apiKey(System.getenv("OPENAI_API_KEY")).build());
             var response = client.createChatCompletion(ChatCompletionCreateParams.builder()
                 .model(System.getenv("OPENAI_MODEL"))
@@ -330,7 +332,7 @@ Python and TypeScript provide framework instrumentors; Java provides client wrap
 | <img src=".github/assets/integrations/mistral-tile.svg" width="24" height="24" alt=""> Mistral AI | [SDK](python/frameworks/mistralai/ "traceAI-mistralai") | [SDK](typescript/packages/traceai_mistral/ "@traceai/mistral") | — | — | — |
 | <img src=".github/assets/integrations/cohere-tile.svg" width="24" height="24" alt=""> Cohere | [SDK](python/frameworks/cohere/ "traceAI-cohere") | [SDK](typescript/packages/traceai_cohere/ "@traceai/cohere") | [SDK](java/traceai-java-cohere/ "traceai-java-cohere") | — | — |
 | <img src=".github/assets/integrations/ollama-tile.svg" width="24" height="24" alt=""> Ollama | [SDK](python/frameworks/ollama/ "traceAI-ollama") | [SDK](typescript/packages/traceai_ollama/ "@traceai/ollama") | [SDK](java/traceai-java-ollama/ "traceai-java-ollama") | — | — |
-| <img src=".github/assets/integrations/pinecone-tile.png" width="24" height="24" alt=""> Pinecone | [SDK](python/frameworks/pinecone/ "traceAI-pinecone") | [SDK](typescript/packages/traceai_pinecone/ "@traceai/pinecone") | [SDK](java/traceai-java-pinecone/ "traceai-java-pinecone") | — | — |
+| <img src=".github/assets/integrations/pinecone-tile.svg" width="24" height="24" alt=""> Pinecone | [SDK](python/frameworks/pinecone/ "traceAI-pinecone") | [SDK](typescript/packages/traceai_pinecone/ "@traceai/pinecone") | [SDK](java/traceai-java-pinecone/ "traceai-java-pinecone") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Qdrant | [SDK](python/frameworks/qdrant/ "traceAI-qdrant") | [SDK](typescript/packages/traceai_qdrant/ "@traceai/qdrant") | [SDK](java/traceai-java-qdrant/ "traceai-java-qdrant") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Chroma | [SDK](python/frameworks/chromadb/ "traceAI-chromadb") | [SDK](typescript/packages/traceai_chromadb/ "@traceai/chromadb") | [SDK](java/traceai-java-chromadb/ "traceai-java-chromadb") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Semantic Kernel | [SDK](python/frameworks/semantic-kernel/ "traceAI-semantic-kernel") | — | [SDK](java/traceai-java-semantic-kernel/ "traceai-java-semantic-kernel") | — | — |
