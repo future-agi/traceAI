@@ -25,12 +25,15 @@ supported and not wrapped.
 
 ## Install
 
-**Release availability:** the command below is for tagged releases. Until the first
-`go/genai/v0.1.0` tag exists, use `@dev` instead of `@latest`. See the
+Install both traceAI and the Google Gen AI SDK in your Go module:
+
+**Release availability:** the traceAI command below is for tagged releases. Until the first
+`go/genai/v0.1.0` tag exists, use `@dev` instead of `@latest` for the traceAI module. See the
 [Go SDK index](../README.md) for all modules and the release scheme.
 
 ```sh
 go get github.com/future-agi/traceAI/go/genai@latest
+go get google.golang.org/genai@latest
 ```
 
 ## Use

@@ -12,4 +12,8 @@
 - All modules now declare Go 1.26.0 as their minimum. This raises the Anthropic module's minimum from Go 1.24; other modules already required Go 1.26.0.
 - Module READMEs consistently distinguish pre-release `@dev` installs from tagged `@latest` installs.
 
+### Fixed
+
+- Gemini installation instructions explicitly install the Google Gen AI SDK, so fresh consumers can build the documented usage without missing `go.sum` entries.
+
 No Go release is published by these changes. Each module's release history will be maintained in its own directory when it is released.
