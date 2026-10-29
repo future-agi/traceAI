@@ -36,6 +36,8 @@ opentelemetry-instrumentation = ">=0.50b0"
 wrapt = ">=1.15.0"
 
 [tool.poetry.group.dev.dependencies]
+# Exercise the real sibling instrumentor coexistence fence in every package run.
+traceAI-google-genai = { path = "../google-genai", develop = true }
 pytest = ">=7.0.0"
 pytest-asyncio = ">=0.23.0"
 

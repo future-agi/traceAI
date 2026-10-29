@@ -6,11 +6,19 @@ Pipecat attributes to OpenTelemetry GenAI conventions (Future AGI standard).
 """
 
 import json
+import copy
+import logging
+import os
 from typing import Any, Dict
 
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import MessageAttributes, SpanAttributes
+from opentelemetry.sdk.trace import Event
+from opentelemetry.trace import Status
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_json_string(value: Any) -> str:
@@ -91,13 +99,26 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
                         else _ensure_json_string(content)
                     )
 
-    # STT transcript or LLM output
-    out_val = attributes.get("output") or attributes.get("transcript")
+    # Realtime transcription explicitly identifies its direction. Do not make
+    # user speech an assistant output (or mask it using the opposite policy).
+    transcript = attributes.get("transcript")
+    input_transcript = attributes.get("transcript.is_input") is True
+    if transcript is not None and input_transcript:
+        mapped.setdefault("input.value", transcript)
+        mapped.setdefault("input.mime_type", _detect_mime_type(transcript))
+        mapped.setdefault(f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", "user")
+        mapped.setdefault(f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", transcript)
+
+    # Native Gemini text output is independent of its transcript alias.
+    out_val = attributes.get("output")
+    if out_val is None:
+        out_val = attributes.get("text_output")
+    if out_val is None and not input_transcript:
+        out_val = transcript
     if out_val is not None and "output.value" not in mapped:
         mapped["output.value"] = out_val
         mapped["output.mime_type"] = _detect_mime_type(out_val)
 
-        # Also expose output as enumerated LLM output message 0
         output_content_key = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"
         if output_content_key not in mapped:
             mapped[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}"] = "assistant"
@@ -255,37 +276,234 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     return mapped
 
 
+# The legacy supported cores do not expose the error policy or its mask.
+# Keep this small compatibility boundary package-owned, without importing new
+# private core helpers or increasing the integration's runtime requirement.
+_CONTENT_HIDE_FLAGS = (
+    "hide_inputs", "hide_outputs", "hide_input_text", "hide_output_text",
+    "hide_input_messages", "hide_output_messages",
+)
+_INPUT_ALIASES = frozenset({
+    "input", "text", "system", "system_instruction", "context_system_instruction",
+    "instructions", "tool.arguments", "input.value", "input.mime_type", "raw.input",
+    "tool_call.function.arguments",
+})
+_OUTPUT_ALIASES = frozenset({
+    "output", "text_output", "tool.result", "output.value", "output.mime_type", "raw.output",
+})
+
+
+def _is_error_detail(key):
+    return key in ("exception.message", "exception.stacktrace", "error.message") or key.endswith((
+        ".exception.message", ".exception.stacktrace", ".error.message", ".error_message",
+    ))
+
+
+def _hidden_content_key(key, hide_input, hide_output, input_transcript):
+    # Both native setup hooks flatten their configuration under session/settings.
+    native_key = key
+    if key.startswith(("session.", "settings.")):
+        native_key = key.split(".", 1)[1]
+    if hide_input and (native_key in _INPUT_ALIASES or key.startswith("gen_ai.input.messages.")):
+        return True
+    if hide_output and (native_key in _OUTPUT_ALIASES or key.startswith("gen_ai.output.messages.")):
+        return True
+    return key == "transcript" and (hide_input if input_transcript else hide_output)
+
+
+def _sanitize_metadata(value, hide_input, hide_output, input_transcript):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, RecursionError):
+            return None
+    # OTel accepts strings, arrays and scalars too. Opaque content cannot be
+    # classified safely: discard that field, never the completed operation.
+    if not isinstance(value, dict):
+        return None
+
+    def sanitize(obj):
+        if isinstance(obj, dict):
+            return {key: sanitize(item) for key, item in obj.items()
+                    if not _hidden_content_key(key, hide_input, hide_output, input_transcript)}
+        if isinstance(obj, list):
+            return [sanitize(item) for item in obj]
+        return obj
+
+    try:
+        return _ensure_json_string(sanitize(value))
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+# Native Pipecat content is JSON inside a single input/message attribute, not
+# the flattened image attributes recognized by TraceConfig.mask. Sanitize that
+# structure before retaining raw aliases or producing the canonical copies.
+_IMAGE_URL_KEY = (
+    f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0."
+    "message.contents.0.message_content.image.image.url"
+)
+_REDACTED = "__REDACTED__"
+
+
+def _mask_image(value, config):
+    if config.hide_input_images:
+        return _REDACTED
+    if isinstance(value, str):
+        return config.mask(_IMAGE_URL_KEY, value)
+    if isinstance(value, dict):
+        # OpenAI image_url objects retain non-content options such as detail.
+        return {key: _mask_image(item, config) if key == "url" else item
+                for key, item in value.items()}
+    return value
+
+
+def _sanitize_images(value, config):
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return value
+        sanitized = _sanitize_images(decoded, config)
+        return value if sanitized == decoded else _ensure_json_string(sanitized)
+    if isinstance(value, list):
+        return [_sanitize_images(item, config) if isinstance(item, (dict, list)) else item
+                for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    # Do not redact plain text merely because it contains a URL. Only actual
+    # image content blocks/fields are images; neighboring text stays observable.
+    if value.get("type") in ("image", "input_image") and config.hide_input_images:
+        return _REDACTED
+    result = {}
+    for key, item in value.items():
+        if key in ("image_url", "image"):
+            result[key] = _mask_image(item, config)
+        elif key in ("inline_data", "inlineData", "file_data", "fileData", "source") and isinstance(item, dict):
+            mime = item.get("mime_type", item.get("mimeType", item.get("media_type", "")))
+            if isinstance(mime, str) and mime.startswith("image/"):
+                if config.hide_input_images:
+                    result[key] = _REDACTED
+                else:
+                    result[key] = dict(item)
+                    data = item.get("data")
+                    if isinstance(data, str):
+                        url = f"data:{mime};base64,{data}"
+                        masked = config.mask(_IMAGE_URL_KEY, url)
+                        if masked != url:
+                            result[key]["data"] = masked
+            else:
+                result[key] = _sanitize_images(item, config)
+        elif isinstance(item, (dict, list)):
+            result[key] = _sanitize_images(item, config)
+        else:
+            result[key] = item
+    return result
+
+
+def _is_invocation_key(key):
+    if key.startswith("session."):
+        # Session instructions are prompt content, not invocation parameters.
+        return key.split(".", 1)[1] not in _INPUT_ALIASES | {"model"}
+    return (key.startswith("gen_ai.request.") and key != "gen_ai.request.model"
+            or key.startswith(("settings.", "param.", "extra."))
+            or key in ("settings", "stream", "tool_choice"))
+
+
+def _sanitize_native_policy(key, value, config):
+    if config.hide_llm_invocation_parameters and _is_invocation_key(key):
+        return None
+    native_key = key.split(".", 1)[1] if key.startswith(("session.", "settings.")) else key
+    if native_key in _INPUT_ALIASES or key.startswith("gen_ai.input.messages."):
+        return _sanitize_images(value, config)
+    if key != "metadata":
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return value
+    else:
+        decoded = value
+
+    def sanitize(obj):
+        if isinstance(obj, dict):
+            result = {}
+            for nested_key, item in obj.items():
+                masked = _sanitize_native_policy(nested_key, item, config)
+                if masked is not None:
+                    result[nested_key] = sanitize(masked) if nested_key not in _OUTPUT_ALIASES else masked
+            return result
+        if isinstance(obj, list):
+            return [sanitize(item) for item in obj]
+        return obj
+
+    sanitized = sanitize(decoded)
+    return value if sanitized == decoded else _ensure_json_string(sanitized)
+
+
 class BaseMappedSpanExporter(SpanExporter):
-    """Base class for span exporters that map Pipecat attributes to Future AGI conventions."""
+    """Map native SDK spans and apply the same privacy policy as FITracer.
+
+    Pipecat uses the ordinary OTel API, not FITracer; mapping alone is therefore
+    not a privacy boundary. Remove native aliases as well as masking canonical
+    attributes so hidden content cannot survive in a second representation.
+    """
+
+    def __init__(self, *args, config=None, **kwargs):
+        self._config = config if config is not None else TraceConfig()
+        if not isinstance(self._config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
+        if hasattr(self._config, "hide_error_details"):
+            self._hide_error_details = self._config.hide_error_details
+        else:
+            explicit = os.getenv("FI_HIDE_ERROR_DETAILS", "").lower()
+            self._hide_error_details = (
+                explicit == "true" if explicit in ("true", "false")
+                else any(getattr(self._config, key, False) for key in _CONTENT_HIDE_FLAGS)
+            )
+        super().__init__(*args, **kwargs)
+
+    def _mask_attributes(self, attributes):
+        config = self._config
+        hide_input = config.hide_inputs or config.hide_input_text or config.hide_input_messages
+        hide_output = config.hide_outputs or config.hide_output_text or config.hide_output_messages
+        input_transcript = attributes.get("transcript.is_input") is True
+        masked = {}
+        for key, value in attributes.items():
+            if (self._hide_error_details and _is_error_detail(key)
+                    or _hidden_content_key(key, hide_input, hide_output, input_transcript)):
+                continue
+            if key == "metadata" and (hide_input or hide_output):
+                value = _sanitize_metadata(value, hide_input, hide_output, input_transcript)
+            value = _sanitize_native_policy(key, value, config)
+            if value is not None:
+                value = config.mask(key, value)
+            if value is not None:
+                masked[key] = value
+        return masked
 
     def _convert_attributes(self, attributes):
-        """Convert attributes by mapping them to Future AGI conventions."""
-        if attributes is None:
-            base = {}
-        elif not isinstance(attributes, dict):
-            base = dict(attributes)
-        else:
-            base = attributes
-        try:
-            return _map_attributes_to_fi_conventions(base)
-        except Exception:
-            return base
+        return self._mask_attributes(_map_attributes_to_fi_conventions(dict(attributes or {})))
 
     def export(self, spans) -> SpanExportResult:
+        converted = []
         for span in spans:
             try:
-                if (
-                    hasattr(span, "_attributes")
-                    and getattr(span, "_attributes") is not None
-                ):
-                    original_attributes = getattr(span, "_attributes")
-
-                    base_attributes = dict(original_attributes)
-                    mapped_attributes = self._convert_attributes(base_attributes)
-
-                    setattr(span, "_attributes", mapped_attributes)
-
+                # Do not mutate a ReadableSpan shared with another processor.
+                mapped = copy.copy(span)
+                mapped._attributes = self._convert_attributes(span.attributes)
+                if self._hide_error_details:
+                    mapped._status = Status(span.status.status_code)
+                events = []
+                for event in span.events:
+                    attributes = self._mask_attributes(event.attributes or {})
+                    events.append(Event(event.name, attributes=attributes, timestamp=event.timestamp))
+                mapped._events = tuple(events)
+                converted.append(mapped)
             except Exception:
-                continue
-
-        return super().export(spans)
+                # Never export original plaintext when conversion/redaction fails.
+                # No exception text: it may contain the very payload being hidden.
+                logger.warning("Dropping Pipecat span: attribute mapping or privacy policy failed")
+        return super().export(converted)

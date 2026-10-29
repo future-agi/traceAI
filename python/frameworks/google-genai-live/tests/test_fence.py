@@ -151,7 +151,7 @@ async def test_ac17_full_queue_drops_and_never_blocks_the_reader(server, client)
 
 def test_ac01_generate_content_keeps_its_own_span_and_gets_no_live_span(instrument, provider, exporter, monkeypatch):
     """AC-01: with both packages instrumented, generate_content is traced by traceAI-google-genai only."""
-    chat = pytest.importorskip("traceai_google_genai")
+    import traceai_google_genai as chat
     import json as _json
 
     from google.genai import _api_client
@@ -170,5 +170,5 @@ def test_ac01_generate_content_keeps_its_own_span_and_gets_no_live_span(instrume
     finally:
         chat_inst.uninstrument()
     names = [s.name for s in exporter.get_finished_spans()]
-    assert names, "traceAI-google-genai produced no span"
+    assert len(names) == 1, names
     assert not any(n.startswith("gemini.live.") for n in names), names

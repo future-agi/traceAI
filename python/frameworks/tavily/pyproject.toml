@@ -28,6 +28,11 @@ wrapt = ">=1.15.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
+# Offline measurement scenarios use the real installed graph/tool implementations.
+traceAI-langchain = { path = "../langchain", develop = true }
+langchain-community = "==0.4.2"
+langchain-core = "==1.5.2"
+langgraph = "==1.2.2"
 
 [build-system]
 requires = ["poetry-core"]

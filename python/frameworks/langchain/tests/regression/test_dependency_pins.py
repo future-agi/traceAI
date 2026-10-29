@@ -5,8 +5,8 @@ forcing customers on LangChain 1.x to `pip install --no-deps`. The fast test bel
 statically asserts the declared pin admits 1.x; it fails today and passes once the
 pins are opened to the house `>=` style.
 
-An optional heavy test performs a real dependency resolution in a throwaway venv
-(no `--no-deps`); it is opt-in via FI_RUN_SLOW=1 because it hits the network.
+The required resolution test consumes an install-stage wheelhouse offline
+(no `--no-deps`), without creating another runtime environment.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import pytest
 try:
     import tomllib  # py3.11+
 except ModuleNotFoundError:  # pragma: no cover
-    tomllib = None
+    import tomli as tomllib
 
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
@@ -53,7 +53,6 @@ def _dep_version(pyproject: dict, name: str):
     return dep["version"] if isinstance(dep, dict) else dep
 
 
-@pytest.mark.skipif(tomllib is None, reason="tomllib unavailable")
 def test_langchain_core_admits_1x():
     """GREEN guard. langchain-core is the real runtime dep and must admit 1.0.2."""
     data = tomllib.loads(PYPROJECT.read_text())
@@ -61,7 +60,6 @@ def test_langchain_core_admits_1x():
     assert TARGET in spec, f"langchain-core pin {spec} rejects {TARGET}"
 
 
-@pytest.mark.skipif(tomllib is None, reason="tomllib unavailable")
 def test_langchain_pin_does_not_block_1x():
     """RED — flags §5.4. If `langchain` is required at all, its pin must admit 1.0.2.
     (The fix drops it as a hard dep, since the package imports only langchain-core.)"""
@@ -74,7 +72,6 @@ def test_langchain_pin_does_not_block_1x():
     )
 
 
-@pytest.mark.skipif(tomllib is None, reason="tomllib unavailable")
 def test_langchain_community_pin_does_not_block_1x():
     """RED — flags §5.4. langchain-community 0.3.x transitively caps langchain-core
     <0.4; if required at all its pin must admit 1.0.2. (The fix drops it.)"""
@@ -87,22 +84,39 @@ def test_langchain_community_pin_does_not_block_1x():
     )
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(os.environ.get("FI_RUN_SLOW") != "1", reason="set FI_RUN_SLOW=1 to run")
 def test_resolves_with_langchain_1x_without_no_deps(tmp_path):
-    """RED — flags §5.4 end-to-end. A real resolve of this package alongside
-    langchain/langgraph 1.x, WITHOUT --no-deps, must succeed."""
+    """A real clean pip resolution, offline, with all dependencies enabled.
+
+    Preparation is an explicit install-stage job, not a test-side network escape
+    or another runtime venv. Missing/stale wheels fail rather than skip.
+    """
+    import hashlib
+    import json
     import subprocess
     import sys
-    import venv
 
-    venv_dir = tmp_path / "resolve_venv"
-    venv.EnvBuilder(with_pip=True).create(venv_dir)
-    py = venv_dir / "bin" / "python"
-    pkg = str(PYPROJECT.parent)
+    from ..prepare_resolution_wheelhouse import source_digest
+
+    path = os.environ.get("FI_RESOLUTION_WHEELHOUSE")
+    assert path, "required install stage must set FI_RESOLUTION_WHEELHOUSE; run tests/prepare_resolution_wheelhouse.py before the sandbox"
+    wheels = pathlib.Path(path)
+    manifest = json.loads((wheels / "resolution-manifest.json").read_text())
+    assert manifest["source_sha256"] == source_digest(), "wheelhouse is not built from this source"
+    for name, digest in manifest["wheels"].items():
+        assert pathlib.Path(name).name == name and name.endswith(".whl")
+        assert hashlib.sha256((wheels / name).read_bytes()).hexdigest() == digest, name
+    source_wheel, = wheels.glob("traceai_langchain-*.whl")
+    report = tmp_path / "resolution.json"
     proc = subprocess.run(
-        [str(py), "-m", "pip", "install", "--dry-run",
-         pkg, "langchain==1.0.2", "langgraph==1.0.1"],
-        capture_output=True, text=True, timeout=600,
+        [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+         "--no-index", "--only-binary=:all:", "--find-links", str(wheels),
+         "--report", str(report), str(source_wheel),
+         "langchain==1.0.2", "langgraph==1.0.1"],
+        capture_output=True, text=True, timeout=120,
     )
-    assert proc.returncode == 0, f"resolution failed:\n{proc.stderr[-2000:]}"
+    assert proc.returncode == 0, f"offline resolution failed:\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+    installed = {row["metadata"]["name"].lower().replace("_", "-"): row["metadata"]["version"]
+                 for row in json.loads(report.read_text())["install"]}
+    assert installed["langchain"] == "1.0.2"
+    assert installed["langgraph"] == "1.0.1"
+    assert {"traceai-langchain", "fi-instrumentation-otel", "langchain-core"} <= installed.keys()

@@ -14,6 +14,19 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langgraph.graph import START, END, StateGraph
 from langgraph.graph.message import add_messages
+from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import var_child_runnable_config
+
+
+def _interrupt(value):
+    """Use the installed SDK's genuine control-flow API in each supported era."""
+    try:
+        from langgraph.types import interrupt
+    except ImportError:
+        # 0.2.0 exposes GraphInterrupt but predates dynamic interrupt()/Command.
+        from langgraph.errors import GraphInterrupt
+        raise GraphInterrupt(value)
+    return interrupt(value)
 
 
 class State(TypedDict):
@@ -102,10 +115,9 @@ def build_tool_graph():
 def build_interrupt_graph():
     """HITL node that calls interrupt() — requires a checkpointer + thread_id."""
     from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.types import interrupt
 
     def ask_human(state: State):
-        interrupt({"q": "approve?"})
+        _interrupt({"q": "approve?"})
         return {"value": 0}
 
     g = StateGraph(State)
@@ -130,12 +142,18 @@ def build_error_graph():
 def build_async_interrupt_graph():
     """Async HITL node calling interrupt() — the customer's actual pattern."""
     from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.types import interrupt
 
-    async def ask_human(state: State):
-        await asyncio.sleep(0)
-        interrupt({"q": "approve?"})
-        return {"value": 0}
+    async def ask_human(state: State, config: RunnableConfig):
+        # Python 3.10 tasks cannot accept a context= argument. Propagate the
+        # explicitly injected runnable config while executing this node, rather
+        # than relying on Python 3.11-only implicit task-context propagation.
+        token = var_child_runnable_config.set(config)
+        try:
+            await asyncio.sleep(0)
+            _interrupt({"q": "approve?"})
+            return {"value": 0}
+        finally:
+            var_child_runnable_config.reset(token)
 
     g = StateGraph(State)
     g.add_node("ask_human", ask_human)
@@ -164,12 +182,11 @@ def build_tool_interrupt_graph():
     """seed -> ToolNode whose tool calls interrupt() (LangGraph HITL-approval pattern)."""
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.prebuilt import ToolNode
-    from langgraph.types import interrupt
 
     @tool
     def ask_approval(item: str) -> str:
         """Human-in-the-loop approval tool."""
-        interrupt({"q": item})
+        _interrupt({"q": item})
         return "approved"
 
     def seed(state: State):
@@ -186,7 +203,7 @@ def build_tool_interrupt_graph():
 
     g = StateGraph(State)
     g.add_node("seed", seed)
-    g.add_node("tools", ToolNode([ask_approval]))
+    g.add_node("tools", ToolNode([ask_approval], handle_tool_errors=False))
     g.add_edge(START, "seed")
     g.add_edge("seed", "tools")
     g.add_edge("tools", END)
@@ -195,10 +212,13 @@ def build_tool_interrupt_graph():
 
 def build_command_handoff_graph():
     """route -> Command(goto='done'): a ParentCommand control-flow bubble-up (not HITL)."""
-    from langgraph.types import Command
+    try:
+        from langgraph.types import Command
+    except ImportError:
+        Command = None
 
     def route(state: State):
-        return Command(goto="done")
+        return Command(goto="done") if Command is not None else {"value": state["value"]}
 
     def done(state: State):
         return {"value": 9}
@@ -207,6 +227,9 @@ def build_command_handoff_graph():
     g.add_node("route", route)
     g.add_node("done", done)
     g.add_edge(START, "route")
+    if Command is None:
+        # Historical routing used conditional edges, before Command existed.
+        g.add_conditional_edges("route", lambda _: "done")
     g.add_edge("done", END)
     return g.compile()
 
