@@ -18,7 +18,7 @@ from .integration import (
     enable_http_attribute_mapping,
 )
 
-__version__ = "0.1.1"  # x-release-please-version
+__version__ = "0.1.2"  # x-release-please-version
 
 __all__ = [
     "enable_fi_attribute_mapping",

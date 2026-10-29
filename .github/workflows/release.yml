@@ -68,8 +68,10 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/release-please-test" --ignore-scripts --no-audit --no-fund release-please@17.11.2
           NODE_PATH="$RUNNER_TEMP/release-please-test/node_modules" node .github/release/test_release_strategies.cjs
-      - name: Validate runtime versions and release-please coverage
-        run: python3 .github/release/release_plan.py --check
+      - name: Validate runtime versions, coverage and bootstrap backlog
+        run: |
+          python3 .github/release/release_plan.py --check
+          python3 .github/release/bootstrap_audit.py --check
       - name: Query registries and reconcile incomplete releases
         id: plan
         env:

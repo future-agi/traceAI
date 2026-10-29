@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.1.11] - 2026-10-29
 ### Fixed
 - Embeddings respect `hide_inputs` for indexed input text and `hide_outputs` for both raw and indexed vectors, including with older fi-core releases.
 - Chat streams used with `with` / `async with` retain the traced iterator and finish once on exhaustion or early context exit; context-body errors mark an unfinished span as ERROR.

@@ -106,7 +106,9 @@ recovery and dry runs. Pull requests never publish; workflow dispatch defaults t
 run and only main is eligible to publish. The workflow never auto-merges a release PR.
 
 When adding a package, add its release-please config and manifest entries, and Python
-runtime-version `extra-files`/markers if applicable. Validate locally:
+runtime-version `extra-files`/markers if applicable. The initial release also includes audited
+one-time patches for fixes merged after their current registry version was uploaded; see
+`RELEASING.md` and `.github/release/bootstrap-audit.json`. Validate locally:
 
 ```bash
 python3 -m unittest discover -s .github/release -p 'test_*.py'

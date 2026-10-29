@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {Manifest} = require('release-please/build/src/manifest.js');
 const {FileNotFoundError} = require('release-please/build/src/errors/index.js');
-const root = path.resolve(__dirname, '../..');
+const root = process.argv[2] ? path.resolve(process.argv[2]) : path.resolve(__dirname, '../..');
 const config = JSON.parse(fs.readFileSync(path.join(root, 'release-please-config.json')));
 const baseline = JSON.parse(fs.readFileSync(path.join(root, '.release-please-manifest.json')));
 const featureVersion = version => {
@@ -66,8 +66,24 @@ const scm = {
   assert(updates.get('csharp/src/FIInstrumentation/FIInstrumentation.csproj').includes(`<Version>${next['csharp/src/FIInstrumentation']}</Version>`));
   assert(!next.java.includes('SNAPSHOT'), 'one release PR, no Maven snapshot PR');
   assert.match(updates.get('java/pom.xml'), new RegExp(`<version>${next.java.replaceAll('.', '\\.')}</version>`));
+  // The Java lane's BOM and every literal reactor parent must move with the
+  // root version. Merely checking the root POM misses a broken Maven reactor.
+  const {DOMParser} = require('@xmldom/xmldom');
+  const parentOf = text => new DOMParser().parseFromString(text, 'text/xml').getElementsByTagName('parent')[0];
+  const valueOf = (parent, name) => parent?.getElementsByTagName(name)[0]?.textContent;
+  const javaPoms = fs.readdirSync(path.join(root, 'java'), {recursive: true})
+    .filter(f => path.basename(f) === 'pom.xml').map(f => `java/${f}`);
+  let checkedJavaParents = 0;
+  for (const file of javaPoms) {
+    const original = parentOf(fs.readFileSync(path.join(root, file), 'utf8'));
+    if (!['com.futureagi', 'ai.traceai'].includes(valueOf(original, 'groupId'))) continue;
+    const updated = parentOf(updates.get(file) || fs.readFileSync(path.join(root, file), 'utf8'));
+    assert.equal(valueOf(updated, 'version'), next.java, `${file}: parent version must follow root`);
+    checkedJavaParents++;
+  }
+  assert(checkedJavaParents > 0, 'test must cover the Java module parents');
   const {TagName} = require('release-please/build/src/util/tag-name.js');
   const {Version} = require('release-please/build/src/version.js');
   assert.equal(new TagName(Version.parse('0.1.0'), 'go/openai', '/', true).toString(), 'go/openai/v0.1.0');
-  console.log(JSON.stringify({result: 'PASS', pullRequests: prs.length, syntheticBumps: Object.fromEntries(Object.keys(next).filter(p => next[p] !== baseline[p]).map(p => [p, {from: baseline[p], to: next[p]}])), updatedFiles: [...updates.keys()]}, null, 2));
+  console.log(JSON.stringify({result: 'PASS', pullRequests: prs.length, checkedJavaParents, bomPresent: javaPoms.includes('java/traceai-bom/pom.xml'), syntheticBumps: Object.fromEntries(Object.keys(next).filter(p => next[p] !== baseline[p]).map(p => [p, {from: baseline[p], to: next[p]}])), updatedFiles: [...updates.keys()]}, null, 2));
 })().catch(err => { console.error(err); process.exitCode = 1; });

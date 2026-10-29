@@ -1,6 +1,6 @@
 {
   "name": "@traceai/vercel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for Vercel",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",

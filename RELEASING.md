@@ -28,7 +28,20 @@ The Go proxy URL escapes uppercase letters: `traceAI` becomes `trace!a!i`. A mod
 
 The manifest is seeded from the current versions on dev, **not** from old registry versions. Go starts at **0.1.0**. `bootstrap-sha` is the dev head `35f2e3dc364676fa5bdab1e71ae500daf9efc00c`: this deliberately excludes pre-bootstrap history from the first release PR. Keep that SHA as a fallback for components that have not yet acquired matching release tags; do not advance it on each release.
 
-When [#287](https://github.com/future-agi/traceAI/pull/287) reaches main, existing unpublished versions can ship immediately once their ecosystem's setup is complete. The workflow also repairs missing tags/releases for versions already on a registry, without re-uploading them or attaching newly built binaries to their historical version. Nothing automatically increments every SDK merely because #287 contains old history. The first qualifying **post-bootstrap** package change produces the next bump.
+When [#287](https://github.com/future-agi/traceAI/pull/287) reaches main, existing unpublished versions can ship immediately once their ecosystem's setup is complete. **Already-merged fixes must not be stranded behind an unchanged registry version.** The committed [bootstrap audit](.github/release/bootstrap-audit.json) inventories all **68 Python and 47 npm manifests** at that baseline, reads the public upload timestamp of each current version, and checks first-parent package history after the upload. It uses the last wheel/sdist upload, not registry project-modification time; core excludes sibling SDK directories. This is conservative: any package-directory change counts, including docs/version housekeeping.
+
+The audit found **35 Python and 3 npm same-version packages with later merged changes**. This PR applies explicit, one-time patch bumps to those **38 packages**, including Python OpenAI **0.1.10 → 0.1.11** for the already-merged #249 fix. Package manifests, Python runtime versions, release-please's manifest and changelogs move together. This option deliberately avoids replaying all old conventional commits or repeatedly forcing `release-as`. There are also **25 Python and 12 npm current versions not yet uploaded**, which need no additional bootstrap bump. Six published Python and 32 published npm packages have no package history after their current-version upload and are left unchanged; two Python manifests are excluded below.
+
+Thus the audited first run needs **60 Python + 15 npm new uploads**, five initial Go tags, and the Java reactor after its companion PR; NuGet 1.0.0 is already published. Registry state can change before the actual release, so the live planner remains authoritative. The workflow also repairs missing tags/releases for versions already on a registry, without re-uploading them or attaching newly built binaries to their historical version. Subsequent qualifying **post-bootstrap** changes use the normal release PR loop.
+
+To reproduce the read-only audit or validate its one-time version floor:
+
+```bash
+python3 .github/release/bootstrap_audit.py --output /tmp/traceai-bootstrap-audit.json
+python3 .github/release/bootstrap_audit.py --check
+```
+
+Reproducing history requires the baseline commit in the local clone. The offline check and CI tests need only the current checkout; they allow later versions rather than permanently pinning packages to the bootstrap patch.
 
 Two manifests are tracked but intentionally **never published**:
 
@@ -108,7 +121,7 @@ Once the config/manifest are present on the target branch, preview the actual PR
   --token "$(gh auth token)"
 ```
 
-Use a token with read access for this dry run. Do not enable shell tracing around tokens. The initial development preview used real dev history with **only** the two proposed, not-yet-merged config files overlaid locally; it found zero post-bootstrap commits and would open zero PRs. A separate fully offline fake-history test exercises a qualifying feature across all five languages and asserts one combined PR plus correct version-file changes.
+Use a token with read access for this dry run. Do not enable shell tracing around tokens. The initial development preview used real dev history with **only** the two proposed, not-yet-merged config files overlaid locally; it found zero post-bootstrap commits and would open zero PRs. A separate fully offline fake-history test exercises a qualifying feature across all five languages and asserts one combined PR plus correct version-file changes. It checks every internal Java parent POM, not just the reactor root; an additional local run over companion #302 also covers `traceai-bom`.
 
 For a GitHub-hosted build-only run after the workflow lands on the default branch:
 
