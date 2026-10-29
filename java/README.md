@@ -222,7 +222,7 @@ Additional examples are in [`examples/`](examples), including [LangChain4j](exam
 
 ## Build and test
 
-Build with **JDK 21** (also used by CI and JitPack) and Maven. The SDK modules target Java 17 bytecode; the Arconia and Quarkus examples have their own Java 21 requirements.
+Build with **JDK 21** (also used by CI and JitPack) and Maven. The checked-in `./mvnw` wrapper pins Maven 3.9.9 and verifies the distribution checksum; JitPack uses it rather than an image-dependent Maven version. The SDK modules target Java 17 bytecode; the Arconia and Quarkus examples have their own Java 21 requirements.
 
 ```bash
 cd java

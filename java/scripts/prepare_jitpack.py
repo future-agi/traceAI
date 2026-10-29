@@ -30,24 +30,24 @@ def prepare(local_repo, group, version):
     # normal/Central POMs: this command requires the isolated jitpack profile.
     prepared = []
     for artifact in sorted(artifacts):
-        path = local_repo / "com/futureagi" / artifact / source_version / f"{artifact}-{source_version}.pom"
+        path = local_repo / "com/futureagi" / artifact / source_version / "{}-{}.pom".format(artifact, source_version)
         tree = ET.parse(path)
         pom = tree.getroot()
         if pom.find("m:parent", NS) is not None or "${" in path.read_text():
-            raise ValueError(f"not a self-contained JitPack POM: {path}")
+            raise ValueError("not a self-contained JitPack POM: {}".format(path))
         for dep in pom.findall(".//m:dependency", NS):
             dep_group = dep.find("m:groupId", NS)
             if dep_group is not None and dep_group.text in {"com.futureagi", group}:
                 dep_version = dep.find("m:version", NS)
                 if (dep.findtext("m:artifactId", namespaces=NS) not in artifacts or
                         dep_version is None or dep_version.text not in {source_version, version}):
-                    raise ValueError(f"unaligned internal dependency in {path}")
+                    raise ValueError("unaligned internal dependency in {}".format(path))
                 dep_group.text = group
                 dep_version.text = version
         prepared.append((path, tree))
     for path, tree in prepared:
         tree.write(path, encoding="UTF-8", xml_declaration=True)
-    print(f"Prepared {len(prepared)} self-contained POMs for {group}:*:{version}")
+    print("Prepared {} self-contained POMs for {}:*:{}".format(len(prepared), group, version))
     return len(prepared)
 
 

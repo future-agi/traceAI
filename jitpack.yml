@@ -3,5 +3,4 @@
 jdk:
   - openjdk21
 install:
-  - mvn -B -ntp -f java/pom.xml -P jitpack -DskipTests install
-  - python3 -I java/scripts/prepare_jitpack.py --group "${GROUP}.${ARTIFACT}" --version "$VERSION"
+  - ./java/mvnw -B -ntp -f java/pom.xml -P jitpack -DskipTests install && python3 -I java/scripts/prepare_jitpack.py --group "${GROUP}.${ARTIFACT}" --version "$VERSION"

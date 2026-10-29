@@ -55,7 +55,7 @@ jobs:
           mvn -B -ntp -f examples/openai-example/pom.xml test
       - name: Validate self-contained JitPack POMs and external consumers
         run: |
-          mvn -B -ntp -P jitpack -DskipTests install
+          ./mvnw -B -ntp -P jitpack -DskipTests install
           python3 -I scripts/test_consumers.py --check-jitpack-poms
       - name: Upload test reports
         if: always()
