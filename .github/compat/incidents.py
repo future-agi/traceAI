@@ -144,6 +144,32 @@ def incident_key(case):
     return digest([case["integration_id"], upstream_tuple(case), case["failure"]["signature"]])
 
 
+def covered_failed_ids(failure, executed_ids):
+    covered = set(executed_ids)
+    # Canonical pytest collection errors can identify a module, not an executed
+    # node. Only collection failures have this interpretation; assertions retain
+    # exact node/parameter matching. The :: boundary prevents filename prefixes
+    # or sibling modules from accidentally satisfying coverage. Set operations
+    # keep large retained suites linear rather than comparing every node pair.
+    if failure.get("failure_kind", failure.get("kind")) == "collection":
+        covered.update(node.split("::", 1)[0] for node in list(covered)
+                       if "::" in node and node.split("::", 1)[0].endswith(".py"))
+    return set(failure["test_ids"]) & covered
+
+
+def complete_pass(case):
+    # Production callers have already authenticated full collect-only evidence,
+    # invocation success, JUnit and the retained suite through the canonical
+    # validator. Keep these in-memory checks too; a partial/skipped execution
+    # cannot supply recovery merely because its status string says passed.
+    contract = case["contract"]
+    tests = contract["tests"]
+    return (bool(tests) and contract["collected"] == contract["executed"] == len(tests)
+            and not contract["unexpected_skips"] and case["failure"] is None
+            and len({t["test_id"] for t in tests}) == len(tests)
+            and all(t["outcome"] == "passed" for t in tests))
+
+
 def classify(case):
     kind = case["failure"]["kind"]
     if kind in ("resolution", "install", "requested_resolved_mismatch"):
@@ -452,6 +478,28 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
             continue
         failed = case["status"] in ("failed", "flaky", "quarantined", "blocked") and case["failure"] is not None
         if failed:
+            observation = [run["run_id"], run["run_attempt"], case["attempt"], case["completed_at"]]
+            if case["mode"] == "source":
+                # A changed diagnostic creates a distinct incident, but cannot
+                # leave older source passes certifying an affected published
+                # scope. Invalidate across signatures while retaining each
+                # original failure and its independent incident identity.
+                for prior in states.values():
+                    if (prior["kind"] != "compatibility" or prior["integration_id"] != case["integration_id"]
+                            or digest(prior["tuple"]) != digest(upstream_tuple(case))):
+                        continue
+                    for other in prior["scopes"].values():
+                        bad = other["failure"]
+                        if (bad["mode"] != "published" or bad["runtime"] != case["runtime"]
+                                or other["suite"] != case["contract"]["suite_sha256"]):
+                            continue
+                        affected = (covered_failed_ids(bad, case["failure"]["test_ids"])
+                                    or covered_failed_ids(case["failure"], bad["test_ids"]))
+                        source_mark = other.get("source_watermark")
+                        if affected and (source_mark is None or at >= timestamp(source_mark[3])):
+                            other["source_passes"] = []
+                            other["source_watermark"] = observation
+                            prior["last_seen"] = max(prior["last_seen"], case["completed_at"], key=timestamp)
             key = incident_key(case)
             if key in isolated:
                 continue
@@ -465,7 +513,6 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
             })
             sk = scope_key(case)
             scope = state["scopes"].get(sk)
-            observation = [run["run_id"], run["run_attempt"], case["attempt"], case["completed_at"]]
             if scope and (at < timestamp(scope["watermark"][3]) or observation == scope["watermark"]):
                 continue
             selected = next((c for c in (plans or {}).get(run["run_id"], {}).get("cases", [])
@@ -474,16 +521,9 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
                                    "source_passes": scope["source_passes"] if scope and case["mode"] == "published" else [],
                                    "source_watermark": scope.get("source_watermark") if scope else None,
                                    "watermark": observation, "suite": case["contract"]["suite_sha256"]}
-            if case["mode"] == "source":
-                for other in state["scopes"].values():
-                    if other["failure"]["mode"] == "published" and other["failure"]["runtime"] == case["runtime"]:
-                        source_mark = other.get("source_watermark")
-                        if source_mark is None or at >= timestamp(source_mark[3]):
-                            other["source_passes"] = []
-                            other["source_watermark"] = observation
             state["status"] = "open"
             state["last_seen"] = max(state["last_seen"], case["completed_at"], key=timestamp)
-        elif case["status"] == "passed" and fresh(evidence(case, run), targets[case["integration_id"]]):
+        elif case["status"] == "passed" and complete_pass(case) and fresh(evidence(case, run), targets[case["integration_id"]]):
             for state in states.values():
                 if state["kind"] != "compatibility" or state["integration_id"] != case["integration_id"]:
                     continue
@@ -506,7 +546,8 @@ def reconcile(runs, issues, registry, now, health=(), *, plans=None):
                     elif bad["runtime"] != case["runtime"]:
                         continue
                     executed = {t["test_id"] for t in case["contract"]["tests"] if t["outcome"] == "passed"}
-                    if not set(bad["test_ids"]).issubset(executed) or not set(bad["scenarios"]).issubset(case["contract"]["scenarios"]):
+                    if (covered_failed_ids(bad, executed) != set(bad["test_ids"])
+                            or not set(bad["scenarios"]).issubset(case["contract"]["scenarios"])):
                         continue
                     comparable = bad["mode"] == case["mode"]
                     source_recovery = bad["mode"] == "published" and case["mode"] == "source"

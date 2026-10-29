@@ -21,6 +21,159 @@ def lifecycle(runs, issues=()):
 
 
 class ResumeRecoveryTests(unittest.TestCase):
+    def collection_runs(self, mode):
+        """Synthetic lifecycle inputs, not extra SDK executions/released fixes."""
+        modules = ['tests/test_collection_a.py', 'tests/test_collection_b.py']
+        failed = copy.deepcopy(RUNS[1])
+        case = failed['cases'][0]
+        case['failure'].update(kind='collection', test_ids=modules,
+                               summary='ImportError: retained modules cannot be collected')
+        case['contract']['tests'] = [dict(case['contract']['tests'][0], test_id=module, outcome='error')
+                                     for module in modules]
+        case['contract'].update(collected=2, executed=2)
+        passes = copy.deepcopy(RUNS[-2:])
+        for bundle in passes:
+            candidate = bundle['cases'][0]
+            candidate['mode'] = mode
+            template = candidate['contract']['tests'][0]
+            nodes = [modules[0] + '::TestOuter::TestInner::test_one[param]',
+                     modules[0] + '::test_two', modules[1] + '::test_three']
+            candidate['contract']['tests'] = [dict(template, test_id=node) for node in nodes]
+            candidate['contract'].update(collected=3, executed=3)
+        return failed, passes
+
+    def test_collection_modules_recover_with_complete_retained_suite(self):
+        for mode, expected in [('source', 'release_pending'), ('published', 'recovered')]:
+            failed, passes = self.collection_runs(mode)
+            original = lifecycle([failed])['actions'][0]
+            issue = issue_for(original)
+            for count, bundle in enumerate(passes, 1):
+                result = lifecycle([bundle], [issue])
+                state = next(s for s in result['states'] if s['key'] == original['key'])
+                scope = next(iter(state['scopes'].values()))
+                field = 'source_passes' if mode == 'source' else 'passes'
+                with self.subTest(mode=mode, count=count):
+                    self.assertEqual(len(scope[field]), count)
+                    self.assertEqual(state['status'], 'open' if count == 1 else expected)
+                    self.assertEqual(scope['failure']['test_ids'], failed['cases'][0]['failure']['test_ids'])
+                    issue = issue_for(result['actions'][0])
+                    self.assertIsNotNone(parse_issue(issue))
+                    self.assertEqual(lifecycle([bundle], [issue])['actions'], [])
+            self.assertEqual(issue['state'], 'closed' if mode == 'published' else 'open')
+
+    def test_collection_recovery_rejects_missing_partial_changed_or_uncovered_suite(self):
+        for variation in ('missing_module', 'module_prefix', 'partial_execution', 'skipped_node',
+                          'changed_suite', 'missing_scenarios', 'assertion_module_identity'):
+            failed, passes = self.collection_runs('source')
+            if variation == 'assertion_module_identity':
+                failed['cases'][0]['failure']['kind'] = 'contract'
+            issue = issue_for(lifecycle([failed])['actions'][0])
+            for bundle in passes:
+                contract = bundle['cases'][0]['contract']
+                if variation in ('missing_module', 'module_prefix'):
+                    contract['tests'][-1]['test_id'] = ('tests/other.py::test_three' if variation == 'missing_module'
+                                                       else 'tests/test_collection_b.py_extra::test_three')
+                elif variation == 'partial_execution':
+                    contract['executed'] -= 1
+                elif variation == 'skipped_node':
+                    contract['tests'][1]['outcome'] = 'skipped'
+                    contract['executed'] -= 1
+                    contract['unexpected_skips'] = 1
+                elif variation == 'changed_suite':
+                    contract['suite_sha256'] = 'd' * 64
+                elif variation == 'missing_scenarios':
+                    contract['scenarios'] = []
+            result = lifecycle(passes, [issue])
+            state = next(s for s in result['states'] if s['kind'] == 'compatibility')
+            with self.subTest(variation=variation):
+                self.assertEqual(state['status'], 'open')
+                self.assertTrue(all(not s['source_passes'] for s in state['scopes'].values()))
+
+    def source_regression(self):
+        bundle = copy.deepcopy(RUNS[2])
+        case = bundle['cases'][0]
+        case.update(mode='source', completed_at='2026-10-28T06:00:00Z')
+        case['failure'].update(signature='f' * 64, summary='AssertionError: a different diagnostic on the same node')
+        for node in case['contract']['tests']:
+            node['failure_signature'] = 'f' * 64
+        return bundle
+
+    def test_changed_diagnostic_invalidates_prior_source_recovery_across_incidents(self):
+        for persisted in (False, True):
+            pending = lifecycle(RUNS[:5])
+            first = pending['actions'][0]
+            issue = issue_for(first)
+            original_failure = copy.deepcopy(next(iter(parse_issue(issue)['scopes'].values()))['failure'])
+            regression = self.source_regression()
+            observations = [regression] if persisted else RUNS[:5] + [regression]
+            result = lifecycle(observations, [issue] if persisted else [])
+            old = next(s for s in result['states'] if s['key'] == first['key'])
+            new = next(s for s in result['states'] if s['key'] == incident_key(regression['cases'][0]))
+            with self.subTest(persisted=persisted):
+                self.assertEqual(old['status'], 'open')
+                self.assertTrue(all(not s['source_passes'] for s in old['scopes'].values()))
+                self.assertEqual(next(iter(old['scopes'].values()))['failure'], original_failure)
+                self.assertEqual(new['status'], 'open')
+                self.assertNotEqual(old['signature'], new['signature'])
+                self.assertEqual(old['last_seen'], regression['cases'][0]['completed_at'])
+                stored = [issue_for(a, 42 if a['key'] == first['key'] else 43) for a in result['actions']]
+                self.assertTrue(all(parse_issue(i) for i in stored))
+                # Replaying earlier full-suite passes must not restore the obsolete claim.
+                self.assertEqual(lifecycle(RUNS[:5] + [regression], stored)['actions'], [])
+                newer = copy.deepcopy(RUNS[3:5])
+                for hour, bundle in enumerate(newer, 7):
+                    bundle['cases'][0]['completed_at'] = f'2026-10-28T{hour:02}:00:00Z'
+                restored = lifecycle(newer, stored)
+                self.assertEqual(next(s for s in restored['states'] if s['key'] == first['key'])['status'], 'release_pending')
+
+    def test_source_regression_only_invalidates_matching_affected_published_scope(self):
+        first = lifecycle(RUNS[:5])['actions'][0]
+        issue = issue_for(first)
+        for variation in ('suite', 'runtime', 'tuple', 'integration', 'different_node', 'older', 'published'):
+            regression = self.source_regression()
+            case = regression['cases'][0]
+            if variation == 'suite':
+                case['contract']['suite_sha256'] = 'd' * 64
+            elif variation == 'runtime':
+                case['runtime']['version'] = '3.13.9'
+            elif variation == 'tuple':
+                next(p for p in case['resolved'] if p['role'] == 'upstream')['version'] = '1.94.0'
+            elif variation == 'integration':
+                case['integration_id'] = 'python-langchain'
+            elif variation == 'different_node':
+                case['failure']['test_ids'] = ['tests/other.py::test_other']
+                case['contract']['tests'][0]['test_id'] = case['failure']['test_ids'][0]
+            elif variation == 'older':
+                case['completed_at'] = '2026-10-27T05:00:00Z'
+            else:
+                case['mode'] = 'published'
+            result = lifecycle([regression], [issue])
+            old = next(s for s in result['states'] if s['key'] == first['key'])
+            with self.subTest(variation=variation):
+                self.assertEqual(old['status'], 'release_pending')
+                self.assertEqual(len(next(iter(old['scopes'].values()))['source_passes']), 2)
+                self.assertFalse(any(a['key'] == first['key'] for a in result['actions']))
+
+    def test_collection_and_exact_node_source_regressions_invalidate_each_other(self):
+        # Collection-module identities and assertion-node identities overlap only
+        # within that canonical module, never via a loose filename prefix.
+        for original_collection in (False, True):
+            failed, passes = self.collection_runs('source')
+            if not original_collection:
+                case = failed['cases'][0]
+                case['failure'].update(kind='contract', test_ids=[passes[0]['cases'][0]['contract']['tests'][0]['test_id']])
+                case['contract']['tests'] = [dict(case['contract']['tests'][0], test_id=case['failure']['test_ids'][0], outcome='failure')]
+                case['contract'].update(collected=1, executed=1)
+            original = lifecycle([failed] + passes)['actions'][0]
+            regression = copy.deepcopy(failed)
+            case = regression['cases'][0]
+            case.update(mode='source', completed_at='2026-10-28T06:00:00Z')
+            ids = ([passes[0]['cases'][0]['contract']['tests'][0]['test_id']] if original_collection
+                   else ['tests/test_collection_a.py'])
+            case['failure'].update(kind='contract' if original_collection else 'collection', test_ids=ids, signature='e' * 64)
+            result = lifecycle([regression], [issue_for(original)])
+            self.assertEqual(next(s for s in result['states'] if s['key'] == original['key'])['status'], 'open')
+
     def test_invalid_unicode_in_owned_state_is_isolated_through_output_writing(self):
         import base64
         import tempfile
