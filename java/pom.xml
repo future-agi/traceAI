@@ -4,14 +4,23 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>ai.traceai</groupId>
+    <groupId>com.futureagi</groupId>
     <artifactId>traceai-java-parent</artifactId>
     <version>1.0.0</version>
     <packaging>pom</packaging>
 
     <name>TraceAI Java SDK</name>
     <description>Enterprise-grade AI observability for Java applications</description>
-    <url>https://github.com/future-agi/traceai-java</url>
+    <url>https://github.com/future-agi/traceAI/tree/main/java</url>
+
+    <scm child.scm.connection.inherit.append.path="false"
+         child.scm.developerConnection.inherit.append.path="false"
+         child.scm.url.inherit.append.path="false">
+        <connection>scm:git:https://github.com/future-agi/traceAI.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/future-agi/traceAI.git</developerConnection>
+        <url>https://github.com/future-agi/traceAI</url>
+        <tag>HEAD</tag>
+    </scm>
 
     <licenses>
         <license>
@@ -29,6 +38,9 @@
     </developers>
 
     <modules>
+        <!-- Version alignment for consumers -->
+        <module>traceai-bom</module>
+
         <!-- Core -->
         <module>traceai-java-core</module>
 
@@ -115,7 +127,7 @@
 
             <!-- Internal modules -->
             <dependency>
-                <groupId>ai.traceai</groupId>
+                <groupId>com.futureagi</groupId>
                 <artifactId>traceai-java-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -184,8 +196,6 @@
                     <version>3.2.3</version>
                     <configuration>
                         <argLine>
-                            -XX:+EnableDynamicAgentLoading
-                            -javaagent:${user.home}/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.10/byte-buddy-agent-1.14.10.jar
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
@@ -210,6 +220,76 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <!-- Opt-in only: normal builds neither sign artifacts nor contact Central. -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <properties>
+                <gpg.signer>bc</gpg.signer>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals><goal>jar-no-fork</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals><goal>jar</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <configuration>
+                            <!-- BC reads an armored secret key directly from the environment;
+                                 no key file or persistent local GnuPG keyring is required. -->
+                            <signer>${gpg.signer}</signer>
+                            <keyEnvName>MAVEN_GPG_PRIVATE_KEY</keyEnvName>
+                            <passphraseEnvName>MAVEN_GPG_PASSPHRASE</passphraseEnvName>
+                            <bestPractices>true</bestPractices>
+                            <!-- Also supports -Dgpg.signer=gpg with a pre-imported key. -->
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals><goal>sign</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.12.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <repositories>
         <repository>
