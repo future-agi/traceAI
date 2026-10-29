@@ -43,10 +43,25 @@ def decode_json(raw, limit=8 * 1024 * 1024):
             result[key] = item
         return result
     try:
-        return json.loads(value, object_pairs_hook=unique,
-                          parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON number")))
+        decoded = json.loads(value, object_pairs_hook=unique,
+                             parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON number")))
     except RecursionError:
         raise ValueError("JSON exceeds decoder nesting limit") from None
+    # ASCII JSON escapes can decode to lone UTF-16 surrogates even when the wire
+    # bytes are valid UTF-8. Reject them in keys and values, including nested
+    # arrays and persisted issue state, before they can reach final output.
+    stack = [decoded]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if re.search(r"[\ud800-\udfff]", item):
+                raise ValueError("JSON contains an invalid Unicode scalar")
+        elif isinstance(item, dict):
+            stack.extend(item)
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return decoded
 
 REPORTER_USER = {"id": 41898282, "login": "github-actions[bot]", "type": "Bot"}
 
@@ -145,7 +160,10 @@ def classify(case):
 def text(value, limit=1500):
     # Artifacts may contain mentions, HTML and Markdown. They are data, not a
     # request to notify arbitrary users or inject a hidden incident marker.
-    value = str(value).replace("@", "＠").replace("<", "&lt;").replace(">", "&gt;")
+    # Defense in depth for direct in-memory callers; decoded untrusted JSON is
+    # rejected instead. A display string must always be writable as UTF-8.
+    value = re.sub(r"[\ud800-\udfff]", "�", str(value))
+    value = value.replace("@", "＠").replace("<", "&lt;").replace(">", "&gt;")
     value = value.replace("|", "\\|").replace("`", "'")
     return re.sub(r"[\x00-\x08\x0b-\x1f]", "", value)[:limit]
 

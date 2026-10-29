@@ -21,6 +21,38 @@ def lifecycle(runs, issues=()):
 
 
 class ResumeRecoveryTests(unittest.TestCase):
+    def test_invalid_unicode_in_owned_state_is_isolated_through_output_writing(self):
+        import base64
+        import tempfile
+        import zlib
+        from report import write_outputs
+        first = lifecycle(RUNS[:2])['actions'][0]
+        for version in (1, 2):
+            for field in ('summary', 'owner', 'test_id'):
+                state = parse_issue(first)
+                scalar = chr(0xd800 if field != 'owner' else 0xdfff)
+                if field == 'test_id':
+                    next(iter(state['scopes'].values()))['failure']['test_ids'][0] += scalar
+                else:
+                    state[field] += scalar
+                raw = json.dumps(state).encode('ascii')
+                encoded = base64.urlsafe_b64encode(zlib.compress(raw) if version == 2 else raw).decode()
+                issue = issue_for(first)
+                issue['body'] = f'<!-- traceai-compat:v{version} {encoded} -->'
+                with self.subTest(version=version, field=field), tempfile.TemporaryDirectory() as tmp:
+                    self.assertIsNone(parse_issue(issue))
+                    result = write_outputs(Path(tmp), [RUNS[-1]], REGISTRY, NOW, [issue])
+                    self.assertIn('issue-state:42', [h['id'] for h in result['health']])
+                    index = json.loads((Path(tmp) / 'results-index.json').read_text())
+                    self.assertEqual([r['run_id'] for r in index['observations']], [RUNS[-1]['run']['run_id']])
+                    self.assertIn(RUNS[-1]['run']['url'], (Path(tmp) / 'compatibility.md').read_text(encoding='utf-8'))
+
+    def test_display_text_is_utf8_safe_even_for_in_memory_invalid_scalars(self):
+        value = 'diagnostic ' + chr(0xd800) + chr(0xdfff)
+        displayed = text(value)
+        self.assertEqual(displayed, 'diagnostic ��')
+        self.assertEqual(displayed.encode('utf-8').decode('utf-8'), displayed)
+
     def test_extreme_timezone_offsets_in_owned_state_are_isolated(self):
         import base64
         first = lifecycle(RUNS[:2])['actions'][0]

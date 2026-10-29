@@ -218,7 +218,7 @@ class ValidationTests(unittest.TestCase):
             good = '<testcase file="tests/test_fixture.py" classname="tests.test_fixture" name="test_stream"/>'
             for xml in ('<testsuite><testcase file="other.py" name="other"/></testsuite>',
                         '<testsuite>' + good + good + '</testsuite>',
-                        '<testsuite>' + good.replace('/>', '><failure/></testcase>') + '</testsuite>'):
+                        '<testsuite>' + good.replace('/>', '><failure message="AssertionError: changed outcome">AssertionError: changed outcome</failure></testcase>') + '</testsuite>'):
                 junit.write_text(xml)
                 with self.assertRaisesRegex(ValueError, 'JUnit'):
                     validate_bundle(bundle, REGISTRY, NOW, artifact_root=root)
@@ -226,8 +226,28 @@ class ValidationTests(unittest.TestCase):
             validate_bundle(bundle, REGISTRY, NOW, artifact_root=root)
         self.assertEqual(junit_outcomes(b'<testsuite><testcase file="x/test_a.py" classname="x.test_a.TestFoo" name="test_a[p.q]"/></testsuite>'),
                          {'x/test_a.py::TestFoo::test_a[p.q]': 'passed'})
-        self.assertEqual(junit_outcomes(b'<testsuite><testcase classname="x.test_a" name="test_a[p.q]"/></testsuite>'),
-                         {'x/test_a.py::test_a[p.q]': 'passed'})
+        # Production requires repository-relative file attributes; a classname
+        # alone cannot authenticate a canonical pytest node ID.
+        with self.assertRaisesRegex(ValueError, 'JUnit.*file'):
+            junit_outcomes(b'<testsuite><testcase classname="x.test_a" name="test_a[p.q]"/></testsuite>')
+
+    def test_unknown_junit_codec_is_a_controlled_validation_error(self):
+        raw = b'<?xml version="1.0" encoding="not-a-codec"?><testsuite><testcase file="tests/test_x.py" name="test_y"/></testsuite>'
+        with self.assertRaisesRegex(ValueError, 'malformed JUnit'):
+            junit_outcomes(raw)
+
+    def test_invalid_unicode_scalars_are_rejected_at_json_boundaries(self):
+        from incidents import decode_json
+        for scalar in ('\ud800', '\udfff'):
+            for value in (scalar, [scalar], {'nested': [{'summary': scalar}]}, {scalar: 'key'}):
+                raw = json.dumps(value)
+                for encoded in (raw, raw.encode('ascii')):
+                    with self.subTest(value=repr(value), bytes=isinstance(encoded, bytes)), \
+                            self.assertRaisesRegex(ValueError, 'Unicode scalar'):
+                        decode_json(encoded)
+        # Valid escaped surrogate pairs decode to an actual Unicode scalar.
+        self.assertEqual(decode_json(b'"\\ud800\\udc00"'), '\U00010000')
+        self.assertEqual(decode_json(json.dumps({'text': '\U0010ffff café'})), {'text': '\U0010ffff café'})
 
     def test_correctly_hashed_contradictory_lock_is_rejected(self):
         bundle = copy.deepcopy(RUNS[-1])
@@ -584,6 +604,51 @@ class ProvenanceTests(unittest.TestCase):
         bundles, errors = github_results(API(), REGISTRY, NOW)
         self.assertEqual(bundles, [])
         self.assertEqual({e['id'] for e in errors}, {'invalid-run:1007', 'invalid-run:2000'})
+
+    def test_text_boundary_failures_preserve_healthy_run_through_final_output(self):
+        for defect in ('xml-codec', 'high-surrogate', 'low-surrogate'):
+            good, healthy_archive = bundle_archive(RUNS[-1])
+            bad = copy.deepcopy(RUNS[1])
+            bad['run'].update(run_id='2000', url=f'https://github.com/{REPO}/actions/runs/2000')
+            if defect != 'xml-codec':
+                bad['cases'][0]['failure']['summary'] = 'Invalid diagnostic ' + chr(0xd800 if defect == 'high-surrogate' else 0xdfff)
+            bad, bad_archive = bundle_archive(bad)
+            changed = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(bad_archive)) as source, zipfile.ZipFile(changed, 'w') as dest:
+                for entry in source.infolist():
+                    content = source.read(entry)
+                    if entry.filename.endswith('.xml'):
+                        content = b'<testsuite><testcase file="tests/test_fixture.py" name="test_stream"><failure message="AssertionError: fixture failure">AssertionError: fixture failure</failure></testcase></testsuite>'
+                        if defect == 'xml-codec':
+                            content = b'<?xml version="1.0" encoding="not-a-codec"?>' + content
+                    dest.writestr(entry, content)
+            archives = {1007: healthy_archive, 2000: changed.getvalue()}
+            metadata = [dict(self.metadata(), created_at='2026-10-28T04:00:00Z'),
+                        dict(self.metadata(), id=2000, html_url=bad['run']['url'], created_at='2026-10-28T04:00:00Z')]
+            class API:
+                def pages(self, path, key=None, **kwargs):
+                    if path.startswith('actions/workflows/'):
+                        return metadata
+                    if path.startswith('actions/artifacts?') or path.startswith('issues?'):
+                        return []
+                    ident = int(path.split('/')[2])
+                    return [dict(name='compatibility-results', expired=False, size_in_bytes=len(archives[ident]), id=ident)]
+                def request(self, path, **kwargs):
+                    return archives[int(path.split('/')[-2])] if path.endswith('/zip') else {'status': 'ahead'}
+            # Exercise the normal read-only CLI through final UTF-8 Markdown and
+            # JSON writing. Only the synthetic fixture's canonical bundle check
+            # is mocked by setUp; XML parsing and JSON decoding are unmocked.
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as tmp, \
+                    patch('report.GitHub', return_value=API()), patch('builtins.print'), \
+                    patch('sys.argv', ['report', '--github', '--output', tmp, '--now', NOW.isoformat()]):
+                self.strict.reset_mock()
+                main()
+                index = load_json(Path(tmp) / 'results-index.json')
+                self.assertEqual([row['run_id'] for row in index['observations']], [good['run']['run_id']])
+                self.assertIn('invalid-run:2000', [h['id'] for h in index['health']])
+                self.assertIn(good['run']['url'], (Path(tmp) / 'compatibility.md').read_text(encoding='utf-8'))
+                self.assertTrue((Path(tmp) / 'incident-actions.json').is_file())
+                self.strict.assert_called_once()
 
     def test_explicit_old_run_and_recent_rerun_are_not_silently_dropped(self):
         from datetime import timedelta

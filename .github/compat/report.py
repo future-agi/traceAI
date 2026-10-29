@@ -226,7 +226,9 @@ def junit_outcomes(content):
             raise ValueError("JUnit DTD/entity declarations are forbidden")
     try:
         xml = ET.fromstring(content, parser=ET.XMLParser(target=NoDeclarations()))
-    except ET.ParseError:
+    except (ET.ParseError, LookupError, UnicodeError):
+        # XML declarations choose a codec before ElementTree can report a parse
+        # error. Unknown/unsupported encodings are invalid per-run evidence too.
         raise ValueError("malformed JUnit") from None
     if Path(__file__).with_name("validate.py").is_file():
         # Once absorbed, production uses the same trusted parser as the producer,
@@ -241,17 +243,14 @@ def junit_outcomes(content):
     observed = {}
     for node in xml.iter("testcase"):
         file, name, classname = node.get("file", ""), node.get("name", ""), node.get("classname", "")
-        if not name or not (file or classname):
+        if not name:
             raise ValueError("JUnit lacks canonical test identity")
-        if file:
-            path = PurePosixPath(file)
-            if path.is_absolute() or ".." in path.parts or "\\" in file:
-                raise ValueError("noncanonical JUnit file")
-            marker = path.stem
-            cls = classname.rsplit(marker, 1)[-1].strip(".") if marker in classname else ""
-            test_id = file + "::" + (cls.replace(".", "::") + "::" if cls else "") + name
-        else:
-            test_id = classname.replace(".", "/") + ".py::" + name
+        path = PurePosixPath(file)
+        if not file.endswith(".py") or path.is_absolute() or ".." in path.parts or "\\" in file:
+            raise ValueError("JUnit requires repository-relative file attributes")
+        marker = path.stem
+        cls = classname.rsplit(marker, 1)[-1].strip(".") if marker in classname else ""
+        test_id = file + "::" + (cls.replace(".", "::") + "::" if cls else "") + name
         outcomes = [kind for kind in ("failure", "error", "skipped") if node.find(kind) is not None]
         if len(outcomes) > 1 or test_id in observed:
             raise ValueError("duplicate/contradictory JUnit test identity")
