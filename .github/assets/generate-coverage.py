@@ -52,10 +52,49 @@ NAMES = {
 }
 LOGOS = {k: k for k in ["openai", "anthropic", "bedrock", "groq", "cohere", "ollama", "langchain", "llamaindex", "crewai", "mcp", "livekit", "pipecat", "pinecone", "dspy", "guardrails", "haystack", "litellm", "mastra", "vercel", "autogen", "together", "vertexai"]}
 LOGOS.update({"google-genai": "google", "google-adk": "google", "azure-openai": "openai", "openai-agents": "openai", "langchain4j": "langchain", "spring-ai": "spring", "spring-boot-starter": "spring", "mistral": "mistral"})
-FEATURED = ["openai", "anthropic", "google-genai", "azure-openai", "bedrock", "vertexai",
-            "langchain", "llamaindex", "crewai", "openai-agents", "google-adk", "langchain4j",
-            "spring-ai", "mcp", "livekit", "pipecat", "groq", "mistral", "cohere", "ollama",
-            "pinecone", "qdrant", "chromadb", "semantic-kernel", "vercel"]
+# Classify by the integration's own README, manifest and implementation, not by
+# language or branding. In particular, mcp-use traces an agent loop; MCP traces
+# the protocol. Hermes is a general-purpose agent, not a coding-only SDK. TypeSafe
+# emits EVALUATOR spans. Search backends and RAG pipelines belong with retrieval.
+CATEGORIES = [
+    ("model-providers", "Model providers",
+     "Hosted and local model inference, embeddings, and reranking.",
+     "anthropic azure-openai bedrock cerebras cohere deepseek fireworks google-genai "
+     "groq huggingface minimax mistral ollama openai replicate together vertexai "
+     "vllm voyage watsonx xai"),
+    ("agent-frameworks", "Agent frameworks",
+     "Agent orchestration, application frameworks, and agent-to-agent communication.",
+     "a2a ag2 agent-framework agno autogen beeai crewai eino genkit google-adk "
+     "hermes-agent langchain mastra mcp-use openai-agents pydantic-ai semantic-kernel "
+     "smolagents strands vercel voltagent"),
+    ("rag-vector-databases", "RAG & vector databases",
+     "Retrieval pipelines, vector stores, and search backends.",
+     "azure-search chromadb discoveryengine elasticsearch haystack lancedb llamaindex "
+     "milvus mongodb pgvector pinecone qdrant redis weaviate"),
+    ("tools-search", "Tools & search",
+     "Tool connectivity, web search, crawling, and extraction.",
+     "exa firecrawl mcp parallel tavily"),
+    ("voice-realtime", "Voice & realtime",
+     "Voice-agent pipelines and conversations. OpenAI Realtime and Google GenAI Live "
+     "are linked in their provider rows under [Model providers](#model-providers).",
+     "elevenlabs-agents livekit pipecat"),
+    ("gateways-proxies", "Gateways & proxies",
+     "Unified access and routing across model providers.",
+     "litellm portkey"),
+    ("coding-agents", "Coding agents",
+     "In-process SDK integrations for coding-agent runs, sessions, and tools.",
+     "claude-agent-sdk codex-sdk cursor-sdk pi-coding-agent"),
+    ("java-frameworks", "Java frameworks",
+     "Java application-framework integrations and auto-configuration.",
+     "langchain4j spring-ai spring-boot-starter"),
+    ("other", "Other",
+     "LLM programming, structured output, validation, and evaluation.",
+     "dspy guardrails instructor typesafe"),
+]
+category_members = [key for _, _, _, members in CATEGORIES for key in members.split()]
+assert len(category_members) == len(set(category_members)), "An integration is in multiple categories"
+assert set(category_members) <= set(NAMES), "A category references an unknown integration"
+FAMILY_CATEGORIES = {key: slug for slug, _, _, members in CATEGORIES for key in members.split()}
 LANGS = ["Python", "TypeScript", "Java", "Go", "C#"]
 rows = {}
 raw = {lang: [] for lang in LANGS}
@@ -64,10 +103,11 @@ excluded = []
 def add(lang, key, path, name):
     key = ALIASES.get(key, key)
     assert key in NAMES, f"Name the new integration family: {key}"
+    assert key in FAMILY_CATEGORIES, f"Categorize the new integration family: {key}"
     assert path.is_file(), path
     item = {"manifest": str(path.relative_to(ROOT)), "package": name, "source": str(path.parent.relative_to(ROOT)) + "/"}
     raw[lang].append(item)
-    rows.setdefault(key, {"id": key, "name": NAMES[key], "languages": {}})["languages"].setdefault(lang, []).append(item)
+    rows.setdefault(key, {"id": key, "name": NAMES[key], "category": FAMILY_CATEGORIES[key], "languages": {}})["languages"].setdefault(lang, []).append(item)
 
 for path in sorted(ROOT.glob("python/frameworks/*/pyproject.toml")):
     doc = tomllib.loads(path.read_text())
@@ -107,7 +147,14 @@ for path in sorted(ROOT.glob("go/*/go.mod")):
 for path in sorted(ROOT.glob("csharp/src/*/*.csproj")):
     excluded.append({"manifest": str(path.relative_to(ROOT)), "reason": "manual-span SDK; no framework auto-instrumentors"})
 
-remaining = sorted(set(rows) - set(FEATURED), key=lambda k: NAMES[k].casefold())
+categories = [
+    {"id": slug, "name": name, "description": description,
+     "families": sorted(set(members.split()) & set(rows), key=lambda k: NAMES[k].casefold())}
+    for slug, name, description, members in CATEGORIES
+    if set(members.split()) & set(rows)
+]
+ordered = [key for category in categories for key in category["families"]]
+assert len(ordered) == len(rows) and set(ordered) == set(rows), "Every family must appear exactly once"
 provenance = json.loads((OUT / "integrations/provenance.json").read_text())
 
 def table(keys):
@@ -129,22 +176,25 @@ def table(keys):
     return "\n".join(lines)
 
 count = len(rows)
+# Explicit anchors keep punctuation-bearing category links stable on GitHub.
+# All tables are ordinary page content: no collapsed or featured-only catalog.
+navigation = " · ".join(f'[{c["name"]}](#{c["id"]})' for c in categories)
+grouped_tables = "\n\n".join(
+    f'<a id="{c["id"]}"></a>\n\n### {c["name"]}\n\n'
+    f'{c["description"]}\n\n{table(c["families"])}'
+    for c in categories
+)
 section = f'''## Integrations
 
 **{count} integration families, with language coverage you can inspect.** Each SDK link opens its package source. A dash means no dedicated framework package in this repository—not a promise of unsupported runtime behavior.
 
 Python and TypeScript provide framework instrumentors; Java provides client wrappers and framework modules; Go provides middleware and framework integrations. **C# provides [manual spans and activities](csharp/src/FIInstrumentation/), not automatic framework instrumentation**, so its framework cells are intentionally empty.
 
-{table(FEATURED)}
+All {count} families are listed below, grouped by what they integrate. Runtime variants share a row: OpenAI includes Realtime; Google GenAI includes Live; AG2 includes its classic SDK. LangGraph ships in the LangChain integration. Shared SDKs are not counted as integrations. Package availability is not a claim of complete upstream feature compatibility; check each package's source and documentation for its scope.
 
-<details>
-<summary><strong>Complete catalog — all {count} integration families</strong></summary>
+{navigation}
 
-The {len(FEATURED)} families above plus the {len(remaining)} below make the complete manifest-derived catalog. Runtime variants share a row: OpenAI includes Realtime; Google GenAI includes Live; AG2 includes its classic SDK. LangGraph ships in the LangChain integration. Shared SDKs are not counted as integrations.
-
-{table(remaining)}
-
-</details>
+{grouped_tables}
 
 **Bring existing telemetry:** [OpenInference](https://docs.futureagi.com/docs/integrations/import/openinference) · [OpenLLMetry](https://docs.futureagi.com/docs/integrations/otel/openllmetry)
 
@@ -172,8 +222,8 @@ summary = {
     "normalization": ALIASES,
     "package_counts_in_matrix": {lang: len(items) for lang, items in raw.items()},
     "excluded_shared_packages": excluded,
-    "featured_rows": FEATURED,
-    "families": [rows[k] for k in FEATURED + remaining],
+    "categories": categories,
+    "families": [rows[k] for k in ordered],
 }
 (OUT / "integration-coverage.json").write_text(json.dumps(summary, indent=2) + "\n")
-print(json.dumps({"families": count, "featured": len(FEATURED), "additional": len(remaining), "packages": summary["package_counts_in_matrix"]}))
+print(json.dumps({"families": count, "visible": len(ordered), "categories": {c["name"]: len(c["families"]) for c in categories}, "packages": summary["package_counts_in_matrix"]}))
