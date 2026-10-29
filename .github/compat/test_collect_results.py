@@ -491,6 +491,86 @@ class CollectorTests(unittest.TestCase):
                 self.assertEqual((output / relative).exists(), corruption is None)
                 self.assertTrue((output / f'evidence/{row["case_id"]}/attempt-1/results.json').is_file())
 
+    def test_unsupported_lock_formats_are_blocked_before_canonical_ingestion(self):
+        # The shared ABI has additional lock adapters, but this producer only
+        # emits pip-freeze. Never send an artifact-selected JSON adapter to the
+        # canonical consumer, even for an otherwise genuine failed execution.
+        for malformed in (1, 2):
+            for failed in (False, True):
+                for payload in ([], None, 'invalid', {}, {'version': '1', 'install': [None]}):
+                    with self.subTest(attempt=malformed, failed=failed, payload=payload), tempfile.TemporaryDirectory() as temporary:
+                        plan, artifacts, output, first, data = evidence(Path(temporary))
+                        cid = data['cases'][0]['case_id']
+                        second = artifacts / first.name.replace('attempt-1', 'attempt-2')
+                        shutil.copytree(first, second)
+                        retry = copy.deepcopy(data)
+                        retry['run']['run_attempt'] = retry['cases'][0]['attempt'] = 2
+                        write_json(second / 'results.json', retry)
+                        status = json.loads((first / invocation_path(cid, 1)).read_text())
+                        write_json(second / invocation_path(cid, 2), {**status, 'attempt': 2})
+                        folder = first if malformed == 1 else second
+                        broken = copy.deepcopy(data if malformed == 1 else retry)
+                        row = broken['cases'][0]
+                        if failed:
+                            row.update(status='failed', failure=failure('contract', 'AssertionError: SDK regression', [IDS[0]]))
+                            xml = (folder / 'junit/attempt1.xml').read_text().replace(
+                                'time="0.1"/>', 'time="0.1"><failure>AssertionError: SDK regression</failure></testcase>', 1)
+                            (folder / 'junit/attempt1.xml').write_text(xml)
+                            row['contract']['tests'] = junit(folder / 'junit/attempt1.xml')[0]
+                            manifest = json.loads((folder / invocation_path(cid, malformed)).read_text())
+                            manifest['contract'].update(exit_code=1, evidence_sha256=sha256(xml.encode()))
+                            write_json(folder / invocation_path(cid, malformed), manifest)
+                            (folder / 'junit/attempt1.xml.exit-code').write_text('1\n')
+                        relative = f'locks/unsupported-{malformed}.json'
+                        write_json(folder / relative, payload)
+                        row['dependency_lock'] = dict(format='pip-report', path=relative, sha256=sha256((folder / relative).read_bytes()))
+                        write_json(folder / 'results.json', broken)
+                        original = (folder / 'results.json').read_bytes()
+                        validator = trusted_validator()
+                        def canonical(data, *args, **kwargs):
+                            for candidate in data['cases']:
+                                lock = candidate['dependency_lock']
+                                if lock:
+                                    self.assertEqual(lock['format'], 'pip-freeze', 'Unsupported adapter reached canonical ingestion')
+                        validator.validate_results = canonical
+                        with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}), \
+                             patch('collect_results.semantic_validator', return_value=validator):
+                            result, bad = self.collect(plan, artifacts, output)
+                        self.assertTrue(bad)
+                        self.assertEqual([r['status'] for r in result['cases']],
+                                         ['blocked', 'flaky'] if malformed == 1 else ['passed', 'blocked'])
+                        invalid = result['cases'][malformed - 1]
+                        self.assertEqual(invalid['resolved'], [])
+                        self.assertIsNone(invalid['dependency_lock'])
+                        self.assertEqual(invalid['contract']['junit_paths'], [])
+                        self.assertIn('pip-freeze', invalid['failure']['summary'])
+                        self.assertEqual((folder / 'results.json').read_bytes(), original)
+                        self.assertEqual((output / f'evidence/{cid}/attempt-{malformed}/results.json').read_bytes(), original)
+                        self.assertEqual((output / f'evidence/{cid}/attempt-{malformed}' / relative).read_bytes(),
+                                         (folder / relative).read_bytes())
+                        self.assertTrue((output / 'results.json').is_file())
+                        self.assertFalse((output / 'validation-errors.json').exists())
+
+    def test_frozen_report_shapes_are_checked_before_canonical_ingestion(self):
+        for payload in ([], None, 'invalid', {}, {'version': '1', 'install': [None]},
+                        {'version': '1', 'install': [{'metadata': None}]}):
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as temporary:
+                plan, artifacts, output, folder, data = evidence(Path(temporary))
+                write_json(folder / 'locks/case.report.json', payload)
+                validator = trusted_validator()
+                def canonical(data, *args, artifact_root, **kwargs):
+                    for candidate in data['cases']:
+                        if candidate['dependency_lock']:
+                            self.fail('Malformed frozen report reached canonical ingestion')
+                validator.validate_results = canonical
+                with patch('collect_results.semantic_validator', return_value=validator):
+                    result, bad = self.collect(plan, artifacts, output)
+                self.assertTrue(bad)
+                self.assertEqual(result['cases'][0]['status'], 'blocked')
+                self.assertIn('pip resolution report', result['cases'][0]['failure']['summary'])
+                self.assertTrue((output / 'results.json').is_file())
+                self.assertEqual(json.loads((output / f'evidence/{data["cases"][0]["case_id"]}/attempt-1/locks/case.report.json').read_text()), payload)
+
     def test_complete_freeze_must_include_explicit_coupled_companion_pins(self):
         from collect_results import frozen_environment
         with tempfile.TemporaryDirectory() as temporary:

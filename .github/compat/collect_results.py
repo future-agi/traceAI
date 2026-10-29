@@ -110,6 +110,25 @@ def validate_case(data, plan, raw, selected, schema, *, independent=False):
     return rows
 
 
+def pip_resolution_report(content):
+    """Check decoded report shapes before invoking shared semantic consumers."""
+    report = bounded_json(content)
+    if (not isinstance(report, dict) or report.get("version") != "1"
+            or not isinstance(report.get("install"), list) or not report["install"]):
+        raise ValueError("Malformed pip resolution report")
+    for item in report["install"]:
+        if not isinstance(item, dict) or not isinstance(item.get("metadata"), dict):
+            raise ValueError("Malformed pip resolution report metadata")
+        if any(not isinstance(item["metadata"].get(k), str) or not item["metadata"][k] for k in ("name", "version")):
+            raise ValueError("Malformed pip resolution report identity")
+        download = item.get("download_info")
+        archive = download.get("archive_info") if isinstance(download, dict) else None
+        hashes = archive.get("hashes") if isinstance(archive, dict) else None
+        if not isinstance(hashes, dict) or not isinstance(hashes.get("sha256"), str):
+            raise ValueError("Malformed pip resolution report artifact")
+    return report
+
+
 def frozen_environment(plan_dir, folder, selected, row):
     resolution = selected["resolution"]
     if not resolution or selected["problems"]:
@@ -119,9 +138,7 @@ def frozen_environment(plan_dir, folder, selected, row):
         copied = safe_path(folder, "locks/" + Path(resolution[key]).name).read_bytes()
         if sha256(content) != resolution[digest] or copied != content:
             raise ValueError("Frozen report/requirements digest mismatch")
-    report = bounded_json(safe_path(plan_dir, resolution["report"]).read_text())
-    if report.get("version") != "1" or not report.get("install"):
-        raise ValueError("Missing successful pip resolution report")
+    report = pip_resolution_report(safe_path(plan_dir, resolution["report"]).read_bytes())
     expected, locks, artifacts = {}, [], {}
     for item in report["install"]:
         name = canonicalize_name(item["metadata"]["name"])
@@ -278,6 +295,11 @@ def invocation_references(folder, row, plan, raw, validator):
 
 
 def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, source_root, validator, previous, output):
+    # The shared ABI supports more formats than this Python producer emits.
+    # Enforce the producer boundary for failed attempts too, BEFORE a consumer
+    # can dispatch to an artifact-selected adapter and dereference decoded JSON.
+    if row["dependency_lock"] and row["dependency_lock"]["format"] != "pip-freeze":
+        raise ValueError("Expected complete pip-freeze inventory")
     validator.reconcile_plan(data, plan, raw)
     if row["qualification"] != target["qualification"]["status"] or row["language"] != target["language"]:
         raise ValueError("Artifact cannot promote qualification/change language")
@@ -306,8 +328,11 @@ def canonical_attempt(data, row, selected, target, plan, raw, registry, folder, 
         if row["dependency_lock"]:
             current.add(row["dependency_lock"]["path"])
         current.update(p.relative_to(folder).as_posix() for p in (folder / "locks").rglob("*") if p.is_file())
+        report_path = "locks/" + Path(selected["resolution"]["report"]).name if selected["resolution"] else None
         for relative in current:
-            if relative.endswith(".json"):
+            if relative == report_path or relative.endswith(".report.json"):
+                pip_resolution_report(safe_path(folder, relative).read_bytes())
+            elif relative.endswith(".json"):
                 bounded_json(safe_path(folder, relative).read_bytes())
             copy_reference(folder, stage, relative)
         # Failure rows are reconciled BEFORE any root reference is accepted. A
