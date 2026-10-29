@@ -16,7 +16,7 @@ fi-instrumentation-otel = ">=0.1.14"
 pytest = "==8.4.2"
 pytest-asyncio = "==0.24.0"
 # Native Pipecat tracing from the documented example's exact SDK floor.
-pipecat-ai = { version = "==0.0.77", extras = ["openai", "tracing"], python = ">=3.10" }
+pipecat-ai = { version = "==0.0.77", extras = ["google", "openai", "tracing"], python = ">=3.10" }
 fi-instrumentation-otel = { version = ">=0.1.14", extras = ["grpc"] }
 
 [tool.pytest.ini_options]

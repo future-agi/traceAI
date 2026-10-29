@@ -8,6 +8,7 @@ Pipecat attributes to OpenTelemetry GenAI conventions (Future AGI standard).
 import json
 import copy
 import logging
+import os
 from typing import Any, Dict
 
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
@@ -98,13 +99,26 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
                         else _ensure_json_string(content)
                     )
 
-    # STT transcript or LLM output
-    out_val = attributes.get("output") or attributes.get("transcript")
+    # Realtime transcription explicitly identifies its direction. Do not make
+    # user speech an assistant output (or mask it using the opposite policy).
+    transcript = attributes.get("transcript")
+    input_transcript = attributes.get("transcript.is_input") is True
+    if transcript is not None and input_transcript:
+        mapped.setdefault("input.value", transcript)
+        mapped.setdefault("input.mime_type", _detect_mime_type(transcript))
+        mapped.setdefault(f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", "user")
+        mapped.setdefault(f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", transcript)
+
+    # Native Gemini text output is independent of its transcript alias.
+    out_val = attributes.get("output")
+    if out_val is None:
+        out_val = attributes.get("text_output")
+    if out_val is None and not input_transcript:
+        out_val = transcript
     if out_val is not None and "output.value" not in mapped:
         mapped["output.value"] = out_val
         mapped["output.mime_type"] = _detect_mime_type(out_val)
 
-        # Also expose output as enumerated LLM output message 0
         output_content_key = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"
         if output_content_key not in mapped:
             mapped[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}"] = "assistant"
@@ -262,6 +276,66 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
     return mapped
 
 
+# The legacy supported cores do not expose the error policy or its mask.
+# Keep this small compatibility boundary package-owned, without importing new
+# private core helpers or increasing the integration's runtime requirement.
+_CONTENT_HIDE_FLAGS = (
+    "hide_inputs", "hide_outputs", "hide_input_text", "hide_output_text",
+    "hide_input_messages", "hide_output_messages",
+)
+_INPUT_ALIASES = frozenset({
+    "input", "text", "system", "system_instruction", "context_system_instruction",
+    "instructions", "tool.arguments", "input.value", "input.mime_type", "raw.input",
+    "tool_call.function.arguments",
+})
+_OUTPUT_ALIASES = frozenset({
+    "output", "text_output", "tool.result", "output.value", "output.mime_type", "raw.output",
+})
+
+
+def _is_error_detail(key):
+    return key in ("exception.message", "exception.stacktrace", "error.message") or key.endswith((
+        ".exception.message", ".exception.stacktrace", ".error.message", ".error_message",
+    ))
+
+
+def _hidden_content_key(key, hide_input, hide_output, input_transcript):
+    # Both native setup hooks flatten their configuration under session/settings.
+    native_key = key
+    if key.startswith(("session.", "settings.")):
+        native_key = key.split(".", 1)[1]
+    if hide_input and (native_key in _INPUT_ALIASES or key.startswith("gen_ai.input.messages.")):
+        return True
+    if hide_output and (native_key in _OUTPUT_ALIASES or key.startswith("gen_ai.output.messages.")):
+        return True
+    return key == "transcript" and (hide_input if input_transcript else hide_output)
+
+
+def _sanitize_metadata(value, hide_input, hide_output, input_transcript):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, RecursionError):
+            return None
+    # OTel accepts strings, arrays and scalars too. Opaque content cannot be
+    # classified safely: discard that field, never the completed operation.
+    if not isinstance(value, dict):
+        return None
+
+    def sanitize(obj):
+        if isinstance(obj, dict):
+            return {key: sanitize(item) for key, item in obj.items()
+                    if not _hidden_content_key(key, hide_input, hide_output, input_transcript)}
+        if isinstance(obj, list):
+            return [sanitize(item) for item in obj]
+        return obj
+
+    try:
+        return _ensure_json_string(sanitize(value))
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
 class BaseMappedSpanExporter(SpanExporter):
     """Map native SDK spans and apply the same privacy policy as FITracer.
 
@@ -274,28 +348,36 @@ class BaseMappedSpanExporter(SpanExporter):
         self._config = config if config is not None else TraceConfig()
         if not isinstance(self._config, TraceConfig):
             raise TypeError("config must be a TraceConfig")
+        if hasattr(self._config, "hide_error_details"):
+            self._hide_error_details = self._config.hide_error_details
+        else:
+            explicit = os.getenv("FI_HIDE_ERROR_DETAILS", "").lower()
+            self._hide_error_details = (
+                explicit == "true" if explicit in ("true", "false")
+                else any(getattr(self._config, key, False) for key in _CONTENT_HIDE_FLAGS)
+            )
         super().__init__(*args, **kwargs)
+
+    def _mask_attributes(self, attributes):
+        return {key: masked for key, value in attributes.items()
+                if not (self._hide_error_details and _is_error_detail(key))
+                and (masked := self._config.mask(key, value)) is not None}
 
     def _convert_attributes(self, attributes):
         mapped = _map_attributes_to_fi_conventions(dict(attributes or {}))
         config = self._config
         hide_input = config.hide_inputs or config.hide_input_text or config.hide_input_messages
         hide_output = config.hide_outputs or config.hide_output_text or config.hide_output_messages
-        # These aliases contain the same message text, not independent metadata.
-        if hide_input:
-            for key in ("input", "text", "system", "system_instruction", "tool.arguments",
-                        "input.value", "input.mime_type", "raw.input", "tool_call.function.arguments"):
-                mapped.pop(key, None)
-            if "metadata" in mapped:
-                metadata = json.loads(mapped["metadata"])
-                for key in ("system", "system_instruction"):
-                    metadata.pop(key, None)
-                mapped["metadata"] = _ensure_json_string(metadata)
-        if hide_output:
-            for key in ("output", "transcript", "tool.result", "output.value", "output.mime_type", "raw.output"):
-                mapped.pop(key, None)
-        return {key: masked for key, value in mapped.items()
-                if (masked := config.mask(key, value)) is not None}
+        input_transcript = mapped.get("transcript.is_input") is True
+        mapped = {key: value for key, value in mapped.items()
+                  if not _hidden_content_key(key, hide_input, hide_output, input_transcript)}
+        if (hide_input or hide_output) and "metadata" in mapped:
+            metadata = _sanitize_metadata(mapped["metadata"], hide_input, hide_output, input_transcript)
+            if metadata is None:
+                mapped.pop("metadata")
+            else:
+                mapped["metadata"] = metadata
+        return self._mask_attributes(mapped)
 
     def export(self, spans) -> SpanExportResult:
         converted = []
@@ -304,16 +386,11 @@ class BaseMappedSpanExporter(SpanExporter):
                 # Do not mutate a ReadableSpan shared with another processor.
                 mapped = copy.copy(span)
                 mapped._attributes = self._convert_attributes(span.attributes)
-                hide_error = getattr(self._config, "hide_error_details",
-                                     self._config.hide_inputs or self._config.hide_outputs)
-                if hide_error:
+                if self._hide_error_details:
                     mapped._status = Status(span.status.status_code)
                 events = []
                 for event in span.events:
-                    attributes = {key: value for key, value in (event.attributes or {}).items()
-                                  if not (hide_error and key in ("exception.message", "exception.stacktrace"))}
-                    attributes = {key: masked for key, value in attributes.items()
-                                  if (masked := self._config.mask(key, value)) is not None}
+                    attributes = self._mask_attributes(event.attributes or {})
                     events.append(Event(event.name, attributes=attributes, timestamp=event.timestamp))
                 mapped._events = tuple(events)
                 converted.append(mapped)

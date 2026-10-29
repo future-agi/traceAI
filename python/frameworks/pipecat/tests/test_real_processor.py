@@ -56,7 +56,7 @@ def offline(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", connect)
     for key in ("FI_HIDE_INPUTS", "FI_HIDE_OUTPUTS", "FI_HIDE_INPUT_TEXT", "FI_HIDE_OUTPUT_TEXT",
-                "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES"):
+                "FI_HIDE_INPUT_MESSAGES", "FI_HIDE_OUTPUT_MESSAGES", "FI_HIDE_ERROR_DETAILS"):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -145,6 +145,36 @@ async def test_real_processor_error_is_preserved_and_ends_span(monkeypatch):
     assert llm.status.status_code.name == "ERROR"
     assert llm.end_time is not None
     assert any(e.name == "exception" for e in llm.events)
+    assert not [f for f in frames if isinstance(f, LLMTextFrame)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", [
+    "hide_inputs", "hide_outputs", "hide_input_text", "hide_output_text",
+    "hide_input_messages", "hide_output_messages",
+])
+@pytest.mark.parametrize("via_environment", [False, True], ids=["explicit", "environment"])
+async def test_real_processor_error_hides_private_cause_on_legacy_and_source_core(
+    monkeypatch, flag, via_environment
+):
+    from fi_instrumentation import TraceConfig
+
+    if via_environment:
+        monkeypatch.setenv("FI_" + flag.upper(), "true")
+        config = TraceConfig()
+    else:
+        config = TraceConfig(**{flag: True})
+    private_error = "PIPECAT-PRIVATE-ERROR-86f"
+    original = ValueError(private_error)
+    spans, frames, requests, caught = await operation(monkeypatch, error=original, config=config)
+    assert isinstance(caught, APIConnectionError)
+    assert caught.__cause__ is original and str(original) == private_error
+    assert requests[0]["messages"][0]["content"] == INPUT
+    llm, = [s for s in spans if s.name == "llm"]
+    assert llm.status.status_code.name == "ERROR" and llm.end_time is not None
+    assert any("APIConnectionError" in e.attributes.get("exception.type", "") for e in llm.events)
+    exported = repr((dict(llm.attributes), llm.status.description, [dict(e.attributes) for e in llm.events]))
+    assert private_error not in exported
     assert not [f for f in frames if isinstance(f, LLMTextFrame)]
 
 
