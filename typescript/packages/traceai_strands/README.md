@@ -15,6 +15,13 @@ The SDK ranges above match this instrumentor's module-version filters. Install
 only the SDKs your application uses. For Future AGI export, set `FI_API_KEY` and
 `FI_SECRET_KEY` in your environment; keep provider credentials outside source code.
 
+## Current packaging limitation
+
+The CommonJS setup below was checked against this source revision. Its declared
+ESM/esnext entry paths do not match the emitted `dist/esm/src` and
+`dist/esnext/src` layout, so ESM consumers need a packaging correction before
+using those entry points. Registry metadata changes alone do not fix this issue.
+
 ## Quick start
 
 Load this setup **before** loading the SDK you want to instrument. This CommonJS

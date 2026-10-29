@@ -15,6 +15,15 @@ The SDK ranges above match this instrumentor's module-version filters. Install
 only the SDKs your application uses. For Future AGI export, set `FI_API_KEY` and
 `FI_SECRET_KEY` in your environment; keep provider credentials outside source code.
 
+## Current packaging limitation
+
+This source revision builds successfully, but its package entry points still
+refer to `dist/index.js` and `dist/esm/index.js`; the compiler emits
+`dist/src/index.js` and `dist/esm/src/index.js` instead. Importing the package by
+name therefore fails until those entry points are corrected. The setup below
+shows the initialization API, but is **not a working install recipe for this
+revision**. Registry metadata changes alone do not fix this packaging issue.
+
 ## Quick start
 
 Load this setup **before** loading the SDK you want to instrument. This CommonJS
