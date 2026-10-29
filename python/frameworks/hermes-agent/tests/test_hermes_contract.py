@@ -1,6 +1,6 @@
-"""The plugin against Hermes itself, when hermes-agent is installed in this environment.
+"""Required offline contracts against the exact upstream Hermes dev dependency.
 
-Skipped otherwise; the E2E run in the docs recipe covers a real session.
+Missing plugin/package-manager modules are failures, not optional skips.
 """
 
 import importlib.metadata
@@ -18,12 +18,12 @@ def test_entry_point_is_declared():
 
 
 def test_every_hook_is_a_valid_hermes_hook():
-    plugins = pytest.importorskip("hermes_cli.plugins")
+    from hermes_cli import plugins
     assert set(HOOKS) <= set(plugins.VALID_HOOKS)
 
 
 def test_hermes_plugin_manager_loads_the_entry_point(monkeypatch, tmp_path):
-    pytest.importorskip("hermes_cli.plugins_discovery")
+    import hermes_cli.plugins_discovery
     from hermes_cli.plugins_discovery import discover_entrypoint_manifests
 
     manifests = {m.key: m for m in discover_entrypoint_manifests()}
@@ -47,3 +47,18 @@ def test_hooks_from_many_threads(make_hermes, exporter):
         if span.name != "hermes.turn":
             parent = turns[span.parent.span_id]
             assert parent.attributes["session.id"] == span.attributes["session.id"]
+
+
+def test_real_entrypoint_loader_registers_real_plugin_context(tmp_path, monkeypatch, provider):
+    from hermes_cli.plugins import PluginContext, PluginManager
+    from hermes_cli.plugins_discovery import discover_entrypoint_manifests
+
+    # Never discover user/project plugins or touch the operator's Hermes profile.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    manifest = next(m for m in discover_entrypoint_manifests() if m.key == "futureagi")
+    manager = PluginManager(scope_key=str(tmp_path))
+    entrypoint = manager._load_entrypoint_module(manifest)
+    context = PluginContext(manifest, manager)
+    entrypoint(context, tracer_provider=provider)
+    assert set(manager._hooks) == set(HOOKS)
+    assert all(len(callbacks) == 1 for callbacks in manager._hooks.values())

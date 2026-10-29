@@ -61,7 +61,7 @@ def test_chat_completion_produces_no_realtime_span(instrument, exporter):
 
 def test_chat_instrumentor_keeps_its_span_when_both_are_installed(instrument, exporter, provider):
     """AC-01: with traceAI-openai also instrumented, the chat call still gets its own span."""
-    traceai_openai = pytest.importorskip("traceai_openai")
+    import traceai_openai
     instrument()
     chat = traceai_openai.OpenAIInstrumentor()
     chat.instrument(tracer_provider=provider)
@@ -76,7 +76,7 @@ def test_chat_instrumentor_keeps_its_span_when_both_are_installed(instrument, ex
         client = OpenAI(api_key="sk-test-000000", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
         client.chat.completions.create(model="gpt-5", messages=[{"role": "user", "content": "hi"}])
         names = [s.name for s in exporter.get_finished_spans()]
-        assert names and not [n for n in names if n.startswith("openai.realtime")]
+        assert len(names) == 1 and not names[0].startswith("openai.realtime"), names
     finally:
         chat.uninstrument()
 

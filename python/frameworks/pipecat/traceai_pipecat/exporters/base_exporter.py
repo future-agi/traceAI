@@ -6,11 +6,18 @@ Pipecat attributes to OpenTelemetry GenAI conventions (Future AGI standard).
 """
 
 import json
+import copy
+import logging
 from typing import Any, Dict
 
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
+from fi_instrumentation import TraceConfig
 from fi_instrumentation.fi_types import MessageAttributes, SpanAttributes
+from opentelemetry.sdk.trace import Event
+from opentelemetry.trace import Status
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_json_string(value: Any) -> str:
@@ -256,36 +263,62 @@ def _map_attributes_to_fi_conventions(attributes: Dict[str, Any]) -> Dict[str, A
 
 
 class BaseMappedSpanExporter(SpanExporter):
-    """Base class for span exporters that map Pipecat attributes to Future AGI conventions."""
+    """Map native SDK spans and apply the same privacy policy as FITracer.
+
+    Pipecat uses the ordinary OTel API, not FITracer; mapping alone is therefore
+    not a privacy boundary. Remove native aliases as well as masking canonical
+    attributes so hidden content cannot survive in a second representation.
+    """
+
+    def __init__(self, *args, config=None, **kwargs):
+        self._config = config if config is not None else TraceConfig()
+        if not isinstance(self._config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
+        super().__init__(*args, **kwargs)
 
     def _convert_attributes(self, attributes):
-        """Convert attributes by mapping them to Future AGI conventions."""
-        if attributes is None:
-            base = {}
-        elif not isinstance(attributes, dict):
-            base = dict(attributes)
-        else:
-            base = attributes
-        try:
-            return _map_attributes_to_fi_conventions(base)
-        except Exception:
-            return base
+        mapped = _map_attributes_to_fi_conventions(dict(attributes or {}))
+        config = self._config
+        hide_input = config.hide_inputs or config.hide_input_text or config.hide_input_messages
+        hide_output = config.hide_outputs or config.hide_output_text or config.hide_output_messages
+        # These aliases contain the same message text, not independent metadata.
+        if hide_input:
+            for key in ("input", "text", "system", "system_instruction", "tool.arguments",
+                        "input.value", "input.mime_type", "raw.input", "tool_call.function.arguments"):
+                mapped.pop(key, None)
+            if "metadata" in mapped:
+                metadata = json.loads(mapped["metadata"])
+                for key in ("system", "system_instruction"):
+                    metadata.pop(key, None)
+                mapped["metadata"] = _ensure_json_string(metadata)
+        if hide_output:
+            for key in ("output", "transcript", "tool.result", "output.value", "output.mime_type", "raw.output"):
+                mapped.pop(key, None)
+        return {key: masked for key, value in mapped.items()
+                if (masked := config.mask(key, value)) is not None}
 
     def export(self, spans) -> SpanExportResult:
+        converted = []
         for span in spans:
             try:
-                if (
-                    hasattr(span, "_attributes")
-                    and getattr(span, "_attributes") is not None
-                ):
-                    original_attributes = getattr(span, "_attributes")
-
-                    base_attributes = dict(original_attributes)
-                    mapped_attributes = self._convert_attributes(base_attributes)
-
-                    setattr(span, "_attributes", mapped_attributes)
-
+                # Do not mutate a ReadableSpan shared with another processor.
+                mapped = copy.copy(span)
+                mapped._attributes = self._convert_attributes(span.attributes)
+                hide_error = getattr(self._config, "hide_error_details",
+                                     self._config.hide_inputs or self._config.hide_outputs)
+                if hide_error:
+                    mapped._status = Status(span.status.status_code)
+                events = []
+                for event in span.events:
+                    attributes = {key: value for key, value in (event.attributes or {}).items()
+                                  if not (hide_error and key in ("exception.message", "exception.stacktrace"))}
+                    attributes = {key: masked for key, value in attributes.items()
+                                  if (masked := self._config.mask(key, value)) is not None}
+                    events.append(Event(event.name, attributes=attributes, timestamp=event.timestamp))
+                mapped._events = tuple(events)
+                converted.append(mapped)
             except Exception:
-                continue
-
-        return super().export(spans)
+                # Never export original plaintext when conversion/redaction fails.
+                # No exception text: it may contain the very payload being hidden.
+                logger.warning("Dropping Pipecat span: attribute mapping or privacy policy failed")
+        return super().export(converted)

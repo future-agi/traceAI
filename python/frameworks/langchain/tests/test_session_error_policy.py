@@ -2,6 +2,7 @@
 import pytest
 from fi_instrumentation import TraceConfig, using_session
 from langchain_core.runnables import RunnableLambda
+from langchain_core.tracers.context import collect_runs
 
 from .test_error_status import (
     GatewayError,
@@ -10,6 +11,7 @@ from .test_error_status import (
     _instrumented,
     _config,
     NATIVE_ERROR_POLICY,
+    assert_native_error_output,
 )
 
 
@@ -32,7 +34,7 @@ def test_failed_nested_run_preserves_session_and_error_policy(config, hidden, se
     def invoke_model(_):
         return GatewayFailingChatModel().invoke("hello")
 
-    with _instrumented(_config(**config)) as exporter:
+    with collect_runs() as native, _instrumented(_config(**config)) as exporter:
         if session_source == "context":
             with using_session("context-session"), pytest.raises(GatewayError):
                 RunnableLambda(invoke_model).invoke("x", {"metadata": metadata})
@@ -63,4 +65,6 @@ def test_failed_nested_run_preserves_session_and_error_policy(config, hidden, se
             assert span.status.description == "Error code: 400"
             assert "exception.stacktrace" in event.attributes
     if not hidden:
-        assert "req_provider_123" in model_span.attributes["output.value"]
+        root, = native.traced_runs
+        child, = root.child_runs
+        assert_native_error_output(model_span, child)
