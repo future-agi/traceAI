@@ -403,8 +403,12 @@ def _sanitize_images(value, config):
 
 
 def _is_invocation_key(key):
+    if key.startswith("session."):
+        # Session instructions are prompt content, not invocation parameters.
+        return key.split(".", 1)[1] not in _INPUT_ALIASES | {"model"}
     return (key.startswith("gen_ai.request.") and key != "gen_ai.request.model"
-            or key.startswith("settings.") or key in ("settings", "stream", "tool_choice"))
+            or key.startswith(("settings.", "param.", "extra."))
+            or key in ("settings", "stream", "tool_choice"))
 
 
 def _sanitize_native_policy(key, value, config):

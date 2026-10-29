@@ -13,7 +13,11 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pipecat.frames.frames import LLMTextFrame
-from pipecat.utils.tracing.service_attributes import add_llm_span_attributes
+from pipecat.utils.tracing.service_attributes import (
+    add_gemini_live_span_attributes,
+    add_llm_span_attributes,
+    add_openai_realtime_span_attributes,
+)
 
 import test_real_processor as processor
 
@@ -181,15 +185,23 @@ def test_invocation_policy_masks_native_and_metadata_parameter_aliases(monkeypat
     try:
         with provider.get_tracer("native").start_as_current_span("operation") as span:
             add_llm_span_attributes(span, "OpenAILLMService", "fixture", messages=TEXT,
-                                    output=processor.OUTPUT, parameters={"temperature": 0.437})
-            span.set_attribute("settings.temperature", 0.437)
+                                    output=processor.OUTPUT,
+                                    parameters={"temperature": 0.437, "custom": "PRIVATE-PARAM"},
+                                    extra_parameters={"custom": "PRIVATE-EXTRA"})
+            add_gemini_live_span_attributes(span, "fixture", "fixture", "setup",
+                                           settings={"temperature": 0.437})
+            add_openai_realtime_span_attributes(span, "fixture", "fixture", "setup",
+                                               session_properties={"temperature": 0.437, "instructions": TEXT})
             span.set_attribute("metadata", json.dumps({"settings": {"temperature": 0.437}, "safe": "retained"}))
         operation, = exporter.get_finished_spans()
         assert operation.end_time is not None
         assert operation.attributes["gen_ai.request.model"] == "fixture"
         assert operation.attributes["input.value"] == TEXT
         assert operation.attributes["output.value"] == processor.OUTPUT
-        assert "0.437" not in repr(dict(operation.attributes))
+        assert operation.attributes["session.instructions"] == TEXT
+        exported = repr(dict(operation.attributes))
+        assert "0.437" not in exported
+        assert "PRIVATE-PARAM" not in exported and "PRIVATE-EXTRA" not in exported
         assert json.loads(operation.attributes["metadata"])["safe"] == "retained"
     finally:
         provider.shutdown()
