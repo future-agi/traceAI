@@ -1,19 +1,17 @@
-# Called by release.yml for a set of TypeScript packages (one job per package). Installs the
-# workspace, builds the package with its workspace dependencies, packs it, installs the tarball
-# in a clean project and loads it (CommonJS and ESM), then (when `publish` is true) publishes to
-# npm with provenance, waits for the version to be served, tags the commit and creates the GitHub
-# release from the package's CHANGELOG. See release.yml for the whole picture.
+# One sequential worker builds exact tarballs, verifies fresh installs with local
+# workspace dependencies, then publishes in DAG order. No dependency can race its
+# consumer (including Vercel -> Mastra). Credentials exist only in the delivery step.
 name: Release (TypeScript packages)
 
 on:
   workflow_call:
     inputs:
       packages:
-        description: JSON array of planner entries ({name, version, dir, tag, changelog, ...})
+        description: JSON array of dependency-ordered release planner entries
         type: string
         required: true
       publish:
-        description: Publish to npm, tag and create the GitHub release (false = build and check only)
+        description: Publish to npm, tag and create GitHub releases (false = build and check only)
         type: boolean
         required: true
 
@@ -22,24 +20,15 @@ defaults:
     shell: bash
 
 jobs:
-  package:
-    name: ${{ matrix.name }} ${{ matrix.version }}
+  packages:
+    name: TypeScript packages in dependency order
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 180
     permissions:
-      contents: write   # the tag and the GitHub release
-      id-token: write   # npm provenance
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(inputs.packages) }}
+      contents: write
+      id-token: write
     env:
-      NAME: ${{ matrix.name }}
-      VERSION: ${{ matrix.version }}
-      DIR: ${{ matrix.dir }}
-      TAG: ${{ matrix.tag }}
-      CHANGELOG: ${{ matrix.changelog }}
-      REGISTRY_PUBLISHED: ${{ matrix.registry_published }}
+      PACKAGES: ${{ inputs.packages }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -59,71 +48,25 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
-
       - name: Install the workspace
         working-directory: typescript
         run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: The version in package.json is the planned one
-        run: |
-          got=$(node -p "require('./$DIR/package.json').version")
-          [ "$got" = "$VERSION" ] || { echo "::error::$DIR/package.json says $got, the plan says $VERSION"; exit 1; }
-
-      - name: Build the package and the workspace packages it depends on
-        working-directory: typescript
-        run: pnpm --filter "${NAME}..." run build
-
-      - name: Pack
-        working-directory: typescript
-        run: |
-          mkdir -p "$DIST"
-          pnpm --filter "$NAME" pack --pack-destination "$DIST"
-          ls -l "$DIST"
-
-      - name: Install the tarball in a clean project and load it
-        working-directory: ${{ runner.temp }}
-        run: |
-          mkdir smoke && cd smoke && npm init -y > /dev/null
-          npm install --no-audit --no-fund "$DIST"/*.tgz
-          node -e "const m = require(process.env.NAME); console.log('require ok:', Object.keys(m).length, 'exports')"
-          node --input-type=module -e "import(process.env.NAME).then((m) => console.log('import ok:', Object.keys(m).length, 'exports'))"
-          got=$(node -p "require('./node_modules/$NAME/package.json').version")
-          [ "$got" = "$VERSION" ] || { echo "::error::installed $NAME is $got, expected $VERSION"; exit 1; }
-
-      - name: Keep the tarball
+      - name: Build and pack targets plus their transitive workspace dependencies
+        run: python3 .github/release/npm_release.py stage --packages "$PACKAGES" --dist "$DIST"
+      - name: Clean-install exact staged tarballs and load each target (CJS and ESM)
+        run: python3 .github/release/npm_release.py verify --packages "$PACKAGES" --dist "$DIST" --smoke "$RUNNER_TEMP/smoke"
+      - name: Keep the tarballs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ matrix.tag }}
-          path: ${{ runner.temp }}/dist/*
+          name: npm-packages
+          path: ${{ runner.temp }}/dist/**/*.tgz
           if-no-files-found: error
-
       - name: Not publishing
         if: inputs.publish != true
-        run: echo "::notice title=${{ matrix.name }} ${{ matrix.version }} not published::built and checked only (publishing is off or this is a dry run)"
-
-      - name: Publish to npm
-        if: inputs.publish && !matrix.registry_published
-        working-directory: typescript
+        run: echo "::notice::npm packages built and checked only (publishing is off or this is a dry run)"
+      - name: Publish, wait for public availability, then tag and release (dependency-first)
+        if: inputs.publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish "$DIST"/*.tgz --access public --provenance
-
-      - name: Wait until npm serves the version
-        if: inputs.publish
-        run: |
-          for attempt in $(seq 1 20); do
-            if [ "$(npm view "$NAME@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
-              echo "$NAME@$VERSION is on npm"
-              exit 0
-            fi
-            echo "attempt $attempt: not served yet"
-            sleep 30
-          done
-          echo "::error title=$NAME $VERSION not on npm::published, but the registry did not serve it after 10 minutes"
-          exit 1
-
-      - name: Tag and create the GitHub release (publisher is the sole tag owner)
-        if: inputs.publish
-        env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/release/github_release.py --install "npm install $NAME@$VERSION" --dist "$DIST"
+        run: python3 .github/release/npm_release.py publish --packages "$PACKAGES" --dist "$DIST"

@@ -69,9 +69,9 @@ def python_packages(root: Path = REPO_ROOT) -> list[dict]:
         out.append({
             "ecosystem": "python", "name": name, "version": version,
             "dir": str(d.relative_to(root)), "import_name": module,
-            # Python strategy recursively discovers version.py; scope the root core to
-            # its code so it cannot overwrite every sibling SDK's runtime version.
-            "release_path": "python/fi_instrumentation" if d == root / "python" else str(d.relative_to(root)),
+            # Core uses the non-recursive simple strategy with explicit updaters.
+            # The python/ root catches manifest-only dependency/security fixes too.
+            "release_path": str(d.relative_to(root)),
             "tag": f"{pypi_normalize(name)}-v{version}", "core": name in PYTHON_CORE,
             "changelog": str((d / "CHANGELOG.md").relative_to(root)) if (d / "CHANGELOG.md").is_file() else None,
             "declared": declared_versions(d, module),
@@ -81,7 +81,9 @@ def python_packages(root: Path = REPO_ROOT) -> list[dict]:
 
 def typescript_packages(root: Path = REPO_ROOT) -> list[dict]:
     out = []
-    for f in sorted((root / "typescript" / "packages").glob("*/package.json")):
+    files = sorted((root / "typescript" / "packages").glob("*/package.json"))
+    names = {json.loads(f.read_text()).get("name") for f in files}
+    for f in files:
         pkg = json.loads(f.read_text())
         if pkg.get("private") or not pkg.get("name") or not pkg.get("version"):
             continue
@@ -90,6 +92,10 @@ def typescript_packages(root: Path = REPO_ROOT) -> list[dict]:
             "ecosystem": "typescript", "name": name, "version": pkg["version"],
             "dir": str(d.relative_to(root)),
             "tag": f"npm-{name.lstrip('@').replace('/', '-')}-v{pkg['version']}",
+            # Include internal edges even when declared with an ordinary semver
+            # range, not only workspace:*. Dev-only edges do not affect delivery.
+            "workspace_dependencies": sorted({dep for section in ("dependencies", "optionalDependencies", "peerDependencies")
+                                               for dep in pkg.get(section, {}) if dep in names}),
             "core": name in TS_CORE,
             "changelog": str((d / "CHANGELOG.md").relative_to(root)) if (d / "CHANGELOG.md").is_file() else None,
         })

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from release_plan import ECOSYSTEMS
+from npm_release import topological
 
 
 def unfinished(plan, release_tags):
@@ -24,13 +25,13 @@ def main():
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         for eco in ECOSYSTEMS:
             groups = {eco: plan[eco]}
-            if eco in ("python", "typescript"):
+            if eco == "python":
                 groups = {eco: [p for p in plan[eco] if not p["core"]],
                           eco + "_core": [p for p in plan[eco] if p["core"]]}
             if eco == "typescript":
-                semantic = "@traceai/fi-semantic-conventions"
-                groups["typescript_semantic"] = [p for p in groups["typescript_core"] if p["name"] == semantic]
-                groups["typescript_core"] = [p for p in groups["typescript_core"] if p["name"] != semantic]
+                # A single sequential worker consumes this dependency-first list;
+                # a parallel matrix cannot express arbitrary workspace edges.
+                groups = {eco: topological(plan[eco])}
             for name, entries in groups.items():
                 output.write(f"{name}={json.dumps(entries, separators=(',', ':'))}\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:

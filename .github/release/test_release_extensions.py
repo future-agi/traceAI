@@ -122,17 +122,30 @@ class ExtensionTests(unittest.TestCase):
             complete_release.main()
             run.assert_not_called()
 
-    def test_workflow_plan_serializes_npm_semantic_before_core(self):
+    def test_workflow_plan_orders_every_npm_dependency_edge(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             data = {eco: [] for eco in release_plan.ECOSYSTEMS}
-            data.update(skipped=[], typescript=[{'name': '@traceai/fi-core', 'core': True, 'version': '1.0.0', 'tag': 'core'}, {'name': '@traceai/fi-semantic-conventions', 'core': True, 'version': '1.0.0', 'tag': 'semantic'}])
+            # Mastra is alphabetically ahead of Vercel, and is a reconciliation
+            # entry, not an upload. It must still wait for Vercel's new version.
+            data.update(skipped=[], typescript=[
+                {'name': '@traceai/mastra', 'workspace_dependencies': ['@traceai/fi-core', '@traceai/vercel'], 'registry_published': True},
+                {'name': '@traceai/vercel', 'workspace_dependencies': ['@traceai/fi-semantic-conventions'], 'registry_published': False},
+                {'name': '@traceai/fi-core', 'workspace_dependencies': ['@traceai/fi-semantic-conventions']},
+                {'name': '@traceai/fi-semantic-conventions', 'workspace_dependencies': []}])
+            for p in data['typescript']:
+                p.update(version='1.0.0', tag=p['name'])
             (root / 'plan.json').write_text(json.dumps(data)); (root / 'tags.txt').write_text('')
             with patch.dict(os.environ, {'GITHUB_OUTPUT': str(root / 'output'), 'GITHUB_STEP_SUMMARY': str(root / 'summary')}), patch.object(sys, 'argv', ['script', str(root / 'plan.json'), str(root / 'tags.txt')]):
                 workflow_plan.main()
             outputs = dict(line.split('=', 1) for line in (root / 'output').read_text().splitlines())
-            self.assertEqual([p['name'] for p in json.loads(outputs['typescript_semantic'])], ['@traceai/fi-semantic-conventions'])
-            self.assertEqual([p['name'] for p in json.loads(outputs['typescript_core'])], ['@traceai/fi-core'])
+            names = [p['name'] for p in json.loads(outputs['typescript'])]
+            for p in data['typescript']:
+                for dep in p['workspace_dependencies']:
+                    self.assertLess(names.index(dep), names.index(p['name']))
+            workflow = (release_plan.REPO_ROOT / '.github/workflows/release-typescript.yml').read_text()
+            self.assertNotIn('matrix:', workflow, 'a matrix would ignore the sorted list order')
+            self.assertIn('npm_release.py publish', workflow)
 
     def test_real_repo_has_complete_manifest_and_runtime_markers(self):
         root = release_plan.REPO_ROOT

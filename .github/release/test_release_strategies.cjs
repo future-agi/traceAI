@@ -1,4 +1,4 @@
-// Run with NODE_PATH=<release-please@17.11.2 node_modules> node this-file.cjs.
+// Run with NODE_PATH=<release-please@17.6.0 node_modules> node this-file.cjs.
 // Exercises real release-please strategies against local files with fake history.
 // No token, HTTP, git writes or GitHub mutations are possible in this test.
 const assert = require('node:assert/strict');
@@ -55,12 +55,12 @@ const scm = {
     if (value !== undefined) updates.set(u.path, value);
   }
   const next = JSON.parse(updates.get('.release-please-manifest.json'));
-  for (const p of ['python/fi_instrumentation', 'python/frameworks/openai', 'typescript/packages/traceai_openai', 'java', 'go/openai', 'csharp/src/FIInstrumentation']) {
+  for (const p of ['python', 'python/frameworks/openai', 'typescript/packages/traceai_openai', 'java', 'go/openai', 'csharp/src/FIInstrumentation']) {
     assert.equal(next[p], featureVersion(baseline[p]), `${p}: feature bumps patch before 1.0, minor after 1.0`);
   }
   assert(updates.get('python/frameworks/openai/traceai_openai/version.py').includes(`__version__ = "${next['python/frameworks/openai']}"`));
-  assert(updates.get('python/fi_instrumentation/instrumentation/version.py').includes(`__version__ = "${next['python/fi_instrumentation']}"`));
-  assert(updates.get('python/pyproject.toml').includes(`version = "${next['python/fi_instrumentation']}"`));
+  assert(updates.get('python/fi_instrumentation/instrumentation/version.py').includes(`__version__ = "${next['python']}"`));
+  assert(updates.get('python/pyproject.toml').includes(`version = "${next['python']}"`));
   assert(!updates.has('python/frameworks/anthropic/traceai_anthropic/version.py'), 'core release must not rewrite untouched sibling SDK runtime versions');
   assert.equal(JSON.parse(updates.get('typescript/packages/traceai_openai/package.json')).version, next['typescript/packages/traceai_openai']);
   assert(updates.get('csharp/src/FIInstrumentation/FIInstrumentation.csproj').includes(`<Version>${next['csharp/src/FIInstrumentation']}</Version>`));
@@ -85,5 +85,40 @@ const scm = {
   const {TagName} = require('release-please/build/src/util/tag-name.js');
   const {Version} = require('release-please/build/src/version.js');
   assert.equal(new TagName(Version.parse('0.1.0'), 'go/openai', '/', true).toString(), 'go/openai/v0.1.0');
-  console.log(JSON.stringify({result: 'PASS', pullRequests: prs.length, checkedJavaParents, bomPresent: javaPoms.includes('java/traceai-bom/pom.xml'), syntheticBumps: Object.fromEntries(Object.keys(next).filter(p => next[p] !== baseline[p]).map(p => [p, {from: baseline[p], to: next[p]}])), updatedFiles: [...updates.keys()]}, null, 2));
+  // A core dependency-only fix must release without touching any source file.
+  // Conversely a sibling-only fix must never bump core or rewrite other SDKs.
+  const scenarios = [];
+  for (const [files, expected] of [
+    [['python/pyproject.toml'], ['python']],
+    [['python/fi_instrumentation/instrumentation/config.py'], ['python']],
+    [['python/frameworks/openai/pyproject.toml'], ['python/frameworks/openai']],
+    [['python/frameworks/new-sdk/pyproject.toml'], []],
+  ]) {
+    const scenarioScm = {...scm, async *mergeCommitIterator() {
+      yield {sha: 'e'.repeat(40), message: 'fix: update dependency security constraint', files};
+      yield {sha: config['bootstrap-sha'], message: 'chore: baseline', files: []};
+    }};
+    const scenario = await Manifest.fromManifest(scenarioScm, 'main');
+    const pulls = await scenario.buildPullRequests();
+    assert.equal(pulls.length, expected.length ? 1 : 0, `${files}: release PR count`);
+    const contents = new Map();
+    for (const update of pulls.flatMap(p => p.updates)) {
+      if (!update.createIfMissing && !caseExists(update.path)) continue;
+      const original = caseExists(update.path) ? fs.readFileSync(path.join(root, update.path), 'utf8') : '';
+      const result = update.updater.updateContent(original);
+      if (result !== undefined) contents.set(update.path, result);
+    }
+    const versions = contents.has('.release-please-manifest.json') ? JSON.parse(contents.get('.release-please-manifest.json')) : baseline;
+    assert.deepEqual(Object.keys(versions).filter(p => versions[p] !== baseline[p]), expected);
+    if (expected.includes('python')) {
+      const [major, minor, patch] = baseline.python.split('.').map(Number);
+      assert.equal(versions.python, `${major}.${minor}.${patch + 1}`);
+      assert(contents.get('python/pyproject.toml').includes(`version = "${versions.python}"`));
+      assert(contents.get('python/fi_instrumentation/instrumentation/version.py').includes(`__version__ = "${versions.python}"`));
+      assert(contents.has('python/CHANGELOG.md'));
+      assert(![...contents.keys()].some(p => p.startsWith('python/frameworks/')), 'no sibling updates, not even unchanged version writes');
+    }
+    scenarios.push({files, bumped: expected, pullRequests: pulls.length});
+  }
+  console.log(JSON.stringify({result: 'PASS', pullRequests: prs.length, checkedJavaParents, bomPresent: javaPoms.includes('java/traceai-bom/pom.xml'), scenarios, syntheticBumps: Object.fromEntries(Object.keys(next).filter(p => next[p] !== baseline[p]).map(p => [p, {from: baseline[p], to: next[p]}])), updatedFiles: [...updates.keys()]}, null, 2));
 })().catch(err => { console.error(err); process.exitCode = 1; });

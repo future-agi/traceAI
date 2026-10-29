@@ -44,8 +44,6 @@ jobs:
     outputs:
       python_core: ${{ steps.plan.outputs.python_core }}
       python: ${{ steps.plan.outputs.python }}
-      typescript_semantic: ${{ steps.plan.outputs.typescript_semantic }}
-      typescript_core: ${{ steps.plan.outputs.typescript_core }}
       typescript: ${{ steps.plan.outputs.typescript }}
       java: ${{ steps.plan.outputs.java }}
       go: ${{ steps.plan.outputs.go }}
@@ -66,7 +64,7 @@ jobs:
         run: python3 -m unittest discover -s .github/release -p 'test_*.py'
       - name: Test real release-please strategies offline
         run: |
-          npm install --prefix "$RUNNER_TEMP/release-please-test" --ignore-scripts --no-audit --no-fund release-please@17.11.2
+          npm install --prefix "$RUNNER_TEMP/release-please-test" --ignore-scripts --no-audit --no-fund release-please@17.6.0
           NODE_PATH="$RUNNER_TEMP/release-please-test/node_modules" node .github/release/test_release_strategies.cjs
       - name: Validate runtime versions, coverage and bootstrap backlog
         run: |
@@ -236,41 +234,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/release/github_release.py --install "pip install $NAME==$VERSION" --dist "$RUNNER_TEMP/dist"
-  typescript-semantic:
-    name: TypeScript semantic conventions
-    needs: plan
-    if: github.event_name != 'pull_request' && needs.plan.outputs.typescript_semantic != '[]'
-    permissions:
-      contents: write
-      id-token: write
-    uses: ./.github/workflows/release-typescript.yml
-    with:
-      packages: ${{ needs.plan.outputs.typescript_semantic }}
-      publish: ${{ needs.plan.outputs.publish_typescript == 'true' }}
-    secrets: inherit
-  typescript-core:
-    name: TypeScript core
-    needs: [plan, typescript-semantic]
-    if: >-
-      !cancelled() && github.event_name != 'pull_request' && needs.plan.result == 'success'
-      && (needs.typescript-semantic.result == 'success' || needs.typescript-semantic.result == 'skipped')
-      && needs.plan.outputs.typescript_core != '[]'
-    permissions:
-      contents: write
-      id-token: write
-    uses: ./.github/workflows/release-typescript.yml
-    with:
-      packages: ${{ needs.plan.outputs.typescript_core }}
-      publish: ${{ needs.plan.outputs.publish_typescript == 'true' }}
-    secrets: inherit
   typescript:
-    name: TypeScript
-    needs: [plan, typescript-semantic, typescript-core]
-    if: >-
-      !cancelled() && github.event_name != 'pull_request' && needs.plan.result == 'success'
-      && (needs.typescript-semantic.result == 'success' || needs.typescript-semantic.result == 'skipped')
-      && (needs.typescript-core.result == 'success' || needs.typescript-core.result == 'skipped')
-      && needs.plan.outputs.typescript != '[]'
+    name: TypeScript (dependency ordered)
+    needs: plan
+    if: github.event_name != 'pull_request' && needs.plan.outputs.typescript != '[]'
     permissions:
       contents: write
       id-token: write
@@ -310,7 +277,7 @@ jobs:
     secrets: inherit
   release:
     name: Release
-    needs: [plan, python-core-build, python-core, python-build, python, typescript-semantic, typescript-core, typescript, java, go, nuget]
+    needs: [plan, python-core-build, python-core, python-build, python, typescript, java, go, nuget]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

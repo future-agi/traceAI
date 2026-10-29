@@ -43,7 +43,7 @@ def manifests(root: Path, ref: str) -> list[dict]:
         directory = str(Path(file).parent)
         out.append({"ecosystem": ecosystem, "name": pkg["name"],
                     "version": pkg["version"], "manifest": file, "dir": directory,
-                    "release_path": "python/fi_instrumentation" if directory == "python" else directory})
+                    "release_path": directory})
     return out
 
 
@@ -77,6 +77,9 @@ def package_history(root: Path, ref: str, package: dict, since: str) -> list[dic
         # Core doesn't own sibling SDKs. Retain its own source, tests, examples,
         # pyproject/lockfile and docs, rather than attributing every SDK to core.
         paths += [":(exclude)python/frameworks", ":(exclude)python/traceai"]
+    # A branch may be authored (and committed) before its registry upload.
+    # Compare first-parent landing/merge committer dates, not branch author dates.
+    # Filter without pruning traversal when later first-parent dates go backwards.
     text = git(root, "log", "--first-parent", f"--since-as-filter={since}",
                "--format=%H%x09%cI%x09%s", ref, "--", *paths)
     return [dict(zip(("sha", "committed_at", "subject"), line.split("\t", 2)))

@@ -839,19 +839,49 @@
         }
       ]
     },
-    "python/fi_instrumentation": {
-      "release-type": "python",
+    "python": {
+      "release-type": "simple",
       "component": "fi-instrumentation-otel",
       "package-name": "fi-instrumentation-otel",
       "extra-files": [
         {
           "type": "toml",
-          "path": "/python/pyproject.toml",
+          "path": "pyproject.toml",
           "jsonpath": "$.tool.poetry.version"
         },
-        "instrumentation/version.py"
+        "fi_instrumentation/instrumentation/version.py"
       ],
-      "changelog-path": "/python/CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "exclude-paths": [
+        "python/frameworks",
+        "python/traceai"
+      ],
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Features"
+        },
+        {
+          "type": "fix",
+          "section": "Bug Fixes"
+        },
+        {
+          "type": "perf",
+          "section": "Performance Improvements"
+        },
+        {
+          "type": "deps",
+          "section": "Dependencies"
+        },
+        {
+          "type": "revert",
+          "section": "Reverts"
+        },
+        {
+          "type": "docs",
+          "section": "Documentation"
+        }
+      ]
     }
   }
 }

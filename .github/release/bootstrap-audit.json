@@ -1119,7 +1119,7 @@
       "version": "1.2.1",
       "manifest": "python/pyproject.toml",
       "dir": "python",
-      "release_path": "python/fi_instrumentation",
+      "release_path": "python",
       "registry_url": "https://pypi.org/pypi/fi-instrumentation-otel/json",
       "uploaded_at": null,
       "status": "unpublished_current_version"
