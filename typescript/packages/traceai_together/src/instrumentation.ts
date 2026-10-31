@@ -12,13 +12,13 @@ import {
   Attributes,
   SpanStatusCode,
   Span,
+  TracerProvider,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import {
   SemanticConventions,
   FISpanKind,
   MimeType,
-  LLMSystem,
   LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
@@ -26,36 +26,25 @@ import {
   FITracer,
   safelyJSONStringify,
   TraceConfigOptions,
+  generateTraceConfig,
 } from "@traceai/fi-core";
 
 const MODULE_NAME = "together-ai";
 
-/**
- * Flag to check if the together module has been patched
- */
-let _isFIPatched = false;
-
-/**
- * Function to check if instrumentation is enabled / disabled
- */
+// Track actual resource wrappers, not an optimistic flag on the module namespace.
+const patchedResources = new Set<object>();
 export function isPatched() {
-  return _isFIPatched;
+  return patchedResources.size > 0;
 }
 
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Resource = { create: (...args: any[]) => any };
+type ResourceClass = { prototype: Resource };
+type TogetherExports = {
+  Chat?: { Completions?: ResourceClass };
+  Completions?: ResourceClass;
+  Embeddings?: ResourceClass;
+};
 
 // Type definitions for Together AI SDK
 interface TogetherMessage {
@@ -178,6 +167,8 @@ interface TogetherEmbeddingResponse {
 
 interface TogetherStream<T> {
   [Symbol.asyncIterator](): AsyncIterator<T>;
+  // The SDK's tee() reads this factory directly in both 0.6.x and 1.x.
+  iterator?: () => AsyncIterator<T>;
 }
 
 /**
@@ -187,6 +178,8 @@ interface TogetherStream<T> {
 export class TogetherInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private readonly _resources = new Set<Resource>();
+  private readonly _manualModules = new Set<Record<string, unknown>>();
 
   constructor({
     instrumentationConfig,
@@ -198,14 +191,33 @@ export class TogetherInstrumentation extends InstrumentationBase {
     super(
       "@traceai/together",
       VERSION,
-      Object.assign({}, instrumentationConfig),
+      { ...instrumentationConfig, enabled: false },
     );
-    this._traceConfig = traceConfig;
+    // InstrumentationBase enables before subclass fields exist; enable once they do.
+    this.setConfig({ ...instrumentationConfig });
+    this._traceConfig = generateTraceConfig(traceConfig);
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    if (this.getConfig().enabled) this.enable();
   }
 
   public override enable(): void {
     super.enable();
     this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    for (const module of this._manualModules) this.patch(module);
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+  }
+
+  public override disable(): void {
+    super.disable();
+    for (const resource of this._resources) {
+      this._unwrap(resource, "create");
+      patchedResources.delete(resource);
+    }
+    this._resources.clear();
   }
 
   public readonly instrumentationName = "@traceai/together";
@@ -213,7 +225,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
   protected init() {
     const module = new InstrumentationNodeModuleDefinition(
       "together-ai",
-      [">=0.5.0"],
+      [">=0.6.0 <2"],
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
@@ -224,74 +236,38 @@ export class TogetherInstrumentation extends InstrumentationBase {
    * Manually instruments the Together module
    */
   manuallyInstrument(module: Record<string, unknown>) {
-    this.patch(module);
+    this._manualModules.add(module);
+    if (this.isEnabled()) this.patch(module);
   }
 
   /**
    * Patches the Together module
    */
   private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
+    module: Record<string, unknown>,
   ) {
-    if (module?.fiPatched || _isFIPatched) {
-      return module;
+    const Together = (module.Together ?? module.default ?? module) as TogetherExports;
+    const candidates = [
+      [Together.Chat?.Completions, this.createChatCompletionWrapper(this)],
+      [Together.Completions, this.createCompletionWrapper(this)],
+      [Together.Embeddings, this.createEmbeddingWrapper(this)],
+    ] as const;
+    let available = 0;
+    for (const [ResourceConstructor, wrapper] of candidates) {
+      const resource = ResourceConstructor?.prototype;
+      if (!resource || typeof resource.create !== "function") continue;
+      available++;
+      // A second instrumentor or a CJS/ESM alias must not double-wrap the same resource.
+      if (patchedResources.has(resource)) continue;
+      this._wrap(resource, "create", wrapper);
+      this._resources.add(resource);
+      patchedResources.add(resource);
     }
-
-    const instrumentation: TogetherInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch the Together class
-    const Together = module.Together as {
-      prototype: {
-        chat?: { completions?: { create?: unknown } };
-        completions?: { create?: unknown };
-        embeddings?: { create?: unknown };
-      };
-    } | undefined;
-
-    if (Together?.prototype) {
-      // Patch chat.completions.create
-      if (Together.prototype.chat?.completions && typeof (Together.prototype.chat.completions as Record<string, unknown>).create === "function") {
-        this._wrap(
-          Together.prototype.chat.completions as Record<string, unknown>,
-          "create",
-          this.createChatCompletionWrapper(instrumentation),
-        );
-      }
-
-      // Patch completions.create (legacy)
-      if (Together.prototype.completions && typeof (Together.prototype.completions as Record<string, unknown>).create === "function") {
-        this._wrap(
-          Together.prototype.completions as Record<string, unknown>,
-          "create",
-          this.createCompletionWrapper(instrumentation),
-        );
-      }
-
-      // Patch embeddings.create
-      if (Together.prototype.embeddings && typeof (Together.prototype.embeddings as Record<string, unknown>).create === "function") {
-        this._wrap(
-          Together.prototype.embeddings as Record<string, unknown>,
-          "create",
-          this.createEmbeddingWrapper(instrumentation),
-        );
-      }
-    }
-
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
+    if (available !== candidates.length) {
+      diag.warn(
+        `${MODULE_NAME}: found ${available}/${candidates.length} supported resource hooks; ` +
+        "expected together-ai >=0.6.0 <2 (Chat.Completions, Completions, Embeddings).",
+      );
     }
 
     return module;
@@ -308,6 +284,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
         body: TogetherChatCompletionRequest,
         options?: Record<string, unknown>,
       ) {
+        if (isTracingSuppressed(context.active())) return original.apply(this, [body, options]);
         const { messages: _messages, ...invocationParameters } = body;
 
         const span = instrumentation.fiTracer.startSpan(
@@ -320,17 +297,17 @@ export class TogetherInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(invocationParameters),
+                getInvocationParameters(invocationParameters, instrumentation._traceConfig?.hideInputs),
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.TOGETHER,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
               ...getChatInputMessagesAttributes(body),
-              ...getToolsJSONSchema(body),
+              ...(instrumentation._traceConfig?.hideInputs ? {} : getToolsJSONSchema(body)),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
@@ -346,7 +323,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
           },
         );
 
-        const wrappedPromise = (execPromise as Promise<TogetherChatCompletion | TogetherStream<TogetherChatCompletion>>).then((result) => {
+        return observeResponse(execPromise as Promise<TogetherChatCompletion | TogetherStream<TogetherChatCompletion>>, span, (result) => {
           if (isChatCompletionResponse(result)) {
             span.setAttributes({
               [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
@@ -365,14 +342,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
             return wrapChatStream(result, span);
           }
           return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
         });
-
-        return context.bind(execContext, wrappedPromise) as Promise<TogetherChatCompletion | TogetherStream<TogetherChatCompletion>>;
       };
     };
   }
@@ -388,6 +358,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
         body: TogetherCompletionRequest,
         options?: Record<string, unknown>,
       ) {
+        if (isTracingSuppressed(context.active())) return original.apply(this, [body, options]);
         const { prompt: _prompt, ...invocationParameters } = body;
 
         const span = instrumentation.fiTracer.startSpan(
@@ -400,16 +371,18 @@ export class TogetherInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(invocationParameters),
+                getInvocationParameters(invocationParameters, instrumentation._traceConfig?.hideInputs),
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.TOGETHER,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
-              [`${SemanticConventions.LLM_PROMPTS}.0`]: body.prompt,
+              ...(instrumentation._traceConfig?.hideInputs ? {} : {
+                [`${SemanticConventions.LLM_PROMPTS}.0`]: body.prompt,
+              }),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
@@ -425,7 +398,8 @@ export class TogetherInstrumentation extends InstrumentationBase {
           },
         );
 
-        const wrappedPromise = (execPromise as Promise<TogetherCompletion>).then((result) => {
+        return observeResponse(execPromise as Promise<TogetherCompletion | TogetherStream<TogetherCompletion>>, span, (result) => {
+          if (isStreamResponse(result)) return wrapCompletionStream(result, span);
           span.setAttributes({
             [SemanticConventions.OUTPUT_VALUE]: result.choices[0]?.text ?? "",
             [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
@@ -436,14 +410,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
         });
-
-        return context.bind(execContext, wrappedPromise) as Promise<TogetherCompletion>;
       };
     };
   }
@@ -459,6 +426,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
         body: TogetherEmbeddingRequest,
         options?: Record<string, unknown>,
       ) {
+        if (isTracingSuppressed(context.active())) return original.apply(this, [body, options]);
         const inputTexts = Array.isArray(body.input) ? body.input : [body.input];
 
         const span = instrumentation.fiTracer.startSpan(
@@ -472,13 +440,13 @@ export class TogetherInstrumentation extends InstrumentationBase {
               [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
               [SemanticConventions.LLM_PROVIDER]: LLMProvider.TOGETHER,
               [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-              ...getEmbeddingInputAttributes(inputTexts),
+              ...(instrumentation._traceConfig?.hideInputs ? {} : getEmbeddingInputAttributes(inputTexts)),
               [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
             },
           },
         );
 
-        const execContext = getExecContext(span);
+        const execContext = context.active();
         const execPromise = safeExecuteInTheMiddle(
           () => {
             return context.with(trace.setSpan(execContext, span), () => {
@@ -494,7 +462,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
           },
         );
 
-        const wrappedPromise = (execPromise as Promise<TogetherEmbeddingResponse>).then((result) => {
+        return observeResponse(execPromise as Promise<TogetherEmbeddingResponse>, span, (result) => {
           span.setAttributes({
             [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
             [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
@@ -505,14 +473,7 @@ export class TogetherInstrumentation extends InstrumentationBase {
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-          span.end();
-          throw error;
         });
-
-        return context.bind(execContext, wrappedPromise) as Promise<TogetherEmbeddingResponse>;
       };
     };
   }
@@ -521,34 +482,15 @@ export class TogetherInstrumentation extends InstrumentationBase {
    * Un-patches the Together module
    */
   private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
+    moduleExports: Record<string, unknown>,
   ) {
-    const Together = moduleExports.Together as {
-      prototype: {
-        chat?: { completions?: Record<string, unknown> };
-        completions?: Record<string, unknown>;
-        embeddings?: Record<string, unknown>;
-      };
-    } | undefined;
-
-    if (Together?.prototype) {
-      if (Together.prototype.chat?.completions) {
-        this._unwrap(Together.prototype.chat.completions, "create");
+    const Together = (moduleExports.Together ?? moduleExports.default ?? moduleExports) as TogetherExports;
+    for (const constructor of [Together.Chat?.Completions, Together.Completions, Together.Embeddings]) {
+      const resource = constructor?.prototype;
+      if (resource && this._resources.delete(resource)) {
+        this._unwrap(resource, "create");
+        patchedResources.delete(resource);
       }
-      if (Together.prototype.completions) {
-        this._unwrap(Together.prototype.completions, "create");
-      }
-      if (Together.prototype.embeddings) {
-        this._unwrap(Together.prototype.embeddings, "create");
-      }
-    }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
     }
   }
 }
@@ -572,53 +514,123 @@ function isStreamResponse<T>(
 }
 
 /**
- * Wraps a chat stream to capture the full response
+ * Observe the SDK's public promise APIs lazily. In particular, asResponse() must
+ * not race a hidden JSON/stream consumer or lose access to the raw response body.
  */
-async function* wrapChatStream(
-  stream: TogetherStream<TogetherChatCompletion>,
-  span: Span,
-): AsyncGenerator<TogetherChatCompletion, void, unknown> {
-  let fullContent = "";
-  const allChunks: TogetherChatCompletion[] = [];
-  let lastChunk: TogetherChatCompletion | null = null;
-
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        fullContent += choice.delta.content;
-      }
-      lastChunk = chunk;
-      yield chunk;
-    }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+function observeResponse<T>(promise: Promise<T>, span: Span, onResult: (result: T) => T): Promise<T> {
+  let parsed: Promise<T> | undefined;
+  const fail = (error: Error): never => {
+    span.recordException(error);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
     span.end();
     throw error;
-  }
-
-  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
   };
+  const parse = () => {
+    parsed ??= promise.then(onResult).catch(fail);
+    return parsed;
+  };
+  return new Proxy(promise, {
+    get(target, property) {
+      if (property === "then") return (...args: Parameters<Promise<T>["then"]>) => parse().then(...args);
+      if (property === "catch") return (...args: Parameters<Promise<T>["catch"]>) => parse().catch(...args);
+      if (property === "finally") return (...args: Parameters<Promise<T>["finally"]>) => parse().finally(...args);
+      const value = Reflect.get(target, property, target);
+      if (property === "withResponse" && typeof value === "function") {
+        return async () => {
+          // Use the SDK envelope, including any version-specific metadata.
+          try {
+            const response = await value.call(target);
+            parsed ??= Promise.resolve(response.data).then(onResult).catch(fail);
+            return { ...response, data: await parsed };
+          } catch (error) {
+            if (parsed) throw error;
+            return fail(error as Error);
+          }
+        };
+      }
+      if (property === "asResponse" && typeof value === "function") {
+        return () => value.call(target).then((response: unknown) => {
+          span.setStatus({ code: SpanStatusCode.OK });
+          span.end();
+          return response;
+        }, fail);
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
 
-  if (lastChunk) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastChunk.model;
-    if (lastChunk.usage) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastChunk.usage.prompt_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastChunk.usage.completion_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = lastChunk.usage.total_tokens;
+/** Decorate iteration in place so controller, tee() and toReadableStream() survive. */
+function observeStream<T>(stream: TogetherStream<T>, span: Span, attributes: (chunk: T) => Attributes): TogetherStream<T> {
+  const iterate = typeof stream.iterator === "function"
+    ? stream.iterator.bind(stream)
+    : stream[Symbol.asyncIterator].bind(stream);
+  const observed = async function* () {
+    let failed = false;
+    try {
+      for await (const chunk of { [Symbol.asyncIterator]: iterate }) {
+        span.setAttributes(attributes(chunk));
+        yield chunk;
+      }
+    } catch (error) {
+      failed = true;
+      span.recordException(error as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
+      throw error;
+    } finally {
+      if (!failed) span.setStatus({ code: SpanStatusCode.OK });
+      span.end();
     }
-  }
+  };
+  if (typeof stream.iterator === "function") stream.iterator = observed;
+  else stream[Symbol.asyncIterator] = observed;
+  return stream;
+}
 
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+function wrapChatStream(stream: TogetherStream<TogetherChatCompletion>, span: Span): TogetherStream<TogetherChatCompletion> {
+  let content = "";
+  const tools = new Map<number, TogetherToolCall>();
+  return observeStream(stream, span, (chunk) => {
+    const choice = chunk.choices?.[0];
+    content += choice?.delta?.content ?? "";
+    for (const delta of choice?.delta?.tool_calls ?? []) {
+      const index = (delta as TogetherToolCall & { index?: number }).index ?? 0;
+      const tool = tools.get(index) ?? { id: "", type: "function", function: { name: "", arguments: "" } };
+      if (delta.id) tool.id = delta.id;
+      tool.function.name += delta.function?.name ?? "";
+      tool.function.arguments += delta.function?.arguments ?? "";
+      tools.set(index, tool);
+    }
+    const message = { role: "assistant", content, ...(tools.size ? { tool_calls: [...tools.values()] } : {}) };
+    return {
+      [SemanticConventions.OUTPUT_VALUE]: content,
+      [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+      [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([message]) ?? "[]",
+      // Aggregate the result, rather than retaining every chunk in memory.
+      [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(message) ?? "",
+      [SemanticConventions.LLM_MODEL_NAME]: chunk.model,
+      [SemanticConventions.GEN_AI_RESPONSE_MODEL]: chunk.model,
+      [SemanticConventions.GEN_AI_RESPONSE_ID]: chunk.id,
+      ...(choice?.finish_reason ? {
+        [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: JSON.stringify([choice.finish_reason]),
+      } : {}),
+      ...getUsageAttributes(chunk),
+    };
+  });
+}
+
+function wrapCompletionStream(stream: TogetherStream<TogetherCompletion>, span: Span): TogetherStream<TogetherCompletion> {
+  let content = "";
+  return observeStream(stream, span, (chunk) => {
+    content += chunk.choices?.[0]?.text ?? "";
+    return {
+      [SemanticConventions.OUTPUT_VALUE]: content,
+      [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+      [SemanticConventions.RAW_OUTPUT]: content,
+      [SemanticConventions.LLM_MODEL_NAME]: chunk.model,
+      ...getCompletionUsageAttributes(chunk),
+    };
+  });
 }
 
 /**
@@ -630,12 +642,24 @@ function getChatInputMessagesAttributes(request: TogetherChatCompletionRequest):
     if (message.content) {
       obj.content = message.content;
     }
+    if (message.tool_calls) obj.tool_calls = message.tool_calls;
     if (message.tool_call_id) {
       obj.tool_call_id = message.tool_call_id;
     }
     return obj;
   });
   return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
+}
+
+/**
+ * With hideInputs, keep numeric and boolean sampling settings but drop anything that can carry
+ * request content (stop strings, tools, response schemas, metadata).
+ */
+function getInvocationParameters(parameters: Record<string, unknown>, hideInputs?: boolean): string {
+  if (!hideInputs) return JSON.stringify(parameters);
+  return JSON.stringify(Object.fromEntries(Object.entries(parameters).filter(
+    ([, value]) => typeof value === "number" || typeof value === "boolean",
+  )));
 }
 
 /**
