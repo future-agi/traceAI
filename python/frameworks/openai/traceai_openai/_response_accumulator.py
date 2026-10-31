@@ -161,6 +161,19 @@ class _ChatCompletionAccumulator:
         raw_chunk = _to_dict(chunk)
         self._raw_data.append(raw_chunk)
         self._is_null = False
+        self._cached_result = None
+
+        # Streaming choices carry message deltas. Feed the existing indexed
+        # accumulators so fragmented tool arguments and multiple choices survive
+        # serialization, just as non-streamed assistant messages do. Keep the
+        # requested-model convention for streams; only aggregate message fields.
+        self._values += {
+            "choices": [
+                {"index": choice["index"], "message": choice.get("delta") or {}}
+                for choice in raw_chunk.get("choices", [])
+                if choice.get("index") is not None
+            ]
+        }
 
         if "choices" in raw_chunk:
             choices = raw_chunk["choices"]
@@ -183,7 +196,7 @@ class _ChatCompletionAccumulator:
 
         if self._raw_data:
             last_chunk = self._raw_data[-1]
-            if "usage" in last_chunk:
+            if isinstance(last_chunk.get("usage"), Mapping):
                 usage = last_chunk["usage"]
                 total_tokens = usage.get("total_tokens")
                 prompt_tokens = usage.get("prompt_tokens")
@@ -196,7 +209,17 @@ class _ChatCompletionAccumulator:
                 if completion_tokens is not None:
                     yield SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens
 
-        # Only yield the assistant's response content, not the raw API response
+        # A tool-only completion has no text, but still has useful output.
+        if not output_value and (result := self._result()):
+            messages = [
+                choice["message"]
+                for choice in result.get("choices", [])
+                if choice.get("message", {}).get("tool_calls")
+                or choice.get("message", {}).get("function_call")
+            ]
+            if messages:
+                yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
+                output_value = safe_json_dumps(messages)
         yield SpanAttributes.OUTPUT_VALUE, output_value
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
