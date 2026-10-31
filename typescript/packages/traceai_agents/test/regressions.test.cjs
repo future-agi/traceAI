@@ -1241,3 +1241,81 @@ test("storage ownership precedes header inspection, preventing two-reader upgrad
   });
   assert.equal((await ready)[0].phase, "ready");
 });
+
+test("auth remove fences capture and strips upstream keys even when local socket is unresponsive", async (t) => {
+  const { p } = fixture(t);
+  await credentials(p);
+  fs.mkdirSync(p.state, { recursive: true, mode: 0o700 });
+  const sockets = new Set();
+  const listener = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => listener.listen(p.socket, resolve));
+  fs.chmodSync(p.socket, 0o600);
+  cleanup(t, async () => {
+    if (listener.listening) {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => listener.close(resolve));
+    }
+  });
+  assert.equal(await main(["auth", "remove", "--profile", "work"], settings), 0);
+  const config = loadConfig(p);
+  assert.equal(config.profiles.work.removed, true);
+  assert.equal(config.routes[routeId].route.enabled, false);
+  assert.ok(config.fences[routeId]);
+  const secret = await new FileSecretStore(p.credentials).get("fixture");
+  assert.ok(secret.identity_key);
+  assert.equal(secret.api_key, undefined);
+  assert.equal(secret.secret_key, undefined);
+  // A restart must enforce the persisted fence before opening ingress.
+  for (const socket of sockets) socket.destroy();
+  await new Promise((resolve) => listener.close(resolve));
+  const restarted = await start(t, p);
+  const stored = (
+    await runtimeRequest(p.socket, {
+      operation: "route-state",
+      route: routeId,
+    })
+  ).route;
+  assert.equal(stored.enabled, false);
+  assert.equal(stored.epoch, 2);
+  await assert.rejects(submit(p, "after-auth-remove"), /HELD_DISABLED/);
+  await restarted.stop();
+});
+
+test("managed run launches child promptly when local socket is unresponsive", async (t) => {
+  const { p } = fixture(t);
+  fs.mkdirSync(p.state, { recursive: true, mode: 0o700 });
+  const sockets = new Set();
+  const listener = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => listener.listen(p.socket, resolve));
+  fs.chmodSync(p.socket, 0o600);
+  cleanup(t, async () => {
+    if (listener.listening) {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => listener.close(resolve));
+    }
+  });
+  const started = Date.now();
+  assert.equal(await command("run", "--", "-e", "process.exit(5)"), 5);
+  assert.ok(
+    Date.now() - started < 1500,
+    "tracing must not block child launch for seconds",
+  );
+});
+
+test("runtime start reports a too-long socket path before detaching", async (t) => {
+  const { root, env } = fixture(t);
+  const longState = path.join(root, "s".repeat(105));
+  const result = await cli(
+    { ...env, FI_AGENT_STATE_HOME: longState },
+    ["runtime", "start"],
+  );
+  assert.equal(result.code, 7);
+  assert.deepEqual(JSON.parse(result.stdout).reasons, ["SOCKET_PATH_TOO_LONG"]);
+  assert.equal(fs.existsSync(longState), false);
+});

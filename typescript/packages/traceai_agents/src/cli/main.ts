@@ -124,9 +124,14 @@ async function startRuntime(
   p: Paths,
   entry: string,
   version: string,
+  readinessMs = 8_000,
 ): Promise<void> {
+  // Diagnose configuration locally rather than hiding detached daemon failures.
+  if (Buffer.byteLength(p.socket) > 100)
+    throw new AgentError("SOCKET_PATH_TOO_LONG");
+  const deadline = Date.now() + readinessMs;
   try {
-    await compatibleRuntime(p, version);
+    await compatibleRuntime(p, version, Math.min(200, readinessMs));
     return;
   } catch (e) {
     if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE") throw e;
@@ -144,15 +149,21 @@ async function startRuntime(
     },
   });
   child.unref();
-  for (let attempt = 0; attempt < 50; attempt++) {
-    await new Promise((r) => setTimeout(r, 50));
+  while (Date.now() < deadline) {
+    await new Promise((r) =>
+      setTimeout(r, Math.min(25, deadline - Date.now())),
+    );
     try {
-      await compatibleRuntime(p, version, 100);
+      await compatibleRuntime(
+        p,
+        version,
+        Math.min(100, Math.max(1, deadline - Date.now())),
+      );
       return;
     } catch (e) {
       if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
         throw e;
-      /* bounded readiness */
+      /* bounded readiness; managed runs have a much shorter launch budget */
     }
   }
   throw new AgentError("RUNTIME_UNAVAILABLE");
@@ -332,30 +343,56 @@ export async function main(
         return 0;
       }
       if (pos[1] === "remove") {
+        // Commit the durable privacy fence before touching the credential store
+        // or contacting a daemon. An unresponsive socket cannot roll back consent.
+        let credentialRef = "";
+        let credentialStorage: Profile["storage"] = "file";
         await configTransaction(p, async (config) => {
           const profile = config.profiles[name];
           if (!profile) throw new AgentError("UNKNOWN_PROFILE", 2);
-          if (Object.values(config.routes).some((r) => r.profile === name))
-            controlRuntime = await ensureControlRuntime(p, settings);
-          for (const [id, route] of Object.entries(config.routes))
-            if (route.profile === name) {
-              const fenced = await runtimeRequest(p.socket, {
-                operation: "disable",
-                route: id,
-                purge: options["purge-capture"] === true,
-              });
-              route.route.enabled = false;
-              route.route.epoch = fenced.epoch;
-            }
-          await removeAuth(store(p, profile), profile.credentialRef);
+          credentialRef = profile.credentialRef;
+          credentialStorage = profile.storage;
           profile.removed = true;
+          config.fences ??= {};
+          for (const [id, route] of Object.entries(config.routes)) {
+            if (route.profile !== name) continue;
+            config.fences[id] = {
+              purge:
+                options["purge-capture"] === true ||
+                config.fences[id]?.purge === true,
+            };
+            route.route.epoch += Number(route.route.enabled);
+            route.route.enabled = false;
+          }
         });
+        // Identity/content keys survive for stable source IDs; upstream keys do not.
+        await removeAuth(
+          store(p, { storage: credentialStorage }),
+          credentialRef,
+        );
+        let reconciled = false;
+        try {
+          await compatibleRuntime(p, settings.version);
+          await runtimeRequest(p.socket, {
+            operation: "refresh",
+            expected_runtime_version: settings.version,
+          });
+          reconciled = true;
+        } catch {
+          /* Startup reconciles the durable fence; credentials are already revoked. */
+        }
+        const pendingPurge = options["purge-capture"] === true && !reconciled;
         output({
-          state: "auth-removed",
-          code: 0,
-          reasons: ["QUEUED_DATA_HELD", "BINDING_IDENTITY_RETAINED"],
+          state: reconciled ? "auth-removed" : "auth-removed-offline",
+          code: pendingPurge ? 4 : 0,
+          reasons: [
+            "QUEUED_DATA_HELD",
+            "BINDING_IDENTITY_RETAINED",
+            ...(!reconciled ? ["STARTUP_RECONCILIATION_PENDING"] : []),
+          ],
+          ...(pendingPurge ? { counts: { purge_pending: 1 } } : {}),
         });
-        return 0;
+        return pendingPurge ? 4 : 0;
       }
       throw new AgentError("INVALID_ARGUMENT", 2);
     }
@@ -407,17 +444,25 @@ export async function main(
       installed = config.routes[routeId];
     const profileName = String(options.profile ?? installed?.profile ?? "");
     const profile = config.profiles[profileName];
-    if (!profile || (profile.removed && command !== "disable" && command !== "uninstall"))
+    if (
+      !profile ||
+      (profile.removed && command !== "disable" && command !== "uninstall")
+    )
       throw new AgentError("HELD_AUTH", 3);
-    // Installed routes cannot silently switch credentials or destination.
-    if (installed && (profileName !== installed.profile ||
-        JSON.stringify(profile.binding) !== JSON.stringify(installed.route.binding)))
-      throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
     if (
       options.project !== undefined &&
-      options.project !== profile.binding.project
+      (options.project !== profile.binding.project ||
+        (installed && options.project !== installed.route.binding.project))
     )
       throw new AgentError("PROJECT_BINDING_MISMATCH", 3);
+    // Installed routes cannot silently switch credentials or destination.
+    if (
+      installed &&
+      (profileName !== installed.profile ||
+        JSON.stringify(profile.binding) !==
+          JSON.stringify(installed.route.binding))
+    )
+      throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
     if (options.capture !== undefined && options.capture !== "structure")
       throw new AgentError("HELD_CONTENT_QUALIFICATION", 3);
     if (
@@ -453,7 +498,7 @@ export async function main(
         throw new AgentError("NATIVE_DESTINATION_CONFLICT", 6);
       let tracing = true;
       try {
-        await startRuntime(p, settings.entry, settings.version);
+        await startRuntime(p, settings.entry, settings.version, 500);
       } catch (e) {
         if (
           !(e instanceof AgentError) ||

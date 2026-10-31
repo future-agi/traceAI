@@ -44,7 +44,7 @@ Credentials use the operating system's credential store. Linux requires Secret S
 
 `--stdin` accepts one bounded JSON object with `api_key` and `secret_key`. `--credential-file` accepts an explicit absolute, owner-only nonsymlink file. These input modes are mutually exclusive.
 
-`auth remove --profile work` removes upstream authentication and holds matching routes. Protected binding identity and content keys remain in the separate credential store so that `auth add` can restore authentication for the same destination without changing work IDs. Removing authentication does not remove owned agent registrations; `disable` and `uninstall` remain available without upstream credentials.
+`auth remove --profile work` removes upstream authentication and holds matching routes. Protected binding identity and content keys remain in the separate credential store so that `auth add` can restore authentication for the same destination without changing work IDs. Removal first persists an admission/export fence, then strips upstream credentials; an offline or unresponsive daemon cannot keep the old route active. Offline `--purge-capture` remains pending until restart reconciliation. Removing authentication does not remove owned agent registrations; `disable` and `uninstall` remain available without upstream credentials.
 
 ## Local state and delivery
 
