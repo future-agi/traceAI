@@ -93,6 +93,12 @@ _NON_SECRET_NAMES = frozenset(
         "authors",
         "authorid",
         "authorname",
+        "authoremail",
+        "authorurl",
+        "promptcachehittokens",
+        "promptcachemisstokens",
+        "cachewriteinputtokens",
+        "tooluseprompttokencount",
         "authorship",
         "authority",
         "sessioncount",
@@ -136,9 +142,7 @@ def _credential_key(key: str) -> bool:
     # a value/index. Exceptions apply to one complete field, never its children.
     if _normalized_name(key) in _NON_SECRET_NAMES:
         return False
-    parts = [
-        _normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part
-    ]
+    parts = [_normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part]
     for normalized in parts:
         if normalized in _NON_SECRET_NAMES:
             continue
@@ -157,9 +161,7 @@ def _credential_key(key: str) -> bool:
 
 
 def _field_path(key: str) -> tuple:
-    return tuple(
-        _normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part
-    )
+    return tuple(_normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part)
 
 
 def _is_headers_field(key: str) -> bool:
@@ -167,19 +169,26 @@ def _is_headers_field(key: str) -> bool:
     return bool(parts and parts[-1].endswith("headers"))
 
 
-def _redact_header_records(value: dict) -> dict:
-    """Shallow projection of complete selector/value records, in any order.
+def _redact_header_records(
+    value: dict, *, _header_context: bool = False, _path: tuple = ()
+) -> dict:
+    """Project selector/value siblings only in explicitly named header fields.
 
-    Leave unrelated values (including core's lazy callbacks) unevaluated. The
-    caller's per-attribute mask remains responsible for individual values.
+    Flattened dot/bracket paths are supported, including descendants of a
+    list-valued value field. No inference from ordinary product records/pairs.
+    Unrelated values (including core's lazy callbacks) remain unevaluated.
     """
     credential_values = set()
     for key, item in value.items():
         if type(key) is not str or type(item) is not str:
             continue
-        parts = _field_path(key)
+        parts = _path + _field_path(key)
+        in_headers = _header_context or any(
+            part.endswith("headers") for part in parts[:-1]
+        )
         if (
-            parts
+            in_headers
+            and parts
             and parts[-1] in ("name", "key", "header", "0")
             and _credential_key(item)
         ):
@@ -188,7 +197,11 @@ def _redact_header_records(value: dict) -> dict:
     return {
         key: (
             REDACTED
-            if type(key) is str and _field_path(key) in credential_values
+            if type(key) is str
+            and any(
+                (_path + _field_path(key))[: len(prefix)] == prefix
+                for prefix in credential_values
+            )
             else item
         )
         for key, item in value.items()
@@ -196,13 +209,16 @@ def _redact_header_records(value: dict) -> dict:
 
 
 def _safe_data(
-    value: Any, depth: int = 0, *, _header_context: bool = False
+    value: Any,
+    depth: int = 0,
+    *,
+    _header_context: bool = False,
+    _path: tuple = (),
 ) -> Any:
-    """Copy plain data; interpret pairs only inside a header collection.
+    """Copy plain application data under a documented field-name policy.
 
-    Header context comes from a headers field or a collection of two-item pairs,
-    including serialized collections. A standalone two-string business list is
-    not a header just because its first element mentions authentication/tokens.
+    Never inspect, stringify or dump an opaque framework/configuration object.
+    Header records/pairs/alternating lists require a named headers context.
     """
     if depth > 20:
         return "[omitted]"
@@ -213,13 +229,14 @@ def _safe_data(
             try:
                 parsed = json.loads(value)
             except (ValueError, RecursionError):
-                # Do not export a partially structured payload we cannot safely
-                # inspect (including valid JSON beyond parser resource limits).
                 return "[omitted unparseable structured data]"
             if type(parsed) in (dict, list):
                 return json.dumps(
                     _safe_data(
-                        parsed, depth + 1, _header_context=_header_context
+                        parsed,
+                        depth + 1,
+                        _header_context=_header_context,
+                        _path=_path,
                     )
                 )
         return value
@@ -229,45 +246,53 @@ def _safe_data(
         return {
             key: (
                 REDACTED
-                if _credential_key(key)
+                if _credential_key(".".join(_path + _field_path(key)))
                 else _safe_data(
                     item,
                     depth + 1,
-                    _header_context=_is_headers_field(key),
+                    _header_context=_header_context or _is_headers_field(key),
+                    _path=_path + _field_path(key),
                 )
             )
-            for key, item in _redact_header_records(value).items()
+            for key, item in _redact_header_records(
+                value, _header_context=_header_context, _path=_path
+            ).items()
             if type(key) is str
         }
     if type(value) in (list, tuple):
+        # Includes standalone pairs and Node-style rawHeaders, but only in an
+        # explicit header field. Business tables are never promoted to headers.
         if (
             _header_context
-            and len(value) == 2
-            and type(value[0]) is str
-            and _credential_key(value[0])
+            and value
+            and len(value) % 2 == 0
+            and all(type(value[i]) is str for i in range(0, len(value), 2))
         ):
-            return [value[0], REDACTED]
-        pair_collection = bool(value) and all(
-            type(item) in (list, tuple)
-            and len(item) == 2
-            and type(item[0]) is str
-            for item in value
-        )
+            return [
+                REDACTED
+                if i % 2 and _credential_key(value[i - 1])
+                else _safe_data(
+                    item,
+                    depth + 1,
+                    _header_context=_header_context,
+                    _path=_path + (str(i),),
+                )
+                for i, item in enumerate(value)
+            ]
         return [
             _safe_data(
                 item,
                 depth + 1,
-                _header_context=pair_collection or _header_context,
+                _header_context=_header_context,
+                _path=_path + (str(i),),
             )
-            for item in value
+            for i, item in enumerate(value)
         ]
     return "[omitted runtime object]"
 
 
 def _has_prefix(key: str, prefixes: tuple) -> bool:
-    return any(
-        key == prefix or key.startswith(prefix + ".") for prefix in prefixes
-    )
+    return any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)
 
 
 class _CrewAITraceConfig(TraceConfig):
@@ -284,14 +309,10 @@ class _CrewAITraceConfig(TraceConfig):
 
     def mask(self, key: str, value: Any) -> Any:
         hide_input = (
-            self.hide_inputs
-            or self.hide_input_text
-            or self.hide_input_messages
+            self.hide_inputs or self.hide_input_text or self.hide_input_messages
         )
         hide_output = (
-            self.hide_outputs
-            or self.hide_output_text
-            or self.hide_output_messages
+            self.hide_outputs or self.hide_output_text or self.hide_output_messages
         )
         if (hide_input and _has_prefix(key, _INPUT_ALIASES)) or (
             hide_output and _has_prefix(key, _OUTPUT_ALIASES)

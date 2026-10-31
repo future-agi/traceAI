@@ -3,7 +3,6 @@ from enum import Enum
 from inspect import signature
 from typing import Any, Callable, Iterator, List, Mapping, Optional, Tuple
 
-from crewai import Agent
 from crewai.tools.tool_calling import ToolCalling
 from fi_instrumentation import get_attributes_from_context
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
@@ -95,16 +94,11 @@ def _task_input(
 
 
 def _get_input_value(method: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
-    """
-    Parses a method call's inputs into a JSON string. Ensures a consistent
-    output regardless of whether the those inputs are passed as positional or
-    keyword arguments.
-    """
+    """Project only ToolCalling's documented application fields.
 
-    # For typical class methods, the corresponding instance of inspect.Signature
-    # does not include the self parameter. However, the inspect.Signature
-    # instance for __call__ does include the self parameter.
-
+    ToolUsage also receives the runtime tool and parsing state: none of those
+    arguments may enter a generic bound-arguments/object serialization fallback.
+    """
     bound = _bound_call(method, args, kwargs)
     calling = bound.get("calling", kwargs.get("calling"))
     if isinstance(calling, ToolCalling):
@@ -114,15 +108,7 @@ def _get_input_value(method: Callable[..., Any], *args: Any, **kwargs: Any) -> s
                 "tool_args": _safe_data(calling.arguments),
             }
         )
-    if args and isinstance(args[0], Agent):
-        return json.dumps(
-            {
-                "role": _safe_data(args[0].role),
-                "goal": _safe_data(args[0].goal),
-                "backstory": _safe_data(args[0].backstory),
-            }
-        )
-    return json.dumps(_safe_data({k: v for k, v in bound.items() if k != "self"}))
+    return json.dumps({})
 
 
 class _ExecuteCoreWrapper:
@@ -246,7 +232,6 @@ class _KickoffWrapper:
                                     "verbose?": agent.verbose,
                                     "max_iter": agent.max_iter,
                                     "max_rpm": agent.max_rpm,
-                                    "i18n": agent.i18n.prompt_file,
                                     "delegation_enabled": agent.allow_delegation,
                                     "tools_names": [
                                         tool.name.casefold()

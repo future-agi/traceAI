@@ -74,9 +74,7 @@ def test_batch_adapter_retains_core_policy_lazy_values_and_lifecycle(
             span.set_attributes({"business.lazy": lambda: "useful lazy"})
             span.add_event("batch", MappingProxyType(attributes))
             span.add_link(link_context, MappingProxyType(attributes))
-            span.record_exception(
-                RuntimeError("synthetic failure"), attributes
-            )
+            span.record_exception(RuntimeError("synthetic failure"), attributes)
         assert attributes == before
         assert calls == ([] if hide_inputs else ["input"])
         assert SECRET not in json.dumps(observations)

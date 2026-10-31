@@ -11,24 +11,24 @@ os.environ["OTEL_SDK_DISABLED"] = "false"
 
 
 @pytest.fixture(autouse=True)
-def native_telemetry_off(request):
+def native_telemetry_off(request, monkeypatch):
+    from importlib.metadata import version
     from crewai.telemetry import Telemetry
-    from traceai_crewai._telemetry import _NativeTelemetryGuard
 
-    if request.node.name.startswith("test_guard_"):
+    if request.node.name.startswith("test_native_telemetry_"):
         yield
         return
-    # Use the packaged adapter for baseline native calls too. Floor CrewAI
-    # ignores the environment flags; maintained versions use their own checks.
-    guard = _NativeTelemetryGuard()
-    guard.enable()
-    try:
-        telemetry = Telemetry()
-        assert not telemetry.ready
-        assert not getattr(telemetry, "provider", None)
-        yield
-    finally:
-        guard.disable()
+    if version("crewai") == "0.41.1":
+        # Test-only isolation: legacy CrewAI does not honor native disable flags.
+        # Production instrumentation must never patch the user's telemetry.
+        def disabled(instance):
+            instance.ready = False
+            instance.trace_set = False
+
+        monkeypatch.setattr(Telemetry, "__init__", disabled)
+    else:
+        assert Telemetry._is_telemetry_disabled()
+    yield
 
 
 @pytest.fixture

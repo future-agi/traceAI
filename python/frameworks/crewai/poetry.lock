@@ -874,11 +874,11 @@ groups = ["main"]
 
 [[package.files]]
 file = "fi_instrumentation_otel-1.2.2-py3-none-any.whl"
-hash = "sha256:ba1003f5962303a0fb9f1587153d0c5bda3856018da00b36629aef96296604fc"
+hash = "sha256:25cf88f93e33aa928d4fae0f631afe8a32565639490862b715869e0633becbaf"
 
 [[package.files]]
 file = "fi_instrumentation_otel-1.2.2.tar.gz"
-hash = "sha256:13d16695511f91c6f16cfa52e4b3236193a734df85ce52b40d37ad52831962fd"
+hash = "sha256:b675df47d7a03c506fbd2e4b0420fe4f74d12a6353a88b219bfd97797b276d4c"
 [package.dependencies]
 jsonschema = ">=4.21.1,<5.0.0"
 opentelemetry-api = ">=1.29.0,<2.0.0"

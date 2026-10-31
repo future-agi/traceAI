@@ -38,10 +38,9 @@ class TestCrewAIInstrumentor:
         deps = instrumentor.instrumentation_dependencies()
         assert "crewai >= 0.41.1" in deps
 
-    @patch("traceai_crewai._NativeTelemetryGuard")
     @patch("traceai_crewai.import_module")
     @patch("traceai_crewai.wrap_function_wrapper")
-    def test_instrument_with_defaults(self, mock_wrap, mock_import, mock_guard):
+    def test_instrument_with_defaults(self, mock_wrap, mock_import):
         """Test instrumentation with default parameters."""
         mock_tracer_provider = Mock()
         mock_task_module = Mock()
@@ -97,7 +96,6 @@ class TestCrewAIInstrumentor:
         instrumentor._original_execute_core = original_execute
         instrumentor._original_kickoff = original_kickoff
         instrumentor._original_tool_use = original_tool_use
-        instrumentor._native_telemetry_guard = Mock()
 
         instrumentor._uninstrument()
 
@@ -704,24 +702,14 @@ class TestUtilityFunctions:
             assert parsed_result["tool_name"] == "search"
             assert parsed_result["tool_args"] == {"query": "test"}
 
-    def test_get_input_value_with_agent(self):
-        """Test _get_input_value with Agent object."""
-        # Mock Agent
+    def test_get_input_value_does_not_serialize_agent_arguments(self):
+        """Only explicit ToolCalling content belongs in a ToolUsage input span."""
         mock_agent = Mock()
-        mock_agent.role = "researcher"
-        mock_agent.goal = "research topics"
-        mock_agent.backstory = "expert in research"
-
-        # Import the real class for isinstance check
-        with patch("traceai_crewai._wrappers.Agent", mock_agent.__class__):
-            mock_method = Mock()
-
-            result = _get_input_value(mock_method, mock_agent)
-
-            parsed_result = json.loads(result)
-            assert parsed_result["role"] == "researcher"
-            assert parsed_result["goal"] == "research topics"
-            assert parsed_result["backstory"] == "expert in research"
+        mock_agent.api_key = "FAKE_SHARED_AGENT_KEY"
+        mock_method = Mock()
+        assert json.loads(_get_input_value(mock_method, mock_agent)) == {}
+        mock_agent.to_dict.assert_not_called()
+        mock_agent.model_dump.assert_not_called()
 
     def test_projection_nested_containers_does_not_introspect_runtime(self):
         runtime = Mock()
@@ -741,8 +729,5 @@ class TestUtilityFunctions:
         projected = json.loads(
             _get_input_value(method, runtime, api_key="FAKE_SHARED_KEY")
         )
-        assert projected == {
-            "arg": "[omitted runtime object]",
-            "kwargs": {"api_key": "__REDACTED__"},
-        }
+        assert projected == {}
         runtime.to_dict.assert_not_called()

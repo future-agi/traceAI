@@ -1,93 +1,99 @@
-"""Verify the package's opt-out, including floor versions without disable flags."""
+"""Native telemetry belongs to the application, not the instrumentor."""
 
+import inspect
+import os
 from importlib import import_module
-from inspect import getattr_static
+from importlib.metadata import version
 from unittest.mock import patch
 
+import pytest
 from crewai.telemetry import Telemetry
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from traceai_crewai import CrewAIInstrumentor
-from traceai_crewai._telemetry import _NativeTelemetryGuard
 
 
-def test_guard_native_exporter_never_constructed_and_traceai_still_records(monkeypatch):
-    # The import was safe under pre-import flags; now prove instrument() itself
-    # disables native telemetry even when those flags are explicitly false.
+@pytest.mark.parametrize("disabled", ["true", "false"])
+def test_native_telemetry_instrumentation_does_not_change_user_settings(
+    monkeypatch, disabled
+):
     for key in (
         "CREWAI_DISABLE_TELEMETRY",
         "CREWAI_DISABLE_TRACKING",
         "OTEL_SDK_DISABLED",
     ):
-        monkeypatch.setenv(key, "false")
-    if hasattr(Telemetry, "_instance"):
-        monkeypatch.setattr(Telemetry, "_instance", None)
-    original = getattr_static(Telemetry, "__init__")
-    check = getattr_static(Telemetry, "_is_telemetry_disabled", None)
-    exporter = InMemorySpanExporter()
+        monkeypatch.setenv(key, disabled)
+    before_env = dict(os.environ)
+    before = dict(vars(Telemetry))
     provider = TracerProvider(shutdown_on_exit=False)
+    exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     instrumentor = CrewAIInstrumentor()
-    # A constructor spy is stronger than an unreachable network endpoint: a
-    # native exporter must not even be instantiated in the opted-out branch.
-    module = "crewai.telemetry.telemetry"
-    target = module + (
-        ".SafeOTLPSpanExporter"
-        if hasattr(import_module(module), "SafeOTLPSpanExporter")
-        else ".OTLPSpanExporter"
-    )
-    with patch(
-        target, side_effect=AssertionError("native exporter constructed")
-    ) as native_exporter:
+    # Instrumentation must not instantiate or patch the native singleton/provider.
+    with patch.object(
+        Telemetry, "__init__", side_effect=AssertionError("native construction")
+    ):
+        init = Telemetry.__init__
         instrumentor.instrument(tracer_provider=provider)
         try:
-            telemetry = Telemetry()
-            assert not telemetry.ready
-            assert not getattr(telemetry, "provider", None)
-            if check is not None:
-                assert Telemetry._is_telemetry_disabled()
+            assert Telemetry.__init__ is init
+            assert dict(os.environ) == before_env
+            for key, value in before.items():
+                if key != "__init__":
+                    assert vars(Telemetry)[key] is value
             with instrumentor._tracer.start_as_current_span("positive-control"):
                 pass
-            assert len(exporter.get_finished_spans()) == 1
-            assert not native_exporter.called
+            assert len(exporter.get_finished_spans()) == (
+                0 if disabled == "true" else 1
+            )
         finally:
             instrumentor.uninstrument()
-    assert getattr_static(Telemetry, "__init__") is original
-    assert getattr_static(Telemetry, "_is_telemetry_disabled", None) is check
+    assert dict(vars(Telemetry)) == before
+    assert dict(os.environ) == before_env
     provider.shutdown()
 
 
-def test_guard_floor_blocks_existing_instance_and_restores(monkeypatch):
-    calls = []
-
-    class LegacyTelemetry:
-        def __init__(self):
-            self.ready, self.trace_set = True, True
-            calls.append("constructor")
-
-        def crew_creation(self, *args):
-            calls.append("export")
-
-    legacy = LegacyTelemetry()
-    from types import SimpleNamespace
-    import traceai_crewai._telemetry as module
-
-    def fake_import(name):
-        if name == "crewai.telemetry":
-            return SimpleNamespace(Telemetry=LegacyTelemetry)
-        raise ModuleNotFoundError(name="crewai_core")
-
-    monkeypatch.setattr(module, "import_module", fake_import)
-    guard = _NativeTelemetryGuard()
-    guard.enable()
-    try:
-        assert not LegacyTelemetry().ready
-        assert legacy.crew_creation(None, None) is None
-        assert calls == ["constructor"]
-    finally:
-        guard.disable()
-    assert LegacyTelemetry().ready
-    legacy.crew_creation(None, None)
-    assert calls == ["constructor", "constructor", "export"]
+def test_native_telemetry_installed_source_and_opt_out_flags(monkeypatch):
+    if version("crewai") == "0.41.1":
+        # This version has no native opt-out check at all. Do not advertise a
+        # variable it ignores, or instantiate its exporter to demonstrate it.
+        source = inspect.getsource(Telemetry)
+        assert not hasattr(Telemetry, "_is_telemetry_disabled")
+        for flag in (
+            "CREWAI_DISABLE_TELEMETRY",
+            "CREWAI_DISABLE_TRACKING",
+            "OTEL_SDK_DISABLED",
+            "CREWAI_TELEMETRY_OPT_OUT",
+            "DO_NOT_TRACK",
+        ):
+            assert flag not in source
+        assert "https://telemetry.crewai.com:4319" in source
+        return
+    # Maintained CrewAI delegates to crewai-core; the repository-locked 0.152
+    # implements the same checks in CrewAI itself.
+    cls = (
+        import_module("crewai_core.telemetry").Telemetry
+        if version("crewai") == "1.15.33"
+        else Telemetry
+    )
+    honored = (
+        "CREWAI_DISABLE_TELEMETRY",
+        "CREWAI_DISABLE_TRACKING",
+        "OTEL_SDK_DISABLED",
+    )
+    ignored = ("CREWAI_TELEMETRY_OPT_OUT", "DO_NOT_TRACK")
+    source = inspect.getsource(cls._is_telemetry_disabled)
+    for flag in honored + ignored:
+        monkeypatch.setenv(flag, "false")
+    assert not Telemetry._is_telemetry_disabled()
+    for flag in honored:
+        assert flag in source
+        monkeypatch.setenv(flag, "true")
+        assert Telemetry._is_telemetry_disabled()
+        monkeypatch.setenv(flag, "false")
+    for flag in ignored:
+        assert flag not in source
+        monkeypatch.setenv(flag, "true")
+    assert not Telemetry._is_telemetry_disabled()

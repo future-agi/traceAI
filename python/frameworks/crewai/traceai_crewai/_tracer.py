@@ -10,11 +10,7 @@ from ._privacy import _redact_header_records
 def _project_attributes(attributes):
     # Keep selector/value siblings together before core's scalar masking; leave
     # unrelated values and core's lazy evaluation semantics unchanged.
-    return (
-        None
-        if attributes is None
-        else _redact_header_records(dict(attributes))
-    )
+    return None if attributes is None else _redact_header_records(dict(attributes))
 
 
 class _CrewAISpan(wrapt.ObjectProxy):
@@ -36,9 +32,7 @@ class _CrewAISpan(wrapt.ObjectProxy):
         self.__wrapped__.set_attributes(_project_attributes(attributes))
 
     def add_event(self, name, attributes=None, timestamp=None):
-        self.__wrapped__.add_event(
-            name, _project_attributes(attributes), timestamp
-        )
+        self.__wrapped__.add_event(name, _project_attributes(attributes), timestamp)
 
     def record_exception(
         self, exception, attributes=None, timestamp=None, escaped=False

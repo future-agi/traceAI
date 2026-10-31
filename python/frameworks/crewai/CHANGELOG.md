@@ -1,15 +1,4 @@
 ## [0.1.9] - 2026-07-13
-### Security
-- Redact credential-named fields in structured task, crew and tool trace data,
-  including JSON-serialized arguments, aliases, context and event attributes.
-  Project business content without serializing opaque runtime objects.
-- Honor directional content hiding on CrewAI aliases and omit automatic
-  exception details while preserving application inputs, results and exceptions.
-- Disable CrewAI's separate native telemetry while instrumented without disabling
-  the OTel SDK; support legacy versions that ignore native opt-out flags.
-- Require fi-instrumentation-otel >=1.2.2 and declare the setuptools dependency
-  needed to import CrewAI 0.41.1 on a clean installation.
-
 ### Fixed
 - Fix `crew.kickoff()` crashing with `TypeError: '_NotSpecified' object is not
   iterable` when a `Task` is created without an explicit `context`. CrewAI

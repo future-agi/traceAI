@@ -75,7 +75,7 @@ def test_generic_input_never_serializes_runtime_objects():
 
     payload = _get_input_value(execute, ExplosiveRuntime(), extra=ExplosiveRuntime())
     assert SENTINEL not in payload
-    assert "omitted runtime object" in payload
+    assert json.loads(payload) == {}
 
 
 def test_exception_does_not_enter_span_and_same_error_propagates():

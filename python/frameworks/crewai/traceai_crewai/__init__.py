@@ -12,7 +12,6 @@ from traceai_crewai._wrappers import (
 )
 from traceai_crewai._privacy import _CrewAITraceConfig
 from traceai_crewai._tracer import _CrewAITracer
-from traceai_crewai._telemetry import _NativeTelemetryGuard
 from traceai_crewai.version import __version__
 from wrapt import wrap_function_wrapper
 
@@ -27,7 +26,6 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
         "_original_kickoff",
         "_original_tool_use",
         "_tracer",
-        "_native_telemetry_guard",
     )
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -44,9 +42,6 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=_CrewAITraceConfig(config),
         )
-
-        self._native_telemetry_guard = _NativeTelemetryGuard()
-        self._native_telemetry_guard.enable()
 
         execute_core_wrapper = _ExecuteCoreWrapper(tracer=self._tracer)
         self._original_execute_core = getattr(
@@ -77,7 +72,6 @@ class CrewAIInstrumentor(BaseInstrumentor):  # type: ignore
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        self._native_telemetry_guard.disable()
         if self._original_execute_core is not None:
             task_module = import_module("crewai")
             task_module.Task._execute_core = self._original_execute_core
