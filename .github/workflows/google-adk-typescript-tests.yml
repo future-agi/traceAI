@@ -1,0 +1,64 @@
+name: Google ADK TypeScript tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_google_adk/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/google-adk-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-adk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        adk: ['0.1.0', '2.4.0']
+        capture: ['0', '1']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install workspace and isolated ADK runtime
+        working-directory: typescript
+        env:
+          ADK_VERSION: ${{ matrix.adk }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          corepack pnpm --filter @traceai/fi-instrumentation-google-adk... install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/adk" --ignore-scripts --no-audit --no-fund "@google/adk@$ADK_VERSION"
+      - name: Build package and dependencies
+        working-directory: typescript
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/fi-instrumentation-google-adk build
+      - name: Unit, compatibility and real ADK OTLP tests without outbound network
+        env:
+          CAPTURE: ${{ matrix.capture }}
+        run: |
+          sudo unshare --net bash -c '
+            set -euo pipefail
+            ip link set lo up
+            "$4" "$1/typescript/node_modules/jest/bin/jest.js" --config "$1/typescript/packages/traceai_google_adk/jest.config.js" --runInBand
+            "$4" --test "$1/typescript/packages/traceai_google_adk/test/native.test.cjs"
+            ADK_RUNTIME="$2" CAPTURE_CONTENT="$3" "$4" "$1/typescript/packages/traceai_google_adk/test/run-adk.cjs"
+          ' -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP/adk" "$CAPTURE" "$(command -v node)"
+      - name: Pack public entry points
+        working-directory: typescript/packages/traceai_google_adk
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP/package"
+          git diff --exit-code -- ../../pnpm-lock.yaml

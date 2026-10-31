@@ -810,6 +810,24 @@ importers:
 
   packages/traceai_google_adk:
     dependencies:
+      '@opentelemetry/sdk-trace-node':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-trace-base':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/resources':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-trace-otlp-http':
+        specifier: ^0.202.0
+        version: 0.202.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/core':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/context-async-hooks':
+        specifier: ^2.0.1
+        version: 2.0.1(@opentelemetry/api@1.9.0)
       '@google/adk':
         specifier: '>=0.1.0'
         version: 0.3.0(e60519ede9712f800b601f30df69e9e3)
@@ -826,12 +844,6 @@ importers:
         specifier: workspace:^
         version: link:../fi-semantic-conventions
     devDependencies:
-      '@opentelemetry/sdk-trace-base':
-        specifier: ^1.19.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
-      '@opentelemetry/sdk-trace-node':
-        specifier: ^1.19.0
-        version: 1.30.1(@opentelemetry/api@1.9.0)
       '@types/jest':
         specifier: ^29.5.11
         version: 29.5.14
