@@ -9,6 +9,14 @@
   "tag-separator": "-",
   "pull-request-title-pattern": "chore${scope}: release${component} ${version}",
   "packages": {
+    "python/frameworks/temporal": {
+      "release-type": "python",
+      "component": "traceai-temporal",
+      "package-name": "traceAI-temporal",
+      "extra-files": [
+        "traceai_temporal/version.py"
+      ]
+    },
     "python/frameworks/a2a": {
       "release-type": "python",
       "component": "traceai-a2a",
@@ -39,6 +47,14 @@
       "package-name": "traceAI-agent-framework",
       "extra-files": [
         "traceai_agent_framework/version.py"
+      ]
+    },
+    "python/frameworks/agentscope": {
+      "release-type": "python",
+      "component": "traceai-agentscope",
+      "package-name": "traceAI-agentscope",
+      "extra-files": [
+        "traceai_agentscope/__init__.py"
       ]
     },
     "python/frameworks/agno": {
@@ -862,7 +878,10 @@
       "changelog-path": "CHANGELOG.md",
       "exclude-paths": [
         "python/frameworks",
-        "python/traceai"
+        "python/traceai",
+        "python/tests",
+        "python/e2e_tests",
+        "python/examples"
       ],
       "changelog-sections": [
         {
