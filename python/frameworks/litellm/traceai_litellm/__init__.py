@@ -136,8 +136,6 @@ def _instrument_func_type_completion(
             )
         if eval_input := process_messages.get("eval_input"):
             _set_span_attribute(span, SpanAttributes.INPUT_VALUE, eval_input)
-        if query := process_messages.get("query"):
-            _set_span_attribute(span, SpanAttributes.INPUT_VALUE, query)
 
         for index, input_message in list(enumerate(messages)):
             for key, value in _get_attributes_from_message_param(input_message):
@@ -694,7 +692,6 @@ def _process_messages(messages):
             "input_images": input_images if input_images else None,
             "filtered_messages": filtered_messages if filtered_messages else messages,
             "eval_input": "\n".join(eval_input),
-            "query": str(eval_input[0]) if eval_input else None,
         }
     except Exception as e:
         print(f"Error in _process_messages: {e}")
@@ -702,5 +699,4 @@ def _process_messages(messages):
             "input_images": None,
             "filtered_messages": messages,
             "eval_input": None,
-            "query": None,
         }
