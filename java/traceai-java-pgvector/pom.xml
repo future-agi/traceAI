@@ -14,6 +14,10 @@
     <name>TraceAI Java PGVector</name>
     <description>PostgreSQL pgvector instrumentation for TraceAI Java SDK</description>
 
+    <properties>
+        <postgresql.version>42.7.1</postgresql.version>
+    </properties>
+
     <dependencies>
         <!-- TraceAI Core -->
         <dependency>
@@ -33,7 +37,7 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <version>42.7.1</version>
+            <version>${postgresql.version}</version>
             <scope>provided</scope>
         </dependency>
 
@@ -61,6 +65,17 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.11.1-alpha</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

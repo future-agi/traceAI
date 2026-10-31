@@ -22,6 +22,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pgvector:
+    name: pgvector (Java ${{ matrix.java }}, JDBC ${{ matrix.jdbc }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+        jdbc: ['42.7.1', '42.7.14']
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: pgvector_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Prepare offline dependencies
+        run: |
+          mvn -B -ntp -pl traceai-java-pgvector -am -Dpostgresql.version=${{ matrix.jdbc }} -DskipTests dependency:go-offline test
+          mvn -B -ntp dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3
+      - name: Test nonempty database results and OTLP export
+        run: >-
+          mvn -o -B -ntp -pl traceai-java-pgvector -am
+          -Dpostgresql.version=${{ matrix.jdbc }}
+          '-Dtest=TracedPgVectorStore*Test' -Dsurefire.failIfNoSpecifiedTests=false
+          -Dpgvector.test.url=jdbc:postgresql://127.0.0.1:5432/pgvector_test test
+      - name: Upload pgvector reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgvector-java-${{ matrix.java }}-jdbc-${{ matrix.jdbc }}
+          path: java/traceai-java-pgvector/target/surefire-reports/
+
   verify:
     name: Build, test, and validate Central artifacts
     runs-on: ubuntu-latest
