@@ -4,6 +4,8 @@ import ai.traceai.FISpanKind;
 import ai.traceai.FITracer;
 import ai.traceai.SemanticConventions;
 import ai.traceai.TraceAI;
+import com.google.common.util.concurrent.ForwardingListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -41,8 +43,8 @@ import java.util.function.Supplier;
  * Semantic tracing for Qdrant search, universal queries (including batch and groups),
  * upsert, delete, retrieval, collection creation and collection listing.
  *
- * <p>Async methods return the SDK's original future, including its cancellation and
- * failure semantics. Spans finish when that future completes, not when it is returned.
+ * <p>Async methods preserve the SDK's result, failure cause and cancellation behavior.
+ * Spans finish on SDK completion, before the returned future exposes the outcome.
  * The calling context is used as the parent and the operation span is current when
  * invoking the SDK. No scope is held open while waiting. As with the SDK itself,
  * applications must propagate context when scheduling their own future listeners.</p>
@@ -268,31 +270,49 @@ public class TracedQdrantClient {
             }
             throw failure;
         }
-        // Observe rather than transform the future: cancellation, exception identity and
-        // listener scheduling remain the SDK's own. Direct callbacks do no blocking work.
+        // Publish the outcome only after ending the span. Returning the SDK future
+        // directly lets get() race its completion callback and an immediate tracer shutdown.
+        SettableFuture<T> completion = SettableFuture.create();
         Futures.addCallback(future, new FutureCallback<T>() {
             @Override
             public void onSuccess(T result) {
-                try (Scope scope = context.makeCurrent()) {
+                finish(span, context, () -> {
                     resultAttributes.accept(span, result);
                     span.setStatus(StatusCode.OK);
-                } catch (RuntimeException ignored) {
-                    // Optional telemetry must not turn a successful SDK result into a failure.
-                } finally {
-                    span.end();
-                }
+                });
+                completion.set(result);
             }
 
             @Override
             public void onFailure(Throwable failure) {
-                try (Scope scope = context.makeCurrent()) {
-                    tracer.setError(span, failure);
-                } finally {
-                    span.end();
+                finish(span, context, () -> tracer.setError(span, failure));
+                if (future.isCancelled()) {
+                    completion.cancel(false);
+                } else {
+                    completion.setException(failure);
                 }
             }
         }, MoreExecutors.directExecutor());
-        return future;
+        return new ForwardingListenableFuture.SimpleForwardingListenableFuture<T>(completion) {
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                // Preserve whether the SDK accepts cancellation, including the interrupt
+                // flag. Its completion callback transfers cancellation after ending the span.
+                return future.cancel(mayInterruptIfRunning);
+            }
+        };
+    }
+
+    private void finish(Span span, Context context, Runnable attributes) {
+        try {
+            try (Scope scope = context.makeCurrent()) {
+                attributes.run();
+            } finally {
+                span.end();
+            }
+        } catch (RuntimeException ignored) {
+            // Optional telemetry must not change or prevent delivery of the SDK outcome.
+        }
     }
 
     /** Returns the original client; operations on it bypass this wrapper. */

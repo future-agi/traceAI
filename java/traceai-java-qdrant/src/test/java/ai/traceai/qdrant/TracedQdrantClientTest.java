@@ -85,7 +85,7 @@ class TracedQdrantClientTest {
 
     @ParameterizedTest
     @EnumSource(Operation.class)
-    void asyncOperationsRemainOpenUntilCompletionAndPreserveFuture(Operation operation) throws Exception {
+    void asyncOperationsRemainOpenUntilCompletionAndPreserveResult(Operation operation) throws Exception {
         SettableFuture<Object> pending = SettableFuture.create();
         AtomicReference<Span> sdkSpan = new AtomicReference<>();
         client = mock(QdrantClient.class, invocation -> {
@@ -99,7 +99,6 @@ class TracedQdrantClientTest {
             returned = invoke(operation);
             assertThat(Span.current()).isSameAs(parent);
         }
-        assertThat(returned).isSameAs(pending);
         assertThat(returned.isDone()).isFalse();
         assertThat(exporter.getFinishedSpanItems()).isEmpty();
         assertThat(sdkSpan.get().getSpanContext().isValid()).isTrue();
@@ -240,6 +239,74 @@ class TracedQdrantClientTest {
         assertThat(traced.unwrap()).isSameAs(client);
         assertThat(exporter.getFinishedSpanItems()).hasSize(10);
         assertThat(exporter.getFinishedSpanItems()).allMatch(span -> span.getStatus().getStatusCode() == StatusCode.OK);
+    }
+
+    @Test
+    void preservesRejectedCancellationAndListenerExecutor() throws Exception {
+        SettableFuture<List<ScoredPoint>> pending = SettableFuture.create();
+        var source = new com.google.common.util.concurrent.ForwardingListenableFuture
+                .SimpleForwardingListenableFuture<List<ScoredPoint>>(pending) {
+            @Override
+            public boolean cancel(boolean interrupt) { return false; }
+        };
+        when(client.queryAsync(same(QUERY), isNull())).thenReturn(source);
+        var returned = traced.queryAsync(QUERY);
+        assertThat(returned.cancel(true)).isFalse();
+        assertThat(returned.isCancelled()).isFalse();
+        assertThat(returned.isDone()).isFalse();
+        var listener = new AtomicReference<Runnable>();
+        var called = new java.util.concurrent.atomic.AtomicBoolean();
+        returned.addListener(() -> called.set(true), listener::set);
+        pending.set(List.of(POINT));
+        assertThat(returned.get()).containsExactly(POINT);
+        assertThat(called).isFalse();
+        assertThat(listener.get()).isNotNull();
+        listener.get().run();
+        assertThat(called).isTrue();
+        assertThat(onlySpan().getStatus().getStatusCode()).isEqualTo(StatusCode.OK);
+    }
+
+    @Test
+    void completedResultIsNotVisibleBeforeSpanEnds() throws Exception {
+        var ending = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var processor = new io.opentelemetry.sdk.trace.SpanProcessor() {
+            public boolean isStartRequired() { return false; }
+            public boolean isEndRequired() { return true; }
+            public void onStart(io.opentelemetry.context.Context parent,
+                    io.opentelemetry.sdk.trace.ReadWriteSpan span) { }
+            public void onEnd(io.opentelemetry.sdk.trace.ReadableSpan span) {
+                ending.countDown();
+                try {
+                    assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+            }
+        };
+        SettableFuture<List<ScoredPoint>> pending = SettableFuture.create();
+        when(client.queryAsync(same(QUERY), isNull())).thenReturn(pending);
+        var executor = Executors.newSingleThreadExecutor();
+        try (var delayedProvider = SdkTracerProvider.builder().addSpanProcessor(processor).build()) {
+            var delayed = new TracedQdrantClient(client, new FITracer(delayedProvider.get("test"), config()));
+            var returned = delayed.queryAsync(QUERY);
+            var completion = executor.submit(() -> pending.set(List.of(POINT)));
+            try {
+                assertThat(ending.await(5, TimeUnit.SECONDS)).isTrue();
+                assertThat(pending.isDone()).isTrue();
+                // A blocking caller may shut down its provider immediately after get().
+                // Do not expose success until the operation span has been ended.
+                assertThat(returned.isDone()).isFalse();
+            } finally {
+                release.countDown();
+            }
+            completion.get(5, TimeUnit.SECONDS);
+            assertThat(returned.get()).containsExactly(POINT);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test
