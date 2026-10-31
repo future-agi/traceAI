@@ -1,0 +1,51 @@
+name: Portkey lifecycle
+
+on:
+  pull_request:
+    paths:
+      - 'python/frameworks/portkey/**'
+      - 'python/tests/test_framework_portkey.py'
+      - '.github/workflows/portkey-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.10'
+            sdk: '1.1.2'
+          - python: '3.10'
+            sdk: '1.2.0'
+          - python: '3.12'
+            sdk: '2.3.4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install integration and SDK
+        env:
+          SDK_VERSION: ${{ matrix.sdk }}
+        run: |
+          python -m venv .venv-portkey
+          .venv-portkey/bin/pip install -e python/frameworks/portkey \
+            "portkey-ai==$SDK_VERSION" "pytest==8.4.2" "pytest-asyncio==0.24.0"
+          # Portkey 1.2.0 imports OpenAI but only declares it as a dev extra.
+          if [ "$SDK_VERSION" = '1.2.0' ]; then
+            .venv-portkey/bin/pip install 'openai==1.109.1' 'httpx<0.28'
+          fi
+      - name: Test with only loopback networking
+        run: |
+          sudo unshare --net sh -c '
+            ip link set lo up
+            "$1" -I -m pytest -q python/frameworks/portkey/tests python/tests/test_framework_portkey.py
+          ' sh "$PWD/.venv-portkey/bin/python"

@@ -27,6 +27,9 @@ class _RequestAttributesExtractor:
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_SPAN_KIND, FiSpanKindValues.LLM.value
+        yield SpanAttributes.GEN_AI_PROVIDER_NAME, "portkey"
+        if model := request_parameters.get("model"):
+            yield SpanAttributes.GEN_AI_REQUEST_MODEL, model
         try:
             yield from _as_input_attributes(
                 _io_value_and_type(request_parameters),
@@ -49,15 +52,21 @@ class _RequestAttributesExtractor:
 
         if isinstance((tools := invocation_params.pop("tools", None)), Iterable):
             for i, tool in enumerate(tools):
-                yield f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.tool.json_schema", safe_json_dumps(tool)
+                yield f"{SpanAttributes.GEN_AI_TOOL_DEFINITIONS}.{i}.tool.json_schema", safe_json_dumps(
+                    tool
+                )
 
-        yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(invocation_params)
+        yield SpanAttributes.GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(
+            invocation_params
+        )
 
         if prompt_id := invocation_params.get("prompt_id"):
             yield SpanAttributes.PROMPT_ID, prompt_id
 
         if prompt_variables := invocation_params.get("variables"):
-            yield SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(prompt_variables)
+            yield SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES, safe_json_dumps(
+                prompt_variables
+            )
 
         if (input_messages := request_parameters.get("messages")) and isinstance(
             input_messages, Iterable
@@ -66,7 +75,9 @@ class _RequestAttributesExtractor:
                 # Use reversed() to get the last message first. This is because OTEL has a default
                 # limit of 128 attributes per span, and flattening increases the number of
                 # attributes very quickly.
-                for key, value in self._get_attributes_from_message_param(input_message):
+                for key, value in self._get_attributes_from_message_param(
+                    input_message
+                ):
                     yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{index}.{key}", value
 
     def _get_attributes_from_message_param(
