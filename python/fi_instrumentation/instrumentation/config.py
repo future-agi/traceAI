@@ -1,4 +1,5 @@
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass, field, fields
 from types import TracebackType
 from typing import Any, Callable, Optional, Type, Union, get_args
@@ -33,13 +34,16 @@ class suppress_tracing:
             ...
     """
 
+    def __init__(self) -> None:
+        self._tokens: ContextVar[tuple] = ContextVar("fi_suppression_tokens", default=())
+
     def __enter__(self) -> "suppress_tracing":
-        self._token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+        token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+        self._tokens.set((*self._tokens.get(), token))
         return self
 
-    def __aenter__(self) -> "suppress_tracing":
-        self._token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
-        return self
+    async def __aenter__(self) -> "suppress_tracing":
+        return self.__enter__()
 
     def __exit__(
         self,
@@ -47,15 +51,17 @@ class suppress_tracing:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> None:
-        detach(self._token)
+        tokens = self._tokens.get()
+        self._tokens.set(tokens[:-1])
+        detach(tokens[-1])
 
-    def __aexit__(
+    async def __aexit__(
         self,
         exc_type: Optional[Type[BaseException]],
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> None:
-        detach(self._token)
+        self.__exit__(exc_type, exc_value, traceback)
 
 
 FI_HIDE_LLM_INVOCATION_PARAMETERS = "FI_HIDE_LLM_INVOCATION_PARAMETERS"
@@ -93,7 +99,62 @@ _HIDDEN_WITH_INPUTS = frozenset(
         SpanAttributes.GEN_AI_PROMPT_TEMPLATE_VARIABLES,
     }
 )
-# When a value is hidden, it will be replaced by this redacted value
+# Known serialized and flattened content fields, including their descendants.
+# Keep identifiers such as model names and token counts available.
+_INPUT_CONTENT_PREFIXES = (
+    SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS,
+    SpanAttributes.GEN_AI_REQUEST_PARAMETERS,
+    SpanAttributes.GEN_AI_REQUEST_STOP_SEQUENCES,
+    SpanAttributes.GEN_AI_AGENT_DESCRIPTION,
+    SpanAttributes.GEN_AI_IMAGE_PROMPT,
+    SpanAttributes.GEN_AI_IMAGE_NEGATIVE_PROMPT,
+    SpanAttributes.INPUT_IMAGES,
+    SpanAttributes.GEN_AI_PROMPTS,
+    SpanAttributes.GEN_AI_TOOL_DEFINITIONS,
+    SpanAttributes.GEN_AI_TOOL_DESCRIPTION,
+    SpanAttributes.GEN_AI_TOOL_CALL_ARGUMENTS,
+    SpanAttributes.TOOL_PARAMETERS,
+    "tool_call.function.arguments",
+    "message.function_call_arguments_json",
+    SpanAttributes.GEN_AI_COMPUTER_USE_TEXT,
+    SpanAttributes.GEN_AI_COMPUTER_USE_ELEMENT_SELECTOR,
+    "tool.json_schema",
+    SpanAttributes.GEN_AI_RETRIEVAL_QUERY,
+    SpanAttributes.GEN_AI_RERANKER_QUERY,
+    SpanAttributes.GEN_AI_RERANKER_INPUT_DOCUMENTS,
+    "reranker.query",
+    "reranker.input_documents",
+)
+_OUTPUT_CONTENT_PREFIXES = (
+    SpanAttributes.GEN_AI_TOOL_CALL_RESULT,
+    SpanAttributes.GEN_AI_IMAGE_REVISED_PROMPT,
+    SpanAttributes.GEN_AI_IMAGE_OUTPUT_URLS,
+    SpanAttributes.GEN_AI_GUARDRAIL_MODIFIED_OUTPUT,
+    SpanAttributes.GEN_AI_EVALUATION_EXPLANATION,
+    SpanAttributes.GEN_AI_COMPUTER_USE_RESULT,
+    SpanAttributes.RETRIEVAL_DOCUMENTS,
+    SpanAttributes.GEN_AI_RETRIEVAL_DOCUMENTS,
+    SpanAttributes.GEN_AI_RERANKER_OUTPUT_DOCUMENTS,
+    "reranker.output_documents",
+)
+
+# These public fields do not encode a direction and may contain either side.
+_MIXED_CONTENT_PREFIXES = (
+    SpanAttributes.GEN_AI_VOICE_TRANSCRIPT,
+    SpanAttributes.GEN_AI_VOICE_RECORDING_URL,
+    SpanAttributes.GEN_AI_VOICE_RECORDING_STEREO_URL,
+    SpanAttributes.GEN_AI_VOICE_RECORDING_CUSTOMER_URL,
+    SpanAttributes.GEN_AI_VOICE_RECORDING_ASSISTANT_URL,
+    SpanAttributes.GEN_AI_AUDIO_URL,
+    SpanAttributes.GEN_AI_AUDIO_TRANSCRIPT,
+    SpanAttributes.GEN_AI_COMPUTER_USE_SCREENSHOT,
+    SpanAttributes.GEN_AI_COMPUTER_USE_CURRENT_URL,
+)
+
+
+def _has_content_prefix(key: str, prefixes: tuple) -> bool:
+    return any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)
+
 
 DEFAULT_HIDE_LLM_INVOCATION_PARAMETERS = False
 DEFAULT_HIDE_INPUTS = False
@@ -300,19 +361,30 @@ class TraceConfig:
             and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
         ):
             return None
-        elif self.hide_inputs and key == SpanAttributes.INPUT_VALUE:
+        elif self.hide_inputs and _has_content_prefix(key, (SpanAttributes.INPUT_VALUE,)):
             value = REDACTED_VALUE
         elif self.hide_inputs and key == SpanAttributes.INPUT_MIME_TYPE:
             return None
-        elif self.hide_inputs and key in _HIDDEN_WITH_INPUTS:
+        elif self.hide_inputs and _has_content_prefix(key, tuple(_HIDDEN_WITH_INPUTS)):
             # The raw request body (messages included) and the values filled
             # into a prompt template are inputs too.
             value = REDACTED_VALUE
-        elif self.hide_outputs and key == SpanAttributes.OUTPUT_VALUE:
+        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.OUTPUT_VALUE,)):
             value = REDACTED_VALUE
         elif self.hide_outputs and key == SpanAttributes.OUTPUT_MIME_TYPE:
             return None
-        elif self.hide_outputs and key == SpanAttributes.RAW_OUTPUT:
+        elif self.hide_outputs and _has_content_prefix(key, (SpanAttributes.RAW_OUTPUT,)):
+            value = REDACTED_VALUE
+        # The aggregate tool call can contain both arguments and results; hide
+        # it if either direction is private. Specific child fields remain
+        # directional, and identifiers like gen_ai.tool.name stay visible.
+        elif key == SpanAttributes.GEN_AI_TOOL_CALL and (self.hide_inputs or self.hide_outputs):
+            value = REDACTED_VALUE
+        elif (self.hide_inputs or self.hide_outputs) and _has_content_prefix(key, _MIXED_CONTENT_PREFIXES):
+            value = REDACTED_VALUE
+        elif self.hide_inputs and _has_content_prefix(key, _INPUT_CONTENT_PREFIXES):
+            value = REDACTED_VALUE
+        elif self.hide_outputs and _has_content_prefix(key, _OUTPUT_CONTENT_PREFIXES):
             value = REDACTED_VALUE
         elif (
             self.hide_inputs or self.hide_input_messages
@@ -348,6 +420,8 @@ class TraceConfig:
             and MessageContentAttributes.MESSAGE_CONTENT_TEXT in key
         ):
             value = REDACTED_VALUE
+        elif self.hide_input_images and _has_content_prefix(key, (SpanAttributes.INPUT_IMAGES,)):
+            return None
         elif (
             self.hide_input_images
             and SpanAttributes.GEN_AI_INPUT_MESSAGES in key
@@ -362,10 +436,12 @@ class TraceConfig:
             and key.endswith(ImageAttributes.IMAGE_URL)
         ):
             value = REDACTED_VALUE
-        elif (
-            self.hide_embedding_vectors
-            and SpanAttributes.EMBEDDING_EMBEDDINGS in key
-            and EmbeddingAttributes.EMBEDDING_VECTOR in key
+        elif self.hide_embedding_vectors and (
+            _has_content_prefix(key, (SpanAttributes.GEN_AI_EMBEDDINGS_VECTORS,))
+            or (
+                SpanAttributes.EMBEDDING_EMBEDDINGS in key
+                and EmbeddingAttributes.EMBEDDING_VECTOR in key
+            )
         ):
             return None
         resolved = value() if callable(value) else value
