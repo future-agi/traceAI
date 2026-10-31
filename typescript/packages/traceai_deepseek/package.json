@@ -20,6 +20,7 @@
     "build:cjs": "tsc -p tsconfig.json",
     "build:esm": "tsc -p tsconfig.esm.json && tsc-alias -p tsconfig.esm.json && echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest --config jest.config.js",
+    "test:contract": "node --test test/contract.cjs test/loading.cjs",
     "test:e2e": "jest --config jest.config.js --testMatch '**/*.e2e.test.ts'",
     "clean": "rimraf dist"
   },
@@ -48,6 +49,7 @@
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "devDependencies": {
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.2",
     "@opentelemetry/sdk-trace-base": "^1.29.0",
     "@opentelemetry/sdk-trace-node": "^1.29.0",
     "@types/jest": "^29.5.14",
