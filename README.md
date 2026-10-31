@@ -315,7 +315,7 @@ Hosted and local model inference, embeddings, and reranking.
 
 | Integration | Python | TypeScript | Java | Go | C# |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| <img src=".github/assets/integrations/bedrock-tile.svg" width="24" height="24" alt=""> Amazon Bedrock | [SDK](python/frameworks/bedrock/ "traceAI-bedrock") | [SDK](typescript/packages/traceai_bedrock/ "@traceai/bedrock") | [SDK](java/traceai-java-bedrock/ "traceai-java-bedrock") | — | — |
+| <img src=".github/assets/integrations/bedrock-tile.svg" width="24" height="24" alt=""> Amazon Bedrock | [SDK](python/frameworks/bedrock/ "traceAI-bedrock") | [SDK](typescript/packages/traceai_bedrock/ "@traceai/bedrock") | [SDK](java/traceai-java-bedrock/ "traceai-java-bedrock") | [SDK](go/bedrock/ "github.com/future-agi/traceAI/go/bedrock") | — |
 | <img src=".github/assets/integrations/anthropic-tile.svg" width="24" height="24" alt=""> Anthropic | [SDK](python/frameworks/anthropic/ "traceAI-anthropic") | [SDK](typescript/packages/traceai_anthropic/ "@traceai/anthropic") | [SDK](java/traceai-java-anthropic/ "traceai-java-anthropic") | [SDK](go/anthropic/ "github.com/future-agi/traceAI/go/anthropic") | — |
 | <img src=".github/assets/integrations/openai-tile.svg" width="24" height="24" alt=""> Azure OpenAI | — | — | [SDK](java/traceai-java-azure-openai/ "traceai-java-azure-openai") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Cerebras | [SDK](python/frameworks/cerebras/ "traceAI-cerebras") | [SDK](typescript/packages/traceai_cerebras/ "@traceai/cerebras") | — | — | — |

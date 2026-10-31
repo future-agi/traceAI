@@ -1046,6 +1046,19 @@
           "section": "Documentation"
         }
       ]
+    },
+    "go/bedrock": {
+      "release-type": "go",
+      "component": "go/bedrock",
+      "package-name": "github.com/future-agi/traceAI/go/bedrock",
+      "tag-separator": "/",
+      "initial-version": "0.1.0",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "client.go"
+        }
+      ]
     }
   }
 }
