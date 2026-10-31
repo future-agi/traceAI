@@ -21,6 +21,7 @@
     "traceAI-replicate",
     "traceAI-semantic-kernel",
     "traceAI-tavily",
+    "traceAI-temporal",
     "traceAI-typesafe",
     "traceAI-voyage"
   ]

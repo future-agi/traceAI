@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "traceAI-temporal"
+version = "0.1.0"
+description = "Future AGI configuration for Temporal's native replay-safe OpenTelemetry tracing"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "Future AGI", email = "no-reply@futureagi.com"}]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "fi-instrumentation-otel>=1.2.2,<2",
+  "temporalio[opentelemetry]>=1.34,<1.36",
+  "opentelemetry-sdk>=1.39,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
+  "typing-extensions>=4.5,<5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "build>=1.2,<2", "hatchling>=1.27,<2", "mypy>=1.15,<2"]
+
+[project.urls]
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/temporal"
+Documentation = "https://docs.futureagi.com/docs/integrations/frameworks/temporal"
+
+[tool.hatch.build.targets.wheel]
+packages = ["traceai_temporal"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: native plugin with a local Temporal dev server"]
+
+[tool.ruff.lint.per-file-ignores]
+# Nested contexts deliberately show the trace tree in fixtures.
+"tests/*.py" = ["SIM117"]

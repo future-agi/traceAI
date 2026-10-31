@@ -364,6 +364,7 @@ Agent orchestration, application frameworks, and agent-to-agent communication.
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Semantic Kernel | [SDK](python/frameworks/semantic-kernel/ "traceAI-semantic-kernel") | — | [SDK](java/traceai-java-semantic-kernel/ "traceai-java-semantic-kernel") | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Smolagents | [SDK](python/frameworks/smolagents/ "traceAI-smolagents") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Strands Agents | [SDK](python/frameworks/strands/ "traceai-strands") | [SDK](typescript/packages/traceai_strands/ "@traceai/strands") | — | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Temporal | [SDK](python/frameworks/temporal/ "traceAI-temporal") | — | — | — | — |
 | <img src=".github/assets/integrations/vercel-tile.svg" width="24" height="24" alt=""> Vercel AI SDK | — | [SDK](typescript/packages/traceai_vercel/ "@traceai/vercel") | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> VoltAgent | — | [SDK](typescript/packages/traceai_voltagent/ "@traceai/voltagent") | — | — | — |
 

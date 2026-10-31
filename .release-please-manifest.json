@@ -59,6 +59,7 @@
   "python/frameworks/smolagents": "0.1.6",
   "python/frameworks/strands": "0.1.1",
   "python/frameworks/tavily": "0.1.0",
+  "python/frameworks/temporal": "0.1.0",
   "python/frameworks/together": "0.1.1",
   "python/frameworks/typesafe": "0.1.0",
   "python/frameworks/vertexai": "0.1.11",
