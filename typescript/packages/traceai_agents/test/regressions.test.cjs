@@ -355,11 +355,26 @@ async function restartAfterKill(t, delayStorageDisconnect = false) {
   const successors = [0, 1].map(
     () => new Runtime(p, settings.storageEntry, "0.1.0", settings.registry),
   );
+  const ownsStorage = [false, false];
+  for (const [index, runtime] of successors.entries()) {
+    const initialize = runtime.initializeStorage.bind(runtime);
+    runtime.initializeStorage = async () => {
+      await initialize();
+      ownsStorage[index] = true;
+    };
+  }
   const starts = await Promise.allSettled(successors.map((r) => r.start()));
   assert.equal(
     starts.filter((r) => r.status === "fulfilled").length,
     1,
-    JSON.stringify(starts),
+    JSON.stringify({
+      starts,
+      ownsStorage,
+      orphanDisconnected: fs.existsSync(
+        path.join(p.state, "orphan-disconnected"),
+      ),
+      orphanExited: fs.existsSync(path.join(p.state, "orphan-exited")),
+    }),
   );
   const winner = successors[starts.findIndex((r) => r.status === "fulfilled")];
   cleanup(t, () => winner.stop());
