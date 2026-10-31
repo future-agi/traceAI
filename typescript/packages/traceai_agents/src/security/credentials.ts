@@ -8,15 +8,38 @@ import {
   protectedDirectory,
   readProtected,
 } from "./files.js";
-export interface Credentials {
-  api_key: string;
-  secret_key: string;
+export interface BindingKeys {
   identity_key: string;
   content_key: string;
 }
+export interface Credentials extends BindingKeys {
+  api_key: string;
+  secret_key: string;
+}
+export type StoredSecrets = BindingKeys &
+  Partial<Pick<Credentials, "api_key" | "secret_key">>;
+export function hasAuth(
+  value: StoredSecrets | undefined,
+): value is Credentials {
+  return (
+    typeof value?.api_key === "string" && typeof value?.secret_key === "string"
+  );
+}
+/** FI authentication can be revoked without changing destination-scoped work identity. */
+export async function removeAuthentication(
+  store: SecretStore,
+  ref: string,
+): Promise<void> {
+  const previous = await store.get(ref);
+  if (!previous) throw new AgentError("HELD_IDENTITY_KEY", 3);
+  await store.set(ref, {
+    identity_key: previous.identity_key,
+    content_key: previous.content_key,
+  });
+}
 export interface SecretStore {
-  get(ref: string): Promise<Credentials | undefined>;
-  set(ref: string, value: Credentials): Promise<void>;
+  get(ref: string): Promise<StoredSecrets | undefined>;
+  set(ref: string, value: StoredSecrets): Promise<void>;
   remove(ref: string): Promise<void>;
 }
 export function parseAuth(bytes: Buffer): {
@@ -41,7 +64,7 @@ export function parseAuth(bytes: Buffer): {
 }
 export function newCredentials(
   auth: ReturnType<typeof parseAuth>,
-  previous?: Credentials,
+  previous?: BindingKeys,
 ): Credentials {
   return {
     ...auth,
@@ -49,14 +72,15 @@ export function newCredentials(
     content_key: previous?.content_key ?? randomBytes(32).toString("hex"),
   };
 }
-function decode(text: string): Credentials {
+function decode(text: string): StoredSecrets {
   try {
     const v = JSON.parse(text);
-    parseAuth(
-      Buffer.from(
-        JSON.stringify({ api_key: v.api_key, secret_key: v.secret_key }),
-      ),
-    );
+    if (v.api_key !== undefined || v.secret_key !== undefined)
+      parseAuth(
+        Buffer.from(
+          JSON.stringify({ api_key: v.api_key, secret_key: v.secret_key }),
+        ),
+      );
     if (
       ![v.identity_key, v.content_key].every(
         (k) => typeof k === "string" && /^[a-f0-9]{64}$/.test(k),
@@ -82,7 +106,7 @@ export class FileSecretStore implements SecretStore {
     if (!token(ref)) throw new AgentError("INVALID_REFERENCE");
     return join(this.root, ref + ".json");
   }
-  async get(ref: string): Promise<Credentials | undefined> {
+  async get(ref: string): Promise<StoredSecrets | undefined> {
     try {
       return decode(readProtected(this.path(ref)).toString());
     } catch (e) {
@@ -90,7 +114,7 @@ export class FileSecretStore implements SecretStore {
       throw e;
     }
   }
-  async set(ref: string, value: Credentials): Promise<void> {
+  async set(ref: string, value: StoredSecrets): Promise<void> {
     atomicProtected(this.path(ref), JSON.stringify(value));
   }
   async remove(ref: string): Promise<void> {
@@ -112,7 +136,7 @@ export class OSSecretStore implements SecretStore {
       linux: { store: "secret-service" },
     });
   }
-  async get(ref: string): Promise<Credentials | undefined> {
+  async get(ref: string): Promise<StoredSecrets | undefined> {
     try {
       const value = (await this.entry(ref)).getPassword();
       return value == null ? undefined : decode(value);
@@ -120,7 +144,7 @@ export class OSSecretStore implements SecretStore {
       throw new AgentError("HELD_CREDENTIALS", 3);
     }
   }
-  async set(ref: string, value: Credentials): Promise<void> {
+  async set(ref: string, value: StoredSecrets): Promise<void> {
     try {
       (await this.entry(ref)).setPassword(JSON.stringify(value));
     } catch {

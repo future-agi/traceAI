@@ -170,18 +170,176 @@ test("unexpected side files and symlinks stop admission before cursor movement",
   );
 });
 
-test('authentication holds persist without disabling capture or another binding', t => {
-  const {spool} = fixture(t);
+test("authentication holds persist without disabling capture or another binding", (t) => {
+  const { spool } = fixture(t);
   spool.admit(route().id, fact());
   const row = spool.next(route().id);
-  spool.complete(row.id, row.epoch, {state:'held', code:'HELD_AUTH'});
+  spool.complete(row.id, row.epoch, { state: "held", code: "HELD_AUTH" });
   assert.equal(spool.getRoute(route().id).enabled, true);
   spool.route(route()); // Startup re-registration must not fail or clear the hold.
   assert.equal(spool.next(route().id), undefined);
-  const other = route(); other.id = 'other.fixture';
-  other.binding.id = '00000000-0000-4000-8000-000000000002';
-  spool.route(other); spool.admit(other.id, fact('other'));
+  const other = route();
+  other.id = "other.fixture";
+  other.binding.id = "00000000-0000-4000-8000-000000000002";
+  spool.route(other);
+  spool.admit(other.id, fact("other"));
   assert.ok(spool.next(other.id));
   assert.equal(spool.releaseAuth(route().id), 1);
   assert.equal(spool.next(route().id).id, row.id);
+});
+
+test("runtime upgrades compare semantic work and preserve exact first-admission bytes and receipts", () => {
+  const dir = fs.mkdtempSync(path.join(base, "upgrade-"));
+  let spool = new Spool(dir, "0.1.0");
+  try {
+    spool.route(route());
+    spool.admit(route().id, fact("queued"));
+    const original = spool.next(route().id);
+    spool.admit(route().id, fact("accepted"));
+    spool.complete(original.id, original.epoch, {
+      state: "accepted",
+      code: "HTTP_ACCEPTED",
+    });
+    const pending = spool.next(route().id);
+    spool.close();
+    spool = new Spool(dir, "0.1.1");
+    assert.equal(spool.admit(route().id, fact("queued")).duplicate, true);
+    assert.equal(spool.admit(route().id, fact("accepted")).duplicate, true);
+    assert.deepEqual(spool.next(route().id).bytes, pending.bytes);
+    assert.throws(
+      () =>
+        spool.admit(route().id, { ...fact("accepted"), endNs: "3000000000" }),
+      /HELD_IMMUTABLE_CONFLICT/,
+    );
+    spool.close();
+    spool = new Spool(dir, "9.0.0");
+    assert.equal(spool.admit(route().id, fact("queued")).duplicate, true);
+    assert.deepEqual(spool.next(route().id).bytes, pending.bytes);
+  } finally {
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("legacy preview fingerprints migrate only on exact proof, including payload-free receipts", () => {
+  const { createHash } = require("node:crypto");
+  const { encodeFacts } = require("../dist/src/export/otlp.js");
+  const dir = fs.mkdtempSync(path.join(base, "legacy-"));
+  let spool = new Spool(dir, "0.1.0");
+  try {
+    spool.route(route());
+    for (const id of ["pending", "accepted"]) spool.admit(route().id, fact(id));
+    const original = spool.next(route().id).bytes;
+    spool.close();
+    const db = new Database(path.join(dir, "spool.db"));
+    for (const id of ["pending", "accepted"])
+      db.prepare(
+        "UPDATE records SET hash=?,bytes=CASE WHEN ? THEN NULL ELSE bytes END,state=CASE WHEN ? THEN 'accepted' ELSE state END WHERE work=?",
+      ).run(
+        createHash("sha256")
+          .update(encodeFacts([fact(id)], route().binding, "0.1.0"))
+          .digest("hex"),
+        Number(id === "accepted"),
+        Number(id === "accepted"),
+        fact(id).sourceWorkId,
+      );
+    db.close();
+    spool = new Spool(dir, "0.1.1");
+    assert.throws(
+      () =>
+        spool.admit(route().id, { ...fact("accepted"), endNs: "3000000000" }),
+      /HELD_IMMUTABLE_CONFLICT/,
+    );
+    for (const id of ["pending", "accepted"])
+      assert.equal(spool.admit(route().id, fact(id)).duplicate, true);
+    assert.deepEqual(spool.next(route().id).bytes, original);
+    spool.close();
+    spool = new Spool(dir, "0.2.0");
+    for (const id of ["pending", "accepted"])
+      assert.equal(spool.admit(route().id, fact(id)).duplicate, true);
+  } finally {
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous immutable delivery retries exact bytes after restart, with scheduling, holds and expiry intact", () => {
+  const dir = fs.mkdtempSync(path.join(base, "ambiguous-"));
+  let spool = new Spool(dir, "0.1.0");
+  try {
+    spool.route(route());
+    spool.admit(route().id, fact());
+    const row = spool.next(route().id);
+    spool.complete(row.id, row.epoch, {
+      state: "ambiguous",
+      code: "AMBIGUOUS_PARTIAL",
+      nextAt: Date.now() + 60000,
+    });
+    assert.equal(spool.next(route().id), undefined);
+    spool.complete(row.id, row.epoch, {
+      state: "ambiguous",
+      code: "AMBIGUOUS_RESPONSE",
+      nextAt: 0,
+    });
+    spool.close();
+    spool = new Spool(dir, "0.1.1");
+    assert.equal(spool.next(route().id).state, "ambiguous");
+    assert.deepEqual(spool.next(route().id).bytes, row.bytes);
+    spool.complete(row.id, row.epoch, {
+      state: "retry",
+      code: "TRANSPORT_UNAVAILABLE",
+      nextAt: 0,
+    });
+    assert.equal(spool.next(route().id).state, "ambiguous");
+    spool.complete(row.id, row.epoch, { state: "held", code: "HELD_AUTH" });
+    assert.equal(spool.next(route().id), undefined);
+    spool.releaseAuth(route().id);
+    assert.deepEqual(spool.next(route().id).bytes, row.bytes);
+    spool.complete(row.id, row.epoch, {
+      state: "accepted",
+      code: "HTTP_ACCEPTED",
+    });
+    assert.equal(spool.next(route().id), undefined);
+    assert.equal(spool.status().logical_bytes, 0);
+    assert.equal(spool.admit(route().id, fact()).duplicate, true);
+  } finally {
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous retry never bypasses backend contract or age and route fences", (t) => {
+  const { spool, dir } = fixture(t);
+  const held = {
+    ...route(),
+    id: "unqualified.fixture",
+    binding: {
+      ...route().binding,
+      id: "00000000-0000-4000-8000-000000000002",
+      backendContract: undefined,
+    },
+  };
+  spool.route(held);
+  spool.admit(held.id, fact());
+  const row = spool.next(held.id);
+  spool.complete(row.id, row.epoch, {
+    state: "ambiguous",
+    code: "AMBIGUOUS_RESPONSE",
+  });
+  assert.equal(spool.next(held.id), undefined);
+  spool.admit(route().id, fact());
+  const eligible = spool.next(route().id);
+  spool.complete(eligible.id, eligible.epoch, {
+    state: "ambiguous",
+    code: "INVALID_RESPONSE",
+  });
+  const db = new Database(path.join(dir, "spool.db"));
+  db.prepare("UPDATE records SET created=? WHERE id=?").run(
+    Date.now() - 86400001,
+    eligible.id,
+  );
+  db.close();
+  assert.equal(spool.next(route().id), undefined);
+  spool.disable(route().id);
+  assert.equal(spool.next(route().id), undefined);
 });

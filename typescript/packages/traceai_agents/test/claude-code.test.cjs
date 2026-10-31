@@ -507,7 +507,11 @@ test("Claude untraced fallback retains preflight and never opens native ingress"
   const cwd = process.cwd();
   try {
     for (const key of Object.keys(process.env)) delete process.env[key];
-    fs.symlinkSync(process.execPath, path.join(home, "claude"));
+    fs.writeFileSync(
+      path.join(home, "claude"),
+      '#!/bin/sh\nprintf "2.1.316 (Claude Code)\\n"\n',
+      { mode: 0o700 },
+    );
     Object.assign(process.env, {
       HOME: home,
       CLAUDE_CONFIG_DIR: path.join(home, "agent"),

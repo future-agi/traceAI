@@ -11,7 +11,11 @@ import { minimize, type CanonicalFact } from "@traceai/agent-core";
 import { AdapterRegistry, enforceCapability } from "../adapters.js";
 import { loadConfig, type Paths, type Config } from "../config.js";
 import { AgentError, protectedDirectory } from "../security/files.js";
-import { FileSecretStore, OSSecretStore } from "../security/credentials.js";
+import {
+  FileSecretStore,
+  OSSecretStore,
+  hasAuth,
+} from "../security/credentials.js";
 import { exportBytes, retryDelay } from "../export/http.js";
 import { StorageClient } from "./storage-client.js";
 import { NativeIngress } from "./native.js";
@@ -36,6 +40,7 @@ export class Runtime {
     private readonly childEntry: string,
     private readonly version: string,
     private readonly registry = new AdapterRegistry(),
+    private controlOnly = false,
   ) {}
   async start(): Promise<void> {
     protectedDirectory(this.paths.state, true);
@@ -81,7 +86,7 @@ export class Runtime {
       });
       this.timer = setInterval(() => {
         this.native.sweep();
-        if (!this.exporting && !this.stopped) {
+        if (!this.exporting && !this.stopped && !this.controlOnly) {
           this.startDrain(10_000);
         }
       }, 1000);
@@ -170,7 +175,12 @@ export class Runtime {
         this.native.close(m.route, m.lease);
         return { code: 0, state: "closed" };
       }
-      if (!route.route.enabled || this.stopped || this.admissionPaused)
+      if (
+        !route.route.enabled ||
+        this.stopped ||
+        this.admissionPaused ||
+        this.controlOnly
+      )
         throw new AgentError("HELD_DISABLED", 3);
       if (m.operation === "native-renew") {
         this.native.renew(m.route, m.lease);
@@ -205,7 +215,8 @@ export class Runtime {
     if (m.operation === "status")
       return {
         schema_version: 1,
-        state: "running",
+        state: this.controlOnly ? "control-only" : "running",
+        control_only: this.controlOnly,
         code: 0,
         storage: this.statusCache,
         last_durable_local_ack: this.lastDurableAck,
@@ -225,6 +236,11 @@ export class Runtime {
               : "HELD_BACKEND_CONTRACT",
         })),
       };
+    if (m.operation === "resume") {
+      await this.refresh();
+      this.controlOnly = false;
+      return { state: "running", code: 0 };
+    }
     if (m.operation === "auth-rotated") {
       this.admissionPaused = true;
       try {
@@ -322,7 +338,13 @@ export class Runtime {
   /** Native and hook ingress share the same capability, policy and durable ACK boundary. */
   private async admit(routeRef: string, fact: CanonicalFact): Promise<unknown> {
     const route = this.config.routes[routeRef];
-    if (!route || !route.route.enabled || this.stopped || this.admissionPaused)
+    if (
+      !route ||
+      !route.route.enabled ||
+      this.stopped ||
+      this.admissionPaused ||
+      this.controlOnly
+    )
       throw new AgentError("HELD_DISABLED", 3);
     const safe = minimize(fact, route.route.policy);
     enforceCapability(
@@ -361,6 +383,7 @@ export class Runtime {
     const active = () =>
       !this.stopped &&
       !this.admissionPaused &&
+      !this.controlOnly &&
       !controller.signal.aborted &&
       Date.now() < until;
     try {
@@ -396,7 +419,8 @@ export class Runtime {
           deferred.add(id);
           continue;
         }
-        if (!credentials || !active() || !route.route.enabled) continue;
+        if (!hasAuth(credentials) || !active() || !route.route.enabled)
+          continue;
         const result = await exportBytes(
           profile.binding,
           Buffer.from(row.bytes),

@@ -299,6 +299,14 @@ async function run({
     assert.equal(tools.length, 1);
     assert.ok(spans.some((s) => attrs(s)["fi.span.kind"] === "AGENT"));
     assert.ok(spans.some((s) => attrs(s)["fi.span.kind"] === "CHAIN"));
+    const completed = spans.filter((s) =>
+      ["AGENT", "TOOL"].includes(attrs(s)["fi.span.kind"]),
+    );
+    assert.equal(completed.length, 2);
+    for (const span of completed) {
+      assert.equal(attrs(span)["fi.agent.outcome"], "success");
+      assert.notEqual(attrs(span)["fi.capture.partial"], true);
+    }
     assert.equal(
       requests.reduce(
         (n, s) => n + Number(attrs(s)["gen_ai.usage.input_tokens"]),
@@ -354,6 +362,7 @@ async function run({
       privacyBeforeSpool: true,
       doctorActivation: true,
       disableHeld: true,
+      completedRootAndTool: true,
       modelNetwork: "loopback-only-sandbox",
       backendPersistence: "NOT_TESTED",
       packageRoot,

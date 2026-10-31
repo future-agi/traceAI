@@ -21,6 +21,7 @@ import {
   OSSecretStore,
   newCredentials,
   parseAuth,
+  removeAuthentication,
 } from "../security/credentials.js";
 import { DEFAULT_ENDPOINT, validateBinding } from "../export/endpoint.js";
 import { runtimeRequest, Runtime } from "../runtime/daemon.js";
@@ -101,31 +102,50 @@ export interface CLIOptions {
   storageEntry: string;
   registry?: AdapterRegistry;
 }
-async function startRuntime(p: Paths, entry: string): Promise<void> {
+async function startRuntime(
+  p: Paths,
+  entry: string,
+  controlOnly = false,
+): Promise<void> {
   try {
-    await runtimeRequest(p.socket, { operation: "status" }, 200);
+    const status = await runtimeRequest(p.socket, { operation: "status" }, 200);
+    if (status.control_only && !controlOnly)
+      await runtimeRequest(p.socket, { operation: "resume" });
     return;
-  } catch {
+  } catch (e) {
+    if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE") throw e;
     /* start outside hooks */
   }
   protectedDirectory(p.state, true);
-  const child = spawn(process.execPath, [entry, "__daemon"], {
-    detached: true,
-    stdio: "ignore",
-    env: {
-      PATH: "/usr/bin:/bin",
-      HOME: process.env.HOME ?? "/",
-      FI_AGENT_CONFIG_HOME: p.config,
-      FI_AGENT_STATE_HOME: p.state,
+  const child = spawn(
+    process.execPath,
+    [entry, controlOnly ? "__daemon-control" : "__daemon"],
+    {
+      detached: true,
+      stdio: "ignore",
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: process.env.HOME ?? "/",
+        FI_AGENT_CONFIG_HOME: p.config,
+        FI_AGENT_STATE_HOME: p.state,
+      },
     },
-  });
+  );
   child.unref();
   for (let attempt = 0; attempt < 50; attempt++) {
     await new Promise((r) => setTimeout(r, 50));
     try {
-      await runtimeRequest(p.socket, { operation: "status" }, 100);
+      const status = await runtimeRequest(
+        p.socket,
+        { operation: "status" },
+        100,
+      );
+      if (status.control_only && !controlOnly)
+        await runtimeRequest(p.socket, { operation: "resume" });
       return;
-    } catch {
+    } catch (e) {
+      if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
+        throw e;
       /* bounded readiness */
     }
   }
@@ -175,12 +195,13 @@ export async function main(
     }
     const p = paths(),
       registry = settings.registry ?? new AdapterRegistry([claudeCodeAdapter]);
-    if (args[0] === "__daemon") {
+    if (args[0] === "__daemon" || args[0] === "__daemon-control") {
       const runtime = new Runtime(
         p,
         settings.storageEntry,
         settings.version,
         registry,
+        args[0] === "__daemon-control",
       );
       await runtime.start();
       process.once("SIGTERM", () => void runtime.stop());
@@ -270,6 +291,9 @@ export async function main(
         return 0;
       }
       if (pos[1] === "remove") {
+        const current = loadConfig(p);
+        if (Object.values(current.routes).some((r) => r.profile === name))
+          await startRuntime(p, settings.entry, true);
         await configTransaction(p, async (config) => {
           const profile = config.profiles[name];
           if (!profile) throw new AgentError("UNKNOWN_PROFILE", 2);
@@ -281,18 +305,20 @@ export async function main(
                 purge: options["purge-capture"] === true,
               });
               route.route.enabled = false;
-              route.route.epoch++;
+              route.route.epoch = (
+                await runtimeRequest(p.socket, {
+                  operation: "route-state",
+                  route: id,
+                })
+              ).route.epoch;
             }
-          await store(p, profile).remove(profile.credentialRef);
+          await removeAuthentication(store(p, profile), profile.credentialRef);
           profile.removed = true;
         });
         output({
           state: "auth-removed",
           code: 0,
-          reasons: [
-            "QUEUED_DATA_HELD",
-            "IDENTITY_RECOVERY_REQUIRED_BEFORE_REUSE",
-          ],
+          reasons: ["QUEUED_DATA_HELD", "BINDING_IDENTITY_RETAINED"],
         });
         return 0;
       }
@@ -348,7 +374,9 @@ export async function main(
     const profile = config.profiles[profileName];
     if (installed && installed.profile !== profileName)
       throw new AgentError("INSTALLED_PROFILE_CONFLICT", 6);
-    if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
+    const cleanup = command === "disable" || command === "uninstall";
+    if (!profile || (profile.removed && !cleanup))
+      throw new AgentError("HELD_AUTH", 3);
     if (
       options.project !== undefined &&
       options.project !== profile.binding.project
@@ -459,6 +487,10 @@ export async function main(
     }
     if (command !== "enable" && !installed)
       throw new AgentError("NOT_INSTALLED", 5);
+    const change = await adapter.preflight(
+      command as "enable" | "disable" | "update" | "uninstall",
+      context,
+    );
     if (command === "update" && options.check) {
       output({
         state: "compatibility-checked",
@@ -481,11 +513,8 @@ export async function main(
       !context.transcriptConsent
     )
       throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
-    const change = await adapter.preflight(
-      command as "enable" | "disable" | "update" | "uninstall",
-      context,
-    );
-    if (command === "enable") await startRuntime(p, settings.entry);
+    if (command === "enable" || cleanup)
+      await startRuntime(p, settings.entry, cleanup);
     if (command === "disable" || command === "uninstall")
       await runtimeRequest(p.socket, {
         operation: "disable",

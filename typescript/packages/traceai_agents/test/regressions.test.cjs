@@ -522,3 +522,66 @@ test("an existing live listener is never reclaimed even without a storage owner"
   await assert.rejects(runtime.start(), /RUNTIME_OWNERSHIP_CONFLICT/);
   assert.equal(fs.statSync(p.socket).ino, before);
 });
+
+test("control-only cleanup startup cannot capture or drain approved queued data, including explicit flush", async (t) => {
+  let uploads = 0;
+  const binding = await upstream(t, (_req, res) => {
+    uploads++;
+    res.end(encodeResponse());
+  });
+  const { p } = fixture(t, binding);
+  await credentials(p);
+  const first = await start(t, p);
+  await submit(p, "queued-before-stop");
+  await first.stop();
+  const runtime = new Runtime(
+    p,
+    settings.storageEntry,
+    "0.1.0",
+    settings.registry,
+    true,
+  );
+  await runtime.start();
+  cleanup(t, () => runtime.stop());
+  assert.equal(
+    (await runtimeRequest(p.socket, { operation: "status" })).control_only,
+    true,
+  );
+  await assert.rejects(submit(p, "must-not-capture"), /HELD_DISABLED/);
+  await flush(p, 1200);
+  await new Promise((r) => setTimeout(r, 1100));
+  assert.equal(uploads, 0);
+  await command("disable");
+  assert.equal(loadConfig(p).routes[routeId].route.enabled, false);
+  assert.equal(uploads, 0);
+});
+
+test("ambiguous HTTP success recovers via exact-byte immutable retry after restart", async (t) => {
+  const bodies = [];
+  const binding = await upstream(t, async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    bodies.push(Buffer.concat(chunks));
+    res.setHeader("content-type", "application/x-protobuf");
+    res.end(encodeResponse(bodies.length === 1 ? 1 : 0));
+  });
+  const { p } = fixture(t, binding);
+  await credentials(p);
+  const first = await start(t, p);
+  await submit(p, "ambiguous");
+  await flush(p);
+  assert.equal(bodies.length, 1);
+  const status = await runtimeRequest(p.socket, { operation: "status" });
+  assert.ok(
+    status.storage.counts.some((r) => r.state === "ambiguous" && r.count === 1),
+  );
+  await first.stop();
+  await start(t, p);
+  await new Promise((r) => setTimeout(r, 1100));
+  await flush(p);
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies[0], bodies[1]);
+  assert.equal((await submit(p, "ambiguous")).reason_code, "DUPLICATE");
+  await flush(p);
+  assert.equal(bodies.length, 2);
+});

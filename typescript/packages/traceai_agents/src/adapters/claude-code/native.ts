@@ -178,7 +178,15 @@ export function normalizeClaudeSpan(
         ? "cancelled"
         : a.decision === "reject"
           ? "permission_denied"
-          : a.success === true || a.decision === "accept"
+          : // In this pinned profile interaction/tool wrappers export on completion,
+            // without request/execution success flags. Child failures stay on their
+            // own spans; absence of a wrapper flag is not a missing end event.
+            a.success === true ||
+              a.decision === "accept" ||
+              span.status?.code === 1 ||
+              span.status?.code === "STATUS_CODE_OK" ||
+              unit === "turn" ||
+              unit === "tool"
             ? "success"
             : "incomplete",
     inputCompleteness: "unavailable",

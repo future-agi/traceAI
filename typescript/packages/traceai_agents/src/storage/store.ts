@@ -10,7 +10,7 @@ import {
   type Policy,
 } from "@traceai/agent-core";
 import { AgentError } from "../security/files.js";
-import { encodeFacts } from "../export/otlp.js";
+import { decodeTraces, encodeFacts } from "../export/otlp.js";
 import { validateBinding, type Binding } from "../export/endpoint.js";
 import { measure, preflight, reserve, STORAGE_LIMITS } from "./budget.js";
 export interface Route {
@@ -200,7 +200,10 @@ export class Spool {
     const fact = minimize(input, route.policy);
     const bytes = encodeFacts([fact], route.binding, this.runtimeVersion);
     if (bytes.length > 262_144) throw new AgentError("OVERSIZE_SPAN", 2);
-    const hash = digest(bytes);
+    // Resource/scope runtime versions are delivery provenance, not source work.
+    // Freeze a version-neutral semantic fingerprint and retain the first wire bytes.
+    const hash =
+      "semantic-v1:" + digest(encodeFacts([fact], route.binding, ""));
     if (
       cursor &&
       (!/^[a-f0-9]{64}$/.test(cursor.stream) ||
@@ -210,7 +213,7 @@ export class Spool {
     return this.write(() => {
       const old = this.db
         .prepare(
-          "SELECT id,hash,work FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
+          "SELECT id,hash,work,bytes FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
         )
         .get(
           route.binding.id,
@@ -218,6 +221,25 @@ export class Spool {
           fact.traceId,
           fact.spanId,
         ) as any;
+      if (old && old.hash !== hash && /^[a-f0-9]{64}$/.test(old.hash)) {
+        // Upgrade the unreleased legacy receipt only after proving its exact
+        // original hash. Pending payloads supply their version; 0.1.0 is the
+        // only shipped-preview encoder that deleted accepted payloads with a
+        // version-dependent receipt. Unknown receipts remain held, never reset.
+        const legacyVersion = old.bytes
+          ? decodeTraces(old.bytes).resourceSpans?.[0]?.scopeSpans?.[0]?.scope
+              ?.version
+          : "0.1.0";
+        if (
+          typeof legacyVersion === "string" &&
+          old.hash === digest(encodeFacts([fact], route.binding, legacyVersion))
+        ) {
+          this.db
+            .prepare("UPDATE records SET hash=? WHERE id=?")
+            .run(hash, old.id);
+          old.hash = hash;
+        }
+      }
       if (old && (old.hash !== hash || old.work !== fact.sourceWorkId))
         throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
       let id = old?.id;
@@ -300,11 +322,11 @@ export class Spool {
       return undefined;
     return this.db
       .prepare(
-        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND state=? AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
+        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND (state='queued' OR (state='ambiguous' AND ?=1)) AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
       )
       .get(
         routeId,
-        "queued",
+        Number(route.binding.backendContract === "immutable-agent-v1"),
         route.epoch,
         Date.now(),
         Date.now() - 86_400_000,
@@ -321,7 +343,7 @@ export class Spool {
   ): void {
     this.write(() => {
       const row = this.db
-        .prepare("SELECT route,epoch FROM records WHERE id=?")
+        .prepare("SELECT route,epoch,state FROM records WHERE id=?")
         .get(id) as any;
       if (
         !row ||
@@ -337,7 +359,9 @@ export class Spool {
           result.code === "HELD_AUTH"
             ? "held-auth"
             : result.state === "retry"
-              ? "queued"
+              ? row.state === "ambiguous"
+                ? "ambiguous"
+                : "queued"
               : result.state,
           result.state === "accepted" ? 1 : 0,
           result.nextAt ?? 0,

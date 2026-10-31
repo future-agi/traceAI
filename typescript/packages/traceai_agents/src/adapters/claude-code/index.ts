@@ -11,6 +11,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { Adapter, AdapterContext, Activation } from "../../adapters.js";
 import { AgentError } from "../../security/files.js";
 import { runtimeRequest } from "../../runtime/daemon.js";
@@ -145,6 +147,32 @@ function executable(): string {
   }
   throw new AgentError("CLAUDE_NOT_FOUND", 5);
 }
+async function supportedExecutable(): Promise<string> {
+  const binary = executable();
+  let stdout: string;
+  try {
+    ({ stdout } = await promisify(execFile)(binary, ["--version"], {
+      encoding: "utf8",
+      timeout: 2000,
+      killSignal: "SIGKILL",
+      maxBuffer: 1024,
+      // No FI/provider credentials or telemetry settings are needed to query a version.
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME ?? homedir(),
+        CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+        DISABLE_AUTOUPDATER: "1",
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      },
+    }));
+  } catch {
+    throw new AgentError("CLAUDE_VERSION_UNAVAILABLE", 5);
+  }
+  const version = /^(\d+\.\d+\.\d+) \(Claude Code\)$/.exec(stdout.trim())?.[1];
+  if (!version || !claudeCapability.versions.includes(version))
+    throw new AgentError("UNSUPPORTED_CLAUDE_VERSION", 5);
+  return binary;
+}
 const pending: Activation = {
   installed: true,
   trusted: "unknown",
@@ -159,7 +187,7 @@ export const claudeCodeAdapter: Adapter = {
       throw new AgentError("HELD_NATIVE_TRANSCRIPT_JOIN", 3);
     if (action === "enable" || action === "update") {
       preflightClaude();
-      executable();
+      await supportedExecutable();
     }
     // fi-agent's own route is the registration. No persistent Claude settings/hook/plugin mutations.
     return {
@@ -169,7 +197,7 @@ export const claudeCodeAdapter: Adapter = {
   },
   async probe(context) {
     preflightClaude();
-    executable();
+    await supportedExecutable();
     const status = await runtimeRequest(context.socketPath, {
       operation: "status",
     });
@@ -187,14 +215,33 @@ export const claudeCodeAdapter: Adapter = {
   },
   async launch(context: AdapterContext, { tracing }) {
     preflightClaude();
-    const binary = executable();
+    const binary = await supportedExecutable();
     // Runtime loss must not prevent the agent running, and must not open a
     // receiver or inject telemetry settings on the untraced fallback path.
     if (!tracing) return { executable: binary, args: [], env: {} };
-    const receiver = await runtimeRequest(context.socketPath, {
-      operation: "native-open",
-      route: context.routeRef,
-    });
+    let receiver;
+    try {
+      receiver = await runtimeRequest(context.socketPath, {
+        operation: "native-open",
+        route: context.routeRef,
+      });
+    } catch (e) {
+      // A narrow availability allowlist, never an exit-code-wide policy bypass.
+      if (
+        !(e instanceof AgentError) ||
+        ![
+          "RUNTIME_UNAVAILABLE",
+          "NATIVE_LISTENER_LIMIT",
+          "NATIVE_ADMISSION_UNAVAILABLE",
+          "STORAGE_UNAVAILABLE",
+        ].includes(e.code)
+      )
+        throw e;
+      process.stderr.write(
+        "fi-agent: tracing unavailable; launching without tracing\n",
+      );
+      return { executable: binary, args: [], env: {} };
+    }
     const heartbeat = setInterval(() => {
       void runtimeRequest(context.socketPath, {
         operation: "native-renew",
