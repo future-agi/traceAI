@@ -130,6 +130,37 @@ Keep one global provider. If your application already owns a `NodeSDK` or `NodeT
 
 `register()` never replaces an existing global provider. It warns and returns a separate provider; global `trace.getTracer()` calls still use the application's original provider. Use `setGlobalTracerProvider: false` to intentionally create an isolated provider, obtain tracers from that returned provider and retain your application's context manager. This option does not install or change global context or propagation. Constructing `FITracerProvider` directly also leaves globals untouched.
 
+### AWS Lambda invocation lifecycle
+
+Wrap your exported handler with `traceLambdaHandler(handler, { provider })`. Create the provider once outside the handler, with a `BatchSpanProcessor` and a finite exporter timeout. Reuse an existing application-owned provider rather than registering a second SDK. The wrapper never installs a provider, changes global propagation or calls `shutdown()`.
+
+```typescript
+import { traceLambdaHandler } from '@traceai/fi-core';
+
+// provider is your application's configured, reusable OpenTelemetry provider.
+export const handler = traceLambdaHandler(async (event, context) => {
+  return { statusCode: 200, body: 'Order accepted' };
+}, { provider, maxFlushWaitMillis: 2000, remainingTimeReserveMillis: 250 });
+```
+
+The application must install an async context manager; `register()` does so when it successfully registers the global provider. Model and tool instrumentors using that provider then attach their spans to `aws.lambda.invoke`. The invocation is a SERVER span classified as `CHAIN`, with request ID, function name and a first-invocation cold-start flag.
+
+The wrapper ends the invocation span before attempting `forceFlush()`. It waits at most the smaller of `maxFlushWaitMillis` (default 2000) and the remaining invocation time minus `remainingTimeReserveMillis` (default 250). Exhausted or invalid budgets skip flushing. A timed-out wait does **not** cancel export. One pending flush is shared across wrappers using the same provider; additional invocations do not start more flushes until it settles. New spans may remain queued for a later flush. Hard timeouts, process termination and synchronously blocking processors/providers cannot be made safe by an asynchronous timer.
+
+Only W3C `traceparent` is extracted, from API Gateway v1/v2, function URL and ALB HTTP events. Names are case-insensitive and multi-value headers must identify a single parent. Conflicting or malformed parents, queue batches and direct invocations start independent traces. Baggage, tracestate and ambient X-Ray parents are not imported. Queue invocations have an invocation span, not per-record links or propagation.
+
+Invocation data is metadata-only: the wrapper does not copy event bodies, results, URLs, query strings, arbitrary headers or exception messages/stacks. Error metadata is restricted to built-in error categories. Root error details remain hidden even with `FI_HIDE_ERROR_DETAILS=false`; there is no content-capture opt-in. Child instrumentors and application-added attributes have their own privacy policies. `provider: undefined` disables invocation tracing; validate both FI credentials and project configuration before constructing an exporter so partial authentication is never sent.
+
+Use this wrapper **instead of** upstream `AwsLambdaInstrumentation`, an auto-instrumenting ADOT layer or another invocation wrapper. Wrapping the same returned handler again is a no-op. Response-streaming handlers are not instrumented and retain their original function identity/stream markers. Promise handlers work on Node 22/24/26. For Node 22 callback handlers, select completion explicitly:
+
+```typescript
+export const handler = traceLambdaHandler((event, context, callback) => {
+  callback(null, { statusCode: 200, body: 'Order accepted' });
+}, { provider, completion: 'callback' });
+```
+
+Use one completion style per handler. Callback mode takes the first callback result or synchronous error, ends the span, attempts flushing, then calls the runtime callback once. Use promise handlers on Node 24 and later. Do not use legacy `context.done`, `context.succeed` or `context.fail` completion methods. Enable the OpenTelemetry diagnostic logger at DEBUG to see static telemetry-failure messages; the wrapper never logs caught exception contents.
+
 ### Advanced Configuration
 
 ```typescript
