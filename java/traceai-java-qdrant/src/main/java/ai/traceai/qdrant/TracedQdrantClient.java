@@ -1,325 +1,301 @@
 package ai.traceai.qdrant;
 
-import ai.traceai.*;
-import io.qdrant.client.QdrantClient;
-import io.qdrant.client.grpc.Points.*;
-import io.qdrant.client.grpc.Common.PointId;
-import io.qdrant.client.grpc.Common.Filter;
-import io.qdrant.client.grpc.Collections.*;
+import ai.traceai.FISpanKind;
+import ai.traceai.FITracer;
+import ai.traceai.SemanticConventions;
+import ai.traceai.TraceAI;
+import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import io.qdrant.client.QdrantClient;
+import io.qdrant.client.grpc.Collections.CollectionOperationResponse;
+import io.qdrant.client.grpc.Collections.Distance;
+import io.qdrant.client.grpc.Collections.VectorParams;
+import io.qdrant.client.grpc.Common.Filter;
+import io.qdrant.client.grpc.Common.PointId;
+import io.qdrant.client.grpc.Points.BatchResult;
+import io.qdrant.client.grpc.Points.PointGroup;
+import io.qdrant.client.grpc.Points.PointStruct;
+import io.qdrant.client.grpc.Points.QueryPointGroups;
+import io.qdrant.client.grpc.Points.QueryPoints;
+import io.qdrant.client.grpc.Points.ReadConsistency;
+import io.qdrant.client.grpc.Points.RetrievedPoint;
+import io.qdrant.client.grpc.Points.ScoredPoint;
+import io.qdrant.client.grpc.Points.SearchPoints;
+import io.qdrant.client.grpc.Points.UpdateResult;
+import io.qdrant.client.grpc.Points.Vectors;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
- * Instrumentation wrapper for Qdrant Java client.
- * Wraps the QdrantClient to provide automatic tracing of all vector operations.
+ * Semantic tracing for Qdrant search, universal queries (including batch and groups),
+ * upsert, delete, retrieval, collection creation and collection listing.
  *
- * <p>Usage:</p>
- * <pre>
- * QdrantClient client = new QdrantClient(
- *     QdrantGrpcClient.newBuilder("localhost", 6334, false).build());
- * TracedQdrantClient traced = new TracedQdrantClient(client);
+ * <p>Async methods return the SDK's original future, including its cancellation and
+ * failure semantics. Spans finish when that future completes, not when it is returned.
+ * The calling context is used as the parent and the operation span is current when
+ * invoking the SDK. No scope is held open while waiting. As with the SDK itself,
+ * applications must propagate context when scheduling their own future listeners.</p>
  *
- * List&lt;ScoredPoint&gt; results = traced.search(SearchPoints.newBuilder()
- *     .setCollectionName("my-collection")
- *     .addAllVector(queryVector)
- *     .setLimit(10)
- *     .build());
- * </pre>
+ * <p>The existing blocking methods remain available and delegate to the async methods.
+ * Operations performed via {@link #unwrap()} are not traced by this wrapper.</p>
  */
 public class TracedQdrantClient {
-
     private final QdrantClient client;
     private final FITracer tracer;
 
-    /**
-     * Creates a new traced Qdrant client with the given client and tracer.
-     *
-     * @param client the QdrantClient to wrap
-     * @param tracer the FITracer for instrumentation
-     */
     public TracedQdrantClient(QdrantClient client, FITracer tracer) {
         this.client = client;
         this.tracer = tracer;
     }
 
-    /**
-     * Creates a new traced Qdrant client using the global TraceAI tracer.
-     *
-     * @param client the QdrantClient to wrap
-     */
     public TracedQdrantClient(QdrantClient client) {
         this(client, TraceAI.getTracer());
     }
 
-    /**
-     * Searches for similar vectors with tracing.
-     * Builds a SearchPoints request from the given parameters.
-     *
-     * @param collectionName the collection to search
-     * @param queryVector    the query vector
-     * @param limit          maximum number of results
-     * @return list of scored points
-     * @throws ExecutionException   if search fails
-     * @throws InterruptedException if interrupted
-     */
     public List<ScoredPoint> search(String collectionName, List<Float> queryVector, int limit)
             throws ExecutionException, InterruptedException {
-        // Build SearchPoints request from simple params
-        SearchPoints searchRequest = SearchPoints.newBuilder()
-            .setCollectionName(collectionName)
-            .addAllVector(queryVector)
-            .setLimit(limit)
-            .build();
-
-        return search(searchRequest);
+        return searchAsync(collectionName, queryVector, limit).get();
     }
 
-    /**
-     * Searches with filter and additional options with tracing.
-     *
-     * @param searchRequest the search request
-     * @return list of scored points
-     * @throws ExecutionException   if search fails
-     * @throws InterruptedException if interrupted
-     */
-    public List<ScoredPoint> search(SearchPoints searchRequest)
+    public List<ScoredPoint> search(SearchPoints request)
             throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Search", FISpanKind.RETRIEVER);
+        return searchAsync(request).get();
+    }
 
-        try (Scope scope = span.makeCurrent()) {
-            // Set attributes
-            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
-            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, searchRequest.getCollectionName());
-            span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, searchRequest.getLimit());
+    public ListenableFuture<List<ScoredPoint>> searchAsync(
+            String collectionName, List<Float> queryVector, int limit) {
+        return searchAsync(SearchPoints.newBuilder().setCollectionName(collectionName)
+                .addAllVector(queryVector).setLimit(limit).build());
+    }
 
-            // Capture vector dimensions from the repeated vector field
-            int vectorCount = searchRequest.getVectorCount();
-            if (vectorCount > 0) {
-                span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) vectorCount);
+    public ListenableFuture<List<ScoredPoint>> searchAsync(SearchPoints request) {
+        return searchAsync(request, null);
+    }
+
+    public ListenableFuture<List<ScoredPoint>> searchAsync(SearchPoints request, Duration timeout) {
+        return traceAsync("Search", FISpanKind.RETRIEVER, request.getCollectionName(), span -> {
+            span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, request.getLimit());
+            if (request.getVectorCount() > 0) {
+                span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS, (long) request.getVectorCount());
             }
-
-            if (searchRequest.hasFilter()) {
+            if (request.hasFilter()) {
                 span.setAttribute("qdrant.has_filter", true);
             }
-
-            // Execute search
-            List<ScoredPoint> results = client.searchAsync(searchRequest).get();
-
-            // Capture results
-            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) results.size());
-            if (!results.isEmpty()) {
-                span.setAttribute("qdrant.top_score", results.get(0).getScore());
-            }
-
-            span.setStatus(StatusCode.OK);
-            return results;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
+        }, () -> client.searchAsync(request, timeout), this::recordScoredPoints);
     }
 
-    /**
-     * Upserts points with tracing.
-     *
-     * @param collectionName the collection name
-     * @param points         the points to upsert
-     * @return the update result
-     * @throws ExecutionException   if upsert fails
-     * @throws InterruptedException if interrupted
-     */
+    /** Universal query, including hybrid and multi-stage requests. */
+    public List<ScoredPoint> query(QueryPoints request) throws ExecutionException, InterruptedException {
+        return queryAsync(request).get();
+    }
+
+    public ListenableFuture<List<ScoredPoint>> queryAsync(QueryPoints request) {
+        return queryAsync(request, null);
+    }
+
+    /** Passes the request and optional SDK timeout through unchanged. */
+    public ListenableFuture<List<ScoredPoint>> queryAsync(QueryPoints request, Duration timeout) {
+        return traceAsync("Query", FISpanKind.RETRIEVER, request.getCollectionName(), span -> {
+            if (request.hasLimit()) {
+                span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, request.getLimit());
+            }
+            if (request.hasFilter()) {
+                span.setAttribute("qdrant.has_filter", true);
+            }
+            span.setAttribute("qdrant.prefetch_count", (long) request.getPrefetchCount());
+        }, () -> client.queryAsync(request, timeout), this::recordScoredPoints);
+    }
+
+    public List<BatchResult> queryBatch(String collectionName, List<QueryPoints> queries)
+            throws ExecutionException, InterruptedException {
+        return queryBatchAsync(collectionName, queries).get();
+    }
+
+    public ListenableFuture<List<BatchResult>> queryBatchAsync(
+            String collectionName, List<QueryPoints> queries) {
+        return queryBatchAsync(collectionName, queries, null, null);
+    }
+
+    public ListenableFuture<List<BatchResult>> queryBatchAsync(
+            String collectionName, List<QueryPoints> queries, ReadConsistency readConsistency) {
+        return queryBatchAsync(collectionName, queries, readConsistency, null);
+    }
+
+    public ListenableFuture<List<BatchResult>> queryBatchAsync(
+            String collectionName, List<QueryPoints> queries,
+            ReadConsistency readConsistency, Duration timeout) {
+        return traceAsync("Query Batch", FISpanKind.RETRIEVER, collectionName,
+                span -> span.setAttribute("qdrant.query_count", (long) queries.size()),
+                () -> client.queryBatchAsync(collectionName, queries, readConsistency, timeout),
+                (span, results) -> {
+                    span.setAttribute("qdrant.batch_count", (long) results.size());
+                    span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT,
+                            results.stream().mapToLong(BatchResult::getResultCount).sum());
+                });
+    }
+
+    public List<PointGroup> queryGroups(QueryPointGroups request)
+            throws ExecutionException, InterruptedException {
+        return queryGroupsAsync(request).get();
+    }
+
+    public ListenableFuture<List<PointGroup>> queryGroupsAsync(QueryPointGroups request) {
+        return queryGroupsAsync(request, null);
+    }
+
+    public ListenableFuture<List<PointGroup>> queryGroupsAsync(QueryPointGroups request, Duration timeout) {
+        return traceAsync("Query Groups", FISpanKind.RETRIEVER, request.getCollectionName(), span -> {
+            if (request.hasLimit()) {
+                span.setAttribute(SemanticConventions.RETRIEVER_TOP_K, request.getLimit());
+            }
+            if (request.hasFilter()) {
+                span.setAttribute("qdrant.has_filter", true);
+            }
+        }, () -> client.queryGroupsAsync(request, timeout), (span, groups) -> {
+            span.setAttribute("qdrant.groups_count", (long) groups.size());
+            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT,
+                    groups.stream().mapToLong(PointGroup::getHitsCount).sum());
+        });
+    }
+
     public UpdateResult upsert(String collectionName, List<PointStruct> points)
             throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Upsert", FISpanKind.VECTOR_DB);
+        return upsertAsync(collectionName, points).get();
+    }
 
-        try (Scope scope = span.makeCurrent()) {
-            // Set attributes
-            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
-            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+    public ListenableFuture<UpdateResult> upsertAsync(String collectionName, List<PointStruct> points) {
+        return traceAsync("Upsert", FISpanKind.VECTOR_DB, collectionName, span -> {
             span.setAttribute(SemanticConventions.DB_VECTOR_UPSERT_COUNT, (long) points.size());
-
-            // Try to capture vector dimensions from the first point
             if (!points.isEmpty() && points.get(0).hasVectors()) {
                 Vectors vectors = points.get(0).getVectors();
                 if (vectors.hasVector()) {
                     span.setAttribute(SemanticConventions.EMBEDDING_DIMENSIONS,
-                        (long) vectors.getVector().getDataCount());
+                            (long) vectors.getVector().getDataCount());
+                }
+            }
+        }, () -> client.upsertAsync(collectionName, points), this::recordUpdate);
+    }
+
+    public UpdateResult delete(String collectionName, Filter filter)
+            throws ExecutionException, InterruptedException {
+        return deleteAsync(collectionName, filter).get();
+    }
+
+    public ListenableFuture<UpdateResult> deleteAsync(String collectionName, Filter filter) {
+        return traceAsync("Delete", FISpanKind.VECTOR_DB, collectionName,
+                span -> span.setAttribute("qdrant.has_filter", true),
+                () -> client.deleteAsync(collectionName, filter), this::recordUpdate);
+    }
+
+    public List<RetrievedPoint> get(String collectionName, List<PointId> pointIds,
+                                    boolean withPayload, boolean withVectors)
+            throws ExecutionException, InterruptedException {
+        return getAsync(collectionName, pointIds, withPayload, withVectors).get();
+    }
+
+    public ListenableFuture<List<RetrievedPoint>> getAsync(String collectionName, List<PointId> pointIds,
+                                                           boolean withPayload, boolean withVectors) {
+        return traceAsync("Get", FISpanKind.VECTOR_DB, collectionName,
+                span -> span.setAttribute("qdrant.requested_count", (long) pointIds.size()),
+                () -> client.retrieveAsync(collectionName, pointIds, withPayload, withVectors, null),
+                (span, results) -> span.setAttribute("qdrant.retrieved_count", (long) results.size()));
+    }
+
+    public void createCollection(String collectionName, int vectorSize, Distance distance)
+            throws ExecutionException, InterruptedException {
+        createCollectionAsync(collectionName, vectorSize, distance).get();
+    }
+
+    public ListenableFuture<CollectionOperationResponse> createCollectionAsync(
+            String collectionName, int vectorSize, Distance distance) {
+        return traceAsync("Create Collection", FISpanKind.VECTOR_DB, collectionName, span -> {
+            span.setAttribute("qdrant.vector_size", (long) vectorSize);
+            span.setAttribute("qdrant.distance", distance.name());
+        }, () -> client.createCollectionAsync(collectionName,
+                VectorParams.newBuilder().setSize(vectorSize).setDistance(distance).build()),
+                (span, result) -> { });
+    }
+
+    public List<String> listCollections() throws ExecutionException, InterruptedException {
+        return listCollectionsAsync().get();
+    }
+
+    public ListenableFuture<List<String>> listCollectionsAsync() {
+        return traceAsync("List Collections", FISpanKind.VECTOR_DB, null, span -> { },
+                client::listCollectionsAsync,
+                (span, results) -> span.setAttribute("qdrant.collections_count", (long) results.size()));
+    }
+
+    private void recordScoredPoints(Span span, List<ScoredPoint> results) {
+        span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) results.size());
+        if (!results.isEmpty()) {
+            span.setAttribute("qdrant.top_score", results.get(0).getScore());
+        }
+    }
+
+    private void recordUpdate(Span span, UpdateResult result) {
+        span.setAttribute("qdrant.status", result.getStatus().name());
+    }
+
+    private <T> ListenableFuture<T> traceAsync(String operation, FISpanKind kind, String collection,
+            Consumer<Span> attributes, Supplier<ListenableFuture<T>> call, BiConsumer<Span, T> resultAttributes) {
+        Span span = tracer.startSpan("Qdrant " + operation, kind);
+        Context context = Context.current().with(span);
+        ListenableFuture<T> future;
+        try (Scope scope = context.makeCurrent()) {
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
+            if (collection != null) {
+                span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collection);
+            }
+            attributes.accept(span);
+            future = call.get();
+        } catch (RuntimeException | Error failure) {
+            try {
+                tracer.setError(span, failure);
+            } finally {
+                span.end();
+            }
+            throw failure;
+        }
+        // Observe rather than transform the future: cancellation, exception identity and
+        // listener scheduling remain the SDK's own. Direct callbacks do no blocking work.
+        Futures.addCallback(future, new FutureCallback<T>() {
+            @Override
+            public void onSuccess(T result) {
+                try (Scope scope = context.makeCurrent()) {
+                    resultAttributes.accept(span, result);
+                    span.setStatus(StatusCode.OK);
+                } catch (RuntimeException ignored) {
+                    // Optional telemetry must not turn a successful SDK result into a failure.
+                } finally {
+                    span.end();
                 }
             }
 
-            // Execute upsert
-            UpdateResult result = client.upsertAsync(collectionName, points).get();
-
-            // Capture result
-            span.setAttribute("qdrant.status", result.getStatus().name());
-
-            span.setStatus(StatusCode.OK);
-            return result;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
+            @Override
+            public void onFailure(Throwable failure) {
+                try (Scope scope = context.makeCurrent()) {
+                    tracer.setError(span, failure);
+                } finally {
+                    span.end();
+                }
+            }
+        }, MoreExecutors.directExecutor());
+        return future;
     }
 
-    /**
-     * Deletes points by filter with tracing.
-     * In Qdrant Java client v1.16.x, deleteAsync takes a Filter, not a list of PointIds.
-     *
-     * @param collectionName the collection name
-     * @param filter         the filter to match points for deletion
-     * @return the update result
-     * @throws ExecutionException   if delete fails
-     * @throws InterruptedException if interrupted
-     */
-    public UpdateResult delete(String collectionName, Filter filter)
-            throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Delete", FISpanKind.VECTOR_DB);
-
-        try (Scope scope = span.makeCurrent()) {
-            // Set attributes
-            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
-            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
-            span.setAttribute("qdrant.has_filter", true);
-
-            // Execute delete
-            UpdateResult result = client.deleteAsync(collectionName, filter).get();
-
-            span.setAttribute("qdrant.status", result.getStatus().name());
-            span.setStatus(StatusCode.OK);
-            return result;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
-    }
-
-    /**
-     * Gets points by IDs with tracing.
-     *
-     * @param collectionName the collection name
-     * @param pointIds       the point IDs to retrieve
-     * @param withPayload    whether to include payload
-     * @param withVectors    whether to include vectors
-     * @return list of retrieved points
-     * @throws ExecutionException   if retrieval fails
-     * @throws InterruptedException if interrupted
-     */
-    public List<RetrievedPoint> get(String collectionName, List<PointId> pointIds,
-                                     boolean withPayload, boolean withVectors)
-            throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Get", FISpanKind.VECTOR_DB);
-
-        try (Scope scope = span.makeCurrent()) {
-            // Set attributes
-            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
-            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
-            span.setAttribute("qdrant.requested_count", (long) pointIds.size());
-
-            // Execute get
-            List<RetrievedPoint> results = client.retrieveAsync(
-                collectionName,
-                pointIds,
-                withPayload,
-                withVectors,
-                null  // readConsistency
-            ).get();
-
-            span.setAttribute("qdrant.retrieved_count", (long) results.size());
-            span.setStatus(StatusCode.OK);
-            return results;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
-    }
-
-    /**
-     * Creates a collection with tracing.
-     *
-     * @param collectionName the collection name
-     * @param vectorSize     the vector dimensions
-     * @param distance       the distance metric
-     * @throws ExecutionException   if creation fails
-     * @throws InterruptedException if interrupted
-     */
-    public void createCollection(String collectionName, int vectorSize, Distance distance)
-            throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant Create Collection", FISpanKind.VECTOR_DB);
-
-        try (Scope scope = span.makeCurrent()) {
-            // Set attributes
-            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
-            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
-            span.setAttribute("qdrant.vector_size", (long) vectorSize);
-            span.setAttribute("qdrant.distance", distance.name());
-
-            // Execute create
-            client.createCollectionAsync(
-                collectionName,
-                VectorParams.newBuilder()
-                    .setSize(vectorSize)
-                    .setDistance(distance)
-                    .build()
-            ).get();
-
-            span.setStatus(StatusCode.OK);
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
-    }
-
-    /**
-     * Lists collections with tracing.
-     *
-     * @return list of collection names
-     * @throws ExecutionException   if listing fails
-     * @throws InterruptedException if interrupted
-     */
-    public List<String> listCollections() throws ExecutionException, InterruptedException {
-        Span span = tracer.startSpan("Qdrant List Collections", FISpanKind.VECTOR_DB);
-
-        try (Scope scope = span.makeCurrent()) {
-            span.setAttribute(SemanticConventions.DB_SYSTEM, "qdrant");
-
-            List<String> collections = client.listCollectionsAsync().get();
-
-            span.setAttribute("qdrant.collections_count", (long) collections.size());
-            span.setStatus(StatusCode.OK);
-            return collections;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw e;
-        } finally {
-            span.end();
-        }
-    }
-
-    /**
-     * Gets the underlying QdrantClient.
-     *
-     * @return the wrapped QdrantClient
-     */
+    /** Returns the original client; operations on it bypass this wrapper. */
     public QdrantClient unwrap() {
         return client;
     }
