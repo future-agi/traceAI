@@ -28,8 +28,13 @@ export interface ReceiverOptions {
   coexistence: Coexistence;
   token?: string;
   singleUserApproved?: boolean;
-  normalize: (span: unknown) => CanonicalFact;
+  normalize: (
+    span: unknown,
+    resource?: unknown,
+    scope?: unknown,
+  ) => CanonicalFact;
   admit: (fact: CanonicalFact) => Promise<unknown>;
+  rejected?: (code: string) => void;
 }
 /** No FI keys; only traces. Existing vendor signals must remain in their original collector. */
 export async function startReceiver(options: ReceiverOptions): Promise<Server> {
@@ -106,7 +111,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
         data.resourceSpans.length > 256
       )
         throw new Error();
-      const spans: unknown[] = [];
+      const spans: { span: any; resource: unknown; scope: unknown }[] = [];
       for (const resource of data.resourceSpans) {
         if (
           !Array.isArray(resource.scopeSpans) ||
@@ -115,13 +120,18 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
           throw new Error();
         for (const scope of resource.scopeSpans) {
           if (!Array.isArray(scope.spans)) throw new Error();
-          spans.push(...scope.spans);
-          if (spans.length > 256) throw new Error();
+          if (spans.length + scope.spans.length > 256) throw new Error();
+          for (const span of scope.spans)
+            spans.push({
+              span,
+              resource: resource.resource,
+              scope: scope.scope,
+            });
         }
       }
       // Normalize every span before admitting any; raw resources/events/status text never persist.
-      const facts = spans.map((span: any) => {
-        const fact = minimize(options.normalize(span));
+      const facts = spans.map(({ span, resource, scope }) => {
+        const fact = minimize(options.normalize(span, resource, scope));
         const id = (value: unknown, length: number): string => {
           if (typeof value !== "string") throw new Error("INVALID_NATIVE_ID");
           const decoded = new RegExp(`^[a-fA-F0-9]{${length * 2}}$`).test(value)
@@ -148,12 +158,35 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
           await options.admit(fact);
         } catch {
           rejected++;
+          options.rejected?.("NATIVE_ADMISSION_REJECTED");
         }
       }
-      res
-        .writeHead(200, { "Content-Type": "application/x-protobuf" })
-        .end(encodeResponse(rejected));
-    } catch {
+      if (type === "application/json") {
+        res
+          .writeHead(200, { "Content-Type": "application/json" })
+          .end(
+            JSON.stringify(
+              rejected
+                ? {
+                    partialSuccess: {
+                      rejectedSpans: String(rejected),
+                      errorMessage: "NATIVE_ADMISSION_REJECTED",
+                    },
+                  }
+                : {},
+            ),
+          );
+      } else {
+        res
+          .writeHead(200, { "Content-Type": "application/x-protobuf" })
+          .end(encodeResponse(rejected));
+      }
+    } catch (error) {
+      options.rejected?.(
+        error instanceof AgentError && error.code === "UNKNOWN_SOURCE_SCHEMA"
+          ? "UNKNOWN_SOURCE_SCHEMA"
+          : "INVALID_NATIVE_BATCH",
+      );
       if (!res.headersSent) res.writeHead(400).end();
     }
   });

@@ -7,6 +7,10 @@ const traceEnvironment = new Set([
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
   "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
   "OTEL_TRACES_EXPORTER",
+  "CLAUDE_CODE_ENABLE_TELEMETRY",
+  "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
 ]);
 export function agentEnvironment(
   env: NodeJS.ProcessEnv,
@@ -28,32 +32,41 @@ export async function runAgent(
   args: readonly string[],
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (!adapter.launch) throw new AgentError("UNSUPPORTED_RUN", 5);
+  adapter.validateArgs?.(args);
   const launch = await adapter.launch(context);
-  if (!launch.executable.startsWith("/"))
-    throw new AgentError("ABSOLUTE_EXECUTABLE_REQUIRED", 5);
-  const child = spawn(launch.executable, [...launch.args, ...args], {
-    env: agentEnvironment(process.env, launch.env),
-    stdio: "inherit",
-    shell: false,
-  });
-  const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
-  const handlers = signals.map((signal) => {
-    const handler = () => {
-      child.kill(signal);
-    };
-    process.on(signal, handler);
-    return handler;
-  });
-  return new Promise((resolve, reject) => {
-    const cleanup = () =>
-      signals.forEach((s, i) => process.removeListener(s, handlers[i]));
-    child.once("error", () => {
-      cleanup();
-      reject(new AgentError("AGENT_LAUNCH_FAILED", 7));
+  try {
+    if (!launch.executable.startsWith("/"))
+      throw new AgentError("ABSOLUTE_EXECUTABLE_REQUIRED", 5);
+    const child = spawn(launch.executable, [...launch.args, ...args], {
+      env: agentEnvironment(process.env, launch.env),
+      stdio: "inherit",
+      shell: false,
     });
-    child.once("exit", (code, signal) => {
-      cleanup();
-      resolve({ code, signal });
+    const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+    const handlers = signals.map((signal) => {
+      const handler = () => {
+        child.kill(signal);
+      };
+      process.on(signal, handler);
+      return handler;
     });
-  });
+    return await new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve, reject) => {
+      const cleanup = () =>
+        signals.forEach((s, i) => process.removeListener(s, handlers[i]));
+      child.once("error", () => {
+        cleanup();
+        reject(new AgentError("AGENT_LAUNCH_FAILED", 7));
+      });
+      child.once("exit", (code, signal) => {
+        cleanup();
+        resolve({ code, signal });
+      });
+    });
+  } finally {
+    // Telemetry cleanup never changes the agent's exit code or signal.
+    await launch.close?.().catch(() => undefined);
+  }
 }

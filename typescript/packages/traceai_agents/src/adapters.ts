@@ -38,10 +38,18 @@ export interface Adapter {
     input: unknown,
     context: NormalizeContext,
   ): readonly CanonicalFact[];
+  nativeNormalize?(
+    span: unknown,
+    resource: unknown,
+    scope: unknown,
+    context: NormalizeContext,
+  ): CanonicalFact;
+  validateArgs?(args: readonly string[]): void;
   launch?(context: AdapterContext): Promise<{
     executable: string;
     env: Record<string, string>;
     args: readonly string[];
+    close?(): Promise<void>;
   }>;
   import?(bytes: Buffer, context: NormalizeContext): readonly CanonicalFact[];
 }

@@ -14,8 +14,10 @@ import { AgentError, protectedDirectory } from "../security/files.js";
 import { FileSecretStore, OSSecretStore } from "../security/credentials.js";
 import { exportBytes, retryDelay } from "../export/http.js";
 import { StorageClient } from "./storage-client.js";
+import { NativeIngress } from "./native.js";
 export class Runtime {
   private storage!: StorageClient;
+  private readonly native = new NativeIngress();
   private admissionPaused = false;
   private server: Server | undefined;
   private config: Config = { schema_version: 1, profiles: {}, routes: {} };
@@ -59,6 +61,7 @@ export class Runtime {
         });
       });
       this.timer = setInterval(() => {
+        this.native.sweep();
         if (!this.exporting && !this.stopped) {
           this.exporting = this.drain()
             .catch(() => undefined)
@@ -143,6 +146,54 @@ export class Runtime {
       throw new AgentError("INVALID_FRAME", 2);
     }
     if (m.protocol_version !== 1) throw new AgentError("INVALID_PROTOCOL", 2);
+    if (["native-open", "native-close", "native-renew"].includes(m.operation)) {
+      const route = this.config.routes[m.route];
+      if (!route) throw new AgentError("UNKNOWN_ROUTE", 3);
+      if (m.operation === "native-close") {
+        this.native.close(m.route, m.lease);
+        return { code: 0, state: "closed" };
+      }
+      if (!route.route.enabled || this.stopped || this.admissionPaused)
+        throw new AgentError("HELD_DISABLED", 3);
+      if (m.operation === "native-renew") {
+        this.native.renew(m.route, m.lease);
+        return { code: 0, state: "renewed" };
+      }
+      const adapter = this.registry.get(route.agent, route.surface);
+      const profile = this.config.profiles[route.profile];
+      if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
+      const secrets =
+        profile.storage === "file"
+          ? new FileSecretStore(this.paths.credentials)
+          : new OSSecretStore();
+      const credentials = await secrets.get(profile.credentialRef);
+      if (!credentials) throw new AgentError("HELD_IDENTITY_KEY", 3);
+      const epoch = route.route.epoch;
+      return this.native.open(
+        m.route,
+        adapter,
+        {
+          identityKey: Buffer.from(credentials.identity_key, "hex"),
+          policyRevision: route.route.policy.revision,
+          sourceSchema: adapter.capability.schemas[0],
+        },
+        () =>
+          !this.stopped &&
+          this.config.routes[m.route]?.route.enabled === true &&
+          this.config.routes[m.route]?.route.epoch === epoch,
+        (fact) =>
+          this.dispatch(
+            Buffer.from(
+              JSON.stringify({
+                protocol_version: 1,
+                operation: "observe",
+                route_ref: m.route,
+                fact,
+              }),
+            ),
+          ),
+      );
+    }
     if (m.operation === "observe") {
       const route = this.config.routes[m.route_ref];
       if (
@@ -182,6 +233,8 @@ export class Runtime {
           surface: r.surface,
           enabled: r.route.enabled,
           activation: r.activation,
+          native_durable_ack: this.native.activated.has(r.route.id),
+          native_capture: this.native.status(r.route.id),
           policy: r.route.policy.revision,
           export:
             r.route.binding.backendContract === "immutable-agent-v1"
@@ -221,6 +274,7 @@ export class Runtime {
       const r = this.config.routes[m.route];
       if (!r) throw new AgentError("UNKNOWN_ROUTE", 3);
       r.route.enabled = false;
+      this.native.closeRoute(m.route);
       await this.fence();
       await this.storage.call("disable", m.route);
       if (m.purge) {
@@ -317,6 +371,7 @@ export class Runtime {
     if (this.timer) clearInterval(this.timer);
     this.controller?.abort();
     this.server?.close();
+    this.native.stop();
     for (const s of this.sockets) s.destroy();
     await this.exporting?.catch(() => undefined);
     await this.storage.close().catch(() => undefined);

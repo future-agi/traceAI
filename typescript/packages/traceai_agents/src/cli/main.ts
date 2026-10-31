@@ -27,6 +27,7 @@ import { runtimeRequest, Runtime } from "../runtime/daemon.js";
 import { ImportPlanner } from "../import.js";
 import { authInput } from "./input.js";
 import { runAgent } from "./run.js";
+import { claudeCodeAdapter } from "../adapters/claude-code/index.js";
 const flags = new Set([
   "json",
   "stdin",
@@ -165,12 +166,15 @@ export async function main(
           "runtime start|stop|status",
         ],
         enabled_by_default: [],
-        reasons: ["NO_QUALIFIED_ADAPTERS_BUNDLED"],
+        reasons: [
+          "NATIVE_PREVIEW_CLAUDE_CODE_2_1_316_MACOS",
+          "BACKEND_RELEASE_GATED",
+        ],
       });
       return 0;
     }
     const p = paths(),
-      registry = settings.registry ?? new AdapterRegistry();
+      registry = settings.registry ?? new AdapterRegistry([claudeCodeAdapter]);
     if (args[0] === "__daemon") {
       const runtime = new Runtime(
         p,
@@ -342,6 +346,8 @@ export async function main(
       installed = config.routes[routeId];
     const profileName = String(options.profile ?? installed?.profile ?? "");
     const profile = config.profiles[profileName];
+    if (installed && installed.profile !== profileName)
+      throw new AgentError("INSTALLED_PROFILE_CONFLICT", 6);
     if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
     if (
       options.project !== undefined &&
@@ -362,9 +368,16 @@ export async function main(
       profile: profileName,
       binding: profile.binding,
       transcriptConsent:
-        options.transcript === "structure" ||
-        installed?.transcriptConsent === true,
+        options.transcript === undefined
+          ? installed?.transcriptConsent === true
+          : options.transcript === "structure",
     };
+    if (
+      context.transcriptConsent &&
+      adapter.capability.native &&
+      !adapter.capability.transcript
+    )
+      throw new AgentError("HELD_NATIVE_TRANSCRIPT_JOIN", 3);
     if (command === "run") {
       if (!installed?.route.enabled) throw new AgentError("ENABLE_REQUIRED", 3);
       // Generic destinations are never overwritten. Agent-specific effective state is adapter preflight's job.

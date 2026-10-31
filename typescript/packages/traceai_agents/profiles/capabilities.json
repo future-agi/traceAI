@@ -2,7 +2,16 @@
   "schema_version": 1,
   "release_state": "foundation-preview",
   "enabled_by_default": [],
-  "agents": [],
+  "agents": [
+    {
+      "agent": "claude-code",
+      "surface": "cli",
+      "versions": ["2.1.316"],
+      "platforms": ["darwin"],
+      "grade": "Request tracing (structure-only preview)",
+      "profile": "claude-code/native-v1.json"
+    }
+  ],
   "holds": [
     "backend-contract-qualification",
     "per-agent-conformance",
