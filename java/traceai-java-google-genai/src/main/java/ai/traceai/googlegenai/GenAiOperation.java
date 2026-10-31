@@ -101,6 +101,8 @@ final class GenAiOperation {
             var raw = JsonParser.parseString(response.toJson()).getAsJsonObject();
             // Newer SDKs attach transport headers; those are not model output.
             raw.remove("sdkHttpResponse");
+            // Automatic-call history can contain prompts even when inputs are hidden.
+            raw.remove("automaticFunctionCallingHistory");
             String json = raw.toString();
             if (!streaming) {
                 tracer.setRawOutput(span, raw);

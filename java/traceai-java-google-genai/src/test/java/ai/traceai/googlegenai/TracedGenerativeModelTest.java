@@ -352,6 +352,18 @@ class TracedGenerativeModelTest {
     }
 
     @Test
+    void hiddenInputsDoNotLeakThroughAutomaticFunctionCallingHistory() {
+        configure(TraceConfig.builder().hideInputs(true).build());
+        var response = GenerateContentResponse.fromJson(RESPONSE.substring(0, RESPONSE.length() - 1)
+            + ",\"automaticFunctionCallingHistory\":[{\"role\":\"user\",\"parts\":[{\"text\":\"private-history\"}]}]}");
+        var operation = new GenAiOperation(tracer, "test", "gemini-test", ai.traceai.FISpanKind.LLM, "private-input", null);
+        operation.response(response, true);
+        operation.finish(null, true, false);
+        assertThat(span().getAttributes().toString()).contains("answer")
+            .doesNotContain("private-history", "private-input", "automaticFunctionCallingHistory");
+    }
+
+    @Test
     void unwrappedClientRemainsOriginalAndExplicitlyUninstrumented() {
         assertThat(model.unwrap()).isSameAs(client);
         client.models.generateContent("gemini-test", "question", null);
