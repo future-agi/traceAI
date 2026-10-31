@@ -11,14 +11,12 @@ import {
   SpanKind,
   Attributes,
   SpanStatusCode,
-  Span,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
 import {
   SemanticConventions,
   FISpanKind,
   MimeType,
-  LLMSystem,
   LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
@@ -27,7 +25,7 @@ import {
   safelyJSONStringify,
   TraceConfigOptions,
 } from "@traceai/fi-core";
-import { isString } from "./typeUtils";
+import { observeResponse } from "./response";
 
 const MODULE_NAME = "groq-sdk";
 
@@ -43,72 +41,7 @@ export function isPatched() {
   return _isFIPatched;
 }
 
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
-}
-
-// Type definitions for Groq SDK
-interface GroqChatCompletionMessage {
-  role: string;
-  content: string | null;
-  tool_calls?: Array<{
-    id: string;
-    type: string;
-    function: {
-      name: string;
-      arguments: string;
-    };
-  }>;
-}
-
-interface GroqChatCompletionChoice {
-  index: number;
-  message: GroqChatCompletionMessage;
-  finish_reason: string;
-  delta?: {
-    content?: string;
-    tool_calls?: Array<{
-      id?: string;
-      function?: {
-        name?: string;
-        arguments?: string;
-      };
-    }>;
-  };
-}
-
-interface GroqChatCompletion {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: GroqChatCompletionChoice[];
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-interface GroqChatCompletionChunk {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: GroqChatCompletionChoice[];
-}
-
+// Request fields used by instrumentation; all other SDK options pass through.
 interface GroqChatCompletionCreateParams {
   model: string;
   messages: Array<{
@@ -131,11 +64,6 @@ interface GroqChatCompletionCreateParams {
   }>;
   tool_choice?: string | { type: string; function: { name: string } };
   [key: string]: unknown;
-}
-
-interface GroqStream<T> {
-  [Symbol.asyncIterator](): AsyncIterator<T>;
-  tee(): [GroqStream<T>, GroqStream<T>];
 }
 
 /**
@@ -213,11 +141,6 @@ export class GroqInstrumentation extends InstrumentationBase {
     } | undefined;
 
     if (Groq?.Chat?.Completions?.prototype) {
-      type ChatCompletionCreateType = (
-        body: GroqChatCompletionCreateParams,
-        options?: Record<string, unknown>
-      ) => Promise<GroqChatCompletion | GroqStream<GroqChatCompletionChunk>>;
-
       this._wrap(
         Groq.Chat.Completions.prototype,
         "create",
@@ -227,6 +150,7 @@ export class GroqInstrumentation extends InstrumentationBase {
             this: unknown,
             ...args: [GroqChatCompletionCreateParams, Record<string, unknown>?]
           ) {
+            if (isTracingSuppressed(context.active())) return original.apply(this, args);
             const body = args[0];
             const { messages: _messages, ...invocationParameters } = body;
 
@@ -237,10 +161,10 @@ export class GroqInstrumentation extends InstrumentationBase {
                 attributes: {
                   [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
                   [SemanticConventions.LLM_MODEL_NAME]: body.model,
-                  [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
+                  [SemanticConventions.INPUT_VALUE]: safelyJSONStringify(body) ?? undefined,
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                    JSON.stringify(invocationParameters),
+                    safelyJSONStringify(invocationParameters) ?? undefined,
                   [SemanticConventions.LLM_PROVIDER]: LLMProvider.GROQ,
                   [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getLLMInputMessagesAttributes(body),
@@ -250,10 +174,10 @@ export class GroqInstrumentation extends InstrumentationBase {
               },
             );
 
-            const execContext = getExecContext(span);
+            const execContext = trace.setSpan(context.active(), span);
             const execPromise = safeExecuteInTheMiddle(
               () => {
-                return context.with(trace.setSpan(execContext, span), () => {
+                return context.with(execContext, () => {
                   return original.apply(this, args);
                 });
               },
@@ -266,35 +190,7 @@ export class GroqInstrumentation extends InstrumentationBase {
               },
             );
 
-            const wrappedPromise = (execPromise as Promise<GroqChatCompletion | GroqStream<GroqChatCompletionChunk>>).then((result) => {
-              if (isChatCompletionResponse(result)) {
-                span.setAttributes({
-                  [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
-                  [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                  [SemanticConventions.LLM_MODEL_NAME]: result.model,
-                  [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
-                  [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
-                  [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(result.choices.map(c => c.finish_reason)) ?? "[]",
-                  ...getChatCompletionLLMOutputMessagesAttributes(result),
-                  ...getUsageAttributes(result),
-                  [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                });
-                span.setStatus({ code: SpanStatusCode.OK });
-                span.end();
-              } else if (isStreamResponse(result)) {
-                const [leftStream, rightStream] = result.tee();
-                consumeChatCompletionStreamChunks(rightStream, span);
-                result = leftStream as unknown as typeof result;
-              }
-              return result;
-            }).catch((error: Error) => {
-              span.recordException(error);
-              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-              span.end();
-              throw error;
-            });
-
-            return context.bind(execContext, wrappedPromise) as Promise<GroqChatCompletion | GroqStream<GroqChatCompletionChunk>>;
+            return observeResponse(execPromise, span, execContext);
           };
         },
       );
@@ -335,24 +231,6 @@ export class GroqInstrumentation extends InstrumentationBase {
 }
 
 /**
- * Type guard for chat completion response
- */
-function isChatCompletionResponse(
-  response: GroqChatCompletion | GroqStream<GroqChatCompletionChunk>,
-): response is GroqChatCompletion {
-  return "choices" in response && Array.isArray((response as GroqChatCompletion).choices);
-}
-
-/**
- * Type guard for stream response
- */
-function isStreamResponse(
-  response: GroqChatCompletion | GroqStream<GroqChatCompletionChunk>,
-): response is GroqStream<GroqChatCompletionChunk> {
-  return typeof (response as GroqStream<GroqChatCompletionChunk>)[Symbol.asyncIterator] === "function";
-}
-
-/**
  * Converts the body of a chat completions request to LLM input messages
  */
 function getLLMInputMessagesAttributes(
@@ -381,112 +259,4 @@ function getLLMToolsJSONSchema(
     return {};
   }
   return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(body.tools) ?? "[]" };
-}
-
-/**
- * Get usage attributes from completion response
- */
-function getUsageAttributes(completion: GroqChatCompletion): Attributes {
-  if (completion.usage) {
-    return {
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]:
-        completion.usage.completion_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]:
-        completion.usage.prompt_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]:
-        completion.usage.total_tokens,
-    };
-  }
-  return {};
-}
-
-/**
- * Converts the chat completion result to LLM output attributes
- */
-function getChatCompletionLLMOutputMessagesAttributes(
-  chatCompletion: GroqChatCompletion,
-): Attributes {
-  const choice = chatCompletion.choices[0];
-  if (!choice) {
-    return {};
-  }
-
-  const msg: Record<string, unknown> = { role: choice.message.role };
-  if (choice.message.content) {
-    msg.content = choice.message.content;
-  }
-  if (choice.message.tool_calls) {
-    msg.tool_calls = choice.message.tool_calls.map((tc) => ({
-      id: tc.id,
-      function: { name: tc.function.name, arguments: tc.function.arguments },
-    }));
-  }
-  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
-}
-
-/**
- * Consumes the stream chunks and adds them to the span
- */
-async function consumeChatCompletionStreamChunks(
-  stream: GroqStream<GroqChatCompletionChunk>,
-  span: Span,
-) {
-  let streamResponse = "";
-  const toolCalls: Record<number, { id?: string; name?: string; arguments?: string }> = {};
-  const allChunks: GroqChatCompletionChunk[] = [];
-
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      if (chunk.choices.length <= 0) {
-        continue;
-      }
-      const choice = chunk.choices[0];
-      if (choice.delta?.content) {
-        streamResponse += choice.delta.content;
-      }
-
-      if (choice.delta?.tool_calls) {
-        choice.delta.tool_calls.forEach((toolCall, index) => {
-          if (!toolCalls[index]) {
-            toolCalls[index] = {};
-          }
-          if (toolCall.id) {
-            toolCalls[index].id = toolCall.id;
-          }
-          if (toolCall.function?.name) {
-            toolCalls[index].name = (toolCalls[index].name || "") + toolCall.function.name;
-          }
-          if (toolCall.function?.arguments) {
-            toolCalls[index].arguments = (toolCalls[index].arguments || "") + toolCall.function.arguments;
-          }
-        });
-      }
-    }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    return;
-  }
-
-  const msg: Record<string, unknown> = { role: "assistant", content: streamResponse };
-  const toolCallEntries = Object.values(toolCalls);
-  if (toolCallEntries.length > 0) {
-    msg.tool_calls = toolCallEntries.map((tc) => ({
-      id: tc.id,
-      function: { name: tc.name, arguments: tc.arguments },
-    }));
-  }
-
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: streamResponse,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
 }
