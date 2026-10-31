@@ -25,6 +25,7 @@
   "python/frameworks/google-adk": "0.1.6",
   "python/frameworks/google-genai": "0.1.3",
   "python/frameworks/google-genai-live": "0.1.0",
+  "python/frameworks/grafi": "0.1.0",
   "python/frameworks/groq": "0.1.10",
   "python/frameworks/guardrails": "0.2.1",
   "python/frameworks/haystack": "0.1.10",
