@@ -1,167 +1,82 @@
+"""Bind Guardrails' native OpenTelemetry spans to a privacy-aware provider."""
+
 import contextvars
-import logging
 from importlib import import_module
+from importlib.util import find_spec
 from typing import Any, Collection
 
-from fi_instrumentation import FITracer, TraceConfig
-from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
-from traceai_guardrails._wrap_guard_call import (
-    _AsyncPromptCallableWrapper,
-    _ParseCallableWrapper,
-    _PostValidationWrapper,
-    _PromptCallableWrapper,
-)
+from fi_instrumentation import TraceConfig
+from opentelemetry import trace
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+
+from traceai_guardrails._legacy import _Contextvars
 from traceai_guardrails.version import __version__
-from wrapt import ObjectProxy, wrap_function_wrapper
-
-logger = logging.getLogger(__name__)
-
-_instruments = ("guardrails-ai>=0.5.0",)
-
-_VALIDATION_MODULE = "guardrails.validator_service"
-_LLM_PROVIDERS_MODULE = "guardrails.llm_providers"
-_RUNNER_MODULE = "guardrails.run"
 
 
-class _Contextvars(ObjectProxy):  # type: ignore
-    def __init__(self, cv: Any) -> None:
-        super().__init__(cv)
+class GuardrailsInstrumentor(BaseInstrumentor):
+    """Use native spans where available, preserving the pre-native SDK adapter.
 
-    @staticmethod
-    def Context() -> contextvars.Context:
-        return contextvars.copy_context()
-
-
-class GuardrailsInstrumentor(BaseInstrumentor):  # type: ignore
-    """An instrumentor for the Guardrails framework."""
-
-    __slots__ = (
-        "_tracer",
-        "_original_guardrails_llm_providers_call",
-        "_original_guardrails_async_llm_providers_call",
-        "_original_guardrails_runner_step",
-        "_original_guardrails_validation_after_run",
-    )
+    Configure this once before running Guards. The supplied provider need not be
+    global; unrelated tracers and the application's provider are never modified.
+    Guardrails' own disable_tracing setting is respected.
+    """
 
     def instrumentation_dependencies(self) -> Collection[str]:
-        return _instruments
+        return ("guardrails-ai>=0.5.0",)
 
     def _instrument(self, **kwargs: Any) -> None:
+        self._bindings = []
+        self._legacy = None
         try:
-            import guardrails as gd
+            if find_spec("guardrails.telemetry.guard_tracing") is None:
+                from traceai_guardrails._legacy import GuardrailsInstrumentor as Legacy
 
-            if not (tracer_provider := kwargs.get("tracer_provider")):
-                tracer_provider = trace_api.get_tracer_provider()
-            if not (config := kwargs.get("config")):
+                self._legacy = Legacy()
+                self._legacy._instrument(**kwargs)
+                return
+
+            from traceai_guardrails._native import (
+                NativeTraceAPI,
+                add_call_attributes,
+                add_step_attributes,
+            )
+
+            config = kwargs.get("config")
+            if config is None:
                 config = TraceConfig()
-            else:
-                assert isinstance(config, TraceConfig)
-            self._tracer = FITracer(
-                trace_api.get_tracer(__name__, __version__, tracer_provider),
-                config=config,
-            )
-
-            gd.guard.contextvars = _Contextvars(gd.guard.contextvars)
-            gd.async_guard.contextvars = _Contextvars(gd.async_guard.contextvars)
-
-            runner_module = import_module(_RUNNER_MODULE)
-            self._original_guardrails_runner_step = runner_module.Runner.step
-            runner_wrapper = _ParseCallableWrapper(tracer=self._tracer)
-            wrap_function_wrapper(
-                module=_RUNNER_MODULE,
-                name="Runner.step",
-                wrapper=runner_wrapper,
-            )
-
-            llm_providers_module = import_module(_LLM_PROVIDERS_MODULE)
-            self._original_guardrails_llm_providers_call = (
-                llm_providers_module.PromptCallableBase.__call__
-            )
-            prompt_callable_wrapper = _PromptCallableWrapper(tracer=self._tracer)
-            wrap_function_wrapper(
-                module=_LLM_PROVIDERS_MODULE,
-                name="PromptCallableBase.__call__",
-                wrapper=prompt_callable_wrapper,
-            )
-
-            self._original_guardrails_async_llm_providers_call = (
-                llm_providers_module.AsyncPromptCallableBase.__call__
-            )
-            wrap_function_wrapper(
-                module=_LLM_PROVIDERS_MODULE,
-                name="AsyncPromptCallableBase.__call__",
-                wrapper=_AsyncPromptCallableWrapper(tracer=self._tracer),
-            )
-
-            validation_module = import_module(_VALIDATION_MODULE)
-            self._original_guardrails_validation_after_run = (
-                validation_module.ValidatorServiceBase.after_run_validator
-            )
-            post_validator_wrapper = _PostValidationWrapper(tracer=self._tracer)
-            wrap_function_wrapper(
-                module=_VALIDATION_MODULE,
-                name="ValidatorServiceBase.after_run_validator",
-                wrapper=post_validator_wrapper,
-            )
-        except Exception as e:
-            logger.exception(f"Failed to instrument Guardrails: {e}", exc_info=True)
+            if not isinstance(config, TraceConfig):
+                raise TypeError("config must be a TraceConfig")
+            provider = kwargs.get("tracer_provider")
+            if provider is None:
+                provider = trace.get_tracer_provider()
+            api = NativeTraceAPI(provider, config)
+            for name in ("guard_tracing", "runner_tracing", "validator_tracing"):
+                module = import_module(f"guardrails.telemetry.{name}")
+                self._bind(module, "trace", api)
+                # Streaming guard spans use the separately imported function.
+                if hasattr(module, "get_tracer"):
+                    self._bind(module, "get_tracer", api.get_tracer)
+                if name == "runner_tracing":
+                    # Native serializers traverse mixed history and can drain an
+                    # async LLMResponse iterator. Replace attribute extraction,
+                    # never execution methods or the framework's span lifecycle.
+                    self._bind(module, "add_call_attributes", add_call_attributes)
+                    self._bind(module, "add_step_attributes", add_step_attributes)
+        except Exception:
             self._uninstrument()
             raise
 
+    def _bind(self, module: Any, name: str, replacement: Any) -> None:
+        self._bindings.append((module, name, getattr(module, name), replacement))
+        setattr(module, name, replacement)
+
     def _uninstrument(self, **kwargs: Any) -> None:
-        try:
-            import guardrails as gd
-
-            # not unwrapping by checking and using the __wrap__ attribute below because the
-            # original package itself also uses wrapping
-            if (
-                hasattr(self, "_original_guardrails_llm_providers_call")
-                and self._original_guardrails_llm_providers_call is not None
-            ):
-                llm_providers = import_module(_LLM_PROVIDERS_MODULE)
-                llm_providers.PromptCallableBase.__call__ = (
-                    self._original_guardrails_llm_providers_call
-                )
-                self._original_guardrails_llm_providers_call = None
-
-            if getattr(self, "_original_guardrails_async_llm_providers_call", None) is not None:
-                llm_providers = import_module(_LLM_PROVIDERS_MODULE)
-                llm_providers.AsyncPromptCallableBase.__call__ = (
-                    self._original_guardrails_async_llm_providers_call
-                )
-                self._original_guardrails_async_llm_providers_call = None
-
-            if (
-                hasattr(self, "_original_guardrails_runner_step")
-                and self._original_guardrails_runner_step is not None
-            ):
-                runner_module = import_module(_RUNNER_MODULE)
-                runner_module.Runner.step = self._original_guardrails_runner_step
-                self._original_guardrails_runner_step = None
-
-            if (
-                hasattr(self, "_original_guardrails_validation_after_run")
-                and self._original_guardrails_validation_after_run is not None
-            ):
-                validation_module = import_module(_VALIDATION_MODULE)
-                validation_module.ValidatorServiceBase.after_run_validator = (
-                    self._original_guardrails_validation_after_run
-                )
-                self._original_guardrails_validation_after_run = None
-
-            if hasattr(gd.guard, "contextvars"):
-                if isinstance(gd.guard.contextvars, _Contextvars):
-                    if wrapped := getattr(gd.guard.contextvars, "__wrapped__", None):
-                        gd.guard.contextvars = wrapped
-
-            if hasattr(gd.async_guard, "contextvars"):
-                if isinstance(gd.async_guard.contextvars, _Contextvars):
-                    if wrapped := getattr(
-                        gd.async_guard.contextvars, "__wrapped__", None
-                    ):
-                        gd.async_guard.contextvars = wrapped
-
-        except Exception as e:
-            logger.exception(f"Error during uninstrumentation: {e}", exc_info=True)
-            raise
+        if getattr(self, "_legacy", None) is not None:
+            self._legacy._uninstrument()
+            self._legacy = None
+        for module, name, original, replacement in reversed(
+            getattr(self, "_bindings", [])
+        ):
+            if getattr(module, name) is replacement:
+                setattr(module, name, original)
+        self._bindings = []
