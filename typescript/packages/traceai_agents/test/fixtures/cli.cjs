@@ -29,7 +29,9 @@ const settings = {
     : __filename,
   storageEntry: path.resolve(
     __dirname,
-    "../../dist/src/runtime/storage-child.js",
+    process.env.FIXTURE_DELAY_STORAGE_DISCONNECT
+      ? "./delayed-storage.cjs"
+      : "../../dist/src/runtime/storage-child.js",
   ),
   registry: new AdapterRegistry([adapter, other]),
 };

@@ -320,10 +320,15 @@ test("failed runtime application rolls back the saved config while holding its t
   assert.deepEqual(loadConfig(p), before);
 });
 
-test("runtime restarts after SIGKILL without stealing a live owner's socket", async (t) => {
+async function restartAfterKill(t, delayStorageDisconnect = false) {
   const { p, env } = fixture(t);
   const child = fork(fixtureEntry, ["__daemon"], {
-    env,
+    env: {
+      ...env,
+      ...(delayStorageDisconnect
+        ? { FIXTURE_DELAY_STORAGE_DISCONNECT: "1" }
+        : {}),
+    },
     execPath: process.execPath,
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
@@ -360,6 +365,33 @@ test("runtime restarts after SIGKILL without stealing a live owner's socket", as
   cleanup(t, () => winner.stop());
   assert.equal((await submit(p, "before-crash")).reason_code, "DUPLICATE");
   assert.equal((await submit(p, "after-crash")).durable, true);
+}
+
+test("runtime restarts after SIGKILL without stealing a live owner's socket", (t) =>
+  restartAfterKill(t));
+test("runtime waits for an orphan storage child to release its crash lock", (t) =>
+  restartAfterKill(t, true));
+
+test("startup stays bounded when a storage owner has no listening socket", async (t) => {
+  const { p } = fixture(t);
+  const { StorageClient } = require("../dist/src/runtime/storage-client.js");
+  const owner = new StorageClient(settings.storageEntry);
+  cleanup(t, () => owner.close());
+  await owner.call("init", {
+    root: path.join(p.state, "spool"),
+    version: "0.1.0",
+  });
+  const contender = new Runtime(
+    p,
+    settings.storageEntry,
+    "0.1.0",
+    settings.registry,
+  );
+  const started = performance.now();
+  await assert.rejects(contender.start(), /RUNTIME_OWNERSHIP_CONFLICT/);
+  assert.ok(performance.now() - started < 5000);
+  assert.equal(fs.existsSync(p.socket), false);
+  assert.equal((await owner.call("status")).logical_bytes, 0);
 });
 
 test("stale socket cleanup refuses ordinary files", async (t) => {
@@ -444,6 +476,56 @@ test("flush drains fair multi-route bursts and respects retry and disable fences
   reject = false;
   await flush(p);
   assert.equal(order.length, 11);
+});
+
+test("an overdue parent watchdog does not discard a completed storage reply", async (t) => {
+  const { root } = fixture(t);
+  const { StorageClient } = require("../dist/src/runtime/storage-client.js");
+  const client = new StorageClient(
+    path.join(__dirname, "fixtures/receipt-storage.cjs"),
+  );
+  cleanup(t, () => client.close().catch(() => {}));
+  await client.call("init", {
+    root: path.join(root, "spool"),
+    version: "0.1.0",
+  });
+  const pending = client.call("status");
+  // Send the RPC, then stall only the parent until the child has actually replied.
+  // The receipt removes any assumption about child scheduling or fsync latency.
+  await Promise.resolve();
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  const receipt = path.join(root, "reply-sent");
+  const until = performance.now() + 3000;
+  while (!fs.existsSync(receipt) && performance.now() < until)
+    Atomics.wait(pause, 0, 0, 10);
+  assert.equal(
+    fs.existsSync(receipt),
+    true,
+    "storage child did not send a reply",
+  );
+  Atomics.wait(pause, 0, 0, 350);
+  const result = await pending;
+  assert.equal(result.logical_bytes, 0);
+  assert.equal((await client.call("status")).logical_bytes, 0);
+});
+
+test("a genuinely stalled storage child is killed at the watchdog deadline", async (t) => {
+  const { root } = fixture(t);
+  const { StorageClient } = require("../dist/src/runtime/storage-client.js");
+  const client = new StorageClient(settings.storageEntry);
+  cleanup(t, () => client.close().catch(() => {}));
+  await client.call("init", {
+    root: path.join(root, "spool"),
+    version: "0.1.0",
+  });
+  const exited = once(client.child, "exit");
+  client.child.kill("SIGSTOP");
+  const started = performance.now();
+  await assert.rejects(client.call("status"), /STORAGE_UNAVAILABLE/);
+  const [, signal] = await exited;
+  assert.equal(signal, "SIGKILL");
+  assert.ok(performance.now() - started < 1500);
+  await assert.rejects(client.call("status"), /STORAGE_UNAVAILABLE/);
 });
 
 test("flush continues beyond a bounded 128-row batch", async (t) => {

@@ -70,8 +70,13 @@ export class StorageClient {
         const id = ++this.sequence;
         const timer = setTimeout(
           () => {
-            this.child.kill("SIGKILL");
-            this.fail();
+            // A delayed parent timer may run before an already-arrived IPC reply.
+            // Give the poll phase one turn, not a longer storage deadline.
+            setImmediate(() => {
+              if (!this.pending.has(id)) return;
+              this.child.kill("SIGKILL");
+              this.fail();
+            });
           },
           op === "init" ? 5000 : 200,
         );

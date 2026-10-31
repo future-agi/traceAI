@@ -6,6 +6,7 @@ import {
 } from "node:net";
 import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { frame } from "@traceai/agent-core/client";
 import { minimize } from "@traceai/agent-core";
 import { AdapterRegistry, enforceCapability } from "../adapters.js";
@@ -48,10 +49,7 @@ export class Runtime {
       for (const socket of this.sockets) socket.destroy();
     });
     try {
-      await this.storage.call("init", {
-        root: join(this.paths.state, "spool"),
-        version: this.version,
-      });
+      await this.initializeStorage();
       // Only the exclusive SQLite owner may remove a socket left by a crash.
       // Never remove a regular file, symlink, or another user's socket.
       try {
@@ -86,6 +84,30 @@ export class Runtime {
       await this.storage.close().catch(() => undefined);
       throw e;
     }
+  }
+  private async initializeStorage(): Promise<void> {
+    const until = performance.now() + 3000;
+    while (!this.stopped) {
+      try {
+        await this.storage.call("init", {
+          root: join(this.paths.state, "spool"),
+          version: this.version,
+        });
+        return;
+      } catch (e) {
+        // A killed daemon's child may not yet have processed IPC disconnect.
+        // Wait for its OS lock; never remove lock files or reclaim live ingress.
+        if (
+          !(e instanceof AgentError) ||
+          e.code !== "RUNTIME_OWNERSHIP_CONFLICT" ||
+          performance.now() >= until ||
+          (await socketIsLive(this.paths.socket))
+        )
+          throw e;
+        await delay(50);
+      }
+    }
+    throw new AgentError("RUNTIME_UNAVAILABLE");
   }
   private async refresh(): Promise<void> {
     const config = loadConfig(this.paths);
