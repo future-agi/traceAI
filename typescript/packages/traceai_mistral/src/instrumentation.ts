@@ -28,11 +28,20 @@ interface Patch {
 }
 // Share the marker across CommonJS/ESM copies to avoid double instrumentation.
 const WRAPPED = Symbol.for("@traceai/mistral/wrapped");
-let activePatches = 0;
+const activePatches = new Set<WeakRef<Patch>>();
+const collectedPatches = new FinalizationRegistry<{ references: Set<WeakRef<Patch>>; reference: WeakRef<Patch> }>(({ references, reference }) => {
+  references.delete(reference);
+  activePatches.delete(reference);
+});
 
-/** Whether any Mistral methods are currently instrumented. */
+/** Whether any live Mistral methods are currently instrumented. */
 export function isPatched(): boolean {
-  return activePatches > 0;
+  for (const reference of activePatches) {
+    const patch = reference.deref();
+    if (!patch) activePatches.delete(reference);
+    else if (patch.attached) return true;
+  }
+  return false;
 }
 
 const RESOURCES: ReadonlyArray<readonly [readonly string[], readonly string[], Operation]> = [
@@ -48,7 +57,9 @@ export class MistralInstrumentation extends InstrumentationBase {
   private traceConfig?: TraceConfigOptions;
   private resolvedConfig!: TraceConfig;
   // InstrumentationBase can call enable()/patch() before the derived constructor runs.
-  private patches?: Patch[];
+  private patches?: Set<WeakRef<Patch>>;
+  // Client registrations must not keep per-request clients or their options alive.
+  private registrations?: WeakMap<Target, Map<string, Patch>>;
   public readonly instrumentationName = "@traceai/mistral";
 
   constructor({ instrumentationConfig, traceConfig }: {
@@ -73,7 +84,10 @@ export class MistralInstrumentation extends InstrumentationBase {
   public override enable(): void {
     super.enable();
     this.refreshTracer();
-    for (const patch of this.patches ?? []) this.attach(patch);
+    for (const reference of this.patches ?? []) {
+      const patch = reference.deref();
+      if (patch) this.attach(patch, reference);
+    }
   }
 
   public override disable(): void {
@@ -141,8 +155,10 @@ export class MistralInstrumentation extends InstrumentationBase {
   private register(target: Target, key: string, operation: Operation, name: string): void {
     const original = target[key];
     if (typeof original !== "function" || Reflect.get(original, WRAPPED)) return;
-    this.patches ??= [];
-    if (this.patches.some(p => p.target === target && p.key === key)) return;
+    this.patches ??= new Set();
+    this.registrations ??= new WeakMap();
+    const methods = this.registrations.get(target) ?? new Map<string, Patch>();
+    if (methods.has(key)) return;
     const instrumentation = this;
     const wrapped: Method = function (...args) {
       if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
@@ -201,30 +217,35 @@ export class MistralInstrumentation extends InstrumentationBase {
       target, key, original: original as Method, wrapped,
       descriptor: Object.getOwnPropertyDescriptor(target, key), attached: false,
     };
-    this.patches.push(patch);
-    if (this.isEnabled()) this.attach(patch);
+    methods.set(key, patch);
+    this.registrations.set(target, methods);
+    const reference = new WeakRef(patch);
+    this.patches.add(reference);
+    collectedPatches.register(patch, { references: this.patches, reference });
+    if (this.isEnabled()) this.attach(patch, reference);
   }
 
-  private attach(patch: Patch): void {
+  private attach(patch: Patch, reference: WeakRef<Patch>): void {
     if (patch.attached || patch.target[patch.key] !== patch.original) return;
     Object.defineProperty(patch.target, patch.key, {
       configurable: true, writable: true, enumerable: patch.descriptor?.enumerable ?? false,
       value: patch.wrapped,
     });
     patch.attached = true;
-    activePatches++;
+    activePatches.add(reference);
   }
 
   private unpatch(): void {
-    for (const patch of this.patches ?? []) {
-      if (!patch.attached) continue;
+    for (const reference of this.patches ?? []) {
+      const patch = reference.deref();
+      activePatches.delete(reference);
+      if (!patch?.attached) continue;
       // Never remove a wrapper installed by another instrumentor afterwards.
       if (patch.target[patch.key] === patch.wrapped) {
         if (patch.descriptor) Object.defineProperty(patch.target, patch.key, patch.descriptor);
         else delete patch.target[patch.key];
       }
       patch.attached = false;
-      activePatches--;
     }
   }
 }

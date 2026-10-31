@@ -91,6 +91,10 @@ test('CommonJS import hook instruments native SDK and supports disable/re-enable
   execFileSync(process.execPath, [path.join(__dirname, 'fixtures/cjs-hook.cjs')], { timeout: 15000 });
 });
 
+test('explicit registration does not retain discarded per-request clients', () => {
+  execFileSync(process.execPath, ['--expose-gc', path.join(__dirname, 'fixtures/client-gc.cjs')], { timeout: 15000 });
+});
+
 test('explicit instance registration preserves identity and composes without duplicate spans', async t => {
   const f = await modern(t);
   const original = f.client.chat.complete;

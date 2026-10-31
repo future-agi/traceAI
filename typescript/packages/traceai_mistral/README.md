@@ -65,6 +65,8 @@ Legacy default-export SDKs, including `0.1.3` and `1.0.0`, define methods on eac
 
 ## Stream a response
 
+Replace the completion call in the example above with this block, keeping the provider shutdown after consumption.
+
 ```typescript
 const stream = await client.chat.stream({
   model: "mistral-small-latest",
