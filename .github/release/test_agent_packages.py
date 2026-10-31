@@ -34,6 +34,8 @@ class AgentPackages(unittest.TestCase):
         self.assertTrue(all(a['qualification'] == 'documented-payload-fixtures-only' for a in cursor))
         self.assertTrue((runtime / 'bin/fi-cursor-hook.cjs').stat().st_mode & 0o111)
         self.assertEqual(package['dependencies']['jsonc-parser'], '3.3.1')
+        lock = (root / 'typescript/pnpm-lock.yaml').read_text()
+        self.assertEqual(lock.count('  jsonc-parser@3.3.1:'), 2, 'package and snapshot records are both required')
         for schema in (root / 'integrations/coding-agents/schema').glob('*.schema.json'):
             self.assertEqual(json.loads(schema.read_text()), json.loads((runtime / 'schema' / schema.name).read_text()))
             self.assertEqual(json.loads(schema.read_text()), json.loads((root / 'typescript/packages/traceai_agent_core/schema' / schema.name).read_text()))

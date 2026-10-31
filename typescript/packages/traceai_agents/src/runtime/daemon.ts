@@ -26,7 +26,7 @@ export class Runtime {
   private sockets = new Set<Socket>();
   private ingressBytes = 0;
   private lastDurableAck: number | null = null;
-  private sourceReceipts = new Set<string>();
+  private sourceReceipts = new Map<string, number>();
   private statusCache: unknown = { state: "unknown", persistence: "unknown" };
   constructor(
     private readonly paths: Paths,
@@ -181,7 +181,7 @@ export class Runtime {
         fact: minimize(facts[0], route.route.policy),
         observed: true,
       });
-      this.sourceReceipts.add(m.route_ref);
+      this.sourceReceipts.set(m.route_ref, route.route.epoch);
       this.lastDurableAck = Date.now();
       return {
         protocol_version: 1,
@@ -231,7 +231,8 @@ export class Runtime {
           surface: r.surface,
           enabled: r.route.enabled,
           activation:
-            this.sourceReceipts.has(r.route.id) && r.route.enabled
+            this.sourceReceipts.get(r.route.id) === r.route.epoch &&
+            r.route.enabled
               ? { ...r.activation, activated: true, restartRequired: false }
               : r.activation,
           policy: r.route.policy.revision,

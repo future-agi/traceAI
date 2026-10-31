@@ -528,10 +528,15 @@ test("actual CLI enable/doctor/hook/status/disable works with synthetic auth in 
   assert.equal(JSON.parse(doctor.stdout).activation.activated, false);
   const result = await hookProcess(root, hook("stop"));
   assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
-  // The hook may time out before FULL fsync. A completed runtime request queues behind admission.
-  await runtimeRequest(path.join(root, "s/runtime.sock"), {
-    operation: "status",
+  // The foreground budget never promises FULL fsync. Off-path replay proves durable
+  // admission without relaxing the hook's deadline or assuming a particular disk speed.
+  const replay = await runtimeRequest(path.join(root, "s/runtime.sock"), {
+    operation: "observe-source",
+    route_ref: "cursor.ide",
+    source_schema: HOOK_SCHEMA,
+    event: minimizeCursorEvent(hook("stop"), "ide"),
   });
+  assert.equal(replay.durable, true);
   doctor = cli(root, ["doctor", "cursor", "--surface", "ide"]);
   assert.equal(doctor.status, 0, doctor.stdout);
   assert.equal(
@@ -550,6 +555,20 @@ test("actual CLI enable/doctor/hook/status/disable works with synthetic auth in 
     JSON.parse(cli(root, ["doctor", "cursor", "--surface", "ide"]).stdout)
       .activation.activated,
     false,
+  );
+  const reenabled = cli(root, [
+    "enable",
+    "cursor",
+    "--surface",
+    "ide",
+    "--preview",
+  ]);
+  assert.equal(reenabled.status, 0, reenabled.stdout);
+  assert.equal(
+    JSON.parse(cli(root, ["doctor", "cursor", "--surface", "ide"]).stdout)
+      .activation.activated,
+    false,
+    "a previous route epoch is not a new activation receipt",
   );
   const importEnabled = cli(root, [
     "enable",
