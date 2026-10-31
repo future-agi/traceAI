@@ -720,10 +720,14 @@ test("inaccessible telemetry state still launches the child without tracing", as
 test("configuration lock survives live contention but releases on process death", async (t) => {
   const {p}=fixture(t);
   const modulePath=path.resolve(__dirname,"../dist/src/config.js");
-  const script=`const {configTransaction}=require(${JSON.stringify(modulePath)}); configTransaction(${JSON.stringify(p)},async()=>{process.send('locked'); setInterval(()=>{},1000); await new Promise(()=>{})})`;
-  const worker=fork("-e",[script],{execArgv:[],execPath:process.execPath,stdio:["ignore","ignore","ignore","ipc"]});
+  const script=`const {configTransaction}=require(${JSON.stringify(modulePath)}); globalThis.pending=configTransaction(${JSON.stringify(p)},async()=>{process.send('locked'); await new Promise(resolve=>process.on('message',resolve))})`;
+  const worker=fork("-e",[script],{execArgv:[],execPath:process.execPath,stdio:["ignore","ignore","pipe","ipc"]});
+  let workerError="";
+  worker.stderr.on("data",chunk=>{workerError+=chunk});
   cleanup(t,()=>{if(worker.exitCode===null) worker.kill("SIGKILL")});
   await once(worker,"message");
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(worker.exitCode,null,"lock owner exited before the contention check: "+workerError);
   await assert.rejects(configTransaction(p,async()=>{}),/CONFIGURATION_CONFLICT/);
   const exit=once(worker,"exit"); worker.kill("SIGKILL"); await exit;
   await configTransaction(p,async(c)=>{c.profiles.work.removed=true});

@@ -142,6 +142,9 @@ export async function configTransaction<T>(
   const lock = new Database(lockFile, { timeout: 0 });
   try {
     chmodSync(lockFile, 0o600);
+    // Materialize the database before taking an exclusive lock. SQLite may
+    // defer filesystem locking for a still-empty database on some platforms.
+    lock.exec("CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY)");
     lock.exec("BEGIN EXCLUSIVE");
   } catch (e) {
     lock.close();
