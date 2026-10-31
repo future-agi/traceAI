@@ -2,11 +2,18 @@
 
 import json
 import logging
+import inspect
+import sys
+from contextvars import ContextVar
 from typing import Any, Callable, Optional
 
 from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
 
 logger = logging.getLogger(__name__)
+
+# Only direct SDK query -> vector-API delegation belongs to the text operation.
+# A blanket suppression flag would also hide independent user callbacks/clients.
+_TEXT_QUERY: ContextVar[Any] = ContextVar("qdrant_text_query", default=None)
 
 
 def safe_json_dumps(obj: Any) -> str:
@@ -32,7 +39,36 @@ class BaseWrapper:
 class QueryPointsWrapper(BaseWrapper):
     """Wrapper for query_points (new API) and query methods."""
 
+    def __init__(self, tracer: Tracer, method_name: str = "query_points"):
+        super().__init__(tracer)
+        self._method_name = method_name
+
     def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
+        parent = _TEXT_QUERY.get()
+        if (self._method_name in ("search", "query_points") and parent is not None
+                and parent[0] is instance):
+            caller = sys._getframe(1)
+            try:
+                # The C implementation calls us directly; pure-Python wrapt
+                # inserts its dispatch frames. Skip only that infrastructure,
+                # not user callbacks between the SDK query and this operation.
+                while caller is not None and caller.f_globals.get("__name__", "").startswith("wrapt."):
+                    caller = caller.f_back
+                delegated = caller is not None and caller.f_code is parent[1]
+            finally:
+                del caller
+            if delegated:
+                return wrapped(*args, **kwargs)
+        token = None
+        if self._method_name == "query":
+            token = _TEXT_QUERY.set((instance, getattr(inspect.unwrap(wrapped), "__code__", None)))
+        try:
+            return self._trace_query(wrapped, args, kwargs)
+        finally:
+            if token is not None:
+                _TEXT_QUERY.reset(token)
+
+    def _trace_query(self, wrapped: Callable, args: tuple, kwargs: dict) -> Any:
         collection_name = args[0] if args else kwargs.get("collection_name", "unknown")
         limit = kwargs.get("limit", 10)
         with_payload = kwargs.get("with_payload", True)

@@ -11,14 +11,20 @@ packages = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: System :: Monitoring",
 ]
+keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm", "replicate"]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
@@ -40,6 +46,12 @@ opentelemetry-instrumentation-httpx = ">=0.48b0"
 # A trio cancellation of an async stream (round 8 review test).
 trio = ">=0.22.0"
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/replicate"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/replicate/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

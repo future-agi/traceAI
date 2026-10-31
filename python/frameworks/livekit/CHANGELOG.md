@@ -1,3 +1,10 @@
+
+
+## [0.1.3] - 2026-10-29
+
+### Fixed
+- Publish package changes merged after 0.1.2 was uploaded to PyPI; one-time bootstrap patch for the automated release pipeline.
+
 ## [0.1.2] - 2026-10-21
 ### Fixed
 - Spans that end last in a LiveKit job, the root `agent_session` span among them, are no longer lost (a job process on Linux

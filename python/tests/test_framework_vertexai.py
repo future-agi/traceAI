@@ -47,7 +47,7 @@ class TestVertexAIInstrumentor:
         instrumentor = VertexAIInstrumentor()
         dependencies = instrumentor.instrumentation_dependencies()
         assert isinstance(dependencies, Collection)
-        assert "google-cloud-aiplatform >= 1.49.0" in dependencies
+        assert "google-cloud-aiplatform >=1.61.0,<=1.101.0" in dependencies
 
     def test_instrument_with_default_config(self):
         """Test instrumentation with default configuration."""
@@ -677,7 +677,7 @@ class TestIntegrationScenarios:
         
         # Test dependencies
         dependencies = instrumentor.instrumentation_dependencies()
-        assert "google-cloud-aiplatform >= 1.49.0" in dependencies
+        assert "google-cloud-aiplatform >=1.61.0,<=1.101.0" in dependencies
 
     def test_wrapper_creation_and_basic_functionality(self):
         """Test wrapper creation and basic functionality."""

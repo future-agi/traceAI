@@ -1,15 +1,13 @@
 {
   "name": "@traceai/portkey",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for Portkey AI Gateway",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
-  "esnext": "./dist/esnext/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },
@@ -27,9 +25,11 @@
     "portkey",
     "gateway",
     "llm",
-    "observability"
+    "observability",
+    "traceai",
+    "futureagi"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -63,5 +63,14 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/portkey",
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_portkey"
   }
 }

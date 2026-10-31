@@ -1,16 +1,8 @@
-"""A held create span survives SIGTERM / SIGINT under ``register()`` (PRD J2.4, AC-02).
+"""Application-owned SIGTERM / SIGINT cleanup exports held create spans.
 
-``fi_instrumentation.register()`` installs SIGTERM and SIGINT handlers that
-shut the tracer provider down and then call ``sys.exit(0)``. Any span that
-ends after that shutdown is dropped by the processors, so a create span that
-is still held open on its prediction must be ended before the provider shuts
-down, not from an ``atexit`` hook that runs afterwards.
-
-The script runs as a subprocess with the real ``register()`` OTLP exporter
-(batch and simple processors) and the real replicate client against the
-loopback fake. It creates a prediction, keeps it in a module global, signals
-that it is ready, and sleeps until the test sends the signal. A released
-variant drops the prediction first, so the span waits in the release queue.
+register() preserves the application's handlers. The subprocess opts into
+provider.shutdown() before exiting; the real OTLP exporter must receive the
+held or released prediction with its original create-time status and timestamp.
 """
 
 from __future__ import annotations
@@ -39,6 +31,7 @@ FI_ROOT = Path(fi_instrumentation.__file__).resolve().parents[1]
 
 SCRIPT = """
 import os
+import signal
 import time
 
 import replicate
@@ -46,12 +39,22 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_replicate import ReplicateInstrumentor
 
+def stop(signum, frame):
+    provider.shutdown()
+    raise SystemExit(int(os.environ["EXIT_CODE"]))
+
+
+# Install before register() to prove it preserves application signal policy.
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
 provider = register(
     project_name="replicate-signal",
     project_type=ProjectType.OBSERVE,
     batch=os.environ["BATCH"] == "1",
     verbose=False,
 )
+assert signal.getsignal(signal.SIGTERM) is stop
+assert signal.getsignal(signal.SIGINT) is stop
 ReplicateInstrumentor().instrument(tracer_provider=provider)
 client = replicate.Client(base_url=os.environ["REPLICATE_BASE_URL"])
 PREDICTION = client.predictions.create(model="{model}", input={{}})
@@ -68,7 +71,7 @@ while True:
 """.format(model=SLOW_MODEL)
 
 
-def _run_until_signalled(tmp_path, fake, receiver, signum, batch, release=False):
+def _run_until_signalled(tmp_path, fake, receiver, signum, batch, release=False, exit_code=0):
     script = tmp_path / "hold_then_signal.py"
     script.write_text(SCRIPT)
     ready = tmp_path / "ready"
@@ -80,6 +83,7 @@ def _run_until_signalled(tmp_path, fake, receiver, signum, batch, release=False)
     env.update(
         {
             "BATCH": "1" if batch else "0",
+            "EXIT_CODE": str(exit_code),
             "RELEASE": "1" if release else "0",
             "READY_FILE": str(ready),
             "FI_BASE_URL": receiver.origin,
@@ -123,17 +127,18 @@ CASES = [
 ]
 
 
+@pytest.mark.parametrize("exit_code", [0, 23], ids=["clean-exit", "app-exit-code"])
 @pytest.mark.parametrize("signum, batch, release", CASES)
-def test_signal_under_register_exports_the_held_create_span_with_its_create_status(
-    tmp_path, signum, batch, release
+def test_application_signal_shutdown_exports_the_held_create_span_with_its_create_status(
+    tmp_path, signum, batch, release, exit_code
 ):
     with FakeReplicate() as fake, Receiver() as receiver:
         returncode, stderr, status, returned = _run_until_signalled(
-            tmp_path, fake, receiver, signum, batch, release
+            tmp_path, fake, receiver, signum, batch, release, exit_code
         )
         spans = receiver.spans()
 
-    assert returncode == 0, stderr  # register()'s handler exits with 0
+    assert returncode == exit_code, stderr  # the application owns the exit policy
     assert status == "starting"
     assert fake.paths("GET") == []  # nothing polled on the way out
     assert [span["name"] for span in spans] == ["replicate.predictions.create"], stderr

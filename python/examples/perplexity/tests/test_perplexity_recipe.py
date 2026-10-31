@@ -3,6 +3,7 @@
 import ast
 from contextlib import contextmanager
 import importlib.util
+from importlib.metadata import PackageNotFoundError, distribution
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,18 @@ from traceai_openai import OpenAIInstrumentor
 # (future-agi/traceAI#249) use the vendor's name for its documented API host.
 # Accept both so this recipe passes on either version.
 PROVIDER_NAMES = ("openai", "perplexity")
+
+# Use distribution metadata: the 1.1.0 wheel's runtime version says 0.1.19.
+# Match the imported file too, so a stale installed wheel cannot relax source tests.
+try:
+    CORE_DISTRIBUTION = distribution("fi-instrumentation-otel")
+except PackageNotFoundError:
+    LEGACY_CORE = False
+else:
+    LEGACY_CORE = CORE_DISTRIBUTION.version == "1.1.0" and (
+        Path(fi_instrumentation.__file__).resolve()
+        == Path(CORE_DISTRIBUTION.locate_file("fi_instrumentation/__init__.py")).resolve()
+    )
 
 TEST_DIR = Path(__file__).resolve().parent
 RECIPE_DIR = TEST_DIR.parent
@@ -88,7 +101,10 @@ def _attributes(span):
     }
 
 
-def _assert_export(receiver, provider, project, error=False, requested_model=fake.REQUEST_MODEL):
+def _assert_export(
+    receiver, provider, project, error=False, requested_model=fake.REQUEST_MODEL,
+    hide_inputs=False,
+):
     assert provider.force_flush()
     [span] = receiver.spans()
     [export] = receiver.requests()
@@ -98,11 +114,17 @@ def _assert_export(receiver, provider, project, error=False, requested_model=fak
     assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     # A successful response overrides the request model, including on streams.
     assert attrs["gen_ai.request.model"] == (requested_model if error else fake.RESPONSE_MODEL)
-    parameters = json.loads(attrs["gen_ai.request.parameters"])
-    if requested_model is None:
-        assert "model" not in parameters
+    # The CI compatibility cell pins core 1.1.0, before hide_inputs also hid
+    # invocation parameters. Require the sentinel on the repaired core; only
+    # that historical release retains the JSON contract in masked cases.
+    if hide_inputs and not LEGACY_CORE:
+        assert attrs["gen_ai.request.parameters"] == "__REDACTED__"
     else:
-        assert parameters["model"] == requested_model
+        parameters = json.loads(attrs["gen_ai.request.parameters"])
+        if requested_model is None:
+            assert "model" not in parameters
+        else:
+            assert parameters["model"] == requested_model
     assert span["status"]["code"] == ("STATUS_CODE_ERROR" if error else "STATUS_CODE_OK")
     assert export["path"] == "/tracer/v1/traces"
     assert export["headers"]["x-api-key"] == FI_KEY
@@ -325,7 +347,7 @@ def test_hide_inputs_with_control(tracing, monkeypatch):
 
         with tracing() as (receiver, provider, project):
             assert _call(handler, prompt=marker) == fake.ANSWER
-            span, _ = _assert_export(receiver, provider, project)
+            span, _ = _assert_export(receiver, provider, project, hide_inputs=hidden)
             assert (marker in json.dumps(span)) is (not hidden)
             # Output echoes remain visible even when the input itself is hidden.
             for output_marker in (fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):
