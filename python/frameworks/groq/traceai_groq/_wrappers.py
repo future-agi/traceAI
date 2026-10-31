@@ -20,6 +20,7 @@ from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
 from traceai_groq._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_groq._response_attributes_extractor import _ResponseAttributesExtractor
+from traceai_groq._stream import _AsyncStream, _Stream, _StreamState
 from traceai_groq._utils import _finish_tracing
 from traceai_groq._with_span import _WithSpan
 
@@ -152,7 +153,7 @@ class _CompletionsWrapper(_WithTracer):
             try:
                 response = wrapped(*args, **kwargs)
                 streaming = request_parameters.get("stream", False)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -162,48 +163,10 @@ class _CompletionsWrapper(_WithTracer):
                 raise
 
             if streaming and isinstance(response, Iterable):
-                # If streaming, wrap the iterator without consuming it
-                def streaming_response_wrapper():
-                    chunks = []  # State belongs to this invocation, not the installed hook.
-                    try:
-                        for item in response:
-                            chunks.append(item)
-                            yield item
-
-                    except Exception as exception:
-                        span.record_exception(exception)
-                        status = trace_api.Status(
-                            status_code=trace_api.StatusCode.ERROR,
-                            description=f"{type(exception).__name__}: {exception}",
-                        )
-                        span.finish_tracing(status=status)
-                        raise
-                    else:
-                        try:
-                            _finish_tracing(
-                                status=trace_api.Status(
-                                    status_code=trace_api.StatusCode.OK
-                                ),
-                                with_span=span,
-                                attributes=self._response_extractor.get_attributes(
-                                    response=chunks, is_streaming=streaming
-                                ),
-                                extra_attributes=self._response_extractor.get_extra_attributes(
-                                    response=chunks,
-                                    request_parameters=request_parameters,
-                                    is_streaming=streaming,
-                                ),
-                            )
-                        except Exception:
-                            logger.exception(
-                                f"Failed to finalize streaming response of type {type(response)}"
-                            )
-                            span.finish_tracing()
-                    finally:
-                        if span._span.is_recording():
-                            span.finish_tracing()
-
-                return streaming_response_wrapper()
+                return _Stream(
+                    response,
+                    _StreamState(span, self._response_extractor, request_parameters),
+                )
             else:
                 # Non-streaming response
                 try:
@@ -270,7 +233,7 @@ class _AsyncCompletionsWrapper(_WithTracer):
             try:
                 response = await wrapped(*args, **kwargs)
                 streaming = request_parameters.get("stream", False)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -280,48 +243,10 @@ class _AsyncCompletionsWrapper(_WithTracer):
                 raise
 
             if streaming and hasattr(response, "__aiter__"):
-                # If streaming, wrap the async iterator without consuming it
-                async def streaming_response_wrapper():
-                    chunks = []  # Concurrent streams must never share response data.
-                    try:
-                        async for item in response:
-                            chunks.append(item)
-                            yield item
-
-                    except Exception as exception:
-                        span.record_exception(exception)
-                        status = trace_api.Status(
-                            status_code=trace_api.StatusCode.ERROR,
-                            description=f"{type(exception).__name__}: {exception}",
-                        )
-                        span.finish_tracing(status=status)
-                        raise
-                    else:
-                        try:
-                            _finish_tracing(
-                                status=trace_api.Status(
-                                    status_code=trace_api.StatusCode.OK
-                                ),
-                                with_span=span,
-                                attributes=self._response_extractor.get_attributes(
-                                    response=chunks, is_streaming=streaming
-                                ),
-                                extra_attributes=self._response_extractor.get_extra_attributes(
-                                    response=chunks,
-                                    request_parameters=request_parameters,
-                                    is_streaming=streaming,
-                                ),
-                            )
-                        except Exception:
-                            logger.exception(
-                                f"Failed to finalize streaming response of type {type(response)}"
-                            )
-                            span.finish_tracing()
-                    finally:
-                        if span._span.is_recording():
-                            span.finish_tracing()
-
-                return streaming_response_wrapper()
+                return _AsyncStream(
+                    response,
+                    _StreamState(span, self._response_extractor, request_parameters),
+                )
             else:
                 # Non-streaming response
                 try:

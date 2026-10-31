@@ -1,0 +1,45 @@
+name: Groq stream tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/groq/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/pyproject.toml'
+      - 'python/tests/test_framework_groq.py'
+      - '.github/workflows/groq-stream-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  streams:
+    name: Groq ${{ matrix.groq }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        groq: ['0.9.0', '1.7.0']
+        python: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install SDK boundary and instrumentation
+        env:
+          GROQ_VERSION: ${{ matrix.groq }}
+        run: |
+          python -m venv "$RUNNER_TEMP/groq-venv"
+          "$RUNNER_TEMP/groq-venv/bin/pip" install -e ./python -e ./python/frameworks/groq "groq==$GROQ_VERSION" 'pytest==8.4.2' 'pytest-asyncio==0.24.0'
+      - name: Run offline lifecycle and OTLP tests
+        run: |
+          # A separate network namespace has loopback only: no vendor or model API egress.
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            "$RUNNER_TEMP/groq-venv/bin/python" -I -m pytest \
+            python/frameworks/groq/tests python/tests/test_framework_groq.py -q
