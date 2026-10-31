@@ -1,4 +1,4 @@
-"""Wrappers for ``AsyncLive.connect`` and the four ``AsyncSession`` methods that remain.
+"""Wrappers for ``AsyncLive.connect`` and supported ``AsyncSession`` methods.
 
 ``Live.send`` and ``Live.start_stream`` are deprecated upstream and are not wrapped.
 """
@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from opentelemetry import context as context_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 
-from ._redact import ContentPolicy, _get, as_list, text_of_turns, url_path
+from ._redact import ContentPolicy, _get, as_list, instruction_text, tool_names, url_path
 from ._session import SessionTrace
 
 logger = logging.getLogger(__name__)
@@ -136,24 +136,14 @@ def _setup_info(config: Any) -> Dict[str, Any]:
         info["gemini.input_audio_transcription"] = True
     if _get(config, "output_audio_transcription") is not None:
         info["gemini.output_audio_transcription"] = True
-    names = []
-    for tool in as_list(_get(config, "tools")):
-        for decl in as_list(_get(tool, "function_declarations")):
-            name = _get(decl, "name")
-            if name:
-                names.append(str(name))
+    names = tool_names(_get(config, "tools"))
     if names:
         info["gemini.tool_names"] = names
     return info
 
 
 def _system_instruction(config: Any) -> Optional[str]:
-    value = _get(config, "system_instruction")
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    return text_of_turns(value) or None
+    return instruction_text(_get(config, "system_instruction"))
 
 
 def _resume_handle(config: Any) -> Optional[str]:
@@ -310,6 +300,27 @@ class ToolResponseWrapper:
         result = await wrapped(*args, **kwargs)
         if trace is not None:
             trace.on_tool_response(kwargs.get("function_responses"))
+        return result
+
+
+class ContextUpdateWrapper:
+    async def __call__(self, wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+        trace = _trace_of(instance)
+        update = None
+        if trace is not None:
+            try:
+                update = trace.start_context_update(
+                    system_instruction=kwargs.get("system_instruction"), tools=kwargs.get("tools"))
+            except Exception:
+                logger.debug("gemini live: context update not traced", exc_info=False)
+        try:
+            result = await wrapped(*args, **kwargs)
+        except BaseException as exc:
+            if update is not None:
+                trace.end_context_update(update, exc)
+            raise
+        if update is not None:
+            trace.end_context_update(update)
         return result
 
 

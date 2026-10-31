@@ -101,6 +101,26 @@ def text_of_turns(turns: Any) -> str:
     return "\n".join(chunks)
 
 
+def instruction_text(value: Any) -> Optional[str]:
+    """ContentUnion accepts text, Content, Part, or a list of Parts; ignore media."""
+    return text_of_turns(value) or text_of_parts(as_list(value)) or None
+
+
+def tool_names(tools: Any) -> List[str]:
+    """Names only: descriptions, schemas and callable source are never captured."""
+    names = []
+    for tool in as_list(tools):
+        if callable(tool):
+            name = getattr(tool, "__name__", None)
+            if name:
+                names.append(str(name))
+        for decl in as_list(_get(tool, "function_declarations")):
+            name = _get(decl, "name")
+            if name:
+                names.append(str(name))
+    return names
+
+
 def roles_of_turns(turns: Any) -> List[str]:
     roles = []
     for item in as_list(turns):

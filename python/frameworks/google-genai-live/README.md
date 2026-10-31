@@ -10,10 +10,10 @@ listed as calls in Future AGI's voice views.
 
 Status: **alpha**. Gemini Live is a preview API.
 
-| Tested | Version |
+| Requirement | Version |
 |---|---|
-| google-genai | **2.31.0** (latest, 2026-10-14) and 2.28.0 (floor) |
-| Live model | `gemini-3.8-live` (Gemini Developer API, real sessions on 2026-10-15) |
+| google-genai | `>=2.28,<3`; use `>=2.34,<3` for in-session context updates |
+| Live model | A [Live-capable model](https://ai.google.dev/gemini-api/docs/live-api/capabilities) on the Gemini Developer API |
 | Python | 3.10 - 3.13 (`fi-instrumentation-otel` declares `<3.14`) |
 
 ## Install
@@ -59,6 +59,7 @@ Options:
 ```
 gemini.live.session        CONVERSATION (audio) / CHAIN (text-only); parentless when CONVERSATION
 ├─ gemini.live.setup       url.path (no host, no query), system instruction (content)
+├─ gemini.live.context_update  ordered instruction/tool updates; send status and safe metadata
 ├─ gemini.live.user_turn   transcription or text (content); gemini.turn_start / gemini.turn_boundary
 ├─ gemini.live.model_turn  LLM: model, llm.token_count.*, gemini.usage.*, transcription (content)
 │  └─ gemini.live.tool     tool name, call id, args and result (content); cancelled / unanswered flags
@@ -96,6 +97,37 @@ How server events map:
   every message is also a span event). Nothing is summed. In real `gemini-3.8-live` sessions
   each message covered one generation (its prompt count includes the context so far).
 - Audio frames sent with `send_realtime_input` are counted, never spanned.
+
+## Update instructions or tools during a session
+
+With `google-genai>=2.34,<3`, use the SDK's `send_context_update` inside your
+existing `async with client.aio.live.connect(...)` block:
+
+```python
+await session.send_context_update(system_instruction="Keep answers concise.")
+await session.send_context_update(tools=[])  # remove all tools for subsequent responses
+```
+
+Each call produces a `gemini.live.context_update` child span. The span records a
+monotonic `gemini.context_update.sequence` in call order, which fields were supplied,
+and `gemini.context_update.sent`. A successful send means the SDK returned normally,
+not that Gemini acknowledged applying the change. Await updates in the order you want
+Gemini to receive them; instrumentation does not serialize or retry concurrent sends.
+
+Instruction text follows the input privacy controls. Tool names remain metadata;
+tool descriptions, schemas and media are not captured. Omitted fields (or `None`)
+leave their previous state unchanged; `tools=[]` explicitly clears the tool names.
+Errors and cancellations end the update span without advancing context state and
+reach your code unchanged.
+
+Each newly opened model turn records the latest successfully sent instruction and
+tool revisions in `gemini.context.system_instruction_revision` and
+`gemini.context.tools_revision` (`0` means the initial setup), together with the
+current tool names. Revisions refer to the update sequence, not a server-side
+acknowledgement. An update does not become a user turn or enter the conversation
+transcript. Existing turns keep their opening snapshot, and resumed connections
+keep the session's update sequence. Older SDKs without this method retain all
+other session tracing.
 
 ## Failures
 
@@ -137,7 +169,7 @@ How server events map:
 ## Tests
 
 ```bash
-pip install -e . pytest pytest-asyncio
+pip install -e . pytest pytest-asyncio opentelemetry-exporter-otlp-proto-http
 pytest
 ```
 

@@ -15,6 +15,7 @@ import json
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from opentelemetry import context as context_api
@@ -26,12 +27,14 @@ from ._redact import (
     _get,
     as_list,
     inline_audio,
+    instruction_text,
     pcm_rate,
     roles_of_turns,
     seconds,
     text_of_parts,
     text_of_turns,
     to_json,
+    tool_names,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -45,6 +48,7 @@ SYSTEM = "google_genai"
 
 ROOT_NAME = "gemini.live.session"
 SETUP_NAME = "gemini.live.setup"
+CONTEXT_UPDATE_NAME = "gemini.live.context_update"
 USER_TURN_NAME = "gemini.live.user_turn"
 MODEL_TURN_NAME = "gemini.live.model_turn"
 TOOL_NAME = "gemini.live.tool"
@@ -69,6 +73,14 @@ def _now() -> int:
 def _enum_name(value: Any) -> str:
     name = getattr(value, "name", None) or getattr(value, "value", None) or value
     return str(name)
+
+
+@dataclass(frozen=True)
+class _ContextUpdate:
+    span: Any
+    sequence: int
+    system_instruction_changed: bool
+    tool_names: Optional[List[str]]  # None means unchanged; [] means cleared
 
 
 class _Turn:
@@ -132,6 +144,9 @@ class SessionTrace:
         self.model_audio_seconds = 0.0
         self.model_audio_unmeasured = False
         self._last_receive_error: Optional[str] = None
+        self._context_sequence = 0
+        self._context_revisions = {"system_instruction": 0, "tools": 0}
+        self._context_tool_names = list(setup_info.get("gemini.tool_names", []))
 
         attrs: Dict[str, Any] = {
             FI_SPAN_KIND: "CONVERSATION" if audio else "CHAIN",
@@ -221,6 +236,57 @@ class SessionTrace:
         span.end()
         self._root_event("gemini.setup_failed", self._error_attrs(exc))
         self.close(error=reason)
+
+    # ------------------------------------------------------------------ context updates
+    def start_context_update(self, *, system_instruction: Any = None,
+                             tools: Any = None) -> _ContextUpdate:
+        # Assign order before awaiting the SDK, and snapshot only safe metadata/text.
+        # A successful send is not a server acknowledgement that the update was applied.
+        self._context_sequence += 1
+        sequence = self._context_sequence
+        names = tool_names(tools) if tools is not None else None
+        attrs: Dict[str, Any] = {
+            "gemini.context_update.sequence": sequence,
+            "gemini.context_update.system_instruction_changed": system_instruction is not None,
+            "gemini.context_update.tools_changed": tools is not None,
+        }
+        if names is not None:
+            attrs["gemini.tool_names"] = names  # [] is an explicit clear, not an omission
+        if system_instruction is not None and self.policy.capture_inputs:
+            text = instruction_text(system_instruction)
+            if text is not None:
+                attrs["input.value"] = text
+                attrs["input.mime_type"] = "text/plain"
+        span = self._child(CONTEXT_UPDATE_NAME, "CHAIN", attributes=attrs)
+        return _ContextUpdate(span, sequence, system_instruction is not None, names)
+
+    def end_context_update(self, update: _ContextUpdate, exc: Optional[BaseException] = None) -> None:
+        span = update.span
+        try:
+            span.set_attribute("gemini.context_update.sent", exc is None)
+            if exc is not None:
+                span.set_attributes(self._error_attrs(exc))
+                reason = "task_cancelled" if isinstance(exc, asyncio.CancelledError) else "context_update_failed"
+                span.set_status(Status(StatusCode.ERROR, reason))
+            else:
+                # Concurrent sends may finish out of order. An older completion must not
+                # restore stale tools or instructions; track each field independently.
+                if (update.system_instruction_changed
+                        and update.sequence > self._context_revisions["system_instruction"]):
+                    self._context_revisions["system_instruction"] = update.sequence
+                if (update.tool_names is not None
+                        and update.sequence > self._context_revisions["tools"]):
+                    self._context_revisions["tools"] = update.sequence
+                    self._context_tool_names = update.tool_names
+                    self.root.set_attribute("gemini.tool_names", update.tool_names)
+                span.set_status(Status(StatusCode.OK))
+        except Exception:
+            logger.debug("gemini live: context update not recorded", exc_info=False)
+        finally:
+            try:
+                span.end()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ client side
     def on_client_content(self, turns: Any, turn_complete: Any, start_ns: int) -> None:
@@ -522,6 +588,9 @@ class SessionTrace:
         attrs: Dict[str, Any] = {
             "gen_ai.system": SYSTEM,
             "gemini.turn_start": opened_by,
+            "gemini.context.system_instruction_revision": self._context_revisions["system_instruction"],
+            "gemini.context.tools_revision": self._context_revisions["tools"],
+            "gemini.tool_names": self._context_tool_names,
         }
         if self.model:
             attrs["llm.model_name"] = self.model
