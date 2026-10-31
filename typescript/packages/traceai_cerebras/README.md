@@ -1,88 +1,64 @@
 # @traceai/cerebras
 
-OpenTelemetry instrumentation for Cerebras - ultra-fast inference on Wafer-Scale Engine hardware.
+Trace native Cerebras Cloud SDK chat and text completions with OpenTelemetry, including streaming responses, token usage, and server timing attributes.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/cerebras
+npm install @traceai/cerebras @cerebras/cerebras_cloud_sdk
 ```
 
-## Features
+The instrumentor supports `@cerebras/cerebras_cloud_sdk` 1.x from 1.0.0. Text completions are traced when your SDK exposes `client.completions.create`.
 
-- Automatic tracing of Cerebras Cloud SDK calls
-- Streaming response support
-- Cerebras-specific time metrics (queue time, prompt time, completion time)
-- Token usage tracking
-- Full OpenTelemetry semantic conventions compliance
+## Configure tracing
 
-## Usage
+Use your application's existing OpenTelemetry tracer provider. For a standalone example that prints spans to the console, install the OpenTelemetry 1.x provider packages used below:
 
-### Basic Setup
+```bash
+npm install @opentelemetry/sdk-trace-node@^1.30.0 @opentelemetry/sdk-trace-base@^1.30.0
+```
+
+Set `CEREBRAS_API_KEY` and set `CEREBRAS_MODEL` to a model available in your Cerebras account.
 
 ```typescript
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { SimpleSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 import { CerebrasInstrumentation } from "@traceai/cerebras";
-import Cerebras from "@cerebras/cerebras_cloud_sdk";
+import * as cerebrasModule from "@cerebras/cerebras_cloud_sdk";
 
-// Set up the tracer provider
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+const provider = new NodeTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(new ConsoleSpanExporter())],
+});
 provider.register();
 
-// Create and enable the instrumentation
 const instrumentation = new CerebrasInstrumentation();
 instrumentation.setTracerProvider(provider);
-instrumentation.enable();
-
-// Manually instrument the Cerebras module
-const cerebrasModule = await import("@cerebras/cerebras_cloud_sdk");
 instrumentation.manuallyInstrument(cerebrasModule);
 
-// Create the Cerebras client
-const client = new Cerebras({
+const client = new cerebrasModule.Cerebras({
   apiKey: process.env.CEREBRAS_API_KEY,
 });
+const model = process.env.CEREBRAS_MODEL;
+if (!model) throw new Error("Set CEREBRAS_MODEL to a model available in your account");
 
-// Make requests - they will be automatically traced
 const response = await client.chat.completions.create({
-  model: "llama3.1-8b",
-  messages: [
-    { role: "system", content: "You are a helpful assistant." },
-    { role: "user", content: "Hello!" },
-  ],
+  model,
+  messages: [{ role: "user", content: "Explain wafer-scale computing in one sentence." }],
 });
+console.log(response.choices[0]?.message.content);
+await provider.forceFlush();
 ```
 
-### Performance Metrics
+Call `manuallyInstrument()` when the SDK is already imported, including ESM applications. CommonJS applications can instead initialize the instrumentor before requiring the SDK. Use one `CerebrasInstrumentation` instance for your application; calling `manuallyInstrument()` again does not duplicate spans. `disable()` restores the SDK methods, and `enable()` instruments them again.
 
-Cerebras provides detailed timing information for analyzing inference performance:
+For an application already exporting traces to Future AGI, pass its provider to `setTracerProvider()` rather than creating another provider. This package emits traces; timing values are span attributes, not an OpenTelemetry metrics stream.
 
-```typescript
-const response = await client.chat.completions.create({
-  model: "llama3.1-70b",
-  messages: [{ role: "user", content: "Explain quantum computing." }],
-});
-
-// Time info is captured in span attributes:
-// cerebras.queue_time: 0.001 (seconds)
-// cerebras.prompt_time: 0.015 (seconds)
-// cerebras.completion_time: 0.045 (seconds)
-// cerebras.total_time: 0.061 (seconds)
-
-if (response.time_info) {
-  const tokensPerSecond = response.usage.completion_tokens / response.time_info.completion_time;
-  console.log(`Throughput: ${tokensPerSecond.toFixed(0)} tokens/second`);
-}
-```
-
-### Streaming Responses
+## Stream a response
 
 ```typescript
 const stream = await client.chat.completions.create({
-  model: "llama3.1-8b",
-  messages: [{ role: "user", content: "Count to 5." }],
+  model,
+  messages: [{ role: "user", content: "Count to five." }],
   stream: true,
 });
 
@@ -91,63 +67,49 @@ for await (const chunk of stream) {
 }
 ```
 
-### High-Throughput Inference
+The span ends when the stream finishes, fails, or is cancelled. The SDK's `controller`, `tee()`, and `toReadableStream()` remain available. Consume the stream or cancel it with `stream.controller.abort()` to finish the span. Usage and timing attributes are recorded when the SDK response includes them.
 
-Cerebras is optimized for extremely fast inference:
+## Use response helpers
+
+The SDK's `APIPromise` helpers remain available:
 
 ```typescript
-const startTime = Date.now();
-
-const response = await client.chat.completions.create({
-  model: "llama3.1-70b",
-  messages: [
-    { role: "user", content: "Write a haiku about AI." },
-  ],
-  max_tokens: 50,
-});
-
-const latency = Date.now() - startTime;
-console.log(`End-to-end latency: ${latency}ms`);
-console.log(`Server time: ${response.time_info?.total_time}s`);
+const { data, response: httpResponse } = await client.chat.completions.create({
+  model,
+  messages: [{ role: "user", content: "Hello." }],
+}).withResponse();
 ```
 
-## Configuration Options
+`withResponse()` captures parsed response attributes. If you choose `asResponse()` instead, the instrumentor leaves the raw response body unread and ends the span without parsed output, usage, or server timing attributes. Use `withResponse()` when you need both the raw HTTP response and those attributes.
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `instrumentationConfig` | `InstrumentationConfig` | OpenTelemetry instrumentation config |
-| `traceConfig` | `TraceConfigOptions` | TraceAI config (hideInputs, hideOutputs, etc.) |
+## Hide request and response content
 
-## Captured Attributes
+Pass `traceConfig` when creating the instrumentor:
 
-| Attribute | Description |
-|-----------|-------------|
-| `fi.span.kind` | Always "LLM" |
-| `llm.system` | "cerebras" |
-| `llm.provider` | "cerebras" |
-| `llm.model` | Model name (llama3.1-8b, llama3.1-70b) |
-| `llm.token_count.prompt` | Input token count |
-| `llm.token_count.completion` | Output token count |
-| `llm.token_count.total` | Total token count |
-| `cerebras.queue_time` | Time spent in queue (seconds) |
-| `cerebras.prompt_time` | Time to process prompt (seconds) |
-| `cerebras.completion_time` | Time to generate completion (seconds) |
-| `cerebras.total_time` | Total server-side time (seconds) |
+```typescript
+const instrumentation = new CerebrasInstrumentation({
+  traceConfig: { hideInputs: true, hideOutputs: true },
+});
+```
 
-## Available Models
+These options hide payload content while retaining model, provider, token usage, and timing attributes. `hideInputs` also omits invocation parameters, which can contain tool schemas or stop text. The shared trace configuration also supports `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, and `FI_HIDE_ERROR_DETAILS` environment variables.
 
-| Model | Description |
-|-------|-------------|
-| `llama3.1-8b` | Llama 3.1 8B - fast general-purpose |
-| `llama3.1-70b` | Llama 3.1 70B - high capability |
+## Captured attributes
 
-## Why Cerebras?
-
-Cerebras Cloud runs on Wafer-Scale Engine (WSE) hardware, providing:
-- Ultra-low latency inference
-- High throughput (thousands of tokens/second)
-- Consistent performance under load
-- No GPU scheduling overhead
+| Attribute | Value |
+|-----------|-------|
+| `fi.span.kind` | `LLM` |
+| `gen_ai.provider.name` | `cerebras` |
+| `gen_ai.operation.name` | `chat` or `text_completion` |
+| `gen_ai.request.model` | Requested model |
+| `gen_ai.response.model` | Model returned by Cerebras |
+| `gen_ai.usage.input_tokens` | Input token count, when returned |
+| `gen_ai.usage.output_tokens` | Output token count, when returned |
+| `gen_ai.usage.total_tokens` | Total token count, when returned |
+| `cerebras.queue_time` | Queue time in seconds, when returned |
+| `cerebras.prompt_time` | Prompt processing time in seconds, when returned |
+| `cerebras.completion_time` | Completion generation time in seconds, when returned |
+| `cerebras.total_time` | Total server time in seconds, when returned |
 
 ## License
 

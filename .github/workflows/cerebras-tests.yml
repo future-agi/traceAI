@@ -1,0 +1,62 @@
+name: Cerebras tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_cerebras/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - 'typescript/package.json'
+      - '.github/workflows/cerebras-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cerebras:
+    name: Cerebras SDK ${{ matrix.sdk }} / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['1.0.0', '1.91.0']
+        node: ['18', '22']
+    defaults:
+      run:
+        working-directory: typescript
+    env:
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: corepack enable
+      - name: Frozen filtered install
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter '@traceai/cerebras...'
+      - name: Install SDK contract version
+        env:
+          SDK_VERSION: ${{ matrix.sdk }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/cerebras-sdk" --ignore-scripts --no-audit --no-fund "@cerebras/cerebras_cloud_sdk@$SDK_VERSION"
+          echo "CEREBRAS_SDK_PATH=$RUNNER_TEMP/cerebras-sdk/node_modules/@cerebras/cerebras_cloud_sdk" >> "$GITHUB_ENV"
+      - name: Build CJS and ESM with shared dependencies
+        run: pnpm --filter '@traceai/cerebras...' --workspace-concurrency=1 run build
+      - name: Offline SDK contracts and localhost OTLP wire checks
+        # A separate network namespace has only loopback. Neither tests nor
+        # child-process import checks can reach a vendor endpoint.
+        run: |
+          sudo --preserve-env=PATH,CEREBRAS_SDK_PATH,FI_BASE_URL,FI_GRPC_URL unshare --net bash -c '
+            ip link set lo up
+            node node_modules/jest/bin/jest.js --config packages/traceai_cerebras/jest.config.js --runInBand
+          '
+      - name: Package tarball
+        run: pnpm --filter '@traceai/cerebras' pack --pack-destination "$RUNNER_TEMP/cerebras-package"

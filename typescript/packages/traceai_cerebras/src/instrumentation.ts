@@ -2,118 +2,93 @@ import {
   InstrumentationBase,
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
-  safeExecuteInTheMiddle,
 } from "@opentelemetry/instrumentation";
 import {
-  diag,
   context,
   trace,
   SpanKind,
   Attributes,
   SpanStatusCode,
   Span,
+  Context,
 } from "@opentelemetry/api";
-import { VERSION } from "./version";
-import {
-  SemanticConventions,
-  FISpanKind,
-  MimeType,
-  LLMSystem,
-  LLMProvider,
-} from "@traceai/fi-semantic-conventions";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import {
   FITracer,
   safelyJSONStringify,
   TraceConfigOptions,
+  generateTraceConfig,
 } from "@traceai/fi-core";
+import {
+  SemanticConventions as S,
+  FISpanKind,
+  MimeType,
+  LLMProvider,
+} from "@traceai/fi-semantic-conventions";
+import { VERSION } from "./version";
 
 const MODULE_NAME = "@cerebras/cerebras_cloud_sdk";
-
-/**
- * Flag to check if the Cerebras module has been patched
- */
-let _isFIPatched = false;
-
-/**
- * Function to check if instrumentation is enabled / disabled
- */
-export function isPatched() {
-  return _isFIPatched;
-}
-
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
-}
-
-// Type definitions for Cerebras SDK
-interface CerebrasMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-interface CerebrasChatCompletionRequest {
-  model: string;
-  messages: CerebrasMessage[];
-  max_tokens?: number;
-  temperature?: number;
-  top_p?: number;
-  stop?: string | string[];
-  stream?: boolean;
+const json = (value: unknown) => safelyJSONStringify(value) ?? undefined;
+type Operation = "chat" | "text_completion";
+type SDKModule = Record<string, unknown>;
+interface Request {
+  model?: string;
+  messages?: Array<Record<string, unknown>>;
+  prompt?: unknown;
   [key: string]: unknown;
 }
-
-interface CerebrasChatCompletionChoice {
-  index: number;
-  message: CerebrasMessage;
-  finish_reason: string;
-  delta?: {
-    content?: string;
-    role?: string;
-  };
-}
-
-interface CerebrasChatCompletion {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: CerebrasChatCompletionChoice[];
+interface Completion {
+  id?: string;
+  model?: string;
+  choices?: Array<{
+    index: number;
+    message?: Record<string, unknown>;
+    delta?: { role?: string; content?: string | null };
+    text?: string;
+    finish_reason?: string | null;
+  }>;
   usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
   };
-  time_info?: {
-    queue_time: number;
-    prompt_time: number;
-    completion_time: number;
-    total_time: number;
-  };
+  time_info?: Record<string, number>;
+}
+interface Stream extends AsyncIterable<Completion> {
+  iterator?: () => AsyncIterator<Completion>;
+  controller?: AbortController;
+}
+type Result = Completion | Stream;
+type Create = (this: unknown, ...args: unknown[]) => Promise<Result>;
+type Resource = { create: Create };
+interface SDKClass {
+  Chat?: { Completions?: { prototype: Resource } };
+  Completions?: { prototype: Resource };
 }
 
-interface CerebrasStream<T> {
-  [Symbol.asyncIterator](): AsyncIterator<T>;
+// Ownership is per resource, not per module name: separate SDK copies can coexist.
+const owners = new WeakMap<Resource, CerebrasInstrumentation>();
+let patchedResources = 0;
+export function isPatched() {
+  return patchedResources > 0;
 }
 
-/**
- * @param instrumentationConfig The config for the instrumentation
- * @param traceConfig The FI trace configuration for masking sensitive information
- */
+function resources(
+  module: SDKModule,
+): Array<[Resource | undefined, Operation]> {
+  // CJS exports the constructor itself; ESM exposes named/default constructors.
+  const sdk = (module.Cerebras ?? module.default ?? module) as SDKClass;
+  return [
+    [sdk.Chat?.Completions?.prototype, "chat"],
+    [sdk.Completions?.prototype, "text_completion"],
+  ];
+}
+
 export class CerebrasInstrumentation extends InstrumentationBase {
-  private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
+  private manualModules?: Set<SDKModule>;
+  private patched?: Set<Resource>;
+  public readonly instrumentationName = "@traceai/cerebras";
 
   constructor({
     instrumentationConfig,
@@ -122,322 +97,358 @@ export class CerebrasInstrumentation extends InstrumentationBase {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super(
-      "@traceai/cerebras",
-      VERSION,
-      Object.assign({}, instrumentationConfig),
-    );
+    super("@traceai/cerebras", VERSION, instrumentationConfig ?? {});
     this._traceConfig = traceConfig;
   }
 
-  public override enable(): void {
-    super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
-  }
-
-  public readonly instrumentationName = "@traceai/cerebras";
-
   protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
-      "@cerebras/cerebras_cloud_sdk",
+    return new InstrumentationNodeModuleDefinition(
+      MODULE_NAME,
       [">=1.0.0"],
       this.patch.bind(this),
       this.unpatch.bind(this),
     );
-    return module;
   }
 
-  /**
-   * Manually instruments the Cerebras module
-   */
-  manuallyInstrument(module: Record<string, unknown>) {
+  public override enable(): void {
+    super.enable();
+    this.manualModules?.forEach((module) => this.patch(module));
+  }
+
+  public override disable(): void {
+    super.disable();
+    // Manual instrumentation also needs cleanup, including pre-imported ESM.
+    this.patched?.forEach((resource) => this.unpatchResource(resource));
+  }
+
+  manuallyInstrument(module: SDKModule) {
+    (this.manualModules ??= new Set()).add(module);
     this.patch(module);
   }
 
-  /**
-   * Patches the Cerebras module
-   */
-  private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    if (module?.fiPatched || _isFIPatched) {
-      return module;
+  private patch(module: SDKModule) {
+    for (const [resource, operation] of resources(module)) {
+      if (
+        !resource ||
+        typeof resource.create !== "function" ||
+        owners.has(resource)
+      )
+        continue;
+      this._wrap(resource, "create", this.createCompletionWrapper(operation));
+      owners.set(resource, this);
+      (this.patched ??= new Set()).add(resource);
+      patchedResources++;
     }
-
-    const instrumentation: CerebrasInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
-    }
-
-    // Patch the Cerebras class
-    const Cerebras = module.Cerebras as {
-      prototype: {
-        chat?: { completions?: { create?: unknown } };
-      };
-    } | undefined;
-
-    if (Cerebras?.prototype) {
-      // Patch chat.completions.create
-      if (Cerebras.prototype.chat?.completions && typeof (Cerebras.prototype.chat.completions as Record<string, unknown>).create === "function") {
-        this._wrap(
-          Cerebras.prototype.chat.completions as Record<string, unknown>,
-          "create",
-          this.createChatCompletionWrapper(instrumentation),
-        );
-      }
-    }
-
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-
     return module;
   }
 
-  /**
-   * Creates a wrapper for chat.completions.create
-   */
-  private createChatCompletionWrapper(instrumentation: CerebrasInstrumentation) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (original: any): any => {
-      return function patchedChatCreate(
-        this: unknown,
-        body: CerebrasChatCompletionRequest,
-        options?: Record<string, unknown>,
-      ) {
-        const { messages: _messages, ...invocationParameters } = body;
+  private unpatch(module: SDKModule) {
+    for (const [resource] of resources(module))
+      if (resource) this.unpatchResource(resource);
+  }
 
-        const span = instrumentation.fiTracer.startSpan(
-          `Cerebras Chat Completions`,
+  private unpatchResource(resource: Resource) {
+    if (owners.get(resource) !== this) return;
+    this._unwrap(resource, "create");
+    owners.delete(resource);
+    this.patched?.delete(resource);
+    patchedResources--;
+  }
+
+  private createCompletionWrapper(operation: Operation) {
+    const instrumentation = this;
+    return (original: Create): Create =>
+      function (...args: unknown[]) {
+        if (
+          !instrumentation.isEnabled() ||
+          isTracingSuppressed(context.active())
+        )
+          return original.apply(this, args);
+        const body = args[0] as Request | undefined;
+        // Leave invalid requests to the SDK rather than changing its error contract.
+        if (!body || typeof body !== "object")
+          return original.apply(this, args);
+        const { messages, prompt: _prompt, ...parameters } = body;
+        const config = generateTraceConfig(instrumentation._traceConfig);
+        const tracer = new FITracer({
+          tracer: instrumentation.tracer,
+          traceConfig: config,
+        });
+        const span = tracer.startSpan(
+          operation === "chat"
+            ? "Cerebras Chat Completions"
+            : "Cerebras Completions",
           {
             kind: SpanKind.INTERNAL,
             attributes: {
-              [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-              [SemanticConventions.LLM_MODEL_NAME]: body.model,
-              [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
-              [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                JSON.stringify(invocationParameters),
-              [SemanticConventions.LLM_PROVIDER]: LLMProvider.CEREBRAS,
-              [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-              ...getChatInputMessagesAttributes(body),
-              [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
+              [S.FI_SPAN_KIND]: FISpanKind.LLM,
+              [S.LLM_MODEL_NAME]: body.model,
+              [S.LLM_PROVIDER]: LLMProvider.CEREBRAS,
+              [S.GEN_AI_OPERATION_NAME]: operation,
+              [S.INPUT_VALUE]: json(body),
+              [S.INPUT_MIME_TYPE]: MimeType.JSON,
+              [S.RAW_INPUT]: json(body),
+              // Parameters can contain tool schemas or stop text; hide them with inputs.
+              ...(!config.hideInputs
+                ? { [S.LLM_INVOCATION_PARAMETERS]: json(parameters) }
+                : {}),
+              ...(messages ? { [S.LLM_INPUT_MESSAGES]: json(messages) } : {}),
             },
           },
         );
-
-        const execContext = getExecContext(span);
-        const execPromise = safeExecuteInTheMiddle(
-          () => {
-            return context.with(trace.setSpan(execContext, span), () => {
-              return original.apply(this, [body, options]);
+        const execContext = trace.setSpan(context.active(), span);
+        let ended = false;
+        const finish = (error?: unknown, complete = true) => {
+          if (ended) return;
+          ended = true;
+          if (error !== undefined) {
+            const exception =
+              error instanceof Error ? error : new Error(String(error));
+            span.recordException(exception);
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: exception.message,
             });
-          },
-          (error) => {
-            if (error) {
-              span.recordException(error);
-              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-              span.end();
-            }
-          },
-        );
-
-        const wrappedPromise = (execPromise as Promise<CerebrasChatCompletion | CerebrasStream<CerebrasChatCompletion>>).then((result) => {
-          if (isChatCompletionResponse(result)) {
-            span.setAttributes({
-              [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
-              [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-              [SemanticConventions.LLM_MODEL_NAME]: result.model,
-              [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
-              [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
-              [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(result.choices.map(c => c.finish_reason)) ?? "[]",
-              ...getChatOutputMessagesAttributes(result),
-              ...getUsageAttributes(result),
-              ...getTimeInfoAttributes(result),
-              [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-            });
-            span.setStatus({ code: SpanStatusCode.OK });
-            span.end();
-          } else if (isStreamResponse(result)) {
-            return wrapChatStream(result, span);
-          }
-          return result;
-        }).catch((error: Error) => {
-          span.recordException(error);
-          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          } else if (complete) span.setStatus({ code: SpanStatusCode.OK });
           span.end();
+        };
+        try {
+          const promise = context.with(execContext, () =>
+            original.apply(this, args),
+          );
+          return observePromise(
+            promise,
+            (result) => {
+              if (
+                result &&
+                typeof result === "object" &&
+                Symbol.asyncIterator in result
+              ) {
+                return observeStream(
+                  result as Stream,
+                  span,
+                  execContext,
+                  finish,
+                  config.hideOutputs,
+                );
+              }
+              if (result)
+                span.setAttributes(completionAttributes(result as Completion));
+              finish();
+              return result;
+            },
+            finish,
+            execContext,
+          );
+        } catch (error) {
+          finish(error);
           throw error;
-        });
-
-        return context.bind(execContext, wrappedPromise) as Promise<CerebrasChatCompletion | CerebrasStream<CerebrasChatCompletion>>;
+        }
       };
-    };
-  }
-
-  /**
-   * Un-patches the Cerebras module
-   */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const Cerebras = moduleExports.Cerebras as {
-      prototype: {
-        chat?: { completions?: Record<string, unknown> };
-      };
-    } | undefined;
-
-    if (Cerebras?.prototype) {
-      if (Cerebras.prototype.chat?.completions) {
-        this._unwrap(Cerebras.prototype.chat.completions, "create");
-      }
-    }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
   }
 }
 
-/**
- * Type guard for chat completion response
- */
-function isChatCompletionResponse(
-  response: CerebrasChatCompletion | CerebrasStream<CerebrasChatCompletion>,
-): response is CerebrasChatCompletion {
-  return "choices" in response && Array.isArray((response as CerebrasChatCompletion).choices);
-}
-
-/**
- * Type guard for stream response
- */
-function isStreamResponse<T>(
-  response: T | CerebrasStream<T>,
-): response is CerebrasStream<T> {
-  return typeof (response as CerebrasStream<T>)[Symbol.asyncIterator] === "function";
-}
-
-/**
- * Wraps a chat stream to capture the full response
- */
-async function* wrapChatStream(
-  stream: CerebrasStream<CerebrasChatCompletion>,
-  span: Span,
-): AsyncGenerator<CerebrasChatCompletion, void, unknown> {
-  let fullContent = "";
-  const allChunks: CerebrasChatCompletion[] = [];
-  let lastChunk: CerebrasChatCompletion | null = null;
-
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        fullContent += choice.delta.content;
-      }
-      lastChunk = chunk;
-      yield chunk;
+/** Observe only the consumption route chosen by the caller. In particular,
+ * attaching .then eagerly would steal the body from APIPromise.asResponse(). */
+function observePromise<T>(
+  promise: Promise<T>,
+  observe: (value: T) => T,
+  finish: (error?: unknown) => void,
+  execContext: Context,
+): Promise<T> {
+  let observed: Promise<T> | undefined;
+  let valueObserved = false;
+  let value: T;
+  const onValue = (result: T) => {
+    if (!valueObserved) {
+      value = observe(result);
+      valueObserved = true;
     }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    throw error;
-  }
-
-  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
+    return value;
   };
-
-  if (lastChunk) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastChunk.model;
-    if (lastChunk.usage) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastChunk.usage.prompt_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastChunk.usage.completion_tokens;
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] = lastChunk.usage.total_tokens;
-    }
-    if (lastChunk.time_info) {
-      Object.assign(attributes, getTimeInfoAttributes(lastChunk));
-    }
-  }
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
-}
-
-/**
- * Gets input message attributes for chat requests
- */
-function getChatInputMessagesAttributes(request: CerebrasChatCompletionRequest): Attributes {
-  const serialized = request.messages.map((message) => {
-    const obj: Record<string, unknown> = { role: message.role };
-    if (message.content) {
-      obj.content = message.content;
-    }
-    return obj;
+  const onError = (error: unknown): never => {
+    finish(error);
+    throw error;
+  };
+  const parsed = () =>
+    (observed ??= context.with(execContext, () =>
+      promise.then(onValue, onError),
+    ));
+  return new Proxy(promise, {
+    get(target, key) {
+      if (key === "then")
+        return (...args: Parameters<Promise<T>["then"]>) =>
+          parsed().then(...args);
+      if (key === "catch")
+        return (...args: Parameters<Promise<T>["catch"]>) =>
+          parsed().catch(...args);
+      if (key === "finally")
+        return (...args: Parameters<Promise<T>["finally"]>) =>
+          parsed().finally(...args);
+      const method = Reflect.get(target, key, target);
+      if (key === "withResponse" && typeof method === "function") {
+        return (...args: unknown[]) =>
+          context
+            .with(execContext, () => method.apply(target, args))
+            .then(
+              (result: { data: T }) => ({
+                ...result,
+                data: onValue(result.data),
+              }),
+              onError,
+            );
+      }
+      if (key === "asResponse" && typeof method === "function") {
+        return (...args: unknown[]) =>
+          context
+            .with(execContext, () => method.apply(target, args))
+            .then((response: unknown) => {
+              finish();
+              return response;
+            }, onError);
+      }
+      return typeof method === "function" && key !== "constructor"
+        ? method.bind(target)
+        : method;
+    },
   });
-  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
 }
 
-/**
- * Gets output message attributes from chat response
- */
-function getChatOutputMessagesAttributes(response: CerebrasChatCompletion): Attributes {
-  const choice = response.choices[0];
-  if (!choice) {
-    return {};
-  }
-
-  const msg: Record<string, unknown> = { role: choice.message.role };
-  if (choice.message.content) {
-    msg.content = choice.message.content;
-  }
-  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
+function getChoices(response: Completion) {
+  return Array.isArray(response.choices)
+    ? response.choices.filter((choice) => choice && typeof choice === "object")
+    : [];
 }
 
-/**
- * Gets usage attributes from chat response
- */
-function getUsageAttributes(response: CerebrasChatCompletion): Attributes {
+function completionAttributes(response: Completion): Attributes {
+  const attrs: Attributes = {
+    [S.OUTPUT_VALUE]: json(response),
+    [S.OUTPUT_MIME_TYPE]: MimeType.JSON,
+    [S.RAW_OUTPUT]: json(response),
+    ...metadataAttributes(response),
+  };
+  const messages = getChoices(response).map(
+    (choice) => choice.message ?? { role: "assistant", content: choice.text },
+  );
+  if (messages) attrs[S.LLM_OUTPUT_MESSAGES] = json(messages);
+  return attrs;
+}
+
+function metadataAttributes(response: Completion): Attributes {
+  const attrs: Attributes = {};
+  if (response.model) {
+    attrs[S.GEN_AI_RESPONSE_MODEL] = response.model;
+  }
+  if (response.id) attrs[S.GEN_AI_RESPONSE_ID] = response.id;
+  const reasons = getChoices(response)
+    .map((c) => c.finish_reason)
+    .filter((reason) => reason != null);
+  if (reasons?.length) attrs[S.GEN_AI_RESPONSE_FINISH_REASONS] = json(reasons);
   if (response.usage) {
-    return {
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]: response.usage.completion_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]: response.usage.prompt_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]: response.usage.total_tokens,
-    };
+    for (const [key, value] of [
+      [S.LLM_TOKEN_COUNT_PROMPT, response.usage.prompt_tokens],
+      [S.LLM_TOKEN_COUNT_COMPLETION, response.usage.completion_tokens],
+      [S.LLM_TOKEN_COUNT_TOTAL, response.usage.total_tokens],
+    ] as const)
+      if (value != null) attrs[key] = value;
   }
-  return {};
+  for (const key of [
+    "queue_time",
+    "prompt_time",
+    "completion_time",
+    "total_time",
+  ]) {
+    const value = response.time_info?.[key];
+    if (value != null) attrs[`cerebras.${key}`] = value;
+  }
+  return attrs;
 }
 
-/**
- * Gets Cerebras-specific time info attributes
- */
-function getTimeInfoAttributes(response: CerebrasChatCompletion): Attributes {
-  if (response.time_info) {
-    return {
-      "cerebras.queue_time": response.time_info.queue_time,
-      "cerebras.prompt_time": response.time_info.prompt_time,
-      "cerebras.completion_time": response.time_info.completion_time,
-      "cerebras.total_time": response.time_info.total_time,
-    };
+function observeStream(
+  stream: Stream,
+  span: Span,
+  execContext: Context,
+  finish: (error?: unknown, complete?: boolean) => void,
+  hideOutputs: boolean,
+): Stream {
+  const contents = new Map<number, string>();
+  const chunks: Completion[] = [];
+  let finished = false;
+  const end = (error?: unknown, complete = false) => {
+    if (finished) return;
+    finished = true;
+    const messages = Array.from(contents.values(), (content) => ({
+      role: "assistant",
+      content,
+    }));
+    span.setAttributes({
+      [S.OUTPUT_VALUE]: contents.get(0) ?? "",
+      [S.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+      [S.LLM_OUTPUT_MESSAGES]: json(messages),
+      [S.RAW_OUTPUT]: json(chunks),
+    });
+    stream.controller?.signal.removeEventListener("abort", aborted);
+    finish(error, complete);
+  };
+  const aborted = () => {
+    // The SDK also aborts while unwinding stream errors. Let the iterator's
+    // catch retain that error rather than turning it into a successful span.
+    if (!iterating) end();
+  };
+  let iterating = false;
+  stream.controller?.signal.addEventListener("abort", aborted, { once: true });
+  if (stream.controller?.signal.aborted) end();
+
+  async function* iterate(iterator: AsyncIterator<Completion>) {
+    try {
+      while (true) {
+        iterating = true;
+        const next = await context.with(execContext, () => iterator.next());
+        iterating = false;
+        if (next.done) {
+          end(undefined, !stream.controller?.signal.aborted);
+          return;
+        }
+        if (!finished && next.value && typeof next.value === "object") {
+          span.setAttributes(metadataAttributes(next.value));
+          if (!hideOutputs) {
+            chunks.push(next.value);
+            for (const choice of getChoices(next.value)) {
+              const content = choice.delta?.content ?? choice.text ?? "";
+              contents.set(
+                choice.index,
+                (contents.get(choice.index) ?? "") + content,
+              );
+            }
+          }
+        }
+        yield next.value;
+      }
+    } catch (error) {
+      end(error);
+      throw error;
+    } finally {
+      try {
+        await context.with(execContext, () => iterator.return?.());
+      } finally {
+        iterating = false;
+        end();
+      }
+    }
   }
-  return {};
+
+  // SDK tee() uses iterator(), whereas toReadableStream() uses asyncIterator.
+  // Intercept the factory so all routes share one observation without replacing
+  // the SDK Stream with an async generator that loses its controller/helpers.
+  const iteratorKey =
+    typeof stream.iterator === "function" ? "iterator" : Symbol.asyncIterator;
+  return new Proxy(stream, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, target);
+      if (key === iteratorKey) return () => iterate(value.call(target));
+      return typeof value === "function" && key !== "constructor"
+        ? value.bind(receiver)
+        : value;
+    },
+  });
 }
