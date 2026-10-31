@@ -15,7 +15,7 @@ permissions:
 jobs:
   flue:
     name: Flue ${{ matrix.flue }} / Node ${{ matrix.node }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
     strategy:
       fail-fast: false
