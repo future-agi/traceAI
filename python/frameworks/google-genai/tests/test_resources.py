@@ -572,8 +572,14 @@ def test_stream_failure_identity_and_lifecycle(asynchronous, failure):
                 else:
                     await stream.__anext__()
 
-            with pytest.raises(type(error)) as exc:
-                asyncio.run(run())
+            async def check_identity():
+                # Python 3.10 asyncio.run reconstructs CancelledError at its
+                # task boundary; assert the wrapper's identity inside the task.
+                with pytest.raises(type(error)) as exc:
+                    await run()
+                assert exc.value is error
+
+            asyncio.run(check_identity())
         else:
             stream = wrapper(Stream, None, (), {})
             with pytest.raises(type(error)) as exc:
@@ -586,7 +592,7 @@ def test_stream_failure_identity_and_lifecycle(asynchronous, failure):
                     stream.close()
                 else:
                     next(stream)
-        assert exc.value is error
+            assert exc.value is error
         spans = memory.get_finished_spans()
         assert len(spans) == 1
         assert spans[0].status.status_code == trace.StatusCode.ERROR
