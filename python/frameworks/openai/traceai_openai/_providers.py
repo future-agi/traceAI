@@ -30,6 +30,9 @@ _HOSTS = {
     "api.anannas.ai": "anannas",
     "anannas.ai": "anannas",
     "api.doubleword.ai": "doubleword",
+    # ModelArk regional endpoints: https://docs.byteplus.com/docs/ModelArk/2191806
+    "ark.ap-southeast.bytepluses.com": "byteplus",
+    "ark.eu-west.bytepluses.com": "byteplus",
 }
 
 # Vendors that give every resource, workspace or endpoint its own subdomain.
