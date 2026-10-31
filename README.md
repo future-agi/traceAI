@@ -350,7 +350,7 @@ Agent orchestration, application frameworks, and agent-to-agent communication.
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> AgentScope | [SDK](python/frameworks/agentscope/ "traceAI-agentscope") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Agno | [SDK](python/frameworks/agno/ "traceai-agno") | — | — | — | — |
 | <img src=".github/assets/integrations/autogen-tile.png" width="24" height="24" alt=""> AutoGen | [SDK](python/frameworks/autogen/ "traceAI-autogen") | — | — | — | — |
-| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> BeeAI | [SDK](python/frameworks/beeai/ "traceai-beeai") | [SDK](typescript/packages/traceai_beeai/ "@traceai/beeai") | — | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> BeeAI | — | [SDK](typescript/packages/traceai_beeai/ "@traceai/beeai") | — | — | — |
 | <img src=".github/assets/integrations/crewai-tile.svg" width="24" height="24" alt=""> CrewAI | [SDK](python/frameworks/crewai/ "traceAI-crewai") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Eino | — | — | — | [SDK](go/eino/ "github.com/future-agi/traceAI/go/eino") | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Genkit | — | [SDK](typescript/packages/traceai_genkit/ "@traceai/genkit") | — | — | — |
