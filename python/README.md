@@ -92,7 +92,6 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-anthropic` | [anthropic](frameworks/anthropic/) |
 | `traceAI-autogen` | [autogen](frameworks/autogen/) |
 | `traceAI-bedrock` | [bedrock](frameworks/bedrock/) |
-| `traceai-beeai` | [beeai](frameworks/beeai/) |
 | `traceAI-cerebras` | [cerebras](frameworks/cerebras/) |
 | `traceAI-chromadb` | [chromadb](frameworks/chromadb/) |
 | `traceai-claude-agent-sdk` | [claude-agent-sdk](frameworks/claude-agent-sdk/) |
@@ -152,6 +151,8 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-xai` | [xai](frameworks/xai/) |
 
 </details>
+
+BeeAI Python users can use the maintained OpenInference instrumentor directly. See the [BeeAI migration guide](https://docs.futureagi.com/docs/integrations/frameworks/beeai); existing `traceai-beeai==0.1.0` installations remain on PyPI.
 
 ## Contributing and license
 

@@ -6,7 +6,7 @@ Covers 46 instrumentors across 4 categories:
   HuggingFace, Bedrock, Vertex AI
 - Agent Frameworks: LangChain, LlamaIndex, CrewAI, AutoGen, PydanticAI,
   Instructor, DSPy, OpenAI Agents, Haystack, Smolagents, Google ADK,
-  Agno, Strands, BeeAI, Claude Agent SDK
+  Agno, Strands, Claude Agent SDK
 - Vector DBs: ChromaDB, LanceDB, Qdrant, Pinecone, Weaviate, Milvus,
   pgvector, Redis, MongoDB
 - Infrastructure: Guardrails, MCP, vLLM, Portkey, LiveKit, Pipecat

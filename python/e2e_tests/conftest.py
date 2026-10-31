@@ -272,7 +272,6 @@ def pytest_configure(config):
         "google_adk: mark test as requiring Google ADK",
         "agno: mark test as requiring Agno",
         "strands: mark test as requiring AWS Strands",
-        "beeai: mark test as requiring BeeAI",
         "claude_agent_sdk: mark test as requiring Claude Agent SDK",
         "chromadb: mark test as requiring ChromaDB",
         "lancedb: mark test as requiring LanceDB",
