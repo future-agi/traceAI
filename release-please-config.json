@@ -588,57 +588,90 @@
     "typescript/packages/traceai_anthropic": {
       "release-type": "node",
       "component": "npm-traceai-anthropic",
-      "package-name": "@traceai/anthropic"
+      "package-name": "@traceai/anthropic",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_bedrock": {
       "release-type": "node",
       "component": "npm-traceai-bedrock",
-      "package-name": "@traceai/bedrock"
+      "package-name": "@traceai/bedrock",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     },
     "typescript/packages/traceai_beeai": {
       "release-type": "node",
       "component": "npm-traceai-beeai",
-      "package-name": "@traceai/beeai"
+      "package-name": "@traceai/beeai",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_cerebras": {
       "release-type": "node",
       "component": "npm-traceai-cerebras",
-      "package-name": "@traceai/cerebras"
+      "package-name": "@traceai/cerebras",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_chromadb": {
       "release-type": "node",
       "component": "npm-traceai-chromadb",
-      "package-name": "@traceai/chromadb"
+      "package-name": "@traceai/chromadb",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_claude_agent_sdk": {
       "release-type": "node",
       "component": "npm-traceai-claude-agent-sdk",
-      "package-name": "@traceai/claude-agent-sdk"
+      "package-name": "@traceai/claude-agent-sdk",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_codex_sdk": {
       "release-type": "node",
       "component": "npm-traceai-codex-sdk",
-      "package-name": "@traceai/codex-sdk"
+      "package-name": "@traceai/codex-sdk",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_cohere": {
       "release-type": "node",
       "component": "npm-traceai-cohere",
-      "package-name": "@traceai/cohere"
+      "package-name": "@traceai/cohere",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_cursor_sdk": {
       "release-type": "node",
       "component": "npm-traceai-cursor-sdk",
-      "package-name": "@traceai/cursor-sdk"
+      "package-name": "@traceai/cursor-sdk",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_deepseek": {
       "release-type": "node",
       "component": "npm-traceai-deepseek",
-      "package-name": "@traceai/deepseek"
+      "package-name": "@traceai/deepseek",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_fireworks": {
       "release-type": "node",
       "component": "npm-traceai-fireworks",
-      "package-name": "@traceai/fireworks"
+      "package-name": "@traceai/fireworks",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_genkit": {
       "release-type": "node",
@@ -648,152 +681,242 @@
     "typescript/packages/traceai_google_adk": {
       "release-type": "node",
       "component": "npm-traceai-fi-instrumentation-google-adk",
-      "package-name": "@traceai/fi-instrumentation-google-adk"
+      "package-name": "@traceai/fi-instrumentation-google-adk",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_google_genai": {
       "release-type": "node",
       "component": "npm-traceai-google-genai",
-      "package-name": "@traceai/google-genai"
+      "package-name": "@traceai/google-genai",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_groq": {
       "release-type": "node",
       "component": "npm-traceai-groq",
-      "package-name": "@traceai/groq"
+      "package-name": "@traceai/groq",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_guardrails": {
       "release-type": "node",
       "component": "npm-traceai-guardrails",
-      "package-name": "@traceai/guardrails"
+      "package-name": "@traceai/guardrails",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_huggingface": {
       "release-type": "node",
       "component": "npm-traceai-huggingface",
-      "package-name": "@traceai/huggingface"
+      "package-name": "@traceai/huggingface",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_instructor": {
       "release-type": "node",
       "component": "npm-traceai-instructor",
-      "package-name": "@traceai/instructor"
+      "package-name": "@traceai/instructor",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_lancedb": {
       "release-type": "node",
       "component": "npm-traceai-lancedb",
-      "package-name": "@traceai/lancedb"
+      "package-name": "@traceai/lancedb",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     },
     "typescript/packages/traceai_langchain": {
       "release-type": "node",
       "component": "npm-traceai-langchain",
-      "package-name": "@traceai/langchain"
+      "package-name": "@traceai/langchain",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_livekit": {
       "release-type": "node",
       "component": "npm-traceai-fi-instrumentation-livekit",
-      "package-name": "@traceai/fi-instrumentation-livekit"
+      "package-name": "@traceai/fi-instrumentation-livekit",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_llamaindex": {
       "release-type": "node",
       "component": "npm-traceai-llamaindex",
-      "package-name": "@traceai/llamaindex"
+      "package-name": "@traceai/llamaindex",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_mastra": {
       "release-type": "node",
       "component": "npm-traceai-mastra",
-      "package-name": "@traceai/mastra"
+      "package-name": "@traceai/mastra",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_mcp": {
       "release-type": "node",
       "component": "npm-traceai-mcp",
-      "package-name": "@traceai/mcp"
+      "package-name": "@traceai/mcp",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_milvus": {
       "release-type": "node",
       "component": "npm-traceai-milvus",
-      "package-name": "@traceai/milvus"
+      "package-name": "@traceai/milvus",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     },
     "typescript/packages/traceai_mistral": {
       "release-type": "node",
       "component": "npm-traceai-mistral",
-      "package-name": "@traceai/mistral"
+      "package-name": "@traceai/mistral",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_mongodb": {
       "release-type": "node",
       "component": "npm-traceai-mongodb",
-      "package-name": "@traceai/mongodb"
+      "package-name": "@traceai/mongodb",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     },
     "typescript/packages/traceai_ollama": {
       "release-type": "node",
       "component": "npm-traceai-ollama",
-      "package-name": "@traceai/ollama"
+      "package-name": "@traceai/ollama",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_openai": {
       "release-type": "node",
       "component": "npm-traceai-openai",
-      "package-name": "@traceai/openai"
+      "package-name": "@traceai/openai",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_openai_agents": {
       "release-type": "node",
       "component": "npm-traceai-openai-agents",
-      "package-name": "@traceai/openai-agents"
+      "package-name": "@traceai/openai-agents",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_pgvector": {
       "release-type": "node",
       "component": "npm-traceai-pgvector",
-      "package-name": "@traceai/pgvector"
+      "package-name": "@traceai/pgvector",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     },
     "typescript/packages/traceai_pi_coding_agent": {
       "release-type": "node",
       "component": "npm-traceai-pi-coding-agent",
-      "package-name": "@traceai/pi-coding-agent"
+      "package-name": "@traceai/pi-coding-agent",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_pinecone": {
       "release-type": "node",
       "component": "npm-traceai-pinecone",
-      "package-name": "@traceai/pinecone"
+      "package-name": "@traceai/pinecone",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_pipecat": {
       "release-type": "node",
       "component": "npm-traceai-fi-instrumentation-pipecat",
-      "package-name": "@traceai/fi-instrumentation-pipecat"
+      "package-name": "@traceai/fi-instrumentation-pipecat",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_portkey": {
       "release-type": "node",
       "component": "npm-traceai-portkey",
-      "package-name": "@traceai/portkey"
+      "package-name": "@traceai/portkey",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_qdrant": {
       "release-type": "node",
       "component": "npm-traceai-qdrant",
-      "package-name": "@traceai/qdrant"
+      "package-name": "@traceai/qdrant",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_redis": {
       "release-type": "node",
       "component": "npm-traceai-redis",
-      "package-name": "@traceai/redis"
+      "package-name": "@traceai/redis",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     },
     "typescript/packages/traceai_strands": {
       "release-type": "node",
       "component": "npm-traceai-strands",
-      "package-name": "@traceai/strands"
+      "package-name": "@traceai/strands",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_together": {
       "release-type": "node",
       "component": "npm-traceai-together",
-      "package-name": "@traceai/together"
+      "package-name": "@traceai/together",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_vercel": {
       "release-type": "node",
       "component": "npm-traceai-vercel",
-      "package-name": "@traceai/vercel"
+      "package-name": "@traceai/vercel",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_vertexai": {
       "release-type": "node",
       "component": "npm-traceai-fi-instrumentation-vertexai",
-      "package-name": "@traceai/fi-instrumentation-vertexai"
+      "package-name": "@traceai/fi-instrumentation-vertexai",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_vllm": {
       "release-type": "node",
       "component": "npm-traceai-vllm",
-      "package-name": "@traceai/vllm"
+      "package-name": "@traceai/vllm",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "typescript/packages/traceai_voltagent": {
       "release-type": "node",
@@ -803,12 +926,18 @@
     "typescript/packages/traceai_weaviate": {
       "release-type": "node",
       "component": "npm-traceai-weaviate",
-      "package-name": "@traceai/weaviate"
+      "package-name": "@traceai/weaviate",
+      "extra-files": [
+        "src/instrumentation.ts"
+      ]
     },
     "typescript/packages/traceai_xai": {
       "release-type": "node",
       "component": "npm-traceai-xai",
-      "package-name": "@traceai/xai"
+      "package-name": "@traceai/xai",
+      "extra-files": [
+        "src/version.ts"
+      ]
     },
     "java": {
       "release-type": "maven",

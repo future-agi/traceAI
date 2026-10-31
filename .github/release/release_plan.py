@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only release inventory and registry plan for all five SDK ecosystems.
 
---check validates Python runtime versions and release-please coverage without network.
+--check validates Python and npm runtime versions and release-please coverage without network.
 --offline inventories publishable packages without registry calls. --only NAME ...
 limits the plan. --root allows a separate source tree. No command publishes anything.
 The release publisher, not release-please, owns tags and GitHub releases.
@@ -25,6 +25,9 @@ PYTHON_CORE = {"fi-instrumentation-otel"}
 TS_CORE = {"@traceai/fi-core", "@traceai/fi-semantic-conventions"}
 ECOSYSTEMS = ("python", "typescript", "java", "go", "nuget")
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
+# npm packages that report their own version at runtime keep it in one of these constants.
+TS_VERSION_RE = re.compile(r'^\s*(?:export\s+)?const\s+(?:VERSION|INSTRUMENTATION_VERSION)\s*=\s*["\']([^"\']+)["\']', re.M)
+TS_VERSION_FILES = ("src/version.ts", "src/instrumentation.ts")
 MAVEN_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 
 
@@ -52,6 +55,15 @@ def declared_versions(pkg_dir: Path, module: str | None) -> dict[str, str]:
             for f in sorted(set(base.rglob("version.py")) | set(base.rglob("__init__.py"))):
                 if f.is_file() and (match := VERSION_RE.search(f.read_text())):
                     out[str(f.relative_to(pkg_dir))] = match.group(1)
+    return out
+
+
+def declared_ts_versions(pkg_dir: Path) -> dict[str, str]:
+    out = {}
+    for rel in TS_VERSION_FILES:
+        f = pkg_dir / rel
+        if f.is_file() and (match := TS_VERSION_RE.search(f.read_text())):
+            out[rel] = match.group(1)
     return out
 
 
@@ -98,6 +110,7 @@ def typescript_packages(root: Path = REPO_ROOT) -> list[dict]:
                                                for dep in pkg.get(section, {}) if dep in names}),
             "core": name in TS_CORE,
             "changelog": str((d / "CHANGELOG.md").relative_to(root)) if (d / "CHANGELOG.md").is_file() else None,
+            "declared": declared_ts_versions(d),
         })
     return out
 
@@ -149,7 +162,8 @@ def consistency_problems(packages: list[dict]) -> list[str]:
         seen[key] = p["dir"]
         for rel, v in p.get("declared", {}).items():
             if v != p["version"]:
-                problems.append(f"{p['dir']}/{rel}: __version__ is {v} but pyproject.toml says {p['version']}")
+                symbol, manifest = ("VERSION", "package.json") if p["ecosystem"] == "typescript" else ("__version__", "pyproject.toml")
+                problems.append(f"{p['dir']}/{rel}: {symbol} is {v} but {manifest} says {p['version']}")
     return problems
 
 

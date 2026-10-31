@@ -43,7 +43,7 @@ import {
 
 const MODULE_NAME = "@aws-sdk/client-bedrock-runtime";
 const INSTRUMENTATION_NAME = "@traceai/bedrock";
-const INSTRUMENTATION_VERSION = "0.1.1";
+const INSTRUMENTATION_VERSION = "0.1.1"; // x-release-please-version
 
 /**
  * AWS SDK module interface for proper typing
