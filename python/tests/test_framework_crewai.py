@@ -230,7 +230,9 @@ class TestExecuteCoreWrapper:
         # Verify context attributes are set
         self.mock_span.set_attributes.assert_called_once()
         call_args = self.mock_span.set_attributes.call_args[0][0]
-        assert call_args["session_id"] == "test_session"
+        # Session identifiers can be session credentials under the structural
+        # policy; unrelated user/business identifiers remain available.
+        assert call_args["session_id"] == "__REDACTED__"
         assert call_args["user_id"] == "test_user"
 
 

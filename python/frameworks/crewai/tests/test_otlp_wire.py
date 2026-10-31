@@ -1,11 +1,13 @@
 """Actual owned-loopback HTTP captures, not a gzip round-trip of span.to_json()."""
 
 import base64
+import copy
 import gzip
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.request import ProxyHandler, Request, build_opener
+from typing import Any
 
 import pytest
 from crewai.tools.tool_calling import ToolCalling
@@ -227,7 +229,11 @@ def otlp_collector():
         {"hide_input_text": True, "hide_output_messages": True},
     ],
 )
+@pytest.mark.parametrize(
+    "shape", ["dict", "pairs", "name", "key", "header", "serialized", "flattened"]
+)
 def test_native_service_credentials_never_reach_otlp_http(
+    shape,
     encoding,
     compressed,
     settings,
@@ -239,10 +245,24 @@ def test_native_service_credentials_never_reach_otlp_http(
 
     endpoint, captured = otlp_collector
     seen = []
+    fields = {**service_credentials, "Accept": "application/json"}
+    if shape == "pairs":
+        tool_headers = [list(item) for item in fields.items()]
+    elif shape in ("name", "key", "header"):
+        tool_headers = [{shape: key, "value": value} for key, value in fields.items()]
+    elif shape == "serialized":
+        tool_headers = json.dumps(
+            [{"name": key, "value": value} for key, value in fields.items()]
+        )
+    elif shape == "flattened":
+        tool_headers = {f"headers[{key}].value": value for key, value in fields.items()}
+    else:
+        tool_headers = fields
+    before = copy.deepcopy(tool_headers)
 
-    def lookup(query: str, headers: dict) -> str:
+    def lookup(query: str, headers: Any) -> str:
         """Return synthetic service credentials without altering application data."""
-        seen.append((query, dict(headers)))
+        seen.append((query, copy.deepcopy(headers)))
         trace.get_current_span().add_event(
             "tool.log",
             {"log.body": json.dumps({"headers": headers, "message": "useful log"})},
@@ -252,7 +272,7 @@ def test_native_service_credentials_never_reach_otlp_http(
         )
 
     usage = native_tool_usage(lookup)
-    arguments = {"query": "useful query", "headers": dict(service_credentials)}
+    arguments = {"query": "useful query", "headers": tool_headers}
     calling = ToolCalling(tool_name="lookup", arguments=arguments)
     baseline = usage.use(calling, "lookup")
     provider = TracerProvider(shutdown_on_exit=False)
@@ -272,10 +292,10 @@ def test_native_service_credentials_never_reach_otlp_http(
         # Use a fresh ToolUsage to exclude native caching from the parity check.
         actual = native_tool_usage(lookup).use(calling, "lookup")
         assert actual == baseline
-        assert json.loads(actual)["headers"] == service_credentials
-        assert seen == [("useful query", service_credentials)] * 2
+        assert json.loads(actual)["headers"] == before
+        assert seen == [("useful query", before)] * 2
         assert calling.arguments == arguments
-        assert arguments["headers"] == service_credentials
+        assert arguments["headers"] == before
         assert provider.force_flush() and len(captured) == 1
         headers, raw = captured[0]
         assert headers["content-type"] == (

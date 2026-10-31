@@ -8,74 +8,85 @@ from typing import Any
 from fi_instrumentation import TraceConfig
 
 REDACTED = "__REDACTED__"
-_CREDENTIAL_KEYS = frozenset(
-    {
-        "apikey",
-        "xapikey",
-        "authorization",
-        "proxyauthorization",
-        "accesstoken",
-        "refreshtoken",
-        "authtoken",
-        "authenticationtoken",
-        "bearertoken",
-        "sessiontoken",
-        "idtoken",
-        "apitoken",
-        "csrftoken",
-        "clientsecret",
-        "clientsecretkey",
-        "clientkey",
-        "secretkey",
-        "secretaccesskey",
-        "accesskey",
-        "accesskeyid",
-        "secret",
-        "secrets",
-        "apisecret",
-        "secrettoken",
-        "privatekey",
-        "signingkey",
-        "password",
-        "passwd",
-        "token",
-        "credential",
-        "credentials",
-        "cookie",
-        "setcookie",
-    }
-)
-_CREDENTIAL_SUFFIXES = (
-    "apikey",
-    "authorization",
-    "accesstoken",
-    "refreshtoken",
-    "authtoken",
-    "authenticationtoken",
-    "bearertoken",
-    "sessiontoken",
-    "idtoken",
-    "apitoken",
-    "csrftoken",
-    # Specific service credential forms, not arbitrary '*token' fields: token
-    # counters, IDs, and tokenizer metadata must remain useful business data.
-    "securitytoken",
-    "vaulttoken",
-    "consultoken",
-    "subjecttoken",
-    "servicetoken",
-    "apisecret",
-    "clientsecret",
-    "clientsecretkey",
-    "clientkey",
-    "secretkey",
-    "secretaccesskey",
-    "accesskey",
-    "accesskeyid",
-    "privatekey",
-    "signingkey",
+# Match credential concepts, not a finite list of vendor header spellings.
+_CREDENTIAL_MARKERS = (
+    "token",
+    "secret",
     "password",
     "passwd",
+    "passphrase",
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "credential",
+    "auth",
+    "cookie",
+    "session",
+    "signature",
+    "bearer",
+    "jwt",
+    "otp",
+    "clientkey",
+    "signingkey",
+)
+# Exact normalized exceptions only: never exempt arbitrary '*_count'/'*_id'
+# names (e.g. private_token_count could still carry a credential). This documents
+# the supported non-secret usage counters, model limits, tokenizer metadata,
+# authorship, and service-token metadata. Extend deliberately with regressions.
+_NON_SECRET_NAMES = frozenset(
+    {
+        "inputtokens",
+        "outputtokens",
+        "totaltokens",
+        "prompttokens",
+        "completiontokens",
+        "cachedtokens",
+        "cachedinputtokens",
+        "cachereadtokens",
+        "cachewritetokens",
+        "inputtokensdetails",
+        "outputtokensdetails",
+        "prompttokensdetails",
+        "completiontokensdetails",
+        "numtokens",
+        "cachecreationinputtokens",
+        "cachereadinputtokens",
+        "reasoningtokens",
+        "audiotokens",
+        "tokencount",
+        "inputtokencount",
+        "outputtokencount",
+        "totaltokencount",
+        "prompttokencount",
+        "completiontokencount",
+        "cachedtokencount",
+        "reasoningtokencount",
+        "maxtokens",
+        "maxinputtokens",
+        "maxoutputtokens",
+        "maxcompletiontokens",
+        "tokensused",
+        "tokenusage",
+        "tokenizer",
+        "tokenizername",
+        "tokenizerversion",
+        "tokenid",
+        "securitytokenid",
+        "apisecretid",
+        "vaulttokencount",
+        "consultokenttl",
+        "subjecttokentype",
+        "servicetokencount",
+        "author",
+        "authors",
+        "authorid",
+        "authorname",
+        "authorship",
+        "authority",
+        "sessioncount",
+        "sessionduration",
+        "sessiondurationms",
+    }
 )
 _INPUT_ALIASES = (
     "input.value",
@@ -103,15 +114,32 @@ _OUTPUT_ALIASES = (
 )
 
 
+def _normalized_name(name: str) -> str:
+    name = re.sub(r"^x[\W_]+", "", name.lower().strip(" '\""))
+    return re.sub(r"[^a-z0-9]", "", name)
+
+
 def _credential_key(key: str) -> bool:
-    # Do not classify every field containing 'token': usage and IDs are useful.
-    # Flattened paths may put a value/index below a credential container, e.g.
-    # headers.Authorization.0 or client.config.api_key.value.
-    for part in re.split(r"[.\[\]]+", key.lower()):
-        normalized = re.sub(r"[^a-z0-9]", "", part)
-        if normalized in _CREDENTIAL_KEYS or normalized.endswith(_CREDENTIAL_SUFFIXES):
+    # Inspect every path component, including credential containers followed by
+    # a value/index. Exceptions apply to one complete field, never its children.
+    if _normalized_name(key) in _NON_SECRET_NAMES:
+        return False
+    parts = [_normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part]
+    for normalized in parts:
+        if normalized in _NON_SECRET_NAMES:
+            continue
+        # PIN is whole-name only, so e.g. 'shipping' is not a credential.
+        if normalized == "pin" or any(
+            marker in normalized for marker in _CREDENTIAL_MARKERS
+        ):
             return True
-    return False
+    # A dot/bracket can separate words of a credential name as well as paths,
+    # e.g. headers.api.key or client[private][key].
+    return any(
+        marker in left + right
+        for left, right in zip(parts, parts[1:])
+        for marker in ("apikey", "accesskey", "privatekey", "clientkey", "signingkey")
+    )
 
 
 def _safe_data(value: Any, depth: int = 0) -> Any:
@@ -134,12 +162,37 @@ def _safe_data(value: Any, depth: int = 0) -> Any:
     if value is None or type(value) in (int, float, bool):
         return value
     if type(value) is dict:
+        # Name/value header records, including their flattened representations.
+        # Keep the selector and unrelated fields; redact only the paired value.
+        def path(key: str) -> tuple:
+            return tuple(
+                _normalized_name(part) for part in re.split(r"[.\[\]]+", key) if part
+            )
+
+        credential_values = set()
+        for key, item in value.items():
+            if type(key) is not str or type(item) is not str:
+                continue
+            parts = path(key)
+            if (
+                parts
+                and parts[-1] in ("name", "key", "header", "0")
+                and _credential_key(item)
+            ):
+                paired_field = "1" if parts[-1] == "0" else "value"
+                credential_values.add(parts[:-1] + (paired_field,))
         return {
-            key: REDACTED if _credential_key(key) else _safe_data(item, depth + 1)
+            key: (
+                REDACTED
+                if _credential_key(key) or path(key) in credential_values
+                else _safe_data(item, depth + 1)
+            )
             for key, item in value.items()
             if type(key) is str
         }
     if type(value) in (list, tuple):
+        if len(value) == 2 and type(value[0]) is str and _credential_key(value[0]):
+            return [value[0], REDACTED]
         return [_safe_data(item, depth + 1) for item in value]
     return "[omitted runtime object]"
 
