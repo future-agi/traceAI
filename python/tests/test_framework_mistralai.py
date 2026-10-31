@@ -511,9 +511,10 @@ class TestUtilityFunctions:
         """Test raw input processing."""
         attributes = list(_raw_input(sample_request))
         
-        # Should return raw input attribute
-        assert len(attributes) >= 1
-        assert attributes[0][0] == "raw.input"
+        # Preserve the full request under the canonical, privacy-aware input key.
+        assert len(attributes) == 1
+        assert attributes[0][0] == "input.value"
+        assert json.loads(attributes[0][1]) == sample_request
 
     def test_raw_input_empty(self):
         """Test raw input processing with None input."""

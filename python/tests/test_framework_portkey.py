@@ -3,6 +3,7 @@ Comprehensive test suite for Portkey instrumentation framework.
 Tests the PortkeyInstrumentor and related wrapper functionality.
 """
 
+import json
 import logging
 import unittest
 from unittest.mock import Mock, patch, MagicMock, ANY, call
@@ -279,7 +280,7 @@ class TestRequestAttributesExtractor:
         attributes = list(self.extractor.get_attributes_from_request(request_params))
         
         # Should contain span kind
-        assert any(key == "fi.span.kind" for key, value in attributes)
+        assert dict(attributes)["gen_ai.span.kind"] == "LLM"
 
     def test_get_extra_attributes_from_request_basic(self):
         """Test extra attributes extraction from request."""
@@ -293,7 +294,9 @@ class TestRequestAttributesExtractor:
         attributes = dict(self.extractor.get_extra_attributes_from_request(request_params))
         
         # Should contain invocation parameters
-        assert "llm.invocation_parameters" in attributes
+        assert json.loads(attributes["gen_ai.request.parameters"]) == {
+            "model": "gpt-3.5-turbo", "temperature": 0.7, "max_tokens": 100,
+        }
 
     def test_get_extra_attributes_with_tools(self):
         """Test extra attributes extraction with tools."""
@@ -308,8 +311,8 @@ class TestRequestAttributesExtractor:
         attributes = dict(self.extractor.get_extra_attributes_from_request(request_params))
         
         # Should contain tool schemas
-        assert "llm.tools.0.tool.json_schema" in attributes
-        assert "llm.tools.1.tool.json_schema" in attributes
+        for index, tool in enumerate(request_params["tools"]):
+            assert json.loads(attributes[f"gen_ai.tool.definitions.{index}.tool.json_schema"]) == tool
 
     def test_get_extra_attributes_with_prompt_id(self):
         """Test extra attributes extraction with prompt ID."""
@@ -320,8 +323,8 @@ class TestRequestAttributesExtractor:
         
         attributes = dict(self.extractor.get_extra_attributes_from_request(request_params))
         
-        assert "prompt.id" in attributes
-        assert attributes["prompt.id"] == "test_prompt_123"
+        assert "gen_ai.prompt.id" in attributes
+        assert attributes["gen_ai.prompt.id"] == "test_prompt_123"
 
     def test_get_extra_attributes_with_variables(self):
         """Test extra attributes extraction with prompt variables."""
@@ -332,7 +335,7 @@ class TestRequestAttributesExtractor:
         
         attributes = dict(self.extractor.get_extra_attributes_from_request(request_params))
         
-        assert "llm.prompt_template.variables" in attributes
+        assert json.loads(attributes["gen_ai.prompt.template.variables"]) == request_params["variables"]
 
     def test_get_extra_attributes_with_messages(self):
         """Test extra attributes extraction with input messages."""
@@ -346,9 +349,10 @@ class TestRequestAttributesExtractor:
         
         attributes = dict(self.extractor.get_extra_attributes_from_request(request_params))
         
-        # Should contain message attributes in reverse order (last first)
-        assert "llm.input_messages.1.message.role" in attributes
-        assert "llm.input_messages.0.message.role" in attributes
+        # Indexes preserve conversation order even if attributes are yielded in reverse.
+        for index, message in enumerate(request_params["messages"]):
+            assert attributes[f"gen_ai.input.messages.{index}.message.role"] == message["role"]
+            assert attributes[f"gen_ai.input.messages.{index}.message.content"] == message["content"]
 
     def test_get_attributes_from_message_param_basic(self):
         """Test message parameter attribute extraction."""
@@ -442,7 +446,7 @@ class TestResponseAttributesExtractor:
         attributes = list(self.extractor.get_extra_attributes(response, request_params))
         
         # Should contain model name
-        assert any("llm.model_name" in attr for attr, value in attributes)
+        assert dict(attributes)["gen_ai.request.model"] == "gpt-3.5-turbo"
 
     def test_get_attributes_from_chat_completion(self):
         """Test chat completion attribute extraction."""
@@ -463,10 +467,10 @@ class TestResponseAttributesExtractor:
         
         attributes = dict(self.extractor._get_attributes_from_chat_completion(completion, request_params))
         
-        assert attributes["llm.model_name"] == "gpt-3.5-turbo"
-        assert attributes["llm.token_count.total"] == 100
-        assert attributes["llm.token_count.prompt"] == 50
-        assert attributes["llm.token_count.completion"] == 50
+        assert attributes["gen_ai.request.model"] == "gpt-3.5-turbo"
+        assert attributes["gen_ai.usage.total_tokens"] == 100
+        assert attributes["gen_ai.usage.input_tokens"] == 50
+        assert attributes["gen_ai.usage.output_tokens"] == 50
 
     def test_get_attributes_from_chat_completion_message(self):
         """Test chat completion message attribute extraction."""
@@ -493,9 +497,9 @@ class TestResponseAttributesExtractor:
         
         attributes = dict(self.extractor._get_attributes_from_completion_usage(usage))
         
-        assert attributes["llm.token_count.total"] == 150
-        assert attributes["llm.token_count.prompt"] == 75
-        assert attributes["llm.token_count.completion"] == 75
+        assert attributes["gen_ai.usage.total_tokens"] == 150
+        assert attributes["gen_ai.usage.input_tokens"] == 75
+        assert attributes["gen_ai.usage.output_tokens"] == 75
 
     def test_get_attributes_from_completion_without_usage(self):
         """Test completion without usage information."""
@@ -508,9 +512,9 @@ class TestResponseAttributesExtractor:
         
         attributes = dict(self.extractor._get_attributes_from_chat_completion(completion, request_params))
         
-        assert attributes["llm.model_name"] == "gpt-3.5-turbo"
+        assert attributes["gen_ai.request.model"] == "gpt-3.5-turbo"
         # Should not have usage attributes
-        assert "llm.token_count.total" not in attributes
+        assert "gen_ai.usage.total_tokens" not in attributes
 
 
 class TestUtilityFunctions:
