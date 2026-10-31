@@ -681,6 +681,11 @@
         "src/version.ts"
       ]
     },
+    "typescript/packages/traceai_flue": {
+      "release-type": "node",
+      "component": "npm-traceai-flue",
+      "package-name": "@traceai/flue"
+    },
     "typescript/packages/traceai_genkit": {
       "release-type": "node",
       "component": "npm-traceai-genkit",
