@@ -69,6 +69,19 @@ jobs:
           cp typescript/packages/traceai_langchain/contract/lifecycle.mjs "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/"
           cp typescript/packages/traceai_langchain/contract/types.mts "$RUNNER_TEMP/langchain-consumer/types.cts"
+      - name: Install the README Quick Start in an empty consumer
+        if: matrix.core == '1.3.2'
+        run: |
+          node typescript/packages/traceai_langchain/contract/readme.mjs install \
+            typescript/packages/traceai_langchain/README.md \
+            "$RUNNER_TEMP/langchain-readme" "$RUNNER_TEMP/langchain-tarballs"
+      - name: Run the exact README Quick Start, localhost only
+        if: matrix.core == '1.3.2'
+        run: |
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            "$(command -v node)" typescript/packages/traceai_langchain/contract/readme.mjs run \
+            typescript/packages/traceai_langchain/README.md \
+            "$RUNNER_TEMP/langchain-readme" "$RUNNER_TEMP/langchain-tarballs"
       - name: Type-check packed public API with the consumer's core version
         run: |
           typescript/node_modules/.bin/tsc --noEmit --strict --skipLibCheck --module nodenext --target es2022 \
