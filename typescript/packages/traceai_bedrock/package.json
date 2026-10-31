@@ -42,6 +42,9 @@
     "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
+  "peerDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.693.0"
+  },
   "devDependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.693.0",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.50.0",

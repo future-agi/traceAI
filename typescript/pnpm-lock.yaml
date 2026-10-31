@@ -2010,6 +2010,9 @@ importers:
       '@opentelemetry/core':
         specifier: ^1.30.1
         version: 1.30.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-trace-base':
+        specifier: '>=1.19.0 <2.0.0'
+        version: 1.30.1(@opentelemetry/api@1.9.0)
       '@traceai/fi-semantic-conventions':
         specifier: workspace:^
         version: link:../fi-semantic-conventions
@@ -2020,9 +2023,6 @@ importers:
       '@opentelemetry/api':
         specifier: '>=1.7.0 <2.0.0'
         version: 1.9.0
-      '@opentelemetry/sdk-trace-base':
-        specifier: '>=1.19.0 <2.0.0'
-        version: 1.30.1(@opentelemetry/api@1.9.0)
       '@types/jest':
         specifier: ^29.5.12
         version: 29.5.14

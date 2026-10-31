@@ -85,6 +85,27 @@ class NpmTests(unittest.TestCase):
             for package in packages:
                 self.assertEqual(json.loads((installed / package['name'] / 'package.json').read_text())['version'], '999.0.0')
 
+    def test_verify_skips_versions_already_on_npm(self):
+        # A published version is never uploaded again, so a defect in it must not block other uploads.
+        packages = [{'name': 'published', 'version': '1.0.0', 'registry_published': True},
+                    {'name': 'fresh', 'version': '1.0.0', 'registry_published': False}]
+        commands = []
+
+        def run(cmd, cwd, **kw):
+            commands.append(cmd)
+            if cmd[:2] == ['npm', 'install']:
+                (cwd / 'node_modules/fresh').mkdir(parents=True)
+                (cwd / 'node_modules/fresh/package.json').write_text('{"version": "1.0.0"}')
+
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(npm_release, 'typescript_packages', return_value=packages), \
+             patch.object(npm_release, 'tarball', side_effect=lambda dist, p: dist / (p['name'] + '.tgz')), \
+             patch.object(npm_release.subprocess, 'run', side_effect=run):
+            npm_release.verify(Path('/fixture'), packages, Path('/dist'), Path(d))
+            self.assertFalse((Path(d) / 'published').exists())
+        self.assertEqual([c[-1] for c in commands if c[:2] == ['npm', 'install']], ['/dist/fresh.tgz'])
+        self.assertEqual(sum(c[0] == 'node' for c in commands), 2, 'CJS require and ESM import of the fresh package')
+
     def test_publish_waits_for_every_dependency_before_uploading_consumer(self):
         packages = [{'name': n, 'version': '1.0.0', 'workspace_dependencies': deps, 'tag': n,
                      'registry_published': n == 'consumer'}

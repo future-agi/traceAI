@@ -4,6 +4,7 @@
 
 ### Fixed
 - Publish package changes merged after 0.1.8 was uploaded to PyPI; one-time bootstrap patch for the automated release pipeline.
+- Require `mistralai<2`. The instrumentor imports `mistralai.utils`, which mistralai 2.0 removed, so it failed to import with mistralai 2.x and 3.x.
 
 ## [0.1.6] - 2025-05-29
 ### Feature
