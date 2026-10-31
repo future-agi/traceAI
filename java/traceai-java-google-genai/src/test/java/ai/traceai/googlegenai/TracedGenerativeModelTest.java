@@ -319,6 +319,7 @@ class TracedGenerativeModelTest {
         assertThatThrownBy(() -> model.generateContentAsync("question", null).get(10, TimeUnit.SECONDS))
             .hasCauseInstanceOf(com.google.genai.errors.ApiException.class);
         assertThat(span().getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(span().getStatus().getDescription()).contains("sensitive-error");
     }
 
     @Test

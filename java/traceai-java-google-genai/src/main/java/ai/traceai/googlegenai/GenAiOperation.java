@@ -135,8 +135,8 @@ final class GenAiOperation {
                 });
             }
             if (error != null) {
-                safely(() -> tracer.setError(span, error));
                 span.setStatus(StatusCode.ERROR);
+                safely(() -> tracer.setError(span, error));
             } else if (cancelled) {
                 span.setAttribute("google.genai.cancelled", true);
             } else {
