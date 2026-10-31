@@ -96,6 +96,7 @@ Each package below links to its own installation instructions, supported SDK ver
 | `traceAI-cerebras` | [cerebras](frameworks/cerebras/) |
 | `traceAI-chromadb` | [chromadb](frameworks/chromadb/) |
 | `traceai-claude-agent-sdk` | [claude-agent-sdk](frameworks/claude-agent-sdk/) |
+| `traceai-cognee` | [cognee](frameworks/cognee/) |
 | `traceAI-cohere` | [cohere](frameworks/cohere/) |
 | `traceAI-crewai` | [crewai](frameworks/crewai/) |
 | `traceAI-deepseek` | [deepseek](frameworks/deepseek/) |
