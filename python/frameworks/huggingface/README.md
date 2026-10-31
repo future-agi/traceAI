@@ -109,6 +109,22 @@ print(response.choices[0].message.content)
 
 ### Streaming
 
+A streaming span stays open until you exhaust or explicitly close the stream.
+If you stop reading early, call `stream.close()` for a sync stream or
+`await stream.aclose()` for an async stream, preferably in a `finally` block.
+Closing early retains the output received so far and sets
+`huggingface.stream.status` to `closed`, without marking the request successful.
+Stream errors and task cancellation propagate to your application and end the span
+with an error status.
+
+Text-generation token counts and finish reasons require `details=True` and the
+corresponding metadata in the server response. Chat token counts are captured when
+the provider sends usage, including a final usage-only chunk. Tool-call argument
+fragments are merged by choice and tool index. Streaming `output.value` is a JSON
+response containing the accumulated text or chat choices; readable message text
+is also available under `gen_ai.output.messages`.
+
+
 ```python
 from huggingface_hub import InferenceClient
 

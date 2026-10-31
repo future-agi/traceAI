@@ -1,0 +1,42 @@
+name: Hugging Face compatibility
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - python/frameworks/huggingface/**
+      - .github/workflows/huggingface-tests.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: Hub ${{ matrix.hub }} offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        hub: ["0.20.0", "2.4.0"]
+    env:
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: "1"
+      FI_BASE_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package and SDK
+        run: >-
+          python -m pip install ./python/frameworks/huggingface
+          "huggingface-hub==${{ matrix.hub }}" "pytest==8.4.2" aiohttp
+      - name: Run without external network access
+        run: >-
+          sudo unshare --net --
+          "$(which python)" -I -m pytest
+          python/frameworks/huggingface/tests -q -p no:cacheprovider
