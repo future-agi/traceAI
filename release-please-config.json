@@ -844,6 +844,13 @@
       "tag-separator": "/",
       "initial-version": "0.1.0"
     },
+    "go/lambda": {
+      "release-type": "go",
+      "component": "go/lambda",
+      "package-name": "github.com/future-agi/traceAI/go/lambda",
+      "tag-separator": "/",
+      "initial-version": "0.1.0"
+    },
     "go/openai": {
       "release-type": "go",
       "component": "go/openai",
