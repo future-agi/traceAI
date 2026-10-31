@@ -214,7 +214,7 @@ def test_rest_calls_get_the_same_spans_as_grpc(endpoint):
         }
         assert span.status.status_code is StatusCode.OK
     assert attrs(answer_span) == {
-        "gen_ai.span.kind": "RETRIEVER",
+        "gen_ai.span.kind": "CHAIN",
         "discoveryengine.serving_config": SERVING_CONFIG,
         "discoveryengine.result_count": ANSWER_REFERENCES,
         "discoveryengine.answer.length": len(ANSWER_TEXT),
