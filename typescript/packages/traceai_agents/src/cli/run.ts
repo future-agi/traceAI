@@ -104,15 +104,22 @@ export async function runAgent(
             : {}),
         }
       : {};
+    // A terminal sends SIGINT to the entire foreground process group. Keeping
+    // the interactive agent in that group preserves its terminal access; do
+    // not forward the same SIGINT a second time. Noninteractive agents can be
+    // isolated in a new process group so a group interrupt reaches only this
+    // wrapper, which then forwards it exactly once.
+    const interactive = Boolean(process.stdin.isTTY);
     const child = spawn(launch.executable, [...launch.args, ...args], {
       env: agentEnvironment(process.env, overlay),
       stdio: "inherit",
       shell: false,
+      detached: process.platform !== "win32" && !interactive,
     });
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
     const handlers = signals.map((signal) => {
       const handler = () => {
-        child.kill(signal);
+        if (signal !== "SIGINT" || !interactive) child.kill(signal);
       };
       process.on(signal, handler);
       return handler;
