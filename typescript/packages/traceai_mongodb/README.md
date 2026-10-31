@@ -1,493 +1,121 @@
 # @traceai/mongodb
 
-OpenTelemetry instrumentation for [MongoDB Atlas Vector Search](https://www.mongodb.com/atlas/vector-search) in Node.js/TypeScript applications.
+Trace MongoDB commands and Atlas Vector Search metadata in Future AGI without changing how you use the MongoDB driver.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/mongodb
-# or
-pnpm add @traceai/mongodb
-# or
-yarn add @traceai/mongodb
+npm install @traceai/mongodb @traceai/fi-core mongodb
 ```
 
-## Prerequisites
+Use MongoDB driver 5.x, 6.x or 7.x and a Node.js version supported by that driver and the OpenTelemetry SDK. Vector search requires a deployment with Atlas Vector Search and a vector index matching your embeddings.
 
-- Node.js >= 18
-- MongoDB driver (`mongodb` >= 5.0.0)
-- MongoDB Atlas with Vector Search enabled (or MongoDB 7.0+ with Atlas Search)
-- OpenTelemetry SDK configured in your application
+## Configure tracing
 
-## Quick Start
+Set `FI_API_KEY` and `FI_SECRET_KEY` to your Future AGI project credentials, and `MONGODB_URI` to your database connection string. Keep these values out of source control.
+
+Initialize instrumentation before connecting. Explicit module instrumentation also works when your application imports MongoDB before the tracing setup, including native ESM imports.
 
 ```typescript
+import { register, ProjectType } from "@traceai/fi-core";
 import { MongoDBInstrumentation } from "@traceai/mongodb";
-import { MongoClient } from "mongodb";
-
-// Initialize instrumentation
-const instrumentation = new MongoDBInstrumentation({
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
-});
-
-// Enable instrumentation
-instrumentation.enable();
-
-// Manually instrument the mongodb module
 import * as mongodb from "mongodb";
+
+const provider = register({
+  projectName: "mongodb-app",
+  projectType: ProjectType.OBSERVE,
+});
+const instrumentation = new MongoDBInstrumentation();
+instrumentation.setTracerProvider(provider);
 instrumentation.manuallyInstrument(mongodb);
 
-// Now all MongoDB operations will be traced
-const client = new MongoClient(process.env.MONGODB_URI!);
-await client.connect();
+const client = new mongodb.MongoClient(process.env.MONGODB_URI!, {
+  monitorCommands: true,
+});
 
-const collection = client.db("mydb").collection("documents");
-
-// Vector search with $vectorSearch (traced)
-const results = await collection
-  .aggregate([
-    {
-      $vectorSearch: {
-        index: "vector_index",
-        path: "embedding",
-        queryVector: [0.1, 0.2, 0.3, ...],
-        numCandidates: 100,
-        limit: 10,
-      },
-    },
-  ])
-  .toArray();
-```
-
-## Configuration Options
-
-```typescript
-interface MongoDBInstrumentationConfig {
-  // Enable/disable the instrumentation
-  enabled?: boolean;
-
-  // Capture query vectors in span attributes
-  captureQueryVectors?: boolean;
-
-  // Capture result documents
-  captureDocuments?: boolean;
-}
-
-interface TraceConfigOptions {
-  // Mask sensitive input data
-  maskInputs?: boolean;
-
-  // Mask sensitive output data
-  maskOutputs?: boolean;
-}
-```
-
-## Traced Operations
-
-The instrumentation automatically traces MongoDB operations with special handling for vector search:
-
-### Vector Search Operations
-
-- `$vectorSearch` - Atlas Vector Search aggregation stage
-- `$search` - Atlas Search (including vector queries)
-
-### Standard Operations (also traced)
-
-- `aggregate` - Aggregation pipelines
-- `find` - Document queries
-- `insertOne` / `insertMany` - Insert operations
-- `updateOne` / `updateMany` - Update operations
-- `deleteOne` / `deleteMany` - Delete operations
-
-## Span Attributes
-
-Each traced operation includes relevant attributes:
-
-| Attribute                  | Description                                    |
-| -------------------------- | ---------------------------------------------- |
-| `db.system`                | Always "mongodb"                               |
-| `db.operation`             | Operation name (e.g., "aggregate", "find")     |
-| `db.collection.name`       | Collection name                                |
-| `db.mongodb.is_vector_search` | true if $vectorSearch is detected           |
-| `db.mongodb.vector_index`  | Vector index name                              |
-| `db.mongodb.num_candidates`| Number of candidates for ANN search            |
-| `db.mongodb.limit`         | Result limit                                   |
-
-## Real-World Use Cases
-
-### 1. Semantic Search with MongoDB Atlas
-
-```typescript
-import { MongoDBInstrumentation } from "@traceai/mongodb";
-import { MongoClient } from "mongodb";
-import OpenAI from "openai";
-
-const instrumentation = new MongoDBInstrumentation();
-instrumentation.enable();
-
-const client = new MongoClient(process.env.MONGODB_URI!);
-const openai = new OpenAI();
-
-async function semanticSearch(query: string, limit = 10) {
-  // Generate embedding for query
-  const embeddingResponse = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: query,
-  });
-  const queryVector = embeddingResponse.data[0].embedding;
-
-  const collection = client.db("app").collection("articles");
-
-  // Vector search (traced)
-  const results = await collection
-    .aggregate([
-      {
-        $vectorSearch: {
-          index: "article_embeddings",
-          path: "embedding",
-          queryVector,
-          numCandidates: 150,
-          limit,
-        },
-      },
-      {
-        $project: {
-          title: 1,
-          content: 1,
-          author: 1,
-          score: { $meta: "vectorSearchScore" },
-        },
-      },
-    ])
-    .toArray();
-
-  return results;
-}
-```
-
-### 2. Hybrid Search (Vector + Text + Filters)
-
-```typescript
-async function hybridSearch(
-  queryVector: number[],
-  textQuery: string,
-  filters: { category?: string; dateRange?: { start: Date; end: Date } }
-) {
-  const collection = client.db("app").collection("products");
-
-  const pipeline: any[] = [
-    {
-      $vectorSearch: {
-        index: "product_vectors",
-        path: "embedding",
-        queryVector,
-        numCandidates: 200,
-        limit: 100,
-        filter: filters.category
-          ? { category: { $eq: filters.category } }
-          : undefined,
-      },
-    },
-    {
-      $addFields: {
-        vectorScore: { $meta: "vectorSearchScore" },
-      },
-    },
-  ];
-
-  // Add text search scoring
-  if (textQuery) {
-    pipeline.push({
-      $addFields: {
-        textScore: {
-          $cond: {
-            if: {
-              $regexMatch: {
-                input: "$name",
-                regex: textQuery,
-                options: "i",
-              },
-            },
-            then: 0.3,
-            else: 0,
-          },
-        },
-      },
-    });
+async function main() {
+  try {
+    await client.connect();
+    const documents = client.db("app").collection("documents");
+    const results = await documents.find({ category: "guides" }).limit(5).toArray();
+    console.log(`Found ${results.length} documents`);
+  } finally {
+    await client.close();
+    instrumentation.disable();
+    await provider.shutdown();
   }
+}
 
-  // Combine scores and sort
-  pipeline.push(
-    {
-      $addFields: {
-        combinedScore: {
-          $add: ["$vectorScore", { $ifNull: ["$textScore", 0] }],
-        },
-      },
+main().catch(console.error);
+```
+
+Open the `mongodb-app` project in Future AGI and inspect the `mongodb find` span. Further cursor batches appear as `mongodb getMore` spans.
+
+If you already have an OpenTelemetry provider, pass that provider to `setTracerProvider()` instead of calling `register()` again. Use only one MongoDB instrumentor: disable `@opentelemetry/instrumentation-mongodb` in an auto-instrumentation bundle when using this package.
+
+## Trace vector search
+
+Use the driver's normal cursor API. The query vector must match the dimensions of your configured index.
+
+```typescript
+const results = await client.db("app").collection("documents").aggregate([
+  {
+    $vectorSearch: {
+      index: "vector_index",
+      path: "embedding",
+      queryVector: [0.1, 0.2, 0.3],
+      numCandidates: 100,
+      limit: 5,
     },
-    { $sort: { combinedScore: -1 } },
-    { $limit: 20 }
-  );
-
-  const results = await collection.aggregate(pipeline).toArray();
-  return results;
-}
-```
-
-### 3. RAG with Conversation Context
-
-```typescript
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-}
-
-async function ragWithContext(
-  userQuery: string,
-  conversationHistory: Message[]
-) {
-  const collection = client.db("app").collection("knowledge");
-
-  // Create context-aware query
-  const contextQuery =
-    conversationHistory.slice(-3).map((m) => m.content).join(" ") +
-    " " +
-    userQuery;
-
-  const embedding = await generateEmbedding(contextQuery);
-
-  // Retrieve relevant context (traced)
-  const context = await collection
-    .aggregate([
-      {
-        $vectorSearch: {
-          index: "knowledge_index",
-          path: "embedding",
-          queryVector: embedding,
-          numCandidates: 100,
-          limit: 5,
-        },
-      },
-      {
-        $project: {
-          content: 1,
-          source: 1,
-          score: { $meta: "vectorSearchScore" },
-        },
-      },
-    ])
-    .toArray();
-
-  // Generate response with context
-  const response = await openai.chat.completions.create({
-    model: "gpt-4",
-    messages: [
-      {
-        role: "system",
-        content: `Use this context to answer:\n${context.map((c) => c.content).join("\n")}`,
-      },
-      ...conversationHistory,
-      { role: "user", content: userQuery },
-    ],
-  });
-
-  return {
-    answer: response.choices[0].message.content,
-    sources: context.map((c) => c.source),
-  };
-}
-```
-
-### 4. Real-time Recommendation Engine
-
-```typescript
-async function getRecommendations(
-  userId: string,
-  currentItemId: string,
-  limit = 10
-) {
-  const db = client.db("ecommerce");
-
-  // Get current item's embedding
-  const currentItem = await db
-    .collection("products")
-    .findOne({ _id: currentItemId });
-
-  if (!currentItem?.embedding) {
-    return [];
-  }
-
-  // Get user's purchase history for filtering
-  const userHistory = await db
-    .collection("orders")
-    .distinct("productId", { userId });
-
-  // Find similar products excluding already purchased (traced)
-  const recommendations = await db
-    .collection("products")
-    .aggregate([
-      {
-        $vectorSearch: {
-          index: "product_similarity",
-          path: "embedding",
-          queryVector: currentItem.embedding,
-          numCandidates: 150,
-          limit: limit + userHistory.length,
-          filter: {
-            _id: { $nin: userHistory },
-            inStock: true,
-          },
-        },
-      },
-      {
-        $project: {
-          name: 1,
-          price: 1,
-          imageUrl: 1,
-          category: 1,
-          score: { $meta: "vectorSearchScore" },
-        },
-      },
-      { $limit: limit },
-    ])
-    .toArray();
-
-  return recommendations;
-}
-```
-
-### 5. Document Clustering and Deduplication
-
-```typescript
-async function findDuplicates(documentId: string, threshold = 0.95) {
-  const collection = client.db("docs").collection("documents");
-
-  const document = await collection.findOne({ _id: documentId });
-  if (!document?.embedding) return [];
-
-  // Find near-duplicates (traced)
-  const similar = await collection
-    .aggregate([
-      {
-        $vectorSearch: {
-          index: "doc_embeddings",
-          path: "embedding",
-          queryVector: document.embedding,
-          numCandidates: 50,
-          limit: 20,
-        },
-      },
-      {
-        $match: {
-          _id: { $ne: documentId },
-        },
-      },
-      {
-        $addFields: {
-          similarity: { $meta: "vectorSearchScore" },
-        },
-      },
-      {
-        $match: {
-          similarity: { $gte: threshold },
-        },
-      },
-    ])
-    .toArray();
-
-  return similar;
-}
-```
-
-### 6. Multi-tenant Vector Search
-
-```typescript
-async function tenantSearch(
-  tenantId: string,
-  queryVector: number[],
-  filters?: { category?: string }
-) {
-  const collection = client.db("saas").collection("tenant_data");
-
-  // Pre-filter by tenant for security and performance
-  const searchFilter: any = { tenantId: { $eq: tenantId } };
-
-  if (filters?.category) {
-    searchFilter.category = { $eq: filters.category };
-  }
-
-  const results = await collection
-    .aggregate([
-      {
-        $vectorSearch: {
-          index: "tenant_vectors",
-          path: "embedding",
-          queryVector,
-          numCandidates: 100,
-          limit: 20,
-          filter: searchFilter,
-        },
-      },
-      {
-        $project: {
-          embedding: 0, // Don't return embeddings
-          tenantId: 0, // Don't expose tenant info
-        },
-      },
-    ])
-    .toArray();
-
-  return results;
-}
-```
-
-## Setting Up Vector Search Index
-
-```javascript
-// Create vector search index in MongoDB Atlas
-db.collection.createSearchIndex({
-  name: "vector_index",
-  type: "vectorSearch",
-  definition: {
-    fields: [
-      {
-        type: "vector",
-        path: "embedding",
-        numDimensions: 1536,
-        similarity: "cosine",
-      },
-      {
-        type: "filter",
-        path: "category",
-      },
-      {
-        type: "filter",
-        path: "tenantId",
-      },
-    ],
   },
-});
+]).toArray();
 ```
 
-## Integration with OpenTelemetry
+`$vectorSearch` and legacy `$search.knnBeta` commands include the index name, vector dimensions, candidate count and result limit when present. The package never records vector values, query/filter contents or returned documents.
+
+## Span behavior
+
+- Spans describe executed database commands, not calls that construct a cursor. Creating or closing an unused cursor produces no span.
+- `find()`, `aggregate()`, chaining, `findOne()`, async iteration and early cursor close retain their normal behavior. Instrumentation does not call `toArray()` or drain a cursor.
+- Insert, update, delete, search-index and read commands are traced. Authentication and handshakes are excluded. Batched writes and cursor iteration can produce multiple command spans.
+- `disable()` removes command listeners and restores instrumented methods. In-flight spans end without a success status; database work continues normally. `enable()` resumes tracing.
+- For a client that is already connected, construct it with `monitorCommands: true` and call `instrumentation.instrumentClient(client)`. Otherwise, initialize instrumentation before connecting.
+- Command monitoring does not report failures that happen before a command is sent, such as invalid arguments or server selection failures. These errors still reach your application unchanged.
+
+| Attribute | Meaning |
+| --- | --- |
+| `fi.span.kind` | `VECTOR_DB` |
+| `db.system`, `db.system.name` | `mongodb` |
+| `db.namespace` | Database name |
+| `db.collection.name` | Collection name, when provided by the command |
+| `db.operation.name` | Wire command name, such as `find`, `aggregate` or `insert` |
+| `db.operation.type` | `vector_search` for supported vector stages |
+| `db.vector.query.top_k` | Requested vector result limit |
+| `db.vector.query.dimensions` | Query vector length |
+| `db.vector.query.num_candidates` | Requested candidate count |
+| `db.vector.index_name` | Vector search index name |
+| `db.response.returned_rows` | Documents in this response batch, not the full cursor |
+| `db.operation.batch_size` | Documents in an insert command |
+| `db.response.inserted_count`, `db.response.modified_count`, `db.response.deleted_count` | Write result counts, when present |
+
+## Update operation-based dashboards
+
+Spans now follow database commands rather than Collection method calls. For example, both `insertOne()` and `insertMany()` produce `mongodb insert` spans with `db.operation.name=insert`; update and delete methods similarly use `update` and `delete`. Adjust filters that used method names. Treat `getMore` spans and `db.response.returned_rows` as individual response batches rather than a materialized full result set.
+
+## Privacy and configuration
+
+The existing constructor options remain supported:
 
 ```typescript
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { MongoDBInstrumentation } from "@traceai/mongodb";
-
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({
-    url: "http://localhost:4318/v1/traces",
-  }),
-  instrumentations: [new MongoDBInstrumentation()],
+const instrumentation = new MongoDBInstrumentation({
+  instrumentationConfig: { enabled: true },
+  traceConfig: { hideErrorDetails: true },
 });
-
-sdk.start();
 ```
+
+Error messages and stack traces are hidden by default because database errors can contain query values. Set `traceConfig.hideErrorDetails` to `false` only if you intend to export those details. Error status and exception type remain available when details are hidden.
+
+`captureQueryVectors` and `captureResultVectors` are deprecated compatibility options. They do not enable payload capture. Database, collection and index names are metadata and remain visible.
 
 ## License
 

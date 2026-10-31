@@ -1,0 +1,41 @@
+name: MongoDB TypeScript tests
+
+on:
+  pull_request:
+    paths:
+      - 'typescript/packages/traceai_mongodb/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/mongodb-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mongodb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node: ['22', '24']
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install locked dependencies without lifecycle scripts
+        run: pnpm --filter @traceai/mongodb... install --frozen-lockfile --ignore-scripts
+      - name: Build MongoDB and workspace dependencies
+        run: pnpm --filter @traceai/mongodb... run build
+      - name: Test real drivers and OTLP over loopback only
+        run: sudo --preserve-env=PATH unshare --net bash -c 'ip link set lo up; pnpm --filter @traceai/mongodb test --runInBand'
