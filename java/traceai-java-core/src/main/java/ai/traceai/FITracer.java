@@ -3,6 +3,7 @@ package ai.traceai;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanKind;
@@ -166,7 +167,7 @@ public class FITracer {
      * @param messages the list of message maps
      */
     public void setInputMessages(Span span, List<Map<String, String>> messages) {
-        if (!config.isHideInputMessages() && messages != null && !messages.isEmpty()) {
+        if (!config.isHideInputs() && !config.isHideInputMessages() && messages != null && !messages.isEmpty()) {
             span.setAttribute(SemanticConventions.LLM_INPUT_MESSAGES,
                 truncateIfNeeded(gson.toJson(messages)));
         }
@@ -179,7 +180,7 @@ public class FITracer {
      * @param messages the list of message maps
      */
     public void setOutputMessages(Span span, List<Map<String, String>> messages) {
-        if (!config.isHideOutputMessages() && messages != null && !messages.isEmpty()) {
+        if (!config.isHideOutputs() && !config.isHideOutputMessages() && messages != null && !messages.isEmpty()) {
             span.setAttribute(SemanticConventions.LLM_OUTPUT_MESSAGES,
                 truncateIfNeeded(gson.toJson(messages)));
         }
@@ -207,10 +208,16 @@ public class FITracer {
      * @param error the error
      */
     public void setError(Span span, Throwable error) {
-        span.setStatus(StatusCode.ERROR, error.getMessage());
-        span.recordException(error);
         span.setAttribute(SemanticConventions.ERROR_TYPE, error.getClass().getName());
-        span.setAttribute(SemanticConventions.ERROR_MESSAGE, error.getMessage());
+        if (config.isHideErrorDetails()) {
+            span.setStatus(StatusCode.ERROR);
+            span.addEvent("exception", Attributes.of(
+                AttributeKey.stringKey("exception.type"), error.getClass().getName()));
+        } else {
+            span.setStatus(StatusCode.ERROR, error.getMessage());
+            span.recordException(error);
+            span.setAttribute(SemanticConventions.ERROR_MESSAGE, error.getMessage());
+        }
     }
 
     /**

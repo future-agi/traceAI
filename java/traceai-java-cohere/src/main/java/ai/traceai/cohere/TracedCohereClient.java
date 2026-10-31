@@ -95,8 +95,10 @@ public class TracedCohereClient {
             tracer.setInputMessages(span, inputMessages);
 
             // Capture preamble/system prompt if present
-            request.getPreamble().ifPresent(preamble ->
-                span.setAttribute("cohere.preamble", preamble));
+            if (!tracer.getConfig().isHideInputs() && !tracer.getConfig().isHideInputMessages()) {
+                request.getPreamble().ifPresent(preamble ->
+                    span.setAttribute("cohere.preamble", preamble));
+            }
 
             tracer.setRawInput(span, request);
 
@@ -127,16 +129,18 @@ public class TracedCohereClient {
                 }));
 
             // Capture tool calls if present
-            response.getToolCalls().ifPresent(toolCalls -> {
-                for (int i = 0; i < toolCalls.size(); i++) {
-                    ToolCall toolCall = toolCalls.get(i);
-                    span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                        + SemanticConventions.TOOL_CALL_FUNCTION_NAME, toolCall.getName());
-                    span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
-                        + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
-                        tracer.toJson(toolCall.getParameters()));
-                }
-            });
+            if (!tracer.getConfig().isHideOutputs() && !tracer.getConfig().isHideOutputMessages()) {
+                response.getToolCalls().ifPresent(toolCalls -> {
+                    for (int i = 0; i < toolCalls.size(); i++) {
+                        ToolCall toolCall = toolCalls.get(i);
+                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                            + SemanticConventions.TOOL_CALL_FUNCTION_NAME, toolCall.getName());
+                        span.setAttribute(SemanticConventions.MESSAGE_TOOL_CALLS + "." + i + "."
+                            + SemanticConventions.TOOL_CALL_FUNCTION_ARGUMENTS,
+                            tracer.toJson(toolCall.getParameters()));
+                    }
+                });
+            }
 
             tracer.setRawOutput(span, response);
             span.setStatus(StatusCode.OK);
@@ -255,7 +259,9 @@ public class TracedCohereClient {
 
             // Capture query
             tracer.setInputValue(span, request.getQuery());
-            span.setAttribute(SemanticConventions.GEN_AI_RERANKER_QUERY, request.getQuery());
+            if (!tracer.getConfig().isHideInputs()) {
+                span.setAttribute(SemanticConventions.GEN_AI_RERANKER_QUERY, request.getQuery());
+            }
 
             // Capture documents count
             if (request.getDocuments() != null) {
