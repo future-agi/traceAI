@@ -42,7 +42,6 @@ from traceai_dspy.version import __version__
 from wrapt import (
     BoundFunctionWrapper,  # type: check this import
     FunctionWrapper,
-    wrap_object,
 )
 
 if TYPE_CHECKING:
@@ -50,8 +49,6 @@ if TYPE_CHECKING:
 
 logger = getLogger(__name__)
 
-
-_DSPY_MODULE = "dspy"
 
 
 class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
@@ -74,82 +71,69 @@ class DSPyInstrumentor(BaseInstrumentor):  # type: ignore
             config=config,
         )
 
-        from dspy import Predict
+        import dspy
 
-        wrap_object(
-            module="dspy",
-            name="LM.__call__",
-            factory=CopyableFunctionWrapper,
-            args=(_LMCallWrapper(self._tracer),),
-        )
+        self._patches = []
+        self._wrappers = []
+        self._callback = None
+        try:
+            from dspy.utils.callback import BaseCallback  # noqa: F401
+        except ModuleNotFoundError as exc:
+            if exc.name != "dspy.utils.callback":
+                raise
+            # Early 2.5 releases predate callbacks. Keep their public API working.
+            self._patch(dspy.LM, "__call__", _LMCallWrapper)
+            self._patch(dspy.Module, "__call__", _ModuleForwardWrapper)
+            self._patch(dspy.Predict, "forward", _PredictForwardWrapper)
+            for cls in dspy.Predict.__subclasses__():
+                if "forward" in cls.__dict__:
+                    self._patch(cls, "forward", _PredictForwardWrapper)
+            self._patch(dspy.Retrieve, "forward", _RetrieverForwardWrapper)
+            self._patch(dspy.Adapter, "__call__", _AdapterCallWrapper)
+        else:
+            from traceai_dspy._callback import _DSPyCallback
 
-        # Predict is a concrete (non-abstract) class that may be invoked
-        # directly, but DSPy also has subclasses of Predict that override the
-        # forward method. We instrument both the forward methods of the base
-        # class and all subclasses.
-        wrap_object(
-            module=_DSPY_MODULE,
-            name="Predict.forward",
-            factory=CopyableFunctionWrapper,
-            args=(_PredictForwardWrapper(self._tracer),),
-        )
+            self._callback = _DSPyCallback(self._tracer)
+            # Configure from the settings-owning thread, just like dspy.configure.
+            # Do not replace or mutate the application's callback list.
+            dspy.configure(callbacks=[*dspy.settings.callbacks, self._callback])
 
-        predict_subclasses = Predict.__subclasses__()
-        for predict_subclass in predict_subclasses:
-            wrap_object(
-                module=_DSPY_MODULE,
-                name=predict_subclass.__name__ + ".forward",
-                factory=CopyableFunctionWrapper,
-                args=(_PredictForwardWrapper(self._tracer),),
-            )
+        # DSPy does not emit callbacks for these two components. Only these
+        # supplemental patches remain on callback-capable releases.
+        self._patch(getattr(dspy, "ColBERTv2", None), "__call__", _RetrieverModelCallWrapper)
+        self._patch(getattr(dspy, "Embedder", None), "__call__", _EmbedderCallWrapper)
 
-        wrap_object(
-            module=_DSPY_MODULE,
-            name="Retrieve.forward",
-            factory=CopyableFunctionWrapper,
-            args=(_RetrieverForwardWrapper(self._tracer),),
-        )
-
-        wrap_object(
-            module=_DSPY_MODULE,
-            # At this time, dspy.Module does not have an abstract forward
-            # method, but assumes that user-defined subclasses implement the
-            # forward method and invokes that method using __call__.
-            name="Module.__call__",
-            factory=CopyableFunctionWrapper,
-            args=(_ModuleForwardWrapper(self._tracer),),
-        )
-
-        # At this time, there is no common parent class for retriever models as
-        # there is for language models. We instrument the retriever models on a
-        # case-by-case basis.
-        wrap_object(
-            module=_DSPY_MODULE,
-            name="ColBERTv2.__call__",
-            factory=CopyableFunctionWrapper,
-            args=(_RetrieverModelCallWrapper(self._tracer),),
-        )
-
-        wrap_object(
-            module=_DSPY_MODULE,
-            name="Adapter.__call__",
-            factory=CopyableFunctionWrapper,
-            args=(_AdapterCallWrapper(self._tracer),),
-        )
-
-        wrap_object(
-            module=_DSPY_MODULE,
-            name="Embedder.__call__",
-            factory=CopyableFunctionWrapper,
-            args=(_EmbedderCallWrapper(self._tracer),),
-        )
+    def _patch(self, cls: Any, method: str, wrapper: Any) -> None:
+        if cls is None or not hasattr(cls, method):
+            return
+        original = getattr(cls, method)
+        owned = method in cls.__dict__
+        handler = wrapper(self._tracer)
+        self._wrappers.append(handler)
+        patched = CopyableFunctionWrapper(original, handler)
+        setattr(cls, method, patched)
+        self._patches.append((cls, method, original, patched, owned))
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        # Restore DSPy constructs
-        from dspy import Predict
+        import dspy
 
-        if hasattr(Predict.forward, "__wrapped__"):
-            Predict.forward = Predict.forward.__wrapped__
+        if callback := getattr(self, "_callback", None):
+            # Captured callback lists (e.g. streamify / dspy.context) may outlive
+            # registration. Disable new starts; in-flight calls still finish.
+            callback.disable()
+            dspy.configure(callbacks=[c for c in dspy.settings.callbacks if c is not callback])
+            self._callback = None
+        for wrapper in getattr(self, "_wrappers", []):
+            wrapper._enabled = False
+        self._wrappers = []
+        for cls, method, original, patched, owned in reversed(getattr(self, "_patches", [])):
+            # Never overwrite an instrumentor installed after us.
+            if cls.__dict__.get(method) is patched:
+                if owned:
+                    setattr(cls, method, original)
+                else:
+                    delattr(cls, method)
+        self._patches = []
 
 
 class CopyableBoundFunctionWrapper(BoundFunctionWrapper):  # type: ignore
@@ -205,6 +189,7 @@ class _WithTracer(ABC):
     def __init__(self, tracer: trace_api.Tracer, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._tracer = tracer
+        self._enabled = True
 
 
 class _LMCallWrapper(_WithTracer):
@@ -219,7 +204,7 @@ class _LMCallWrapper(_WithTracer):
         args: Tuple[type, Any],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         arguments = _bind_arguments(wrapped, *args, **kwargs)
         messages = arguments.get("messages")
@@ -271,7 +256,7 @@ class _PredictForwardWrapper(_WithTracer):
         args: Tuple[type, Any],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         from dspy import Predict
 
@@ -282,9 +267,8 @@ class _PredictForwardWrapper(_WithTracer):
         # for a single invocation, we don't create a span for the base class'
         # forward method if the instance belongs to a proper subclass of Predict
         # with an overridden forward method.
-        is_instance_of_predict_subclass = (
-            isinstance(instance, Predict) and (cls := instance.__class__) is not Predict
-        )
+        cls = instance.__class__
+        is_instance_of_predict_subclass = isinstance(instance, Predict) and cls is not Predict
         has_overridden_forward_method = getattr(cls, "forward", None) is not getattr(
             Predict, "forward", None
         )
@@ -365,7 +349,7 @@ class _ModuleForwardWrapper(_WithTracer):
         args: Tuple[type, Any],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         span_name = instance.__class__.__name__ + ".forward"
         arguments = _bind_arguments(wrapped, *args, **kwargs)
@@ -432,7 +416,7 @@ class _RetrieverForwardWrapper(_WithTracer):
         args: Tuple[type, Any],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         span_name = instance.__class__.__name__ + ".forward"
         arguments = _bind_arguments(wrapped, *args, **kwargs)
@@ -482,7 +466,7 @@ class _RetrieverModelCallWrapper(_WithTracer):
         args: Tuple[type, Any],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         class_name = instance.__class__.__name__
         span_name = class_name + ".__call__"
@@ -531,7 +515,7 @@ class _AdapterCallWrapper(_WithTracer):
         args: Tuple[type, Any],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
         arguments = _bind_arguments(wrapped, *args, **kwargs)
         span_name = instance.__class__.__name__ + ".__call__"
@@ -574,11 +558,13 @@ class _EmbedderCallWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if not self._enabled or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
         arguments = _bind_arguments(wrapped, *args, **kwargs)
-        input_texts = arguments.get("texts") or args[0]  # Get input texts
+        input_texts = arguments.get("inputs", arguments.get("texts", args[0] if args else []))
+        if isinstance(input_texts, str):
+            input_texts = [input_texts]
         span_name = instance.__class__.__name__ + ".__call__"
 
         with self._tracer.start_as_current_span(
@@ -838,6 +824,8 @@ def _get_embedding_input(inputs: list) -> Iterator[Tuple[str, Any]]:
 
 
 def _get_embedding_output(response: list) -> Iterator[Tuple[str, Any]]:
+    if getattr(response, "ndim", None) == 1:
+        response = [response]
     output = []
     for index, embedding in enumerate(response):
         embedding_vector = embedding.tolist()
