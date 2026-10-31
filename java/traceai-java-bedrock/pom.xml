@@ -31,6 +31,18 @@
 
         <!-- Testing -->
         <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
+            <version>${aws-sdk.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.0.0-alpha</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
