@@ -74,6 +74,16 @@ class _Stream(ObjectProxy):  # type: ignore
         finally:
             _finish_on_exit(self, exc)
 
+    def close(self) -> Any:
+        error = None
+        try:
+            return self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
+
     def __iter__(self) -> Iterator[Any]:
         return self
 
@@ -163,6 +173,16 @@ class _AsyncStream(ObjectProxy):
             raise
         finally:
             _finish_on_exit(self, exc)
+
+    async def close(self) -> Any:
+        error = None
+        try:
+            return await self.__wrapped__.close()
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _finish_on_exit(self, error)
 
     def __aiter__(self):
         return self

@@ -30,6 +30,10 @@ class OpenAIInstrumentor(BaseInstrumentor):  # type: ignore
     An instrumentor for openai
     """
 
+    # Legacy provider entry points only defer once extraction/privacy parity is
+    # present, not merely because an older shared package happens to be enabled.
+    _supports_deepseek_extensions = True
+
     __slots__ = (
         "_original_request",
         "_original_async_request",
