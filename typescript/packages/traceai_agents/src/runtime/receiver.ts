@@ -150,9 +150,15 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
           rejected++;
         }
       }
-      res
-        .writeHead(200, { "Content-Type": "application/x-protobuf" })
-        .end(encodeResponse(rejected));
+      const response =
+        type === "application/json"
+          ? JSON.stringify(
+              rejected
+                ? { partialSuccess: { rejectedSpans: String(rejected) } }
+                : {},
+            )
+          : encodeResponse(rejected);
+      res.writeHead(200, { "Content-Type": type }).end(response);
     } catch {
       if (!res.headersSent) res.writeHead(400).end();
     }

@@ -121,6 +121,7 @@ export function saveConfig(p: Paths, c: Config): void {
 export async function configTransaction<T>(
   p: Paths,
   action: (config: Config) => Promise<T>,
+  apply?: () => Promise<void>,
 ): Promise<T> {
   protectedDirectory(p.config, true);
   const lock = join(p.config, "write.lock");
@@ -131,8 +132,18 @@ export async function configTransaction<T>(
   }
   try {
     const config = loadConfig(p);
+    const previous = structuredClone(config);
     const result = await action(config);
     saveConfig(p, config);
+    try {
+      await apply?.();
+    } catch (e) {
+      // A rejected runtime registration must not leave the installation enabled
+      // on disk. Keep the write lock through rollback and runtime reconciliation.
+      saveConfig(p, previous);
+      await apply?.().catch(() => undefined);
+      throw e;
+    }
     return result;
   } finally {
     rmdirSync(lock);
