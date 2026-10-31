@@ -25,11 +25,17 @@
         <dependency>
             <groupId>com.cohere</groupId>
             <artifactId>cohere-java</artifactId>
-            <version>1.9.3</version>
+            <version>${cohere-java.version}</version>
             <scope>provided</scope>
         </dependency>
 
         <!-- Testing -->
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.0.0-alpha</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -56,4 +62,26 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <profiles>
+        <profile>
+            <id>cohere-1.12-maven-transport</id>
+            <activation>
+                <property>
+                    <name>cohere-java.version</name>
+                    <value>1.12.0</value>
+                </property>
+            </activation>
+            <!-- Cohere 1.12's POM names OkHttp's multiplatform artifact. Maven
+                 needs the JVM artifact explicitly; Gradle selects its JVM variant. -->
+            <dependencies>
+                <dependency>
+                    <groupId>com.squareup.okhttp3</groupId>
+                    <artifactId>okhttp-jvm</artifactId>
+                    <version>5.2.1</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
 </project>

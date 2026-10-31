@@ -16,7 +16,8 @@ import java.util.Optional;
 
 /**
  * Instrumentation wrapper for Cohere Java client.
- * Wraps the Cohere client to provide automatic tracing of all API calls.
+ * Traces v1 chat, embed, rerank and chat streams, plus the same operations through
+ * {@link #v2()}. Calls made directly on {@link #unwrap()} are not traced.
  *
  * <p>Usage:</p>
  * <pre>
@@ -308,9 +309,53 @@ public class TracedCohereClient {
     }
 
     /**
-     * Gets the underlying Cohere client.
+     * Returns a typed traced facade for v2 chat, embed, rerank and chat streaming.
+     * @return the traced v2 client
+     */
+    public TracedCohereV2Client v2() {
+        return new TracedCohereV2Client(client.v2(), tracer);
+    }
+
+    /**
+     * Opens a traced v1 chat stream. Always use try-with-resources when consuming it.
+     * @param request the stream request
+     * @return the closeable stream of unchanged SDK events
+     */
+    public TracedCohereStream<StreamedChatResponse> chatStream(ChatStreamRequest request) {
+        return chatStream(request, null);
+    }
+
+    /**
+     * Opens a traced v1 chat stream with SDK request options.
+     * @param request the stream request
+     * @param options the SDK request options, or null for defaults
+     * @return the closeable stream of unchanged SDK events
+     */
+    public TracedCohereStream<StreamedChatResponse> chatStream(
+            ChatStreamRequest request, com.cohere.api.core.RequestOptions options) {
+        Span span = tracer.startSpan("Cohere Chat Stream", FISpanKind.LLM);
+        CohereAttributes attributes = new CohereAttributes(tracer, span);
+        try (Scope ignored = span.makeCurrent()) {
+            request.getModel().ifPresent(attributes::model);
+            request.getTemperature().ifPresent(value ->
+                span.setAttribute(SemanticConventions.LLM_REQUEST_TEMPERATURE, value.doubleValue()));
+            request.getMaxTokens().ifPresent(value ->
+                span.setAttribute(SemanticConventions.LLM_REQUEST_MAX_TOKENS, value.longValue()));
+            attributes.chatInput(request);
+            return new TracedCohereStream<>(client.chatStream(request, options), tracer, span,
+                attributes::v1Event, attributes::streamOutput);
+        } catch (RuntimeException | Error error) {
+            tracer.setError(span, error);
+            span.end();
+            throw error;
+        }
+    }
+
+    /**
+     * Gets the underlying, untraced Cohere client. Calls through this escape hatch
+     * bypass instrumentation; use {@link #v2()} for supported v2 operations.
      *
-     * @return the wrapped Cohere client
+     * @return the original SDK client, without tracing
      */
     public Cohere unwrap() {
         return client;
