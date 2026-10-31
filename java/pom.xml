@@ -68,6 +68,7 @@
         <module>traceai-java-elasticsearch</module>
 
         <!-- Frameworks -->
+        <module>traceai-java-koog</module>
         <module>traceai-langchain4j</module>
         <module>traceai-spring-ai</module>
         <module>traceai-spring-boot-starter</module>
