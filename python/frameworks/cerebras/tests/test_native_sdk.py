@@ -353,6 +353,8 @@ def test_request_tools_and_transport_metadata(tracing):
                 }
             ],
             extra_headers={"X-Fixture-Secret": "transport-secret"},
+            logit_bias={"3": 1},
+            extra_body={"custom_option": "body-only"},
         )
     assert len(sent[0]["messages"]) == 2
     assert sent[0]["messages"][0]["tool_calls"] == [CALL]
@@ -364,6 +366,13 @@ def test_request_tools_and_transport_metadata(tracing):
     assert attrs["gen_ai.input.messages.1.message.tool_call_id"] == "call_fixture"
     assert "lookup" in attrs["gen_ai.tool.definitions.0.tool.json_schema"]
     assert b"transport-secret" not in wire
+    raw_input = json.loads(attrs["input.value"])
+    assert raw_input["logit_bias"] == sent[0]["logit_bias"] == {"3": 1}
+    assert (
+        raw_input["extra_body"]["custom_option"]
+        == sent[0]["custom_option"]
+        == "body-only"
+    )
 
 
 def test_uninstrument_restores_all_resources(tracing):

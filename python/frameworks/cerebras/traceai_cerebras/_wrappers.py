@@ -119,7 +119,24 @@ def _get_input_attributes(
         attributes[SpanAttributes.GEN_AI_REQUEST_PARAMETERS] = safe_json_dumps(
             invocation
         )
-    raw_input = {"model": model, **invocation}
+    # Preserve the supplied request body, including SDK extension fields, but
+    # never serialize options that belong to HTTP transport rather than the model.
+    transport_options = {
+        "extra_headers",
+        "extra_query",
+        "timeout",
+        "cf_ray",
+        "x_amz_cf_id",
+        "x_delay_time",
+    }
+    raw_input = {
+        "model": model,
+        **{
+            key: value
+            for key, value in kwargs.items()
+            if key not in transport_options and value is not None
+        },
+    }
     if "prompt" in kwargs:
         raw_input["prompt"] = kwargs["prompt"]
         attributes[SpanAttributes.GEN_AI_PROMPTS] = safe_json_dumps(kwargs["prompt"])
