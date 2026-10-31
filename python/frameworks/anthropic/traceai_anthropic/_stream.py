@@ -1,6 +1,7 @@
 from collections import defaultdict
 from copy import deepcopy
 import inspect
+import logging
 import threading
 from typing import (
     TYPE_CHECKING,
@@ -39,6 +40,9 @@ if TYPE_CHECKING:
     from anthropic import Stream
     from anthropic.types import Completion, RawMessageStreamEvent
 
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
 
 # Settled items held back by a stalled earlier extraction before ordering is
 # given up for that extraction.
@@ -62,6 +66,7 @@ class _StreamLifecycle(ObjectProxy):
         self._self_extracting = set()
         self._self_pending = {}
         self._self_skipped = set()
+        self._self_dropped = False
 
     def _begin_operation(self):
         with self._self_lock:
@@ -85,7 +90,8 @@ class _StreamLifecycle(ObjectProxy):
         # must not replace the native item.
         try:
             return _plain(self._response_accumulator.extract(item))
-        except Exception:
+        except Exception as error:
+            self._dropped("could not read a stream event", error)
             return None
 
     def _merge(self, values):
@@ -95,9 +101,19 @@ class _StreamLifecycle(ObjectProxy):
             return
         try:
             self._response_accumulator.merge(values)
-        except Exception:
+        except Exception as error:
             # Losing one item's telemetry must not change the native operation.
-            pass
+            self._dropped("could not record a stream event", error)
+
+    def _dropped(self, what, error=None):
+        # The span is still exported, but without this event's content or usage.
+        # Report only the exception type: its message may carry model content.
+        detail = f"{what} ({type(error).__name__})" if error is not None else what
+        if self._self_dropped:
+            logger.debug("Anthropic stream telemetry %s; the span is incomplete.", detail)
+            return
+        self._self_dropped = True
+        logger.warning("Anthropic stream telemetry %s; the span is incomplete. Later drops on this stream log at DEBUG.", detail)
 
     def _drain(self, everything=False):
         # Merge settled items in ticket order, up to the earliest ticket still
@@ -131,6 +147,7 @@ class _StreamLifecycle(ObjectProxy):
                             stalled = {t for t in self._self_extracting if t < latest}
                             self._self_skipped |= stalled
                             self._self_extracting -= stalled
+                            self._dropped(f"stopped waiting for {len(stalled)} stalled stream event(s)")
                         self._drain()
                 finally:
                     if terminal:
