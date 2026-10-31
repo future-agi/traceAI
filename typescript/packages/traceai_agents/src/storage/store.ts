@@ -329,11 +329,11 @@ export class Spool {
       return undefined;
     return this.db
       .prepare(
-        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND state=? AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
+        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND (state='queued' OR (state='ambiguous' AND ?)) AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
       )
       .get(
         routeId,
-        "queued",
+        Number(route.binding.backendContract === "immutable-agent-v1"),
         route.epoch,
         Date.now(),
         Date.now() - 86_400_000,
@@ -350,7 +350,7 @@ export class Spool {
   ): void {
     this.write(() => {
       const row = this.db
-        .prepare("SELECT route,epoch FROM records WHERE id=?")
+        .prepare("SELECT route,epoch,state FROM records WHERE id=?")
         .get(id) as any;
       if (
         !row ||
@@ -366,7 +366,9 @@ export class Spool {
           result.code === "HELD_AUTH"
             ? "held-auth"
             : result.state === "retry"
-              ? "queued"
+              ? row.state === "ambiguous"
+                ? "ambiguous"
+                : "queued"
               : result.state,
           result.state === "accepted" ? 1 : 0,
           result.nextAt ?? 0,

@@ -21,6 +21,7 @@ import {
   OSSecretStore,
   newCredentials,
   parseAuth,
+  removeAuth,
 } from "../security/credentials.js";
 import {
   DEFAULT_ENDPOINT,
@@ -156,10 +157,32 @@ async function startRuntime(
   }
   throw new AgentError("RUNTIME_UNAVAILABLE");
 }
+/** Reuse a running daemon, or own a temporary control/storage runtime. Unlike
+ * normal startup this cannot capture or export, and the caller closes it. */
+async function ensureControlRuntime(
+  p: Paths,
+  settings: CLIOptions,
+): Promise<Runtime | undefined> {
+  try {
+    await runtimeRequest(p.socket, { operation: "status" }, 200);
+    return undefined;
+  } catch (e) {
+    if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE") throw e;
+  }
+  const runtime = new Runtime(
+    p,
+    settings.storageEntry,
+    settings.version,
+    settings.registry,
+  );
+  await runtime.start(true);
+  return runtime;
+}
 export async function main(
   args: string[],
   settings: CLIOptions,
 ): Promise<number> {
+  let controlRuntime: Runtime | undefined;
   const output = (value: object) =>
     process.stdout.write(
       JSON.stringify({ schema_version: 1, ...value }) + "\n",
@@ -312,26 +335,25 @@ export async function main(
         await configTransaction(p, async (config) => {
           const profile = config.profiles[name];
           if (!profile) throw new AgentError("UNKNOWN_PROFILE", 2);
+          if (Object.values(config.routes).some((r) => r.profile === name))
+            controlRuntime = await ensureControlRuntime(p, settings);
           for (const [id, route] of Object.entries(config.routes))
             if (route.profile === name) {
-              await runtimeRequest(p.socket, {
+              const fenced = await runtimeRequest(p.socket, {
                 operation: "disable",
                 route: id,
                 purge: options["purge-capture"] === true,
               });
               route.route.enabled = false;
-              route.route.epoch++;
+              route.route.epoch = fenced.epoch;
             }
-          await store(p, profile).remove(profile.credentialRef);
+          await removeAuth(store(p, profile), profile.credentialRef);
           profile.removed = true;
         });
         output({
           state: "auth-removed",
           code: 0,
-          reasons: [
-            "QUEUED_DATA_HELD",
-            "IDENTITY_RECOVERY_REQUIRED_BEFORE_REUSE",
-          ],
+          reasons: ["QUEUED_DATA_HELD", "BINDING_IDENTITY_RETAINED"],
         });
         return 0;
       }
@@ -385,11 +407,12 @@ export async function main(
       installed = config.routes[routeId];
     const profileName = String(options.profile ?? installed?.profile ?? "");
     const profile = config.profiles[profileName];
-    if (
-      !profile ||
-      (profile.removed && command !== "disable" && command !== "uninstall")
-    )
+    if (!profile || (profile.removed && command !== "disable" && command !== "uninstall"))
       throw new AgentError("HELD_AUTH", 3);
+    // Installed routes cannot silently switch credentials or destination.
+    if (installed && (profileName !== installed.profile ||
+        JSON.stringify(profile.binding) !== JSON.stringify(installed.route.binding)))
+      throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
     if (
       options.project !== undefined &&
       options.project !== profile.binding.project
@@ -410,10 +433,16 @@ export async function main(
       binding: profile.binding,
       rollback: options.rollback === true,
       transcriptConsent:
-        options.transcript === "structure" ||
-        (options.transcript === undefined &&
-          installed?.transcriptConsent === true),
+        options.transcript === undefined
+          ? installed?.transcriptConsent === true
+          : options.transcript === "structure",
     };
+    if (
+      ["enable", "run"].includes(command) &&
+      adapter.capability.transcript &&
+      !context.transcriptConsent
+    )
+      throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
     if (command === "run") {
       if (!installed?.route.enabled) throw new AgentError("ENABLE_REQUIRED", 3);
       // Generic destinations are never overwritten. Agent-specific effective state is adapter preflight's job.
@@ -512,6 +541,8 @@ export async function main(
     )
       throw new AgentError("DISABLE_REQUIRED_TO_REVOKE_TRANSCRIPT", 3);
     if (command === "enable" && installed?.route.enabled) {
+      if (context.transcriptConsent !== installed.transcriptConsent)
+        throw new AgentError("CAPTURE_POLICY_CHANGE_REQUIRED", 3);
       output({
         state: "already-enabled",
         code: 0,
@@ -683,5 +714,7 @@ export async function main(
       reasons: [error.code],
     });
     return error.exitCode;
+  } finally {
+    await controlRuntime?.stop();
   }
 }

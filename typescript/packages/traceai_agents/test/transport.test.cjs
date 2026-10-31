@@ -13,6 +13,7 @@ const {
   preflightNative,
 } = require("../dist/src/runtime/receiver.js");
 const reference = require("../contract/reference.cjs");
+const { AgentError } = require("../dist/src/security/files.js");
 const credentials = {
   api_key: "synthetic-api",
   secret_key: "synthetic-secret",
@@ -200,6 +201,68 @@ test("native conflict refusal precedes listener creation; receiver rejects brows
 });
 
 for (const type of ["application/json", "application/x-protobuf"])
+  for (const code of [
+    "STORAGE_UNAVAILABLE",
+    "PAUSED_CHECKPOINT",
+    "PAUSED_LOGICAL_QUOTA",
+    "UNEXPECTED",
+  ])
+    test(`native ${type} retries ${code} after partial durable admission`, async (t) => {
+      const second = reference.normalize(
+        {
+          schema: "fixture-v1",
+          session: "s",
+          turn: "t",
+          id: "second",
+          unit: "request",
+        },
+        { identityKey: Buffer.alloc(32), policyRevision: "1" },
+      )[0];
+      const facts = [fact, second].map((f) => ({ ...f, source: "native" }));
+      const durable = new Set();
+      let fail = true,
+        duplicates = 0;
+      const s = await startReceiver({
+        coexistence: { state: "owned-or-none" },
+        singleUserApproved: true,
+        normalize: (span) =>
+          facts.find(
+            (f) =>
+              Buffer.from(span.spanId, "base64").toString("hex") === f.spanId,
+          ),
+        admit: async (f) => {
+          if (fail && f.sourceWorkId === second.sourceWorkId) {
+            if (code === "UNEXPECTED") throw new Error("private error text");
+            throw new AgentError(code);
+          }
+          if (durable.has(f.sourceWorkId)) duplicates++;
+          durable.add(f.sourceWorkId);
+        },
+      });
+      t.after(() => new Promise((r) => s.close(r)));
+      const wire = encodeFacts(facts, binding(s), "0.1.0");
+      const send = () =>
+        fetch(binding(s).endpoint, {
+          method: "POST",
+          headers: { "content-type": type },
+          body:
+            type === "application/json"
+              ? JSON.stringify(decodeTraces(wire))
+              : wire,
+        });
+      const first = await send();
+      assert.equal(first.status, 503);
+      assert.ok(!(await first.text()).includes("private"));
+      assert.equal(durable.size, 1);
+      fail = false;
+      const retry = await send();
+      assert.equal(retry.status, 200);
+      await retry.arrayBuffer();
+      assert.equal(durable.size, 2);
+      assert.equal(duplicates, 1);
+    });
+
+for (const type of ["application/json", "application/x-protobuf"])
   for (const reject of [false, true])
     test(`native ${type} responds in-kind for ${reject ? "partial rejection" : "acceptance"}`, async (t) => {
       let admits = 0;
@@ -209,7 +272,7 @@ for (const type of ["application/json", "application/x-protobuf"])
         normalize: () => ({ ...fact, source: "native" }),
         admit: async () => {
           admits++;
-          if (reject) throw new Error("synthetic storage hold");
+          if (reject) throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
         },
       });
       t.after(() => new Promise((r) => s.close(r)));
