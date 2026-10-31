@@ -79,8 +79,9 @@ public class AzureOpenAIExample {
 
         // ============================================================
         // Step 3: Wrap with TracedAzureOpenAIClient
-        // This wrapper automatically captures traces for all API calls,
-        // including request parameters, response data, and token usage.
+        // This wrapper traces its three blocking methods: chat completions,
+        // embeddings, and legacy completions. Streaming, async, and unwrap()
+        // calls bypass the wrapper's semantic tracing.
         // ============================================================
         TracedAzureOpenAIClient traced = new TracedAzureOpenAIClient(azureClient);
 

@@ -12,8 +12,16 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Instrumentation wrapper for Azure OpenAI Java client.
- * Wraps the Azure OpenAI client to provide automatic tracing of all API calls.
+ * Traces the three blocking operations exposed here on the legacy Azure OpenAI Java client:
+ * chat completions, embeddings, and text completions. Targets azure-ai-openai 1.0.0-beta.16.
+ *
+ * <p>This is not an instrumentor for the whole Azure SDK. Streaming, OpenAIAsyncClient,
+ * Responses, audio, images, files, and calls through {@link #unwrap()} are not traced by
+ * this wrapper. Existing constructors and blocking methods remain supported.</p>
+ *
+ * <p>Microsoft has stopped updating this client in its current form and recommends the
+ * official OpenAI Java SDK for new features. That SDK uses different client types; neither
+ * it nor the TraceAI OpenAI wrapper is a drop-in replacement for this class.</p>
  *
  * <p>Usage:</p>
  * <pre>
@@ -308,9 +316,10 @@ public class TracedAzureOpenAIClient {
     }
 
     /**
-     * Gets the underlying Azure OpenAI client.
+     * Gets the underlying Azure OpenAI client without this wrapper's instrumentation.
+     * Calls made on the returned client bypass this wrapper's semantic tracing.
      *
-     * @return the wrapped Azure OpenAI client
+     * @return the original Azure OpenAI client
      */
     public OpenAIClient unwrap() {
         return client;
