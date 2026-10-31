@@ -8,7 +8,22 @@ export interface Binding {
   loopbackTest?: boolean;
   backendContract?: "immutable-agent-v1";
 }
+/** Backend qualification is a capability, never part of destination identity. */
+export function sameDestination(a: Binding, b: Binding): boolean {
+  return (
+    a.id === b.id &&
+    a.endpoint === b.endpoint &&
+    a.approvedOrigin === b.approvedOrigin &&
+    a.project === b.project &&
+    (a.loopbackTest === true) === (b.loopbackTest === true)
+  );
+}
 export function validateBinding(binding: Binding): URL {
+  if (
+    binding.backendContract !== undefined &&
+    binding.backendContract !== "immutable-agent-v1"
+  )
+    throw new AgentError("HELD_BACKEND_CONTRACT", 3);
   let url: URL;
   try {
     url = new URL(binding.endpoint);

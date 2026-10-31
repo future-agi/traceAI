@@ -138,7 +138,10 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
                 }
               : {
                   plan: [
-                    { step: "Synthetic observer fixture", status: "completed" },
+                    {
+                      step: "Synthetic observer fixture",
+                      status: "completed",
+                    },
                   ],
                 },
           ),
@@ -301,6 +304,31 @@ main(process.argv.slice(2), {version:"0.1.1", entry:__filename,
         { mode: 0o600 },
       );
       const update = ["update", "codex", "--surface", "cli"];
+      // The documented upgrade must refuse the old daemon, not silently stage a
+      // new bundle while retaining old runtime/storage modules in memory.
+      for (const args of [
+        ["runtime", "start"],
+        [...update, "--check"],
+        update,
+      ]) {
+        const held = JSON.parse(await fi(args, undefined, 3));
+        assert.deepEqual(held.reasons, ["RUNTIME_RESTART_REQUIRED"]);
+        assert.deepEqual(
+          JSON.parse(
+            fs.readFileSync(path.join(state, "codex/registration.json")),
+          ),
+          registration,
+        );
+      }
+      await fi(["runtime", "stop"]);
+      for (
+        let i = 0;
+        i < 100 && fs.existsSync(path.join(state, "runtime.sock"));
+        i++
+      )
+        await new Promise((r) => setTimeout(r, 20));
+      await fi(["runtime", "start"]);
+      assert.equal(JSON.parse(await fi(["status"])).runtime_version, "0.1.1");
       assert.equal(
         JSON.parse(await fi([...update, "--check"])).preview.replacement,
         true,
@@ -320,16 +348,6 @@ main(process.argv.slice(2), {version:"0.1.1", entry:__filename,
           false,
         );
       }
-      await fi(["runtime", "stop"]);
-      // Stop has a bounded asynchronous shutdown; let the next explicit start
-      // own the completed transition, never remove a live socket.
-      for (
-        let i = 0;
-        i < 100 && fs.existsSync(path.join(state, "runtime.sock"));
-        i++
-      )
-        await new Promise((r) => setTimeout(r, 20));
-      await fi(["runtime", "start"]);
     }
     // Obtain upstream-computed trust hashes, exclusively in this new synthetic
     // HOME. Production enable never grants trust or changes feature settings.
@@ -493,6 +511,17 @@ main(process.argv.slice(2), {version:"0.1.1", entry:__filename,
       ).length,
       facts.length,
     );
+    if (scenario === "upgrade") {
+      for (const resource of uploads.flatMap((u) => u.resourceSpans)) {
+        assert.equal(
+          resource.resource.attributes.find((a) => a.key === "service.version")
+            .value.stringValue,
+          "0.1.1",
+        );
+        for (const scope of resource.scopeSpans)
+          assert.equal(scope.scope.version, "0.1.1");
+      }
+    }
     const replay = { counts: { admitted: 0, pending: 0 } };
     for (const file of scenario === "subagent"
       ? [path.dirname(files[0])]
@@ -561,7 +590,11 @@ main(process.argv.slice(2), {version:"0.1.1", entry:__filename,
       disabled: true,
       offline_revocation_survives_restart: true,
       ...(scenario === "upgrade"
-        ? { official_plugin_replace_and_rollback: true }
+        ? {
+            official_plugin_replace_and_rollback: true,
+            incompatible_runtime_refused: true,
+            exported_runtime_version: "0.1.1",
+          }
         : {}),
       outbound: "sandbox-denied-except-localhost",
       remote_persistence: "not-tested-synthetic-loopback-only",

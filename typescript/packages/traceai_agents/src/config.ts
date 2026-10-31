@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, rmdirSync } from "node:fs";
+import { configurationLock } from "./security/config-lock.js";
 import { token } from "@traceai/agent-core";
 import {
   AgentError,
@@ -140,12 +140,7 @@ export async function configTransaction<T>(
   apply?: () => Promise<void>,
 ): Promise<T> {
   protectedDirectory(p.config, true);
-  const lock = join(p.config, "write.lock");
-  try {
-    mkdirSync(lock, { mode: 0o700 });
-  } catch {
-    throw new AgentError("CONFIGURATION_CONFLICT", 6);
-  }
+  const release = configurationLock(join(p.config, "write.lock"));
   try {
     const config = loadConfig(p);
     const previous = structuredClone(config);
@@ -162,6 +157,6 @@ export async function configTransaction<T>(
     }
     return result;
   } finally {
-    rmdirSync(lock);
+    release();
   }
 }

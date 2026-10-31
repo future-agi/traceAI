@@ -64,7 +64,9 @@ function fixture(t, bindingExtra = {}) {
   };
   const config = {
     schema_version: 1,
-    profiles: { work: { binding, storage: "file", credentialRef: "fixture" } },
+    profiles: {
+      work: { binding, storage: "file", credentialRef: "fixture" },
+    },
     routes: {
       [routeId]: {
         route: {
@@ -299,7 +301,10 @@ test("uninstall/reinstall recovers retained generation and immutable receipts, i
   assert.equal(await command("uninstall"), 0);
   assert.equal(loadConfig(p).routes[routeId], undefined);
   const retained = (
-    await runtimeRequest(p.socket, { operation: "route-state", route: routeId })
+    await runtimeRequest(p.socket, {
+      operation: "route-state",
+      route: routeId,
+    })
   ).route;
   assert.equal(retained.enabled, false);
   assert.equal(retained.epoch, 2);
@@ -627,7 +632,10 @@ test("offline purge is explicitly pending and reconciles before startup ingress"
   );
   runtime = await start(t, p);
   const route = (
-    await runtimeRequest(p.socket, { operation: "route-state", route: routeId })
+    await runtimeRequest(p.socket, {
+      operation: "route-state",
+      route: routeId,
+    })
   ).route;
   assert.equal(route.enabled, false);
   // Explicit enable removes the tombstone but retains the durable generation.
@@ -646,8 +654,8 @@ test("offline purge is explicitly pending and reconciles before startup ingress"
   );
 });
 
-test("Codex CLI check validates the same replacement as update; offline revocation persists registration too", async (t) => {
-  const { root, p, config } = fixture(t);
+test("Codex CLI check validates the same replacement as update; crash-released offline revocation persists registration too", async (t) => {
+  const { root, p, config, env } = fixture(t);
   process.env.CODEX_HOME = path.join(root, "agent");
   const { codexAdapter } = require("../dist/src/adapters/codex/index.js");
   const {
@@ -700,6 +708,16 @@ test("Codex CLI check validates the same replacement as update; offline revocati
   assert.equal(await main(update, opts), 6);
   assert.equal(registration(p.socket).bundle, original.bundle);
   await runtime.stop();
+  const owner = fork(path.resolve(__dirname, "fixtures/config-owner.cjs"), [], {
+    env,
+    execPath: process.execPath,
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  cleanup(t, () => owner.kill("SIGKILL"));
+  assert.deepEqual((await once(owner, "message"))[0], { locked: true });
+  const exited = once(owner, "exit");
+  owner.kill("SIGKILL");
+  await exited;
   assert.equal(
     await main(
       ["disable", "codex", "--surface", "cli", "--transcript", "off"],
@@ -713,10 +731,278 @@ test("Codex CLI check validates the same replacement as update; offline revocati
   runtime = new Runtime(p, settings.storageEntry, "0.1.1", registry);
   await runtime.start();
   assert.equal(
-    (await runtimeRequest(p.socket, { operation: "route-state", route: id }))
-      .route.enabled,
+    (
+      await runtimeRequest(p.socket, {
+        operation: "route-state",
+        route: id,
+      })
+    ).route.enabled,
     false,
   );
+});
+
+test("configuration ownership is crash-released and privacy revocation survives restart", async (t) => {
+  const { p, env } = fixture(t);
+  const runtime = await start(t, p);
+  const owner = fork(path.resolve(__dirname, "fixtures/config-owner.cjs"), [], {
+    env,
+    execPath: process.execPath,
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  cleanup(t, () => owner.kill("SIGKILL"));
+  assert.deepEqual((await once(owner, "message"))[0], { locked: true });
+  await assert.rejects(
+    configTransaction(p, async () => {}),
+    /CONFIGURATION_CONFLICT/,
+  );
+  assert.equal(loadConfig(p).routes[routeId].route.enabled, true);
+  const exited = once(owner, "exit");
+  owner.kill("SIGKILL");
+  await exited;
+  assert.equal(await command("disable", "--transcript", "off"), 0);
+  assert.equal(loadConfig(p).routes[routeId].transcriptConsent, false);
+  assert.ok(loadConfig(p).fences[routeId]);
+  await runtime.stop();
+  await start(t, p);
+  await assert.rejects(submit(p, "post-kill"), /HELD_DISABLED/);
+});
+
+test("configuration lock excludes same-process contenders without releasing the kernel owner", async (t) => {
+  const { p, env } = fixture(t);
+  await configTransaction(p, async () => {
+    await assert.rejects(
+      configTransaction(p, async () => {}),
+      /CONFIGURATION_CONFLICT/,
+    );
+    const contender = fork(
+      path.resolve(__dirname, "fixtures/config-owner.cjs"),
+      [],
+      {
+        env,
+        execPath: process.execPath,
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      },
+    );
+    cleanup(t, () => contender.kill("SIGKILL"));
+    assert.deepEqual((await once(contender, "message"))[0], {
+      held: "CONFIGURATION_CONFLICT",
+    });
+  });
+  const file = path.join(p.config, "write.lock"),
+    first = fs.statSync(file);
+  assert.equal(first.size, 0);
+  assert.equal(first.mode & 0o777, 0o600);
+  await configTransaction(p, async () => {});
+  assert.equal(fs.statSync(file).ino, first.ino);
+  assert.deepEqual(fs.readdirSync(p.config).sort(), [
+    "config.json",
+    "write.lock",
+  ]);
+});
+
+test("simultaneous configuration starters acquire exactly one crash-released owner", async (t) => {
+  const { p, env } = fixture(t);
+  const owners = [];
+  const results = await Promise.all(
+    [0, 1, 2].map(async () => {
+      const owner = fork(
+        path.resolve(__dirname, "fixtures/config-owner.cjs"),
+        [],
+        {
+          env,
+          execPath: process.execPath,
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+        },
+      );
+      owners.push(owner);
+      cleanup(t, () => owner.kill("SIGKILL"));
+      return (await once(owner, "message"))[0];
+    }),
+  );
+  assert.equal(results.filter((r) => r.locked).length, 1);
+  assert.equal(
+    results.filter((r) => r.held === "CONFIGURATION_CONFLICT").length,
+    2,
+  );
+  const winner = owners[results.findIndex((r) => r.locked)];
+  const exited = once(winner, "exit");
+  winner.kill("SIGKILL");
+  await exited;
+  await configTransaction(p, async () => {});
+});
+
+test("legacy and unsafe configuration locks are refused without deleting unknown owners", async (t) => {
+  const { root, p } = fixture(t);
+  const file = path.join(p.config, "write.lock");
+  fs.mkdirSync(file, { mode: 0o700 });
+  await assert.rejects(
+    configTransaction(p, async () => {}),
+    /LEGACY_CONFIG_LOCK_REQUIRES_RECOVERY/,
+  );
+  assert.ok(fs.statSync(file).isDirectory());
+  fs.rmdirSync(file);
+  const target = path.join(root, "untouched");
+  fs.writeFileSync(target, "fixture", { mode: 0o600 });
+  fs.symlinkSync(target, file);
+  await assert.rejects(configTransaction(p, async () => {}));
+  assert.equal(fs.readFileSync(target, "utf8"), "fixture");
+  fs.unlinkSync(file);
+  fs.writeFileSync(file, "not empty", { mode: 0o600 });
+  await assert.rejects(
+    configTransaction(p, async () => {}),
+    /UNSAFE_CONFIG_LOCK/,
+  );
+});
+
+test("legacy unversioned runtime cannot certify a package upgrade", async (t) => {
+  const { p } = fixture(t);
+  fs.mkdirSync(p.state, { mode: 0o700 });
+  const listener = net.createServer((socket) => {
+    socket.once("data", () =>
+      socket.end(
+        require("@traceai/agent-core/client").frame({
+          state: "running",
+          code: 0,
+        }),
+      ),
+    );
+  });
+  await new Promise((resolve) => listener.listen(p.socket, resolve));
+  fs.chmodSync(p.socket, 0o600);
+  cleanup(t, () => new Promise((resolve) => listener.close(resolve)));
+  assert.equal(await main(["runtime", "start"], settings), 3);
+  assert.equal(await command("update", "--check"), 3);
+  assert.equal(await command("update"), 3);
+});
+
+test("package upgrades refuse a different running runtime before check or mutation", async (t) => {
+  const { p } = fixture(t);
+  const old = await start(t, p);
+  const before = loadConfig(p);
+  const candidate = { ...settings, version: "0.1.1" };
+  for (const args of [
+    ["runtime", "start"],
+    ["update", "reference", "--surface", "fixture", "--check"],
+    ["update", "reference", "--surface", "fixture"],
+  ])
+    assert.equal(await main(args, candidate), 3, args.join(" "));
+  assert.deepEqual(loadConfig(p), before);
+  await old.stop();
+  const upgraded = new Runtime(
+    p,
+    settings.storageEntry,
+    "0.1.1",
+    settings.registry,
+  );
+  cleanup(t, () => upgraded.stop());
+  await upgraded.start();
+  assert.equal(
+    (await runtimeRequest(p.socket, { operation: "status" })).runtime_version,
+    "0.1.1",
+  );
+  for (const extra of [["--check"], []])
+    assert.equal(
+      await main(
+        ["update", "reference", "--surface", "fixture", ...extra],
+        candidate,
+      ),
+      0,
+    );
+});
+
+for (const offline of [false, true])
+  test(`contract approval migrates installed and stored capabilities without changing work identity (offline=${offline})`, async (t) => {
+    const binding = await upstream(t, (req, res) => {
+      req.resume();
+      res.setHeader("content-type", "application/x-protobuf");
+      res.end(encodeResponse());
+    });
+    delete binding.backendContract;
+    const { root, p, config, env } = fixture(t, binding);
+    // Disabled routes must receive the capability too, without being re-enabled.
+    config.routes["reference.other"] = structuredClone(config.routes[routeId]);
+    config.routes["reference.other"].surface = "other";
+    config.routes["reference.other"].route.id = "reference.other";
+    config.routes["reference.other"].route.enabled = false;
+    saveConfig(p, config);
+    await credentials(p);
+    let runtime = await start(t, p);
+    const receipt = await submit(p, "before-contract");
+    if (offline) await runtime.stop();
+    const contract = path.join(root, "contract.json"),
+      auth = path.join(root, "synthetic-auth.json");
+    fs.writeFileSync(
+      contract,
+      JSON.stringify({
+        contract: "immutable-agent-v1",
+        endpoint: binding.endpoint,
+        project: "fixture",
+        immutableAdmission: true,
+        uniqueReads: true,
+        usagePlans: true,
+      }),
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(
+      auth,
+      JSON.stringify({
+        api_key: "synthetic-api",
+        secret_key: "synthetic-secret",
+      }),
+      { mode: 0o600 },
+    );
+    const approved = await cli(env, [
+      "auth",
+      "add",
+      "--profile",
+      "work",
+      "--project",
+      "fixture",
+      "--credential-file",
+      auth,
+      "--contract-manifest",
+      contract,
+      "--loopback-test",
+    ]);
+    assert.equal(approved.code, 0, approved.stdout);
+    if (offline) runtime = await start(t, p);
+    const updated = loadConfig(p);
+    for (const id of [routeId, "reference.other"]) {
+      assert.equal(
+        updated.routes[id].route.binding.backendContract,
+        "immutable-agent-v1",
+      );
+      const stored = (
+        await runtimeRequest(p.socket, {
+          operation: "route-state",
+          route: id,
+        })
+      ).route;
+      assert.deepEqual(stored, updated.routes[id].route);
+      assert.equal(stored.epoch, 1);
+    }
+    assert.equal(updated.routes["reference.other"].route.enabled, false);
+    assert.equal(
+      (await submit(p, "before-contract")).receipt_id,
+      receipt.receipt_id,
+    );
+    assert.equal((await flush(p)).storage.logical_bytes, 0);
+    assert.equal(await command("update", "--check"), 0);
+    assert.equal(await command("update"), 0);
+    await runtime.stop();
+    await start(t, p);
+    assert.equal((await submit(p, "before-contract")).reason_code, "DUPLICATE");
+  });
+
+test("update check validates the prospective destination, not the installed route", async (t) => {
+  const { p } = fixture(t);
+  await start(t, p);
+  const c = loadConfig(p);
+  c.profiles.work.binding.project = "changed-destination";
+  saveConfig(p, c);
+  assert.equal(await command("update", "--check"), 3);
+  assert.equal(await command("update"), 3);
+  assert.equal(loadConfig(p).routes[routeId].route.binding.project, "fixture");
 });
 
 test("storage ownership precedes header inspection, preventing two-reader upgrade deadlock", async (t) => {

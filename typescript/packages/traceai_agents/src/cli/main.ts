@@ -22,7 +22,11 @@ import {
   newCredentials,
   parseAuth,
 } from "../security/credentials.js";
-import { DEFAULT_ENDPOINT, validateBinding } from "../export/endpoint.js";
+import {
+  DEFAULT_ENDPOINT,
+  sameDestination,
+  validateBinding,
+} from "../export/endpoint.js";
 import { runtimeRequest, Runtime } from "../runtime/daemon.js";
 import { ImportPlanner } from "../import.js";
 import { authInput } from "./input.js";
@@ -101,12 +105,31 @@ export interface CLIOptions {
   storageEntry: string;
   registry?: AdapterRegistry;
 }
-async function startRuntime(p: Paths, entry: string): Promise<void> {
+async function compatibleRuntime(
+  p: Paths,
+  version: string,
+  timeout = 200,
+): Promise<void> {
+  const status = await runtimeRequest(
+    p.socket,
+    { operation: "status" },
+    timeout,
+  );
+  // Legacy daemons without a version handshake are not certified compatible.
+  if (status.runtime_version !== version)
+    throw new AgentError("RUNTIME_RESTART_REQUIRED", 3);
+}
+async function startRuntime(
+  p: Paths,
+  entry: string,
+  version: string,
+): Promise<void> {
   try {
-    await runtimeRequest(p.socket, { operation: "status" }, 200);
+    await compatibleRuntime(p, version);
     return;
-  } catch {
-    /* start outside hooks */
+  } catch (e) {
+    if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE") throw e;
+    /* start outside hooks; never replace a responsive incompatible owner */
   }
   protectedDirectory(p.state, true);
   const child = spawn(process.execPath, [entry, "__daemon"], {
@@ -123,9 +146,11 @@ async function startRuntime(p: Paths, entry: string): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt++) {
     await new Promise((r) => setTimeout(r, 50));
     try {
-      await runtimeRequest(p.socket, { operation: "status" }, 100);
+      await compatibleRuntime(p, version, 100);
       return;
-    } catch {
+    } catch (e) {
+      if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
+        throw e;
       /* bounded readiness */
     }
   }
@@ -238,6 +263,14 @@ export async function main(
               throw new AgentError("HELD_BACKEND_CONTRACT", 3);
             profile.binding.backendContract = "immutable-agent-v1";
           }
+          // Contract qualification changes delivery eligibility, not the approved
+          // destination, identity key, route epoch, capture consent or activation.
+          for (const installed of Object.values(config.routes)) {
+            if (installed.profile !== name) continue;
+            if (!sameDestination(installed.route.binding, profile.binding))
+              throw new AgentError("HELD_DESTINATION_CHANGED", 3);
+            installed.route.binding = { ...profile.binding };
+          }
           const secrets = store(p, profile);
           const previous = existing
             ? await secrets.get(profile.credentialRef)
@@ -251,20 +284,27 @@ export async function main(
           profile.removed = false;
           config.profiles[name] = profile;
         });
-        // Rotation is explicit approval to release only authentication holds.
-        // An unavailable runtime remains held until this action is repeated while running.
+        // Qualification persists offline; startup migrates matching route metadata.
+        // Authentication retry holds still need this explicit action while running.
+        let reconciled = false;
         try {
+          await compatibleRuntime(p, settings.version);
           await runtimeRequest(p.socket, {
             operation: "auth-rotated",
             profile: name,
+            expected_runtime_version: settings.version,
           });
+          reconciled = true;
         } catch {
-          /* safe hold */
+          /* Preserve approval, never pretend an old/absent daemon applied it. */
         }
         output({
           state: "profile-approved",
           code: 0,
-          reasons: ["BACKEND_PERSISTENCE_NOT_VERIFIED"],
+          reasons: [
+            "BACKEND_PERSISTENCE_NOT_VERIFIED",
+            ...(!reconciled ? ["RUNTIME_RECONCILIATION_PENDING"] : []),
+          ],
         });
         return 0;
       }
@@ -299,7 +339,7 @@ export async function main(
     }
     if (command === "runtime") {
       if (pos[1] === "start") {
-        await startRuntime(p, settings.entry);
+        await startRuntime(p, settings.entry, settings.version);
         output({ state: "running", code: 0 });
         return 0;
       }
@@ -384,7 +424,7 @@ export async function main(
         throw new AgentError("NATIVE_DESTINATION_CONFLICT", 6);
       let tracing = true;
       try {
-        await startRuntime(p, settings.entry);
+        await startRuntime(p, settings.entry, settings.version);
       } catch (e) {
         if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
           throw e;
@@ -443,7 +483,7 @@ export async function main(
         });
         return 0;
       }
-      await startRuntime(p, settings.entry);
+      await startRuntime(p, settings.entry, settings.version);
       const counts = await planner.commit(
         required(options, "commit"),
         adapter,
@@ -490,10 +530,24 @@ export async function main(
       command as "enable" | "disable" | "update" | "uninstall",
       context,
     );
+    const prospectiveRoute = (retainedEpoch = 0) => ({
+      id: routeId,
+      binding: profile.binding,
+      policy: command === "update" ? installed.route.policy : STRUCTURE_POLICY,
+      enabled:
+        command === "enable" ||
+        (command === "update" && installed.route.enabled),
+      epoch:
+        command === "update"
+          ? installed.route.epoch
+          : Math.max(retainedEpoch, installed?.route.epoch ?? 0) + 1,
+    });
     if (command === "update" && options.check) {
+      await compatibleRuntime(p, settings.version);
       await runtimeRequest(p.socket, {
         operation: "validate-route",
-        route: installed.route,
+        route: prospectiveRoute(),
+        expected_runtime_version: settings.version,
       });
       output({
         state: "compatibility-checked",
@@ -546,7 +600,7 @@ export async function main(
       return pendingPurge ? 4 : 0;
     }
     if (command === "enable" || command === "update")
-      await startRuntime(p, settings.entry);
+      await startRuntime(p, settings.entry, settings.version);
     try {
       await configTransaction(
         p,
@@ -562,6 +616,7 @@ export async function main(
             await runtimeRequest(p.socket, {
               operation: "route-state",
               route: routeId,
+              expected_runtime_version: settings.version,
             })
           ).route;
           if (
@@ -570,25 +625,13 @@ export async function main(
               context.transcriptConsent !== installed.transcriptConsent)
           )
             throw new AgentError("UPDATE_POLICY_CHANGE_REQUIRED", 3);
-          const route = {
-            id: routeId,
-            binding: profile.binding,
-            policy:
-              command === "update" ? installed.route.policy : STRUCTURE_POLICY,
-            enabled:
-              command === "enable" ||
-              (command === "update" && installed.route.enabled),
-            epoch:
-              command === "update"
-                ? installed.route.epoch
-                : Math.max(retained?.epoch ?? 0, installed?.route.epoch ?? 0) +
-                  1,
-          };
+          const route = prospectiveRoute(retained?.epoch);
           // Reject destination/policy/storage conflicts BEFORE changing the adapter
           // registration or committing its enabled config.
           await runtimeRequest(p.socket, {
             operation: "validate-route",
             route,
+            expected_runtime_version: settings.version,
           });
           const activation = await change.commit();
           if (command === "enable" && c.fences) delete c.fences[routeId];
@@ -602,7 +645,10 @@ export async function main(
           };
         },
         async () => {
-          await runtimeRequest(p.socket, { operation: "refresh" });
+          await runtimeRequest(p.socket, {
+            operation: "refresh",
+            expected_runtime_version: settings.version,
+          });
         },
       );
     } catch (e) {

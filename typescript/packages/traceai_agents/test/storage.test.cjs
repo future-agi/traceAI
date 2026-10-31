@@ -114,6 +114,44 @@ test("profile isolation, destination immutability, policy fencing and bounded pu
     /HELD_CONTENT_QUALIFICATION/,
   );
 });
+test("backend qualification is mutable but every destination field stays immutable", (t) => {
+  const { spool } = fixture(t);
+  const original = route();
+  const unqualified = structuredClone(original);
+  delete unqualified.binding.backendContract;
+  spool.route(unqualified);
+  const receipt = spool.admit(original.id, fact());
+  spool.route(original);
+  assert.equal(spool.admit(original.id, fact()).receipt_id, receipt.receipt_id);
+  for (const changes of [
+    { id: "00000000-0000-4000-8000-000000000002" },
+    { project: "other" },
+    { endpoint: "http://127.0.0.1:1/different" },
+    {
+      endpoint: "http://127.0.0.1:2/v1/traces",
+      approvedOrigin: "http://127.0.0.1:2",
+    },
+  ]) {
+    const changed = {
+      ...original,
+      binding: { ...original.binding, ...changes },
+    };
+    assert.throws(
+      () => spool.validateRoute(changed),
+      /HELD_DESTINATION_CHANGED/,
+    );
+  }
+  assert.throws(
+    () =>
+      spool.route({
+        ...original,
+        binding: { ...original.binding, backendContract: "unknown" },
+      }),
+    /HELD_BACKEND_CONTRACT/,
+  );
+  assert.deepEqual(spool.getRoute(original.id), original);
+});
+
 test("accepted bytes are deleted but accounting receipts survive restart", (t) => {
   const dir = fs.mkdtempSync(path.join(base, "restart-"));
   let spool = new Spool(dir, "0.1.0");
@@ -137,7 +175,9 @@ test("accepted bytes are deleted but accounting receipts survive restart", (t) =
 test("stalled second reader prevents another write and WAL stays within one transaction", (t) => {
   const { spool, dir } = fixture(t);
   spool.admit(route().id, fact("before"));
-  const reader = new Database(path.join(dir, "spool.db"), { readonly: true });
+  const reader = new Database(path.join(dir, "spool.db"), {
+    readonly: true,
+  });
   reader.exec("BEGIN");
   reader.prepare("SELECT count(*) FROM records").get();
   spool.admit(route().id, fact("first-uncheckpointed"));
@@ -225,7 +265,10 @@ for (const legacy of [false, true])
       assert.deepEqual(spool.next(route().id).bytes, original);
       assert.throws(
         () =>
-          spool.admit(route().id, { ...fact("accepted"), outcome: "error" }),
+          spool.admit(route().id, {
+            ...fact("accepted"),
+            outcome: "error",
+          }),
         /HELD_IMMUTABLE_CONFLICT/,
       );
       assert.equal(spool.admit(route().id, fact("new-turn")).duplicate, false);

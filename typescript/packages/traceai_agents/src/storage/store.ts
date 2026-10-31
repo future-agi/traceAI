@@ -11,7 +11,11 @@ import {
 } from "@traceai/agent-core";
 import { AgentError } from "../security/files.js";
 import { encodeFacts } from "../export/otlp.js";
-import { validateBinding, type Binding } from "../export/endpoint.js";
+import {
+  sameDestination,
+  validateBinding,
+  type Binding,
+} from "../export/endpoint.js";
 import { measure, preflight, reserve, STORAGE_LIMITS } from "./budget.js";
 export interface Route {
   id: string;
@@ -81,7 +85,9 @@ export class Spool {
       this.db.pragma("mmap_size=0");
       this.db.pragma("temp_store=MEMORY");
       this.db.pragma("busy_timeout=10");
-      const existingVersion = this.db.pragma("user_version", { simple: true });
+      const existingVersion = this.db.pragma("user_version", {
+        simple: true,
+      });
       if (![0, 1, 2].includes(Number(existingVersion)))
         throw new AgentError("HELD_STORAGE_SCHEMA");
       this.write(() =>
@@ -161,7 +167,7 @@ export class Spool {
       .get(route.id) as any;
     if (old) {
       const prior = JSON.parse(old.config);
-      if (JSON.stringify(prior.binding) !== JSON.stringify(route.binding))
+      if (!sameDestination(prior.binding, route.binding))
         throw new AgentError("HELD_DESTINATION_CHANGED", 3);
       if (
         route.epoch < old.epoch ||

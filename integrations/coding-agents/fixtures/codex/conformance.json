@@ -176,6 +176,8 @@
       "disabled": true,
       "offline_revocation_survives_restart": true,
       "official_plugin_replace_and_rollback": true,
+      "incompatible_runtime_refused": true,
+      "exported_runtime_version": "0.1.1",
       "outbound": "sandbox-denied-except-localhost",
       "remote_persistence": "not-tested-synthetic-loopback-only"
     },
@@ -297,7 +299,7 @@
       "linked_child_turns": 1,
       "hook_events_registered": 10,
       "live": {
-        "callbacks": 12,
+        "callbacks": 13,
         "admitted": 6,
         "active": 1,
         "reasons": [],
@@ -352,6 +354,8 @@
       "disabled": true,
       "offline_revocation_survives_restart": true,
       "official_plugin_replace_and_rollback": true,
+      "incompatible_runtime_refused": true,
+      "exported_runtime_version": "0.1.1",
       "outbound": "sandbox-denied-except-localhost",
       "remote_persistence": "not-tested-synthetic-loopback-only"
     }

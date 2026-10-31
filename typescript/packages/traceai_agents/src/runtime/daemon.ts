@@ -34,7 +34,10 @@ export class Runtime {
   private sockets = new Set<Socket>();
   private ingressBytes = 0;
   private lastDurableAck: number | null = null;
-  private statusCache: unknown = { state: "unknown", persistence: "unknown" };
+  private statusCache: unknown = {
+    state: "unknown",
+    persistence: "unknown",
+  };
   constructor(
     private readonly paths: Paths,
     private readonly childEntry: string,
@@ -247,6 +250,11 @@ export class Runtime {
       throw new AgentError("INVALID_FRAME", 2);
     }
     if (m.protocol_version !== 1) throw new AgentError("INVALID_PROTOCOL", 2);
+    if (
+      m.expected_runtime_version !== undefined &&
+      m.expected_runtime_version !== this.version
+    )
+      throw new AgentError("RUNTIME_RESTART_REQUIRED", 3);
     // A complete administrative frame may need longer than ingress assembly.
     socket.setTimeout(15_000);
     if (m.operation === "adapter-observe") {
@@ -262,7 +270,11 @@ export class Runtime {
       observer.accept(m.input);
       // Callback admission is NOT durable span admission. The off-hook reader
       // commits minimized facts separately and exposes its own counts.
-      return { protocol_version: 1, durable: false, reason_code: "SCHEDULED" };
+      return {
+        protocol_version: 1,
+        durable: false,
+        reason_code: "SCHEDULED",
+      };
     }
     if (m.operation === "observe") {
       const route = this.config.routes[m.route_ref];
@@ -295,6 +307,7 @@ export class Runtime {
         schema_version: 1,
         state: "running",
         code: 0,
+        runtime_version: this.version,
         storage: this.statusCache,
         last_durable_local_ack: this.lastDurableAck,
         unknown_gap: "unknown",
@@ -307,7 +320,10 @@ export class Runtime {
           observer:
             this.observers.get(r.route.id)?.status() ??
             (this.observerHolds.has(r.route.id)
-              ? { state: "held", reasons: [this.observerHolds.get(r.route.id)] }
+              ? {
+                  state: "held",
+                  reasons: [this.observerHolds.get(r.route.id)],
+                }
               : undefined),
           policy: r.route.policy.revision,
           export:
@@ -346,7 +362,10 @@ export class Runtime {
     }
     if (m.operation === "route-state") {
       try {
-        return { route: await this.storage.call("getRoute", m.route), code: 0 };
+        return {
+          route: await this.storage.call("getRoute", m.route),
+          code: 0,
+        };
       } catch (e) {
         if (e instanceof AgentError && e.code === "UNKNOWN_ROUTE")
           return { route: null, code: 0 };
