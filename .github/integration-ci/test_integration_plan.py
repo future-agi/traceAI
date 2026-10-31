@@ -42,13 +42,13 @@ class IntegrationPlanTests(unittest.TestCase):
             self.assertEqual(self.names([path]), expected)
         self.assertEqual(self.names([], all_targets=True), expected)
 
-    def test_shared_typescript_inputs_cover_both_consumers(self):
+    def test_shared_typescript_inputs_cover_all_consumers(self):
         for path in ['typescript/pnpm-lock.yaml', 'typescript/package.json',
                      'typescript/pnpm-workspace.yaml', 'typescript/.npmrc',
                      'typescript/tsconfig.base.json', 'typescript/packages/fi-core/src/index.ts',
                      'typescript/packages/fi-semantic-conventions/src/index.ts']:
             with self.subTest(path=path):
-                self.assertEqual(self.names([path]), {'codex-sdk', 'pi-coding-agent'})
+                self.assertEqual(self.names([path]), {name for name, language, _, _ in TARGETS if language == 'typescript'})
 
     def test_unrelated_paths_do_not_claim_coverage(self):
         self.assertEqual(self.names(['README.md', 'python/frameworks/openai/tracer.py',
