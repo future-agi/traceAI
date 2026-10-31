@@ -465,7 +465,7 @@ def test_throwing_action_marks_error_with_exception_event(built_package: Path) -
 
 
 def test_throwing_action_with_content_hidden_exports_error_type_only(built_package: Path) -> None:
-    """With FI_HIDE_INPUTS / FI_HIDE_OUTPUTS the error message (which can quote user data) is replaced."""
+    """With FI_HIDE_INPUTS / FI_HIDE_OUTPUTS the error message (which can quote user data) is omitted."""
     with Receiver() as receiver:
         result = run([NODE, str(FIXTURE)], env=_fixture_env(receiver.origin, "error", HIDE_ENV), stdin=None, timeout=90)
         _check(result, "node run_fixture.mjs (error, hidden)")
@@ -474,9 +474,9 @@ def test_throwing_action_with_content_hidden_exports_error_type_only(built_packa
     assert "lookup exploded" not in json.dumps(spans)
     for span in (_one(spans, "failingFlow"), _one(spans, "brokenLookup")):
         assert _status_code(span) == 2, span["name"]
-        assert span["status"]["message"] == f"Error: {REDACTED}", span["status"]
+        assert not span["status"].get("message"), span["status"]
         events = _exception_events(span)
-        assert events == [{"exception.type": "Error", "exception.message": REDACTED}], events
+        assert events == [{"exception.type": "Error"}], events
     _assert_no_content(spans)
 
 
@@ -516,9 +516,9 @@ def test_schema_validation_error_does_not_export_model_output_with_content_hidde
         assert _status_code(span) == 2, span["name"]
         # Kept as recorded: sdk-trace-base 1.25 Span.recordException uses `error.code` first
         # (GenkitError.code is the HTTP status, 400 for INVALID_ARGUMENT).
-        assert span["status"]["message"] == f"400: {REDACTED}", span["status"]
+        assert not span["status"].get("message"), span["status"]
         events = _exception_events(span)
-        assert events == [{"exception.type": "400", "exception.message": REDACTED}], (span["name"], events)
+        assert events == [{"exception.type": "400"}], (span["name"], events)
     assert _attrs(generate)["genkit:isFailureSource"] is True
 
 

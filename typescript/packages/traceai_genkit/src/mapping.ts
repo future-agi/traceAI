@@ -20,6 +20,8 @@ import {
 } from "./attributes";
 import {
   type ContentPolicy,
+  hidesFreeText,
+  isErrorDetailAttribute,
   redactEmbeddingVectors,
   redactMessageText,
   SHOW_ALL,
@@ -250,5 +252,11 @@ export function mapGenkitAttributes(source: Attributes, options: MapOptions = {}
     }
   }
 
+  // Native spans bypass FISpan: filter after context merging so those keys cannot reintroduce errors.
+  if (hidesFreeText(policy)) {
+    for (const key of Object.keys(out)) {
+      if (isErrorDetailAttribute(key)) delete out[key];
+    }
+  }
   return out;
 }

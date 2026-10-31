@@ -10,12 +10,13 @@ import {
   type SpanStatus,
   trace,
 } from "@opentelemetry/api";
-import { getAttributesFromContext, REDACTED_VALUE, type TraceConfigOptions } from "@traceai/fi-core";
+import { getAttributesFromContext, type TraceConfigOptions } from "@traceai/fi-core";
 import { mapGenkitAttributes } from "./mapping";
 import {
   type ContentPolicy,
   defaultScrubContext,
   hidesFreeText,
+  isErrorDetailAttribute,
   resolveContentPolicy,
   SHOW_ALL,
   type ScrubContext,
@@ -101,10 +102,11 @@ export interface FIGenkitSpanProcessorOptions {
    * traceAI content switches, as for every traceAI instrumentor. Content (Genkit's
    * `genkit:input` / `genkit:output`, copied to `input.value` / `output.value`) is
    * exported by default; `hideInputs` / `hideOutputs` (or `FI_HIDE_INPUTS=true` /
-   * `FI_HIDE_OUTPUTS=true`) hide it and drop error message text, and
-   * `hideInputMessages` / `hideOutputMessages` / `hideInputText` / `hideOutputText`
-   * apply to model spans. Precedence: option > env var > default. The env vars apply
-   * even when this option is not passed.
+   * `FI_HIDE_OUTPUTS=true`) hide it. Message/text flags apply to model content.
+   * `hideErrorDetails` (or `FI_HIDE_ERROR_DETAILS`) hides status descriptions and error
+   * detail attributes; when unset, any input/output/message/text hide flag enables it.
+   * An explicit false opts out. Precedence: option > env var > default. The env vars
+   * apply even when this option is not passed.
    */
   traceConfig?: TraceConfigOptions;
   /**
@@ -123,7 +125,6 @@ const DEFAULT_SCOPE: InstrumentationScopeLike = { name: "genkit-tracer" };
 
 const EXCEPTION_EVENT_NAME = "exception";
 const EXCEPTION_MESSAGE = "exception.message";
-const EXCEPTION_TYPE = "exception.type";
 /** Raw stack traces (local paths, module layout) are never exported. */
 const EXCEPTION_STACKTRACE = "exception.stacktrace";
 
@@ -132,28 +133,15 @@ export interface ExportPrivacy {
   scrub?: ScrubContext;
 }
 
-function exceptionType(events: TimedEventLike[] | undefined): string | undefined {
-  if (!Array.isArray(events)) return undefined;
-  for (const event of events) {
-    const type = event?.name === EXCEPTION_EVENT_NAME ? event.attributes?.[EXCEPTION_TYPE] : undefined;
-    if (typeof type === "string" && type.length > 0) return type;
-  }
-  return undefined;
-}
-
 /**
- * The exported status. With inputs or outputs hidden the message (which can quote user data, as
- * Genkit's schema-validation "Provided data:" errors and tool errors do) becomes
- * `<exception.type>: __REDACTED__`; otherwise it is exported without local paths, stack traces,
- * emails, or this machine's user and host names.
+ * With error details hidden, keep only the status code, as fi-core does. Otherwise export
+ * the message without local paths, stack traces, emails, or this machine's user and host names.
+ * The events argument is retained for API compatibility.
  */
-export function exportStatus(status: SpanStatus, events: TimedEventLike[] | undefined, privacy: ExportPrivacy = {}): SpanStatus {
-  if (typeof status?.message !== "string" || status.message.length === 0) return status;
+export function exportStatus(status: SpanStatus, _events: TimedEventLike[] | undefined, privacy: ExportPrivacy = {}): SpanStatus {
+  if (typeof status?.message !== "string") return status;
   const policy = privacy.policy ?? SHOW_ALL;
-  if (hidesFreeText(policy)) {
-    const type = exceptionType(events);
-    return { ...status, message: type ? `${scrubErrorText(type, privacy.scrub)}: ${REDACTED_VALUE}` : REDACTED_VALUE };
-  }
+  if (hidesFreeText(policy)) return { code: status.code };
   const message = scrubErrorText(status.message, privacy.scrub);
   return message === status.message ? status : { ...status, message };
 }
@@ -165,16 +153,17 @@ export function exportStatus(status: SpanStatus, events: TimedEventLike[] | unde
  */
 export function exportEvents(events: TimedEventLike[], privacy: ExportPrivacy = {}): TimedEventLike[] {
   if (!Array.isArray(events)) return events;
-  const policy = privacy.policy ?? SHOW_ALL;
+  const hideErrors = hidesFreeText(privacy.policy ?? SHOW_ALL);
   return events.map((event) => {
     if (!event?.attributes) return event;
     const isException = event.name === EXCEPTION_EVENT_NAME;
     const attributes: Attributes = {};
     for (const [key, value] of Object.entries(event.attributes)) {
       if (value === undefined) continue;
+      if (hideErrors && isErrorDetailAttribute(key)) continue;
       if (isException && key === EXCEPTION_STACKTRACE) continue;
       if (isException && key === EXCEPTION_MESSAGE && typeof value === "string") {
-        attributes[key] = hidesFreeText(policy) ? REDACTED_VALUE : scrubErrorText(value, privacy.scrub);
+        attributes[key] = scrubErrorText(value, privacy.scrub);
         continue;
       }
       attributes[key] =
@@ -279,9 +268,7 @@ function hasAttributes(attributes: Attributes): boolean {
 /**
  * A span processor for Genkit's `enableTelemetry({ spanProcessors })`.
  *
- * Genkit keeps its own telemetry-server processor first in the list
- * (`@genkit-ai/core` tracing/node-telemetry-provider.ts:66-77), so the dev UI
- * keeps working. For each ended Genkit span this processor builds a copy with
+ * For each ended Genkit span this processor builds a copy with
  * Future AGI span kinds, model, usage and session mapped, content handled per
  * the traceAI TraceConfig (exported by default, FI_HIDE_* hides it), stack
  * traces and local paths removed, and the Future AGI resource (`project_name`,

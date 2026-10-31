@@ -5,8 +5,9 @@
  * inputs and outputs (prompts, model responses, tool arguments and results, flow input/output) are
  * exported by default, and the standard flags hide them: `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
  * `FI_HIDE_INPUT_MESSAGES`, `FI_HIDE_OUTPUT_MESSAGES`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`,
- * `FI_HIDE_EMBEDDING_VECTORS`, or the same options on `traceConfig`. Precedence and parsing are fi-core's: option > env var >
- * default, and only the string "true" (any case) hides.
+ * `FI_HIDE_EMBEDDING_VECTORS`, or the same options on `traceConfig`. Error details follow
+ * fi-core's tri-state `hideErrorDetails` / `FI_HIDE_ERROR_DETAILS` policy, derived from
+ * input/output/message/text hiding when unset. Options override environment variables.
  *
  * Never exported, in either mode: Genkit's request context, stack traces, and local file paths
  * (rewritten to `[cwd]`, `~` or `[path]`). Error text additionally loses emails and this
@@ -28,6 +29,9 @@ import {
   FI_HIDE_OUTPUTS,
   FI_HIDE_OUTPUT_MESSAGES,
   FI_HIDE_OUTPUT_TEXT,
+  ERROR_DETAIL_ATTRIBUTE_KEYS,
+  generateTraceConfig,
+  HIDE_ERROR_DETAILS_IMPLIED_BY,
   REDACTED_VALUE,
   type TraceConfigOptions,
 } from "@traceai/fi-core";
@@ -41,6 +45,8 @@ export interface ContentPolicy {
   hideInputText: boolean;
   hideOutputText: boolean;
   hideEmbeddingVectors: boolean;
+  /** Optional for compatibility with existing policies; unset derives from content flags. */
+  hideErrorDetails?: boolean;
 }
 
 /** Content captured, nothing hidden: fi-core's defaults (`DEFAULT_HIDE_* = false`). */
@@ -67,8 +73,8 @@ export const HIDE_ALL: Readonly<ContentPolicy> = Object.freeze({
 
 /**
  * One fi-core boolean flag: option > env var > default, with fi-core's env rule
- * (`value.toLowerCase() === "true"`). Read here because fi-core's `generateTraceConfig` is not
- * exported and reads the env vars only when a config object is passed.
+ * (`value.toLowerCase() === "true"`). Resolve these separately to preserve the legacy
+ * `captureContent: false` fallback below options and environment variables.
  */
 function flag(option: boolean | undefined, envKey: string, fallback: boolean): boolean {
   if (option !== undefined) return option;
@@ -86,7 +92,7 @@ export function resolveContentPolicy(
   fallback: Partial<ContentPolicy> = {},
 ): ContentPolicy {
   const d = { ...SHOW_ALL, ...fallback };
-  return {
+  const content = {
     hideInputs: flag(traceConfig?.hideInputs, FI_HIDE_INPUTS, d.hideInputs),
     hideOutputs: flag(traceConfig?.hideOutputs, FI_HIDE_OUTPUTS, d.hideOutputs),
     hideInputMessages: flag(traceConfig?.hideInputMessages, FI_HIDE_INPUT_MESSAGES, d.hideInputMessages),
@@ -95,11 +101,21 @@ export function resolveContentPolicy(
     hideOutputText: flag(traceConfig?.hideOutputText, FI_HIDE_OUTPUT_TEXT, d.hideOutputText),
     hideEmbeddingVectors: flag(traceConfig?.hideEmbeddingVectors, FI_HIDE_EMBEDDING_VECTORS, d.hideEmbeddingVectors),
   };
+  // Use fi-core's tri-state parser: option > valid env > derivation from resolved content flags.
+  const { hideErrorDetails } = generateTraceConfig({ ...content, hideErrorDetails: traceConfig?.hideErrorDetails });
+  return { ...content, hideErrorDetails };
 }
 
 /** True when free text written at run time (error messages) must not be exported. */
 export function hidesFreeText(policy: ContentPolicy): boolean {
-  return policy.hideInputs || policy.hideOutputs;
+  return policy.hideErrorDetails ?? HIDE_ERROR_DETAILS_IMPLIED_BY.some((key) => policy[key]);
+}
+
+const ERROR_DETAIL_SUFFIXES = [...ERROR_DETAIL_ATTRIBUTE_KEYS].map((key) => `.${key}`).concat(".error_message");
+
+/** The same exact and namespaced error-detail keys as fi-core's span/event masking. */
+export function isErrorDetailAttribute(key: string): boolean {
+  return ERROR_DETAIL_ATTRIBUTE_KEYS.has(key) || ERROR_DETAIL_SUFFIXES.some((suffix) => key.endsWith(suffix));
 }
 
 const MAX_REDACT_DEPTH = 64;
