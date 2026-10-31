@@ -93,5 +93,6 @@ demo = gr.ChatInterface(predict, analytics_enabled=False)
 
 if __name__ == "__main__":
     init_tracing()
-    # register() flushes the batch on normal exit and on SIGINT/SIGTERM.
+    # register() cleans up on normal exit; signal cleanup belongs to the app.
+    # See README.md for shutdown lifecycle guidance.
     demo.launch()

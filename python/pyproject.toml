@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fi-instrumentation-otel"
-version = "1.2.1"
+version = "1.2.2"
 description = "OpenTelemetry tracing for AI applications: tracer setup, span helpers, exporters, and semantic conventions for Future AGI."
 authors = ["Future AGI <no-reply@futureagi.com>"]
 readme = "README.md"

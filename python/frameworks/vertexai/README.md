@@ -1,103 +1,121 @@
-# VertexAI OpenTelemetry Integration
+# Trace Vertex AI requests
 
-## Overview
-This integration provides support for using OpenTelemetry with the VertexAI framework. It enables tracing and monitoring of applications built with VertexAI.
+Trace Gemini requests on Vertex AI in Future AGI using the Google Gen AI SDK.
 
-## Installation
+## Choose the SDK
 
-1. **Install traceAI VertexAI**
+For new applications, use [`traceAI-google-genai`](../google-genai/README.md) with `google-genai`. Its `GoogleGenAIInstrumentor` wraps the SDK's synchronous and asynchronous generation and streaming methods, including clients configured with `vertexai=True`.
+
+`traceAI-vertexai` is the **legacy** integration for `google-cloud-aiplatform`. Google deprecated its generative AI modules, including `vertexai.generative_models`, and [announced their removal after June 24, 2026](https://cloud.google.com/vertex-ai/generative-ai/docs/deprecations/genai-vertexai-sdk). This package supports `google-cloud-aiplatform>=1.61.0,<=1.101.0`; the lower bound allows the protobuf version required by the tracing dependencies, and the upper bound retains a release containing those modules. It does not instrument `google-genai`. Do not install the separate `vertexai` distribution to set up either route.
+
+## Set up Google Gen AI (recommended)
+
+Install the maintained instrumentation package and SDK:
 
 ```bash
-pip install traceAI-vertexai
+pip install traceAI-google-genai google-genai
 ```
 
-2. **Install VertexAI SDK**
+You need a Google Cloud project with Vertex AI enabled, access to your chosen model in the selected location, and Application Default Credentials. For local development:
 
 ```bash
-pip install vertexai
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_CLOUD_LOCATION="global"
+export GOOGLE_GENAI_MODEL="your-enabled-model-id"
+export FI_API_KEY="your-future-agi-api-key"
+export FI_SECRET_KEY="your-future-agi-secret-key"
 ```
 
-### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI
+Use a model ID available to your project and location. In a deployed application, use its service account or another supported Application Default Credentials configuration instead of an interactive login.
+
+Register the tracer and instrument the SDK before making requests:
 
 ```python
 import os
 
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GOOGLE_APPLICATION_CREDENTIALS
-```
-
-## Quickstart
-
-### Register Tracer Provider
-Set up the trace provider to establish the observability pipeline. The trace provider:
-
-```python
 from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
+from google import genai
+from traceai_google_genai import GoogleGenAIInstrumentor
+
+
+def main():
+    trace_provider = register(
+        project_type=ProjectType.OBSERVE,
+        project_name="vertexai_app",
+    )
+    GoogleGenAIInstrumentor().instrument(tracer_provider=trace_provider)
+    try:
+        client = genai.Client(
+            vertexai=True,
+            project=os.environ["GOOGLE_CLOUD_PROJECT"],
+            location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+        )
+        response = client.models.generate_content(
+            model=os.environ["GOOGLE_GENAI_MODEL"],
+            contents="Write a haiku about a mountain trail.",
+        )
+        print(response.text)
+    finally:
+        trace_provider.force_flush()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+This example is also available as [`examples/google_genai_vertex.py`](examples/google_genai_vertex.py). Open the `vertexai_app` project in Future AGI Observe to inspect the generation span, input, output and token usage returned by the SDK.
+
+## Keep an existing legacy application running
+
+For applications that still import `vertexai.generative_models`, install the bounded legacy dependency rather than upgrading it past the supported range:
+
+```bash
+pip install traceAI-vertexai 'google-cloud-aiplatform==1.101.0'
+```
+
+Use the same Google Cloud and Future AGI credentials above, but select a **region** where your model is available. Older supported legacy SDKs reject `global`; if you set it for the recommended route, override it before running the legacy example:
+
+```bash
+export GOOGLE_CLOUD_LOCATION="us-central1"
+```
+
+The legacy example defaults to `us-central1` when the variable is unset. Instrument **before importing `vertexai`** so the legacy SDK's GAPIC clients are wrapped when they are created:
+
+```python
+import os
+
+from fi_instrumentation import register
+from fi_instrumentation.fi_types import ProjectType
+from traceai_vertexai import VertexAIInstrumentor
 
 trace_provider = register(
     project_type=ProjectType.OBSERVE,
-    project_name="vertexai_app"
+    project_name="vertexai_legacy_app",
 )
-```
-
-### Configure VertexAI Instrumentation
-Instrument the VertexAI client to enable telemetry collection. This step ensures that all interactions with the VertexAI SDK are tracked and monitored.
-
-```python
-from traceai_vertexai import VertexAIInstrumentor
-
 VertexAIInstrumentor().instrument(tracer_provider=trace_provider)
-```
 
-### Create VertexAI Components
-Set up your VertexAI client with built-in observability.
-
-```python
 import vertexai
-from vertexai.generative_models import FunctionDeclaration, GenerativeModel, Part, Tool
+from vertexai.generative_models import GenerativeModel
 
 vertexai.init(
-    project="project_name",
+    project=os.environ["GOOGLE_CLOUD_PROJECT"],
+    location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
 )
-
-# Describe a function by specifying its schema (JsonSchema format)
-get_current_weather_func = FunctionDeclaration(
-    name="get_current_weather",
-    description="Get the current weather in a given location",
-    parameters={
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "The city and state, e.g. San Francisco, CA",
-            },
-            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-        },
-        "required": ["location"],
-    },
-)
-
-# Tool is a collection of related functions
-weather_tool = Tool(function_declarations=[get_current_weather_func])
-
-# Use tools in chat
-chat = GenerativeModel("gemini-1.5-flash", tools=[weather_tool]).start_chat()
-
-if __name__ == "__main__":
-    for response in chat.send_message(
-        "What is the weather like in Boston?", stream=True
-    ):
-        print(response)
-    for response in chat.send_message(
-        Part.from_function_response(
-            name="get_current_weather",
-            response={"content": {"weather": "super nice"}},
-        ),
-        stream=True,
-    ):
-        print(response)
+try:
+    response = GenerativeModel(os.environ["GOOGLE_GENAI_MODEL"]).generate_content(
+        "Write a haiku about a mountain trail."
+    )
+    print(response.text)
+finally:
+    trace_provider.force_flush()
 ```
 
+The pin preserves the SDK modules, not retired models or service endpoints. Migrate the application's imports, client construction and calls using [Google's migration guide](https://cloud.google.com/vertex-ai/generative-ai/docs/deprecations/genai-vertexai-sdk), then replace `VertexAIInstrumentor` with `GoogleGenAIInstrumentor`. Do not enable both instrumentors for the same SDK call.
+
+## Troubleshooting
+
+- **`ModuleNotFoundError: vertexai.generative_models`**: migrate to the recommended Google Gen AI route, or install the legacy version shown above. Installing `vertexai` separately is not the migration.
+- **No generation spans after switching to `google-genai`**: replace `VertexAIInstrumentor` with `GoogleGenAIInstrumentor`; they target different SDKs.
+- **Authentication, model-not-found or location errors**: check Application Default Credentials, Vertex AI permissions, and the model's availability in your project and location. Changing the tracing package does not restore retired models.

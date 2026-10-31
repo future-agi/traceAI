@@ -28,7 +28,6 @@ from mlflow.entities import LiveSpan, SpanStatusCode, SpanType
 
 MODEL = "gpt-4o-mini"
 PROVIDER = "openai"
-REDACTED = "[REDACTED]"
 
 _POLICY = "Refunds are accepted within 30 days of purchase."
 
@@ -111,36 +110,55 @@ def check_environment() -> None:
         raise SystemExit("Add project_name=<your project> to OTEL_RESOURCE_ATTRIBUTES.")
 
 
-def drop_exception_events(span: LiveSpan) -> None:
-    """Remove the ``exception`` events from a span before it is exported.
+def _filter_events(span: LiveSpan, *, content: bool = False) -> None:
+    # Read through the public OTel events API. MLflow 3.16.1 / OTel 1.45
+    # have no public event-removal API, so replacing the backing collection
+    # is the only compatibility fallback. Never silently skip filtering.
+    def is_sensitive(event) -> bool:
+        if event.name == "exception" or any(
+            key.startswith("exception.") for key in event.attributes or {}
+        ):
+            return True
+        if not content:
+            return False
+        return event.name in {
+            "gen_ai.system.message", "gen_ai.user.message", "gen_ai.assistant.message",
+            "gen_ai.tool.message", "gen_ai.choice", "gen_ai.input.messages",
+            "gen_ai.output.messages", "tool.input", "tool.output",
+        } or event.name.startswith("gen_ai.content.") or any(
+            key in {"body", "content", "input", "output", "prompt", "completion", "messages"}
+            or key.startswith(("gen_ai.input.", "gen_ai.output.", "gen_ai.system_instructions",
+                               "gen_ai.tool.call.arguments", "gen_ai.tool.call.result"))
+            for key in event.attributes or {}
+        )
 
-    When a span fails, MLflow records an ``exception`` event holding the
-    exception message and ``exception.stacktrace``, which contains the local
-    file paths of the failing process (and so the user name). Nothing in
-    MLflow's own settings turns that off, and the status stays ERROR without
-    it. MLflow has no public call that removes an event, so this clears the
-    underlying OpenTelemetry span's event list (the span has ended, so nothing
-    appends to it again); the processor is a no-op if that attribute is not there. ``main()`` always registers it.
-    """
-    otel_span = getattr(span, "_span", None)
-    if getattr(otel_span, "_events", None):
-        otel_span._events = []
+    try:
+        otel_span = span._span
+        events = tuple(otel_span.events)
+        kept = tuple(event for event in events if not is_sensitive(event))
+        if len(kept) != len(events):
+            if not hasattr(otel_span, "_events"):
+                raise RuntimeError("Event removal is unavailable")
+            otel_span._events = list(kept)
+            if tuple(otel_span.events) != kept:
+                raise RuntimeError("Event removal did not take effect")
+    except Exception:
+        # MLflow catches Exception from processors and exports the span anyway.
+        # SystemExit deliberately stops finalization before the unsafe span is
+        # queued for export; neither the event nor its text is logged here.
+        raise SystemExit("Cannot safely filter MLflow events; refusing to export this span.") from None
+
+
+def drop_exception_events(span: LiveSpan) -> None:
+    _filter_events(span)
 
 
 def drop_content(span: LiveSpan) -> None:
-    """Replace a span's inputs and outputs, and the text of its error, before it
-    is exported.
-
-    MLflow has no setting that keeps tracing on and content off; a span
-    processor registered with ``mlflow.tracing.configure`` is its own hook.
-    A failed span keeps status ERROR, but MLflow would otherwise export the
-    exception text (``"<Type>: <message>"``, which providers fill with request
-    details such as model names and sometimes prompt text) as its status message.
-    """
+    _filter_events(span, content=True)
     if span.inputs is not None:
-        span.set_inputs(REDACTED)
+        span.set_inputs("[REDACTED]")
     if span.outputs is not None:
-        span.set_outputs(REDACTED)
+        span.set_outputs("[REDACTED]")
     if span.status.status_code == SpanStatusCode.ERROR:
         span.set_status("ERROR")
 

@@ -161,6 +161,7 @@ TraceAI.init(TraceConfig.builder()
     .hideOutputs(false)
     .hideInputMessages(false)
     .hideOutputMessages(false)
+    .hideErrorDetails(false)
     .enableConsoleExporter(false)
     .batchSize(512)
     .exportIntervalMs(5000)
@@ -168,6 +169,27 @@ TraceAI.init(TraceConfig.builder()
 ```
 
 Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Console export can include request and response content; enable it only when that is appropriate.
+
+### Privacy controls
+
+To suppress input/output content and exception details recorded by `FITracer`, configure all three controls:
+
+```java
+TraceConfig config = TraceConfig.builder()
+    .hideInputs(true)
+    .hideOutputs(true)
+    .hideErrorDetails(true)
+    .build();
+```
+
+- `hideInputs` suppresses input values, raw input and input messages. In Cohere it also suppresses the preamble and rerank query.
+- `hideOutputs` suppresses output values, raw output and output messages. In Cohere it also suppresses generated tool-call names and arguments.
+- `hideInputMessages` and `hideOutputMessages` suppress only message attributes (including Cohere's preamble and tool calls respectively). They do not suppress values or raw payloads, which can contain the same content. Setting a message flag to `false` cannot override `hideInputs(true)` or `hideOutputs(true)`.
+- `hideErrorDetails` suppresses `error.message`, exception messages, exception stack traces and ERROR status descriptions written by `FITracer.setError`, including errors from Cohere chat, embed and rerank. ERROR status, `error.type` and an exception event containing `exception.type` remain available.
+
+Error-detail hiding is opt-in in Java: it defaults to `false`, independently of the input/output flags. Set `FI_HIDE_ERROR_DETAILS=true` to enable it through the environment; an explicit `.hideErrorDetails(true)` or `.hideErrorDetails(false)` overrides the environment.
+
+These controls govern the tracing helpers and the Cohere content fields described above, not arbitrary attributes or events written directly to an OpenTelemetry span by your application or another instrumentor. Do not attach sensitive content directly to spans.
 
 Spring Boot applications can configure the starter with:
 

@@ -562,6 +562,41 @@ def test_error_text_and_stack_trace_are_dropped_and_status_stays_error(
         assert not span["status"].get("message")
 
 
+@pytest.mark.parametrize("semconv", [None, "true"])
+@pytest.mark.parametrize("mode", ["events", "content", "unsupported"])
+def test_event_filter_preserves_operational_events_or_refuses_export(
+    tmp_path: Path, semconv: Optional[str], mode: str
+) -> None:
+    record = _run_script(
+        tmp_path, TESTS_DIR / "events_app.py", [mode],
+        MLFLOW_ENABLE_OTEL_GENAI_SEMCONV=semconv,
+    )
+    if mode == "unsupported":
+        assert record["result"].returncode != 0
+        assert not record["result"].timed_out
+        assert "refusing to export" in record["stderr"]
+        assert not record["requests"]
+        assert not record["spans"]
+        assert "PRIVATE-" not in record["stderr"]
+        assert record["guard_attempts"] == []
+        return
+    _assert_exited_cleanly(record)
+    (span,) = record["spans"]
+    events = span["events"]
+    assert events[0]["name"] == "checkpoint"
+    assert events[0]["timeUnixNano"] == "123456789"
+    assert _attrs(events[0]) == {"attempt": 2}
+    dump = _export_dump(record)
+    assert "PRIVATE-EXCEPTION" not in dump
+    if mode == "content":
+        assert len(events) == 1
+        assert "PRIVATE-" not in dump
+    else:
+        assert [event["name"] for event in events] == ["checkpoint", "gen_ai.user.message", "custom"]
+        assert "PRIVATE-PROMPT" in dump
+        assert "PRIVATE-RESULT" in dump
+
+
 # --------------------------------------------------------------------------
 # Endpoint, protocol and the settings src/app.py refuses.
 # --------------------------------------------------------------------------

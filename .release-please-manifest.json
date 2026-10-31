@@ -120,5 +120,5 @@
   "go/genai": "0.1.0",
   "go/openai": "0.1.0",
   "csharp/src/FIInstrumentation": "1.0.0",
-  "python": "1.2.1"
+  "python": "1.2.2"
 }

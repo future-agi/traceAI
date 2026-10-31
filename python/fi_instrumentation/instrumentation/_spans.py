@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
 
 import wrapt  # type: ignore[import-untyped]
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
-from opentelemetry.trace import Span, Status, StatusCode
+from opentelemetry.trace import Span, SpanContext, Status, StatusCode
 from opentelemetry.util.types import Attributes, AttributeValue
 
 from ._attributes import (
@@ -54,9 +54,14 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
       exception events keep only ``exception.type`` / ``exception.escaped``.
     """
 
-    def __init__(self, wrapped: Span, config: TraceConfig) -> None:
+    def __init__(
+        self, wrapped: Span, config: TraceConfig, span_kind: Optional[AttributeValue] = None
+    ) -> None:
         super().__init__(wrapped)
         self._self_config = config
+        # Logical kind permits the helper methods even if a sampler omitted the
+        # kind. It is not written back unless the sampler or a setter chose it.
+        self._self_span_kind = span_kind
         self._self_important_attributes: Dict[str, AttributeValue] = {}
         # Only summaries (class names, message) of recorded exceptions are kept,
         # never the exceptions, so their traceback frames and locals are freed.
@@ -111,6 +116,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         span = cast(Span, self.__wrapped__)
         if not span.is_recording():
             return
+        attributes = self._mask_event_attributes(attributes)
         error_type = get_error_type(exception)
         self._remember_recorded(error_type, summarize_exception(exception))
         if escaped:
@@ -130,6 +136,26 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         span.add_event(
             name=EXCEPTION_EVENT_NAME, attributes=event_attributes, timestamp=timestamp
         )
+
+    def _mask_event_attributes(self, attributes: Attributes) -> Attributes:
+        if attributes is None:
+            return None
+        result: Dict[str, AttributeValue] = {}
+        for key, value in attributes.items():
+            masked = self._self_config.mask(key, value)
+            if masked is not None:
+                result[key] = masked
+        return result
+
+    def add_link(self, context: SpanContext, attributes: Attributes = None) -> None:
+        # Available on newer OTel SDKs; preserve the underlying API's behavior
+        # on versions that do not support adding links after start.
+        span = cast(Span, self.__wrapped__)
+        span.add_link(context, attributes=self._mask_event_attributes(attributes))
+
+    def _remember_sampled_kind(self, value: AttributeValue) -> None:
+        # Exported selection and the caller's logical helper kind are distinct.
+        self._self_important_attributes[GEN_AI_SPAN_KIND] = value
 
     def add_event(
         self,
@@ -151,6 +177,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
                 )
                 if str(escaped).lower() == "true":
                     self._self_escaped_error_type = exception_type
+        attributes = self._mask_event_attributes(attributes)
         if self._self_config.hide_error_details:
             attributes = strip_error_details(attributes)
         span.add_event(name, attributes=attributes, timestamp=timestamp)
@@ -244,6 +271,8 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         if masked_value is not None:
             if key in _IMPORTANT_ATTRIBUTES:
                 self._self_important_attributes[key] = masked_value
+                if key == GEN_AI_SPAN_KIND:
+                    self._self_span_kind = masked_value
             else:
                 span = cast(Span, self.__wrapped__)
                 span.set_attribute(key, masked_value)
@@ -264,7 +293,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         *,
         mime_type: Optional[FiMimeType] = None,
     ) -> None:
-        if GEN_AI_SPAN_KIND not in self._self_important_attributes:
+        if self._self_span_kind is None:
             raise ValueError("Cannot set input attributes on a non-Fi span")
         self.set_attributes(get_input_attributes(value, mime_type=mime_type))
 
@@ -274,7 +303,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         *,
         mime_type: Optional[FiMimeType] = None,
     ) -> None:
-        if GEN_AI_SPAN_KIND not in self._self_important_attributes:
+        if self._self_span_kind is None:
             raise ValueError("Cannot set output attributes on a non-Fi span")
         self.set_attributes(get_output_attributes(value, mime_type=mime_type))
 
@@ -285,7 +314,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         description: Optional[str] = None,
         parameters: Union[str, Dict[str, Any]],
     ) -> None:
-        if self._self_important_attributes.get(GEN_AI_SPAN_KIND) != TOOL:
+        if self._self_span_kind != TOOL:
             raise ValueError("Cannot set tool attributes on a non-tool span")
         self.set_attributes(
             get_tool_attributes(

@@ -16,8 +16,8 @@ All notable changes to `traceAI-replicate` will be documented here.
   last traced call (with an exporter that runs inline, exported there, also by `force_flush(timeout_millis=0)`).
   `replicate.run` and create + `wait()` spans have status and token counts either way.
 - A traced call still running (`run`, `async_run`, a create, `wait()` or `cancel()`), or a referenced stream or run
-  iterator still open, at provider shutdown (including the SIGTERM/SIGINT handler `register()` installs) or
-  interpreter exit ends then as cancelled (ERROR `cancelled`, `replicate.cancelled`), with what it knows, so it is
+  iterator still open, at provider shutdown (including application-owned SIGTERM/SIGINT cleanup that calls
+  `provider.shutdown()`) or normal interpreter exit ends then as cancelled (ERROR `cancelled`, `replicate.cancelled`), with what it knows, so it is
   exported before the processors stop. Before, an in-flight `run()` / `async_run()` or create span was lost there, and
   a running `wait()` ended OK with its last polled status.
 - A stream or run iterator that stops before it completes (closed, dropped, a cancelled task, Ctrl-C, an exception,

@@ -6,8 +6,8 @@ call runs, neither the cap (a traced call on another thread or task) nor
 neither does a release of the prediction object: the call ends it once, when
 it returns or raises, with the final status, output and end time.
 
-Provider shutdown and interpreter exit (including the SIGTERM/SIGINT handler
-``register()`` installs) still end it as a best effort: as of then, as
+Provider shutdown and interpreter exit (including an application SIGTERM/SIGINT handler
+that calls ``provider.shutdown()``) still end it as a best effort: as of then, as
 cancelled (ERROR ``cancelled``, ``replicate.cancelled``; round 8: as every
 call still running then is), with the prediction's last polled status and
 no output. The call returning later neither ends it again nor opens a wait
@@ -408,6 +408,7 @@ FI_ROOT = Path(fi_instrumentation.__file__).resolve().parents[1]
 
 SCRIPT = """
 import os
+import signal
 import threading
 import time
 
@@ -416,12 +417,22 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_replicate import ReplicateInstrumentor
 
+def stop(signum, frame):
+    # End in-flight spans before SystemExit unwinds the active client call.
+    provider.shutdown()
+    raise SystemExit(0)
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
 provider = register(
     project_name="replicate-inflight",
     project_type=ProjectType.OBSERVE,
     batch=os.environ["BATCH"] == "1",
     verbose=False,
 )
+assert signal.getsignal(signal.SIGTERM) is stop
+assert signal.getsignal(signal.SIGINT) is stop
 ReplicateInstrumentor().instrument(tracer_provider=provider)
 client = replicate.Client(base_url=os.environ["REPLICATE_BASE_URL"])
 client.poll_interval = 0.01
