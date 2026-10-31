@@ -6,5 +6,3 @@
 # (for example, a LangChain change that fixes its tests). A listed package with no tests at all also fails: remove its line.
 # Each entry should name its follow-up (a ticket or PR) in the reason once one exists.
 # Format: <package name: its dir under python/frameworks, or traceai for python/traceai> | <reason in plain words>
-autogen | 17 tests (12 own, 5 core): the instrumentor no longer has _original_generate or _safe_json_dumps, traceai_autogen no longer exports _is_v04_available, and a dependency name
-openai-agents | its own tests do not load (conftest imports traceai_openai, not installed); 2 core tests expect raw.output and a trace-start call
