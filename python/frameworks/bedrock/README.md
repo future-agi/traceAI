@@ -45,7 +45,7 @@ trace_provider = register(
 ```
 
 ### Configure Bedrock Instrumentation
-Instrument the Bedrock client to enable telemetry collection. This step ensures that all interactions with the Bedrock SDK are tracked and monitored.
+Call the instrumentor before creating your boto3 clients to trace supported Bedrock model, retrieval, and agent operations.
 
 ```python
 from traceai_bedrock import BedrockInstrumentor
@@ -83,4 +83,50 @@ def converse_with_claude():
 if __name__ == "__main__":
     converse_with_claude()
 ```
+
+## Trace an existing Bedrock Agents Classic agent
+
+Use a synchronous boto3 `bedrock-agent-runtime` client created **after** calling
+`BedrockInstrumentor().instrument(...)`. Set `enableTrace=True` to include the
+agent's internal model and tool events. These AWS events are converted into
+OpenTelemetry spans; Agents Classic does not send them as native OTLP.
+
+```python
+import boto3
+import os
+
+client = boto3.client("bedrock-agent-runtime", region_name=os.environ["AWS_REGION"])
+response = client.invoke_agent(
+    agentId=os.environ["BEDROCK_AGENT_ID"],
+    agentAliasId=os.environ["BEDROCK_AGENT_ALIAS_ID"],
+    sessionId="travel-planning-session",
+    inputText="Plan a three-day trip to Lisbon.",
+    enableTrace=True,
+)
+completion = response["completion"]
+try:
+    answer = b"".join(
+        event["chunk"]["bytes"] for event in completion if "chunk" in event
+    )
+    print(answer.decode("utf-8"))
+finally:
+    completion.close()
+    trace_provider.force_flush()
+```
+
+Use your usual AWS credential chain, an existing agent and alias, and permission
+to invoke that agent. Consume the completion stream to record the full answer.
+If you stop early, call `completion.close()`; the span then contains only the
+output and trace events you consumed. Closing does not drain the remaining events.
+Decode assembled bytes rather than individual chunks, because a UTF-8 character
+can span chunks. A stream that is neither exhausted nor closed stays open.
+
+This agent route supports synchronous boto3 `invoke_agent`. It does not
+instrument `invoke_inline_agent` or async `aiobotocore`/`aioboto3` clients.
+Do not enable another instrumentor for the same operations.
+
+For new agent deployments, use [Amazon Bedrock AgentCore](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html).
+[Agents Classic is in maintenance mode](https://docs.aws.amazon.com/bedrock/latest/userguide/agents-classic-maintenance-mode.html),
+with no planned end-of-life for existing customers. Bedrock Runtime and Knowledge
+Bases remain supported; this package is not deprecated.
 

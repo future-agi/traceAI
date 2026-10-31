@@ -9,6 +9,7 @@ from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import Status, StatusCode, Tracer
 
 from traceai_bedrock._attribute_extractor import AttributeExtractor
+from traceai_bedrock._proxy import _no_err
 from traceai_bedrock._rag_wrappers import _RagEventStream
 from traceai_bedrock._response_accumulator import _ResponseAccumulator
 from traceai_bedrock.utils import _EventStream, _use_span
@@ -68,6 +69,20 @@ class _InvokeModelWithResponseStream(_WithTracer):
             return response
 
 
+class _AgentEventStream(_EventStream):
+    """Finalize agent telemetry when the caller closes without exhausting the stream."""
+
+    def close(self) -> Any:
+        callback = _no_err(self._self_callback)
+        try:
+            result = self.__wrapped__.close()
+        except BaseException as exc:
+            callback(exc)
+            raise
+        callback(StopIteration())
+        return result
+
+
 class _InvokeAgentWithResponseStream(_WithTracer):
     _name = "bedrock_agent.invoke_agent"
 
@@ -95,7 +110,7 @@ class _InvokeAgentWithResponseStream(_WithTracer):
             span.set_attributes({k: v for k, v in attributes.items() if v is not None})
             try:
                 response = wrapped(*args, **kwargs)
-                response["completion"] = _EventStream(
+                response["completion"] = _AgentEventStream(
                     response["completion"],
                     _ResponseAccumulator(span, self._tracer, kwargs),
                     _use_span(span),
