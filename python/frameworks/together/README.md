@@ -8,6 +8,20 @@ OpenTelemetry instrumentation for [Together AI](https://together.ai/) - chat com
 pip install traceai-together
 ```
 
+## Compatibility
+
+`TogetherInstrumentor` traces the native `together.Together` and `together.AsyncTogether` clients from the Together Python SDK 1.x, 2.x and 3.x:
+
+- `chat.completions.create`, including streaming and tool calls
+- `completions.create`, including streaming
+- `embeddings.create`
+
+If an SDK release no longer exposes one of these methods, the instrumentor logs a warning that names the calls it cannot trace. If it finds none of them, it logs an error and leaves `is_instrumented_by_opentelemetry` as `False`.
+
+Calls made through `with_raw_response` or `with_streaming_response` produce a span with request details only, so the instrumentor never reads a response body before your code does.
+
+If you call Together through the OpenAI client (`base_url="https://api.together.ai/v1"`), use `traceai-openai` instead of this package.
+
 ## Features
 
 - Automatic tracing of Together AI API calls

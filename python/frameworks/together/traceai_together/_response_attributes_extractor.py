@@ -228,6 +228,7 @@ class _StreamingChatResponseAccumulator:
             chunk_dict = chunk
 
         self._raw_chunks.append(chunk_dict)
+        del self._raw_chunks[:-5]
 
         if "model" in chunk_dict:
             self._model = chunk_dict["model"]
@@ -237,7 +238,7 @@ class _StreamingChatResponseAccumulator:
 
         choices = chunk_dict.get("choices", [])
         for choice in choices:
-            delta = choice.get("delta", {})
+            delta = choice.get("delta") or {}
 
             # Accumulate content
             if "content" in delta and delta["content"]:
@@ -320,6 +321,7 @@ class _StreamingCompletionsResponseAccumulator:
             chunk_dict = chunk
 
         self._raw_chunks.append(chunk_dict)
+        del self._raw_chunks[:-5]
 
         if "model" in chunk_dict:
             self._model = chunk_dict["model"]
@@ -329,9 +331,10 @@ class _StreamingCompletionsResponseAccumulator:
 
         choices = chunk_dict.get("choices", [])
         for choice in choices:
-            # For completions, text is directly in choice
-            if "text" in choice and choice["text"]:
-                self._text_parts.append(choice["text"])
+            # Together 1.x sends delta.content; Stainless 2+ sends text.
+            text = choice.get("text") or (choice.get("delta") or {}).get("content")
+            if text:
+                self._text_parts.append(text)
 
             # Capture finish reason
             if "finish_reason" in choice and choice["finish_reason"]:
