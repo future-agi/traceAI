@@ -1,152 +1,151 @@
-"""pgvector method wrappers for OpenTelemetry instrumentation."""
+"""Metadata-only enrichment for spans owned by the OTel PostgreSQL drivers.
 
-import re
+This is deliberately not a SQL parser. Only recognized SQL operations and
+pgvector operators become attributes; query text, identifiers and values never
+leave this module. Unknown queries still get their driver's database span.
+"""
+
+from __future__ import annotations
+
 import logging
-from typing import Any, Callable, Optional, Tuple
+import re
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Callable
 
-from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
-
-logger = logging.getLogger(__name__)
-
-# Vector operators in pgvector
 VECTOR_OPERATORS = {
     "<->": "l2_distance",
     "<=>": "cosine_distance",
     "<#>": "inner_product",
     "<+>": "l1_distance",
+    "<~>": "hamming_distance",
+    "<%>": "jaccard_distance",
 }
+VECTOR_OP_PATTERN = re.compile(r"<->|<=>|<#>|<\+>|<~>|<%>")
+# Mask literals, quoted identifiers and comments before recognizing operators.
+# Dollar-quoted strings and nested comments are handled by the scanner below.
+_SQL_TOKEN = re.compile(
+    r"--[^\n]*|/\*|\$[A-Za-z_][A-Za-z_0-9]*\$|\$\$|"
+    r"'(?:''|\\.|[^'\\])*'|\"(?:\"\"|[^\"])*\"",
+    re.DOTALL,
+)
+_OPERATION = re.compile(
+    r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH|BEGIN|COMMIT|ROLLBACK)\b",
+    re.IGNORECASE,
+)
+_QUERY_ATTRIBUTES = ContextVar("pgvector_query_attributes", default=None)
 
-# Regex patterns for detecting vector operations
-VECTOR_OP_PATTERN = re.compile(r"(<->|<=>|<#>|<\+>)")
-ORDER_BY_PATTERN = re.compile(r"ORDER\s+BY\s+.*?(<->|<=>|<#>|<\+>)", re.IGNORECASE)
-LIMIT_PATTERN = re.compile(r"LIMIT\s+(\d+)", re.IGNORECASE)
-TABLE_PATTERN = re.compile(r"(?:FROM|INTO|UPDATE)\s+(\w+)", re.IGNORECASE)
+
+def _structure(query: str) -> str:
+    """Remove SQL data before best-effort structural matching."""
+    parts = []
+    position = 0
+    while match := _SQL_TOKEN.search(query, position):
+        parts.append(query[position : match.start()])
+        token = match.group()
+        end = match.end()
+        if token == "/*":
+            depth = 1
+            while depth and end < len(query):
+                next_token = re.search(r"/\*|\*/", query[end:])
+                if next_token is None:
+                    end = len(query)
+                    break
+                depth += 1 if next_token.group() == "/*" else -1
+                end += next_token.end()
+        elif token.startswith("$"):
+            closing = query.find(token, end)
+            end = len(query) if closing < 0 else closing + len(token)
+        parts.append(" ")
+        position = end
+    parts.append(query[position:])
+    return "".join(parts)
 
 
-def detect_vector_operation(query) -> Optional[Tuple[str, dict]]:
-    """Detect if a query contains pgvector operations and extract metadata."""
-    if not query:
-        return None
+def query_attributes(query: Any, cursor: Any = None) -> dict:
+    """Read query metadata without consuming parameters or exporting SQL."""
+    try:
+        if isinstance(query, bytes):
+            query = query.decode("utf-8", "replace")
+        elif hasattr(query, "as_string"):
+            query = query.as_string(cursor)
+        if not isinstance(query, str):
+            return {}
+        # Bound enrichment work; the driver still receives the complete query.
+        structure = _structure(query[:65536])
+        attributes = {}
+        operation = _OPERATION.match(structure)
+        if operation:
+            attributes["db.operation.name"] = operation.group(1).lower()
+        vector = VECTOR_OP_PATTERN.search(structure)
+        if vector:
+            attributes.update(
+                {
+                    "db.vector.extension": "pgvector",
+                    "db.vector.operator": vector.group(),
+                    "db.vector.distance_type": VECTOR_OPERATORS[vector.group()],
+                }
+            )
+            if re.search(
+                r"ORDER\s+BY\b[^;]*" + re.escape(vector.group()),
+                structure,
+                re.IGNORECASE,
+            ):
+                attributes["db.vector.query.type"] = "similarity_search"
+            limit = re.search(r"\bLIMIT\s+(\d+)\b", structure, re.IGNORECASE)
+            if limit:
+                value = int(limit.group(1))
+                if value <= 2**63 - 1:
+                    attributes["db.vector.query.top_k"] = value
+        return attributes
+    except Exception:  # noqa: BLE001 - metadata is best-effort; never block the driver
+        # Fail open. Error strings/tracebacks can contain SQL and credentials,
+        # so the diagnostic deliberately omits exception details.
+        logging.getLogger(__name__).warning("Could not enrich pgvector query metadata")
+        return {}
 
-    # Handle psycopg3 Composed objects and other non-string query types
-    if hasattr(query, 'as_string'):
+
+def detect_vector_operation(query: Any) -> tuple[str, dict] | None:
+    """Compatibility helper; only structural vector metadata is returned."""
+    attributes = query_attributes(query)
+    distance = attributes.get("db.vector.distance_type")
+    return (distance, attributes) if distance else None
+
+
+def enrich_cursor_factory(
+    base: type, enabled: Callable[[], bool], asynchronous: bool = False
+) -> type:
+    """Add context to a maintained driver cursor, without creating a span."""
+
+    @contextmanager
+    def query_context(cursor, args, kwargs):
+        if not enabled():
+            yield
+            return
+        # psycopg2 and psycopg3 both name the SQL argument `query`.
+        query = args[0] if args else kwargs.get("query")
+        token = _QUERY_ATTRIBUTES.set(query_attributes(query, cursor))
         try:
-            # Composed.as_string() can work with None for simple cases
-            query = query.as_string(None)
-        except Exception:
-            # Fall back to str() if as_string fails
-            query = str(query)
-    elif not isinstance(query, str):
-        query = str(query)
+            yield
+        finally:
+            _QUERY_ATTRIBUTES.reset(token)
 
-    query_upper = query.upper()
+    class Cursor(base):
+        def execute(self, *args, **kwargs):
+            with query_context(self, args, kwargs):
+                return super().execute(*args, **kwargs)
 
-    # Check for vector operators
-    vector_match = VECTOR_OP_PATTERN.search(query)
-    if not vector_match:
-        return None
+        def executemany(self, *args, **kwargs):
+            with query_context(self, args, kwargs):
+                return super().executemany(*args, **kwargs)
 
-    operator = vector_match.group(1)
-    distance_type = VECTOR_OPERATORS.get(operator, "unknown")
+    class AsyncCursor(base):
+        async def execute(self, *args, **kwargs):
+            with query_context(self, args, kwargs):
+                return await super().execute(*args, **kwargs)
 
-    metadata = {
-        "db.vector.distance_type": distance_type,
-        "db.vector.operator": operator,
-    }
+        async def executemany(self, *args, **kwargs):
+            with query_context(self, args, kwargs):
+                return await super().executemany(*args, **kwargs)
 
-    # Check if it's a similarity search (ORDER BY with vector operator)
-    order_match = ORDER_BY_PATTERN.search(query)
-    if order_match:
-        metadata["db.vector.query.type"] = "similarity_search"
-
-    # Extract limit
-    limit_match = LIMIT_PATTERN.search(query)
-    if limit_match:
-        metadata["db.vector.query.top_k"] = int(limit_match.group(1))
-
-    # Extract table name
-    table_match = TABLE_PATTERN.search(query)
-    if table_match:
-        metadata["db.vector.collection.name"] = table_match.group(1)
-
-    # Detect operation type
-    if "INSERT" in query_upper:
-        metadata["db.operation.name"] = "insert"
-    elif "UPDATE" in query_upper:
-        metadata["db.operation.name"] = "update"
-    elif "DELETE" in query_upper:
-        metadata["db.operation.name"] = "delete"
-    elif "SELECT" in query_upper:
-        metadata["db.operation.name"] = "query"
-    else:
-        metadata["db.operation.name"] = "unknown"
-
-    return distance_type, metadata
-
-
-class BaseWrapper:
-    def __init__(self, tracer: Tracer):
-        self._tracer = tracer
-
-    def _get_attributes(self) -> dict:
-        return {
-            "db.system": "postgresql",
-            "db.vector.extension": "pgvector",
-        }
-
-
-class ExecuteWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        query = args[0] if args else ""
-
-        # Check if this is a vector operation
-        vector_info = detect_vector_operation(query)
-
-        if vector_info:
-            distance_type, metadata = vector_info
-            attributes = self._get_attributes()
-            attributes.update(metadata)
-
-            span_name = f"pgvector {metadata.get('db.operation.name', 'query')}"
-
-            with self._tracer.start_as_current_span(span_name, kind=SpanKind.CLIENT, attributes=attributes) as span:
-                try:
-                    result = wrapped(*args, **kwargs)
-                    span.set_status(Status(StatusCode.OK))
-                    return result
-                except Exception as e:
-                    span.set_status(Status(StatusCode.ERROR, str(e)))
-                    span.record_exception(e)
-                    raise
-        else:
-            # Not a vector operation, just execute normally
-            return wrapped(*args, **kwargs)
-
-
-class ExecuteManyWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        query = args[0] if args else ""
-        params_seq = args[1] if len(args) > 1 else kwargs.get("vars_list", [])
-
-        # Check if this is a vector operation
-        vector_info = detect_vector_operation(query)
-
-        if vector_info:
-            distance_type, metadata = vector_info
-            attributes = self._get_attributes()
-            attributes.update(metadata)
-            attributes["db.vector.batch.size"] = len(params_seq) if params_seq else 0
-
-            span_name = f"pgvector {metadata.get('db.operation.name', 'batch')}"
-
-            with self._tracer.start_as_current_span(span_name, kind=SpanKind.CLIENT, attributes=attributes) as span:
-                try:
-                    result = wrapped(*args, **kwargs)
-                    span.set_status(Status(StatusCode.OK))
-                    return result
-                except Exception as e:
-                    span.set_status(Status(StatusCode.ERROR, str(e)))
-                    span.record_exception(e)
-                    raise
-        else:
-            return wrapped(*args, **kwargs)
+    return AsyncCursor if asynchronous else Cursor
