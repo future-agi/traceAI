@@ -2,17 +2,20 @@ import asyncio
 import collections
 import inspect
 from collections.abc import Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from datetime import datetime
+from functools import partial
 from secrets import randbits
 from types import ModuleType
 from typing import (
     TYPE_CHECKING,
     Any,  # type: ignore[attr-defined]
+    AsyncGenerator,
     Awaitable,
     Callable,
     Dict,
+    Generator,
     Iterator,
     Literal,
     Optional,
@@ -380,16 +383,23 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
             args: Tuple[Any, ...],
             kwargs: Dict[str, Any],
         ) -> ReturnType:
-            tracer = self
-            with _chain_context(
-                tracer=tracer,
+            is_generator = (
+                inspect.isgeneratorfunction(wrapped)
+                or inspect.isasyncgenfunction(wrapped)
+            )
+            context = _chain_context(
+                tracer=self,
                 name=name,
                 kind=kind,
                 wrapped=wrapped,
                 instance=instance,
                 args=args,
                 kwargs=kwargs,
-            ) as chain_context:
+                end_on_exit=not is_generator,
+            )
+            if is_generator:
+                return cast(ReturnType, _trace_generator(wrapped(*args, **kwargs), context))
+            with context as chain_context:
                 output = wrapped(*args, **kwargs)
                 return chain_context.process_output(output)
 
@@ -466,9 +476,12 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
             args: Tuple[Any, ...],
             kwargs: Dict[str, Any],
         ) -> ReturnType:
-            tracer = self
-            with _tool_context(
-                tracer=tracer,
+            is_generator = (
+                inspect.isgeneratorfunction(wrapped)
+                or inspect.isasyncgenfunction(wrapped)
+            )
+            context = _tool_context(
+                tracer=self,
                 name=name,
                 description=description,
                 parameters=parameters,
@@ -476,7 +489,11 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
                 instance=instance,
                 args=args,
                 kwargs=kwargs,
-            ) as tool_context:
+                end_on_exit=not is_generator,
+            )
+            if is_generator:
+                return cast(ReturnType, _trace_generator(wrapped(*args, **kwargs), context))
+            with context as tool_context:
                 output = wrapped(*args, **kwargs)
                 return tool_context.process_output(output)
 
@@ -532,6 +549,7 @@ def _chain_context(
     instance: Any,
     args: Tuple[Any, ...],
     kwargs: Dict[str, Any],
+    end_on_exit: bool = True,
 ) -> Iterator[_ChainContext]:
     span_name = name or _infer_span_name(instance=instance, callable=wrapped)
     bound_args = inspect.signature(wrapped).bind(*args, **kwargs)
@@ -548,6 +566,7 @@ def _chain_context(
         span_name,
         fi_span_kind=kind,
         attributes=input_attributes,
+        end_on_exit=end_on_exit,
     ) as span:
         context = _ChainContext(span=span)
         yield context
@@ -576,6 +595,7 @@ def _tool_context(
     instance: Any,
     args: Tuple[Any, ...],
     kwargs: Dict[str, Any],
+    end_on_exit: bool = True,
 ) -> Iterator[_ToolContext]:
     tool_name = name or _infer_span_name(instance=instance, callable=wrapped)
     bound_args = inspect.signature(wrapped).bind(*args, **kwargs)
@@ -600,9 +620,106 @@ def _tool_context(
             **input_attributes,
             **tool_attributes,
         },
+        end_on_exit=end_on_exit,
     ) as span:
         context = _ToolContext(span=span)
         yield context
+
+
+_DecoratorContext = Union[_ChainContext, _ToolContext]
+
+
+@contextmanager
+def _generator_context(
+    manager: AbstractContextManager[_DecoratorContext],
+) -> Iterator[_DecoratorContext]:
+    # Start lazily on first consumption, under the consumer's parent. Detach
+    # immediately: an OTel context token must never span a yield (or two tasks).
+    with manager as context:
+        pass
+    span = context._span
+    try:
+        yield context
+    except GeneratorExit:
+        # Explicit early close is not a failed operation.
+        raise
+    except BaseException as exc:
+        # use_span only handles Exception; cancellation is a BaseException.
+        # Record once through FiSpan so error privacy applies on every path.
+        span.record_exception(exc, escaped=True)
+        span.set_status(Status(StatusCode.ERROR, str(exc)))
+        raise
+    finally:
+        span.end()
+
+
+def _trace_generator(
+    generator: Any,
+    manager: AbstractContextManager[_DecoratorContext],
+) -> Union[Generator[Any, Any, Any], AsyncGenerator[Any, Any]]:
+    if inspect.isasyncgen(generator):
+        return _trace_async_generator(generator, manager)
+    return _trace_sync_generator(generator, manager)
+
+
+def _trace_sync_generator(
+    generator: Generator[Any, Any, Any],
+    manager: AbstractContextManager[_DecoratorContext],
+) -> Generator[Any, Any, Any]:
+    with _generator_context(manager) as context:
+        operation: Callable[[], Any] = generator.__next__
+        while True:
+            try:
+                with use_span(
+                    context._span, record_exception=False, set_status_on_exception=False
+                ):
+                    output = operation()
+            except StopIteration as stopped:
+                # Do not accumulate chunks: streams can be unbounded. Preserve
+                # an explicit return value or output set by the application.
+                if stopped.value is not None:
+                    context.process_output(stopped.value)
+                return stopped.value
+            try:
+                sent = yield output
+            except GeneratorExit:
+                with use_span(
+                    context._span, record_exception=False, set_status_on_exception=False
+                ):
+                    generator.close()
+                raise
+            except BaseException as exc:
+                operation = partial(generator.throw, exc)
+            else:
+                operation = partial(generator.send, sent)
+
+
+async def _trace_async_generator(
+    generator: AsyncGenerator[Any, Any],
+    manager: AbstractContextManager[_DecoratorContext],
+) -> AsyncGenerator[Any, Any]:
+    with _generator_context(manager) as context:
+        operation: Callable[[], Awaitable[Any]] = generator.__anext__
+        while True:
+            try:
+                with use_span(
+                    context._span, record_exception=False, set_status_on_exception=False
+                ):
+                    output = await operation()
+            except StopAsyncIteration:
+                return
+            try:
+                sent = yield output
+            except GeneratorExit:
+                with use_span(
+                    context._span, record_exception=False, set_status_on_exception=False
+                ):
+                    await generator.aclose()
+                raise
+            except BaseException as exc:
+                operation = partial(generator.athrow, exc)
+            else:
+                operation = partial(generator.asend, sent)
 
 
 def _infer_span_name(*, instance: Any, callable: Callable[..., Any]) -> str:
