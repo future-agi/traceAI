@@ -1,0 +1,57 @@
+{
+  "captured_at": "2026-10-29",
+  "source": "Actual Future AGI Cloud app in Chrome; real generated trace, not a mock or reconstructed UI.",
+  "project": "traceai-quickstart",
+  "project_id": "dfe9f45b-06e0-434d-bb69-bbf2537d6f70",
+  "trace_id": "b0019666-3819-4f98-ab8a-3b6479bc5318",
+  "backend_summary": {
+    "total_spans": 5,
+    "total_duration_ms": 6228,
+    "total_tokens": 500,
+    "total_prompt_tokens": 392,
+    "total_completion_tokens": 108,
+    "total_cost": 0.001864,
+    "error_count": 0,
+    "span_type_counts": {
+      "agent": 1,
+      "tool": 2,
+      "chain": 1,
+      "llm": 1
+    }
+  },
+  "screenshot": {
+    "file": "trace-preview-compact.png",
+    "sha256": "970bcfd25c04a93ee9c051748b7fe71967002a558096e60e107672bf6ccf1344",
+    "original_viewport": [
+      1380,
+      900
+    ],
+    "crop": [
+      0,
+      0,
+      1380,
+      840
+    ],
+    "editing": "Crop only. No metric, content, DOM or CSS edits. Native UI: fullscreen, select LLM span, resize tree/graph divider, fit graph, collapse attributes."
+  },
+  "reproduction": {
+    "source": "trace-preview-demo.py",
+    "dependencies": [
+      "fi-instrumentation-otel",
+      "traceai-openai",
+      "openai"
+    ],
+    "command": "python .github/assets/trace-preview-demo.py",
+    "environment": [
+      "FI_API_KEY",
+      "FI_SECRET_KEY",
+      "OPENAI_API_KEY",
+      "OPENAI_MODEL"
+    ],
+    "model_used": "gpt-6.1-sol via an authorized local OpenAI-compatible proxy",
+    "data": "Local README guide lookup, one genuine model call and deterministic answer validation; provider usage captured by the instrumentor; cost computed by Cloud. No metrics are manually set."
+  },
+  "capture_authentication": "Supported Cloud API-key authentication adapted privately in the browser request headers, restricted to api.futureagi.com. All user and trace responses are genuine; write endpoints blocked. No browser credentials or header values are included.",
+  "browser_page_errors": [],
+  "cloud_response_failures": []
+}

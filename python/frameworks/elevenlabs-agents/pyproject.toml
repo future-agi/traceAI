@@ -1,0 +1,54 @@
+[tool.poetry]
+name = "traceAI-elevenlabs-agents"
+version = "0.1.0"
+description = "Forward ElevenLabs Agents post-call OpenTelemetry traces to Future AGI (Observe Voice tab)"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+packages = [
+    { include = "traceai_elevenlabs_agents" }
+]
+keywords = ["opentelemetry", "elevenlabs", "voice", "agents", "webhook", "tracing", "observability", "traceai", "futureagi", "llm", "elevenlabs-agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: System :: Monitoring",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+# For fi_instrumentation.TraceConfig only: the same FI_HIDE_* privacy switch every
+# traceAI instrumentor uses. HMAC, the HTTP server, the OTLP/HTTP JSON export and the
+# SQLite idempotency record are standard library. The ElevenLabs SDK is a test
+# oracle, not a dependency.
+fi-instrumentation-otel = ">=0.1.11"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+# Signature oracle (construct_event). 2.73.0 is the latest stable on 2026-10-15;
+# the tests also pass against 2.70.0, the version the PRD pinned.
+elevenlabs = "2.73.0"
+
+[tool.poetry.scripts]
+traceai-elevenlabs-agents = "traceai_elevenlabs_agents.cli:main"
+
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/elevenlabs-agents"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/elevenlabs-agents/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

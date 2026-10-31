@@ -1,6 +1,6 @@
 {
   "name": "@traceai/bedrock",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for AWS Bedrock",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -35,12 +35,15 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_bedrock#readme",
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/bedrock",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
     "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.693.0"
   },
   "devDependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.693.0",
@@ -59,10 +62,16 @@
     "opentelemetry",
     "instrumentation",
     "typescript",
-    "bedrock"
+    "bedrock",
+    "traceai",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

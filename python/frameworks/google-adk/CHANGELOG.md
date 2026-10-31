@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.6] - 2026-10-29
+
+### Fixed
+- Publish package changes merged after 0.1.5 was uploaded to PyPI; one-time bootstrap patch for the automated release pipeline.
+
 ## [0.1.5] - 2026-05-15
 
 - Fix `instrument()` crash on `google-adk >= 1.32`. Patch targets and

@@ -55,4 +55,4 @@ __all__ = [
     "create_trace_context",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.0"  # x-release-please-version

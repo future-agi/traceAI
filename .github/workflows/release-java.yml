@@ -1,0 +1,75 @@
+name: Release (Java reactor)
+on:
+  workflow_call:
+    inputs:
+      packages:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        required: true
+permissions:
+  contents: write
+defaults:
+  run:
+    shell: bash
+jobs:
+  reactor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.packages) }}
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      TAG: ${{ matrix.tag }}
+      CHANGELOG: ${{ matrix.changelog }}
+      REGISTRY_PUBLISHED: ${{ matrix.registry_published }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+      - name: Build and test all modules
+        working-directory: java
+        run: mvn -B -ntp verify
+      - name: Deploy signed sources, javadocs and binaries to Central
+        if: inputs.publish && !matrix.registry_published
+        working-directory: java
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: mvn -B -ntp -P release deploy
+      - name: Verify every reactor artifact on Central
+        if: inputs.publish
+        env:
+          PACKAGE: ${{ toJson(matrix) }}
+        run: |
+          python3 - <<'PY'
+          import importlib.util, json, os, time
+          spec = importlib.util.spec_from_file_location('plan', '.github/release/release_plan.py')
+          plan = importlib.util.module_from_spec(spec); spec.loader.exec_module(plan)
+          p = json.loads(os.environ['PACKAGE']); p['ecosystem'] = 'java'
+          for attempt in range(60):
+              if plan.published_versions(p): break
+              time.sleep(30)
+          else: raise SystemExit('Central has not served every reactor artifact after 30 minutes; rerun after checking the deployment portal')
+          PY
+      - name: Tag and create the reactor release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/release/github_release.py --install "Maven com.futureagi:traceai-java-core:$VERSION"

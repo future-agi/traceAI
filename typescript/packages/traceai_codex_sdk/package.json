@@ -1,0 +1,79 @@
+{
+  "name": "@traceai/codex-sdk",
+  "version": "0.1.0",
+  "description": "OpenTelemetry tracing for the OpenAI Codex SDK (@openai/codex-sdk) thread turns",
+  "main": "./dist/src/index.js",
+  "module": "./dist/esm/index.js",
+  "esnext": "./dist/esnext/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "rimraf dist",
+    "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
+    "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
+    "test": "jest",
+    "test:contract": "pnpm run build && node contract/run_real_sdk.mjs",
+    "prepare": "pnpm run build"
+  },
+  "keywords": [
+    "opentelemetry",
+    "tracing",
+    "instrumentation",
+    "openai",
+    "codex",
+    "codex-sdk",
+    "agents",
+    "llm",
+    "observability",
+    "traceai",
+    "futureagi"
+  ],
+  "author": "Future AGI",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_codex_sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/future-agi/traceAI/issues"
+  },
+  "homepage": "https://docs.futureagi.com/docs/tracing",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@traceai/fi-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^"
+  },
+  "devDependencies": {
+    "@openai/codex-sdk": "0.162.1",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.10",
+    "jest": "^29.7.0",
+    "rimraf": "^6.0.1",
+    "ts-jest": "^29.2.5",
+    "tsc-alias": "^1.8.10",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "@openai/codex-sdk": ">=0.44.0 <1"
+  },
+  "files": [
+    "dist",
+    "src",
+    "!**/__tests__/**",
+    "!**/*.tsbuildinfo"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

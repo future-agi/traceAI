@@ -1,6 +1,6 @@
 {
   "name": "@traceai/langchain",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "OpenTelemetry instrumentation for LangChain.js",
   "main": "./dist/src/index.js",
   "module": "./dist/esm/index.js",
@@ -35,7 +35,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_langchain#readme",
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/langchain",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
@@ -67,10 +67,17 @@
     "opentelemetry",
     "instrumentation",
     "typescript",
-    "openai"
+    "openai",
+    "traceai",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm",
+    "langchain"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

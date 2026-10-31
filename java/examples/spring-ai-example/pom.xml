@@ -10,7 +10,7 @@
         <version>3.2.1</version>
     </parent>
 
-    <groupId>ai.traceai.examples</groupId>
+    <groupId>com.futureagi.examples</groupId>
     <artifactId>spring-ai-example</artifactId>
     <version>1.0.0</version>
     <name>TraceAI Spring AI Example</name>
@@ -29,7 +29,7 @@
 
         <!-- TraceAI Spring Boot Starter -->
         <dependency>
-            <groupId>ai.traceai</groupId>
+            <groupId>com.futureagi</groupId>
             <artifactId>traceai-spring-boot-starter</artifactId>
             <version>1.0.0</version>
         </dependency>

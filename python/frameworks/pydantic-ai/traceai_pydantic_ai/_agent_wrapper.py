@@ -9,8 +9,10 @@ import json
 import logging
 import time
 import uuid
+from contextvars import ContextVar
 from typing import Any, Callable, Dict, Optional, TypeVar, Union
 
+from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
@@ -28,6 +30,10 @@ T = TypeVar("T")
 AGENT_RUN_SPAN_NAME = "pydantic_ai.agent.run"
 MODEL_REQUEST_SPAN_NAME = "pydantic_ai.model.request"
 TOOL_CALL_SPAN_NAME = "pydantic_ai.tool.call"
+
+# run_sync delegates to run in a copied async context. Suppress only that
+# delegation, not nested agent operations or tracing in unrelated tasks.
+_SYNC_DELEGATION: ContextVar[Any] = ContextVar("pydantic_ai_sync_delegation", default=None)
 
 
 def safe_serialize(obj: Any, max_length: int = 2000) -> str:
@@ -86,33 +92,198 @@ def extract_model_info(agent: Any) -> Dict[str, Any]:
     return info
 
 
-def extract_usage(result: Any) -> Optional[Dict[str, Any]]:
-    """Extract usage information from a run result.
-
-    Args:
-        result: RunResult or similar object
-
-    Returns:
-        Dict with usage info or None
-    """
-    usage = getattr(result, "usage", None)
-    if not usage:
+def _usage_values(usage: Any) -> Optional[Dict[str, Any]]:
+    """Copy known counters; None means unknown, not measured zero."""
+    if usage is None:
         return None
+    values = {}
+    for key, names in {
+        "input_tokens": ("request_tokens", "input_tokens"),
+        "output_tokens": ("response_tokens", "output_tokens"),
+        "total_tokens": ("total_tokens",),
+        "requests": ("requests",),
+    }.items():
+        for name in names:
+            value = getattr(usage, name, None)
+            if isinstance(value, int):
+                values[key] = value
+                break
+    return values
 
-    return {
-        "input_tokens": getattr(usage, "request_tokens", 0)
-        or getattr(usage, "input_tokens", 0),
-        "output_tokens": getattr(usage, "response_tokens", 0)
-        or getattr(usage, "output_tokens", 0),
-        "total_tokens": getattr(usage, "total_tokens", 0),
-        "requests": getattr(usage, "requests", 0),
+
+def _sum_usage(samples):
+    values = {}
+    for sample in samples:
+        for key, value in (sample or {}).items():
+            values[key] = values.get(key, 0) + value
+    return values
+
+
+class _OperationUsage:
+    def __init__(self, budget, capture_legacy=False):
+        self.budget = budget
+        self.capture_legacy = capture_legacy
+        self.samples = []
+        self.context = None
+
+    def extract(self, result):
+        if self.capture_legacy:
+            # The SDK may create the effective budget itself. Select it from
+            # the original result, without supplying/replacing application args
+            # or assuming the first Usage.incr target is the run's budget.
+            budget = getattr(result, "usage", None)
+            if callable(budget):
+                budget = budget()
+            return _sum_usage(sample for target, sample in self.samples if target is budget)
+        values = _response_usage(result)
+        if values is not None:
+            return values
+        if self.budget is not None:
+            # No attributable measurements is not permission to count other
+            # operations' changes to the same mutable aggregate.
+            return {}
+        return extract_usage(result)
+
+
+def _parent_run_context():
+    operation = _ACTIVE_USAGE.get()
+    # Historical SDK NoOpTracer scopes install an invalid current span. Keep
+    # genuine nested logical runs attached, but prefer valid application spans.
+    if operation is not None and not trace_api.get_current_span().get_span_context().is_valid:
+        return operation.context
+    return None
+
+
+_ACTIVE_USAGE: ContextVar[Any] = ContextVar("pydantic_ai_operation_usage", default=None)
+
+
+def wrap_legacy_usage_incr(original):
+    """Historical responses omit usage. Observe only this run's budget updates.
+
+    Keep the SDK's real shared budget intact (including limits and identity),
+    and never infer usage from changes made by another task or nested run.
+    """
+    @functools.wraps(original)
+    def incr(self, incr_usage, *args, **kwargs):
+        operation = _ACTIVE_USAGE.get()
+        sample = _usage_values(incr_usage)
+        result = original(self, incr_usage, *args, **kwargs)
+        if operation is not None:
+            operation.samples.append((self, sample))
+        return result
+    return incr
+
+
+def _response_usage(result):
+    new_messages = getattr(result, "new_messages", None)
+    if callable(new_messages):
+        messages = new_messages()
+        if isinstance(messages, (list, tuple)):
+            responses = [m for m in messages if getattr(m, "kind", None) == "response"]
+            if all(getattr(m, "usage", None) is not None for m in responses):
+                return _sum_usage(_usage_values(m.usage) for m in responses)
+    return None
+
+
+def extract_usage(
+    result: Any, previous_usage: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """Prefer run-local response counters over a mutable aggregate budget."""
+    values = _response_usage(result)
+    if values is not None:
+        return values
+
+    # Historical SDKs expose usage() and no counters on ModelResponse. Shared
+    # budgets use _OperationUsage samples above; unshared results are run-local.
+    usage = getattr(result, "usage", None)
+    if callable(usage):
+        usage = usage()
+    values = _usage_values(usage)
+    if values is not None and previous_usage is not None:
+        return {key: value - previous_usage.get(key, 0) for key, value in values.items()}
+    return values
+
+
+def _record_usage(span, usage):
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        if usage is not None and key in usage:
+            span.set_attribute(f"gen_ai.usage.{key}", usage[key])
+
+
+def _run_attributes(
+    agent: Any, args: tuple, kwargs: dict, method_name: str
+) -> Dict[str, Any]:
+    """Keep sync and async operation attributes identical."""
+    # Generate run ID
+    run_id = str(uuid.uuid4())
+
+    # Extract prompt
+    prompt = ""
+    if args:
+        prompt = safe_serialize(args[0])
+    elif "user_prompt" in kwargs:
+        prompt = safe_serialize(kwargs["user_prompt"])
+
+    # Get model info
+    model_info = extract_model_info(agent)
+
+    # Build attributes
+    attributes = {
+        PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.AGENT_RUN.value,
+        PydanticAIAttributes.RUN_ID: run_id,
+        PydanticAIAttributes.RUN_METHOD: method_name,
+        PydanticAIAttributes.RUN_PROMPT: prompt,
     }
+
+    # Add agent info
+    if hasattr(agent, "name") and agent.name:
+        attributes[PydanticAIAttributes.GEN_AI_AGENT_NAME] = agent.name
+
+    # Add model info
+    if model_info.get("model_name"):
+        attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
+    if model_info.get("model_provider"):
+        attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
+
+    # Add instructions if available
+    instructions = getattr(agent, "instructions", None)
+    if instructions:
+        if callable(instructions):
+            try:
+                instr_str = str(instructions)
+            except Exception:
+                instr_str = "<dynamic>"
+        else:
+            instr_str = safe_serialize(instructions, 500)
+        attributes[PydanticAIAttributes.AGENT_INSTRUCTIONS] = instr_str
+
+    # Add result type info
+    result_type = (
+        kwargs.get("output_type")
+        or getattr(agent, "result_type", None)
+        or getattr(agent, "output_type", None)
+    )
+    if result_type and result_type is not str:
+        attributes[PydanticAIAttributes.AGENT_RESULT_TYPE] = str(result_type)
+        attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = True
+    else:
+        attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = False
+
+    # Check for message history
+    message_history = kwargs.get("message_history")
+    if message_history:
+        attributes[PydanticAIAttributes.RUN_MESSAGE_HISTORY_LENGTH] = len(
+            message_history
+        )
+
+    return attributes
 
 
 def wrap_agent_run(
     original_method: Callable,
     tracer: trace_api.Tracer,
     method_name: str,
+    capture_legacy_usage: bool = False,
 ) -> Callable:
     """Wrap an agent run method with tracing.
 
@@ -127,63 +298,15 @@ def wrap_agent_run(
 
     @functools.wraps(original_method)
     async def async_wrapper(self, *args, **kwargs):
-        # Generate run ID
-        run_id = str(uuid.uuid4())
+        if method_name == "run" and _SYNC_DELEGATION.get() is self:
+            token = _SYNC_DELEGATION.set(None)
+            try:
+                return await original_method(self, *args, **kwargs)
+            finally:
+                _SYNC_DELEGATION.reset(token)
 
-        # Extract prompt
-        prompt = ""
-        if args:
-            prompt = safe_serialize(args[0])
-        elif "user_prompt" in kwargs:
-            prompt = safe_serialize(kwargs["user_prompt"])
-
-        # Get model info
-        model_info = extract_model_info(self)
-
-        # Build attributes
-        attributes = {
-            PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.AGENT_RUN.value,
-            PydanticAIAttributes.RUN_ID: run_id,
-            PydanticAIAttributes.RUN_METHOD: method_name,
-            PydanticAIAttributes.RUN_PROMPT: prompt,
-        }
-
-        # Add agent info
-        if hasattr(self, "name") and self.name:
-            attributes[PydanticAIAttributes.GEN_AI_AGENT_NAME] = self.name
-
-        # Add model info
-        if model_info.get("model_name"):
-            attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
-        if model_info.get("model_provider"):
-            attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
-
-        # Add instructions if available
-        instructions = getattr(self, "instructions", None)
-        if instructions:
-            if callable(instructions):
-                try:
-                    instr_str = str(instructions)
-                except Exception:
-                    instr_str = "<dynamic>"
-            else:
-                instr_str = safe_serialize(instructions, 500)
-            attributes[PydanticAIAttributes.AGENT_INSTRUCTIONS] = instr_str
-
-        # Add result type info
-        result_type = getattr(self, "result_type", None)
-        if result_type:
-            attributes[PydanticAIAttributes.AGENT_RESULT_TYPE] = str(result_type)
-            attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = True
-        else:
-            attributes[PydanticAIAttributes.RUN_IS_STRUCTURED] = False
-
-        # Check for message history
-        message_history = kwargs.get("message_history")
-        if message_history:
-            attributes[PydanticAIAttributes.RUN_MESSAGE_HISTORY_LENGTH] = len(
-                message_history
-            )
+        attributes = _run_attributes(self, args, kwargs, method_name)
+        operation_usage = _OperationUsage(kwargs.get("usage"), capture_legacy_usage)
 
         start_time = time.time()
 
@@ -191,29 +314,22 @@ def wrap_agent_run(
             AGENT_RUN_SPAN_NAME,
             kind=SpanKind.CLIENT,
             attributes=attributes,
+            context=_parent_run_context(),
         ) as span:
+            operation_usage.context = context_api.get_current()
             try:
-                result = await original_method(self, *args, **kwargs)
+                usage_token = _ACTIVE_USAGE.set(operation_usage)
+                try:
+                    result = await original_method(self, *args, **kwargs)
+                finally:
+                    _ACTIVE_USAGE.reset(usage_token)
 
                 # Record result
                 duration_ms = (time.time() - start_time) * 1000
                 span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
 
                 # Extract and record usage
-                usage = extract_usage(result)
-                if usage:
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_INPUT_TOKENS,
-                        usage.get("input_tokens", 0),
-                    )
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_OUTPUT_TOKENS,
-                        usage.get("output_tokens", 0),
-                    )
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_TOTAL_TOKENS,
-                        usage.get("total_tokens", 0),
-                    )
+                _record_usage(span, operation_usage.extract(result))
 
                 # Record output
                 output = getattr(result, "output", None) or getattr(result, "data", None)
@@ -240,32 +356,8 @@ def wrap_agent_run(
 
     @functools.wraps(original_method)
     def sync_wrapper(self, *args, **kwargs):
-        # Generate run ID
-        run_id = str(uuid.uuid4())
-
-        # Extract prompt
-        prompt = ""
-        if args:
-            prompt = safe_serialize(args[0])
-        elif "user_prompt" in kwargs:
-            prompt = safe_serialize(kwargs["user_prompt"])
-
-        # Get model info
-        model_info = extract_model_info(self)
-
-        # Build attributes
-        attributes = {
-            PydanticAIAttributes.SPAN_KIND: PydanticAISpanKind.AGENT_RUN.value,
-            PydanticAIAttributes.RUN_ID: run_id,
-            PydanticAIAttributes.RUN_METHOD: method_name,
-            PydanticAIAttributes.RUN_PROMPT: prompt,
-        }
-
-        # Add model info
-        if model_info.get("model_name"):
-            attributes[PydanticAIAttributes.MODEL_NAME] = model_info["model_name"]
-        if model_info.get("model_provider"):
-            attributes[PydanticAIAttributes.MODEL_PROVIDER] = model_info["model_provider"]
+        attributes = _run_attributes(self, args, kwargs, method_name)
+        operation_usage = _OperationUsage(kwargs.get("usage"), capture_legacy_usage)
 
         start_time = time.time()
 
@@ -273,24 +365,31 @@ def wrap_agent_run(
             AGENT_RUN_SPAN_NAME,
             kind=SpanKind.CLIENT,
             attributes=attributes,
+            context=_parent_run_context(),
         ) as span:
+            operation_usage.context = context_api.get_current()
             try:
-                result = original_method(self, *args, **kwargs)
+                token = _SYNC_DELEGATION.set(self)
+                usage_token = _ACTIVE_USAGE.set(operation_usage)
+                try:
+                    result = original_method(self, *args, **kwargs)
+                finally:
+                    _ACTIVE_USAGE.reset(usage_token)
+                    _SYNC_DELEGATION.reset(token)
 
                 # Record result
                 duration_ms = (time.time() - start_time) * 1000
                 span.set_attribute(PydanticAIAttributes.DURATION_MS, duration_ms)
 
                 # Extract and record usage
-                usage = extract_usage(result)
-                if usage:
+                _record_usage(span, operation_usage.extract(result))
+
+                output = getattr(result, "output", None)
+                if output is None:
+                    output = getattr(result, "data", None)
+                if output is not None:
                     span.set_attribute(
-                        PydanticAIAttributes.USAGE_INPUT_TOKENS,
-                        usage.get("input_tokens", 0),
-                    )
-                    span.set_attribute(
-                        PydanticAIAttributes.USAGE_OUTPUT_TOKENS,
-                        usage.get("output_tokens", 0),
+                        PydanticAIAttributes.RUN_RESULT, safe_serialize(output)
                     )
 
                 span.set_attribute(PydanticAIAttributes.IS_ERROR, False)

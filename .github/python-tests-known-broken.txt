@@ -6,33 +6,3 @@
 # (for example, a LangChain change that fixes its tests). A listed package with no tests at all also fails: remove its line.
 # Each entry should name its follow-up (a ticket or PR) in the reason once one exists.
 # Format: <package name: its dir under python/frameworks, or traceai for python/traceai> | <reason in plain words>
-agno | 1 test expects gen_ai.system where the code now writes gen_ai.provider.name
-autogen | 17 tests (12 own, 5 core): the instrumentor no longer has _original_generate or _safe_json_dumps, traceai_autogen no longer exports _is_v04_available, and a dependency name
-bedrock | 1 test expects image.url where the code now writes message_content.image
-cerebras | 3 tests expect the reply text where the code now records the whole response
-cohere | 5 tests: llm.system and mock constants that no longer exist, and generated text that is no longer recorded
-deepseek | 4 tests: mock constants that no longer exist, llm.system, and generated text that is no longer recorded
-dspy | 1 test expects raw.output on embedding spans
-fireworks | 3 tests expect the reply text where the code now records the whole response
-groq | 5 tests: pre-GenAI attribute names (fi.span.kind, eval.input) and missing output checks in 4, and a string instead of a dependency tuple in 1
-guardrails | its core test file does not load (SpanAttributes.FI_SPAN_KIND no longer exists)
-haystack | 5 tests expect pre-GenAI attribute names (llm.token_count.*, fi.span.kind) and a list of dependencies
-huggingface | 3 tests expect llm.system; 1 expects generated text that is no longer recorded
-instructor | 6 tests: instructor.core no longer exists in current instructor (5), and a dependency string check (1)
-langchain | 2 tests: dependency count and a set_attributes call no longer made
-litellm | 3 tests use SpanAttributes.FI_SPAN_KIND, which no longer exists
-llama_index | 14 tests: llama_index.core.base.agent no longer exists; 1 expects SpanAttributes.LLM_MODEL_NAME; 1 a dependency count
-mcp | 1 test expects two instrumentation dependencies, the package declares one
-mistralai | 1 test expects raw.input where the code now writes input.value
-ollama | 2 tests expect llm.system; 2 expect generated text and embedding size that are no longer recorded
-openai-agents | its own tests do not load (conftest imports traceai_openai, not installed); 2 core tests expect raw.output and a trace-start call
-pinecone | 5 tests error: pinecone-client is now a stub that raises "renamed to pinecone"; the package has to move to the pinecone package
-portkey | 10 tests expect pre-GenAI attribute names (llm.model_name, llm.invocation_parameters)
-pydantic-ai | 1 test builds an agent with model "test-model", which pydantic-ai no longer accepts
-qdrant | 2 tests error: QdrantClient has no query method in current qdrant-client
-smolagents | 6 tests expect pre-GenAI attribute names; its own test file does not load (smolagents.models no longer has ChatMessageToolCallDefinition)
-together | 5 tests: llm.system and mock constants that no longer exist, and generated text that is no longer recorded
-traceai | 1 test expects f"{SemanticConvention.FI}" to give "fi"; on Python 3.11 and later it gives "SemanticConvention.FI"
-vertexai | 2 tests expect pre-GenAI attribute names (llm.output_messages, llm.token_count.prompt)
-vllm | 3 tests expect the reply text where the code now records the whole response
-xai | 3 tests expect the reply text where the code now records the whole response

@@ -1,0 +1,66 @@
+name: Go CI
+
+on:
+  pull_request:
+    paths:
+      - 'go/**'
+      - '.github/workflows/go-ci.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'go/**'
+      - '.github/workflows/go-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.module }} / Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [a2a, anthropic, eino, genai, openai]
+        go: ['1.26.0', stable]
+    defaults:
+      run:
+        working-directory: go/${{ matrix.module }}
+    env:
+      # Test each independently consumable module, not a developer's workspace.
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/${{ matrix.module }}/go.sum
+      - name: Check module identity and release portability
+        env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          go mod edit -json | python3 -c '
+          import json, os, sys
+          mod = json.load(sys.stdin)
+          assert mod["Module"]["Path"] == "github.com/future-agi/traceAI/go/" + os.environ["MODULE"]
+          assert mod["Go"] == "1.26.0"
+          assert not any(not r["New"].get("Version") for r in mod.get("Replace") or []), "local replace is not releasable"
+          '
+      - name: Check tidy
+        run: go mod tidy -diff
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+      - name: Build example
+        run: go build -o "$RUNNER_TEMP/traceai-example" ./example
+      - name: Render package documentation
+        run: go doc .

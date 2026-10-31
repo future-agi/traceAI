@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.futureagi.examples</groupId>
+    <artifactId>arconia-example</artifactId>
+    <version>1.0.0</version>
+    <name>TraceAI Arconia Example</name>
+    <description>Arconia OpenTelemetry exporting traces to Future AGI. Configuration only, no traceAI module.</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <!-- Pre-GA, roughly monthly releases. 0.31.0 is the tested version. 0.30.0 was also run (-Darconia.version=0.30.0). -->
+        <arconia.version>0.31.0</arconia.version>
+        <opentelemetry-proto.version>1.11.1-alpha</opentelemetry-proto.version>
+        <!-- opentelemetry-proto 1.11.1-alpha is generated with protobuf 4.36.2; Spring Boot manages an older runtime. -->
+        <protobuf-java.version>4.36.2</protobuf-java.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.arconia</groupId>
+                <artifactId>arconia-bom</artifactId>
+                <version>${arconia.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <!-- The only observability dependency. The version comes from the BOM. -->
+        <dependency>
+            <groupId>io.arconia</groupId>
+            <artifactId>arconia-opentelemetry-spring-boot-starter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Decodes the OTLP bytes the stand-in collector records. Test scope only. -->
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>${opentelemetry-proto.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

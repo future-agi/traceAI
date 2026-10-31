@@ -5,6 +5,7 @@ import {
   context,
   trace,
   SpanStatusCode,
+  Exception,
 } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { SemanticConventions } from "@traceai/fi-semantic-conventions";
@@ -23,16 +24,66 @@ import {
   safelyFormatToolCalls,
   safelyGetFISpanKindFromRunType,
 } from "./utils";
-import { FITracer } from "@traceai/fi-core";
+import { FITracer, getErrorMessage } from "@traceai/fi-core";
 
 type RunWithSpan = {
   run: Run;
   span: Span;
 };
 
+/**
+ * LangChain's BaseTracer stores `run.error` as `message + "\n\n" + stack`
+ * (`stringifyError`). Splits that back into message and stack so the stack never
+ * ends up in the span status. Only used when the original error object was not seen.
+ */
+function parseRunError(runError: string): {
+  name?: string;
+  message: string;
+  stack?: string;
+} {
+  // The message itself can contain blank lines: split where a JS stack ("Name: ...\n    at ...") starts
+  let separator = runError.indexOf("\n\n");
+  while (separator !== -1) {
+    const stack = runError.slice(separator + 2);
+    const name = /^([A-Za-z_$][\w$.]*)(?::|\n|$)/.exec(stack)?.[1];
+    if (name != null && /\n\s+at\s/.test(stack)) {
+      return { name, message: runError.slice(0, separator), stack };
+    }
+    separator = runError.indexOf("\n\n", separator + 2);
+  }
+  return { message: runError };
+}
+
+/**
+ * Records a failed run on its span: the exception event (the stack trace only goes to
+ * `exception.stacktrace`) and an ERROR status whose description is the error message only.
+ * @param span - the run's span
+ * @param error - the error object LangChain passed to `handle*Error`, when it was seen
+ * @param runError - `run.error`, used when the error object was not seen
+ */
+function recordRunError(span: Span, error: unknown, runError: string) {
+  if (error != null) {
+    span.recordException(
+      typeof error === "object" ? (error as Exception) : String(error),
+    );
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message:
+        getErrorMessage(error) ??
+        (typeof error === "object" ? undefined : String(error)),
+    });
+    return;
+  }
+  const { name, message, stack } = parseRunError(runError);
+  span.recordException({ name, message, stack });
+  span.setStatus({ code: SpanStatusCode.ERROR, message });
+}
+
 export class LangChainTracer extends BaseTracer {
   private tracer: FITracer;
   private runs: Record<string, RunWithSpan | undefined> = {};
+  /** The error objects passed to handle*Error, keyed by run id, until the run's trace ends */
+  private runErrors: Record<string, unknown> = {};
   constructor(tracer: FITracer) {
     super();
     this.tracer = tracer;
@@ -40,6 +91,55 @@ export class LangChainTracer extends BaseTracer {
   name: string = "FILangChainTracer";
   protected persistRun(_run: Run): Promise<void> {
     return Promise.resolve();
+  }
+
+  /**
+   * Keeps the error object for {@link _endTrace}: `run.error` is the message plus the full stack.
+   */
+  private async withRunError(
+    error: unknown,
+    runId: string,
+    handle: () => Promise<Run>,
+  ): Promise<Run> {
+    this.runErrors[runId] = error;
+    try {
+      return await handle();
+    } finally {
+      delete this.runErrors[runId];
+    }
+  }
+
+  async handleLLMError(
+    error: unknown,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    extraParams?: Record<string, unknown>,
+  ): Promise<Run> {
+    return this.withRunError(error, runId, () =>
+      super.handleLLMError(error, runId, parentRunId, tags, extraParams),
+    );
+  }
+
+  async handleChainError(
+    ...args: Parameters<BaseTracer["handleChainError"]>
+  ): Promise<Run> {
+    const [error, runId] = args;
+    return this.withRunError(error, runId, () =>
+      super.handleChainError(...args),
+    );
+  }
+
+  async handleToolError(error: unknown, runId: string): Promise<Run> {
+    return this.withRunError(error, runId, () =>
+      super.handleToolError(error, runId),
+    );
+  }
+
+  async handleRetrieverError(error: unknown, runId: string): Promise<Run> {
+    return this.withRunError(error, runId, () =>
+      super.handleRetrieverError(error, runId),
+    );
   }
 
   /**
@@ -115,11 +215,7 @@ export class LangChainTracer extends BaseTracer {
     }
     const { span } = runWithSpan;
     if (run.error != null) {
-      span.recordException(run.error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: run.error,
-      });
+      recordRunError(span, this.runErrors[run.id], run.error);
     } else {
       span.setStatus({ code: SpanStatusCode.OK });
     }

@@ -1,14 +1,13 @@
 {
   "name": "@traceai/chromadb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenTelemetry instrumentation for ChromaDB vector database",
   "main": "./dist/src/index.js",
-  "module": "./dist/esm/index.js",
   "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/esm/index.js",
+      "import": "./dist/src/index.js",
       "require": "./dist/src/index.js"
     }
   },
@@ -32,7 +31,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_chromadb#readme",
+  "homepage": "https://docs.futureagi.com/docs/tracing",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
@@ -58,10 +57,15 @@
     "typescript",
     "chromadb",
     "vector-database",
-    "tracing"
+    "tracing",
+    "traceai",
+    "futureagi",
+    "observability",
+    "llm"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

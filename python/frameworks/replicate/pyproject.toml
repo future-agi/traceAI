@@ -1,0 +1,57 @@
+[tool.poetry]
+name = "traceAI-replicate"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for the Replicate Python client"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+packages = [
+    { include = "traceai_replicate" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
+    "Topic :: System :: Monitoring",
+]
+keywords = ["traceai", "futureagi", "opentelemetry", "tracing", "observability", "llm", "replicate"]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+fi-instrumentation-otel = ">=1.1.0"
+replicate = ">=1.0.0,<2"
+wrapt = ">=1.15.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+# HTTP/socket mocks the opt-in read after a stream must not go through (round 5 and 6 review tests).
+respx = ">=0.21.1"
+mocket = ">=3.15.0"
+# Integrations whose skip reasons the README names (round 7 review tests).
+sentry-sdk = ">=2.0.0"
+truststore = ">=0.10.0"
+# The global HTTPXClientInstrumentor the opt-in read allows and the per-client
+# instrument_client() it skips (round 5 and 7 review tests); without it CI skipped them.
+opentelemetry-instrumentation-httpx = ">=0.48b0"
+# A trio cancellation of an async stream (round 8 review test).
+trio = ">=0.22.0"
+
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/replicate"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/replicate/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

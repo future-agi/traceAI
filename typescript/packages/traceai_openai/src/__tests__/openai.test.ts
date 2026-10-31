@@ -1226,11 +1226,10 @@ describe("OpenAIInstrumentation with TraceConfig", () => {
   "gen_ai.usage.input_tokens": 12,
   "gen_ai.usage.output_tokens": 5,
   "gen_ai.usage.total_tokens": 17,
-  "input.mime_type": "text/plain",
-  "input.value": "Say this is a test",
+  "input.value": "__REDACTED__",
   "output.mime_type": "text/plain",
   "output.value": "This is a test",
-  "raw.input": "{"prompt":"Say this is a test","model":"gpt-3.5-turbo-instruct"}",
+  "raw.input": "__REDACTED__",
   "raw.output": "{"id":"cmpl-8fZu1H3VijJUWev9asnxaYyQvJTC9","object":"text_completion","created":1704920149,"model":"gpt-3.5-turbo-instruct","choices":[{"text":"This is a test","index":0,"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
 }
 `);

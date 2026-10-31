@@ -32,7 +32,7 @@ from traceai_pydantic_ai._agent_wrapper import (
     wrap_tool_function,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.0"  # x-release-please-version
 
 __all__ = [
     # Main API

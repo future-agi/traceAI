@@ -5,8 +5,12 @@ support to send traces to TraceAI, along with optional method wrapping for
 additional instrumentation.
 """
 
+import logging
 import os
-from typing import Any, Dict, List, Optional
+import re
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from opentelemetry import trace
 from opentelemetry.trace import TracerProvider
@@ -18,6 +22,155 @@ from traceai_strands._attributes import (
     get_model_attributes,
     get_trace_attributes_from_config,
 )
+
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+# Environment variables through which the upstream OTLP/HTTP span exporter authenticates outside
+# its headers: a client certificate (mTLS), or, from opentelemetry-exporter-otlp-proto-http 1.37,
+# a credential provider that builds its requests session. These are the variable names; the
+# opentelemetry.sdk.environment_variables constants for the credential provider ones start with
+# an underscore, the variables do not.
+_CREDENTIALS_OUTSIDE_HEADERS = (
+    "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
+    "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
+    "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
+    "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+    "OTEL_PYTHON_EXPORTER_OTLP_HTTP_TRACES_CREDENTIAL_PROVIDER",
+    "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
+)
+
+
+def _traces_url(url: Any) -> Optional[Tuple[str, str, str, int, str, str]]:
+    """An http(s) URL normalised for comparison, or None for anything else.
+
+    (scheme, userinfo, host, port, path, query): scheme and host lower-cased, the default port
+    filled in, repeated and trailing slashes in the path dropped, the fragment (never sent)
+    ignored. Userinfo and query are kept as written: they can carry credentials or a tenant.
+    """
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url.strip())
+        scheme = parts.scheme.lower()
+        if scheme not in _DEFAULT_PORTS or not parts.hostname:
+            return None
+        port = parts.port or _DEFAULT_PORTS[scheme]
+    except ValueError:
+        return None
+    userinfo = parts.netloc.rpartition("@")[0]
+    path = re.sub(r"/{2,}", "/", parts.path).rstrip("/") or "/"
+    return scheme, userinfo, parts.hostname.lower(), port, path, parts.query
+
+
+def _shown(url: Tuple[str, str, str, int, str, str]) -> str:
+    """A normalised traces URL for the log, without its userinfo or query."""
+    scheme, _, host, port, path, _ = url
+    return f"{scheme}://{host}:{port}{path}"
+
+
+def _exporter_headers(exporter: Any) -> Optional[Dict[str, str]]:
+    """The headers an OTLP/HTTP exporter sends, names lower-cased, or None when unreadable.
+
+    opentelemetry-exporter-otlp-proto-http before 1.45 (1.29 to 1.44) keeps them on the exporter
+    (`_headers`): the headers passed to it, or, when none are, the ones OTEL_EXPORTER_OTLP_*
+    sets. From 1.45 they sit on its inner `_client` (`_client._headers`): the environment's
+    merged with the ones passed, plus the exporter's own Content-Type and User-Agent.
+    """
+    for owner in (exporter, getattr(exporter, "_client", None)):
+        headers = getattr(owner, "_headers", None)
+        try:
+            pairs = headers.items() if isinstance(headers, Mapping) else None
+            if pairs is None and isinstance(headers, (list, tuple)):
+                pairs = headers
+            if pairs is not None:
+                return {str(name).strip().lower(): str(value).strip() for name, value in pairs}
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _strands_otlp_exporter_target() -> Optional[Tuple[str, Dict[str, str]]]:
+    """The traces URL and headers Strands' OTLP exporter would send with, or None if unknown.
+
+    Strands' setup_otlp_exporter() builds the upstream OTLP/HTTP span exporter with no arguments,
+    so it resolves both from the OTEL_EXPORTER_OTLP_* variables. One is built the same way here,
+    read back and shut down, so the answer follows the installed exporter release: the rules for
+    empty variables and for merging headers differ between releases.
+    """
+    if any(os.environ.get(name) for name in _CREDENTIALS_OUTSIDE_HEADERS):
+        return None
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+        probe = OTLPSpanExporter()
+    except Exception:
+        return None
+    try:
+        endpoint = getattr(probe, "_endpoint", None)
+        headers = _exporter_headers(probe)
+    finally:
+        try:
+            probe.shutdown()
+        except Exception:
+            pass
+    if not isinstance(endpoint, str) or headers is None:
+        return None
+    return endpoint, headers
+
+
+def _span_exporters(tracer_provider: Any) -> List[Any]:
+    """The exporters behind the span processors already on an SDK tracer provider."""
+    active = getattr(tracer_provider, "_active_span_processor", None)
+    processors = getattr(active, "_span_processors", None)
+    if not isinstance(processors, (tuple, list)):
+        return []
+    exporters = []
+    for processor in processors:
+        exporter = getattr(processor, "span_exporter", None)
+        if exporter is None:
+            # Recent OTel SDKs keep a BatchSpanProcessor's exporter on an inner _batch_processor.
+            exporter = getattr(getattr(processor, "_batch_processor", None), "_exporter", None)
+        if exporter is not None:
+            exporters.append(exporter)
+    return exporters
+
+
+def _strands_otlp_exporter_duplicates(tracer_provider: Any) -> Optional[str]:
+    """The traces URL, when Strands' OTLP exporter would only send copies of what the provider sends.
+
+    That is when a span processor on the provider already exports to the same traces URL with the
+    same headers as Strands' exporter would: the same names (compared case-insensitively) and the
+    same values, none missing on either side. A header only one of them sends can route its spans
+    elsewhere (other keys, or a routing header such as x-project-name), or be the one the
+    collector needs (keys only Strands' exporter carries, or only the provider's). Returns None
+    otherwise, and whenever that cannot be shown, so Strands' exporter is added as before.
+
+    It also returns None when the provider would replace its exporter on the next
+    add_span_processor() call. fi-instrumentation-otel 1.1.0 and earlier mark the exporter of the
+    provider register() returns that way; skipping there would leave no exporter for that URL once
+    any processor is added, such as Strands' console exporter.
+    """
+    if getattr(tracer_provider, "_default_processor", False):
+        return None
+    exporters = _span_exporters(tracer_provider)
+    if not exporters:
+        return None
+    target = _strands_otlp_exporter_target()
+    if target is None:
+        return None
+    endpoint, headers = target
+    url = _traces_url(endpoint)
+    if url is None:
+        return None
+    for exporter in exporters:
+        if _traces_url(getattr(exporter, "_endpoint", None)) != url:
+            continue
+        if _exporter_headers(exporter) == headers:
+            return _shown(url)
+    return None
 
 
 class StrandsInstrumentor:
@@ -61,7 +214,8 @@ class StrandsInstrumentor:
 
         Args:
             tracer_provider: Optional OpenTelemetry tracer provider.
-            otlp_endpoint: OTLP endpoint URL. If not provided, uses
+            otlp_endpoint: OTLP base URL, stored in OTEL_EXPORTER_OTLP_ENDPOINT;
+                Strands' exporter appends /v1/traces to it. If not provided, uses
                 OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
             otlp_headers: Headers for OTLP export (e.g., authentication).
             enable_console_exporter: Whether to also export to console.
@@ -103,6 +257,10 @@ class StrandsInstrumentor:
     ) -> None:
         """Configure Strands' StrandsTelemetry class.
 
+        Strands' OTLP span exporter is added for the traces URL the OTEL_EXPORTER_OTLP_* variables
+        resolve to (http://localhost:4318/v1/traces when none is set), unless it would only send
+        copies of what the tracer provider already sends: see _strands_otlp_exporter_duplicates().
+
         Args:
             enable_console_exporter: Whether to enable console export.
             enable_metrics: Whether to enable metrics.
@@ -112,8 +270,19 @@ class StrandsInstrumentor:
         # Create telemetry instance with our tracer provider
         telemetry = StrandsTelemetry(tracer_provider=self._tracer_provider)
 
-        # Set up exporters
-        telemetry.setup_otlp_exporter()
+        # Set up exporters. Skip Strands' OTLP exporter when it would only send copies of what the
+        # provider already sends, such as the Future AGI exporter of the provider register()
+        # returns: a second exporter there would send every span twice.
+        duplicated_url = _strands_otlp_exporter_duplicates(self._tracer_provider)
+        if duplicated_url is not None:
+            logger.info(
+                "traceai-strands: the tracer provider already exports spans to %s with the same "
+                "headers; not adding Strands' OTLP exporter, which would send every span there "
+                "twice.",
+                duplicated_url,
+            )
+        else:
+            telemetry.setup_otlp_exporter()
 
         if enable_console_exporter:
             telemetry.setup_console_exporter()
@@ -165,16 +334,20 @@ def configure_strands_tracing(
         from fi_instrumentation.fi_types import ProjectType
         from traceai_strands import configure_strands_tracing
 
-        # Option 1: Use with fi_instrumentation
+        # Option 1: Use with fi_instrumentation. Spans go to Future AGI through
+        # register()'s exporter; no OTEL_EXPORTER_OTLP_* setting is needed for
+        # that. Strands' own OTLP exporter is still added, for the endpoint
+        # those variables resolve to (localhost:4318 when unset).
         trace_provider = register(
             project_type=ProjectType.OBSERVE,
             project_name="strands-agent",
         )
         configure_strands_tracing(tracer_provider=trace_provider)
 
-        # Option 2: Configure directly with endpoint
+        # Option 2: Configure directly with endpoint. otlp_endpoint is a base
+        # URL: "https://api.traceai.com/v1/traces" would export to .../v1/traces/v1/traces.
         configure_strands_tracing(
-            otlp_endpoint="https://api.traceai.com/v1/traces",
+            otlp_endpoint="https://api.traceai.com",
             otlp_headers={"Authorization": "Bearer YOUR_API_KEY"},
             project_name="strands-agent",
         )
@@ -190,8 +363,16 @@ def configure_strands_tracing(
     Args:
         tracer_provider: Optional OpenTelemetry tracer provider. If not
             provided, uses the global tracer provider.
-        otlp_endpoint: OTLP endpoint URL for trace export. If not provided,
-            uses the OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
+        otlp_endpoint: OTLP endpoint URL for trace export, stored in the
+            OTEL_EXPORTER_OTLP_ENDPOINT environment variable: a base URL that
+            Strands' exporter appends /v1/traces to, unless
+            OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is set. If not provided, the
+            OTEL_EXPORTER_OTLP_* environment variables apply. Strands' OTLP
+            exporter is not added when the tracer provider already exports to
+            the same traces URL with exactly the headers it would send, and keeps
+            that exporter when another processor is added (for example register()'s
+            Future AGI exporter on fi-instrumentation-otel releases with the
+            TH-8727 fix), so spans are not sent there twice.
         otlp_headers: Headers for OTLP export (e.g., authentication).
         project_name: Optional project name for trace attributes.
         enable_console_exporter: Whether to also export traces to console.

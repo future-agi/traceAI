@@ -22,7 +22,8 @@ class FITracerTest {
 
     @BeforeEach
     void setup() {
-        tracer = new FITracer(otelTesting.getOpenTelemetry().getTracer("test"));
+        tracer = new FITracer(otelTesting.getOpenTelemetry().getTracer("test"),
+            TraceConfig.builder().hideErrorDetails(false).build());
     }
 
     @Test

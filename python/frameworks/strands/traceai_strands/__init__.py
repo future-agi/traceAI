@@ -53,4 +53,4 @@ __all__ = [
     "get_model_attributes",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"  # x-release-please-version
