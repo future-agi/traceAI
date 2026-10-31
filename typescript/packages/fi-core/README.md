@@ -109,7 +109,7 @@ The `FITracerProvider` extends OpenTelemetry's `BasicTracerProvider` with custom
 - Custom HTTP span exporter
 - Automatic resource detection and configuration  
 - Built-in UUID generation for trace and span IDs
-- Configurable batch or simple span processing
+- Bounded batch span processing by default; explicitly supplied processors remain application-owned
 
 ### Evaluation System
 
@@ -206,6 +206,48 @@ pnpm test
 ```bash
 pnpm lint
 ```
+
+## Export privacy and application identity
+
+Every traceAI-owned HTTP/gRPC exporter, including the legacy constructors, applies
+the same detached S1 privacy snapshot immediately before serialization. Recognition
+comes from the byte-identical shared `privacy.json` catalog. Environment credentials
+and FI headers, including ignored halves of incomplete pairs, seed the process-wide
+bounded registry. `traceConfig` and `FI_HIDE_*` controls also apply on manual routes.
+Application-supplied processors/exporters remain application-owned and are not
+silently scrubbed or replaced. Provider defaults use batching; `batch: true` remains
+compatible, and `spanProcessors` selects an explicit SDK policy. Manual SDK owners
+must await `provider.forceFlush()` or `provider.shutdown()` before explicitly
+terminating the process; the auto agent manages its own bounded exit/signal drain.
+
+`register({ projectName })` sets FI `project_name`, not `service.name`. Default OTel
+resource identity, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` and an optional
+application `resource` are preserved.
+
+`FITracer` applies the shared privacy policy before SDK attribute-value truncation.
+Its library spans use the same deterministic count-limit projection as wire spans,
+including late output/usage updates. Only canonical metadata enters the overflow
+capsule; the export boundary reapplies hiding by each capsule member's original key.
+Image hiding (explicit or `FI_HIDE_INPUT_IMAGES`) also implies error-detail hiding
+unless `hideErrorDetails`/`FI_HIDE_ERROR_DETAILS` explicitly overrides it.
+
+## Known limitations
+
+- **2026-10-30 (manual credential discovery):** Without the auto agent's transport
+  hooks, the registry knows FI/environment credentials, structurally marked
+  captured fields and explicit `registerSecret` values. It cannot infer unmarked,
+  never-observed credentials or arbitrary application transformations. Use
+  `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`, `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT` and
+  `FI_HIDE_ERROR_DETAILS` or explicitly register sensitive exact values. The shared
+  LRU retains at most 1024 values; re-register credentials when reused.
+- **2026-10-30 (recognition bounds):** Catalog depth/node/text exhaustion fails closed
+  per span, preserving identity/timing and dropping content. Recognition is
+  structural, not semantic inference; use the hide controls for stronger protection.
+  Raw SDK resource arrays above 4096 pairs fail closed rather than cropping away
+  MIME siblings. An `FITracer` library span exhausting its bounded admission view
+  remains content-free through end. Opaque custom Span implementations without the
+  SDK's writable attribute storage cannot support late attribute replacement; use
+  a standard OTel SDK span or configure sufficient attribute capacity.
 
 ## Contributing
 

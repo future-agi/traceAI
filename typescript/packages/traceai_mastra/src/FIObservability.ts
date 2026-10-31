@@ -1,10 +1,15 @@
-import { Observability } from "@mastra/observability";
+import { BaseSpan, DefaultObservabilityInstance, Observability } from "@mastra/observability";
+import { registerLoadedObservability } from "./auto.js";
 import { SpanType } from "@mastra/core/observability";
+import { registerSecret } from "@traceai/fi-core";
 import {
   FIMastraSpanExporter,
   type FISpanExporterConfig,
 } from "./FIMastraSpanExporter.js";
 
+// Record both native module formats without enabling anything on manual import.
+// The lean auto entry can then patch these exact classes after agent init.
+registerLoadedObservability({ BaseSpan, DefaultObservabilityInstance, Observability });
 
 const DEFAULT_FI_BASE_URL = "https://api.futureagi.com";
 const FI_TRACES_PATH = "/tracer/v1/traces";
@@ -46,6 +51,10 @@ export interface FIMastraExporterOptions {
   timeout?: number;
   /** Spans per export batch. */
   batchSize?: number;
+  /** Use the initialized agent's processor instead of a second OTLP transport. */
+  spanProcessor?: FISpanExporterConfig["spanProcessor"];
+  /** Head sampling ratio for spans forwarded to an existing processor. */
+  sampleRate?: number;
 }
 
 /** @internal Exported for unit testing; not part of the public package API. */
@@ -93,6 +102,10 @@ export function createFIMastraExporter(
   options: FIMastraExporterOptions = {},
 ): FIMastraSpanExporter {
   const { apiKey, secretKey } = resolveAuth(options);
+  // These explicit credentials may never cross a transport when forwarding to
+  // the agent's processor. All outgoing provider discovery stays in the core.
+  registerSecret(apiKey);
+  registerSecret(secretKey);
   const config: FISpanExporterConfig = {
     endpoint: resolveEndpoint(options),
     headers: {
@@ -104,6 +117,8 @@ export function createFIMastraExporter(
     resourceAttributes: resolveResourceAttributes(options),
     ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
     ...(options.batchSize !== undefined ? { batchSize: options.batchSize } : {}),
+    ...(options.spanProcessor ? { spanProcessor: options.spanProcessor } : {}),
+    ...(options.sampleRate !== undefined ? { sampleRate: options.sampleRate } : {}),
   };
   return new FIMastraSpanExporter(config);
 }

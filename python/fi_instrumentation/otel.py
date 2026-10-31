@@ -9,10 +9,18 @@ import threading
 import uuid
 import warnings
 from enum import Enum
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import ParseResult, urlparse
 
 import requests
+from fi_instrumentation._attribute_limits import adopt_admission_hints
+from fi_instrumentation._credentials import merge_headers
+from fi_instrumentation._export_privacy import (
+    observe_exporter_credentials,
+    protect_exporter,
+    sanitize_batch,
+)
 from fi_instrumentation.fi_types import (
     EvalName,
     EvalTag,
@@ -113,6 +121,7 @@ def register(
     timeout: Optional[float] = None,
     sampler: Optional[Sampler] = None,
     span_limits: Optional[SpanLimits] = None,
+    signal_handlers: bool = True,
 ) -> _TracerProvider:
     """Configure and return a Future AGI `TracerProvider`.
 
@@ -148,8 +157,15 @@ def register(
         Provider tuning:
         sampler (Sampler): Head sampler (e.g. `TraceIdRatioBased`) to shed volume.
         span_limits (SpanLimits): Caps on attributes/events/links per span.
+        signal_handlers (bool): Install SIGINT/SIGTERM handlers that flush and exit (default).
+            Pass False to keep the application's own handlers; spans still flush at exit.
     """
 
+    from fi_instrumentation._secrets import seed_environment
+    from fi_instrumentation.auto.wire._privacy import observe_request
+
+    seed_environment()
+    observe_request(headers or {})
     eval_tags = eval_tags or []
     metadata = metadata or {}
 
@@ -198,7 +214,9 @@ def register(
         SEMANTIC_CONVENTION: semantic_convention.value,
     }
 
-    resource = Resource(attributes=resource_attributes)
+    # Detection (OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES and SDK identity)
+    # belongs to the application; FI project routing is a separate overlay.
+    resource = Resource.create(resource_attributes)
 
     # Only forward provider tuning when set, so unset -> upstream env/default.
     provider_kwargs: Dict[str, Any] = {}
@@ -207,9 +225,14 @@ def register(
     if span_limits is not None:
         provider_kwargs["span_limits"] = span_limits
 
+    # register() owns this route: the one S1 sanitizer runs immediately before the selected
+    # exporter serializes (on the batch worker when batching). FI HTTP/gRPC exporters
+    # sanitize themselves; any other exporter is put behind the same boundary here.
+    span_exporter = protect_exporter(span_exporter)
+
     tracer_provider = TracerProvider(
         resource=resource, verbose=False, id_generator=UuidIdGenerator(),
-        transport=transport, **provider_kwargs,
+        transport=transport, _default_exporter=False, **provider_kwargs,
     )
     span_processor: SpanProcessor
     if batch:
@@ -243,8 +266,8 @@ def register(
             transport=transport,
             timeout=timeout,
         )
-    # Replaces the default the provider added on construction. This processor is not marked as a
-    # default: a later add_span_processor() call adds next to it, as in upstream OpenTelemetry.
+    # register() constructs no throwaway default exporter. Later processors run
+    # next to the explicitly selected route, as in upstream OpenTelemetry.
     tracer_provider.add_span_processor(span_processor)
 
     if set_global_tracer_provider:
@@ -258,7 +281,7 @@ def register(
     else:
         global_provider_msg = ""
 
-    tracer_provider.setup_signal_handlers()
+    tracer_provider.setup_signal_handlers(install_signal_handlers=signal_handlers)
 
     details = tracer_provider._tracing_details()
     if verbose:
@@ -291,6 +314,7 @@ class TracerProvider(_TracerProvider):
         *args: Any,
         verbose: bool = True,
         transport: Transport = Transport.HTTP,
+        _default_exporter: bool = True,
         **kwargs: Any,
     ):
         if "shutdown_on_exit" not in kwargs:
@@ -310,7 +334,10 @@ class TracerProvider(_TracerProvider):
         super().__init__(*bound_args.args, **bound_args.kwargs)
 
         self._default_processor = False
-
+        # register() supplies the selected processor. Do not construct an unused
+        # environment-derived exporter that could override explicit configuration.
+        if not _default_exporter:
+            return
 
         if transport == Transport.HTTP:
             endpoint = get_env_collector_endpoint()
@@ -407,8 +434,12 @@ class TracerProvider(_TracerProvider):
         # Call the parent shutdown method
         super().shutdown()
 
-    def setup_signal_handlers(self):
+    def setup_signal_handlers(self, install_signal_handlers: bool = True):
         """Set up signal handlers to ensure proper shutdown on termination"""
+        if not install_signal_handlers:
+            atexit.register(self.shutdown)
+            return self
+
         def handle_signal(signum, frame):
             print(f"Received signal {signum}, shutting down tracer provider...")
             try:
@@ -506,6 +537,8 @@ class SimpleSpanProcessor(_SimpleSpanProcessor):
 
     def on_start(self, span: Any, parent_context: Optional[Any] = None) -> None:
         """Track span when it starts"""
+        # Owned route: keep media context through SDK eviction for the export boundary.
+        adopt_admission_hints(span)
         if hasattr(span, "context") and hasattr(span.context, "span_id"):
             max_active_spans_tracked = int(
                 os.getenv(FI_MAX_ACTIVE_SPANS_TRACKED, DEFAULT_MAX_ACTIVE_SPANS_TRACKED)
@@ -600,6 +633,11 @@ class BatchSpanProcessor(_BatchSpanProcessor):
             export_timeout_millis=export_timeout_millis,
         )
 
+    def on_start(self, span: Any, parent_context: Optional[Any] = None) -> None:
+        # Owned route: keep media context through SDK eviction for the export boundary.
+        adopt_admission_hints(span)
+        super().on_start(span, parent_context=parent_context)
+
     def on_end(self, span: Any) -> None:
         """Auto-set OK status for UNSET spans before batching."""
         _auto_set_ok_status(span)
@@ -622,34 +660,22 @@ class GRPCSpanExporter(_GRPCSpanExporter):
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
 
-        auth_header = get_env_fi_auth_header()
-        lower_case_auth_header = (
-            {k.lower(): v for k, v in auth_header.items()} if auth_header else None
-        )
+        passed_headers = bound_args.arguments.get("headers") or {}
+        entries = passed_headers.items() if isinstance(passed_headers, Mapping) else passed_headers
+        headers = {k.lower(): v for k, v in entries}
+        defaults = lambda: {k.lower(): v for k, v in (get_env_fi_auth_header() or {}).items()}
+        bound_args.arguments["headers"] = merge_headers(headers, defaults) or None
 
-        if not bound_args.arguments.get("headers"):
-            headers = {
-                **(lower_case_auth_header or dict()),
-            }
-            bound_args.arguments["headers"] = headers if headers else None
-        else:
-            passed_headers = bound_args.arguments["headers"]
-            if isinstance(passed_headers, dict):
-                headers = {k.lower(): v for k, v in passed_headers.items()}
-            else:
-                headers = {k.lower(): v for k, v in passed_headers}
-
-            if AUTHORIZATION not in headers:
-                bound_args.arguments["headers"] = {
-                    **headers,
-                    **(lower_case_auth_header or dict()),
-                }
-            else:
-                bound_args.arguments["headers"] = headers
-
-        endpoint = get_env_grpc_collector_endpoint()
-        bound_args.arguments["endpoint"] = endpoint
+        if bound_args.arguments.get("endpoint") is None:
+            bound_args.arguments["endpoint"] = get_env_grpc_collector_endpoint()
         super().__init__(*bound_args.args, **bound_args.kwargs)
+        observe_exporter_credentials(self)
+
+    _traceai_sanitizes = True
+
+    def export(self, spans: Any, *args: Any, **kwargs: Any) -> SpanExportResult:
+        """Sanitize (S1) immediately before serializing, unless an outer boundary already did."""
+        return super().export(sanitize_batch(spans), *args, **kwargs)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -678,21 +704,25 @@ class HTTPSpanExporter(_HTTPSpanExporter):
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
-        endpoint = kwargs.get("endpoint")
-        headers = kwargs.get("headers")
-
-        if endpoint is None:
+        bound_args = _get_class_signature(_HTTPSpanExporter).bind_partial(*args, **kwargs)
+        if bound_args.arguments.get("endpoint") is None:
             _, endpoint = _normalized_endpoint(None)
-            kwargs["endpoint"] = endpoint
+            bound_args.arguments["endpoint"] = endpoint
 
-        final_headers = {k.lower(): v for k, v in (headers or {}).items()}
-        if AUTHORIZATION not in final_headers:
-            auth_header = get_env_fi_auth_header()
-            if auth_header:
-                final_headers.update(auth_header)
-        kwargs["headers"] = final_headers or None
+        headers = bound_args.arguments.get("headers") or {}
+        entries = headers.items() if isinstance(headers, Mapping) else headers
+        final_headers = {k.lower(): v for k, v in entries}
+        defaults = lambda: {k.lower(): v for k, v in (get_env_fi_auth_header() or {}).items()}
+        bound_args.arguments["headers"] = merge_headers(final_headers, defaults) or None
 
-        super().__init__(*args, **kwargs)
+        super().__init__(*bound_args.args, **bound_args.kwargs)
+        observe_exporter_credentials(self)
+
+    _traceai_sanitizes = True
+
+    def export(self, spans: Any, *args: Any, **kwargs: Any) -> SpanExportResult:
+        """Sanitize (S1) immediately before serializing, unless an outer boundary already did."""
+        return super().export(sanitize_batch(spans), *args, **kwargs)
 
     def shutdown(self) -> None:
         """Clean up any resources before shutting down."""
@@ -717,7 +747,7 @@ def _exporter_transport(exporter: SpanExporter) -> str:
 def _printable_headers(
     headers: Union[List[Tuple[str, str]], Dict[str, str]]
 ) -> Dict[str, str]:
-    if isinstance(headers, dict):
+    if isinstance(headers, Mapping):
         return {key: "****" for key, _ in headers.items()}
     return {key: "****" for key, _ in headers}
 

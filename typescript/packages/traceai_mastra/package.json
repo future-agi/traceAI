@@ -12,6 +12,11 @@
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js"
     },
+    "./auto": {
+      "types": "./dist/src/auto.d.ts",
+      "import": "./dist/esm/auto.js",
+      "require": "./dist/src/auto.js"
+    },
     "./legacy": {
       "types": "./dist/src/legacy.d.ts",
       "import": "./dist/esm/legacy.js",
@@ -22,7 +27,7 @@
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
-    "test": "jest --passWithNoTests",
+    "test": "tsc -p tsconfig.json && jest --passWithNoTests --runInBand",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint . --ext .ts",

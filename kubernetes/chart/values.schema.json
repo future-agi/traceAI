@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1, "pattern": "^\\S+$"},
+        "tag": {"type": "string"},
+        "digest": {"type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "replicaCount": {"type": "integer", "minimum": 1},
+    "credentials": {
+      "type": "object",
+      "properties": {
+        "secretName": {"type": "string"},
+        "apiKeyKey": {"type": "string", "minLength": 1, "pattern": "^[-._a-zA-Z0-9]+$"},
+        "secretKeyKey": {"type": "string", "minLength": 1, "pattern": "^[-._a-zA-Z0-9]+$"}
+      }
+    },
+    "settings": {
+      "type": "object",
+      "propertyNames": {"pattern": "^FI_(BASE_URL|PROJECT_NAME|PROJECT_TYPE|INSTRUMENTATIONS|DISABLED_INSTRUMENTATIONS|WIRE_CAPTURE|WIRE_MAX_BODY_BYTES|AUTO_DEBUG|SAMPLE_RATE|HIDE_[A-Z_]+)$"},
+      "additionalProperties": {"type": "string"}
+    },
+    "excludedNamespaces": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "certManager": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "issuerRef": {"type": "object"},
+        "duration": {"type": "string"},
+        "renewBefore": {"type": "string"}
+      }
+    },
+    "tls": {
+      "type": "object",
+      "properties": {"existingSecret": {"type": "string"}, "caBundle": {"type": "string"}, "clientCAConfigMap": {"type": "string"}, "clientCAKey": {"type": "string", "minLength": 1}}
+    },
+    "admission": {
+      "type": "object",
+      "required": ["maxConcurrentAdmissions", "maxConcurrentLookups"],
+      "properties": {
+        "maxConcurrentAdmissions": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "maxConcurrentLookups": {"type": "integer", "minimum": 1, "maximum": 1024}
+      }
+    },
+    "initResources": {
+      "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+      "properties": {
+        "requests": {"$ref": "#/definitions/resourceList"},
+        "limits": {"$ref": "#/definitions/resourceList"}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "apiServerCIDRs": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-fA-F:.]+/[0-9]{1,3}$"}},
+        "controlPlanePeers": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["namespaceSelector", "podSelector"],
+          "properties": {
+            "namespaceSelector": {"$ref": "#/definitions/peerSelector"},
+            "podSelector": {"$ref": "#/definitions/peerSelector"}
+          }
+        }}
+      }
+    }
+  },
+  "definitions": {
+    "resourceList": {
+      "type": "object", "additionalProperties": false, "required": ["cpu", "memory"],
+      "properties": {
+        "cpu": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?m?$"},
+        "memory": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?([EPTGMK]i?|[kmun])?$"}
+      }
+    },
+    "peerSelector": {
+      "type": "object", "additionalProperties": false, "required": ["matchLabels"],
+      "properties": {"matchLabels": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}}}
+    }
+  }
+}

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>TraceAI.AutoInstrumentation.Runtime</AssemblyName>
+    <RootNamespace>TraceAI.AutoInstrumentation</RootNamespace>
+    <PackageId>TraceAI.AutoInstrumentation.Runtime</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Isolated traceAI instrumentation runtime for the framework-only startup hook</Description>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../*.cs" Exclude="../StartupHook.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../Wire/*.cs" Link="Wire/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../Wire/wire-protocols.json" LogicalName="TraceAI.AutoInstrumentation.Wire.wire-protocols.json" />
+    <EmbeddedResource Include="../Wire/privacy.json" LogicalName="TraceAI.AutoInstrumentation.Wire.privacy.json" />
+    <None Include="../Wire/privacy-fixtures.json" Pack="true" PackagePath="privacy/" />
+    <ProjectReference Include="../../FIInstrumentation/FIInstrumentation.csproj" Condition="'$(TargetFramework)' == 'net10.0'" />
+    <ProjectReference Include="../Net8Sdk/TraceAI.AutoInstrumentation.Net8Sdk.csproj" Condition="'$(TargetFramework)' == 'net8.0'" />
+    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <InternalsVisibleTo Include="TraceAI.AutoInstrumentation.Tests" />
+  </ItemGroup>
+</Project>

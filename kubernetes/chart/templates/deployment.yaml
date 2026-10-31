@@ -1,0 +1,129 @@
+{{- if gt (int .Values.admission.maxConcurrentLookups) (int .Values.admission.maxConcurrentAdmissions) }}
+{{- fail "maxConcurrentLookups must not exceed maxConcurrentAdmissions" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "traceai.fullname" . }}
+  labels:
+    {{- include "traceai.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "traceai.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "traceai.selectorLabels" . | nindent 8 }}
+      annotations:
+        traceai.futureagi.com/inject: "false"
+    spec:
+      serviceAccountName: {{ include "traceai.fullname" . }}
+      terminationGracePeriodSeconds: 10
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook
+          image: {{ include "traceai.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - {{ printf "--agent-image=%s" (include "traceai.image" .) | quote }}
+            - {{ printf "--image-pull-policy=%s" .Values.image.pullPolicy | quote }}
+            - {{ printf "--credentials-secret=%s" .Values.credentials.secretName | quote }}
+            - {{ printf "--api-key-key=%s" .Values.credentials.apiKeyKey | quote }}
+            - {{ printf "--secret-key-key=%s" .Values.credentials.secretKeyKey | quote }}
+            - {{ printf "--excluded-namespaces=%s" (join "," .Values.excludedNamespaces) | quote }}
+            - {{ printf "--max-concurrent-admissions=%d" (int .Values.admission.maxConcurrentAdmissions) | quote }}
+            - {{ printf "--max-concurrent-lookups=%d" (int .Values.admission.maxConcurrentLookups) | quote }}
+            - {{ printf "--init-resources=%s" (toJson .Values.initResources) | quote }}
+            {{- if .Values.tls.clientCAConfigMap }}
+            - "--tls-client-ca=/client-ca/ca.crt"
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: TRACEAI_SETTINGS_JSON
+              value: {{ .Values.settings | toJson | replace "$" "$$" | quote }}
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            {{- if .Values.tls.clientCAConfigMap }}
+            tcpSocket:
+              port: https
+            {{- else }}
+            httpGet:
+              scheme: HTTPS
+              path: /readyz
+              port: https
+            {{- end }}
+            periodSeconds: 5
+          livenessProbe:
+            {{- if .Values.tls.clientCAConfigMap }}
+            tcpSocket:
+              port: https
+            {{- else }}
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: https
+            {{- end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- if .Values.tls.clientCAConfigMap }}
+            - name: client-ca
+              mountPath: /client-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "traceai.tlsSecret" . }}
+            defaultMode: 0444
+        {{- if .Values.tls.clientCAConfigMap }}
+        - name: client-ca
+          configMap:
+            name: {{ .Values.tls.clientCAConfigMap | quote }}
+            items:
+              - key: {{ .Values.tls.clientCAKey | quote }}
+                path: ca.crt
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "traceai.selectorLabels" . | nindent 20 }}

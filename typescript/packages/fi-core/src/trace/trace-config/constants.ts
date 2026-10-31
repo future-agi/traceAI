@@ -56,6 +56,7 @@ export const HIDE_ERROR_DETAILS_IMPLIED_BY = [
   "hideOutputMessages",
   "hideInputText",
   "hideOutputText",
+  "hideInputImages",
 ] as const;
 
 /** When a value is hidden, it will be replaced by this redacted value */

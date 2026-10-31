@@ -26,11 +26,13 @@ from typing import (
 import wrapt  # type: ignore[import-untyped]
 from fi_instrumentation.fi_types import FiSpanKindValues, SpanAttributes
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY, Context, get_value
+from opentelemetry import context as context_api
 from opentelemetry.sdk.trace.id_generator import IdGenerator, RandomIdGenerator
 from opentelemetry.trace import (
     INVALID_SPAN,
     INVALID_SPAN_ID,
     INVALID_TRACE_ID,
+    get_current_span,
     Link,
     Span,
     SpanKind,
@@ -81,9 +83,31 @@ class _IdGenerator(IdGenerator):
         return trace_id
 
 
+_MODEL_COVERED_KEY = context_api.create_key("fi-model-call-covered")
+_MODEL_KINDS = frozenset({"LLM", "EMBEDDING", "RERANKER", "GUARDRAIL"})
+
+
+def _mark_model_coverage(span: Any, parent_context: Optional[Context] = None) -> None:
+    """Carry model coverage through native SDK intermediates (S4)."""
+    parent = get_current_span(parent_context)
+    parent_kind = ((getattr(parent, "_self_important_attributes", None) or {}).get("gen_ai.span.kind")
+                   or (getattr(parent, "attributes", None) or {}).get("gen_ai.span.kind"))
+    parent_covered = getattr(parent, "_traceai_model_covered", False) or parent_kind in _MODEL_KINDS
+    span._traceai_model_covered = parent_covered or (getattr(span, "attributes", None) or {}).get("gen_ai.span.kind") in _MODEL_KINDS
+
+
 class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
-    def __init__(self, wrapped: Tracer, config: TraceConfig = TraceConfig()) -> None:
-        super().__init__(wrapped)
+    def __init__(self, wrapped: Tracer, config: Optional[TraceConfig] = None) -> None:
+        # Opt in only FI tracers, not application-owned SDK tracers, to the
+        # auto agent's independent route when that route exists.
+        from fi_instrumentation.auto._sampling import agent_tracer
+        from fi_instrumentation._secrets import seed_environment
+
+        seed_environment()
+        if config is None:
+            # The process policy (or env > config file > defaults); never raises into the app.
+            config = TraceConfig()
+        super().__init__(agent_tracer(wrapped))
         self._self_config = config
         self._self_id_generator = _IdGenerator()
 
@@ -120,13 +144,18 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
             record_exception=record_exception,
             set_status_on_exception=set_status_on_exception,
         )
-        with use_span(
-            span,  # type: ignore[arg-type]
-            end_on_exit=end_on_exit,
-            record_exception=record_exception,
-            set_status_on_exception=set_status_on_exception,
-        ) as current_span:
-            yield cast(FiSpan, current_span)
+        marker = None
+        if span._self_important_attributes.get("gen_ai.span.kind") in _MODEL_KINDS:
+            marker = context_api.attach(context_api.set_value(_MODEL_COVERED_KEY, True))
+        try:
+            with use_span(
+                span, end_on_exit=end_on_exit, record_exception=record_exception,
+                set_status_on_exception=set_status_on_exception,
+            ) as current_span:
+                yield cast(FiSpan, current_span)
+        finally:
+            if marker is not None:
+                context_api.detach(marker)
 
     def start_span(
         self,
@@ -163,6 +192,12 @@ class FITracer(wrapt.ObjectProxy):  # type: ignore[misc]
         if fi_span_kind is not None:
             fi_span.set_attributes(get_span_kind_attributes(fi_span_kind))
         fi_span.set_attributes(dict(get_attributes_from_context()))
+        if otel_span is not INVALID_SPAN and otel_span.is_recording():
+            # Standalone FITracer spans carry dedup coverage too.
+            # Never mark the shared INVALID_SPAN.
+            _mark_model_coverage(otel_span, context)
+            if fi_span._self_important_attributes.get("gen_ai.span.kind") in _MODEL_KINDS:
+                otel_span._traceai_model_covered = True
         return fi_span
 
     @overload  # for @tracer.agent usage (no parameters)

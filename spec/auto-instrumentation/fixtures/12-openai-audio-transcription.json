@@ -1,0 +1,54 @@
+{
+  "name": "openai-audio-transcription",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/audio/transcriptions",
+    "multipart": {
+      "fields": {
+        "model": "gpt-4o-transcribe",
+        "language": "en",
+        "response_format": "json"
+      },
+      "files": [
+        {
+          "name": "file",
+          "filename": "call.mp3",
+          "content_type": "audio/mpeg",
+          "size": 2048
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "text": "Hello, I need help with my order.",
+      "usage": {
+        "type": "tokens",
+        "input_tokens": 50,
+        "output_tokens": 10,
+        "total_tokens": 60
+      }
+    }
+  },
+  "expect": {
+    "captured": true,
+    "name": "transcription gpt-4o-transcribe",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.operation.name": "transcription",
+      "gen_ai.request.model": "gpt-4o-transcribe",
+      "gen_ai.audio.language": "en",
+      "gen_ai.audio.mime_type": "audio/mpeg",
+      "traceai.audio.input_bytes": 2048,
+      "gen_ai.audio.transcript": "Hello, I need help with my order.",
+      "output.value": "Hello, I need help with my order.",
+      "output.mime_type": "text/plain",
+      "gen_ai.usage.input_tokens": 50,
+      "gen_ai.usage.output_tokens": 10
+    }
+  }
+}

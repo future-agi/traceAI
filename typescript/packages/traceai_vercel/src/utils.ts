@@ -278,7 +278,7 @@ import {
             id: c.toolCallId,
             function: {
               name: c.toolName,
-              arguments: typeof c.args === "string" ? c.args : typeof c.args === "object" ? JSON.stringify(c.args) : undefined,
+              arguments: typeof (c.input ?? c.args) === "string" ? (c.input ?? c.args) : safelyJSONStringify(c.input ?? c.args) ?? undefined,
             },
           }));
         if (toolCalls.length > 0) msg.tool_calls = toolCalls;
@@ -321,9 +321,10 @@ import {
     const msg: Record<string, unknown> = {
       role: "assistant",
       tool_calls: parsedToolCalls.map((toolCall) => ({
+        id: typeof toolCall.toolCallId === "string" ? toolCall.toolCallId : undefined,
         function: {
           name: isAttributeValue(toolCall.toolName) ? toolCall.toolName : undefined,
-          arguments: safelyJSONStringify(toolCall.args) ?? undefined,
+          arguments: typeof (toolCall.input ?? toolCall.args) === "string" ? (toolCall.input ?? toolCall.args) : safelyJSONStringify(toolCall.input ?? toolCall.args) ?? undefined,
         },
       })),
     };

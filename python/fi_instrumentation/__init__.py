@@ -1,3 +1,4 @@
+from fi_instrumentation._secrets import register_secret
 from fi_instrumentation.instrumentation._tracers import FITracer
 from fi_instrumentation.instrumentation.config import (
     REDACTED_VALUE,
@@ -35,6 +36,9 @@ from .otel import (
 )
 
 __all__ = [
+    # Zero-code setup
+    "init",
+    "auto_instrument",
     # Context and attributes
     "get_attributes_from_context",
     "using_attributes",
@@ -46,6 +50,7 @@ __all__ = [
     "using_simulator_attributes",
     # Helpers and config
     "safe_json_dumps",
+    "register_secret",
     "suppress_tracing",
     "TraceConfig",
     "FITracer",
@@ -68,3 +73,12 @@ __all__ = [
     "SemanticConvention",
     "register",
 ]
+
+
+def __getattr__(name: str):
+    # The zero-code entry points load on first use, so `import fi_instrumentation` stays as light as before.
+    if name in ("init", "auto_instrument"):
+        from fi_instrumentation import auto
+
+        return getattr(auto, name)
+    raise AttributeError(f"module 'fi_instrumentation' has no attribute {name!r}")

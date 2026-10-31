@@ -6,6 +6,7 @@ import {
   createFIObservability,
 } from "../FIObservability";
 import { FIMastraSpanExporter } from "../FIMastraSpanExporter";
+import { getRegisteredSecrets } from "@traceai/fi-core";
 
 const ENV_KEYS = ["FI_API_KEY", "FI_SECRET_KEY", "FI_BASE_URL", "FI_PROJECT_NAME"];
 const saved: Record<string, string | undefined> = {};
@@ -112,6 +113,18 @@ describe("resolveResourceAttributes", () => {
 });
 
 describe("createFIMastraExporter", () => {
+  it("registers explicit FI configuration credentials even without an exporter transport", async () => {
+    const exporter = createFIMastraExporter({
+      apiKey: "synthetic-mastra-config-api-key",
+      secretKey: "synthetic-mastra-config-secret-key",
+      spanProcessor: { onStart() {}, onEnd() {}, async forceFlush() {}, async shutdown() {} },
+    });
+    expect(getRegisteredSecrets()).toEqual(expect.arrayContaining([
+      "synthetic-mastra-config-api-key", "synthetic-mastra-config-secret-key",
+    ]));
+    await exporter.shutdown();
+  });
+
   it("throws without credentials", () => {
     expect(() => createFIMastraExporter({})).toThrow(
       /Missing Future AGI credentials/,

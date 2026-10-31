@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace import SpanLimits
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
+from fi_instrumentation._export_privacy import PrivacyExporter
 from fi_instrumentation.fi_types import ProjectType
 from fi_instrumentation.otel import (
     BatchSpanProcessor,
@@ -197,7 +198,9 @@ class TestRegisterPlumbsTuning:
         )
         _, bkw = mock_bsp.call_args
         assert bkw["timeout"] == 30
-        assert bkw["span_exporter"] is exp
+        # register() owns this route: the supplied exporter sits behind the S1 boundary.
+        assert isinstance(bkw["span_exporter"], PrivacyExporter)
+        assert bkw["span_exporter"].__wrapped__ is exp
 
         _, pkw = mock_tp.call_args
         assert pkw["sampler"] is sampler
@@ -251,7 +254,8 @@ class TestRegisterBatchFalse:
         exp = InMemorySpanExporter()
         register(batch=False, verbose=False, span_exporter=exp)
         _, kw = mock_ssp.call_args
-        assert kw["span_exporter"] is exp
+        assert isinstance(kw["span_exporter"], PrivacyExporter)  # S1 boundary (register-owned)
+        assert kw["span_exporter"].__wrapped__ is exp
 
     def test_warning_fires_across_python_versions(self):
         """Regression: the warning must not rely on locals() inside a comprehension

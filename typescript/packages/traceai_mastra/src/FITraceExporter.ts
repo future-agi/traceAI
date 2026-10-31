@@ -2,6 +2,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { addFIAttributesToSpan } from "@traceai/vercel";
 import { addFIAttributesToMastraSpan } from "./attributes.js";
 import { addFIProjectResourceAttributeSpan } from "./utils.js";
+import { ownData, snapshotReadableSpan } from "./snapshot.js";
 
 type ReadableSpanFromExporter =
   Parameters<OTLPTraceExporter["export"]>[0][number];
@@ -29,18 +30,23 @@ export class FITraceExporter extends OTLPTraceExporter {
   ) {
     const spans = args[0];
     const resultCallback = args[1];
-    let filteredSpans = spans.map((span) => {
-      addFIProjectResourceAttributeSpan(span as any);
-      addFIAttributesToSpan({
-        ...(span as any),
-        // backwards compatibility with older versions of sdk-trace-base
-        instrumentationLibrary: {
-          name: "@traceai/mastra",
-        },
-      });
-      addFIAttributesToMastraSpan(span as any);
-      return span;
-    });
+    let filteredSpans: ReadableSpanFromExporter[] = [];
+    const length = ownData(spans, "length");
+    if (typeof length === "number" && length <= 4096) for (let i = 0; i < length; i++) {
+      try {
+        // Legacy enrichment also used to spread arbitrary SDK/application spans
+        // and mutate their shared resources. Work only on detached data, before
+        // either the Vercel adapter or the OTLP serializer sees the values.
+        const span = snapshotReadableSpan(ownData(spans, String(i)));
+        addFIProjectResourceAttributeSpan(span);
+        addFIAttributesToSpan({
+          ...span,
+          instrumentationLibrary: { name: "@traceai/mastra" },
+        } as any);
+        addFIAttributesToMastraSpan(span);
+        filteredSpans.push(span as any);
+      } catch { /* Unsupported legacy carriers never execute their methods/getters. */ }
+    }
     if (this.spanFilter) {
       filteredSpans = filteredSpans.filter(this.spanFilter);
     }

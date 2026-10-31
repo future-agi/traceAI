@@ -13,9 +13,10 @@ import {
     TraceConfigOptions,
   } from "./types";
   import { FISpan } from "./FISpan";
-  import { maskAttributes } from "./maskingRules";
   import { generateTraceConfig } from "./traceConfig";
   import { getAttributesFromContext } from "../contextAttributes";
+  import { privacyFilter } from "../../export-privacy";
+  import { projectAttributes, tracerAttributeLimit } from "../../attribute-projection";
   
   /**
    * Formats the params for the startActiveSpan method
@@ -148,23 +149,27 @@ import {
       attributes: Attributes | undefined,
       context: Context | undefined,
     ): FISpan {
-      const startAttributes =
-        attributes != null
-          ? maskAttributes({ config: this.config, attributes })
-          : undefined;
+      // Exact-secret/media/hide sanitization precedes SDK count/value limits.
+      // Otherwise truncation can turn a known credential into an unknown prefix.
+      let startAttributes: Attributes | undefined;
+      try { startAttributes = attributes != null ? privacyFilter(this.config).admissionAttributes(Object.fromEntries(Object.entries(attributes).filter(([, value]) => value != null))) : undefined; }
+      catch { startAttributes = {}; }
+      const attributeCountLimit = tracerAttributeLimit(tracer);
+      const projected = projectAttributes(startAttributes ?? {}, attributeCountLimit);
       // Link attributes are span attributes too: same masking
-      const links = options?.links?.map((link) =>
-        link.attributes != null
-          ? { ...link, attributes: maskAttributes({ config: this.config, attributes: link.attributes }) }
-          : link,
-      );
+      const links = options?.links?.map((link) => {
+        if (link.attributes == null) return link;
+        try { return { ...link, attributes: privacyFilter(this.config).admissionAttributes(link.attributes) }; }
+        catch { return { ...link, attributes: {} }; }
+      });
       const span = tracer.startSpan(
         name,
         links != null
-          ? { ...options, attributes: startAttributes, links }
-          : { ...options, attributes: startAttributes },
+          ? { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes, links }
+          : { ...options, attributes: startAttributes === undefined ? undefined : projected.attributes },
         context,
       );
-      return new FISpan({ span, config: this.config, startAttributes });
+      if (projected.dropped && typeof (span as any)._droppedAttributesCount === "number") (span as any)._droppedAttributesCount += projected.dropped;
+      return new FISpan({ span, config: this.config, startAttributes, attributeCountLimit, projectedDropped: projected.dropped });
     }
   }

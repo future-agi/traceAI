@@ -1,0 +1,34 @@
+traceAI Pod injection is opt-in. This chart does not create workload credentials.
+{{- if .Values.networkPolicy.enabled }}
+NetworkPolicy is ENABLED. Only configured API-server/control-plane peers can reach
+8443; empty allowlists DENY ALL ingress (Pods still admit without instrumentation).
+Configure networkPolicy.apiServerCIDRs/controlPlanePeers for your CNI. Read the
+README before using networkPolicy.enabled=false with equivalent external controls.
+{{- else }}
+WARNING: NetworkPolicy is disabled. Supply equivalent control-plane-only ingress
+restrictions; serving TLS alone does not authenticate an admission caller.
+{{- end }}
+{{- if .Values.tls.clientCAConfigMap }}
+Verified API-server client certificates are REQUIRED on every TLS connection.
+{{- else }}
+No client CA is configured: TLS authenticates the server, NOT the caller. Use
+managed-cluster control-plane network restrictions, or configure dedicated mTLS.
+{{- end }}
+
+1. Provision {{ .Values.credentials.secretName }} in each target workload namespace,
+   with keys {{ .Values.credentials.apiKeyKey }} and {{ .Values.credentials.secretKeyKey }}.
+2. Annotate the workload's Pod TEMPLATE (not the Deployment metadata):
+   traceai.futureagi.com/inject: "true"
+   traceai.futureagi.com/language: "node" # python, java, dotnet, ruby
+   Or label its namespace traceai.futureagi.com/inject=true (language hints still apply).
+3. Restart the workload and inspect its Pod: traceai-agent-init, read-only mount,
+   optional secretKeyRef entries, and TRACEAI_KUBERNETES_INJECTED=v1.
+
+failurePolicy=Ignore and a 3s deadline protect ADMISSION availability. After a Pod
+has been mutated, image-pull, init, policy/quota and incompatible runtime failures
+can still prevent startup. Read kubernetes/README.md before production rollout.
+Existing Pods are not modified. The release namespace is never injected.
+{{- if .Values.certManager.enabled }}
+Requires cert-manager + cainjector. Wait for the Certificate to become Ready and
+verify the webhook caBundle before creating opted-in workloads.
+{{- end }}

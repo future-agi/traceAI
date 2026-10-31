@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <PackageId>TraceAI.AutoInstrumentation</PackageId>
+    <Version>0.1.0</Version>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Description>Fail-open startup hook and ActivitySource/HttpClient tracing for traceAI</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Only this BCL-only type enters the application's default load context. -->
+    <Compile Include="StartupHook.cs" />
+    <ProjectReference Include="AgentRuntime/TraceAI.AutoInstrumentation.Runtime.csproj" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,14 @@
+LAPTOP SMOKE — NOT A BENCHMARK
+
+| Adapter | Correctness | JSON added us p50/p95/p99 | SSE added us p50/p95/p99 | p95 relative JSON/SSE | SSE TTFC added us p95 | Startup added ms p50 | RSS added MiB p50 | First trace ms p50 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| python | passed | 789.8/8923.1/23622.3 | 303.1/1595.1/6284.2 | 3151.3%/7.7% | 336.3 | 336.5 | 30.1 | 577.7 |
+| node | passed | 776.9/2080.7/2196.9 | 912.5/2599.9/2916.0 | 250.8%/12.3% | 626.4 | 40.6 | 27.8 | 101.4 |
+
+Signed paired on-minus-off deltas; negative values are retained, not interpreted as speedups.
+TTFC = first nonempty body bytes (not first semantic token). RSS = per-child wait4 high-water mark.
+Absolute off/on p50/p95/p99, raw timings, span attributes, byte hashes and failures are in results.json.
+Braintrust comparison: not_measured
+Gate: PASS
+Not measured: go, dotnet, java, ruby, launcher, launcher-node
+Evidence: /Volumes/nikm4/futureagi/traceai-auto/bench/auto-instrumentation/results.json

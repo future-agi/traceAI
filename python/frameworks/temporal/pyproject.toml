@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "traceAI-temporal"
+version = "0.1.0"
+description = "Replay-safe OpenTelemetry instrumentation for Temporal workflows and activities"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10,<3.14"
+authors = [{ name = "FutureAGI", email = "support@futureagi.com" }]
+dependencies = [
+    "temporalio>=1.9,<2",
+    "fi-instrumentation-otel>=1.2.1",
+    "opentelemetry-instrumentation>=0.40b0",
+    "wrapt>=1.15",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27"]
+
+[project.entry-points.opentelemetry_instrumentor]
+temporal = "traceai_temporal:TemporalInstrumentor"
+
+[tool.hatch.build.targets.wheel]
+packages = ["traceai_temporal"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = ["integration: starts Temporal's local time-skipping test server"]

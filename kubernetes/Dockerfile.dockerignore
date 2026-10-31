@@ -1,0 +1,28 @@
+# Dockerfile-specific context allowlist: never send credentials, caches, .git,
+# application source trees, or the unused Go embedded source payload to a builder.
+**
+!kubernetes/
+!kubernetes/go.mod
+!kubernetes/go.sum
+!kubernetes/cmd/
+!kubernetes/cmd/**
+!kubernetes/internal/
+!kubernetes/internal/**
+!go/
+!go/launcher/
+!go/launcher/go.mod
+!go/launcher/*.go
+!go/launcher/cmd/
+!go/launcher/cmd/**
+!go/launcher/shims/
+!go/launcher/shims/**
+!go/launcher/embedded/
+!go/launcher/embedded/versions.json
+!go/launcher/embedded/java/
+!go/launcher/embedded/java/**
+!go/launcher/embedded/dotnet/
+!go/launcher/embedded/dotnet/**
+!go/launcher/embedded/node/
+!go/launcher/embedded/node/**
+!go/launcher/embedded/ruby/
+!go/launcher/embedded/ruby/**

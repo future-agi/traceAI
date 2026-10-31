@@ -1,0 +1,4 @@
+/embedded/*
+!/embedded/.keep
+/bin/
+/.scratch/

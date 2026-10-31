@@ -1,0 +1,88 @@
+{
+  "name": "milestone-gemini-empty-audio-no-output",
+  "description": "Audio MIME metadata and an empty payload do not establish first output.",
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Hi"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "sse": [
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "inlineData": {
+                    "mimeType": "audio/pcm"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [
+                {
+                  "inlineData": {
+                    "mimeType": "audio/pcm",
+                    "data": ""
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "finishReason": "STOP"
+          }
+        ]
+      }
+    ],
+    "arrival_offsets_ms": [
+      10,
+      25,
+      50
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "generate_content gemini-fixture",
+    "status": "OK",
+    "attributes": {
+      "gen_ai.response.time_to_first_chunk": 0.01,
+      "gen_ai.request.stream": true
+    },
+    "absent": [
+      "gen_ai.response.time_to_first_text"
+    ]
+  }
+}

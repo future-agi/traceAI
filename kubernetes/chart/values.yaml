@@ -1,0 +1,83 @@
+# Build and publish kubernetes/Dockerfile to your trusted registry first.
+# This is an example repository, not a claim of a published release.
+image:
+  repository: ghcr.io/future-agi/traceai-kubernetes
+  tag: "0.1.0"
+  digest: "" # Prefer sha256:<digest>; overrides tag for BOTH server and init.
+  pullPolicy: IfNotPresent
+imagePullSecrets: [] # Server only; workloads need their own registry access.
+replicaCount: 2
+nameOverride: ""
+fullnameOverride: ""
+
+credentials:
+  # A Secret with this name must exist in EACH opted-in workload namespace.
+  # It is never read by the webhook and never created by this chart.
+  secretName: traceai-credentials
+  apiKeyKey: FI_API_KEY
+  secretKeyKey: FI_SECRET_KEY
+
+# Non-secret FI_* configuration; existing container env wins. No inline keys,
+# runtime option overrides, agent-path overrides, or config-file paths accepted.
+settings: {}
+# Example:
+# settings:
+#   FI_PROJECT_NAME: production-assistant
+#   FI_HIDE_INPUTS: "true"
+#   FI_HIDE_OUTPUTS: "true"
+#   FI_SAMPLE_RATE: "0.25"
+
+excludedNamespaces:
+  - kube-system
+  - kube-public
+  - kube-node-lease
+# The release namespace is always excluded as well.
+
+certManager:
+  enabled: true # Requires preinstalled cert-manager + cainjector.
+  issuerRef: {} # Empty: create a namespaced self-signed Issuer.
+  duration: 2160h
+  renewBefore: 360h
+tls:
+  existingSecret: "" # Required when certManager.enabled=false
+  caBundle: "" # Base64-encoded PEM CA, required in existingSecret mode.
+  # Optional dedicated CA for API-server client certificates, NOT the serving CA.
+  # Configure API-server admission kubeconfig first. When set, mTLS is mandatory.
+  clientCAConfigMap: ""
+  clientCAKey: ca.crt
+
+admission:
+  maxConcurrentAdmissions: 32
+  maxConcurrentLookups: 8
+
+networkPolicy:
+  enabled: true
+  # Empty allowlists deny all ingress: set the API server's observed source CIDRs
+  # for your CNI/control plane before installing. Never guess 0.0.0.0/0.
+  apiServerCIDRs: []
+  # Optional in-cluster control-plane peers. Each entry must have BOTH nonempty
+  # namespaceSelector.matchLabels and podSelector.matchLabels (AND, not OR).
+  controlPlanePeers: []
+
+# Used for Burstable Pods. Guaranteed Pods use these LIMITS for both request and
+# limit; BestEffort Pods omit init resources to retain their original QoS class.
+initResources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+podDisruptionBudget:
+  enabled: true
+nodeSelector:
+  kubernetes.io/os: linux
+tolerations: []

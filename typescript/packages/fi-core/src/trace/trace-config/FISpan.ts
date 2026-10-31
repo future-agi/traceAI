@@ -12,6 +12,8 @@ import {
   } from "@opentelemetry/api";
   import { TraceConfig } from "./types";
   import { mask, maskAttributes } from "./maskingRules";
+  import { privacyFilter } from "../../export-privacy";
+  import { projectAttributes } from "../../attribute-projection";
   import {
     ERROR_TYPE,
     ERROR_TYPE_OTHER,
@@ -65,19 +67,32 @@ import {
     private lastException?: Exception;
     /** The last status set on the span is ERROR */
     private hasErrorStatus: boolean = false;
-  
+    private pendingAttributes: Attributes;
+    private readonly attributeCountLimit: number;
+    private projectedDropped: number;
+    private readonly privacy: ReturnType<typeof privacyFilter>;
+    private admissionFailed = false;
+
     constructor({
       span,
       config,
       startAttributes,
+      attributeCountLimit = 128,
+      projectedDropped = 0,
     }: {
       span: Span;
       config: TraceConfig;
       /** The (already masked) attributes the span was created with */
       startAttributes?: Attributes;
+      attributeCountLimit?: number;
+      projectedDropped?: number;
     }) {
       this.span = span;
       this.config = config;
+      this.pendingAttributes = { ...startAttributes };
+      this.attributeCountLimit = attributeCountLimit;
+      this.projectedDropped = projectedDropped;
+      this.privacy = privacyFilter(config);
       if (startAttributes?.[ERROR_TYPE] != null) {
         this.hasExplicitErrorType = true;
       }
@@ -99,6 +114,43 @@ import {
       return maskedValue;
     }
   
+    /** Reproject the complete bounded library view when late usage/output arrives.
+     * SDK spans expose a writable attribute data slot. Only our wrapped span is
+     * updated; custom span implementations retain their normal public API path.
+     */
+    private admit(attributes: Attributes, singleKey?: string): void {
+      const slot = Object.getOwnPropertyDescriptor(this.span, "attributes");
+      const native = Object.getOwnPropertyDescriptor(this.span, "_droppedAttributesCount");
+      let clean: Attributes = {};
+      if (!this.admissionFailed) {
+        try {
+          // Preserve annotations made by host onStart processors. Projected
+          // metadata is already represented by the complete pending view.
+          const host = native && slot && "value" in slot ? { ...slot.value } : {};
+          delete host["traceai.attribute_projection.metadata"];
+          delete host["traceai.attribute_projection.dropped_count"];
+          clean = this.privacy.admissionAttributes({ ...host, ...this.pendingAttributes, ...attributes });
+        } catch { this.admissionFailed = true; }
+      }
+      this.pendingAttributes = clean;
+      const projected = projectAttributes(clean, this.attributeCountLimit);
+      if (slot && "value" in slot && slot.writable && native && "value" in native && native.writable && typeof native.value === "number") {
+        // Clear SDK-owned storage so a late canonical field can displace earlier
+        // content, instead of being rejected by setAttributes at the host limit.
+        const prior = Math.max(0, native.value - this.projectedDropped);
+        Object.defineProperty(this.span, "attributes", { ...slot, value: {} });
+        // SDK 2.7+ caches cardinality separately; resetting only the map makes
+        // every projected key look new against a permanently full old count.
+        const count = Object.getOwnPropertyDescriptor(this.span, "_attributesCount");
+        if (count && "value" in count && count.writable && typeof count.value === "number") Object.defineProperty(this.span, "_attributesCount", { ...count, value: 0 });
+        this.span.setAttributes(projected.attributes);
+        (this.span as any)._droppedAttributesCount = prior + projected.dropped;
+        this.projectedDropped = projected.dropped;
+      } else if (singleKey !== undefined && clean[singleKey] != null) {
+        this.span.setAttribute(singleKey, clean[singleKey]!);
+      } else this.span.setAttributes(clean);
+    }
+
     setAttribute(key: string, value: AttributeValue): this {
       if (this.isEnded) {
         diag.warn(`FISpan.setAttribute called on ended span ID: ${this.span.spanContext().spanId} for key: ${key}`);
@@ -106,7 +158,7 @@ import {
       }
       const maskedValue = this.maskAttribute(key, value);
       if (maskedValue != null) {
-        this.span.setAttribute(key, maskedValue);
+        this.admit({ [key]: maskedValue }, key);
       }
       return this;
     }
@@ -120,7 +172,7 @@ import {
       if (maskedAttributes[ERROR_TYPE] != null) {
         this.hasExplicitErrorType = true;
       }
-      this.span.setAttributes(maskedAttributes);
+      this.admit(maskedAttributes);
       return this;
     }
   
@@ -140,12 +192,12 @@ import {
           this.recordedErrorType = exceptionType;
         }
       }
-      if (!this.config.hideErrorDetails) {
-        this.span.addEvent(name, attributesOrStartTime, startTime);
-        return this;
-      }
-      // A denylist, for "exception" and other events alike (as Python's strip_error_details)
-      this.span.addEvent(name, stripErrorDetailAttributes(attributes), time);
+      // Newer SDKs also truncate event/link values. Protect their exact values
+      // before admission, while retaining native event names/times and identity.
+      let clean = attributes;
+      try { if (attributes) clean = this.privacy.admissionAttributes(this.config.hideErrorDetails ? stripErrorDetailAttributes(attributes) : attributes); }
+      catch { clean = {}; }
+      this.span.addEvent(name, clean, time);
       return this;
     }
   
@@ -171,10 +223,14 @@ import {
         return;
       }
       if (this.hasErrorStatus && !this.hasExplicitErrorType) {
-        this.span.setAttribute(ERROR_TYPE, this.recordedErrorType ?? ERROR_TYPE_OTHER);
+        this.setAttribute(ERROR_TYPE, this.recordedErrorType ?? ERROR_TYPE_OTHER);
       }
+      // A transport can discover credentials after the library span was
+      // created. Re-sanitize its full bounded view, not SDK-truncated prefixes.
+      this.admit({});
       this.span.end(endTime);
       this.isEnded = true;
+      this.pendingAttributes = {};
       // diag.debug(
       //     `FISpan.end CALLED for span ID: ${this.span.spanContext().spanId}`
       // );
@@ -203,7 +259,11 @@ import {
         diag.warn(`FISpan.recordException: nothing to record for ${typeof exception}`);
         return;
       }
-      this.span.addEvent(EXCEPTION_EVENT_NAME, attributes, time);
+      const errorType = this.recordedErrorType;
+      this.addEvent(EXCEPTION_EVENT_NAME, attributes, time);
+      // exception.type can be a generic class while error.type is the provider's
+      // normalized name/code. addEvent's explicit-event fallback must not replace it.
+      this.recordedErrorType = errorType;
     }
   
     spanContext(): SpanContext {
@@ -212,9 +272,9 @@ import {
   
     /** Link attributes get the same masking as span attributes */
     private maskLink(link: Link): Link {
-      return link.attributes != null
-        ? { ...link, attributes: maskAttributes({ config: this.config, attributes: link.attributes }) }
-        : link;
+      if (link.attributes == null) return link;
+      try { return { ...link, attributes: this.privacy.admissionAttributes(link.attributes) }; }
+      catch { return { ...link, attributes: {} }; }
     }
 
     addLink(link: Link): this {

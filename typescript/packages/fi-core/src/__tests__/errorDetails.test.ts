@@ -83,9 +83,10 @@ describe("hideErrorDetails derivation", () => {
     },
   );
 
-  it("covers exactly the six content-hiding flags", () => {
+  it("covers all seven content/image-hiding flags", () => {
     expect([...HIDE_ERROR_DETAILS_IMPLIED_BY].sort()).toEqual(
       [
+        "hideInputImages",
         "hideInputMessages",
         "hideInputText",
         "hideInputs",
@@ -96,7 +97,7 @@ describe("hideErrorDetails derivation", () => {
     );
   });
 
-  it.each([["hideInputImages"], ["hideEmbeddingVectors"], ["piiRedaction"]])(
+  it.each([["hideEmbeddingVectors"], ["piiRedaction"]])(
     "is not implied by %s",
     (flag) => {
       expect(

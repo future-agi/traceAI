@@ -1,0 +1,80 @@
+{
+  "name": "openai-chat-stream-fails-midway",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "json": {
+      "model": "gpt-4o-mini",
+      "stream": true,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Count to 3"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream"
+    },
+    "error_after_chunks": 2,
+    "sse": [
+      {
+        "id": "c40",
+        "model": "gpt-4o-mini",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant",
+              "content": ""
+            }
+          }
+        ]
+      },
+      {
+        "id": "c40",
+        "model": "gpt-4o-mini",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "1, 2"
+            }
+          }
+        ]
+      },
+      {
+        "id": "c40",
+        "model": "gpt-4o-mini",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": ", 3"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      },
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "captured": true,
+    "name": "chat gpt-4o-mini",
+    "status": "ERROR",
+    "attributes": {
+      "output.value": "1, 2",
+      "gen_ai.request.stream": true
+    },
+    "present": [
+      "error.type"
+    ]
+  }
+}

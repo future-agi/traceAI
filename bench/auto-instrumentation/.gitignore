@@ -1,0 +1,8 @@
+.work/
+__pycache__/
+*.pyc
+*.json.tmp
+cloud-summary.md
+compare/results.json
+compare/profile.json
+compare/node_modules/

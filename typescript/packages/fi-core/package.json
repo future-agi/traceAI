@@ -11,12 +11,18 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js"
+    },
+    "./privacy": {
+      "types": "./dist/src/privacy-runtime.d.ts",
+      "import": "./dist/esm/privacy.js",
+      "require": "./dist/src/privacy-runtime.js"
     }
   },
+  "typesVersions": { "*": { "privacy": ["dist/src/privacy-runtime.d.ts"] } },
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
-    "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
+    "postbuild": "node scripts/postbuild.cjs",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",

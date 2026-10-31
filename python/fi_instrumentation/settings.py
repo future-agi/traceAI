@@ -6,6 +6,7 @@ from re import compile
 from typing import Any, Dict, List, Optional
 
 import requests
+from fi_instrumentation._credentials import credential_pair
 from opentelemetry.sdk.trace.id_generator import IdGenerator
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,10 @@ def get_env_project_version_name() -> str:
 
 
 def get_env_fi_auth_header() -> Optional[Dict[str, str]]:
-    api_key = os.environ.get("FI_API_KEY")
-    secret_key = os.environ.get("FI_SECRET_KEY")
-
-    if api_key and secret_key:
-        return {"X-Api-Key": api_key, "X-Secret-Key": secret_key}
+    pair = credential_pair({"api_key": os.environ.get("FI_API_KEY"),
+                            "secret_key": os.environ.get("FI_SECRET_KEY")}, "environment")
+    if pair is not None:
+        return {"X-Api-Key": pair[0], "X-Secret-Key": pair[1]}
     return None
 
 

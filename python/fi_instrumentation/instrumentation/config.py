@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass, field, fields
 from types import TracebackType
 from typing import Any, Callable, Optional, Type, Union, get_args
@@ -264,6 +263,22 @@ class TraceConfig:
             object.__setattr__(self, f.name, values[f.name])
         self.__post_init__()
 
+    @classmethod
+    def _from_resolved(cls, values: dict) -> "TraceConfig":
+        """Build an already-resolved policy without consulting the environment again.
+
+        Keep the nullable error-detail setting intact so dataclasses.replace()
+        can still derive it from changed content controls.
+        """
+        config = object.__new__(cls)
+        for f in fields(cls):
+            value = values[f.name]
+            expected = get_args(f.type)[0]
+            if value is not None and type(value) is not expected:
+                raise TypeError(f"Invalid resolved privacy field {f.name}")
+            object.__setattr__(config, f.name, value)
+        return config
+
     @property
     def hide_error_details(self) -> bool:
         """Hides error details: the ERROR status description, exception.message,
@@ -277,16 +292,33 @@ class TraceConfig:
         return any(getattr(self, name) for name in _CONTENT_HIDE_FLAGS)
 
     def __post_init__(self) -> None:
+        # Fields not set in code resolve exactly as the agent resolves them: the policy the
+        # agent pinned for this process, else the environment, then FI_CONFIG_FILE /
+        # ./futureagi.toml, then defaults. One parser for every source; never raises here.
+        unset = []
         for f in fields(self):
             expected_type = get_args(f.type)[0]
-            # Optional is Union[T,NoneType]. get_args()returns (T, NoneType).
-            # We collect the first type
-            self._parse_value(
-                f.name,
-                expected_type,
-                f.metadata["env_var"],
-                f.metadata["default_value"],
-            )
+            value = getattr(self, f.name, None)
+            if value is None:
+                unset.append(f.name)
+            elif not isinstance(value, expected_type):
+                raise TypeError(
+                    f"The field {f.name.lstrip('_')} must be of type '{expected_type.__name__}' "
+                    f"but '{type(value).__name__}' was found."
+                )
+        if not unset:
+            return
+        try:
+            from fi_instrumentation._configuration import default_privacy_values
+
+            base = default_privacy_values()
+        except Exception:
+            # Never fail the application; an unresolvable policy hides content.
+            logger.warning("traceAI: could not resolve the privacy configuration; hiding content")
+            base = {f.name: f.metadata["default_value"] for f in fields(self)}
+            base.update(hide_inputs=True, hide_outputs=True, hide_llm_invocation_parameters=True)
+        for name in unset:
+            object.__setattr__(self, name, base[name])
 
     def mask(
         self,
@@ -372,56 +404,6 @@ class TraceConfig:
         if self.pii_redaction and resolved is not None:
             resolved = redact_pii_in_value(resolved)
         return resolved
-
-    def _parse_value(
-        self,
-        field_name: str,
-        expected_type: Any,
-        env_var: str,
-        default_value: Any,
-    ) -> None:
-        type_name = expected_type.__name__
-        init_value = getattr(self, field_name, None)
-        if init_value is None:
-            env_value = os.getenv(env_var)
-            if env_value is None:
-                object.__setattr__(self, field_name, default_value)
-            else:
-                try:
-                    env_value = self._cast_value(env_value, expected_type)
-                    object.__setattr__(self, field_name, env_value)
-                except Exception:
-                    fallback = (
-                        default_value
-                        if default_value is not None
-                        else "derived from the other hide flags"
-                    )
-                    logger.warning(
-                        f"Could not parse '{env_value}' to {type_name} "
-                        f"for the environment variable '{env_var}'. "
-                        f"Using default value instead: {fallback}."
-                    )
-                    object.__setattr__(self, field_name, default_value)
-        else:
-            if not isinstance(init_value, expected_type):
-                raise TypeError(
-                    f"The field {field_name.lstrip('_')} must be of type '{type_name}' "
-                    f"but '{type(init_value).__name__}' was found."
-                )
-
-    def _cast_value(
-        self,
-        value: Any,
-        cast_to: Any,
-    ) -> Any:
-        if cast_to is bool:
-            if isinstance(value, str) and value.lower() == "true":
-                return True
-            if isinstance(value, str) and value.lower() == "false":
-                return False
-            raise
-        else:
-            return cast_to(value)
 
 
 def is_base64_url(url: str) -> bool:

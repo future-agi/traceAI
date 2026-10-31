@@ -17,7 +17,7 @@
     "prebuild": "rimraf dist",
     "build": "tsc --build tsconfig.json tsconfig.esm.json tsconfig.esnext.json && tsc-alias -p tsconfig.esm.json && pnpm run postbuild",
     "postbuild": "echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
-    "test": "jest --passWithNoTests",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint . --ext .ts",
@@ -38,6 +38,9 @@
   "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_vercel#readme",
   "dependencies": {
     "@opentelemetry/core": "^1.30.1",
+    "@opentelemetry/instrumentation": "^0.202.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.1",
+    "@traceai/fi-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^"
   },
   "peerDependencies": {
@@ -45,9 +48,12 @@
   },
   "devDependencies": {
     "@ai-sdk/openai": "^3.0.0",
-    "ai": "^6.0.0",
+    "ai": "6.0.320",
+    "ai-v5": "npm:ai@5.0.283",
+    "ai-v7": "npm:ai@7.0.158",
+    "zod": "^4.3.6",
+    "@opentelemetry/context-async-hooks": "^1.30.1",
     "@opentelemetry/api": ">=1.7.0 <2.0.0",
-    "@opentelemetry/sdk-trace-base": ">=1.19.0 <2.0.0",
     "@types/jest": "^29.5.12",
     "jest": "^29.7.0"
   },

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><IsPackable>false</IsPackable><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.0.1" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <ProjectReference Include="../../src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj" />
+    <ProjectReference Include="../TraceAI.AutoInstrumentation.TestApp/TraceAI.AutoInstrumentation.TestApp.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../TraceAI.AutoInstrumentation.TestApp/Stock/TraceAI.AutoInstrumentation.StockApp.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <!-- Build both real child-process targets even though the test runner is net10. -->
+  <Target Name="BuildNet8HookTests" BeforeTargets="Build">
+    <MSBuild Projects="../../src/TraceAI.AutoInstrumentation/TraceAI.AutoInstrumentation.csproj;../TraceAI.AutoInstrumentation.TestApp/TraceAI.AutoInstrumentation.TestApp.csproj;../TraceAI.AutoInstrumentation.TestApp/Stock/TraceAI.AutoInstrumentation.StockApp.csproj"
+             Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0;UseSharedCompilation=false" BuildInParallel="false" />
+  </Target>
+</Project>

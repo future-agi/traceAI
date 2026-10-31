@@ -15,5 +15,10 @@ export {
   type FISpanExporterConfig,
 } from "./FIMastraSpanExporter.js";
 
+// Zero-argument installation entry for @traceai/auto. The /auto subpath stays
+// lean; the manual factories above register cached observability classes so a
+// root import before init also receives the context/factory patches on enable.
+export { enableMastra } from "./auto.js";
+
 // The legacy Mastra v0.x exporter (`telemetry:` config) lives at
 // `@traceai/mastra/legacy` so v1 users don't pull in @traceai/vercel et al.

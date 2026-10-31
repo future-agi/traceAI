@@ -1,0 +1,42 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "traceai.clustername" . }}
+  labels:
+    {{- include "traceai.labels" . | nindent 4 }}
+  {{- if .Values.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s" .Release.Namespace (include "traceai.fullname" .) | quote }}
+  {{- end }}
+webhooks:
+  - name: pods.traceai.futureagi.com
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: 3
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    clientConfig:
+      service:
+        namespace: {{ .Release.Namespace }}
+        name: {{ include "traceai.fullname" . }}
+        path: /mutate
+        port: 443
+      {{- if not .Values.certManager.enabled }}
+      caBundle: {{ required "tls.caBundle is required without cert-manager" .Values.tls.caBundle | quote }}
+      {{- end }}
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - {{ .Release.Namespace | quote }}
+            {{- range .Values.excludedNamespaces }}
+            - {{ . | quote }}
+            {{- end }}
+    rules:
+      - operations: [CREATE]
+        apiGroups: [""]
+        apiVersions: [v1]
+        resources: [pods]
+        scope: Namespaced

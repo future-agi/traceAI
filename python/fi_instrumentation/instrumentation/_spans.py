@@ -29,9 +29,14 @@ from ._errors import (
 from ._types import FiMimeType
 from .config import TraceConfig
 
-_IMPORTANT_ATTRIBUTES = [
-    SpanAttributes.GEN_AI_SPAN_KIND,
-]
+from fi_instrumentation._attribute_limits import (
+    ESSENTIAL_NAMES,
+    adopt_admission_hints,
+    project_span_attributes,
+    reserved_attribute,
+)
+
+_IMPORTANT_ATTRIBUTES = ESSENTIAL_NAMES
 
 # Recorded exceptions kept for the ERROR status description cleanup.
 _MAX_EXCEPTION_SUMMARIES = 8
@@ -57,6 +62,8 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
     def __init__(self, wrapped: Span, config: TraceConfig) -> None:
         super().__init__(wrapped)
         self._self_config = config
+        # Media context must outlive SDK eviction and A7 projection (S1 sees it at export).
+        adopt_admission_hints(wrapped)
         self._self_important_attributes: Dict[str, AttributeValue] = {}
         # Only summaries (class names, message) of recorded exceptions are kept,
         # never the exceptions, so their traceback frames and locals are freed.
@@ -228,7 +235,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
         )
         span = cast(Span, self.__wrapped__)
         existing = getattr(span, "attributes", None) or {}
-        if ERROR_TYPE not in existing:
+        if ERROR_TYPE not in existing and ERROR_TYPE not in self._self_important_attributes:
             self.set_attribute(ERROR_TYPE, error_type)
 
     def set_attributes(self, attributes: Dict[str, AttributeValue]) -> None:
@@ -242,7 +249,7 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
     ) -> None:
         masked_value = self._self_config.mask(key, value)
         if masked_value is not None:
-            if key in _IMPORTANT_ATTRIBUTES:
+            if reserved_attribute(key, self._self_important_attributes):
                 self._self_important_attributes[key] = masked_value
             else:
                 span = cast(Span, self.__wrapped__)
@@ -250,11 +257,30 @@ class FiSpan(wrapt.ObjectProxy):  # type: ignore[misc]
 
     def end(self, end_time: Optional[int] = None) -> None:
         span = cast(Span, self.__wrapped__)
-        for k, v in reversed(self._self_important_attributes.items()):
-            span.set_attribute(k, v)
         if hasattr(span, "is_recording") and span.is_recording():
             self._set_error_type()
-            span.end(end_time)
+            # Libraries may write directly to the SDK span or record_exception(),
+            # bypassing set_attribute(). Enforce privacy again at the export boundary.
+            from .logging import logger
+
+            try:
+                from fi_instrumentation.auto.wire._privacy import protect_live_span
+
+                project_span_attributes(span, self._self_important_attributes)
+                protect_live_span(span, self._self_config)
+            except Exception:
+                # Drop telemetry, not the application's call. End through a no-op
+                # processor too, so active-span shutdown cannot later export it raw.
+                logger.debug("traceAI: export privacy failed; dropping span", exc_info=True)
+                try:
+                    from opentelemetry.sdk.trace import SpanProcessor
+
+                    span._span_processor = SpanProcessor()
+                    span.end(end_time)
+                except Exception:
+                    logger.debug("traceAI: could not discard protected span", exc_info=True)
+            else:
+                span.end(end_time)
         self._self_exception_summaries.clear()
         self._self_recorded.clear()
 

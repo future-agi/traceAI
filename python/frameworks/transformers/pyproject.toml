@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "traceAI-transformers"
+version = "0.1.0"
+description = "OpenTelemetry instrumentation for local Hugging Face Transformers inference"
+authors = ["Future AGI <no-reply@futureagi.com>"]
+readme = "README.md"
+packages = [{ include = "traceai_transformers" }]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+fi-instrumentation-otel = ">=1.2.1"
+transformers = ">=4.41,<6"
+
+[tool.poetry.group.test.dependencies]
+pytest = ">=7.4"
+torch = ">=2.2"
+
+[build-system]
+requires = ["poetry-core>=1.8"]
+build-backend = "poetry.core.masonry.api"

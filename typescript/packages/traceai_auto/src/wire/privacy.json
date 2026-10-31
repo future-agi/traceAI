@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "normalization": {
+    "case": "ascii_lowercase",
+    "remove": ["-", "_", "."],
+    "paths": "Split dotted and bracket-indexed paths into components; ignore numeric indices. Test every component, retaining credential ancestry. Also test the folded full name unless a component is explicitly excluded. An excluded metric component never exempts a different credential component."
+  },
+  "credentials": {
+    "replacement": "<redacted>",
+    "patterns": [
+      {"id": "token", "contains": "token", "example": "x-vault-token"},
+      {"id": "secret", "contains": "secret", "example": "client_secret"},
+      {"id": "key", "contains": "key", "example": "Ocp-Apim-Subscription-Key"},
+      {"id": "auth", "contains": "auth", "example": "Proxy-Authorization"},
+      {"id": "password", "contains": "password", "example": "database_password"},
+      {"id": "passwd", "contains": "passwd", "example": "db_passwd"},
+      {"id": "credential", "contains": "credential", "example": "provider_credentials"},
+      {"id": "signature", "contains": "signature", "example": "request_signature"},
+      {"id": "sig", "contains": "sig", "example": "sig"},
+      {"id": "session", "contains": "session", "example": "session_id"},
+      {"id": "cookie", "contains": "cookie", "example": "Set-Cookie"}
+    ],
+    "exclusions": [
+      {"id": "tokens", "regex": "^.*token(s(details)?|details)$", "unless_contains_patterns": ["secret", "key", "auth", "password", "passwd", "credential", "signature", "sig", "session", "cookie"], "examples": ["tokens", "max_tokens", "max_completion_tokens", "max_output_tokens", "input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens", "cache_read_tokens", "cache_write_tokens", "cached_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "reasoning_tokens", "num_tokens", "max_new_tokens", "prompt_tokens_details", "completion_tokens_details", "input_tokens_details", "output_tokens_details", "prompt_token_details", "completion_token_details", "input_token_details", "output_token_details"], "reason": "Token limits, usage and singular/plural token-detail objects and their counters are not authentication tokens. Independent credential markers still win; this is not a blanket subtree exemption."},
+      {"id": "token-count", "regex": "^.*token ?counts?$", "unless_contains_patterns": ["secret", "key", "auth", "password", "passwd", "credential", "signature", "sig", "session", "cookie"], "examples": ["token_count", "token_counts", "token count", "token counts", "promptTokenCount", "candidatesTokenCount", "totalTokenCount", "cachedContentTokenCount", "thoughtsTokenCount", "inputTokenCount", "outputTokenCount"], "reason": "Includes camelCase provider usage metrics."},
+      {"id": "token-metrics", "regex": "^(tokenusage|tokenlimit|tokenbudget|tokenlength|tokenspersecond|tokenrate|tokenizer|tokenization)$", "examples": ["token_usage", "token_limit", "token_budget", "token_length", "tokens_per_second", "token_rate", "tokenizer", "tokenization"], "reason": "Explicit non-secret usage and tokenizer metadata; not a blanket usage subtree exemption."},
+      {"id": "key-identifiers", "regex": "^(keyid|apikeyid|publickeyid|privatekeyid|signingkeyid|accesskeyid|awsaccesskeyid|xamzkeyid|xgoogkeyid)$", "examples": ["key_id", "api_key_id", "public_key_id", "private_key_id", "signing_key_id", "access_key_id", "aws_access_key_id", "x-amz-key-id", "x-goog-key-id"], "reason": "Identifiers, not the corresponding private key material. x-amz-credential remains secret."},
+      {"id": "key-metadata", "regex": "^(keytype|keyname|keyversion|keyalgorithm|keyboard|monkey|keywords)$", "examples": ["key_type", "key_name", "key_version", "key_algorithm", "keyboard", "monkey", "keywords"], "reason": "Explicit metadata and ordinary words; never arbitrary *key* exemptions."},
+      {"id": "signature-metadata", "regex": "^(signaturealgorithm|signatureversion|signaturemethod|signalgain|signalstrength|signal|signals|design|assignment|assigned)$", "examples": ["signature_algorithm", "signature_version", "signature_method", "signal_gain", "signal_strength", "signal", "signals", "design", "assignment", "assigned"], "reason": "Avoid the sig substring in ordinary words and signing-algorithm metadata."},
+      {"id": "auth-metadata", "regex": "^(authtype|authscheme|authmethod|authenabled|authenticationmethod|authorizationtype|author|authors|authorname)$", "examples": ["auth_type", "auth_scheme", "auth_method", "auth_enabled", "authentication_method", "authorization_type", "author", "authors", "author_name"], "reason": "Non-secret authentication descriptors and authorship."},
+      {"id": "session-metrics", "regex": "^(sessioncount|sessionduration|sessiontimeout|sessionstart|sessionend)$", "examples": ["session_count", "session_duration", "session_timeout", "session_start", "session_end"], "reason": "Session metrics, not session identifiers or session cookies."},
+      {"id": "cookie-metadata", "regex": "^(cookiecount|cookieenabled|cookiesenabled)$", "examples": ["cookie_count", "cookie_enabled", "cookies_enabled"], "reason": "Cookie configuration and counts, not Cookie/Set-Cookie values."}
+    ],
+    "contextual_exclusions": [
+      {"id": "logprob-token", "path_regex": "^(.*\\.)?logprobs\\.(content\\.)?(toplogprobs\\.)?token$", "examples": ["choices.0.logprobs.content.0.token", "choices.0.logprobs.content.0.top_logprobs.0.token", "logprobs.token"], "reason": "Model logprob token text is content, not an authentication token. Match normalized nonnumeric path components joined with dots. Exempts only this token component, never independent credential ancestors/descendants."}
+    ],
+    "seed_names": ["authorization", "authorization_token", "api_key", "x-api-key", "xi-api-key", "api_token", "token", "access_token", "refresh_token", "id_token", "secret", "secret_key", "client_secret", "password", "private_key", "x-goog-api-key", "anthropic-api-key", "Ocp-Apim-Subscription-Key", "x-secret-key", "Proxy-Authorization", "Cookie", "Set-Cookie", "passwd", "credential", "credentials", "auth_token", "x-amz-security-token", "x-auth-token", "x-access-token", "private-token", "x-vault-token", "key", "sig", "signature", "session"],
+    "sources": ["python/fi_instrumentation/auto/wire/_privacy.py", "typescript/packages/traceai_auto/src/wire/privacy.ts", "go/auto/internal/wire/privacy.go", "go/auto/privacy.go", "java/traceai-javaagent/src/main/java/ai/traceai/auto/WirePrivacy.java", "csharp/src/TraceAI.AutoInstrumentation/Wire/WirePrivacy.cs", "ruby/lib/traceai/auto/privacy.rb"],
+    "missed_name_sources": [
+      {"review": "round4-final-node-r4.txt", "names": ["x-goog-api-key", "anthropic-api-key", "ocp-apim-subscription-key"]},
+      {"review": "round4-final-csharp-r4.txt", "names": ["authorization_token", "client_secret", "password"]},
+      {"review": "round4-final-node-genkit.txt", "names": ["apiKey", "X-Amz-Signature"]},
+      {"review": "round4-final-node-mastra.txt", "names": ["api_key"]},
+      {"review": "round4-final-py-agentscope.txt", "names": ["Authorization"]},
+      {"review": "round4-final-python-r4.txt", "names": ["Authorization"]},
+      {"review": "round4-final-launcher.txt", "names": ["api_key", "secret_key", "X-Amz-Signature"]},
+      {"review": "round5-final-go-s5.txt", "names": ["client_secret", "Proxy-Authorization"]},
+      {"review": "round5-final-java-s5.txt", "names": ["X-Auth-Token", "passwd", "token"]},
+      {"review": "round5-final-genkit-s5.txt", "names": ["x-vault-token", "database_password"]},
+      {"review": "round5-final-python-s5.txt", "names": ["X-Session-Id", "auth_token", "x-vault-token"]},
+      {"review": "round5-final-csharp-s5.txt", "names": ["key", "passwd", "Set-Cookie", "private-token", "x-vault-token"]},
+      {"review": "round5-final-ruby-s5.txt", "names": ["x-access-token", "private-token", "x-vault-token", "client_secret", "password", "refresh_token", "api-key"]}
+    ]
+  },
+  "signed_url": {
+    "parameters": ["key", "api_key", "api-key", "apikey", "secret_key", "token", "access_token", "sig", "signature", "x-amz-signature", "x-amz-credential", "x-amz-security-token", "x-goog-signature", "x-goog-credential", "se", "sp", "sv", "sr", "skoid", "sktid"],
+    "also_match_credential_patterns": true,
+    "decode_parameter_names": "Before treating a scalar/body/attribute/array-element value as one HTTP(S), /path or ?query URL, validate its entire lexical boundary, not only its prefix. A message beginning with a URL can still be prose containing later URLs: scan every URL independently and preserve the prose. Recognized data-URI query values own literal quotes, whitespace, markup and backslashes; mask only those payloads for whole-URL lexical validation, then parse the original whole URL before delimiter-limited scanning. Never use credential or audio redaction to validate the boundary, since it can swallow prose or later URLs. Isolate each HTTP(S) URL or relative /path or ?query reference in text. Apostrophes are legal URI characters in names and values, not token delimiters; preserve enclosing single quotes in prose. Split off the fragment before splitting at the first question mark; later question marks are legal query-name/value characters. Split query pairs on ampersands, then the first equals sign. Percent-decode names once as UTF-8; plus means space. Use the same predicate as transport observation. Percent-decode values once and apply the shared structural media predicate, including data-URI recognition, not only base64 sniffing. Treat all decoded query pairs as one flat object for MIME/type siblings, including dotted/bracket-indexed names and duplicate hints (combine hints, never last-value-wins); keep exact indexed parent isolation. Frame query pairs before scanning literal data URIs so following parameters/fragments survive. Do not recursively decode nested URLs. Preserve original spelling of unchanged values, separators, ordering, duplicates and fragments; replace only sensitive values. Already-redacted values are stable.",
+    "userinfo": "Replace HTTP(S) user:password@ with <redacted>@."
+  },
+  "media": {
+    "base64_alphabet": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-\r\n",
+    "base64_prefix_decoded_bytes": 32,
+    "unrecognized_base64_min_chars_exclusive": 256,
+    "unrecognized_base64_fields": ["data", "bytes", "b64json", "filedata", "audiobase64", "images", "image", "inputimage", "outputimage", "inlinedata"],
+    "length_counts": "ASCII characters in the original payload including CR/LF; data URI payload is percent-decoded once before counting.",
+    "replacement": "<omitted: {length} base64 chars>",
+    "other_replacement": "<omitted: media>",
+    "magic": [
+      {"id": "png", "tests": [{"offset": 0, "hex": "89504e470d0a1a0a"}]},
+      {"id": "jpeg", "tests": [{"offset": 0, "hex": "ffd8ff"}]},
+      {"id": "gif87a", "tests": [{"offset": 0, "hex": "474946383761"}]},
+      {"id": "gif89a", "tests": [{"offset": 0, "hex": "474946383961"}]},
+      {"id": "riff-wave", "tests": [{"offset": 0, "hex": "52494646"}, {"offset": 8, "hex": "57415645"}]},
+      {"id": "riff-webp", "tests": [{"offset": 0, "hex": "52494646"}, {"offset": 8, "hex": "57454250"}]},
+      {"id": "id3", "tests": [{"offset": 0, "hex": "494433"}]},
+      {"id": "mp3-frame-sync", "tests": [{"offset": 0, "hex": "ffe0", "mask": "ffe0"}]},
+      {"id": "ogg", "tests": [{"offset": 0, "hex": "4f676753"}]},
+      {"id": "flac", "tests": [{"offset": 0, "hex": "664c6143"}]},
+      {"id": "ftyp", "tests": [{"offset": 4, "hex": "66747970"}]},
+      {"id": "pdf", "tests": [{"offset": 0, "hex": "255044462d"}]}
+    ],
+    "data_uri": {"scheme_boundary": "The character before data: must not be an ASCII letter, digit, plus, dot, hyphen, underscore or colon. Never match the data: suffix of metadata: or another scheme/name.", "value_boundary": "When an exact scalar/body/attribute/array-element or decoded query value begins with data: and contains a comma, the entire value is the URI. Quotes, apostrophes, whitespace, brackets and embedded URLs are payload, never delimiters. Recognize it before contextual media rules. Only free text uses delimiter-limited scanning; a prefix without a comma is not a data URI.", "any_encoding": true, "base64_replacement": "<omitted: {length} base64 chars>", "other_replacement": "<omitted: data URI>", "allow_wrapped_base64": true},
+    "mime_siblings": {
+      "names": ["mimetype", "mediatype", "contenttype"],
+      "prefixes": ["audio/", "image/", "video/"],
+      "exact": ["application/pdf", "application/octet-stream"],
+      "payload_fields": ["data", "bytes", "content", "value", "body", "base64", "b64json", "filedata", "audiobase64"],
+      "scope": "The same object's payload fields and all their descendants, including source/inlineData wrappers. Payload ancestry persists through arbitrary chunk wrappers and numeric indices. Audio metadata_fields reset inherited media, audio and payload context at that component, so transcript.content is text. Fresh explicit hints/fields can start new context beneath a boundary. For flattened siblings use the exact indexed parent path; never bleed into another array element. Scalar, string-array and indexed MIME hints bind to the MIME field's parent, not its index. MIME parameters after a semicolon are ignored."
+    },
+    "audio": {
+      "fields": ["audio", "inputaudio", "outputaudio", "audiobase64", "audiodata", "audiobytes", "audiocontent"],
+      "payload_fields": ["data", "bytes", "content", "value", "body", "base64", "b64", "b64json", "delta", "chunk", "samples"],
+      "type_names": ["audio", "inputaudio", "outputaudio"],
+      "any_size": true,
+      "scope": "An audio field's direct scalar or indexed/array samples are payload, but an audio object establishes only audio context for its named children. Only explicit payload fields start inherited payload context through arbitrary wrappers. Keep direct-sample context separate from established payload ancestry: a nested audio field never clears that ancestry; only metadata_fields do. When a field is both an audio field and a MIME payload field (audio_base64), both rules apply, so MIME-established payload ancestry persists through its named wrappers. Parameters such as voice, format, max_tokens, sample_rate, speed, IDs and usage are not implicitly payload. Type hints establish audio context, not payload. Credential, magic-byte and data-URI rules still apply independently.",
+      "numeric_arrays": "Replace numeric/bool payload scalars or arrays with other_replacement; walk arrays of strings/objects preserving structure. Null and empty arrays carry no media bytes.",
+      "metadata_fields": ["transcript", "text", "format", "mimetype", "mediatype", "contenttype", "duration", "durationsecs", "language", "inputbytes", "outputbytes", "samplerate", "channels", "url", "audiourl", "type", "voice", "speed", "maxtokens", "id", "expiresat", "usage"]
+    }
+  },
+  "fixture_sites": ["request_headers", "request_query", "request_body", "response_body", "attribute_keys", "flattened_paths", "indexed_paths", "mime_siblings", "magic_bytes", "free_text_urls"],
+  "limits": {"max_depth": 32, "max_nodes": 16384, "max_text_chars": 4194304},
+  "scope": "S6 recognition only. SDK S1 snapshot/hide-family and S5 process-wide registry/transport observation are mandatory in addition; this catalog does not redefine registry timing or permit body buffering on suppressed requests."
+}

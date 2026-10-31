@@ -1,0 +1,40 @@
+{{- if .Values.certManager.enabled }}
+{{- if not .Values.certManager.issuerRef }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "traceai.fullname" . }}
+  labels:
+    {{- include "traceai.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "traceai.fullname" . }}
+  labels:
+    {{- include "traceai.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "traceai.tlsSecret" . }}
+  duration: {{ .Values.certManager.duration }}
+  renewBefore: {{ .Values.certManager.renewBefore }}
+  privateKey:
+    rotationPolicy: Always
+  usages:
+    - server auth
+  dnsNames:
+    - {{ include "traceai.fullname" . }}
+    - {{ printf "%s.%s" (include "traceai.fullname" .) .Release.Namespace }}
+    - {{ printf "%s.%s.svc" (include "traceai.fullname" .) .Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "traceai.fullname" .) .Release.Namespace }}
+  issuerRef:
+    {{- if .Values.certManager.issuerRef }}
+    {{- toYaml .Values.certManager.issuerRef | nindent 4 }}
+    {{- else }}
+    name: {{ include "traceai.fullname" . }}
+    kind: Issuer
+    group: cert-manager.io
+    {{- end }}
+{{- end }}

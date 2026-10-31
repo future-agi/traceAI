@@ -2,6 +2,20 @@
 
 The Python SDK for traceAI provides OpenTelemetry-native instrumentation for AI applications.
 
+## Zero-code setup
+
+```bash
+pip install fi-instrumentation-otel
+export FI_API_KEY=<your-api-key> FI_SECRET_KEY=<your-secret-key>
+fi-instrument python app.py      # or FI_AUTO_INSTRUMENT=true python app.py
+```
+
+Every installed traceAI integration turns on when its library is imported, and AI API calls
+from any SDK (OpenAI-compatible, Anthropic, Gemini, Bedrock, Cohere, Ollama, speech APIs, ...)
+are traced at the HTTP layer even without a dedicated package. `fi-instrument doctor` shows
+what is covered. In code, the same is `fi_instrumentation.init()`. See
+[auto-instrumentation](../docs/python/auto-instrumentation.md).
+
 ## Installation
 
 Install the core instrumentation library and your framework of choice:

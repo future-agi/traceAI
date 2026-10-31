@@ -1,0 +1,145 @@
+name: Auto-instrumentation
+
+# Zero-code auto-instrumentation in every SDK. Each job runs the SDK's agent tests, including
+# every golden fixture in spec/auto-instrumentation/fixtures, and the catalog job fails when an
+# SDK's copy of wire-protocols.json differs from the spec. The Python agent's tests run in
+# python-tests.yml with the rest of fi_instrumentation.
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'spec/auto-instrumentation/**'
+      - 'python/fi_instrumentation/auto/**'
+      - 'typescript/packages/traceai_auto/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'go/auto/**'
+      - 'csharp/src/TraceAI.AutoInstrumentation/**'
+      - 'csharp/tests/TraceAI.AutoInstrumentation.Tests/**'
+      - 'csharp/tests/TraceAI.AutoInstrumentation.TestApp/**'
+      - 'java/traceai-javaagent/**'
+      - 'java/traceai-java-core/**'
+      - '.github/workflows/auto-instrumentation.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'spec/auto-instrumentation/**'
+      - 'python/fi_instrumentation/auto/**'
+      - 'typescript/packages/traceai_auto/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'go/auto/**'
+      - 'csharp/src/TraceAI.AutoInstrumentation/**'
+      - 'csharp/tests/TraceAI.AutoInstrumentation.Tests/**'
+      - 'csharp/tests/TraceAI.AutoInstrumentation.TestApp/**'
+      - 'java/traceai-javaagent/**'
+      - 'java/traceai-java-core/**'
+      - '.github/workflows/auto-instrumentation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: auto-instrumentation-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The agents never export during tests, but point every collector at a closed port anyway.
+  FI_BASE_URL: http://127.0.0.1:9
+  FI_GRPC_URL: http://127.0.0.1:9
+
+jobs:
+  catalog:
+    name: Catalog copies match the spec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: python3 spec/auto-instrumentation/sync.py
+
+  typescript:
+    name: TypeScript (@traceai/auto)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install pinned workspace dependencies
+        working-directory: typescript
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          corepack pnpm --filter @traceai/auto... --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+      - name: Build
+        working-directory: typescript
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/auto run build
+      - name: fi-core tests (auto options are additive)
+        working-directory: typescript
+        run: pnpm --filter @traceai/fi-core test --runInBand
+      - name: Agent tests (fixtures, fetch capture, --import and -r end to end)
+        working-directory: typescript
+        run: timeout 300 pnpm --filter @traceai/auto test
+
+  go:
+    name: Go (go/auto)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: go/auto
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go/auto/go.mod
+          cache-dependency-path: go/auto/go.sum
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  dotnet:
+    name: C# (TraceAI.AutoInstrumentation)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Agent tests (fixtures, startup hook end to end)
+        run: dotnet test csharp/tests/TraceAI.AutoInstrumentation.Tests/TraceAI.AutoInstrumentation.Tests.csproj -c Release --nologo
+
+  java:
+    name: Java (traceai-javaagent)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Agent tests (fixtures, -javaagent child JVMs)
+        run: mvn -f java/pom.xml -pl traceai-javaagent -am verify --no-transfer-progress

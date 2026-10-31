@@ -1,0 +1,12 @@
+source 'https://rubygems.org'
+gemspec
+gem 'minitest', '~> 5.0'
+gem 'rake', '~> 13.0'
+# Optional SDK integration and independent protobuf decoder used by the tests.
+gem 'opentelemetry-sdk', '~> 1.0'
+gem 'opentelemetry-exporter-otlp', '~> 0.30'
+gem 'openai'
+gem 'anthropic'
+gem 'ruby_llm'
+gem 'ruby-openai'
+gem 'httpx'

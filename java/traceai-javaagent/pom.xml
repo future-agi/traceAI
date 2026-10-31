@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>ai.traceai</groupId><artifactId>traceai-java-parent</artifactId><version>1.0.0</version></parent>
+  <artifactId>traceai-javaagent</artifactId>
+  <name>TraceAI Java Agent</name>
+  <dependencies>
+    <dependency><groupId>ai.traceai</groupId><artifactId>traceai-java-core</artifactId><exclusions>
+      <exclusion><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-exporter-otlp</artifactId></exclusion>
+      <exclusion><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-exporter-logging</artifactId></exclusion>
+    </exclusions></dependency>
+    <dependency><groupId>net.bytebuddy</groupId><artifactId>byte-buddy</artifactId><version>1.15.11</version></dependency>
+    <dependency><groupId>net.bytebuddy</groupId><artifactId>byte-buddy-agent</artifactId><version>1.15.11</version></dependency>
+    <dependency><groupId>com.squareup.okhttp3</groupId><artifactId>okhttp</artifactId><version>3.14.9</version><scope>provided</scope></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-testing</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build>
+    <finalName>traceai-javaagent</finalName>
+    <plugins>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><executions>
+        <execution><id>default-compile</id><configuration><excludes><exclude>**/AgentBootstrap.java</exclude></excludes></configuration></execution>
+        <execution><id>java8-bootstrap</id><phase>compile</phase><goals><goal>compile</goal></goals><configuration>
+          <release>8</release><includes><include>**/AgentBootstrap.java</include></includes><useIncrementalCompilation>false</useIncrementalCompilation>
+        </configuration></execution>
+      </executions></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-dependency-plugin</artifactId><version>3.11.0</version><executions><execution><id>legacy-okhttp-test</id><phase>generate-test-resources</phase><goals><goal>copy</goal></goals><configuration><artifactItems><artifactItem>
+        <groupId>com.squareup.okhttp3</groupId><artifactId>okhttp</artifactId><version>3.8.1</version><type>jar</type><outputDirectory>${project.build.directory}/legacy-okhttp</outputDirectory>
+      </artifactItem></artifactItems></configuration></execution></executions></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><configuration><argLine>--add-modules jdk.httpserver</argLine><environmentVariables><XDG_CONFIG_HOME>${project.build.directory}/synthetic-fi-config</XDG_CONFIG_HOME></environmentVariables><excludes><exclude>**/*E2ETest.java</exclude></excludes></configuration></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-failsafe-plugin</artifactId><version>3.2.3</version><configuration><environmentVariables><XDG_CONFIG_HOME>${project.build.directory}/synthetic-fi-config</XDG_CONFIG_HOME></environmentVariables><includes><include>**/*E2ETest.java</include></includes></configuration><executions><execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution></executions></plugin>
+      <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-shade-plugin</artifactId><version>3.6.0</version><executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration>
+        <createDependencyReducedPom>false</createDependencyReducedPom>
+        <relocations>
+          <relocation><pattern>net.bytebuddy</pattern><shadedPattern>ai.traceai.auto.shaded.bytebuddy</shadedPattern></relocation>
+          <relocation><pattern>io.opentelemetry</pattern><shadedPattern>ai.traceai.auto.shaded.otel</shadedPattern></relocation>
+          <relocation><pattern>com.google.gson</pattern><shadedPattern>ai.traceai.auto.shaded.gson</shadedPattern></relocation>
+          <relocation><pattern>org.slf4j</pattern><shadedPattern>ai.traceai.auto.shaded.slf4j</shadedPattern></relocation>
+          <relocation><pattern>ai.traceai.TraceConfig</pattern><shadedPattern>ai.traceai.auto.shaded.core.TraceConfig</shadedPattern></relocation>
+          <relocation><pattern>ai.traceai.ContextAttributes</pattern><shadedPattern>ai.traceai.auto.shaded.core.ContextAttributes</shadedPattern></relocation>
+        </relocations>
+        <filters><filter><artifact>*:*</artifact><excludes><exclude>META-INF/*.SF</exclude><exclude>META-INF/*.RSA</exclude><exclude>META-INF/*.DSA</exclude><exclude>module-info.class</exclude><exclude>META-INF/versions/**/module-info.class</exclude><exclude>ai/traceai/TraceAI.class</exclude><exclude>ai/traceai/FITracer.class</exclude></excludes></filter></filters>
+        <transformers><transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/><transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"><manifestEntries>
+          <Premain-Class>ai.traceai.auto.AgentBootstrap</Premain-Class><Agent-Class>ai.traceai.auto.AgentBootstrap</Agent-Class><Main-Class>ai.traceai.auto.AgentBootstrap</Main-Class><Can-Retransform-Classes>true</Can-Retransform-Classes><Can-Redefine-Classes>true</Can-Redefine-Classes>
+        </manifestEntries></transformer></transformers>
+      </configuration></execution></executions></plugin>
+    </plugins>
+  </build>
+</project>

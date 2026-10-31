@@ -4,6 +4,7 @@ import {
   ATTR_PROJECT_NAME,
 } from "@traceai/fi-semantic-conventions";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { ownData } from "./snapshot.js";
 
 /**
  * Augments a span with OpenInference project resource attribute.
@@ -28,8 +29,7 @@ export const addFIProjectResourceAttributeSpan = (
  * @returns `true` if the span is an OpenInference span, `false` otherwise.
  */
 export const isFISpan = (span: ReadableSpan) => {
-  const maybeFISpanKind =
-    span.attributes[SemanticConventions.FI_SPAN_KIND];
+  const maybeFISpanKind = ownData(ownData(span, "attributes"), SemanticConventions.FI_SPAN_KIND);
   return typeof maybeFISpanKind === "string";
 };
 

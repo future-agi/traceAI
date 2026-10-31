@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "traceai.fullname" . }}
+  labels:
+    {{- include "traceai.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "traceai.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  {{- if or .Values.networkPolicy.apiServerCIDRs .Values.networkPolicy.controlPlanePeers }}
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+      from:
+        {{- range .Values.networkPolicy.apiServerCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+        {{- range .Values.networkPolicy.controlPlanePeers }}
+        - {{- toYaml . | nindent 10 }}
+        {{- end }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+{{- end }}

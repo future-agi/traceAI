@@ -1,0 +1,26 @@
+#!/bin/bash
+set -euo pipefail
+ROOT=/Volumes/nikm4/futureagi/traceai-auto/ruby
+export PATH=/opt/homebrew/opt/ruby/bin:$PATH
+export GEM_HOME="$ROOT/.bundle/gems"
+export GEM_PATH="$GEM_HOME:/opt/homebrew/lib/ruby/gems/3.2.0"
+export BUNDLE_PATH="$ROOT/.bundle/vendor"
+export BUNDLE_USER_HOME="$ROOT/.bundle/user"
+export TMPDIR="$ROOT/.bundle/tmp"
+mkdir -p "$TMPDIR"
+while :; do
+  STATUS=$(/Users/nikhilpareek/.futureagi-local/bin/host-status.sh)
+  echo "$STATUS"
+  FREE=$(echo "$STATUS" | sed -nE 's/.*free=([0-9]+)%.*/\1/p')
+  LOAD=$(echo "$STATUS" | sed -nE 's/.*load=([0-9.]+).*/\1/p')
+  if [ -n "$FREE" ] && [ -n "$LOAD" ] && awk "BEGIN {exit !($FREE >= 20 && $LOAD <= 30)}"; then break; fi
+  sleep 60
+done
+LOCK=/Volumes/nikm4/futureagi/tmp/traceai-auto-review/heavy.lock
+until mkdir "$LOCK" 2>/dev/null; do
+  find "$LOCK" -maxdepth 0 -mmin +25 -exec rmdir {} \; 2>/dev/null || true
+  sleep 10
+done
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+cd "$ROOT"
+"$@"
