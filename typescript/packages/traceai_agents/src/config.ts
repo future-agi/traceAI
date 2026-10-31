@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, rmdirSync } from "node:fs";
+import { chmodSync, closeSync, constants, openSync } from "node:fs";
+import Database from "better-sqlite3";
 import { token } from "@traceai/agent-core";
 import {
   AgentError,
@@ -125,11 +126,32 @@ export async function configTransaction<T>(
   apply?: () => Promise<void>,
 ): Promise<T> {
   protectedDirectory(p.config, true);
-  const lock = join(p.config, "write.lock");
+  // SQLite's OS lock is released by the kernel even after SIGKILL. Keep the
+  // transaction open across awaits; a second writer fails without stealing it.
+  const lockFile = join(p.config, "write.lock.db");
   try {
-    mkdirSync(lock, { mode: 0o700 });
-  } catch {
-    throw new AgentError("CONFIGURATION_CONFLICT", 6);
+    const fd = openSync(
+      lockFile,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+    closeSync(fd);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    readProtected(lockFile, 1_048_576);
+  }
+  const lock = new Database(lockFile, { timeout: 0 });
+  try {
+    chmodSync(lockFile, 0o600);
+    // Materialize the database before taking an exclusive lock. SQLite may
+    // defer filesystem locking for a still-empty database on some platforms.
+    lock.exec("CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY)");
+    lock.exec("BEGIN EXCLUSIVE");
+  } catch (e) {
+    lock.close();
+    if ((e as { code?: string }).code === "SQLITE_BUSY")
+      throw new AgentError("CONFIGURATION_CONFLICT", 6);
+    throw e;
   }
   try {
     const config = loadConfig(p);
@@ -147,6 +169,7 @@ export async function configTransaction<T>(
     }
     return result;
   } finally {
-    rmdirSync(lock);
+    lock.exec("ROLLBACK");
+    lock.close();
   }
 }
