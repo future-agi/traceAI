@@ -34,6 +34,7 @@ process.on("message", (message: any) => {
             a.cursor,
             a.observed === true,
             a.expectedEpoch,
+            a.observedTurns === true,
           );
           break;
         case "next":

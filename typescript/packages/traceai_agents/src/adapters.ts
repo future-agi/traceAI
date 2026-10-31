@@ -17,6 +17,8 @@ export interface Capability {
   neutralResponse: string;
   /** Opt-in schema for a minimized credentialless observer envelope. */
   observerSchema?: string;
+  /** Durably reserve and finalize a turn root alongside each observed tool. */
+  observedTurns?: boolean;
 }
 export interface Activation {
   installed: boolean;

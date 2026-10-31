@@ -4,6 +4,7 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   openSync,
   readSync,
@@ -86,7 +87,35 @@ export function readProtected(path: string, max = 65_536): Buffer {
     closeSync(fd);
   }
 }
-export function atomicProtected(path: string, value: string | Buffer): void {
+export interface ProtectedSnapshot {
+  bytes: Buffer;
+  identity: string | null;
+}
+/** Keep identity as well as contents: an editor can replace a file with identical text. */
+export function protectedSnapshot(
+  path: string,
+  max = 65_536,
+): ProtectedSnapshot {
+  const identity = () => {
+    const s = lstatSync(path, { bigint: true });
+    return [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs].join(":");
+  };
+  try {
+    const before = identity();
+    const bytes = readProtected(path, max);
+    if (identity() !== before) throw new AgentError("SOURCE_CHANGED", 6);
+    return { bytes, identity: before };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT")
+      return { bytes: Buffer.alloc(0), identity: null };
+    throw e;
+  }
+}
+export function atomicProtected(
+  path: string,
+  value: string | Buffer,
+  expected?: ProtectedSnapshot,
+): void {
   protectedDirectory(dirname(path), true);
   try {
     readProtected(path, 1_048_576);
@@ -106,7 +135,29 @@ export function atomicProtected(path: string, value: string | Buffer): void {
     writeFileSync(fd, value);
     fsyncSync(fd);
     closeSync(fd);
-    renameSync(temp, path);
+    // Compare after staging and fsync, immediately before replacing the pathname.
+    // The caller's private lock cannot coordinate ordinary host/editor saves.
+    if (expected) {
+      const current = protectedSnapshot(path);
+      if (
+        current.identity !== expected.identity ||
+        !current.bytes.equals(expected.bytes)
+      )
+        throw new AgentError("SOURCE_CHANGED", 6);
+    }
+    if (expected?.identity === null) {
+      // An absent target can be installed without clobbering even a racing creator.
+      try {
+        linkSync(temp, path);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EEXIST")
+          throw new AgentError("SOURCE_CHANGED", 6);
+        throw e;
+      }
+      unlinkSync(temp);
+    } else {
+      renameSync(temp, path);
+    }
     const directory = openSync(dirname(path), constants.O_RDONLY);
     try {
       fsyncSync(directory);

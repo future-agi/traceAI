@@ -209,6 +209,7 @@ export class Runtime {
         route: m.route_ref,
         fact: minimize(facts[0], route.route.policy),
         observed: true,
+        observedTurns: adapter.capability.observedTurns === true,
         expectedEpoch: epoch,
       });
       // A durable ACK belongs to the admitted epoch, not whichever epoch is active

@@ -5,6 +5,7 @@ import { chmodSync } from "node:fs";
 import {
   minimize,
   planId,
+  spanId,
   token,
   type CanonicalFact,
   type Policy,
@@ -30,6 +31,15 @@ interface Row {
   attempts: number;
   created: number;
   state: string;
+}
+// A turn can be silent indefinitely; finalize after a fixed, bounded observation
+// window, never treating this timeout as a successful stop or an execution end.
+export const OBSERVED_TURN_WINDOW_MS = 15 * 60_000;
+interface TurnWindow {
+  start_ns: string;
+  end_ns: string;
+  deadline: number;
+  epoch: number;
 }
 const digest = (bytes: Buffer): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -78,7 +88,7 @@ export class Spool {
       this.db.pragma("temp_store=MEMORY");
       this.db.pragma("busy_timeout=10");
       const existingVersion = this.db.pragma("user_version", { simple: true });
-      if (existingVersion !== 0 && existingVersion !== 1)
+      if (![0, 1, 2].includes(Number(existingVersion)))
         throw new AgentError("HELD_STORAGE_SCHEMA");
       this.write(() =>
         this.db.exec(`
@@ -91,18 +101,22 @@ export class Spool {
         state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL,
         UNIQUE(binding,work),UNIQUE(binding,trace,span));
       CREATE INDEX IF NOT EXISTS pending ON records(route,state,next_at,id);
+      CREATE TABLE IF NOT EXISTS observed_turns (binding TEXT NOT NULL,work TEXT NOT NULL,route TEXT NOT NULL,
+        epoch INTEGER NOT NULL,start_ns TEXT NOT NULL,end_ns TEXT NOT NULL,deadline INTEGER NOT NULL,PRIMARY KEY(binding,work));
       CREATE TABLE IF NOT EXISTS cursors (route TEXT NOT NULL,stream TEXT NOT NULL,coordinate TEXT NOT NULL,PRIMARY KEY(route,stream));
     `),
       );
       const version = this.db
         .prepare("SELECT value FROM meta WHERE key=?")
         .get("schema") as any;
-      if (version && version.value !== "1")
+      if (version && !["1", "2"].includes(version.value))
         throw new AgentError("HELD_STORAGE_SCHEMA");
-      if (!version)
+      if (version?.value !== "2")
         this.write(() => {
-          this.db.prepare("INSERT INTO meta VALUES (?,?)").run("schema", "1");
-          this.db.pragma("user_version=1");
+          this.db
+            .prepare("INSERT OR REPLACE INTO meta VALUES (?,?)")
+            .run("schema", "2");
+          this.db.pragma("user_version=2");
         });
     } catch (e) {
       this.db.close();
@@ -196,6 +210,7 @@ export class Spool {
     cursor?: { stream: string; coordinate: string },
     observed = false,
     expectedEpoch?: number,
+    observedTurns = false,
   ): { receipt_id: string; duplicate: boolean } {
     const route = this.getRoute(routeId);
     if (!route.enabled) throw new AgentError("HELD_DISABLED", 3);
@@ -223,6 +238,45 @@ export class Spool {
       fact.endNs = end;
       cursor = { stream: fact.sourceWorkId, coordinate: end };
     }
+    if (observedTurns && !observed)
+      throw new AgentError("INVALID_OBSERVATION_CLOCK", 2);
+    // Finalization precedes admission, so an overdue/finished turn cannot acquire
+    // new children or change its already immutable root. Replays still dedupe.
+    if (observedTurns) this.finalizeTurns(routeId);
+    return this.write(() => {
+      if (observedTurns) this.observeTurn(route, fact);
+      return this.insertFact(route, fact, cursor, "queued", observedTurns);
+    });
+  }
+  private checkQuota(routeId: string, size: number, replacing?: number): void {
+    const global = (
+      this.db
+        .prepare(
+          "SELECT coalesce(sum(length(bytes)),0) n FROM records WHERE id != ?",
+        )
+        .get(replacing ?? -1) as any
+    ).n;
+    const local = (
+      this.db
+        .prepare(
+          "SELECT coalesce(sum(length(bytes)),0) n FROM records WHERE route=? AND id != ?",
+        )
+        .get(routeId, replacing ?? -1) as any
+    ).n;
+    if (
+      global + size > STORAGE_LIMITS.logical ||
+      local + size > STORAGE_LIMITS.route
+    )
+      throw new AgentError("PAUSED_LOGICAL_QUOTA");
+  }
+  private insertFact(
+    route: Route,
+    fact: CanonicalFact,
+    cursor?: { stream: string; coordinate: string },
+    state = "queued",
+    allowPending = false,
+  ): { receipt_id: string; duplicate: boolean } {
+    const routeId = route.id;
     const bytes = encodeFacts([fact], route.binding, this.runtimeVersion);
     if (bytes.length > 262_144) throw new AgentError("OVERSIZE_SPAN", 2);
     const hash = digest(bytes);
@@ -232,61 +286,53 @@ export class Spool {
         !/^(0|[1-9][0-9]{0,19})$/.test(cursor.coordinate))
     )
       throw new AgentError("INVALID_CURSOR", 2);
-    return this.write(() => {
-      const old = this.db
-        .prepare(
-          "SELECT id,hash,work FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
-        )
-        .get(
-          route.binding.id,
-          fact.sourceWorkId,
-          fact.traceId,
-          fact.spanId,
-        ) as any;
-      if (old && (old.hash !== hash || old.work !== fact.sourceWorkId))
-        throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
-      let id = old?.id;
-      if (!old) {
-        const global = (
+    const old = this.db
+      .prepare(
+        "SELECT id,hash,work,state FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
+      )
+      .get(
+        route.binding.id,
+        fact.sourceWorkId,
+        fact.traceId,
+        fact.spanId,
+      ) as any;
+    if (
+      old &&
+      (old.work !== fact.sourceWorkId ||
+        ((old.state !== "pending-turn" || !allowPending) && old.hash !== hash))
+    )
+      throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+    let id = old?.id;
+    if (!old || (old.state === "pending-turn" && allowPending)) {
+      this.checkQuota(routeId, bytes.length, old?.id);
+      const u = fact.usage;
+      if (u && u.contribution !== "none") {
+        if (u.planId !== planId(fact.turnId))
+          throw new AgentError("HELD_USAGE_PLAN", 3);
+        const plan = this.db
+          .prepare("SELECT choice FROM plans WHERE binding=? AND id=?")
+          .get(route.binding.id, u.planId) as any;
+        if (plan && plan.choice !== u.contribution)
+          throw new AgentError("HELD_USAGE_PLAN", 3);
+        this.db
+          .prepare("INSERT OR IGNORE INTO plans VALUES (?,?,?)")
+          .run(route.binding.id, u.planId, u.contribution);
+        for (const usage of u.factIds) {
+          const existing = this.db
+            .prepare("SELECT work FROM usage WHERE binding=? AND id=?")
+            .get(route.binding.id, usage) as any;
+          if (existing && existing.work !== fact.sourceWorkId)
+            throw new AgentError("HELD_USAGE_CONFLICT", 3);
           this.db
-            .prepare("SELECT coalesce(sum(length(bytes)),0) n FROM records")
-            .get() as any
-        ).n;
-        const local = (
-          this.db
-            .prepare(
-              "SELECT coalesce(sum(length(bytes)),0) n FROM records WHERE route=?",
-            )
-            .get(routeId) as any
-        ).n;
-        if (
-          global + bytes.length > STORAGE_LIMITS.logical ||
-          local + bytes.length > STORAGE_LIMITS.route
-        )
-          throw new AgentError("PAUSED_LOGICAL_QUOTA");
-        const u = fact.usage;
-        if (u && u.contribution !== "none") {
-          if (u.planId !== planId(fact.turnId))
-            throw new AgentError("HELD_USAGE_PLAN", 3);
-          const plan = this.db
-            .prepare("SELECT choice FROM plans WHERE binding=? AND id=?")
-            .get(route.binding.id, u.planId) as any;
-          if (plan && plan.choice !== u.contribution)
-            throw new AgentError("HELD_USAGE_PLAN", 3);
-          this.db
-            .prepare("INSERT OR IGNORE INTO plans VALUES (?,?,?)")
-            .run(route.binding.id, u.planId, u.contribution);
-          for (const usage of u.factIds) {
-            const existing = this.db
-              .prepare("SELECT work FROM usage WHERE binding=? AND id=?")
-              .get(route.binding.id, usage) as any;
-            if (existing && existing.work !== fact.sourceWorkId)
-              throw new AgentError("HELD_USAGE_CONFLICT", 3);
-            this.db
-              .prepare("INSERT OR IGNORE INTO usage VALUES (?,?,?)")
-              .run(route.binding.id, usage, fact.sourceWorkId);
-          }
+            .prepare("INSERT OR IGNORE INTO usage VALUES (?,?,?)")
+            .run(route.binding.id, usage, fact.sourceWorkId);
         }
+      }
+      if (old) {
+        this.db
+          .prepare("UPDATE records SET hash=?,bytes=?,state=? WHERE id=?")
+          .run(hash, bytes, state, old.id);
+      } else
         id = this.db
           .prepare(
             "INSERT INTO records(route,binding,work,trace,span,hash,bytes,encrypted,epoch,state,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -301,22 +347,131 @@ export class Spool {
             bytes,
             0,
             route.epoch,
-            "queued",
+            state,
             Date.now(),
           ).lastInsertRowid;
+    }
+    if (cursor)
+      this.db
+        .prepare(
+          "INSERT INTO cursors VALUES (?,?,?) ON CONFLICT(route,stream) DO UPDATE SET coordinate=excluded.coordinate",
+        )
+        .run(routeId, cursor.stream, cursor.coordinate);
+    return {
+      receipt_id: String(id),
+      duplicate: !!old && old.state !== "pending-turn",
+    };
+  }
+  /** Pending parents are never leased. Their bytes and the child commit together. */
+  private observeTurn(route: Route, fact: CanonicalFact): void {
+    if (
+      !["turn", "tool"].includes(fact.unit) ||
+      fact.source !== "hook" ||
+      fact.traceId.length !== 32 ||
+      (fact.unit === "tool" && fact.parentSpanId !== spanId(fact.turnId))
+    )
+      throw new AgentError("INVALID_OBSERVED_TURN", 2);
+    const parent = this.db
+      .prepare("SELECT state FROM records WHERE binding=? AND work=?")
+      .get(route.binding.id, fact.turnId) as { state: string } | undefined;
+    const window = this.db
+      .prepare("SELECT * FROM observed_turns WHERE binding=? AND work=?")
+      .get(route.binding.id, fact.turnId) as TurnWindow | undefined;
+    if (window && window.epoch !== route.epoch)
+      throw new AgentError("STALE_CAPTURE_EPOCH", 3);
+    const old = this.db
+      .prepare("SELECT id FROM records WHERE binding=? AND work=?")
+      .get(route.binding.id, fact.sourceWorkId);
+    if (parent && parent.state !== "pending-turn") {
+      if (!old) throw new AgentError("HELD_TURN_FINALIZED", 3);
+      // Terminal replay keeps its originally bounded start; a late stop after a
+      // timeout remains a conflict instead of changing incomplete into success.
+      if (fact.unit === "turn" && window) {
+        fact.startNs = window.start_ns;
+        fact.endNs = window.end_ns;
+        fact.timing =
+          window.start_ns === window.end_ns ? "unknown" : "estimated";
       }
-      if (cursor)
-        this.db
-          .prepare(
-            "INSERT INTO cursors VALUES (?,?,?) ON CONFLICT(route,stream) DO UPDATE SET coordinate=excluded.coordinate",
-          )
-          .run(routeId, cursor.stream, cursor.coordinate);
-      return { receipt_id: String(id), duplicate: !!old };
+      return;
+    }
+    const start =
+      window && BigInt(window.start_ns) < BigInt(fact.startNs)
+        ? window.start_ns
+        : fact.startNs;
+    const end =
+      window && BigInt(window.end_ns) > BigInt(fact.endNs)
+        ? window.end_ns
+        : fact.endNs;
+    if (fact.unit === "tool") {
+      const root = minimize(
+        {
+          ...fact,
+          sourceWorkId: fact.turnId,
+          spanId: spanId(fact.turnId),
+          parentSpanId: undefined,
+          unit: "turn",
+          tool: undefined,
+          outcome: "incomplete",
+          model: undefined,
+          provider: undefined,
+          usage: undefined,
+          content: undefined,
+          causedBy: undefined,
+          links: undefined,
+          inputCompleteness: "unavailable",
+          outputCompleteness: "unavailable",
+          incomplete: true,
+          startNs: start,
+          endNs: end,
+          timing: start === end ? "unknown" : "estimated",
+        },
+        route.policy,
+      );
+      this.insertFact(route, root, undefined, "pending-turn", true);
+    } else {
+      fact.startNs = start;
+      fact.endNs = end;
+      fact.timing = start === end ? "unknown" : "estimated";
+    }
+    this.db
+      .prepare(
+        `INSERT INTO observed_turns VALUES (?,?,?,?,?,?,?)
+      ON CONFLICT(binding,work) DO UPDATE SET start_ns=excluded.start_ns,end_ns=excluded.end_ns`,
+      )
+      .run(
+        route.binding.id,
+        fact.turnId,
+        route.id,
+        route.epoch,
+        start,
+        end,
+        Date.now() + OBSERVED_TURN_WINDOW_MS,
+      );
+  }
+  /** Bounded crash-recoverable sweep; no raw events or invented timeout duration. */
+  finalizeTurns(routeId: string): number {
+    const route = this.getRoute(routeId);
+    if (!route.enabled) return 0;
+    const due = this.db
+      .prepare(
+        `SELECT r.id FROM records r JOIN observed_turns t
+      ON r.binding=t.binding AND r.work=t.work WHERE r.route=? AND r.epoch=?
+      AND r.state='pending-turn' AND t.deadline<=? LIMIT 128`,
+      )
+      .all(routeId, route.epoch, Date.now()) as { id: number }[];
+    if (!due.length) return 0;
+    return this.write(() => {
+      const update = this.db.prepare(
+        "UPDATE records SET state='queued' WHERE id=? AND state='pending-turn'",
+      );
+      for (const row of due) update.run(row.id);
+      return due.length;
     });
   }
   next(routeId: string, includeDisabled = false): Row | undefined {
     const route = this.getRoute(routeId);
     if (!route.enabled && !includeDisabled) return undefined;
+    this.finalizeTurns(routeId);
     if (
       this.db
         .prepare("SELECT value FROM meta WHERE key=?")
@@ -416,7 +571,12 @@ export class Spool {
           "DELETE FROM cursors WHERE rowid IN (SELECT rowid FROM cursors WHERE route=? LIMIT 128)",
         )
         .run(routeId);
-      return result.changes;
+      const turns = this.db
+        .prepare(
+          "DELETE FROM observed_turns WHERE rowid IN (SELECT rowid FROM observed_turns WHERE route=? LIMIT 128)",
+        )
+        .run(routeId).changes;
+      return Math.max(result.changes, turns);
     });
   }
   expire(): number {

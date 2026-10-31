@@ -37,6 +37,7 @@ export function cursorAdapters(options: CursorInstallOptions): Adapter[] {
         native: false,
         neutralResponse: "",
         observerSchema: HOOK_SCHEMA,
+        observedTurns: true,
       },
       preflight: (action, context) =>
         cursorChange(action, surface, context, options),
