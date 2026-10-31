@@ -39,6 +39,7 @@ from fi_instrumentation import (
     get_attributes_from_context,
     safe_json_dumps,
 )
+from traceai_bedrock._converse import _async_client_creation_wrapper, _converse_wrapper
 from traceai_bedrock._rag_wrappers import (
     _retrieve_and_generate_wrapper,
     _retrieve_wrapper,
@@ -58,9 +59,7 @@ from fi_instrumentation.fi_types import (
     ImageAttributes,
     MessageAttributes,
     MessageContentAttributes,
-    FiSpanKindValues,
     SpanAttributes,
-    FiLLMProviderValues,
 )
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 try:
@@ -171,6 +170,11 @@ def _client_creation_wrapper(
             if module_version >= _MINIMUM_CONVERSE_BOTOCORE_VERSION:
                 client._unwrapped_converse = client.converse
                 client.converse = _model_converse_wrapper(tracer)(client)
+                if hasattr(client, "converse_stream"):
+                    client._unwrapped_converse_stream = client.converse_stream
+                    client.converse_stream = _converse_wrapper(
+                        tracer, client.converse_stream, streaming=True
+                    )
         return client
 
     return _client_wrapper  # type: ignore
@@ -231,111 +235,10 @@ def _model_invocation_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], 
 
 
 def _model_converse_wrapper(tracer: Tracer) -> Callable[[InstrumentedClient], Callable[..., Any]]:
-    def _converse_wrapper(wrapped_client: InstrumentedClient) -> Callable[..., Any]:
-        """Instruments a bedrock client's `converse` method."""
+    def _wrapper(client: InstrumentedClient) -> Callable[..., Any]:
+        return _converse_wrapper(tracer, client._unwrapped_converse)
 
-        @wraps(wrapped_client.converse)
-        def instrumented_response(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-            if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-                return wrapped_client._unwrapped_converse(*args, **kwargs)  # type: ignore
-
-            with tracer.start_as_current_span("bedrock.converse") as span:
-                span.set_attribute(
-                    SpanAttributes.GEN_AI_SPAN_KIND,
-                    FiSpanKindValues.LLM.value,
-                )
-                
-                _set_span_attribute(span, SpanAttributes.GEN_AI_PROVIDER_NAME, FiLLMProviderValues.AWS.value)
-
-                if model_id := kwargs.get("modelId"):
-                    _set_span_attribute(span, SpanAttributes.GEN_AI_REQUEST_MODEL, model_id)
-
-                if inference_config := kwargs.get("inferenceConfig"):
-                    invocation_parameters = safe_json_dumps(inference_config)
-                    _set_span_attribute(
-                        span, SpanAttributes.GEN_AI_REQUEST_PARAMETERS, invocation_parameters
-                    )
-
-                aggregated_messages = []
-                if system_prompts := kwargs.get("system"):
-                    aggregated_messages.append(
-                        {
-                            "role": "system",
-                            "content": [
-                                {
-                                    "text": " ".join(
-                                        prompt.get("text", "") for prompt in system_prompts
-                                    )
-                                }
-                            ],
-                        }
-                    )
-
-                aggregated_messages.extend(kwargs.get("messages", []))
-                for idx, msg in enumerate(aggregated_messages):
-                    if not isinstance(msg, dict):
-                        # Only dictionaries supported for now
-                        continue
-                    for key, value in _get_attributes_from_message_param(msg):
-                        _set_span_attribute(
-                            span,
-                            f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{idx}.{key}",
-                            value,
-                        )
-                last_message = aggregated_messages[-1]
-                if isinstance(last_message, dict) and (
-                    request_msg_content := last_message.get("content")
-                ):
-                    request_msg_prompt = "\n".join(
-                        content_input.get("text", "")  # type: ignore
-                        for content_input in request_msg_content
-                    ).strip("\n")
-                    _set_span_attribute(span, SpanAttributes.INPUT_VALUE, request_msg_prompt)
-
-                try:
-                    response = wrapped_client._unwrapped_converse(*args, **kwargs)
-                except Exception as e:
-                    span.record_exception(e)
-                    raise e
-
-                if (
-                    (response_message := response.get("output", {}).get("message"))
-                    and (response_role := response_message.get("role"))
-                    and (response_content := response_message.get("content", []))
-                ):
-                    # Currently only supports text-based data
-                    response_text = "\n".join(
-                        content_input.get("text", "") for content_input in response_content
-                    )
-                    _set_span_attribute(span, SpanAttributes.OUTPUT_VALUE, response_text)
-
-                    span_prefix = f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0"
-                    _set_span_attribute(span, f"{span_prefix}.message.role", response_role)
-                    _set_span_attribute(span, f"{span_prefix}.message.content", response_text)
-
-                if usage := response.get("usage"):
-                    if input_token_count := usage.get("inputTokens"):
-                        _set_span_attribute(
-                            span, SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, input_token_count
-                        )
-                    if response_token_count := usage.get("outputTokens"):
-                        _set_span_attribute(
-                            span,
-                            SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS,
-                            response_token_count,
-                        )
-                    if total_token_count := usage.get("totalTokens"):
-                        _set_span_attribute(
-                            span, SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS, total_token_count
-                        )
-
-                span.set_attributes(dict(get_attributes_from_context()))
-                span.set_status(Status(StatusCode.OK))
-                return response  # type: ignore
-
-        return instrumented_response
-
-    return _converse_wrapper
+    return _wrapper
 
 
 class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
@@ -371,6 +274,21 @@ class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
             ),
         )
 
+        # aiobotocore has a separate async creator; wrapping botocore alone does
+        # not instrument it. It remains optional for synchronous boto3 users.
+        self._original_async_client_creator = None
+        try:
+            aio = import_module("aiobotocore.client")
+        except ImportError:
+            pass
+        else:
+            self._original_async_client_creator = aio.AioClientCreator.create_client
+            wrap_function_wrapper(
+                module="aiobotocore.client",
+                name="AioClientCreator.create_client",
+                wrapper=_async_client_creation_wrapper(self._tracer),
+            )
+
         if Protect is not None:
             self._original_protect = Protect.protect
             wrap_function_wrapper(
@@ -385,6 +303,10 @@ class BedrockInstrumentor(BaseInstrumentor):  # type: ignore
         boto = import_module(_MODULE)
         boto.ClientCreator.create_client = self._original_client_creator
         self._original_client_creator = None
+        if self._original_async_client_creator is not None:
+            aio = import_module("aiobotocore.client")
+            aio.AioClientCreator.create_client = self._original_async_client_creator
+            self._original_async_client_creator = None
 
 
 def _set_span_attribute(span: trace_api.Span, name: str, value: AttributeValue) -> None:
