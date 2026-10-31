@@ -75,7 +75,7 @@ using (var parent = source.StartActivity("application"))
         }
         else if (scenario == "protocol")
         {
-            using var content = BinaryContent.Create(BinaryData.FromString("{\"messages\":[{\"role\":\"user\",\"content\":\"PROMPT_PRIVATE_MARKER\"}]}"));
+            using var content = BinaryContent.Create(BinaryData.FromString("{\"model\":\"test-deployment\",\"messages\":[{\"role\":\"user\",\"content\":\"PROMPT_PRIVATE_MARKER\"}]}"));
             var result = await chat.CompleteChatAsync(content);
             output = result.GetRawResponse().Status.ToString();
         }

@@ -327,8 +327,7 @@ def run_case(dotnet, dll, scenario, conventions, output_dir):
             if scenario == "responses"
             else "/openai/v1/chat/completions"
         )
-        if scenario != "protocol":
-            assert request["body"]["model"] == "test-deployment"
+        assert request["body"]["model"] == "test-deployment"
     assert len(model_spans) == (0 if scenario in EXCLUDED else 1), len(model_spans)
     combined = "\n".join(str(export[2]) for export in exports)
     for marker in (
