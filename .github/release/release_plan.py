@@ -25,9 +25,9 @@ PYTHON_CORE = {"fi-instrumentation-otel"}
 TS_CORE = {"@traceai/fi-core", "@traceai/fi-semantic-conventions"}
 ECOSYSTEMS = ("python", "typescript", "java", "go", "nuget")
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.M)
-# npm packages that report their own version at runtime keep it in one of these constants.
+# npm packages that report their own version at runtime keep it in a VERSION or
+# INSTRUMENTATION_VERSION constant somewhere under src/ (tests excluded).
 TS_VERSION_RE = re.compile(r'^\s*(?:export\s+)?const\s+(?:VERSION|INSTRUMENTATION_VERSION)\s*=\s*["\']([^"\']+)["\']', re.M)
-TS_VERSION_FILES = ("src/version.ts", "src/instrumentation.ts")
 MAVEN_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 
 
@@ -60,10 +60,12 @@ def declared_versions(pkg_dir: Path, module: str | None) -> dict[str, str]:
 
 def declared_ts_versions(pkg_dir: Path) -> dict[str, str]:
     out = {}
-    for rel in TS_VERSION_FILES:
-        f = pkg_dir / rel
-        if f.is_file() and (match := TS_VERSION_RE.search(f.read_text())):
-            out[rel] = match.group(1)
+    for f in sorted((pkg_dir / "src").rglob("*.ts")):
+        rel = f.relative_to(pkg_dir)
+        if "__tests__" in rel.parts or f.name.endswith((".test.ts", ".spec.ts", ".d.ts")):
+            continue
+        if match := TS_VERSION_RE.search(f.read_text()):
+            out[str(rel)] = match.group(1)
     return out
 
 
