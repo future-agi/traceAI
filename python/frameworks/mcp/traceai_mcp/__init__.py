@@ -90,6 +90,13 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
                 setattr(owner, attr, original)
         self._wrapped_targets = []
 
+    def _wrap_stream(self, stream: Any, proxy_type: type["_SwitchableProxy"]) -> Any:
+        # Legacy transport aliases may delegate to another wrapped entry point.
+        # Reuse only our own proxies; other owners keep their lifecycle state.
+        if isinstance(stream, proxy_type) and stream._self_state is self._stream_state:
+            return stream
+        return proxy_type(stream, self._stream_state)
+
     @asynccontextmanager
     async def _wrap_transport_with_callback(
         self, wrapped: Callable[..., Any], instance: Any, args: Any, kwargs: Any
@@ -100,15 +107,15 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
             if len(streams) == 3:
                 read_stream, write_stream, get_session_id_callback = streams
                 yield (
-                    InstrumentedStreamReader(read_stream, self._stream_state),
-                    InstrumentedStreamWriter(write_stream, self._stream_state),
+                    self._wrap_stream(read_stream, InstrumentedStreamReader),
+                    self._wrap_stream(write_stream, InstrumentedStreamWriter),
                     get_session_id_callback,
                 )
             else:
                 read_stream, write_stream = streams
                 yield (
-                    InstrumentedStreamReader(read_stream, self._stream_state),
-                    InstrumentedStreamWriter(write_stream, self._stream_state),
+                    self._wrap_stream(read_stream, InstrumentedStreamReader),
+                    self._wrap_stream(write_stream, InstrumentedStreamWriter),
                 )
 
     @asynccontextmanager
@@ -118,8 +125,9 @@ class MCPInstrumentor(BaseInstrumentor):  # type: ignore
         Tuple["InstrumentedStreamReader", "InstrumentedStreamWriter"], None
     ]:
         async with wrapped(*args, **kwargs) as (read_stream, write_stream):
-            yield InstrumentedStreamReader(read_stream, self._stream_state), InstrumentedStreamWriter(
-                write_stream, self._stream_state
+            yield (
+                self._wrap_stream(read_stream, InstrumentedStreamReader),
+                self._wrap_stream(write_stream, InstrumentedStreamWriter),
             )
 
     def _base_session_init_wrapper(
