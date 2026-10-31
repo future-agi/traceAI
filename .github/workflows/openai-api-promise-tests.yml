@@ -58,4 +58,5 @@ jobs:
         if: matrix.sdk == '5.23.2'
         run: |
           sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' bash \
-            env PATH="$PATH" pnpm --filter @traceai/openai test --runInBand
+            env PATH="$PATH" node packages/traceai_openai/node_modules/jest/bin/jest.js \
+            --config packages/traceai_openai/jest.config.js --runInBand
