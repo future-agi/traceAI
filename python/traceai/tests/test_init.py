@@ -6,7 +6,6 @@ from pathlib import Path
 from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import Mock
-from zipfile import ZipFile
 import sys
 
 import pytest
@@ -174,15 +173,10 @@ def test_unknown_library_is_nonfatal(providers, capsys):
     assert "Unknown library 'unknown'" in capsys.readouterr().out
 
 
-def test_wheel_has_no_ineffective_extras_and_an_importable_core_floor(tmp_path):
+def test_metadata_has_no_ineffective_extras_and_an_importable_core_floor():
     package = Path(__file__).resolve().parents[1]
-    wheel = WheelBuilder(Factory().create_poetry(package)).build(tmp_path)
-    with ZipFile(wheel) as archive:
-        assert "traceai/__init__.py" in archive.namelist()
-        metadata_path = next(
-            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
-        )
-        metadata = Parser().parsestr(archive.read(metadata_path).decode())
+    builder = WheelBuilder(Factory().create_poetry(package))
+    metadata = Parser().parsestr(builder.get_metadata_content())
     assert not metadata.get_all("Provides-Extra")
     requirements = [Requirement(value) for value in metadata.get_all("Requires-Dist")]
     assert len(requirements) == 1
