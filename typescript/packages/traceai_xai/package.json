@@ -18,7 +18,7 @@
   "scripts": {
     "build": "npm run build:cjs && npm run build:esm",
     "build:cjs": "tsc -p tsconfig.json",
-    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:esm": "tsc -p tsconfig.esm.json && tsc-alias -p tsconfig.esm.json && echo '{\"type\": \"module\"}' > ./dist/esm/package.json",
     "test": "jest --config jest.config.js",
     "test:e2e": "jest --config jest.config.js --testMatch '**/*.e2e.test.ts'",
     "clean": "rimraf dist"
@@ -57,6 +57,7 @@
     "openai": "^4.77.0",
     "rimraf": "^6.0.1",
     "ts-jest": "^29.2.5",
+    "tsc-alias": "^1.8.16",
     "typescript": "^5.7.2"
   },
   "peerDependencies": {
