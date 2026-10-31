@@ -31,6 +31,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         "_original_async_completions_create",
         "_original_messages_create",
         "_original_async_messages_create",
+        "_original_messages_count_tokens",
         "_original_protect",
         "_instruments",
         "_tracer",
@@ -40,7 +41,14 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        from anthropic.resources.completions import AsyncCompletions, Completions
+        # SDK 1+ removed Text Completions. Messages instrumentation must not
+        # depend on that optional historical API, but older SDKs retain hooks.
+        try:
+            from anthropic.resources.completions import AsyncCompletions, Completions
+        except ModuleNotFoundError as exc:
+            if exc.name != "anthropic.resources.completions":
+                raise
+            AsyncCompletions = Completions = None
         from anthropic.resources.messages import AsyncMessages, Messages
         try:
             from fi.evals import Protect
@@ -60,19 +68,21 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             config=config,
         )
 
-        self._original_completions_create = Completions.create
-        wrap_function_wrapper(
-            module="anthropic.resources.completions",
-            name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer),
-        )
-
-        self._original_async_completions_create = AsyncCompletions.create
-        wrap_function_wrapper(
-            module="anthropic.resources.completions",
-            name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
-        )
+        self._original_completions_create = None
+        self._original_async_completions_create = None
+        if Completions is not None:
+            self._original_completions_create = Completions.create
+            wrap_function_wrapper(
+                module="anthropic.resources.completions",
+                name="Completions.create",
+                wrapper=_CompletionsWrapper(tracer=self._tracer),
+            )
+            self._original_async_completions_create = AsyncCompletions.create
+            wrap_function_wrapper(
+                module="anthropic.resources.completions",
+                name="AsyncCompletions.create",
+                wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
+            )
 
         self._original_messages_create = Messages.create
         wrap_function_wrapper(
@@ -88,6 +98,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             wrapper=_AsyncMessagesWrapper(tracer=self._tracer),
         )
 
+        self._original_messages_count_tokens = Messages.count_tokens
         wrap_function_wrapper(
             module="anthropic.resources.messages",
             name="Messages.count_tokens",
@@ -105,7 +116,14 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        from anthropic.resources.completions import AsyncCompletions, Completions
+        # SDK 1+ removed Text Completions. Messages instrumentation must not
+        # depend on that optional historical API, but older SDKs retain hooks.
+        try:
+            from anthropic.resources.completions import AsyncCompletions, Completions
+        except ModuleNotFoundError as exc:
+            if exc.name != "anthropic.resources.completions":
+                raise
+            AsyncCompletions = Completions = None
         from anthropic.resources.messages import AsyncMessages, Messages
         try:
             from fi.evals import Protect
@@ -113,9 +131,9 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             logger.warning("ai-evaluation is not installed, please install it to trace protect")
             Protect = None
 
-        if self._original_completions_create is not None:
+        if Completions is not None and self._original_completions_create is not None:
             Completions.create = self._original_completions_create  # type: ignore[method-assign]
-        if self._original_async_completions_create is not None:
+        if AsyncCompletions is not None and self._original_async_completions_create is not None:
             AsyncCompletions.create = self._original_async_completions_create  # type: ignore[method-assign]
 
         if self._original_messages_create is not None:
@@ -123,5 +141,7 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         if self._original_async_messages_create is not None:
             AsyncMessages.create = self._original_async_messages_create  # type: ignore[method-assign]
 
-        if self._original_protect is not None:
+        if self._original_messages_count_tokens is not None:
+            Messages.count_tokens = self._original_messages_count_tokens
+        if Protect is not None and self._original_protect is not None:
             Protect.protect = self._original_protect

@@ -60,6 +60,24 @@ class FixtureCase(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
         write_tree(self.root, FIXTURE_FILES)
+        # Build a small schema-valid canonical inventory for this synthetic repository.
+        data = json.loads((REPO_ROOT / '.github/compat/registry.json').read_text())
+        template = next(t for t in data['integrations'] if t['id'] == 'python-google-genai')
+        data['integrations'] = []
+        import copy
+        for name in ALL_PACKAGES:
+            directory = 'python/traceai' if name == 'traceai' else f'python/frameworks/{name}'
+            manifest = self.root / directory / 'pyproject.toml'
+            manifest.write_text(manifest.read_text() + f'\n[project]\nname = "fixture-{name}"\n')
+            t = copy.deepcopy(template)
+            t.update(id=f'python-{name}', package_dir=directory, distribution=f'fixture-{name}',
+                     upstream=[], contract_test=None, notes=[])
+            t['declared_range_source'] = dict(path=directory+'/pyproject.toml', key='project.dependencies', kind='metadata')
+            t['runtimes'].update(declared=None, representative=[], boundaries=[],
+                                source=dict(path=directory+'/pyproject.toml', key='project.requires-python', kind='metadata'))
+            data['integrations'].append(t)
+        data['defaults']['pilot_ids'] = ['python-alpha', 'python-beta', 'python-gamma']
+        write_tree(self.root, {'.github/compat/registry.json': json.dumps(data)})
         patcher = mock.patch.dict(planner.FRAMEWORK_TEST_PACKAGES, ZETA)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -126,6 +144,26 @@ class PlanTable(FixtureCase):
                 self.assertEqual(self.names(result), expected)
                 self.assertIs(result["run_all"], run_all)
                 self.assertIs(result["core_changed"], core_changed)
+
+    def test_package_local_offline_pilots_are_isolated_without_duplicate_own_collection(self):
+        registry = json.loads((REPO_ROOT / '.github/compat/registry.json').read_text())
+        planned = planner.plan(['.github/scripts/python_test_plan.py'], root=REPO_ROOT)
+        by_id = {p['integration_id']: p for p in planned['packages']}
+        for target in registry['integrations']:
+            if target['language'] != 'python' or not target['canary']['pilot']:
+                continue
+            package = by_id[target['id']]
+            with self.subTest(integration=target['id']):
+                self.assertEqual(package['contract_tests'], target['contract_test']['paths'])
+                self.assertFalse(set(package['contract_tests']) & set(package['own_test_paths']))
+                own_files = {p.relative_to(REPO_ROOT).as_posix() for p in
+                             (REPO_ROOT / package['dir'] / 'tests').rglob('*.py')
+                             if p.name.startswith('test_') or p.name.endswith('_test.py')}
+                self.assertEqual(own_files, set(package['own_test_paths']) |
+                                 {p for p in package['contract_tests'] if p in own_files})
+                self.assertEqual(package['own_tests'], bool(package['own_test_paths']))
+        self.assertTrue(by_id['python-openai']['contract_tests'])
+        self.assertTrue(by_id['python-langchain']['contract_tests'])
 
     def test_package_entries(self):
         result = planner.plan(["python/fi_instrumentation/otel.py"], root=self.root)
@@ -194,15 +232,15 @@ class PlanErrors(FixtureCase):
 
     def test_run_all_with_0_packages(self):
         self.discover_nothing()
-        self.assert_plan_error([".github/workflows/python-tests.yml"], "run_all is set but 0 packages were found")
+        self.assert_plan_error([".github/workflows/python-tests.yml"], "compatibility registry")
 
     def test_core_change_with_0_packages(self):
         self.discover_nothing()
-        self.assert_plan_error(["python/fi_instrumentation/otel.py"], "core_changed is set but 0 packages were found")
+        self.assert_plan_error(["python/fi_instrumentation/otel.py"], "compatibility registry")
 
     def test_a_change_with_0_packages_and_no_run_all_is_not_an_error(self):
         self.discover_nothing()
-        self.assertEqual(planner.plan(["README.md"], root=self.root)["packages"], [])
+        self.assert_plan_error(["README.md"], "compatibility registry")
 
     def test_a_change_in_a_directory_without_a_pyproject(self):
         write_tree(self.root, {"python/frameworks/notpkg/src/mod.py": "VALUE = 1\n"})
@@ -214,7 +252,7 @@ class PlanErrors(FixtureCase):
 
     def test_a_package_that_lost_its_pyproject(self):
         (self.root / "python/frameworks/alpha/pyproject.toml").unlink()
-        self.assert_plan_error(["python/frameworks/alpha/src/mod.py"], "python/frameworks/alpha/ changed but has no pyproject.toml")
+        self.assert_plan_error(["python/frameworks/alpha/src/mod.py"], "compatibility registry")
 
     def test_tests_e2e_may_exist_without_a_pyproject(self):
         write_tree(self.root, {"python/frameworks/tests_e2e/x.py": ""})
@@ -292,7 +330,7 @@ class ChangedPaths(GitFixtureCase):
         self.assertEqual(planner.changed_paths(f"{base}...HEAD", self.root), ["README.md"])
 
     def test_none_lists_every_tracked_file(self):
-        expected = set(FIXTURE_FILES) | {self.ODD_NAME, self.OTHER_NAME}
+        expected = set(FIXTURE_FILES) | {self.ODD_NAME, self.OTHER_NAME, '.github/compat/registry.json'}
         self.assertEqual(set(planner.changed_paths(None, self.root)), expected)
 
     def test_no_change_is_an_empty_list(self):
@@ -380,109 +418,39 @@ class CommandLine(GitFixtureCase):
 VERDICT = SCRIPTS_DIR / "known_broken_verdict.sh"
 
 
-INSTALL_FAILS_THE_CHECK = "a failed install fails the check, listed or not"
-
-
 class KnownBrokenVerdict(unittest.TestCase):
-    BASE = {
-        "PKG_NAME": "pkg",
-        "REASON": "the listed reason",
-        "INSTALL_POETRY": "success",
-        "INSTALL_HATCH": "skipped",
-        "CORE_INSTALL": "skipped",
-        "TESTS": "failure",
-        "OWN_TESTS": "true",
-        "CORE_TESTS": "",
-    }
-    CASES = [
-        # (label, env overrides, exit code, a phrase that must be in the output)
-        ("tests pass", {"TESTS": "success"}, 1, "remove its line"),
-        (
-            "tests pass after a failed install",
-            {"TESTS": "success", "INSTALL_POETRY": "failure"},
-            1,
-            f"pkg: install (poetry) failed; {INSTALL_FAILS_THE_CHECK}",
-        ),
-        ("tests fail", {"TESTS": "failure"}, 0, "known broken (the listed reason)"),
-        (
-            "tests fail after failed poetry and core installs",
-            {"TESTS": "failure", "INSTALL_POETRY": "failure", "CORE_INSTALL": "failure"},
-            1,
-            f"pkg: install (poetry), fi_instrumentation install failed; {INSTALL_FAILS_THE_CHECK}",
-        ),
-        (
-            "tests fail after a failed hatch install",
-            {"TESTS": "failure", "INSTALL_POETRY": "skipped", "INSTALL_HATCH": "failure"},
-            1,
-            f"pkg: install (hatch) failed; {INSTALL_FAILS_THE_CHECK}",
-        ),
-        (
-            "tests fail after a failed core install",
-            {"TESTS": "failure", "CORE_INSTALL": "failure"},
-            1,
-            f"pkg: fi_instrumentation install failed; {INSTALL_FAILS_THE_CHECK}",
-        ),
-        (
-            "tests skipped after a failed install (the real case: a failed install skips the Tests step)",
-            {"TESTS": "skipped", "INSTALL_POETRY": "failure"},
-            1,
-            f"pkg: install (poetry) failed; {INSTALL_FAILS_THE_CHECK}",
-        ),
-        (
-            "cancelled after a failed install",
-            {"TESTS": "cancelled", "INSTALL_HATCH": "failure"},
-            1,
-            f"pkg: install (hatch) failed; {INSTALL_FAILS_THE_CHECK}",
-        ),
-        (
-            "no tests, the tests pass, and a failed install",
-            {"TESTS": "success", "OWN_TESTS": "false", "CORE_TESTS": "", "CORE_INSTALL": "failure"},
-            1,
-            INSTALL_FAILS_THE_CHECK,
-        ),
-        ("tests skipped", {"TESTS": "skipped"}, 1, "did not run"),
-        (
-            "no tests and the tests pass",
-            {"TESTS": "success", "OWN_TESTS": "false", "CORE_TESTS": ""},
-            1,
-            "has no tests",
-        ),
-        (
-            "core tests only, and they pass",
-            {"TESTS": "success", "OWN_TESTS": "false", "CORE_TESTS": "python/tests/test_framework_x.py"},
-            1,
-            "its tests pass",
-        ),
-        ("cancelled", {"TESTS": "cancelled"}, 0, "known broken"),
-        ("tests fail, no install failed (skipped installs)", {"TESTS": "failure", "INSTALL_POETRY": "skipped", "CORE_INSTALL": "skipped"}, 0, "known broken (the listed reason)"),
-        ("no Tests outcome", {"TESTS": ""}, 1, "unexpected Tests outcome"),
-        ("a misspelled outcome", {"TESTS": "succes"}, 1, "unexpected Tests outcome"),
-    ]
-
-    def run_verdict(self, overrides):
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **self.BASE, **overrides}
-        # GitHub runs a bash step as: bash -e {0}; with pipefail it is: bash --noprofile --norc -eo pipefail {0}.
-        return subprocess.run(
-            ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(VERDICT)],
-            env=env,
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
-
-    def test_cases(self):
-        for label, overrides, code, phrase in self.CASES:
-            with self.subTest(label):
-                done = self.run_verdict(overrides)
-                output = done.stdout + done.stderr
-                self.assertEqual(done.returncode, code, output)
-                self.assertIn(phrase, output)
-                # The old "may not reflect the listed reason" warning and "(failed in this run: ...)" note are gone.
-                self.assertNotIn("may not reflect", output)
-                self.assertNotIn("failed in this run", output)
+    def test_wrapper_fails_closed_and_never_uses_package_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            junit = directory / 'suite.xml'
+            context = directory / 'context.json'
+            context.write_text(json.dumps({'runtime': {'implementation': 'cpython', 'version': '3.11.9'},
+                                           'resolved': [{'name': 'google-genai', 'version': '1.8.0'}]}))
+            base = {**os.environ, 'PKG_NAME': 'google-genai', 'REASON': 'legacy package-wide reason',
+                    'INSTALL_POETRY': 'success', 'INSTALL_HATCH': 'skipped', 'CORE_INSTALL': 'skipped',
+                    'TESTS': 'success', 'INTEGRATION_ID': 'python-google-genai',
+                    'JUNIT_DIR': tmp, 'TEST_CONTEXT': str(context), 'EXPECTED_SUITES': '1',
+                    'TEST_EXIT_CODE': '0', 'VALIDATOR_PYTHON': sys.executable, 'GITHUB_WORKSPACE': str(REPO_ROOT)}
+            def run(overrides=None):
+                return subprocess.run(['bash', str(VERDICT)], cwd=REPO_ROOT,
+                                      env={**base, **(overrides or {})}, capture_output=True, text=True)
+            xml = '<testsuites><testsuite><testcase file=".github/compat/contracts/test_google_genai.py" classname="test_google_genai" name="test_plain"/></testsuite></testsuites>'
+            junit.write_text(xml)
+            (directory / 'suite.xml.exit-code').write_text('0\n')
+            self.assertEqual(run().returncode, 0)
+            for outcome in ['skipped', 'cancelled', '']:
+                self.assertNotEqual(run({'TESTS': outcome}).returncode, 0)
+            self.assertNotEqual(run({'INSTALL_POETRY': 'failure'}).returncode, 0)
+            self.assertNotEqual(run({'TEST_EXIT_CODE': '2'}).returncode, 0)
+            for content in ['<testsuites/>', xml.replace('/></testsuite>', '><skipped/></testcase></testsuite>'),
+                            xml.replace('/></testsuite>', '><failure>AssertionError: unrelated</failure></testcase></testsuite>')]:
+                junit.write_text(content)
+                self.assertNotEqual(run({'TESTS': 'failure', 'TEST_EXIT_CODE': '1'}).returncode, 0)
+            junit.unlink()
+            self.assertNotEqual(run().returncode, 0)
 
     def test_the_syntax_is_valid(self):
-        subprocess.run(["bash", "-n", str(VERDICT)], check=True)
+        subprocess.run(['bash', '-n', str(VERDICT)], check=True)
 
 
 class WorkflowText(unittest.TestCase):
@@ -579,7 +547,7 @@ class WorkflowText(unittest.TestCase):
     def test_the_tests_step_runs_every_planned_set_and_reports_failures(self):
         tests = self.step("Tests", containing="id: tests")
         for line in (
-            "continue-on-error: ${{ matrix.package.known_broken }}",
+            "continue-on-error: true",
             'if [ "$OWN_TESTS" = "true" ]; then',
             "for test_file in $CORE_TESTS; do",
             '[ "$OWN_TESTS" = "true" ] && expected=$((expected + 1))',
@@ -588,8 +556,9 @@ class WorkflowText(unittest.TestCase):
             'exit "$status"',
         ):
             self.assertIn(line, tests)
-        self.assertEqual(sum(line.endswith("|| status=1") for line in tests), 2, tests)
-        self.assertEqual(sum(line == "ran=$((ran + 1))" for line in tests), 2, tests)
+        self.assertEqual(sum("status=$((rc > status ? rc : status))" in line for line in tests), 3, tests)
+        self.assertEqual(sum('printf' in line and '.xml.exit-code' in line for line in tests), 3, tests)
+        self.assertEqual(sum(line == "ran=$((ran + 1))" for line in tests), 3, tests)
 
     @classmethod
     def step(cls, name, containing=None):
@@ -732,7 +701,7 @@ class WorkflowText(unittest.TestCase):
                 self.assertEqual([line for line in run if "set +" in line], [], run)
         # Only the Tests step may be allowed to fail (for a listed package).
         tests = self.step("Tests", containing="id: tests")
-        self.assertEqual(tests.count("continue-on-error: ${{ matrix.package.known_broken }}"), 1)
+        self.assertEqual(tests.count("continue-on-error: true"), 1)
         self.assertEqual(sum(line.startswith("continue-on-error") for line in self.lines()), 1)
 
     def test_the_tests_step_is_skipped_after_a_failed_install(self):
@@ -776,7 +745,7 @@ class WorkflowText(unittest.TestCase):
 
     def test_the_verdict_step_runs_always_for_known_broken_packages(self):
         step = self.step("Known-broken verdict")
-        self.assertIn("if: always() && matrix.package.known_broken", step)
+        self.assertIn("if: always()", step)
 
     def test_has_packages_is_read_from_the_plan(self):
         expression = """has_packages=$(jq '.packages | length > 0' "$RUNNER_TEMP/plan.json")"""

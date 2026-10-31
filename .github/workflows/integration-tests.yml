@@ -1,8 +1,7 @@
 name: Integration tests
 
-# Additive to python-tests.yml and livekit-release-check.yml. Only the seven
-# targets listed in integration_plan.py are covered here; absent, not-yet-merged
-# packages are ignored so each integration can carry this same CI independently.
+# Registry-backed legacy executable checks; all other targets are visible coverage gaps.
+# Deterministic execution is not floor/latest qualification.
 on:
   pull_request:
     branches: [main, dev]
@@ -46,6 +45,8 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12.3'
+      - name: Install registry validation tools
+        run: pip install jsonschema==4.23.0 packaging==24.2
       - name: Test existing and integration planners and result gates
         run: |
           python -m unittest discover -s .github/scripts -p 'test_*.py' -v
@@ -124,7 +125,8 @@ jobs:
         run: |
           corepack pnpm run build:deps
           corepack pnpm --filter "@traceai/$PACKAGE_NAME" run build
-          corepack pnpm --filter "@traceai/$PACKAGE_NAME" test --runInBand
+          corepack pnpm --filter "@traceai/$PACKAGE_NAME" test --runInBand --json --outputFile "$RUNNER_TEMP/jest.json"
+          python3 "$GITHUB_WORKSPACE/.github/integration-ci/check_results.py" execution typescript "$RUNNER_TEMP/jest.json"
       - name: Codex real SDK contract (local subprocess, no API calls)
         if: matrix.package.name == 'codex-sdk'
         working-directory: ${{ matrix.package.dir }}
@@ -166,7 +168,9 @@ jobs:
           go mod verify
           go build ./...
           go vet ./...
-          go test -race -count=1 -v ./...
+          go test -race -count=1 -json ./... > "$RUNNER_TEMP/go-tests.jsonl"
+          cat "$RUNNER_TEMP/go-tests.jsonl"
+          python3 "$GITHUB_WORKSPACE/.github/integration-ci/check_results.py" execution go "$RUNNER_TEMP/go-tests.jsonl"
           git diff --exit-code -- go.mod go.sum
 
   java:
@@ -195,6 +199,7 @@ jobs:
         run: |
           mvn --version
           mvn -B -ntp -DfailIfNoTests=true verify
+          python3 "$GITHUB_WORKSPACE/.github/integration-ci/check_results.py" execution java target
           test -n "$(find target -name '*.jar' -print -quit)"
           git diff --exit-code -- pom.xml
 

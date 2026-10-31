@@ -13,19 +13,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / '.github/scripts'))
-from python_test_plan import PlanError, changed_paths, commit_count
+from python_test_plan import PlanError, changed_paths, commit_count, load_registry
 
-TARGETS = (
-    ('codex-sdk', 'typescript', 'typescript/packages/traceai_codex_sdk', 'package.json'),
-    ('pi-coding-agent', 'typescript', 'typescript/packages/traceai_pi_coding_agent', 'package.json'),
-    ('openai', 'go', 'go/openai', 'go.mod'),
-    ('a2a', 'go', 'go/a2a', 'go.mod'),
-    ('eino', 'go', 'go/eino', 'go.mod'),
-    ('anthropic', 'go', 'go/anthropic', 'go.mod'),
-    ('genai', 'go', 'go/genai', 'go.mod'),
-    ('arconia', 'java', 'java/examples/arconia-example', 'pom.xml'),
-    ('quarkus-langchain4j', 'java', 'java/examples/quarkus-langchain4j-example', 'pom.xml'),
-)
+MANIFESTS = {'typescript': 'package.json', 'go': 'go.mod', 'java': 'pom.xml'}
+
+
+def legacy_targets(registry):
+    """Preserve existing executable checks; the inventory lives only in registry.json."""
+    return tuple((t['distribution'].removeprefix('@traceai/') if t['language'] == 'typescript'
+                  else Path(t['package_dir']).name.removesuffix('-example'),
+                  t['language'], t['package_dir'], MANIFESTS[t['language']])
+                 for t in registry['integrations']
+                 if t['language'] in MANIFESTS and t.get('regression_ci', False))
+
+
+# Backward-compatible fixture interface, generated from the same inventory, not a second list.
+TARGETS = legacy_targets(json.loads((ROOT / '.github/compat/registry.json').read_text()))
 WORKFLOW = '.github/workflows/integration-tests.yml'
 CI_PREFIX = '.github/integration-ci/'
 SHARED_DIFF_READER = '.github/scripts/python_test_plan.py'
@@ -39,11 +42,13 @@ TEST_GLOBS = {'typescript': 'src/__tests__/**/*.test.ts', 'go': '**/*_test.go', 
 
 def plan(changed, root=ROOT, all_targets=False):
     changed = set(changed)
-    run_all = all_targets or WORKFLOW in changed or SHARED_DIFF_READER in changed or any(p.startswith(CI_PREFIX) for p in changed)
+    registry = load_registry(root)
+    by_dir = {t['package_dir']: t for t in registry['integrations']}
+    run_all = all_targets or WORKFLOW in changed or SHARED_DIFF_READER in changed or any(p.startswith((CI_PREFIX, '.github/compat/')) for p in changed)
     ts_shared = any(p in TS_SHARED_FILES or p.startswith(TS_SHARED_PREFIXES) or
                     (p.startswith('typescript/tsconfig') and p.endswith('.json')) for p in changed)
     result = {'typescript': [], 'go': [], 'java': []}
-    for name, language, directory, manifest in TARGETS:
+    for name, language, directory, manifest in legacy_targets(registry):
         path = root / directory
         if not path.is_dir():
             # A not-yet-landed or entirely deleted integration is not a target.
@@ -53,7 +58,17 @@ def plan(changed, root=ROOT, all_targets=False):
         if not any(path.glob(TEST_GLOBS[language])):
             raise PlanError(f'{directory} has no tests; refusing an empty test gate')
         if run_all or (language == 'typescript' and ts_shared) or any(p.startswith(directory + '/') for p in changed):
-            result[language].append({'name': name, 'dir': directory})
+            target = by_dir[directory]
+            result[language].append({'name': name, 'dir': directory, 'integration_id': target['id'],
+                                     'qualification': target['qualification']['status'],
+                                     'exception_ids': [ex['id'] for ex in target['exceptions']]})
+    result['coverage_gaps'] = [
+        {'integration_id': t['id'], 'dir': t['package_dir'], 'qualification': t['qualification']['status'],
+         'execution': 'not_tested'}
+        for t in registry['integrations'] if t['language'] != 'python' and not t.get('regression_ci', False)
+        and (run_all or (ts_shared and t['language'] == 'typescript') or
+             any(p.startswith(t['package_dir'] + '/') for p in changed))
+    ]
     return result
 
 
