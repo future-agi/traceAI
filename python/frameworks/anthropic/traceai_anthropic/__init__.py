@@ -40,8 +40,16 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
+        try:
+            from anthropic.resources.completions import (
+                AsyncCompletions,
+                Completions,
+            )
+        except ImportError:
+            # The legacy Completions API was removed from the anthropic SDK;
+            # there is nothing to instrument.
+            AsyncCompletions = Completions = None
         try:
             from fi.evals import Protect
         except ImportError:
@@ -60,19 +68,23 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             config=config,
         )
 
-        self._original_completions_create = Completions.create
-        wrap_function_wrapper(
-            module="anthropic.resources.completions",
-            name="Completions.create",
-            wrapper=_CompletionsWrapper(tracer=self._tracer),
-        )
+        if Completions is not None:
+            self._original_completions_create = Completions.create
+            wrap_function_wrapper(
+                module="anthropic.resources.completions",
+                name="Completions.create",
+                wrapper=_CompletionsWrapper(tracer=self._tracer),
+            )
 
-        self._original_async_completions_create = AsyncCompletions.create
-        wrap_function_wrapper(
-            module="anthropic.resources.completions",
-            name="AsyncCompletions.create",
-            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
-        )
+            self._original_async_completions_create = AsyncCompletions.create
+            wrap_function_wrapper(
+                module="anthropic.resources.completions",
+                name="AsyncCompletions.create",
+                wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
+            )
+        else:
+            self._original_completions_create = None
+            self._original_async_completions_create = None
 
         self._original_messages_create = Messages.create
         wrap_function_wrapper(
@@ -105,18 +117,25 @@ class AnthropicInstrumentor(BaseInstrumentor):  # type: ignore[misc]
             self._original_protect = None
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        from anthropic.resources.completions import AsyncCompletions, Completions
         from anthropic.resources.messages import AsyncMessages, Messages
+        try:
+            from anthropic.resources.completions import (
+                AsyncCompletions,
+                Completions,
+            )
+        except ImportError:
+            AsyncCompletions = Completions = None
         try:
             from fi.evals import Protect
         except ImportError:
             logger.warning("ai-evaluation is not installed, please install it to trace protect")
             Protect = None
 
-        if self._original_completions_create is not None:
-            Completions.create = self._original_completions_create  # type: ignore[method-assign]
-        if self._original_async_completions_create is not None:
-            AsyncCompletions.create = self._original_async_completions_create  # type: ignore[method-assign]
+        if Completions is not None:
+            if self._original_completions_create is not None:
+                Completions.create = self._original_completions_create  # type: ignore[method-assign]
+            if self._original_async_completions_create is not None:
+                AsyncCompletions.create = self._original_async_completions_create  # type: ignore[method-assign]
 
         if self._original_messages_create is not None:
             Messages.create = self._original_messages_create  # type: ignore[method-assign]
