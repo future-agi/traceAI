@@ -7,8 +7,5 @@
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**", "test/**/*.ts"],
-  "references": [
-    { "path": "../fi-core" },
-    { "path": "../fi-semantic-conventions" }
-  ]
+  "references": []
 }
