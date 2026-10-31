@@ -1,0 +1,54 @@
+name: Haystack native tracing
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/haystack/**'
+      - 'python/tests/test_framework_haystack.py'
+      - '.github/workflows/haystack-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/haystack/**'
+      - 'python/tests/test_framework_haystack.py'
+      - '.github/workflows/haystack-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-tracing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+        haystack: ['2.10.0', '3.4.1']
+    env:
+      HAYSTACK_TELEMETRY_ENABLED: 'false'
+      HAYSTACK_AUTO_TRACE_ENABLED: 'false'
+      FI_BASE_URL: http://127.0.0.1:9
+      FI_GRPC_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build wheel from source distribution and install
+        env:
+          HAYSTACK_VERSION: ${{ matrix.haystack }}
+        run: |
+          python -m pip install build 'pytest==8.4.2'
+          python -m build python/frameworks/haystack --outdir "$RUNNER_TEMP/dist"
+          python -m pip install "$RUNNER_TEMP"/dist/*.whl "haystack-ai==$HAYSTACK_VERSION"
+      - name: Run native and semantic tests with only loopback available
+        run: |
+          sudo iptables -I OUTPUT 1 ! -o lo -j REJECT
+          sudo ip6tables -I OUTPUT 1 ! -o lo -j REJECT
+          trap 'sudo iptables -D OUTPUT ! -o lo -j REJECT; sudo ip6tables -D OUTPUT ! -o lo -j REJECT' EXIT
+          python -I -m pytest python/frameworks/haystack/tests python/tests/test_framework_haystack.py -q
