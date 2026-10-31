@@ -96,7 +96,8 @@ async def test_real_query_batch_groups_and_crud(client_type, instrument_qdrant, 
         assert span.attributes["db.vector.results.groups_count"] == 2
         assert span.attributes["db.vector.results.count"] == 2
         assert span.attributes["db.vector.query.group_size"] == 1
-        assert span.attributes["db.vector.query.top_k"] == 2
+        assert span.attributes["db.vector.query.group_limit"] == 2
+        assert "db.vector.query.top_k" not in span.attributes
         in_memory_span_exporter.clear()
 
         assert (await call(client.count, "documents")).count == 2

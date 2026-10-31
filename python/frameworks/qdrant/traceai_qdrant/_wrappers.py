@@ -148,7 +148,8 @@ class QueryPointsWrapper(BaseWrapper):
             attributes["db.vector.query.batch_size"] = len(requests)
         # Batch requests can have different limits/selectors: do not report
         # made-up defaults for the whole batch.
-        for param, attr in (("limit", "top_k"), ("group_size", "group_size"),
+        limit_attribute = "group_limit" if "groups" in self._method_name else "top_k"
+        for param, attr in (("limit", limit_attribute), ("group_size", "group_size"),
                             ("score_threshold", "score_threshold")):
             if values.get(param) is not None:
                 attributes[f"db.vector.query.{attr}"] = values[param]
