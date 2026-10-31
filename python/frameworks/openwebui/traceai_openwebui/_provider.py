@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from collections.abc import Callable
+from concurrent.futures import Future, TimeoutError
 from urllib.parse import urlsplit
 
 import certifi
@@ -121,6 +124,7 @@ class Providers:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._flush_lock = threading.Lock()
         self._current: _Generation | None = None
 
     @staticmethod
@@ -159,9 +163,43 @@ class Providers:
         return current.provider, release
 
     def flush(self, timeout_millis: int = 10000) -> bool:
+        """Bound the caller's wait, even when the SDK ignores its flush timeout."""
+        deadline = time.monotonic() + max(0, timeout_millis) / 1000
         with self._lock:
             provider = self._current.provider if self._current else None
-        return provider.force_flush(timeout_millis) if provider else True
+        if provider is None:
+            return True
+        # One worker at a time, including after timeout. Do not create a thread
+        # per retry or return a previous flush's result for newly queued spans.
+        if not self._flush_lock.acquire(timeout=max(0, deadline - time.monotonic())):
+            return False
+        result: Future[bool] = Future()
+
+        def flush_provider() -> None:
+            try:
+                result.set_result(
+                    provider.force_flush(
+                        max(1, int((deadline - time.monotonic()) * 1000))
+                    )
+                )
+            except Exception:  # noqa: BLE001 - fixed diagnostic; never export private errors
+                logging.getLogger(__name__).warning("Open WebUI tracing flush failed")
+                result.set_result(False)
+            finally:
+                self._flush_lock.release()
+
+        try:
+            threading.Thread(
+                target=flush_provider, name="traceai-openwebui-flush", daemon=True
+            ).start()
+        except BaseException:
+            self._flush_lock.release()
+            raise
+        try:
+            return result.result(timeout=max(0, deadline - time.monotonic()))
+        except TimeoutError:
+            # Export can finish in the daemon worker; it cannot hold up shutdown.
+            return False
 
     def close(self) -> None:
         with self._lock:

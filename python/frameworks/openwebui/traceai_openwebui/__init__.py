@@ -40,7 +40,7 @@ class Pipe:
     class Valves(BaseModel):
         target_model: str = Field(
             default="",
-            description="Native OpenAI-compatible or Ollama model ID; not another Pipe or Arena.",
+            description="Native OpenAI-compatible model ID; not Ollama, another Pipe or Arena.",
         )
         api_key: SecretStr = _secret()
         secret_key: SecretStr = _secret()
@@ -83,6 +83,13 @@ class Pipe:
         ):
             raise ValueError(
                 "Choose a native provider model as target_model, not a workspace preset, Pipe or Arena"
+            )
+        # The native Ollama dispatcher discards in-band errors, invents [DONE]
+        # at EOF and (on the floor host) invents missing usage as zero. Reject it
+        # before dispatch instead of presenting converted data as real telemetry.
+        if target.get("owned_by") == "ollama":
+            raise ValueError(
+                "Native Ollama connections are not supported; choose an OpenAI-compatible connection"
             )
         user = await Users.get_user_by_id(__user__.get("id"))
         if user is None:
@@ -166,6 +173,13 @@ class Pipe:
             nonlocal span
             try:
                 if span is not None:
+                    # Host cleanup may abandon our stream under shield before the
+                    # cancelled consumer finishes. A pending cancel request is
+                    # already known; do not overwrite it with "incomplete" on GC.
+                    if outcome == "incomplete" and any(
+                        task.cancelling() or task.cancelled() for task in watched_tasks
+                    ):
+                        outcome = "cancelled"
                     observe("finish")
                     if observation is not None and observation.failed:
                         outcome = "error"
@@ -231,15 +245,24 @@ class Pipe:
                 if (
                     observation is not None
                     and isinstance(response, Response)
-                    and response.status_code >= 400
+                    and (response.status_code >= 400 or not isinstance(data, dict))
                 ):
                     observation.failed = True
             finally:
                 finish("completed")
-            # The host's streaming Pipe dispatcher handles dicts, not ordinary
-            # Response objects. Passing a JSONResponse through would discard a
-            # provider HTTP error and synthesize a successful empty completion.
-            if body.get("stream") and isinstance(response, Response):
+            # Both Pipe dispatch modes accept dicts, not ordinary Response
+            # objects. Preserve JSON payloads and normalize HTTP errors without
+            # an error envelope so the host cannot synthesize an empty success.
+            if isinstance(response, Response):
+                if response.status_code >= 400 and (
+                    not isinstance(data, dict) or not data.get("error")
+                ):
+                    return {
+                        "error": {
+                            "message": "model request failed",
+                            "code": response.status_code,
+                        }
+                    }
                 return (
                     data
                     if isinstance(data, dict)

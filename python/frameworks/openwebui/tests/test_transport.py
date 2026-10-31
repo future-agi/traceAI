@@ -2,6 +2,7 @@ import asyncio
 import http.client
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from traceai_openwebui.cli import function_document
 def loopback():
     requests = []
     otlp = []
+    delay = SimpleNamespace(seconds=0)
     chunks = [
         frame(
             {
@@ -48,6 +50,7 @@ def loopback():
                 self.wfile.write(output)
             elif self.path == "/tracer/v1/traces":
                 otlp.append((dict(self.headers), body))
+                threading.Event().wait(delay.seconds)
                 self.send_response(200)
                 self.end_headers()
             else:
@@ -57,7 +60,11 @@ def loopback():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield SimpleNamespace(
-        port=server.server_port, requests=requests, otlp=otlp, chunks=chunks
+        port=server.server_port,
+        requests=requests,
+        otlp=otlp,
+        chunks=chunks,
+        delay=delay,
     )
     server.shutdown()
     server.server_close()
@@ -185,6 +192,82 @@ def test_reconfiguration_keeps_inflight_project(monkeypatch):
     assert not closed["second"].is_set()
     release_second()
     assert closed["second"].wait(5)
+
+
+def test_flush_deadline_with_slow_loopback_collector(loopback):
+    loopback.delay.seconds = 0.25
+    providers = Providers()
+    provider, release = providers.acquire(
+        (f"http://127.0.0.1:{loopback.port}", "synthetic", "synthetic", "synthetic")
+    )
+    provider.get_tracer("test").start_span("synthetic").end()
+    release()
+    try:
+        started = time.monotonic()
+        assert providers.flush(10) is False
+        assert time.monotonic() - started < 0.1
+        assert providers.flush(2000) is True
+        assert len(loopback.otlp) == 1
+    finally:
+        providers.close()
+
+
+def test_timed_out_flushes_do_not_spawn_unbounded_workers(monkeypatch):
+    entered = threading.Event()
+    resume = threading.Event()
+    calls = []
+
+    def flush(timeout):
+        calls.append(timeout)
+        entered.set()
+        assert resume.wait(5)
+        return True
+
+    monkeypatch.setattr(
+        "traceai_openwebui._provider.make_provider",
+        lambda *args: SimpleNamespace(force_flush=flush, shutdown=lambda: None),
+    )
+    providers = Providers()
+    _, release = providers.acquire(("a", "synthetic", "synthetic", "synthetic"))
+    release()
+    try:
+        started = time.monotonic()
+        assert providers.flush(10) is False
+        assert time.monotonic() - started < 0.1
+        assert entered.wait(1)
+        for _ in range(5):
+            assert providers.flush(1) is False
+        assert len(calls) == 1
+        resume.set()
+        # A later flush must run anew, not reuse an older completed result that
+        # may predate spans queued since that operation started.
+        assert providers.flush(2000) is True
+        assert len(calls) == 2
+    finally:
+        resume.set()
+        providers.close()
+
+
+def test_flush_failure_releases_worker_and_uses_fixed_diagnostic(monkeypatch, caplog):
+    def fail(timeout):
+        raise RuntimeError("private-collector-error")
+
+    provider = SimpleNamespace(force_flush=fail, shutdown=lambda: None)
+    monkeypatch.setattr(
+        "traceai_openwebui._provider.make_provider", lambda *args: provider
+    )
+    providers = Providers()
+    assert providers.flush(0) is True
+    _, release = providers.acquire(("a", "synthetic", "synthetic", "synthetic"))
+    release()
+    try:
+        assert providers.flush(1000) is False
+        assert "tracing flush failed" in caplog.text
+        assert "private-collector-error" not in caplog.text
+        provider.force_flush = lambda timeout: True
+        assert providers.flush(1000) is True
+    finally:
+        providers.close()
 
 
 def test_export_cli_never_overwrites(tmp_path, monkeypatch):

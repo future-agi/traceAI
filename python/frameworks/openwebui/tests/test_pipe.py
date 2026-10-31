@@ -125,7 +125,10 @@ async def test_stream_error_fixed_message(setup_pipe, signal):
 async def test_nonstream_error(setup_pipe, result):
     s = setup_pipe
     s.delegate.return_value = result
-    assert await invoke(s) is result
+    response = await invoke(s)
+    assert response == (
+        json.loads(result.body) if isinstance(result, JSONResponse) else result
+    )
     (span,) = s.exporter.get_finished_spans()
     assert span.status.description == "model request failed"
 

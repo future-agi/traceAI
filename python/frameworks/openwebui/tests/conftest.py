@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import sys
+import time
+import uuid
 from collections.abc import AsyncGenerator, Generator, Iterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -114,6 +116,8 @@ def host(setup_pipe, monkeypatch):
             "Response": Response,
             "StreamingResponse": StreamingResponse,
             "inspect": inspect,
+            "time": time,
+            "uuid": uuid,
             "BaseModel": BaseModel,
             "JSONCodec": SimpleNamespace(dumps=json.dumps, loads=json.loads),
             "Generator": Generator,
@@ -134,12 +138,16 @@ def host(setup_pipe, monkeypatch):
         for filename, name in (
             ("open_webui/functions.py", "generate_function_chat_completion"),
             ("open_webui/utils/chat.py", "generate_chat_completion"),
+            ("open_webui/utils/misc.py", "openai_chat_message_template"),
+            ("open_webui/utils/misc.py", "openai_chat_completion_message_template"),
+            ("open_webui/utils/misc.py", "openai_chat_chunk_message_template"),
         ):
             module = ast.parse(wheel.read(filename).decode(), filename=filename)
             node = next(
                 n
                 for n in module.body
-                if isinstance(n, ast.AsyncFunctionDef) and n.name == name
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name == name
             )
             # Compile the entire unchanged function, never rewritten hook snippets.
             exec(  # noqa: S102 - execute released host contract only in isolated tests

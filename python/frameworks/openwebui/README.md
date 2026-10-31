@@ -4,7 +4,7 @@ Trace each model call made through an Open WebUI Pipe Function in Future AGI, wi
 
 ## Install
 
-Use Python 3.11 or 3.12 and Open WebUI 0.11.4–0.12.x. Configure a native OpenAI-compatible or Ollama model in Open WebUI first.
+Use Python 3.11 or 3.12 and Open WebUI 0.11.4–0.12.x. Configure an OpenAI-compatible connection model in Open WebUI first. Native Ollama connections are not supported: Open WebUI's conversion can hide failures and incomplete streams, so the Pipe rejects that route rather than recording misleading spans.
 
 Install the package in the same Python environment as Open WebUI, then generate its Function import file:
 
@@ -18,7 +18,7 @@ For a container deployment, install the package in your image and run the export
 ## Configure the Function
 
 1. In **Admin Panel → Functions**, import `traceai-openwebui.json`.
-2. Open the **Traced model** Function's valves. Set `target_model` to the exact native model ID from your existing OpenAI-compatible or Ollama connection. Workspace model presets, other Pipes, and Arena models cannot be targets.
+2. Open the **Traced model** Function's valves. Set `target_model` to the exact model ID from your existing OpenAI-compatible connection. Native Ollama models, workspace model presets, other Pipes, and Arena models cannot be targets.
 3. Set `api_key`, `secret_key`, and `project` to your Future AGI credentials and project name. The default endpoint is `https://api.futureagi.com`. For self-hosted Future AGI, set its HTTPS origin; `/tracer/v1/traces` is added automatically.
 4. Enable the Function, and select **Traced model** in a new chat. Access to the target model is still checked using the signed-in Open WebUI user.
 
@@ -51,10 +51,14 @@ Existing Function copies in Open WebUI's database do not change when this reposi
 
 **No spans:** Confirm you selected **Traced model**, supplied both Future AGI keys, and enabled the Function. Tracing configuration/export failures do not block the model response. Allow a few seconds for the batch exporter.
 
-**Target model rejected:** Use a native connection model ID, not a workspace preset, Arena model, or another Pipe. The signed-in user must also have permission to use that target.
+**Target model rejected:** Use an OpenAI-compatible connection model ID, not a native Ollama model, workspace preset, Arena model, or another Pipe. The signed-in user must also have permission to use that target.
 
 **No token counts:** Enable Usage on the wrapper model and check that the provider returns usage. Cancelled calls may never receive a final usage snapshot.
 
 **Incomplete stream:** The provider ended its stream without a completion marker, or the consumer closed it early. The span is not marked successful. An abrupt process kill cannot export pending spans.
 
 **Self-hosted collector:** Remote endpoints must use HTTPS; HTTP is accepted only for loopback testing. Redirects, host proxy settings, `.netrc`, and unrelated native OTLP client certificates are not used. Use a directly reachable collector endpoint.
+
+## Embedding lifecycle
+
+If you manage the Pipe lifecycle in Python, `pipe.flush(timeout_millis=10000)` bounds the caller's wait and returns `False` when the flush does not complete within that budget. An in-progress export can continue in the background; retrying does not create concurrent flush workers. Call `pipe.close()` to retire the exporter after active model calls finish.
