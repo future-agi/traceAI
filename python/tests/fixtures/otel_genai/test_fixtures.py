@@ -482,12 +482,44 @@ HELPER_MUTATIONS = {
 }
 
 
+def retained_adapter_source() -> str:
+    """Exact authenticated upstream bytes, not a reconstruction of the golden.
+
+    Provenance pins the source commit and Git blob in addition to its SHA-256.
+    A live checkout can still be supplied to detect subsequent upstream drift.
+    """
+    import hashlib
+
+    source = FIXTURES_DIR / "source"
+    provenance = json.loads((source / "provenance.json").read_text(encoding="utf-8"))
+    data = (source / "adapter.go").read_bytes()
+    assert provenance["revision"] == "4af5338700d6f835a5efbec57fbd1bf6f92958b6"
+    assert hashlib.sha256(data).hexdigest() == provenance["sha256"], "retained source changed"
+    assert hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest() == provenance["git_blob"]
+    return data.decode("utf-8")
+
+
 @pytest.fixture(scope="module")
 def adapter_go() -> str:
     path = os.environ.get("FI_COLLECTOR_ADAPTER_GO")
-    if not path:
-        pytest.skip("set FI_COLLECTOR_ADAPTER_GO to fi-collector/pkg/adapter/adapter.go")
-    return Path(path).read_text(encoding="utf-8")
+    return Path(path).read_text(encoding="utf-8") if path else retained_adapter_source()
+
+
+def test_retained_adapter_is_authenticated():
+    assert "\npackage adapter\n" in retained_adapter_source()
+
+
+def test_retained_adapter_corruption_fails(tmp_path, monkeypatch):
+    import sys
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "provenance.json").write_bytes((FIXTURES_DIR / "source/provenance.json").read_bytes())
+    data = (FIXTURES_DIR / "source/adapter.go").read_bytes()
+    (source / "adapter.go").write_bytes(data + b"// changed\n")
+    monkeypatch.setattr(sys.modules[__name__], "FIXTURES_DIR", tmp_path)
+    with pytest.raises(AssertionError, match="retained source changed"):
+        retained_adapter_source()
 
 
 def find_function(source: str, name: str) -> re.Match[str]:

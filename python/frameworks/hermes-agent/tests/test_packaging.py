@@ -39,7 +39,9 @@ def test_untested_python_versions_are_refused(version):
 
 
 def test_hermes_package_manager_accepts_the_wrapper_on_python_3_14():
-    declarations = pytest.importorskip("pm.plugin_declarations")
+    from pm import plugin_declarations as declarations
     declaration = declarations.read_python_declaration(WRAPPER)
-    assert declaration.is_member
+    # Upstream bf0203a names the membership predicate installs_packages.
+    # It still must recognize a genuinely installable wrapper, not an empty plugin.
+    assert declaration.installs_packages
     assert declaration.python_error("3.14.4") is None

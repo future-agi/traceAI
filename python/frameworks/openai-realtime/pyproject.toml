@@ -32,6 +32,8 @@ openai = { version = ">=2.0.0,<4", extras = ["realtime"] }
 wrapt = ">=1.14"
 
 [tool.poetry.group.dev.dependencies]
+# Exercise the real sibling instrumentor coexistence fence in every package run.
+traceAI-openai = { path = "../openai", develop = true }
 pytest = ">=7.0.0"
 opentelemetry-sdk = ">=1.25.0"
 

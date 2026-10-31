@@ -414,7 +414,9 @@ def _is_hitl_interrupt(error: BaseException) -> bool:
 def _is_graph_interrupt(error: BaseException) -> bool:
     """True for LangGraph control-flow signals (dynamic ``interrupt()``/HITL,
     ``Command``, graph delegation) which are intentional pauses, not errors."""
-    return _GraphBubbleUp is not None and isinstance(error, _GraphBubbleUp)
+    # At the declared langgraph 0.2.0 floor GraphInterrupt predates the
+    # GraphBubbleUp base class. Match the real SDK type, not a name/string.
+    return (_GraphBubbleUp is not None and isinstance(error, _GraphBubbleUp)) or _is_hitl_interrupt(error)
 
 
 @audit_timing  # type: ignore

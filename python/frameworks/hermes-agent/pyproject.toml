@@ -36,6 +36,13 @@ opentelemetry-exporter-otlp-proto-http = ">=1.35.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
+# Real upstream plugin discovery and pm.plugin_declarations, never the unrelated
+# PyPI `hermes`/`pm` packages. Pin a reviewed immutable NousResearch revision.
+hermes-agent = { git = "https://github.com/NousResearch/hermes-agent.git", rev = "bf0203a794a07aac3ff764972ab9087baa4e4f4e", develop = true, python = "<3.14" }
+packaging = "==26.0"
+ruamel-yaml = "==0.18.16"
+python-dotenv = "==1.2.2"
+rich = "==14.3.3"
 
 # Hermes discovers pip-installed plugins through this entry-point group. The
 # plugin stays off until `hermes plugins enable futureagi`.
