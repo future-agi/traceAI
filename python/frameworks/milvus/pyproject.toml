@@ -26,12 +26,13 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = ">3.9,<3.14"
-fi-instrumentation-otel = ">=0.1.11"
+fi-instrumentation-otel = ">=1.2.2"
 pymilvus = ">=2.3.0"
 wrapt = ">=1.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
+opentelemetry-exporter-otlp-proto-http = ">=1.20.0"
 
 [tool.poetry.urls]
 Homepage = "https://futureagi.com"
