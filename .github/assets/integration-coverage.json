@@ -1,5 +1,5 @@
 {
-  "integration_families": 78,
+  "integration_families": 79,
   "languages": [
     "Python",
     "TypeScript",
@@ -7,7 +7,7 @@
     "Go",
     "C#"
   ],
-  "method": "Union of normalized framework families from 66 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
+  "method": "Union of normalized framework families from 67 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
   "normalization": {
     "ag2-classic": "ag2",
     "google-genai-live": "google-genai",
@@ -24,7 +24,7 @@
     "fi-instrumentation-vertexai": "vertexai"
   },
   "package_counts_in_matrix": {
-    "Python": 66,
+    "Python": 67,
     "TypeScript": 45,
     "Java": 23,
     "Go": 5,
@@ -105,6 +105,7 @@
         "semantic-kernel",
         "smolagents",
         "strands",
+        "temporal",
         "vercel",
         "voltagent"
       ]
@@ -998,6 +999,20 @@
             "manifest": "typescript/packages/traceai_strands/package.json",
             "package": "@traceai/strands",
             "source": "typescript/packages/traceai_strands/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "temporal",
+      "name": "Temporal",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/temporal/pyproject.toml",
+            "package": "traceAI-temporal",
+            "source": "python/frameworks/temporal/"
           }
         ]
       }

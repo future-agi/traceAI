@@ -46,7 +46,7 @@ NAMES = {
     "portkey": "Portkey", "pydantic-ai": "Pydantic AI", "qdrant": "Qdrant",
     "redis": "Redis Vector Search", "replicate": "Replicate", "semantic-kernel": "Semantic Kernel",
     "smolagents": "Smolagents", "spring-ai": "Spring AI", "spring-boot-starter": "Spring Boot",
-    "strands": "Strands Agents", "tavily": "Tavily", "together": "Together AI", "typesafe": "TypeSafe",
+    "strands": "Strands Agents", "tavily": "Tavily", "temporal": "Temporal", "together": "Together AI", "typesafe": "TypeSafe",
     "vercel": "Vercel AI SDK", "vertexai": "Vertex AI", "vllm": "vLLM", "voltagent": "VoltAgent",
     "voyage": "Voyage AI", "watsonx": "IBM watsonx", "weaviate": "Weaviate", "xai": "xAI",
 }
@@ -66,7 +66,7 @@ CATEGORIES = [
      "Agent orchestration, application frameworks, and agent-to-agent communication.",
      "a2a ag2 agent-framework agno autogen beeai crewai eino genkit google-adk "
      "hermes-agent langchain mastra mcp-use openai-agents pydantic-ai semantic-kernel "
-     "smolagents strands vercel voltagent"),
+     "smolagents strands temporal vercel voltagent"),
     ("rag-vector-databases", "RAG & vector databases",
      "Retrieval pipelines, vector stores, and search backends.",
      "azure-search chromadb cognee discoveryengine elasticsearch haystack lancedb llamaindex "

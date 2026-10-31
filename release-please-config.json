@@ -9,6 +9,14 @@
   "tag-separator": "-",
   "pull-request-title-pattern": "chore${scope}: release${component} ${version}",
   "packages": {
+    "python/frameworks/temporal": {
+      "release-type": "python",
+      "component": "traceai-temporal",
+      "package-name": "traceAI-temporal",
+      "extra-files": [
+        "traceai_temporal/version.py"
+      ]
+    },
     "python/frameworks/a2a": {
       "release-type": "python",
       "component": "traceai-a2a",
