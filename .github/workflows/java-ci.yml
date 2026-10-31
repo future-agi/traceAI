@@ -40,7 +40,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d pgvector_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -59,6 +59,7 @@ jobs:
         run: |
           mvn -B -ntp -pl traceai-java-pgvector -am -Dpostgresql.version=${{ matrix.jdbc }} -DskipTests dependency:go-offline test
           mvn -B -ntp dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3
+          mvn -B -ntp dependency:get -Dartifact=org.junit.platform:junit-platform-launcher:1.10.1
       - name: Test nonempty database results and OTLP export
         run: >-
           mvn -o -B -ntp -pl traceai-java-pgvector -am
