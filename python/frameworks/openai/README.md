@@ -23,6 +23,34 @@ os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 ```
 
+## Vercel AI Gateway
+
+Use the same `OpenAIInstrumentor` for Chat Completions sent to Vercel AI Gateway;
+no gateway-specific instrumentation package is needed. After registering and
+instrumenting the tracer as below, create your client with:
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://ai-gateway.vercel.sh/v1",
+    api_key=os.environ["AI_GATEWAY_API_KEY"],
+)
+```
+
+The documented gateway host is labelled `gen_ai.provider.name="vercel"`.
+This identifies the service the client calls, **not** the upstream model provider
+or a fallback provider. Unknown proxies and look-alike hosts retain their existing
+provider label. Sync, async, streamed and failed calls use the same attribution.
+
+Client spans capture prompts, responses and returned token usage. They do not
+reconstruct gateway routing, retries, cost or provider attempts. Vercel's separate
+[Trace Drains](https://vercel.com/docs/ai-gateway/observability-and-spend/trace-drains)
+provide those gateway details but omit prompts and completions. A drain is not
+configured by `OpenAIInstrumentor`; do not sum client and drain token counts for
+the same request as separate model usage.
+
 ## Quickstart
 
 ### Register Tracer Provider

@@ -30,6 +30,8 @@ _HOSTS = {
     "api.anannas.ai": "anannas",
     "anannas.ai": "anannas",
     "api.doubleword.ai": "doubleword",
+    # Identify the gateway, not the upstream provider it may select or fall back to.
+    "ai-gateway.vercel.sh": "vercel",
 }
 
 # Vendors that give every resource, workspace or endpoint its own subdomain.
