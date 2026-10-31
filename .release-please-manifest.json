@@ -124,5 +124,6 @@
   "go/genai": "0.1.0",
   "go/openai": "0.1.0",
   "csharp/src/FIInstrumentation": "1.0.0",
-  "python": "1.2.2"
+  "python": "1.2.2",
+  "typescript/packages/traceai_openrouter_agent": "0.1.0"
 }

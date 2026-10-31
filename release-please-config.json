@@ -1046,6 +1046,11 @@
           "section": "Documentation"
         }
       ]
+    },
+    "typescript/packages/traceai_openrouter_agent": {
+      "release-type": "node",
+      "component": "npm-traceai-openrouter-agent",
+      "package-name": "@traceai/openrouter-agent"
     }
   }
 }
