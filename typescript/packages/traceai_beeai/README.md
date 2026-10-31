@@ -1,101 +1,101 @@
 # @traceai/beeai
 
-OpenTelemetry instrumentation for IBM BeeAI Framework. Part of traceAI, Future AGI's OpenTelemetry instrumentation libraries.
-
-[Documentation](https://docs.futureagi.com/docs/tracing) · [Source](https://github.com/future-agi/traceAI/tree/dev/typescript/packages/traceai_beeai) · [Issues](https://github.com/future-agi/traceAI/issues)
-
-## Runtime support and prerequisites
-
-`beeai-framework@0.1.27` exports `ReActAgent` from
-`beeai-framework/agents/react/agent`, not the package root. This instrumentor
-patches root exports, so registering `BeeAIInstrumentation` alone does **not**
-instrument that SDK. The package version range is not a compatibility guarantee.
-Do not use automatic registration as proof that spans are being captured.
-
-The explicit application-span fallback below works around this limitation without
-patching the SDK. It does not add automatic tool/LLM spans or token usage. Awaited,
-non-streaming operations only: a returned stream must be consumed inside the
-callback, before the span ends.
+Trace BeeAI agents, tools, chat models and workflows in Future AGI while keeping BeeAI's lazy `Run`, observers and middleware intact.
 
 ## Install
 
-The checked SDK version is `beeai-framework@0.1.27`. Install the SDK only after satisfying
-its prerequisites above. The fallback requires these tracing dependencies:
-
 ```sh
-npm install @traceai/fi-core @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
+npm install @traceai/beeai @traceai/fi-core beeai-framework zod@^3.25.76 @opentelemetry/api@^1.9.0 @opentelemetry/context-async-hooks@^2.0.1
 ```
 
-`@traceai/beeai` is the automatic-instrumentation package, not a requirement for the
-manual fallback. Its corrected source entry points resolve for both CommonJS and
-ESM (through one CommonJS implementation), but still need a patch release.
-Previously published `0.1.0` tarballs are unchanged. **Packaging repair does not
-fix the provider runtime limitations above.**
+Use `beeai-framework` 0.1.x. Your model adapter may require additional packages and its own credentials. This integration exports traces, not metrics or logs.
 
-## ESM application-span fallback
+## Configure tracing
 
-Save this as `tracing.mjs`. Set `FI_API_KEY` and `FI_SECRET_KEY` in the environment
-for Future AGI export. Never embed credentials in source.
+Set `FI_API_KEY` and `FI_SECRET_KEY` in your environment. Save this as `tracing.mjs` and load it before running your agents.
 
 ```javascript
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-// Use the core's CommonJS entry from ESM as well.
-const { register, ProjectType } = require("@traceai/fi-core");
-const { context, SpanStatusCode } = require("@opentelemetry/api");
-const { AsyncLocalStorageContextManager } = require("@opentelemetry/context-async-hooks");
+import { register, ProjectType } from "@traceai/fi-core";
+import { BeeAIInstrumentation } from "@traceai/beeai";
+import { RunContext } from "beeai-framework/context";
+import { context } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 
-// Standalone process only. Reuse an existing OTel context manager if present.
+// For a standalone application. Reuse your existing OTel context manager if present.
 context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+
 export const tracerProvider = register({
   projectName: "beeai-app",
   projectType: ProjectType.OBSERVE,
 });
-const tracer = tracerProvider.getTracer("beeai-application");
 
-export async function traceSdkCall(operation) {
-  return tracer.startActiveSpan("beeai.run", {
-    attributes: { "fi.span.kind": "AGENT" },
-  }, async (span) => {
-    try {
-      const result = await operation();
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    } catch (error) {
-      // Do not record exception text: provider errors can contain sensitive data.
-      span.setStatus({ code: SpanStatusCode.ERROR });
-      throw error;
-    } finally {
-      span.end();
-    }
-  });
-}
+export const instrumentation = new BeeAIInstrumentation({
+  traceConfig: {
+    hideInputs: true,
+    hideOutputs: true,
+    hideErrorDetails: true,
+  },
+});
+instrumentation.setTracerProvider(tracerProvider);
+instrumentation.manuallyInstrument({ RunContext });
 ```
 
-In your application's `.mjs` file, use an already configured SDK instance:
+Pass `RunContext` from the same CommonJS or ESM framework copy your application uses. This explicit setup works with either module system and does not require an ESM loader hook.
+
+If your application already owns an OpenTelemetry tracer provider, pass that provider to `setTracerProvider()` instead of creating a second one. Use only one BeeAI tracing integration: do not also attach BeeAI's telemetry middleware or another BeeAI instrumentor.
+
+## Run a workflow
+
+This workflow needs no model credentials. Save it as `app.mjs` next to `tracing.mjs`.
 
 ```javascript
-import { traceSdkCall, tracerProvider } from "./tracing.mjs";
+import { tracerProvider } from "./tracing.mjs";
+import { Workflow } from "beeai-framework/workflows/workflow";
+import { z } from "zod";
+
+const workflow = new Workflow({
+  name: "normalize-question",
+  schema: z.object({ question: z.string() }),
+}).addStep("trim", async (state) => {
+  state.question = state.question.trim();
+  return Workflow.END;
+});
+
 try {
-  // agent is an already configured ReActAgent from
-  // beeai-framework/agents/react/agent; provider credentials stay in the environment.
-  const result = await traceSdkCall(() => agent.run({ prompt: "Hello" }));
+  const result = await workflow.run({ question: " How do I trace my agent? " });
+  console.log(result.state.question);
 } finally {
   await tracerProvider.shutdown();
 }
 ```
 
-The fallback was checked with mocked asynchronous SDK operations, including a
-nested child span and an error. This verifies span export and context continuity,
-not a live model request or all SDK features. `register()` alone does not install
-an async context manager; the explicit setup above is needed for nested traces.
-Keep shutdown at process exit for long-running applications.
+```sh
+node app.mjs
+```
+
+Open the `beeai-app` project in Future AGI to inspect the workflow trace. The same setup captures your existing agents and their nested tools, models and workflows. Keep shutdown at process exit for a long-running service, not after each request.
+
+## What is captured
+
+- One span per native BeeAI run, with parent-child relationships for nested runs.
+- Agent, tool, LLM, embedding and workflow span kinds. Workflows use the `CHAIN` kind.
+- Chat model and provider identifiers, and token counts when BeeAI supplies usage.
+- One model span for a streamed chat completion; token observers continue to receive events normally.
+- Error status and cancellation without changing the application's return values or exceptions.
+
+Constructing a `Run` without awaiting it does not create a span or execute the operation. Timing follows BeeAI's native `run.start` through `run.finish` lifecycle. A custom run that returns an unconsumed async iterator ends when BeeAI finishes that run; consuming the iterator later is not a second traced operation.
 
 ## Privacy
 
-This fallback deliberately records no prompts or responses. Other instrumentors
-and SDK telemetry may capture sensitive data; configure them separately before
-sending production traffic.
+The setup above hides input, output and error text. Set the corresponding `traceConfig` options to `false` only when you intend to export that content. Environment configuration in `@traceai/fi-core` also applies when options are not set explicitly.
+
+Message/text-hiding options also hide generic agent/workflow payloads, because those payloads can contain copies of model messages. Embedding vectors are not recorded. Configure any other instrumentors separately.
+
+## Existing applications
+
+`BeeAIInstrumentation`, `setTracerProvider()`, `enable()`, `disable()` and `manuallyInstrument()` remain available. CommonJS automatic registration must happen before loading `beeai-framework` or its subpaths.
+
+Existing `manuallyInstrument(beeModule)` calls with the package root continue to trace agents and their nested BeeAI runs. Pass `{ RunContext }` as shown above to also capture standalone tools, models and workflows and propagate the active span into other OpenTelemetry-instrumented work inside a run.
 
 ## License
 

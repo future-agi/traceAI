@@ -1,58 +1,38 @@
-/**
- * Example usage of BeeAI instrumentation with TraceAI.
- *
- * IMPORTANT: Register instrumentation BEFORE importing beeai-framework.
- */
-
 import { register, ProjectType } from "@traceai/fi-core";
-import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 import { BeeAIInstrumentation } from "@traceai/beeai";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-import * as dotenv from "dotenv";
+import { context } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { RunContext } from "beeai-framework/context";
+import { Workflow } from "beeai-framework/workflows/workflow";
+import { z } from "zod";
 
-dotenv.config();
-
-// 1. Enable diagnostic logging (optional, for debugging)
-diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
-
-// 2. Register FI Core TracerProvider
-const tracerProvider = register({
-  projectName: "beeai-example",
-  projectType: ProjectType.OBSERVE,
-  sessionName: `beeai-session-${Date.now()}`,
+// Reuse your application's context manager if it already has one.
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+const provider = register({ projectName: "beeai-example", projectType: ProjectType.OBSERVE });
+const instrumentation = new BeeAIInstrumentation({
+  traceConfig: { hideInputs: true, hideOutputs: true, hideErrorDetails: true },
 });
-
-// 3. Register BeeAI instrumentation BEFORE importing the SDK
-registerInstrumentations({
-  tracerProvider: tracerProvider as any,
-  instrumentations: [new BeeAIInstrumentation()],
-});
-
-// 4. Now import and use beeai-framework
-import { BeeAgent } from "beeai-framework/agents/bee/agent";
-import { OllamaLLM } from "beeai-framework/adapters/ollama/llm";
-import { TokenMemory } from "beeai-framework/memory/tokenMemory";
+instrumentation.setTracerProvider(provider);
+instrumentation.manuallyInstrument({ RunContext });
 
 async function main() {
-  // Create an LLM adapter
-  const llm = new OllamaLLM({
-    modelId: "llama3.1",
+  const workflow = new Workflow({
+    name: "normalize-question",
+    schema: z.object({ question: z.string() }),
+  }).addStep("trim", async state => {
+    state.question = state.question.trim();
+    return Workflow.END;
   });
-
-  // Create a BeeAgent
-  const agent = new BeeAgent({
-    llm,
-    memory: new TokenMemory({ llm }),
-    tools: [],
-  });
-
-  // Run the agent
-  const response = await agent.run(
-    { prompt: "What is the capital of France?" },
-    { execution: { maxIterations: 3 } }
-  );
-
-  console.log("Agent response:", response.result?.text);
+  try {
+    const result = await workflow.run({ question: " How do I trace my agent? " });
+    console.log(result.state.question);
+  } finally {
+    instrumentation.disable();
+    await provider.shutdown();
+  }
 }
 
-main().catch(console.error);
+main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
