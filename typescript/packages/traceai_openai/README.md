@@ -93,6 +93,35 @@ try {
 }
 ```
 
+## Cloudflare AI Gateway and provider attribution
+
+Use the existing `OpenAIInstrumentation` with an OpenAI-compatible client; no
+Cloudflare-specific instrumentation package is needed. For new Cloudflare
+integrations, use the [REST endpoint](https://developers.cloudflare.com/ai-gateway/usage/rest-api/)
+`https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1`. Existing
+`https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/compat` clients
+continue to work.
+
+Chat, legacy completion and Responses spans record `server.address` separately
+from `gen_ai.provider.name`. For Cloudflare's REST and compatibility endpoints,
+explicit request prefixes identify the requested provider: `openai/`,
+`anthropic/`, `google/` or `google-ai-studio/`, and `xai/` or `grok/`. Workers AI's
+`@cf/` or `workers-ai/` prefix identifies `cloudflare`, not the author of the hosted model.
+
+Dynamic routes, unrecognized prefixes and unprefixed aliases do not establish a
+provider, so the provider attribute is omitted. Response model names never
+replace this routing decision. Direct OpenAI and Azure OpenAI hosts retain their
+respective provider identity; other custom endpoints have no inferred provider.
+The endpoint attributes never contain URL credentials, account/gateway path
+segments, query strings or fragments.
+
+Application spans describe the requested route, not a gateway's eventual fallback
+or routing choice. Prefer [Cloudflare's native OpenTelemetry export](https://developers.cloudflare.com/ai-gateway/observability/otel-integration/)
+when you need gateway-side routing details. Choose native gateway export or
+application instrumentation for a single view of each call; enabling both adds
+two tracing layers, not one automatically deduplicated span. This package does
+not configure or replace native gateway export.
+
 ## Environment Variables
 
 The following environment variables are required:

@@ -129,6 +129,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
   "raw.input": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-3.5-turbo"}",
   "raw.output": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -195,6 +196,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":1}}}",
   "raw.input": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-4o-mini"}",
   "raw.output": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":1}}}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -248,6 +250,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "This is a test",
   "raw.input": "{"prompt":"Say this is a test","model":"gpt-3.5-turbo-instruct"}",
   "raw.output": "{"id":"cmpl-8fZu1H3VijJUWev9asnxaYyQvJTC9","object":"text_completion","created":1704920149,"model":"gpt-3.5-turbo-instruct","choices":[{"text":"This is a test","index":0,"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -333,6 +336,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "This is a test.",
   "raw.input": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-3.5-turbo","stream":true}",
   "raw.output": "[{"choices":[{"delta":{"content":"This is "}}]},{"choices":[{"delta":{"content":"a test."}}]},{"choices":[{"delta":{"finish_reason":"stop"}}]}]",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -586,6 +590,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-8hhqZDFTRD0vzExhqWnMLE7viVl7E","object":"chat.completion","created":1705427343,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_5ERYvu4iTGSvDlcDQjDP3g3J","type":"function","function":{"name":"getCurrentLocation","arguments":"{}"}}]},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":70,"completion_tokens":7,"total_tokens":77},"system_fingerprint":null}",
   "raw.input": "{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"How is the weather this week?"}],"tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"tool_choice":"auto","stream":false}",
   "raw.output": "{"id":"chatcmpl-8hhqZDFTRD0vzExhqWnMLE7viVl7E","object":"chat.completion","created":1705427343,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_5ERYvu4iTGSvDlcDQjDP3g3J","type":"function","function":{"name":"getCurrentLocation","arguments":"{}"}}]},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":70,"completion_tokens":7,"total_tokens":77},"system_fingerprint":null}",
+  "server.address": "api.openai.com",
 }
 `);
     expect(span2.name).toBe("OpenAI Chat Completions");
@@ -611,6 +616,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-8hhsP9eAplUFYB3mHUJxBkq7IwnjZ","object":"chat.completion","created":1705427457,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_0LCdYLkdRUt3rV3dawoIFHBf","type":"function","function":{"name":"getWeather","arguments":"{\\n  \\"location\\": \\"Boston\\"\\n}"}}]},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":86,"completion_tokens":15,"total_tokens":101},"system_fingerprint":null}",
   "raw.input": "{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"How is the weather this week?"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_5ERYvu4iTGSvDlcDQjDP3g3J","type":"function","function":{"name":"getCurrentLocation","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_5ERYvu4iTGSvDlcDQjDP3g3J","content":"Boston"}],"tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"tool_choice":"auto","stream":false}",
   "raw.output": "{"id":"chatcmpl-8hhsP9eAplUFYB3mHUJxBkq7IwnjZ","object":"chat.completion","created":1705427457,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_0LCdYLkdRUt3rV3dawoIFHBf","type":"function","function":{"name":"getWeather","arguments":"{\\n  \\"location\\": \\"Boston\\"\\n}"}}]},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":86,"completion_tokens":15,"total_tokens":101},"system_fingerprint":null}",
+  "server.address": "api.openai.com",
 }
 `);
     expect(span3.name).toBe("OpenAI Chat Completions");
@@ -636,6 +642,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-8hhtfzSD33tsG7XJiBg4F9MqnXKDp","object":"chat.completion","created":1705427535,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"The weather in Boston this week is expected to be rainy with a temperature of 52 degrees."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":121,"completion_tokens":20,"total_tokens":141},"system_fingerprint":null}",
   "raw.input": "{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"How is the weather this week?"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_5ERYvu4iTGSvDlcDQjDP3g3J","type":"function","function":{"name":"getCurrentLocation","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_5ERYvu4iTGSvDlcDQjDP3g3J","content":"Boston"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_0LCdYLkdRUt3rV3dawoIFHBf","type":"function","function":{"name":"getWeather","arguments":"{\\n  \\"location\\": \\"Boston\\"\\n}"}}]},{"role":"tool","tool_call_id":"call_0LCdYLkdRUt3rV3dawoIFHBf","content":"{\\"temperature\\":52,\\"precipitation\\":\\"rainy\\"}"}],"tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"tool_choice":"auto","stream":false}",
   "raw.output": "{"id":"chatcmpl-8hhtfzSD33tsG7XJiBg4F9MqnXKDp","object":"chat.completion","created":1705427535,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"The weather in Boston this week is expected to be rainy with a temperature of 52 degrees."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":121,"completion_tokens":20,"total_tokens":141},"system_fingerprint":null}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -764,6 +771,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "",
   "raw.input": "{"messages":[{"role":"user","content":"What's the weather today?"}],"model":"gpt-3.5-turbo","tools":[{"type":"function","function":{"name":"getCurrentLocation","parameters":{"type":"object","properties":{}},"description":"Get the current location of the user."}},{"type":"function","function":{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}],"stream":true}",
   "raw.output": "[{"id":"chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL","object":"chat.completion.chunk","created":1705535755,"model":"gpt-3.5-turbo-0613","system_fingerprint":null,"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_PGkcUg2u6vYrCpTn0e9ofykY","type":"function","function":{"name":"getWeather","arguments":""}}]},"logprobs":null,"finish_reason":null}]},{"id":"chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL","object":"chat.completion.chunk","created":1705535755,"model":"gpt-3.5-turbo-0613","system_fingerprint":null,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"logprobs":null,"finish_reason":null}]},{"id":"chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL","object":"chat.completion.chunk","created":1705535755,"model":"gpt-3.5-turbo-0613","system_fingerprint":null,"choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"tool_calls"}]}]",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -876,6 +884,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "",
   "raw.input": "{"messages":[{"role":"user","content":"What's the weather today?"}],"model":"gpt-3.5-turbo","functions":[{"name":"getWeather","description":"Get the weather for a location.","parameters":{"type":"object","properties":{"location":{"type":"string"}}}},{"name":"getCurrentLocation","description":"Get the current location of the user.","parameters":{"type":"object","properties":{}}}],"stream":true}",
   "raw.output": "[{"id":"chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL","object":"chat.completion.chunk","created":1705535755,"model":"gpt-3.5-turbo-0613","system_fingerprint":null,"choices":[{"index":0,"delta":{"role":"assistant","content":null,"function_call":{"name":"getWeather","arguments":""}},"logprobs":null,"finish_reason":null}]},{"id":"chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL","object":"chat.completion.chunk","created":1705535755,"model":"gpt-3.5-turbo-0613","system_fingerprint":null,"choices":[{"index":0,"delta":{"function_call":{"arguments":"{}"}},"logprobs":null,"finish_reason":null}]},{"id":"chatcmpl-8iA39kCtuVHIVDr9AnBdJZjgSjNWL","object":"chat.completion.chunk","created":1705535755,"model":"gpt-3.5-turbo-0613","system_fingerprint":null,"choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"function_call"}]}]",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -994,6 +1003,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
   "raw.input": "{"messages":[{"role":"user","content":[{"type":"text","text":"Say this is a test"},{"type":"image_url","image_url":{"url":"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}}]}],"model":"gpt-3.5-turbo"}",
   "raw.output": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-3.5-turbo-0613","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -1060,6 +1070,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "This is a test",
   "raw.input": "{"prompt":"Say this is a test","model":"gpt-3.5-turbo-instruct"}",
   "raw.output": "{"id":"cmpl-8fZu1H3VijJUWev9asnxaYyQvJTC9","object":"text_completion","created":1704920149,"model":"gpt-3.5-turbo-instruct","choices":[{"text":"This is a test","index":0,"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -1138,6 +1149,7 @@ describe("OpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-parseTest","object":"chat.completion","created":1706000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"message":{"role":"assistant","content":"{\\"name\\":\\"science fair\\",\\"date\\":\\"Friday\\",\\"participants\\":[\\"Alice\\",\\"Bob\\"]}"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}}",
   "raw.input": "{"model":"gpt-4o-2024-08-06","messages":[{"role":"system","content":"Extract the event information."},{"role":"user","content":"Alice and Bob are going to a science fair on Friday."}],"response_format":{"type":"json_schema","json_schema":{"name":"event","strict":true,"schema":{"type":"object","properties":{"name":{"type":"string"},"date":{"type":"string"},"participants":{"type":"array","items":{"type":"string"}}},"required":["name","date","participants"],"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}}}}",
   "raw.output": "{"id":"chatcmpl-parseTest","object":"chat.completion","created":1706000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"message":{"role":"assistant","content":"{\\"name\\":\\"science fair\\",\\"date\\":\\"Friday\\",\\"participants\\":[\\"Alice\\",\\"Bob\\"]}"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -1231,6 +1243,7 @@ describe("OpenAIInstrumentation with TraceConfig", () => {
   "output.value": "This is a test",
   "raw.input": "__REDACTED__",
   "raw.output": "{"id":"cmpl-8fZu1H3VijJUWev9asnxaYyQvJTC9","object":"text_completion","created":1704920149,"model":"gpt-3.5-turbo-instruct","choices":[{"text":"This is a test","index":0,"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
+  "server.address": "api.openai.com",
 }
 `);
   });
@@ -1320,7 +1333,7 @@ describe("AzureOpenAIInstrumentation", () => {
   "gen_ai.input.messages": "[{"role":"user","content":"Say this is a test"}]",
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"This is a test."}]",
-  "gen_ai.provider.name": "openai",
+  "gen_ai.provider.name": "azure",
   "gen_ai.request.model": "gpt-35-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-35-turbo"}",
   "gen_ai.response.finish_reasons": "["stop"]",
@@ -1335,6 +1348,7 @@ describe("AzureOpenAIInstrumentation", () => {
   "output.value": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-35-turbo","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
   "raw.input": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-35-turbo"}",
   "raw.output": "{"id":"chatcmpl-8adq9JloOzNZ9TyuzrKyLpGXexh6p","object":"chat.completion","created":1703743645,"model":"gpt-35-turbo","choices":[{"index":0,"message":{"role":"assistant","content":"This is a test."},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}",
+  "server.address": "my-azure-openai.openai.azure.com",
 }
 `);
   });
@@ -1413,7 +1427,7 @@ describe("AzureOpenAIInstrumentation", () => {
   "gen_ai.input.messages": "[{"role":"user","content":"Say this is a test"}]",
   "gen_ai.operation.name": "chat",
   "gen_ai.output.messages": "[{"role":"assistant","content":"This is a test."}]",
-  "gen_ai.provider.name": "openai",
+  "gen_ai.provider.name": "azure",
   "gen_ai.request.model": "gpt-35-turbo",
   "gen_ai.request.parameters": "{"model":"gpt-35-turbo","stream":true}",
   "input.mime_type": "application/json",
@@ -1422,6 +1436,7 @@ describe("AzureOpenAIInstrumentation", () => {
   "output.value": "This is a test.",
   "raw.input": "{"messages":[{"role":"user","content":"Say this is a test"}],"model":"gpt-35-turbo","stream":true}",
   "raw.output": "[{"choices":[{"delta":{"content":"This is "}}]},{"choices":[{"delta":{"content":"a test."}}]},{"choices":[{"delta":{"finish_reason":"stop"}}]}]",
+  "server.address": "my-azure-openai.openai.azure.com",
 }
 `);
   });

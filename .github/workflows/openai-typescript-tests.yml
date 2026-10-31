@@ -1,0 +1,58 @@
+name: OpenAI TypeScript tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_openai/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/tsconfig*.json'
+      - '.github/workflows/openai-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  openai:
+    name: OpenAI SDK ${{ matrix.sdk }} offline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['4.0.0', '5.23.2']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install locked dependencies and isolated SDK
+        working-directory: typescript
+        env:
+          SDK_VERSION: ${{ matrix.sdk }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          corepack pnpm --filter @traceai/openai... install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/openai-sdk" --ignore-scripts --no-audit --no-fund "openai@$SDK_VERSION"
+      - name: Build package and shared dependencies
+        working-directory: typescript
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/openai run build
+      - name: Run unit tests and real SDK contract with only loopback networking
+        working-directory: typescript/packages/traceai_openai
+        run: |
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' _ \
+            "$(command -v node)" "$PWD/node_modules/jest/bin/jest.js" --runInBand --config jest.config.js
+          sudo unshare --net -- bash -c 'ip link set lo up; exec "$@"' _ \
+            env OPENAI_TEST_MODULE="$RUNNER_TEMP/openai-sdk/node_modules/openai" \
+            "$(command -v node)" "$PWD/node_modules/jest/bin/jest.js" --runInBand --config jest.compat.config.js
+      - name: Check lockfile stays unchanged
+        run: git diff --exit-code -- typescript/pnpm-lock.yaml

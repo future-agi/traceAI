@@ -195,7 +195,9 @@ describe("OpenAI instrumentation with hidden content", () => {
       expect(span.attributes[SemanticConventions.LLM_INPUT_MESSAGES]).toBeUndefined();
       // Not content: kept
       expect(span.attributes[SemanticConventions.LLM_MODEL_NAME]).toBeDefined();
-      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBe("openai");
+      // A local compatible endpoint does not establish an inference provider.
+      expect(span.attributes[SemanticConventions.LLM_PROVIDER]).toBeUndefined();
+      expect(span.attributes["server.address"]).toBe("127.0.0.1");
     }
     const failed = spans.filter((span) => span.status.code === SpanStatusCode.ERROR);
     expect(failed).toHaveLength(2);

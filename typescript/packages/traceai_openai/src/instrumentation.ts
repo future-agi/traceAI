@@ -21,7 +21,6 @@ import {
   FISpanKind,
   MimeType,
   LLMSystem,
-  LLMProvider,
 } from "@traceai/fi-semantic-conventions";
 import {
   ChatCompletion,
@@ -57,6 +56,8 @@ import {
   getResponsesOutputMessagesAttributes,
   getResponsesUsageAttributes,
 } from "./responseAttributes"; 
+
+import { getProviderAttributes } from "./providerAttributes";
 
 const MODULE_NAME = "openai";
 
@@ -119,6 +120,9 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       Object.assign({}, instrumentationConfig),
     );
     this._traceConfig = traceConfig;
+    // super() enables instrumentation before traceConfig is assigned. Apply it
+    // even when the provider was already registered and its tracer is unchanged.
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig });
   }
 
   public override enable(): void {
@@ -216,7 +220,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                ...getProviderAttributes(this, body.model),
                 [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                 ...getLLMInputMessagesAttributes(body),
                 ...getLLMToolsJSONSchema(body),
@@ -269,9 +273,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
             } else {
-              const [leftStream, rightStream] = result.tee();
-              consumeChatCompletionStreamChunks(rightStream, span);
-              result = leftStream;
+              result = traceStream(result, span, (stream) => consumeChatCompletionStreamChunks(stream, span));
             }
             return result;
           }).catch((error: Error) => {
@@ -310,7 +312,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 [SemanticConventions.LLM_MODEL_NAME]: body.model,
                 [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                   JSON.stringify(invocationParameters),
-                [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                ...getProviderAttributes(this, body.model),
                 [SemanticConventions.GEN_AI_OPERATION_NAME]: "text_completion",
                 ...getCompletionInputValueAndMimeType(body),
                 [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
@@ -356,6 +358,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
+            } else {
+              result = traceStream(result, span, (stream) => consumeCompletionStreamChunks(stream, span));
             }
             return result;
           }).catch((error: Error) => {
@@ -473,7 +477,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                   [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
                   [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
                     JSON.stringify(invocationParameters),
-                  [SemanticConventions.LLM_PROVIDER]: LLMProvider.OPENAI,
+                  ...getProviderAttributes(this, body.model),
                   [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
                   ...getResponsesInputMessagesAttributes(body),
                   ...getLLMToolsJSONSchema(body),
@@ -526,7 +530,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 recordSpan(result);
               } else {
                 const [leftStream, rightStream] = result.tee();
-                consumeResponseStreamEvents(rightStream).then(recordSpan);
+                consumeResponseStreamEvents(rightStream).then(recordSpan).catch((error) => endSpanWithError(span, error));
                 result = leftStream;
               }
 
@@ -842,11 +846,67 @@ function getEmbeddingEmbeddingsAttributes(
   }, {} as Attributes);
 }
 
+/** Keep the SDK's stream API, including early 4.x releases without tee(). */
+function traceStream<T>(stream: Stream<T>, span: Span, consume: (chunks: AsyncIterable<T>) => Promise<void>): Stream<T> {
+  if (typeof stream.tee === "function") {
+    const [left, right] = stream.tee();
+    consume(right).catch((error) => endSpanWithError(span, error));
+    return left;
+  }
+  const iterate = stream[Symbol.asyncIterator].bind(stream);
+  stream[Symbol.asyncIterator] = async function* () {
+    const chunks: T[] = [];
+    let failed = false;
+    try {
+      for await (const chunk of { [Symbol.asyncIterator]: iterate }) {
+        chunks.push(chunk);
+        yield chunk;
+      }
+    } catch (error) {
+      failed = true;
+      endSpanWithError(span, error as Error);
+      throw error;
+    } finally {
+      if (!failed) {
+        await consume({ async *[Symbol.asyncIterator]() { yield* chunks; } })
+          .catch((error) => endSpanWithError(span, error));
+      }
+    }
+  };
+  return stream;
+}
+
+function endSpanWithError(span: Span, error: Error) {
+  span.recordException(error);
+  span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+  span.end();
+}
+
+/** Legacy completion streams also need a finished span for their route metadata. */
+async function consumeCompletionStreamChunks(stream: AsyncIterable<Completion>, span: Span) {
+  let output = "";
+  for await (const chunk of stream) {
+    output += chunk.choices.find((choice) => choice.index === 0)?.text ?? "";
+    span.setAttributes({
+      [SemanticConventions.GEN_AI_RESPONSE_MODEL]: chunk.model,
+      [SemanticConventions.GEN_AI_RESPONSE_ID]: chunk.id,
+      ...getUsageAttributes(chunk),
+    });
+  }
+  span.setAttributes({
+    [SemanticConventions.OUTPUT_VALUE]: output,
+    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+    [SemanticConventions.RAW_OUTPUT]: output,
+  });
+  span.setStatus({ code: SpanStatusCode.OK });
+  span.end();
+}
+
 /**
  * Consumes the stream chunks and adds them to the span
  */
 async function consumeChatCompletionStreamChunks(
-  stream: Stream<ChatCompletionChunk>,
+  stream: AsyncIterable<ChatCompletionChunk>,
   span: Span,
 ) {
   // --- ADD LOG ---
