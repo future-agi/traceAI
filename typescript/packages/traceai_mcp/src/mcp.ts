@@ -370,6 +370,19 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
     )
       return;
     const descriptor = Object.getOwnPropertyDescriptor(target, key);
+    let declaredDescriptor = descriptor;
+    for (
+      let owner = Object.getPrototypeOf(target);
+      !declaredDescriptor && owner;
+      owner = Object.getPrototypeOf(owner)
+    ) {
+      declaredDescriptor = Object.getOwnPropertyDescriptor(owner, key);
+    }
+    // Node's streamable HTTP adapter forwards callbacks through accessors to
+    // its web-standard transport. Shadowing the accessor would bypass dispatch.
+    const delegated =
+      !!declaredDescriptor &&
+      ("get" in declaredDescriptor || "set" in declaredDescriptor);
     const replacement = wrap(original as Method);
     let active = true;
     // If another instrumentor wraps us later, disable still makes its retained
@@ -378,12 +391,16 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
       return Reflect.apply(active ? replacement : original, this, args);
     };
     try {
-      Object.defineProperty(target, key, {
-        configurable: true,
-        writable: true,
-        enumerable: descriptor?.enumerable ?? false,
-        value: guarded,
-      });
+      if (delegated) {
+        if (!Reflect.set(target, key, guarded)) return;
+      } else {
+        Object.defineProperty(target, key, {
+          configurable: true,
+          writable: true,
+          enumerable: descriptor?.enumerable ?? false,
+          value: guarded,
+        });
+      }
     } catch {
       diag.debug(`MCP instrumentation could not wrap ${key}`);
       return;
@@ -398,7 +415,8 @@ export class MCPInstrumentation extends InstrumentationBase<InstrumentationConfi
       restore: () => {
         active = false;
         if (Reflect.get(target, key) !== guarded) return;
-        if (descriptor) Object.defineProperty(target, key, descriptor);
+        if (delegated) Reflect.set(target, key, original);
+        else if (descriptor) Object.defineProperty(target, key, descriptor);
         else Reflect.deleteProperty(target, key);
       },
     });
