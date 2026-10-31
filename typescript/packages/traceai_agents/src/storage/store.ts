@@ -15,7 +15,7 @@ import {
   encodeFacts,
   encodeTraceObject,
 } from "../export/otlp.js";
-import { validateBinding, type Binding } from "../export/endpoint.js";
+import { sameDestination, validateBinding, type Binding } from "../export/endpoint.js";
 import { measure, preflight, reserve, STORAGE_LIMITS } from "./budget.js";
 export interface Route {
   id: string;
@@ -176,7 +176,9 @@ export class Spool {
       .get(route.id) as any;
     if (old) {
       const prior = JSON.parse(old.config);
-      if (JSON.stringify(prior.binding) !== JSON.stringify(route.binding))
+      // Contract approval may be rolled back by a failed config transaction.
+      // Only the export eligibility changes; the destination identity never does.
+      if (!sameDestination(prior.binding, route.binding))
         throw new AgentError("HELD_DESTINATION_CHANGED", 3);
       if (
         route.epoch < old.epoch ||

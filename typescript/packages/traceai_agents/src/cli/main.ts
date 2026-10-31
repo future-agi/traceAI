@@ -23,7 +23,11 @@ import {
   parseAuth,
   removeAuthentication,
 } from "../security/credentials.js";
-import { DEFAULT_ENDPOINT, validateBinding } from "../export/endpoint.js";
+import {
+  DEFAULT_ENDPOINT,
+  sameDestination,
+  validateBinding,
+} from "../export/endpoint.js";
 import { runtimeRequest, Runtime } from "../runtime/daemon.js";
 import { ImportPlanner } from "../import.js";
 import { authInput } from "./input.js";
@@ -281,6 +285,19 @@ export async function main(
             )
               throw new AgentError("HELD_BACKEND_CONTRACT", 3);
             profile.binding.backendContract = "immutable-agent-v1";
+            // Approval may follow installation. Upgrade the installed route with
+            // the same immutable destination and epoch, or refuse atomically.
+            for (const route of Object.values(config.routes)) {
+              if (route.profile !== name) continue;
+              if (!sameDestination(route.route.binding, profile.binding))
+                throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
+              controlRuntime ??= await ensureControlRuntime(p, settings);
+              await runtimeRequest(p.socket, {
+                operation: "validate-route",
+                route: { ...route.route, binding: profile.binding },
+              });
+              route.route.binding = profile.binding;
+            }
           }
           const secrets = store(p, profile);
           const previous = existing
@@ -294,7 +311,15 @@ export async function main(
           );
           profile.removed = false;
           config.profiles[name] = profile;
-        });
+        },
+          async () => {
+            if (
+              options["contract-manifest"] &&
+              Object.values(loadConfig(p).routes).some((r) => r.profile === name)
+            )
+              await runtimeRequest(p.socket, { operation: "refresh" });
+          },
+        );
         // Rotation is explicit approval to release only authentication holds.
         // An unavailable runtime remains held until this action is repeated while running.
         try {
@@ -452,7 +477,10 @@ export async function main(
       try {
         await startRuntime(p, settings.entry);
       } catch (e) {
-        if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
+        // Only failures in bringing up local telemetry are recoverable here.
+        // Adapter launch and native-destination checks still fail closed.
+        // Invalid paths/symlinks make telemetry unavailable; never write there.
+        if (e instanceof AgentError && e.code === "NATIVE_DESTINATION_CONFLICT")
           throw e;
         tracing = false;
         process.stderr.write(
@@ -545,12 +573,24 @@ export async function main(
     }
     if (command === "enable") await startRuntime(p, settings.entry);
     if (cleanup) controlRuntime = await ensureControlRuntime(p, settings);
-    if (cleanup)
-      await runtimeRequest(p.socket, {
+    if (cleanup) {
+      const fenced = await runtimeRequest(p.socket, {
         operation: "disable",
         route: routeId,
         purge: options["purge-capture"] === true,
       });
+      // Persist the fence BEFORE touching the adapter: if its owned commit or
+      // rollback fails, the config must never resurrect a lower generation.
+      await configTransaction(p, async (c) => {
+        const route = c.routes[routeId];
+        if (!route || JSON.stringify(route) !== JSON.stringify(installed))
+          throw new AgentError("CONFIGURATION_CONFLICT", 6);
+        route.route.enabled = false;
+        route.route.epoch = fenced.epoch;
+      });
+      installed.route.enabled = false;
+      installed.route.epoch = fenced.epoch;
+    }
     try {
       await configTransaction(
         p,
