@@ -30,10 +30,14 @@ license = "Apache-2.0"
 [tool.poetry.dependencies]
 python = ">3.9,<3.14"
 fi-instrumentation-otel = ">=0.1.11"
-pinecone-client = ">=3.0.0"
+pinecone = ">=3.0.0"
 wrapt = ">=1.0.0"
 
 [tool.poetry.group.dev.dependencies]
+# Exercise the exact historical floor in the normal Python 3.11 CI cell.
+# SDK 3.0.0 itself excludes Python 3.13; newer runtimes resolve a newer SDK.
+# This is test-only; the published package remains open to newer releases.
+pinecone = { version = "==3.0.0", python = "<3.13" }
 pytest = ">=7.0.0"
 pytest-asyncio = ">=0.21.0"
 

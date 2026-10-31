@@ -16,12 +16,12 @@ This package supports both major AutoGen versions:
 
 **AutoGen v0.2 (legacy)**:
 ```bash
-pip install autogen>=0.2.0
+pip install "pyautogen>=0.2.0,<0.3"
 ```
 
 **AutoGen v0.4 (AgentChat)**:
 ```bash
-pip install autogen-agentchat>=0.4.0
+pip install "autogen-agentchat>=0.4.0"
 ```
 
 ## Quick Start
@@ -392,6 +392,18 @@ AutogenInstrumentor().instrument(tracer_provider=trace_provider)
 
 ## Running Tests
 
+Install development dependencies with `poetry install`, then run the commands
+below with `poetry run`. The suite uses real OpenTelemetry and offline SDK
+contracts; no provider key is required. Legacy contracts use `pyautogen==0.2.35`
+on Python 3.10–3.12; AgentChat supports Python 3.13 as well. The legacy test
+file is not collected on 3.13 because that upstream distribution excludes it.
+
+The compatibility repair restores the advertised legacy hooks, including their
+async counterparts, rather than removing legacy tests or changing the support
+policy. Real-SDK coverage includes keyword-only/task-less team calls, streaming
+and early close, concrete AssistantAgent hooks, cancellation, span parentage and
+usage, uninstrument/reinstrument, and legacy conversations/function execution.
+
 ```bash
 # Run all tests
 pytest tests/
@@ -405,12 +417,12 @@ pytest tests/test_v04_wrapper.py -v
 
 ## Requirements
 
-- Python >= 3.9
+- Python >= 3.10, < 3.14 (legacy pyautogen requires < 3.13)
 - opentelemetry-api >= 1.0.0
 - opentelemetry-sdk >= 1.0.0
 - fi-instrumentation-otel >= 0.1.11
 
-**For v0.2**: autogen >= 0.2.0
+**For v0.2**: pyautogen >= 0.2.0, < 0.3 (import name: `autogen`)
 **For v0.4**: autogen-agentchat >= 0.4.0
 
 ## License

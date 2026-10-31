@@ -68,12 +68,6 @@ class _ChatCompletionRequestAttributesExtractor:
                         yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.tool_calls.{j}.function.name", tc["function"].get("name", "")
                         yield f"{SpanAttributes.GEN_AI_INPUT_MESSAGES}.{i}.tool_calls.{j}.function.arguments", tc["function"].get("arguments", "")
 
-        # System prompt extraction
-        for msg in messages:
-            if msg.get("role") == "system":
-                yield SpanAttributes.GEN_AI_PROVIDER_NAME_PROMPT, str(msg.get("content", ""))
-                break
-
         # User input for display
         for msg in reversed(messages):
             if msg.get("role") == "user":

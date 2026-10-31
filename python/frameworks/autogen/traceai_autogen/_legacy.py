@@ -1,0 +1,128 @@
+"""ConversableAgent (pyautogen 0.2) hooks, kept separate from AgentChat."""
+
+import functools
+import inspect
+import json
+
+from fi_instrumentation import TraceConfig
+from fi_instrumentation.fi_types import SpanAttributes
+from opentelemetry.trace import Status, StatusCode
+
+
+def safe_json_dumps(value):
+    try:
+        return json.dumps(value)
+    except (TypeError, ValueError):
+        return json.dumps(str(value))
+
+
+def _history(agent, peer):
+    # Read through the public conversation view without creating a defaultdict
+    # entry, changing messages, or injecting a messages argument into the SDK.
+    histories = getattr(agent, "chat_messages", None)
+    return histories.get(peer) if histories is not None else None
+
+
+def wrap_legacy(original, tracer, method, config=None):
+    # Bind for observation only: never rewrite, drop or inject SDK arguments.
+    signature = inspect.signature(original)
+    config = config or TraceConfig()
+    # Older published core releases mask I/O but not error events/status. Apply
+    # the same derived error-detail policy here without requiring a core upgrade.
+    hide_error_details = getattr(config, "hide_error_details", None)
+    if hide_error_details is None:
+        hide_error_details = any(getattr(config, flag, False) for flag in (
+            "hide_inputs", "hide_outputs", "hide_input_messages", "hide_output_messages",
+            "hide_input_text", "hide_output_text",
+        ))
+
+    def observe(agent, args, kwargs):
+        try:
+            bound = signature.bind(agent, *args, **kwargs).arguments
+        except TypeError:
+            # Let the SDK raise its own call error, with its original message.
+            bound = {}
+        extras = next((bound.get(name, {}) for name, parameter in signature.parameters.items()
+                       if parameter.kind == inspect.Parameter.VAR_KEYWORD), {})
+        if method.endswith("execute_function"):
+            value = bound.get("func_call")
+        elif method.endswith("initiate_chat"):
+            value = bound.get("message", extras.get("message"))
+        else:
+            value = bound.get("messages")
+            if value is None:
+                value = _history(agent, bound.get("sender"))
+        attributes = {
+            SpanAttributes.GEN_AI_SPAN_KIND: "TOOL" if method.endswith("execute_function") else "AGENT",
+            SpanAttributes.INPUT_VALUE: safe_json_dumps(value),
+            SpanAttributes.INPUT_MIME_TYPE: "application/json",
+            "agent.type": type(agent).__name__,
+        }
+        if method.endswith("execute_function"):
+            name = value.get("name", "unknown") if isinstance(value, dict) else str(value)
+            attributes[SpanAttributes.GEN_AI_TOOL_NAME] = name
+        return attributes, bound
+
+    def record_error(span, error):
+        # Do not delegate raised errors to the OTel context manager: supported
+        # published cores do not sanitize its automatic status/exception data.
+        span.set_attribute("autogen.is_error", True)
+        span.set_attribute("autogen.error.type", type(error).__name__)
+        span.set_status(Status(StatusCode.ERROR, None if hide_error_details else str(error)))
+        if hide_error_details:
+            span.add_event("exception", {"exception.type": type(error).__name__})
+        else:
+            span.record_exception(error)
+
+    def finish(span, result, agent, bound):
+        history = getattr(result, "chat_history", None)
+        if result is None and method.endswith("initiate_chat"):
+            # pyautogen 0.2.0 has no ChatResult return, but both peers retain the
+            # completed conversation. Observe the initiating agent's peer view.
+            history = _history(agent, bound.get("recipient"))
+        output = history[-1].get("content") if history else result
+        span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(output))
+        span.set_attribute(SpanAttributes.OUTPUT_MIME_TYPE, "application/json")
+        if (method.endswith("execute_function") and isinstance(result, tuple)
+                and len(result) == 2 and result[0] is False):
+            # The SDK catches missing functions, bad arguments and user function
+            # exceptions and returns a failure tuple instead of raising. Record
+            # the diagnostic through FITracer's error policy; never raise it or
+            # replace the application's original return value.
+            payload = result[1]
+            diagnostic = str(payload.get("content", "Function execution failed")) if isinstance(payload, dict) else str(payload)
+            record_error(span, RuntimeError(diagnostic))
+        else:
+            span.set_status(Status(StatusCode.OK))
+
+    @functools.wraps(original)
+    def sync_wrapper(self, *args, **kwargs):
+        attributes, bound = observe(self, args, kwargs)
+        with tracer.start_as_current_span(
+            f"autogen.{method}", attributes=attributes,
+            record_exception=False, set_status_on_exception=False,
+        ) as span:
+            try:
+                result = original(self, *args, **kwargs)
+                finish(span, result, self, bound)
+                return result
+            except Exception as error:
+                record_error(span, error)
+                raise
+
+    @functools.wraps(original)
+    async def async_wrapper(self, *args, **kwargs):
+        attributes, bound = observe(self, args, kwargs)
+        with tracer.start_as_current_span(
+            f"autogen.{method}", attributes=attributes,
+            record_exception=False, set_status_on_exception=False,
+        ) as span:
+            try:
+                result = await original(self, *args, **kwargs)
+                finish(span, result, self, bound)
+                return result
+            except Exception as error:
+                record_error(span, error)
+                raise
+
+    return async_wrapper if inspect.iscoroutinefunction(original) else sync_wrapper

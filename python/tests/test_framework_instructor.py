@@ -92,15 +92,15 @@ class TestInstructorInstrumentor:
         dependencies = instrumentor.instrumentation_dependencies()
         
         assert isinstance(dependencies, tuple)
-        assert "instructor >= 0.0.1" in dependencies
-        assert len(dependencies) == 2
+        assert "instructor >= 1.0.0" in dependencies
+        assert len(dependencies) == 1
 
     def test_instrument_basic(self, tracer_provider, config, mock_protect):
         """Test basic instrumentation setup."""
         instrumentor = InstructorInstrumentor()
         
-        with patch("wrapt.wrap_function_wrapper") as mock_wrap:
-            with patch("importlib.import_module") as mock_import:
+        with patch("traceai_instructor.wrap_function_wrapper") as mock_wrap:
+            with patch("traceai_instructor.import_module") as mock_import:
                 # Mock instructor modules
                 mock_instructor_module = MagicMock()
                 mock_patch_module = MagicMock()
@@ -122,13 +122,14 @@ class TestInstructorInstrumentor:
                 
                 # Verify original methods were stored
                 assert hasattr(instrumentor, '_original_patch')
-                assert hasattr(instrumentor, '_original_handle_response_model')
+                assert hasattr(instrumentor, '_original_create')
+                assert hasattr(instrumentor, '_original_async_create')
 
     def test_instrument_without_tracer_provider(self, config, mock_instructor, mock_protect):
         """Test instrumentation without explicit tracer provider."""
         instrumentor = InstructorInstrumentor()
         
-        with patch("wrapt.wrap_function_wrapper"):
+        with patch("traceai_instructor.wrap_function_wrapper"):
             with patch("opentelemetry.trace.get_tracer_provider") as mock_get_provider:
                 mock_get_provider.return_value = MagicMock()
                 instrumentor._instrument(config=config)
@@ -138,7 +139,7 @@ class TestInstructorInstrumentor:
         """Test instrumentation without explicit config."""
         instrumentor = InstructorInstrumentor()
         
-        with patch("wrapt.wrap_function_wrapper"):
+        with patch("traceai_instructor.wrap_function_wrapper"):
             instrumentor._instrument(tracer_provider=tracer_provider)
             # Should create default TraceConfig
             assert isinstance(instrumentor._tracer, FITracer)
@@ -152,23 +153,23 @@ class TestInstructorInstrumentor:
         original_patch = MagicMock()
         original_handle = MagicMock()
         mock_instructor_module.patch = MagicMock()
-        mock_patch_module.handle_response_model = MagicMock()
+        mock_instructor_module.Instructor.create = MagicMock()
         
-        with patch("wrapt.wrap_function_wrapper"):
+        with patch("traceai_instructor.wrap_function_wrapper"):
             instrumentor._instrument(tracer_provider=tracer_provider, config=config)
             
             # Store originals manually for testing
             instrumentor._original_patch = original_patch
-            instrumentor._original_handle_response_model = original_handle
+            instrumentor._original_create = original_handle
             
             # Test uninstrumentation
             instrumentor._uninstrument()
             
             # Verify restoration
             assert mock_instructor_module.patch == original_patch
-            assert mock_patch_module.handle_response_model == original_handle
+            assert mock_instructor_module.Instructor.create == original_handle
             assert instrumentor._original_patch is None
-            assert instrumentor._original_handle_response_model is None
+            assert instrumentor._original_create is None
 
 
 class TestPatchWrapper:
@@ -574,8 +575,8 @@ class TestIntegrationScenarios:
         """Test complete instructor.patch instrumentation scenario."""
         instrumentor = InstructorInstrumentor()
         
-        with patch("wrapt.wrap_function_wrapper") as mock_wrap:
-            with patch("importlib.import_module") as mock_import:
+        with patch("traceai_instructor.wrap_function_wrapper") as mock_wrap:
+            with patch("traceai_instructor.import_module") as mock_import:
                 # Mock instructor modules
                 mock_instructor = MagicMock()
                 mock_patch_module = MagicMock()

@@ -38,6 +38,15 @@ Documentation = "https://docs.futureagi.com/docs/integrations/traceai/smol_agent
 Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/smolagents"
 Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/smolagents/CHANGELOG.md"
 Issues = "https://github.com/future-agi/traceAI/issues"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8,<9"
+pytest-recording = ">=0.13.2"
+openai = ">=1.0.0"
+
+[tool.poetry.plugins."opentelemetry_instrumentor"]
+smolagents = "traceai_smolagents:SmolagentsInstrumentor"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

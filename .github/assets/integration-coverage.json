@@ -1,0 +1,1694 @@
+{
+  "integration_families": 77,
+  "languages": [
+    "Python",
+    "TypeScript",
+    "Java",
+    "Go",
+    "C#"
+  ],
+  "method": "Union of normalized framework families from 65 Python framework manifests, 45 TypeScript instrumentor manifests, 23 Java integration modules and 5 Go module manifests. Runtime variants share a family; shared/core SDKs, BOMs, aggregators and examples do not count. C# has a manual-span core SDK and no framework auto-instrumentors.",
+  "normalization": {
+    "ag2-classic": "ag2",
+    "google-genai-live": "google-genai",
+    "openai-realtime": "openai",
+    "llama_index": "llamaindex",
+    "mistralai": "mistral",
+    "mongodb-vector": "mongodb",
+    "redis-vector": "redis",
+    "genai": "google-genai",
+    "langchain4j": "langchain4j",
+    "fi-instrumentation-google-adk": "google-adk",
+    "fi-instrumentation-livekit": "livekit",
+    "fi-instrumentation-pipecat": "pipecat",
+    "fi-instrumentation-vertexai": "vertexai"
+  },
+  "package_counts_in_matrix": {
+    "Python": 65,
+    "TypeScript": 45,
+    "Java": 23,
+    "Go": 5,
+    "C#": 0
+  },
+  "excluded_shared_packages": [
+    {
+      "manifest": "typescript/packages/fi-core/package.json",
+      "reason": "shared SDK / semantic conventions"
+    },
+    {
+      "manifest": "typescript/packages/fi-semantic-conventions/package.json",
+      "reason": "shared SDK / semantic conventions"
+    },
+    {
+      "manifest": "java/traceai-java-core/pom.xml",
+      "reason": "shared SDK / BOM / example; not an integration"
+    },
+    {
+      "manifest": "csharp/src/FIInstrumentation/FIInstrumentation.csproj",
+      "reason": "manual-span SDK; no framework auto-instrumentors"
+    }
+  ],
+  "categories": [
+    {
+      "id": "model-providers",
+      "name": "Model providers",
+      "description": "Hosted and local model inference, embeddings, and reranking.",
+      "families": [
+        "bedrock",
+        "anthropic",
+        "azure-openai",
+        "cerebras",
+        "cohere",
+        "deepseek",
+        "fireworks",
+        "google-genai",
+        "groq",
+        "huggingface",
+        "watsonx",
+        "minimax",
+        "mistral",
+        "ollama",
+        "openai",
+        "replicate",
+        "together",
+        "vertexai",
+        "vllm",
+        "voyage",
+        "xai"
+      ]
+    },
+    {
+      "id": "agent-frameworks",
+      "name": "Agent frameworks",
+      "description": "Agent orchestration, application frameworks, and agent-to-agent communication.",
+      "families": [
+        "a2a",
+        "ag2",
+        "agno",
+        "autogen",
+        "beeai",
+        "crewai",
+        "eino",
+        "genkit",
+        "google-adk",
+        "hermes-agent",
+        "langchain",
+        "mastra",
+        "mcp-use",
+        "agent-framework",
+        "openai-agents",
+        "pydantic-ai",
+        "semantic-kernel",
+        "smolagents",
+        "strands",
+        "vercel",
+        "voltagent"
+      ]
+    },
+    {
+      "id": "rag-vector-databases",
+      "name": "RAG & vector databases",
+      "description": "Retrieval pipelines, vector stores, and search backends.",
+      "families": [
+        "azure-search",
+        "chromadb",
+        "elasticsearch",
+        "discoveryengine",
+        "haystack",
+        "lancedb",
+        "llamaindex",
+        "milvus",
+        "mongodb",
+        "pgvector",
+        "pinecone",
+        "qdrant",
+        "redis",
+        "weaviate"
+      ]
+    },
+    {
+      "id": "tools-search",
+      "name": "Tools & search",
+      "description": "Tool connectivity, web search, crawling, and extraction.",
+      "families": [
+        "exa",
+        "firecrawl",
+        "mcp",
+        "parallel",
+        "tavily"
+      ]
+    },
+    {
+      "id": "voice-realtime",
+      "name": "Voice & realtime",
+      "description": "Voice-agent pipelines and conversations. OpenAI Realtime and Google GenAI Live are linked in their provider rows under [Model providers](#model-providers).",
+      "families": [
+        "elevenlabs-agents",
+        "livekit",
+        "pipecat"
+      ]
+    },
+    {
+      "id": "gateways-proxies",
+      "name": "Gateways & proxies",
+      "description": "Unified access and routing across model providers.",
+      "families": [
+        "litellm",
+        "portkey"
+      ]
+    },
+    {
+      "id": "coding-agents",
+      "name": "Coding agents",
+      "description": "In-process SDK integrations for coding-agent runs, sessions, and tools.",
+      "families": [
+        "claude-agent-sdk",
+        "codex-sdk",
+        "cursor-sdk",
+        "pi-coding-agent"
+      ]
+    },
+    {
+      "id": "java-frameworks",
+      "name": "Java frameworks",
+      "description": "Java application-framework integrations and auto-configuration.",
+      "families": [
+        "langchain4j",
+        "spring-ai",
+        "spring-boot-starter"
+      ]
+    },
+    {
+      "id": "other",
+      "name": "Other",
+      "description": "LLM programming, structured output, validation, and evaluation.",
+      "families": [
+        "dspy",
+        "guardrails",
+        "instructor",
+        "typesafe"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "bedrock",
+      "name": "Amazon Bedrock",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/bedrock/pyproject.toml",
+            "package": "traceAI-bedrock",
+            "source": "python/frameworks/bedrock/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_bedrock/package.json",
+            "package": "@traceai/bedrock",
+            "source": "typescript/packages/traceai_bedrock/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-bedrock/pom.xml",
+            "package": "traceai-java-bedrock",
+            "source": "java/traceai-java-bedrock/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/anthropic/pyproject.toml",
+            "package": "traceAI-anthropic",
+            "source": "python/frameworks/anthropic/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_anthropic/package.json",
+            "package": "@traceai/anthropic",
+            "source": "typescript/packages/traceai_anthropic/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-anthropic/pom.xml",
+            "package": "traceai-java-anthropic",
+            "source": "java/traceai-java-anthropic/"
+          }
+        ],
+        "Go": [
+          {
+            "manifest": "go/anthropic/go.mod",
+            "package": "github.com/future-agi/traceAI/go/anthropic",
+            "source": "go/anthropic/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "azure-openai",
+      "name": "Azure OpenAI",
+      "category": "model-providers",
+      "languages": {
+        "Java": [
+          {
+            "manifest": "java/traceai-java-azure-openai/pom.xml",
+            "package": "traceai-java-azure-openai",
+            "source": "java/traceai-java-azure-openai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/cerebras/pyproject.toml",
+            "package": "traceAI-cerebras",
+            "source": "python/frameworks/cerebras/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_cerebras/package.json",
+            "package": "@traceai/cerebras",
+            "source": "typescript/packages/traceai_cerebras/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cohere",
+      "name": "Cohere",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/cohere/pyproject.toml",
+            "package": "traceAI-cohere",
+            "source": "python/frameworks/cohere/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_cohere/package.json",
+            "package": "@traceai/cohere",
+            "source": "typescript/packages/traceai_cohere/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-cohere/pom.xml",
+            "package": "traceai-java-cohere",
+            "source": "java/traceai-java-cohere/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/deepseek/pyproject.toml",
+            "package": "traceAI-deepseek",
+            "source": "python/frameworks/deepseek/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_deepseek/package.json",
+            "package": "@traceai/deepseek",
+            "source": "typescript/packages/traceai_deepseek/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "fireworks",
+      "name": "Fireworks AI",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/fireworks/pyproject.toml",
+            "package": "traceAI-fireworks",
+            "source": "python/frameworks/fireworks/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_fireworks/package.json",
+            "package": "@traceai/fireworks",
+            "source": "typescript/packages/traceai_fireworks/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "google-genai",
+      "name": "Google GenAI (Gemini)",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/google-genai/pyproject.toml",
+            "package": "traceAI-google-genai",
+            "source": "python/frameworks/google-genai/"
+          },
+          {
+            "manifest": "python/frameworks/google-genai-live/pyproject.toml",
+            "package": "traceAI-google-genai-live",
+            "source": "python/frameworks/google-genai-live/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_google_genai/package.json",
+            "package": "@traceai/google-genai",
+            "source": "typescript/packages/traceai_google_genai/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-google-genai/pom.xml",
+            "package": "traceai-java-google-genai",
+            "source": "java/traceai-java-google-genai/"
+          }
+        ],
+        "Go": [
+          {
+            "manifest": "go/genai/go.mod",
+            "package": "github.com/future-agi/traceAI/go/genai",
+            "source": "go/genai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/groq/pyproject.toml",
+            "package": "traceAI-groq",
+            "source": "python/frameworks/groq/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_groq/package.json",
+            "package": "@traceai/groq",
+            "source": "typescript/packages/traceai_groq/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/huggingface/pyproject.toml",
+            "package": "traceAI-huggingface",
+            "source": "python/frameworks/huggingface/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_huggingface/package.json",
+            "package": "@traceai/huggingface",
+            "source": "typescript/packages/traceai_huggingface/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "watsonx",
+      "name": "IBM watsonx",
+      "category": "model-providers",
+      "languages": {
+        "Java": [
+          {
+            "manifest": "java/traceai-java-watsonx/pom.xml",
+            "package": "traceai-java-watsonx",
+            "source": "java/traceai-java-watsonx/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/minimax/pyproject.toml",
+            "package": "traceAI-minimax",
+            "source": "python/frameworks/minimax/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral AI",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/mistralai/pyproject.toml",
+            "package": "traceAI-mistralai",
+            "source": "python/frameworks/mistralai/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_mistral/package.json",
+            "package": "@traceai/mistral",
+            "source": "typescript/packages/traceai_mistral/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/ollama/pyproject.toml",
+            "package": "traceAI-ollama",
+            "source": "python/frameworks/ollama/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_ollama/package.json",
+            "package": "@traceai/ollama",
+            "source": "typescript/packages/traceai_ollama/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-ollama/pom.xml",
+            "package": "traceai-java-ollama",
+            "source": "java/traceai-java-ollama/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/openai/pyproject.toml",
+            "package": "traceAI-openai",
+            "source": "python/frameworks/openai/"
+          },
+          {
+            "manifest": "python/frameworks/openai-realtime/pyproject.toml",
+            "package": "traceAI-openai-realtime",
+            "source": "python/frameworks/openai-realtime/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_openai/package.json",
+            "package": "@traceai/openai",
+            "source": "typescript/packages/traceai_openai/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-openai/pom.xml",
+            "package": "traceai-java-openai",
+            "source": "java/traceai-java-openai/"
+          }
+        ],
+        "Go": [
+          {
+            "manifest": "go/openai/go.mod",
+            "package": "github.com/future-agi/traceAI/go/openai",
+            "source": "go/openai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "replicate",
+      "name": "Replicate",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/replicate/pyproject.toml",
+            "package": "traceAI-replicate",
+            "source": "python/frameworks/replicate/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "together",
+      "name": "Together AI",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/together/pyproject.toml",
+            "package": "traceAI-together",
+            "source": "python/frameworks/together/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_together/package.json",
+            "package": "@traceai/together",
+            "source": "typescript/packages/traceai_together/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "vertexai",
+      "name": "Vertex AI",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/vertexai/pyproject.toml",
+            "package": "traceAI-vertexai",
+            "source": "python/frameworks/vertexai/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_vertexai/package.json",
+            "package": "@traceai/fi-instrumentation-vertexai",
+            "source": "typescript/packages/traceai_vertexai/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-vertexai/pom.xml",
+            "package": "traceai-java-vertexai",
+            "source": "java/traceai-java-vertexai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/vllm/pyproject.toml",
+            "package": "traceAI-vllm",
+            "source": "python/frameworks/vllm/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_vllm/package.json",
+            "package": "@traceai/vllm",
+            "source": "typescript/packages/traceai_vllm/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "voyage",
+      "name": "Voyage AI",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/voyage/pyproject.toml",
+            "package": "traceAI-voyage",
+            "source": "python/frameworks/voyage/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "xai",
+      "name": "xAI",
+      "category": "model-providers",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/xai/pyproject.toml",
+            "package": "traceAI-xai",
+            "source": "python/frameworks/xai/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_xai/package.json",
+            "package": "@traceai/xai",
+            "source": "typescript/packages/traceai_xai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a2a",
+      "name": "A2A",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/a2a/pyproject.toml",
+            "package": "traceAI-a2a",
+            "source": "python/frameworks/a2a/"
+          }
+        ],
+        "Go": [
+          {
+            "manifest": "go/a2a/go.mod",
+            "package": "github.com/future-agi/traceAI/go/a2a",
+            "source": "go/a2a/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ag2",
+      "name": "AG2",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/ag2/pyproject.toml",
+            "package": "traceAI-ag2",
+            "source": "python/frameworks/ag2/"
+          },
+          {
+            "manifest": "python/frameworks/ag2-classic/pyproject.toml",
+            "package": "traceAI-ag2-classic",
+            "source": "python/frameworks/ag2-classic/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "agno",
+      "name": "Agno",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/agno/pyproject.toml",
+            "package": "traceai-agno",
+            "source": "python/frameworks/agno/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "autogen",
+      "name": "AutoGen",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/autogen/pyproject.toml",
+            "package": "traceAI-autogen",
+            "source": "python/frameworks/autogen/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "beeai",
+      "name": "BeeAI",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/beeai/pyproject.toml",
+            "package": "traceai-beeai",
+            "source": "python/frameworks/beeai/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_beeai/package.json",
+            "package": "@traceai/beeai",
+            "source": "typescript/packages/traceai_beeai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "crewai",
+      "name": "CrewAI",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/crewai/pyproject.toml",
+            "package": "traceAI-crewai",
+            "source": "python/frameworks/crewai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eino",
+      "name": "Eino",
+      "category": "agent-frameworks",
+      "languages": {
+        "Go": [
+          {
+            "manifest": "go/eino/go.mod",
+            "package": "github.com/future-agi/traceAI/go/eino",
+            "source": "go/eino/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "genkit",
+      "name": "Genkit",
+      "category": "agent-frameworks",
+      "languages": {
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_genkit/package.json",
+            "package": "@traceai/genkit",
+            "source": "typescript/packages/traceai_genkit/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "google-adk",
+      "name": "Google ADK",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/google-adk/pyproject.toml",
+            "package": "traceAI-google-adk",
+            "source": "python/frameworks/google-adk/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_google_adk/package.json",
+            "package": "@traceai/fi-instrumentation-google-adk",
+            "source": "typescript/packages/traceai_google_adk/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hermes-agent",
+      "name": "Hermes Agent",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/hermes-agent/pyproject.toml",
+            "package": "traceAI-hermes-agent",
+            "source": "python/frameworks/hermes-agent/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "langchain",
+      "name": "LangChain / LangGraph",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/langchain/pyproject.toml",
+            "package": "traceAI-langchain",
+            "source": "python/frameworks/langchain/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_langchain/package.json",
+            "package": "@traceai/langchain",
+            "source": "typescript/packages/traceai_langchain/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mastra",
+      "name": "Mastra",
+      "category": "agent-frameworks",
+      "languages": {
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_mastra/package.json",
+            "package": "@traceai/mastra",
+            "source": "typescript/packages/traceai_mastra/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mcp-use",
+      "name": "MCP-use",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/mcp-use/pyproject.toml",
+            "package": "traceAI-mcp-use",
+            "source": "python/frameworks/mcp-use/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "agent-framework",
+      "name": "Microsoft Agent Framework",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/agent-framework/pyproject.toml",
+            "package": "traceAI-agent-framework",
+            "source": "python/frameworks/agent-framework/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openai-agents",
+      "name": "OpenAI Agents",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/openai-agents/pyproject.toml",
+            "package": "traceAI-openai-agents",
+            "source": "python/frameworks/openai-agents/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_openai_agents/package.json",
+            "package": "@traceai/openai-agents",
+            "source": "typescript/packages/traceai_openai_agents/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "pydantic-ai",
+      "name": "Pydantic AI",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/pydantic-ai/pyproject.toml",
+            "package": "traceai-pydantic-ai",
+            "source": "python/frameworks/pydantic-ai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "semantic-kernel",
+      "name": "Semantic Kernel",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/semantic-kernel/pyproject.toml",
+            "package": "traceAI-semantic-kernel",
+            "source": "python/frameworks/semantic-kernel/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-semantic-kernel/pom.xml",
+            "package": "traceai-java-semantic-kernel",
+            "source": "java/traceai-java-semantic-kernel/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "smolagents",
+      "name": "Smolagents",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/smolagents/pyproject.toml",
+            "package": "traceAI-smolagents",
+            "source": "python/frameworks/smolagents/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "strands",
+      "name": "Strands Agents",
+      "category": "agent-frameworks",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/strands/pyproject.toml",
+            "package": "traceai-strands",
+            "source": "python/frameworks/strands/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_strands/package.json",
+            "package": "@traceai/strands",
+            "source": "typescript/packages/traceai_strands/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "vercel",
+      "name": "Vercel AI SDK",
+      "category": "agent-frameworks",
+      "languages": {
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_vercel/package.json",
+            "package": "@traceai/vercel",
+            "source": "typescript/packages/traceai_vercel/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "voltagent",
+      "name": "VoltAgent",
+      "category": "agent-frameworks",
+      "languages": {
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_voltagent/package.json",
+            "package": "@traceai/voltagent",
+            "source": "typescript/packages/traceai_voltagent/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "azure-search",
+      "name": "Azure AI Search",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Java": [
+          {
+            "manifest": "java/traceai-java-azure-search/pom.xml",
+            "package": "traceai-java-azure-search",
+            "source": "java/traceai-java-azure-search/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "chromadb",
+      "name": "Chroma",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/chromadb/pyproject.toml",
+            "package": "traceAI-chromadb",
+            "source": "python/frameworks/chromadb/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_chromadb/package.json",
+            "package": "@traceai/chromadb",
+            "source": "typescript/packages/traceai_chromadb/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-chromadb/pom.xml",
+            "package": "traceai-java-chromadb",
+            "source": "java/traceai-java-chromadb/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "elasticsearch",
+      "name": "Elasticsearch",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Java": [
+          {
+            "manifest": "java/traceai-java-elasticsearch/pom.xml",
+            "package": "traceai-java-elasticsearch",
+            "source": "java/traceai-java-elasticsearch/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "discoveryengine",
+      "name": "Google Discovery Engine",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/discoveryengine/pyproject.toml",
+            "package": "traceAI-discoveryengine",
+            "source": "python/frameworks/discoveryengine/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "haystack",
+      "name": "Haystack",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/haystack/pyproject.toml",
+            "package": "traceAI-haystack",
+            "source": "python/frameworks/haystack/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "lancedb",
+      "name": "LanceDB",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/lancedb/pyproject.toml",
+            "package": "traceAI-lancedb",
+            "source": "python/frameworks/lancedb/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_lancedb/package.json",
+            "package": "@traceai/lancedb",
+            "source": "typescript/packages/traceai_lancedb/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "llamaindex",
+      "name": "LlamaIndex",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/llama_index/pyproject.toml",
+            "package": "traceAI-llamaindex",
+            "source": "python/frameworks/llama_index/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_llamaindex/package.json",
+            "package": "@traceai/llamaindex",
+            "source": "typescript/packages/traceai_llamaindex/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "milvus",
+      "name": "Milvus",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/milvus/pyproject.toml",
+            "package": "traceAI-milvus",
+            "source": "python/frameworks/milvus/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_milvus/package.json",
+            "package": "@traceai/milvus",
+            "source": "typescript/packages/traceai_milvus/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-milvus/pom.xml",
+            "package": "traceai-java-milvus",
+            "source": "java/traceai-java-milvus/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mongodb",
+      "name": "MongoDB Atlas Vector Search",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/mongodb-vector/pyproject.toml",
+            "package": "traceAI-mongodb",
+            "source": "python/frameworks/mongodb-vector/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_mongodb/package.json",
+            "package": "@traceai/mongodb",
+            "source": "typescript/packages/traceai_mongodb/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-mongodb/pom.xml",
+            "package": "traceai-java-mongodb",
+            "source": "java/traceai-java-mongodb/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "pgvector",
+      "name": "pgvector",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/pgvector/pyproject.toml",
+            "package": "traceAI-pgvector",
+            "source": "python/frameworks/pgvector/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_pgvector/package.json",
+            "package": "@traceai/pgvector",
+            "source": "typescript/packages/traceai_pgvector/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-pgvector/pom.xml",
+            "package": "traceai-java-pgvector",
+            "source": "java/traceai-java-pgvector/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "pinecone",
+      "name": "Pinecone",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/pinecone/pyproject.toml",
+            "package": "traceAI-pinecone",
+            "source": "python/frameworks/pinecone/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_pinecone/package.json",
+            "package": "@traceai/pinecone",
+            "source": "typescript/packages/traceai_pinecone/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-pinecone/pom.xml",
+            "package": "traceai-java-pinecone",
+            "source": "java/traceai-java-pinecone/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "qdrant",
+      "name": "Qdrant",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/qdrant/pyproject.toml",
+            "package": "traceAI-qdrant",
+            "source": "python/frameworks/qdrant/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_qdrant/package.json",
+            "package": "@traceai/qdrant",
+            "source": "typescript/packages/traceai_qdrant/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-qdrant/pom.xml",
+            "package": "traceai-java-qdrant",
+            "source": "java/traceai-java-qdrant/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "redis",
+      "name": "Redis Vector Search",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/redis-vector/pyproject.toml",
+            "package": "traceAI-redis",
+            "source": "python/frameworks/redis-vector/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_redis/package.json",
+            "package": "@traceai/redis",
+            "source": "typescript/packages/traceai_redis/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-redis/pom.xml",
+            "package": "traceai-java-redis",
+            "source": "java/traceai-java-redis/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "weaviate",
+      "name": "Weaviate",
+      "category": "rag-vector-databases",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/weaviate/pyproject.toml",
+            "package": "traceAI-weaviate",
+            "source": "python/frameworks/weaviate/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_weaviate/package.json",
+            "package": "@traceai/weaviate",
+            "source": "typescript/packages/traceai_weaviate/"
+          }
+        ],
+        "Java": [
+          {
+            "manifest": "java/traceai-java-weaviate/pom.xml",
+            "package": "traceai-java-weaviate",
+            "source": "java/traceai-java-weaviate/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "exa",
+      "name": "Exa",
+      "category": "tools-search",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/exa/pyproject.toml",
+            "package": "traceAI-exa",
+            "source": "python/frameworks/exa/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "firecrawl",
+      "name": "Firecrawl",
+      "category": "tools-search",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/firecrawl/pyproject.toml",
+            "package": "traceAI-firecrawl",
+            "source": "python/frameworks/firecrawl/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mcp",
+      "name": "MCP",
+      "category": "tools-search",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/mcp/pyproject.toml",
+            "package": "traceAI-mcp",
+            "source": "python/frameworks/mcp/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_mcp/package.json",
+            "package": "@traceai/mcp",
+            "source": "typescript/packages/traceai_mcp/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "parallel",
+      "name": "Parallel",
+      "category": "tools-search",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/parallel/pyproject.toml",
+            "package": "traceAI-parallel",
+            "source": "python/frameworks/parallel/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "tavily",
+      "name": "Tavily",
+      "category": "tools-search",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/tavily/pyproject.toml",
+            "package": "traceAI-tavily",
+            "source": "python/frameworks/tavily/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "elevenlabs-agents",
+      "name": "ElevenLabs Agents",
+      "category": "voice-realtime",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/elevenlabs-agents/pyproject.toml",
+            "package": "traceAI-elevenlabs-agents",
+            "source": "python/frameworks/elevenlabs-agents/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "livekit",
+      "name": "LiveKit",
+      "category": "voice-realtime",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/livekit/pyproject.toml",
+            "package": "traceAI-livekit",
+            "source": "python/frameworks/livekit/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_livekit/package.json",
+            "package": "@traceai/fi-instrumentation-livekit",
+            "source": "typescript/packages/traceai_livekit/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "pipecat",
+      "name": "Pipecat",
+      "category": "voice-realtime",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/pipecat/pyproject.toml",
+            "package": "traceAI-pipecat",
+            "source": "python/frameworks/pipecat/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_pipecat/package.json",
+            "package": "@traceai/fi-instrumentation-pipecat",
+            "source": "typescript/packages/traceai_pipecat/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "litellm",
+      "name": "LiteLLM",
+      "category": "gateways-proxies",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/litellm/pyproject.toml",
+            "package": "traceAI-litellm",
+            "source": "python/frameworks/litellm/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "portkey",
+      "name": "Portkey",
+      "category": "gateways-proxies",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/portkey/pyproject.toml",
+            "package": "traceAI-portkey",
+            "source": "python/frameworks/portkey/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_portkey/package.json",
+            "package": "@traceai/portkey",
+            "source": "typescript/packages/traceai_portkey/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "claude-agent-sdk",
+      "name": "Claude Agent SDK",
+      "category": "coding-agents",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/claude-agent-sdk/pyproject.toml",
+            "package": "traceai-claude-agent-sdk",
+            "source": "python/frameworks/claude-agent-sdk/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_claude_agent_sdk/package.json",
+            "package": "@traceai/claude-agent-sdk",
+            "source": "typescript/packages/traceai_claude_agent_sdk/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "codex-sdk",
+      "name": "Codex SDK",
+      "category": "coding-agents",
+      "languages": {
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_codex_sdk/package.json",
+            "package": "@traceai/codex-sdk",
+            "source": "typescript/packages/traceai_codex_sdk/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cursor-sdk",
+      "name": "Cursor SDK",
+      "category": "coding-agents",
+      "languages": {
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_cursor_sdk/package.json",
+            "package": "@traceai/cursor-sdk",
+            "source": "typescript/packages/traceai_cursor_sdk/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "pi-coding-agent",
+      "name": "Pi Coding Agent",
+      "category": "coding-agents",
+      "languages": {
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_pi_coding_agent/package.json",
+            "package": "@traceai/pi-coding-agent",
+            "source": "typescript/packages/traceai_pi_coding_agent/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "langchain4j",
+      "name": "LangChain4j",
+      "category": "java-frameworks",
+      "languages": {
+        "Java": [
+          {
+            "manifest": "java/traceai-langchain4j/pom.xml",
+            "package": "traceai-langchain4j",
+            "source": "java/traceai-langchain4j/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "spring-ai",
+      "name": "Spring AI",
+      "category": "java-frameworks",
+      "languages": {
+        "Java": [
+          {
+            "manifest": "java/traceai-spring-ai/pom.xml",
+            "package": "traceai-spring-ai",
+            "source": "java/traceai-spring-ai/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "spring-boot-starter",
+      "name": "Spring Boot",
+      "category": "java-frameworks",
+      "languages": {
+        "Java": [
+          {
+            "manifest": "java/traceai-spring-boot-starter/pom.xml",
+            "package": "traceai-spring-boot-starter",
+            "source": "java/traceai-spring-boot-starter/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dspy",
+      "name": "DSPy",
+      "category": "other",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/dspy/pyproject.toml",
+            "package": "traceAI-DSPy",
+            "source": "python/frameworks/dspy/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "guardrails",
+      "name": "Guardrails AI",
+      "category": "other",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/guardrails/pyproject.toml",
+            "package": "traceAI-guardrails",
+            "source": "python/frameworks/guardrails/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_guardrails/package.json",
+            "package": "@traceai/guardrails",
+            "source": "typescript/packages/traceai_guardrails/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "instructor",
+      "name": "Instructor",
+      "category": "other",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/instructor/pyproject.toml",
+            "package": "traceAI-instructor",
+            "source": "python/frameworks/instructor/"
+          }
+        ],
+        "TypeScript": [
+          {
+            "manifest": "typescript/packages/traceai_instructor/package.json",
+            "package": "@traceai/instructor",
+            "source": "typescript/packages/traceai_instructor/"
+          }
+        ]
+      }
+    },
+    {
+      "id": "typesafe",
+      "name": "TypeSafe",
+      "category": "other",
+      "languages": {
+        "Python": [
+          {
+            "manifest": "python/frameworks/typesafe/pyproject.toml",
+            "package": "traceAI-typesafe",
+            "source": "python/frameworks/typesafe/"
+          }
+        ]
+      }
+    }
+  ]
+}

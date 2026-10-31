@@ -1,77 +1,100 @@
-"""Unit tests for Qdrant instrumentation."""
+"""Offline contracts using the real Qdrant in-memory client."""
 
 import pytest
-from unittest.mock import MagicMock, patch
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+from qdrant_client import QdrantClient, models
+
+from traceai_qdrant import QdrantInstrumentor
+
+
+@pytest.fixture
+def client(instrument_qdrant):
+    client = QdrantClient(":memory:")
+    client.create_collection(
+        "documents", vectors_config=models.VectorParams(size=3, distance=models.Distance.COSINE)
+    )
+    yield client
+    client.close()
+
+
+def insert(client):
+    return client.upsert(
+        collection_name="documents",
+        points=[models.PointStruct(id=1, vector=[1.0, 0.0, 0.0], payload={"text": "document"})],
+    )
 
 
 class TestQdrantInstrumentor:
-    """Test QdrantInstrumentor class."""
-
     def test_instrumentor_can_be_instantiated(self):
-        from traceai_qdrant import QdrantInstrumentor
-        instrumentor = QdrantInstrumentor()
-        assert instrumentor is not None
+        assert isinstance(QdrantInstrumentor(), QdrantInstrumentor)
 
     def test_instrumentation_dependencies(self):
-        from traceai_qdrant import QdrantInstrumentor
+        assert tuple(QdrantInstrumentor().instrumentation_dependencies()) == ("qdrant-client >= 1.6.0",)
+
+    def test_uninstrument_restores_available_methods(self, tracer_provider):
+        names = ("query", "query_points", "search", "upsert", "delete", "retrieve", "scroll", "count")
+        originals = {name: getattr(QdrantClient, name, None) for name in names}
         instrumentor = QdrantInstrumentor()
-        deps = instrumentor.instrumentation_dependencies()
-        assert any("qdrant" in dep for dep in deps)
+        instrumentor.instrument(tracer_provider=tracer_provider)
+        try:
+            for name, original in originals.items():
+                if original is not None:
+                    assert getattr(QdrantClient, name) is not original
+                else:
+                    assert not hasattr(QdrantClient, name)
+        finally:
+            instrumentor.uninstrument()
+        for name, original in originals.items():
+            assert getattr(QdrantClient, name, None) is original
 
 
 class TestQdrantSearch:
-    """Test Qdrant search operation tracing."""
-
-    @patch("qdrant_client.QdrantClient")
-    def test_search_creates_span(
-        self,
-        mock_client_class,
-        tracer_provider,
-        in_memory_span_exporter: InMemorySpanExporter,
-        mock_qdrant_client,
-        instrument_qdrant,
-    ):
-        mock_client_class.return_value = mock_qdrant_client
-
-        client = mock_client_class()
-        result = client.search(
-            collection_name="test-collection",
-            query_vector=[0.1] * 384,
-            limit=10,
-        )
-
-        spans = in_memory_span_exporter.get_finished_spans()
-        search_spans = [s for s in spans if "search" in s.name.lower()]
-        if search_spans:
-            span = search_spans[0]
-            assert "qdrant" in span.name.lower()
+    def test_search_creates_span(self, client, in_memory_span_exporter):
+        insert(client)
+        in_memory_span_exporter.clear()
+        # Exercise the actual dense-vector API in both pre-1.10 and current SDKs.
+        if hasattr(client, "query_points"):
+            points = client.query_points("documents", query=[1.0, 0.0, 0.0], limit=1).points
+        else:
+            points = client.search("documents", query_vector=[1.0, 0.0, 0.0], limit=1)
+        assert len(points) == 1
+        assert points[0].id == 1
+        assert points[0].payload == {"text": "document"}
+        span, = in_memory_span_exporter.get_finished_spans()
+        assert span.name == "qdrant query"
+        assert span.status.status_code == StatusCode.OK
+        assert span.attributes["db.system"] == "qdrant"
+        assert span.attributes["db.namespace"] == "documents"
+        assert span.attributes["db.vector.query.top_k"] == 1
+        assert span.attributes["db.vector.results.count"] == 1
 
 
 class TestQdrantUpsert:
-    """Test Qdrant upsert operation tracing."""
+    def test_upsert_creates_span(self, client, in_memory_span_exporter):
+        result = insert(client)
+        assert result.status == models.UpdateStatus.COMPLETED
+        span, = in_memory_span_exporter.get_finished_spans()
+        assert span.name == "qdrant upsert"
+        assert span.attributes["db.vector.upsert.count"] == 1
+        assert span.status.status_code == StatusCode.OK
 
-    @patch("qdrant_client.QdrantClient")
-    def test_upsert_creates_span(
-        self,
-        mock_client_class,
-        tracer_provider,
-        in_memory_span_exporter: InMemorySpanExporter,
-        mock_qdrant_client,
-        instrument_qdrant,
-    ):
-        mock_client_class.return_value = mock_qdrant_client
+    def test_error_propagates_and_finishes_span(self, client, in_memory_span_exporter):
+        with pytest.raises(ValueError, match="not found"):
+            client.upsert("missing", points=[models.PointStruct(id=1, vector=[1.0, 0.0, 0.0])])
+        span, = in_memory_span_exporter.get_finished_spans()
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.events[0].name == "exception"
 
-        client = mock_client_class()
-        client.upsert(
-            collection_name="test-collection",
-            points=[
-                MagicMock(id="1", vector=[0.1] * 384, payload={"text": "doc1"}),
-            ],
-        )
 
-        spans = in_memory_span_exporter.get_finished_spans()
-        upsert_spans = [s for s in spans if "upsert" in s.name.lower()]
-        if upsert_spans:
-            span = upsert_spans[0]
-            assert "qdrant" in span.name.lower()
+def test_crud_results_and_spans(client, in_memory_span_exporter):
+    insert(client)
+    in_memory_span_exporter.clear()
+    assert client.count("documents").count == 1
+    assert client.retrieve("documents", ids=[1])[0].payload == {"text": "document"}
+    records, _ = client.scroll("documents", limit=1)
+    assert records[0].id == 1
+    assert client.delete("documents", points_selector=models.PointIdsList(points=[1])).status == models.UpdateStatus.COMPLETED
+    spans = in_memory_span_exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["qdrant count", "qdrant retrieve", "qdrant scroll", "qdrant delete"]
+    assert all(span.status.status_code == StatusCode.OK for span in spans)
+    assert all(span.attributes["db.namespace"] == "documents" for span in spans)

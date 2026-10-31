@@ -39,6 +39,13 @@ Documentation = "https://docs.futureagi.com/docs/integrations/traceai/instructor
 Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/instructor"
 Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/instructor/CHANGELOG.md"
 Issues = "https://github.com/future-agi/traceAI/issues"
+
+[tool.poetry.group.dev.dependencies]
+# Newer Instructor releases make providers optional; offline contracts execute
+# the real OpenAI client and its in-process HTTP transport.
+openai = ">=1.0.0"
+httpx = ">=0.27.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
