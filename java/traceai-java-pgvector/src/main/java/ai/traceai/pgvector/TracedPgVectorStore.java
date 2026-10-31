@@ -18,8 +18,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Instrumentation wrapper for PostgreSQL pgvector operations.
- * Wraps JDBC connections to provide automatic tracing of all vector database operations.
+ * Traced PostgreSQL pgvector store for tables with id, embedding, and metadata columns.
+ * Traces operations invoked through this store, not arbitrary JDBC queries.
  *
  * <p>Usage:</p>
  * <pre>
@@ -244,7 +244,7 @@ public class TracedPgVectorStore {
                 span.setStatus(StatusCode.OK);
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -314,7 +314,7 @@ public class TracedPgVectorStore {
                 span.setStatus(StatusCode.OK);
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -363,7 +363,7 @@ public class TracedPgVectorStore {
                 span.setStatus(StatusCode.OK);
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -446,8 +446,10 @@ public class TracedPgVectorStore {
                     try (ResultSet rs = pstmt.executeQuery()) {
                         while (rs.next()) {
                             String id = rs.getString("id");
-                            PGvector embeddingVector = (PGvector) rs.getObject("embedding");
-                            float[] embedding = embeddingVector != null ? embeddingVector.toArray() : null;
+                            // Decode the JDBC text value through pgvector-java. getObject() returns
+                            // PGobject unless the caller registered PGvector on this connection.
+                            String embeddingValue = rs.getString("embedding");
+                            float[] embedding = embeddingValue != null ? new PGvector(embeddingValue).toArray() : null;
                             double distance = rs.getDouble("distance");
                             String metadataJson = rs.getString("metadata");
 
@@ -468,7 +470,7 @@ public class TracedPgVectorStore {
             span.setStatus(StatusCode.OK);
             return results;
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -510,7 +512,7 @@ public class TracedPgVectorStore {
                 }
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -549,7 +551,7 @@ public class TracedPgVectorStore {
                 return rowsAffected;
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -608,7 +610,7 @@ public class TracedPgVectorStore {
                 span.setStatus(StatusCode.OK);
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -652,7 +654,7 @@ public class TracedPgVectorStore {
             span.setStatus(StatusCode.OK);
             return 0;
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
@@ -686,7 +688,7 @@ public class TracedPgVectorStore {
                 span.setStatus(StatusCode.OK);
             }
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             tracer.setError(span, e);
             throw e;
         } finally {
