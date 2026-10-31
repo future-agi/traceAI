@@ -1,162 +1,111 @@
-"""
-Integration functions for Pipecat with Future AGI.
-
-This module provides functions to install attribute mapping for Pipecat applications
-by updating existing span exporters in the tracer provider.
-"""
+"""Exporter composition and backward-compatible Pipecat mapping setup."""
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from fi_instrumentation.otel import Transport
 from opentelemetry import trace as trace_api
 
-from .exporters import MappedGRPCSpanExporter, MappedHTTPSpanExporter
+from .exporters import (
+    BaseMappedSpanExporter,
+    MappedGRPCSpanExporter,
+    MappedHTTPSpanExporter,
+    MappedSpanExporter,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def enable_fi_attribute_mapping(transport: Transport = Transport.HTTP) -> bool:
-    """
-    Install the mapping exporter by swapping FI's exporter instances.
+    """Wrap existing FI exporters without reconstructing their configuration.
 
-    This function finds existing span exporters in the global tracer provider
-    and replaces them with mapped exporters that convert Pipecat attributes
-    to Future AGI conventions.
+    Call once at startup, before producing spans. This compatibility helper
+    inspects SDK processor internals; new applications should instead pass a
+    ``MappedSpanExporter`` to their span processor during provider setup.
 
     Args:
-        transport: The transport protocol to match existing exporters (Transport enum)
+        transport: The transport protocol whose FI exporters should be mapped.
 
     Returns:
-        True if at least one exporter was swapped; False otherwise.
+        True if at least one matching exporter is mapped (including an already
+        mapped exporter); False if none can be mapped.
     """
     provider = trace_api.get_tracer_provider()
-    swapped_any = False
-
     active = getattr(provider, "_active_span_processor", None)
     if not active:
         logger.warning("No active span processor found")
         return False
 
-    processors = getattr(active, "_span_processors", tuple())
-    for proc in processors:
+    try:
+        if transport == Transport.HTTP:
+            from fi_instrumentation.otel import HTTPSpanExporter as exporter_type
+        elif transport == Transport.GRPC:
+            from fi_instrumentation.otel import GRPCSpanExporter as exporter_type
+        else:
+            logger.warning("Unsupported exporter transport")
+            return False
+    except ImportError:
+        logger.warning("Required exporter is not installed")
+        return False
+
+    mapped_any = False
+    for proc in getattr(active, "_span_processors", ()):
         exporter = getattr(proc, "span_exporter", None)
-        if exporter is None:
+        original = exporter.exporter if isinstance(exporter, MappedSpanExporter) else exporter
+        if not isinstance(original, exporter_type):
+            continue
+        if isinstance(exporter, BaseMappedSpanExporter):
+            mapped_any = True
             continue
 
         try:
-            if transport == Transport.HTTP:
-                from fi_instrumentation.otel import (
-                    HTTPSpanExporter as _FIHTTPSpanExporter,
-                )
+            mapped = MappedSpanExporter(exporter)
+            # Older SDK batch processors expose a writable span_exporter; newer
+            # ones delegate it to a shared batch processor. Preserve both paths.
+            if hasattr(proc, "_batch_processor"):
+                proc._batch_processor._exporter = mapped
+            else:
+                proc.span_exporter = mapped
+            mapped_any = True
+        except Exception as exc:
+            # Custom processors may not support replacement. Do not include
+            # exception text, which can contain exporter credentials/options.
+            logger.warning("Failed to wrap exporter (%s)", type(exc).__name__)
 
-                if isinstance(exporter, _FIHTTPSpanExporter):
-                    endpoint = getattr(exporter, "_endpoint", None)
-                    headers = getattr(exporter, "_headers", None)
-                    new_exporter = MappedHTTPSpanExporter(
-                        endpoint=endpoint, headers=headers
-                    )
-
-                    if hasattr(proc, "_batch_processor"):
-                        setattr(proc._batch_processor, "_exporter", new_exporter)
-                    else:
-                        setattr(proc, "span_exporter", new_exporter)
-
-                    swapped_any = True
-                    logger.info("Replaced HTTP exporter with mapped HTTP exporter")
-
-            elif transport == Transport.GRPC:
-                from fi_instrumentation.otel import (
-                    GRPCSpanExporter as _FIGRPCSpanExporter,
-                )
-
-                if isinstance(exporter, _FIGRPCSpanExporter):
-                    endpoint = getattr(exporter, "_endpoint", None)
-                    headers = getattr(exporter, "_headers", None)
-                    new_exporter = MappedGRPCSpanExporter(
-                        endpoint=endpoint, headers=headers
-                    )
-
-                    if hasattr(proc, "_batch_processor"):
-                        setattr(proc._batch_processor, "_exporter", new_exporter)
-                    else:
-                        setattr(proc, "span_exporter", new_exporter)
-
-                    swapped_any = True
-                    logger.info("Replaced gRPC exporter with mapped gRPC exporter")
-
-        except ImportError as e:
-            logger.warning(f"Failed to import required exporter: {e}")
-            continue
-        except Exception as e:
-            logger.warning(f"Failed to replace exporter: {e}")
-            continue
-
-    if not swapped_any:
-        logger.warning(f"No {transport.value} exporters found to replace")
-
-    return swapped_any
+    if not mapped_any:
+        logger.warning("No %s exporters found to map", transport.value)
+    return mapped_any
 
 
 def enable_http_attribute_mapping() -> bool:
-    """
-    Install HTTP attribute mapping for Pipecat.
-
-    Convenience function that calls enable_fi_attribute_mapping with HTTP transport.
-
-    Returns:
-        True if at least one exporter was swapped; False otherwise.
-    """
+    """Map existing HTTP exporters at startup; True also means already mapped."""
     return enable_fi_attribute_mapping(transport=Transport.HTTP)
 
 
 def enable_grpc_attribute_mapping() -> bool:
-    """
-    Install gRPC attribute mapping for Pipecat.
-
-    Convenience function that calls enable_fi_attribute_mapping with gRPC transport.
-
-    Returns:
-        True if at least one exporter was swapped; False otherwise.
-    """
+    """Map existing gRPC exporters at startup; True also means already mapped."""
     return enable_fi_attribute_mapping(transport=Transport.GRPC)
 
 
 def create_mapped_http_exporter(
-    endpoint: Optional[str] = None, headers: Optional[dict] = None
-):
+    endpoint: Optional[str] = None, headers: Optional[dict] = None, **kwargs: Any
+) -> MappedHTTPSpanExporter:
+    """Create a mapped HTTP exporter, forwarding all transport options.
+
+    ``endpoint`` and ``headers`` retain FI's environment defaults when omitted.
+    Additional options (for example ``timeout``, ``compression``, ``session``
+    and TLS settings) are forwarded unchanged to FI's HTTP exporter.
     """
-    Create a mapped HTTP exporter for Pipecat.
-
-    This function creates a new HTTP exporter that maps Pipecat attributes
-    to Future AGI conventions. It can be used independently without
-    modifying existing exporters.
-
-    Args:
-        endpoint: The collector endpoint (optional, will use environment defaults)
-        headers: Optional headers to include in requests (optional, will use environment defaults)
-
-    Returns:
-        A configured MappedHTTPSpanExporter instance
-    """
-    return MappedHTTPSpanExporter(endpoint=endpoint, headers=headers)
+    return MappedHTTPSpanExporter(endpoint=endpoint, headers=headers, **kwargs)
 
 
 def create_mapped_grpc_exporter(
-    endpoint: Optional[str] = None, headers: Optional[dict] = None
-):
+    endpoint: Optional[str] = None, headers: Optional[dict] = None, **kwargs: Any
+) -> MappedGRPCSpanExporter:
+    """Create a mapped gRPC exporter, forwarding all transport options.
+
+    ``endpoint`` and ``headers`` retain FI's environment defaults when omitted.
+    Additional options (for example ``timeout``, ``compression``, ``insecure``
+    and ``credentials``) are forwarded unchanged to FI's gRPC exporter.
     """
-    Create a mapped gRPC exporter for Pipecat.
-
-    This function creates a new gRPC exporter that maps Pipecat attributes
-    to Future AGI conventions. It can be used independently without
-    modifying existing exporters.
-
-    Args:
-        endpoint: The collector endpoint (optional, will use environment defaults)
-        headers: Optional headers to include in requests (optional, will use environment defaults)
-
-    Returns:
-        A configured MappedGRPCSpanExporter instance
-    """
-    return MappedGRPCSpanExporter(endpoint=endpoint, headers=headers)
+    return MappedGRPCSpanExporter(endpoint=endpoint, headers=headers, **kwargs)
