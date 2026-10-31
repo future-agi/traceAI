@@ -1,0 +1,65 @@
+name: OpenAI Java compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'java/pom.xml'
+      - 'java/traceai-java-core/**'
+      - 'java/traceai-java-openai/**'
+      - 'java/compatibility/openai/**'
+      - '.github/workflows/openai-java-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'java/pom.xml'
+      - 'java/traceai-java-core/**'
+      - 'java/traceai-java-openai/**'
+      - 'java/compatibility/openai/**'
+      - '.github/workflows/openai-java-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Offline OpenAI 0.8.0 and 4.95.0 / Java ${{ matrix.java }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Prepare dependencies without running tests
+        run: |
+          mvn -B -ntp -pl traceai-java-openai -am -DskipTests install
+          mvn -B -ntp -f compatibility/openai/pom.xml -DskipTests test
+          mvn -B -ntp -f compatibility/openai/pom.xml dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.2.3
+          mvn -B -ntp -f compatibility/openai/pom.xml dependency:get -Dartifact=org.junit.platform:junit-platform-launcher:1.10.1
+      - name: Run legacy, current SDK and OTLP contracts with loopback only
+        run: |
+          sudo --preserve-env=JAVA_HOME unshare --net /bin/bash -c '
+            set -euo pipefail
+            ip link set lo up
+            mvn -B -ntp -o -Dmaven.repo.local="$1" -pl traceai-java-openai -am install
+            mvn -B -ntp -o -Dmaven.repo.local="$1" -f compatibility/openai/pom.xml test
+          ' _ "$HOME/.m2/repository"
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openai-java-${{ matrix.java }}-reports
+          path: |
+            java/traceai-java-openai/target/surefire-reports/
+            java/compatibility/openai/target/surefire-reports/

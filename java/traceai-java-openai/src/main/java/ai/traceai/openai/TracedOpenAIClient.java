@@ -3,30 +3,26 @@ package ai.traceai.openai;
 import ai.traceai.*;
 import com.openai.client.OpenAIClient;
 import com.openai.models.*;
+import com.openai.core.http.StreamResponse;
+import io.opentelemetry.context.Context;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Instrumentation wrapper for OpenAI Java client.
- * Wraps the OpenAI client to provide automatic tracing of all API calls.
+ * Legacy facade for OpenAI Java 0.8 chat completions and embeddings.
+ * New integrations should use {@link TracingHttpClient} with the SDK's native services; this
+ * facade retains its original model types and method descriptors for existing customers.
  *
  * <p>Usage:</p>
  * <pre>
- * OpenAIClient openai = OpenAI.client();
- * TracedOpenAIClient traced = new TracedOpenAIClient(openai);
- *
- * ChatCompletion response = traced.createChatCompletion(
- *     ChatCompletionCreateParams.builder()
- *         .model("gpt-4")
- *         .addMessage(ChatCompletionMessageParam.user("Hello!"))
- *         .build()
- * );
+ * // existingClient and params use the OpenAI Java 0.8 API.
+ * TracedOpenAIClient traced = new TracedOpenAIClient(existingClient);
+ * ChatCompletion response = traced.createChatCompletion(params);
  * </pre>
  */
 public class TracedOpenAIClient {
@@ -51,7 +47,7 @@ public class TracedOpenAIClient {
 
         Span span = tracer.startSpan("OpenAI Chat Completion", FISpanKind.LLM);
 
-        try (Scope scope = span.makeCurrent()) {
+        try (Scope scope = Context.current().with(span).with(OpenAITrace.LEGACY, true).makeCurrent()) {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
             span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model);
             span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, model);
@@ -143,7 +139,7 @@ public class TracedOpenAIClient {
     public CreateEmbeddingResponse createEmbedding(EmbeddingCreateParams params) {
         Span span = tracer.startSpan("OpenAI Embedding", FISpanKind.EMBEDDING);
 
-        try (Scope scope = span.makeCurrent()) {
+        try (Scope scope = Context.current().with(span).with(OpenAITrace.LEGACY, true).makeCurrent()) {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
             span.setAttribute(SemanticConventions.EMBEDDING_MODEL_NAME, params.model().toString());
             span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, "embeddings");
@@ -182,74 +178,40 @@ public class TracedOpenAIClient {
     }
 
     /**
-     * Creates a streaming chat completion with tracing.
-     * Returns an Iterable that wraps the underlying StreamResponse.
+     * Returns a lazy, single-use iterable. Complete iteration closes the response.
+     * @deprecated Use {@link #streamChatCompletionResponse} in try-with-resources so breaking out
+     *     of iteration also closes the response. The return type is retained for binary compatibility.
      */
+    @Deprecated
     public Iterable<ChatCompletionChunk> streamChatCompletion(ChatCompletionCreateParams params) throws Exception {
-        String model = params.model().toString();
+        return (LegacyChatStream) streamChatCompletionResponse(params);
+    }
 
+    /**
+     * Creates a lazy, closeable streaming response for the legacy OpenAI Java 0.8 API.
+     * Always close it, including when taking only the first chunk or cancelling generation.
+     * For current SDK clients, install {@link TracingHttpClient} and use the SDK's own stream API.
+     * @param params the chat completion request
+     * @return the response, owned by the caller
+     */
+    public StreamResponse<ChatCompletionChunk> streamChatCompletionResponse(ChatCompletionCreateParams params) {
         Span span = tracer.startSpan("OpenAI Chat Completion (Stream)", FISpanKind.LLM);
-
-        try {
+        try (Scope scope = Context.current().with(span).with(OpenAITrace.LEGACY, true).makeCurrent()) {
             span.setAttribute(SemanticConventions.LLM_PROVIDER, "openai");
-            span.setAttribute(SemanticConventions.LLM_MODEL_NAME, model);
+            span.setAttribute(SemanticConventions.LLM_MODEL_NAME, params.model().toString());
+            span.setAttribute(SemanticConventions.LLM_REQUEST_MODEL, params.model().toString());
             span.setAttribute(SemanticConventions.GEN_AI_OPERATION_NAME, "chat");
-
-            // Capture input messages
-            List<ChatCompletionMessageParam> messages = params.messages();
             List<Map<String, String>> inputMessages = new ArrayList<>();
-            for (ChatCompletionMessageParam msg : messages) {
-                inputMessages.add(FITracer.message("user", extractMessageContent(msg)));
+            for (ChatCompletionMessageParam message : params.messages()) {
+                inputMessages.add(FITracer.message("user", extractMessageContent(message)));
             }
             tracer.setInputMessages(span, inputMessages);
-
-            tracer.setRawInput(span, params);
-
-            // Get the stream response
-            var streamResponse = client.chat().completions().createStreaming(params);
-
-            // Collect chunks and finalize span when done
-            List<ChatCompletionChunk> chunks = new ArrayList<>();
-            StringBuilder content = new StringBuilder();
-
-            try {
-                streamResponse.stream().forEach(chunk -> {
-                    chunks.add(chunk);
-                    if (chunk.choices() != null && !chunk.choices().isEmpty()) {
-                        ChatCompletionChunk.Choice choice = chunk.choices().get(0);
-                        if (choice.delta() != null && choice.delta().content().isPresent()) {
-                            content.append(choice.delta().content().get());
-                        }
-                        if (choice.finishReason() != null) {
-                            span.setAttribute(SemanticConventions.LLM_RESPONSE_FINISH_REASON,
-                                choice.finishReason().toString());
-                        }
-                    }
-                    chunk.usage().ifPresent(usage -> {
-                        tracer.setTokenCounts(span,
-                            usage.promptTokens(),
-                            usage.completionTokens(),
-                            usage.totalTokens()
-                        );
-                    });
-                });
-            } finally {
-                streamResponse.close();
-            }
-
-            tracer.setOutputValue(span, content.toString());
-            tracer.setOutputMessages(span, Collections.singletonList(
-                FITracer.message("assistant", content.toString())));
-
-            span.setStatus(StatusCode.OK);
+            if (!tracer.getConfig().isHideInputMessages()) tracer.setRawInput(span, params);
+            return new LegacyChatStream(client.chat().completions().createStreaming(params), span, tracer);
+        } catch (Throwable error) {
+            tracer.setError(span, error);
             span.end();
-
-            return chunks;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            span.end();
-            throw e;
+            throw OpenAITrace.propagate(error);
         }
     }
 

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.futureagi</groupId><artifactId>traceai-java-parent</artifactId><version>1.0.0</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+    <artifactId>openai-compatibility</artifactId>
+    <properties><openai-compat.version>4.95.0</openai-compat.version></properties>
+    <dependencies>
+        <dependency><groupId>com.futureagi</groupId><artifactId>traceai-java-openai</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.openai</groupId><artifactId>openai-java</artifactId><version>${openai-compat.version}</version></dependency>
+        <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>org.assertj</groupId><artifactId>assertj-core</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-testing</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>io.opentelemetry.proto</groupId><artifactId>opentelemetry-proto</artifactId><version>1.3.2-alpha</version><scope>test</scope></dependency>
+    </dependencies>
+    <build>
+        <testSourceDirectory>../../traceai-java-openai/src/test/java</testSourceDirectory>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId>
+                <configuration><testExcludes>
+                    <testExclude>**/LegacyStreamTest.java</testExclude>
+                    <testExclude>**/TracedOpenAIClientE2ETest.java</testExclude>
+                </testExcludes></configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
