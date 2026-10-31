@@ -185,6 +185,19 @@ async function streamChat(message: string) {
 }
 ```
 
+Streamed chat and generation retain the native SDK's `abort()` method when it is
+available. Call `stream.abort()` to cancel one request, or `ollama.abort()` to
+cancel that client's active requests. Handle an abort rejection if a read is in
+progress. Ollama SDK 0.4.x does not expose transport cancellation.
+
+Exiting a `for await` loop with `break`, calling the iterator's `return()`, or
+aborting closes the span with the output received so far. These cancellation
+paths leave the span status unset rather than reporting a completed response.
+Upstream errors and explicit iterator `throw()` calls record an error; normal
+exhaustion records success. Final token counts are captured only when supplied by
+Ollama. Chat tool calls and thinking are aggregated into the output message;
+`hideOutputs: true` hides those messages and raw output from exported traces.
+
 ### 3. Local Embeddings for Semantic Search
 
 ```typescript
