@@ -4,13 +4,13 @@ Capture synchronous and asynchronous pipeline runs, component inputs and outputs
 
 ## Install
 
-Use Python 3.10–3.12. This adapter supports Haystack 2.10 through 3.x; the example uses Haystack 3.4.1.
+Use Python 3.11–3.12 for this Haystack 3.4.1 example. The adapter also supports Python 3.10 with older Haystack versions, including 2.10.
 
 ```bash
 pip install traceAI-haystack 'haystack-ai==3.4.1'
 ```
 
-Set `FI_API_KEY` and `FI_SECRET_KEY` in your application's environment. Get these credentials from your Future AGI project settings.
+Set `FI_API_KEY` and `FI_SECRET_KEY` in your application's environment.
 
 ## Configure and run
 

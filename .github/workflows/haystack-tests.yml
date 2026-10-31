@@ -25,8 +25,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.12']
-        haystack: ['2.10.0', '3.4.1']
+        include:
+          - python: '3.10'
+            haystack: '2.10.0'
+          - python: '3.12'
+            haystack: '2.10.0'
+          - python: '3.11'
+            haystack: '3.4.1'
+          - python: '3.12'
+            haystack: '3.4.1'
     env:
       HAYSTACK_TELEMETRY_ENABLED: 'false'
       HAYSTACK_AUTO_TRACE_ENABLED: 'false'
