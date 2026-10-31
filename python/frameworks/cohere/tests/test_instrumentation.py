@@ -33,9 +33,9 @@ class TestChatRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "LLM"
-        assert attributes["llm.system"] == "cohere"
-        assert attributes["llm.model"] == "command-r-plus"
+        assert attributes["gen_ai.span.kind"] == "LLM"
+        assert attributes["gen_ai.provider.name"] == "cohere"
+        assert attributes["gen_ai.request.model"] == "command-r-plus"
 
     def test_extract_chat_with_history(self):
         """Test extracting chat with history."""
@@ -54,7 +54,7 @@ class TestChatRequestAttributesExtractor:
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
         # Should have messages from history
-        assert any("input_messages" in k for k in extra_attrs.keys())
+        assert any("gen_ai.input.messages" in k for k in extra_attrs.keys())
 
     def test_extract_preamble(self):
         """Test extracting preamble (system prompt)."""
@@ -69,7 +69,9 @@ class TestChatRequestAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes_from_request(request_params))
 
-        assert extra_attrs.get("llm.system_prompt") == "You are a helpful assistant."
+        assert extra_attrs["gen_ai.input.messages.0.message.role"] == "system"
+        assert extra_attrs["gen_ai.input.messages.0.message.content"] == "You are a helpful assistant."
+        assert extra_attrs["gen_ai.input.messages.1.message.content"] == request_params["message"]
 
     def test_extract_documents_count(self):
         """Test extracting documents count for RAG."""
@@ -107,8 +109,8 @@ class TestEmbedRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "EMBEDDING"
-        assert attributes["llm.system"] == "cohere"
+        assert attributes["gen_ai.span.kind"] == "EMBEDDING"
+        assert attributes["gen_ai.provider.name"] == "cohere"
         assert attributes.get("cohere.input_type") == "search_document"
 
     def test_extract_texts_count(self):
@@ -143,8 +145,8 @@ class TestRerankRequestAttributesExtractor:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert attributes["fi.span.kind"] == "RERANKER"
-        assert attributes["llm.system"] == "cohere"
+        assert attributes["gen_ai.span.kind"] == "RERANKER"
+        assert attributes["gen_ai.provider.name"] == "cohere"
         assert attributes.get("reranker.top_k") == 3
 
     def test_extract_rerank_query(self):
@@ -183,8 +185,8 @@ class TestChatResponseAttributesExtractor:
 
         attributes = dict(extractor.get_attributes(response))
 
-        assert attributes.get("llm.token_count.prompt") == 10
-        assert attributes.get("llm.token_count.completion") == 15
+        assert attributes.get("gen_ai.usage.input_tokens") == 10
+        assert attributes.get("gen_ai.usage.output_tokens") == 15
 
     def test_extract_response_text(self):
         """Test extracting response text."""
@@ -197,7 +199,11 @@ class TestChatResponseAttributesExtractor:
 
         extra_attrs = dict(extractor.get_extra_attributes(response, {}))
 
-        assert extra_attrs.get("output.value") == "Paris is the capital of France."
+        # output.value is the serialized provider response; message text is
+        # also retained separately for display and content-level masking.
+        assert json.loads(extra_attrs["output.value"]) == response
+        assert extra_attrs["gen_ai.output.messages.0.message.content"] == "Paris is the capital of France."
+        assert extra_attrs["gen_ai.output.messages.0.message.role"] == "assistant"
 
     def test_extract_tool_calls(self):
         """Test extracting tool calls from response."""
@@ -278,7 +284,7 @@ class TestRealWorldScenarios:
             "input_type": "search_query",
         }
         embed_attrs = dict(embed_extractor.get_attributes_from_request(embed_params))
-        assert embed_attrs["fi.span.kind"] == "EMBEDDING"
+        assert embed_attrs["gen_ai.span.kind"] == "EMBEDDING"
 
         # Step 2: Rerank results
         rerank_extractor = _RerankRequestAttributesExtractor()
@@ -289,7 +295,7 @@ class TestRealWorldScenarios:
             "top_n": 2,
         }
         rerank_attrs = dict(rerank_extractor.get_attributes_from_request(rerank_params))
-        assert rerank_attrs["fi.span.kind"] == "RERANKER"
+        assert rerank_attrs["gen_ai.span.kind"] == "RERANKER"
 
         # Step 3: Generate with context
         chat_extractor = _ChatRequestAttributesExtractor()
@@ -299,7 +305,7 @@ class TestRealWorldScenarios:
             "documents": [{"text": "ML is a subset of AI..."}],
         }
         chat_attrs = dict(chat_extractor.get_attributes_from_request(chat_params))
-        assert chat_attrs["fi.span.kind"] == "LLM"
+        assert chat_attrs["gen_ai.span.kind"] == "LLM"
 
     def test_invocation_parameters(self):
         """Test extraction of invocation parameters."""
@@ -318,7 +324,7 @@ class TestRealWorldScenarios:
 
         attributes = dict(extractor.get_attributes_from_request(request_params))
 
-        assert "llm.invocation_parameters" in attributes
-        params = json.loads(attributes["llm.invocation_parameters"])
+        assert "gen_ai.request.parameters" in attributes
+        params = json.loads(attributes["gen_ai.request.parameters"])
         assert params["temperature"] == 0.7
         assert params["max_tokens"] == 500
