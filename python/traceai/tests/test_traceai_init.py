@@ -8,6 +8,7 @@ These tests verify:
 - Instrumentor loading
 """
 
+import json
 import unittest
 from unittest.mock import patch, MagicMock
 import sys
@@ -38,9 +39,12 @@ class TestSemanticConventionEnum(unittest.TestCase):
         """Test that SemanticConvention inherits from str."""
         from fi_instrumentation.otel import SemanticConvention
 
-        # Should be usable as string
+        # str+Enum members compare/serialize as strings, but Python 3.11+ formats
+        # them as Enum names. Use .value for display rather than changing the API.
         self.assertIsInstance(SemanticConvention.FI, str)
-        self.assertEqual(f"Convention: {SemanticConvention.FI}", "Convention: fi")
+        self.assertEqual(SemanticConvention.FI, "fi")
+        self.assertEqual(json.dumps(SemanticConvention.FI), '"fi"')
+        self.assertEqual(f"Convention: {SemanticConvention.FI.value}", "Convention: fi")
 
 
 class TestTraceAIInit(unittest.TestCase):

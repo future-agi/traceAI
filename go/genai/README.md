@@ -15,9 +15,9 @@ them) becomes one client span named `generate_content <model>` with the same att
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/genai` (package `traceaigenai`) |
-| Gemini SDK | `google.golang.org/genai` v1.71.0 or later (the `go.mod` minimum); tested on v1.75.0, the latest on 2026-10-16, and v1.71.0 |
+| Gemini SDK | `google.golang.org/genai` v1.71.0 or later (the `go.mod` minimum) |
 | Backend | Gemini Developer API (`genai.BackendGeminiAPI`). Vertex AI is not tested and not claimed. |
-| Go | 1.26 or later (OpenTelemetry Go v1.47.0 requires it); tested on 1.26.9 and 1.27.2 |
+| Go | 1.26.0 or later, the common minimum across traceAI Go modules |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and the standard library. No exporter is built in. `google.golang.org/genai` and the OTel SDK are used by the tests and the example only. |
 
 The retired module `github.com/google/generative-ai-go` (support ended 2025-11-30) is not
@@ -25,8 +25,15 @@ supported and not wrapped.
 
 ## Install
 
+Install both traceAI and the Google Gen AI SDK in your Go module:
+
+**Release availability:** the traceAI command below is for tagged releases. Until the first
+`go/genai/v0.1.0` tag exists, use `@dev` instead of `@latest` for the traceAI module. See the
+[Go SDK index](../README.md) for all modules and the release scheme.
+
 ```sh
-go get github.com/future-agi/traceAI/go/genai@latest google.golang.org/genai@latest
+go get github.com/future-agi/traceAI/go/genai@latest
+go get google.golang.org/genai@latest
 ```
 
 ## Use
@@ -134,7 +141,10 @@ generated (inline) images are never copied; the transport adds no resource attri
 ## Test
 
 ```sh
+go mod tidy -diff
+go vet ./...
 go test -race ./...
+go build -o /tmp/traceai-genai-example ./example
 ```
 
 The tests drive the real SDK against an `httptest` Gemini server that replays recorded Gemini

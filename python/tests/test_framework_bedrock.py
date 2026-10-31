@@ -502,7 +502,7 @@ class TestBedrockFramework:
         
         # Check that base64 encoding is working
         url_attr = attributes[0]
-        assert url_attr[0] == "image.url"
+        assert url_attr[0] == "message_content.image"
         assert url_attr[1].startswith("data:image/jpeg;base64,")
         
         # Verify base64 content
