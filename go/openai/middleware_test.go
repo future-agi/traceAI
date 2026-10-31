@@ -610,8 +610,8 @@ func TestSessionFromContext(t *testing.T) {
 	}
 }
 
-// Only Chat Completions are spanned; other endpoints pass through untouched.
-func TestOtherEndpointsPassThrough(t *testing.T) {
+// Responses and embeddings are traced through the same official middleware.
+func TestResponsesAndEmbeddingsAreSpanned(t *testing.T) {
 	h := newHarness(t, nil)
 	if _, err := h.client.Embeddings.New(context.Background(), openai.EmbeddingNewParams{
 		Model: openai.EmbeddingModelTextEmbedding3Small,
@@ -625,8 +625,8 @@ func TestOtherEndpointsPassThrough(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(h.rec.Started()); n != 0 {
-		t.Fatalf("%d spans for non-chat endpoints, want 0", n)
+	if n := len(h.rec.Ended()); n != 2 {
+		t.Fatalf("%d spans for Responses and Embeddings, want 2", n)
 	}
 }
 

@@ -13,7 +13,7 @@ const (
 	ResourceProjectType = "project_type"
 
 	// GenAISpanKind types a span in Future AGI (LLM, TOOL, AGENT, CHAIN, ...).
-	// This package sets it to SpanKindLLM, as traceai-openai does.
+	// Model generation uses SpanKindLLM; embeddings use SpanKindEmbedding.
 	GenAISpanKind = "gen_ai.span.kind"
 
 	// GenAI semantic conventions.
@@ -75,8 +75,9 @@ const (
 
 // Values of [GenAISpanKind] (fi_instrumentation.fi_types.FiSpanKindValues).
 const (
-	SpanKindLLM   = "LLM"
-	SpanKindTool  = "TOOL"
-	SpanKindAgent = "AGENT"
-	SpanKindChain = "CHAIN"
+	SpanKindEmbedding = "EMBEDDING"
+	SpanKindLLM       = "LLM"
+	SpanKindTool      = "TOOL"
+	SpanKindAgent     = "AGENT"
+	SpanKindChain     = "CHAIN"
 )

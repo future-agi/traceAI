@@ -53,8 +53,8 @@ func WithTraceConfig(tc TraceConfig) Option {
 // Middleware returns the tracing middleware. Pass it to
 // option.WithMiddleware when you build the client, or per request.
 //
-// Only Chat Completions requests (POST .../chat/completions) are spanned. Any
-// other request passes through untouched.
+// Chat Completions, Responses creation and Embeddings requests are spanned.
+// Other requests pass through untouched.
 func Middleware(opts ...Option) option.Middleware {
 	c := &config{}
 	for _, o := range opts {
@@ -64,10 +64,11 @@ func Middleware(opts ...Option) option.Middleware {
 		c.tc = TraceConfigFromEnv()
 	}
 	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-		if !isChatCompletions(req) {
+		op := operationForRequest(req)
+		if op == "" {
 			return next(req)
 		}
-		return c.traceChat(req, next)
+		return c.traceRequest(req, next, op)
 	}
 }
 
@@ -79,17 +80,15 @@ func (c *config) tracer() trace.Tracer {
 	return tp.Tracer(ScopeName, trace.WithInstrumentationVersion(Version))
 }
 
-func isChatCompletions(req *http.Request) bool {
-	return req != nil && req.URL != nil && req.Method == http.MethodPost &&
-		strings.HasSuffix(strings.TrimRight(req.URL.Path, "/"), "/chat/completions")
-}
-
-func (c *config) traceChat(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	parsed := parseChatRequest(readRequestBody(req), c.tc)
-
+func (c *config) traceRequest(req *http.Request, next option.MiddlewareNext, op operation) (*http.Response, error) {
+	parsed := parseRequest(readRequestBody(req), c.tc, op)
+	kind := SpanKindLLM
+	if op == opEmbeddings {
+		kind = SpanKindEmbedding
+	}
 	attrs := []attribute.KeyValue{
-		attribute.String(GenAISpanKind, SpanKindLLM),
-		attribute.String(GenAIOperationName, "chat"),
+		attribute.String(GenAISpanKind, kind),
+		attribute.String(GenAIOperationName, string(op)),
 		attribute.String(GenAIProviderName, providerFromHost(req.URL.Hostname())),
 	}
 	attrs = append(attrs, parsed.attrs...)
@@ -98,7 +97,7 @@ func (c *config) traceChat(req *http.Request, next option.MiddlewareNext) (*http
 	}
 	attrs = append(attrs, ContextAttributes(req.Context())...)
 
-	name := "chat"
+	name := string(op)
 	if parsed.model != "" {
 		name += " " + parsed.model
 	}
@@ -122,9 +121,9 @@ func (c *config) traceChat(req *http.Request, next option.MiddlewareNext) (*http
 	case res.StatusCode >= 400:
 		c.endHTTPError(span, res)
 	case isEventStream(res):
-		res.Body = newStreamBody(reqCtx, res.Body, span, c.tc)
+		res.Body = newStreamBody(reqCtx, res.Body, span, c.tc, op)
 	default:
-		c.endJSON(reqCtx, span, res)
+		c.endJSON(reqCtx, span, res, op)
 	}
 	return res, nil
 }
@@ -181,7 +180,7 @@ func isJSON(res *http.Response) bool {
 
 // endJSON reads a non-streaming response, restores the body for the SDK and
 // ends the span with the response attributes.
-func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response) {
+func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Response, op operation) {
 	if res.Body == nil || !isJSON(res) {
 		span.End()
 		return
@@ -196,8 +195,9 @@ func (c *config) endJSON(reqCtx context.Context, span trace.Span, res *http.Resp
 	}
 	res.Body = io.NopCloser(bytes.NewReader(b))
 	acc := newAccumulator()
-	acc.addCompletion(b)
+	acc.addJSON(b, op)
 	span.SetAttributes(c.tc.Filter(acc.attributes(c.tc))...)
+	setResponseError(span, acc.streamErr, c.tc, op)
 	span.End()
 }
 
