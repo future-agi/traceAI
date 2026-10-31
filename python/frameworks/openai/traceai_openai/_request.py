@@ -181,7 +181,11 @@ class _WithOpenAI(ABC):
             ):
                 # Older supported core releases do not mask invocation parameters
                 # with hide_inputs. extra_body may carry arbitrary private values.
-                if self._config.hide_inputs and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS:
+                if (
+                    self._config.hide_inputs
+                    and cast_to is self._openai.types.responses.Response
+                    and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS
+                ):
                     value = REDACTED_VALUE
                 yield key, value
         except Exception:
@@ -446,8 +450,12 @@ def _parse_request_args(args: Tuple[type, Any]) -> Tuple[type, Mapping[str, Any]
         and isinstance(json_data := args[1].json_data, Mapping)
         else {}
     )
+    from openai.types.responses import Response
+
     extra_json = getattr(args[1], "extra_json", None)
-    if isinstance(extra_json, Mapping):
+    # Limit the new extension contract to Responses; other SDK routes keep
+    # their existing capture behavior.
+    if cast_to is Response and isinstance(extra_json, Mapping):
         from openai._types import Omit
 
         # The SDK shallow-merges extra_body over json_data and drops Omit values
