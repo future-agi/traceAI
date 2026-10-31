@@ -52,6 +52,8 @@ The per-launch capability is passed to the agent in a trace-specific header vari
 
 If the local runtime is unavailable or holds the route, `run` starts the agent without managed trace variables and returns the agent's own exit status or signal. Routes that are not enabled, unsupported profiles and destination conflicts refuse before launch. Bundled Copilot CLI and VS Code profiles remain qualification-only and cannot use this path yet.
 
+On POSIX systems, a noninteractive managed run forwards signals to the agent's process group, including tools it starts. Interactive terminal SIGINT already reaches the foreground group, so the wrapper does not forward it again. A supervisor that signals only the interactive wrapper PID must start the wrapper in a **dedicated process group** and opt in to `runAgent(..., { signalDelivery: "dedicated-wrapper-group" })`; the library verifies group ownership and refuses this option in a shared group. The default cannot distinguish a wrapper-only interrupt from a terminal-wide interrupt, and does not claim to support wrapper-only signalling. Windows process-tree signal delivery is not qualified.
+
 ## Compatibility
 
 Node 22.16–22.x and 24.x are supported runtime lines. Windows activation is held. The SQLite binding is pinned; an unqualified SQLite engine is refused rather than substituted.

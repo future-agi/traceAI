@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import type { Adapter, AdapterContext } from "../adapters.js";
 import { AgentError } from "../security/files.js";
 import { runtimeRequest } from "../runtime/daemon.js";
@@ -29,8 +29,26 @@ export async function runAgent(
   context: AdapterContext,
   args: readonly string[],
   tracing = true,
+  options: { signalDelivery?: "terminal" | "dedicated-wrapper-group" } = {},
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (!adapter.launch) throw new AgentError("UNSUPPORTED_RUN", 5);
+  if (options.signalDelivery === "dedicated-wrapper-group") {
+    // Never signal a group owned by a shell, IDE or supervisor. ps is used
+    // only for this explicit mode; unavailable/ambiguous group ID fails closed.
+    let group: number;
+    try {
+      group = Number(
+        execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(process.pid)], {
+          encoding: "utf8",
+          timeout: 1000,
+        }).trim(),
+      );
+    } catch {
+      throw new AgentError("UNSUPPORTED_SIGNAL_DELIVERY", 5);
+    }
+    if (process.platform === "win32" || group !== process.pid)
+      throw new AgentError("UNSUPPORTED_SIGNAL_DELIVERY", 5);
+  }
   let launch = await adapter.launch(context, { tracing });
   // Validate before opening ingress, including the no-tracing fallback.
   const validate = () => {
@@ -104,12 +122,14 @@ export async function runAgent(
             : {}),
         }
       : {};
-    // A terminal sends SIGINT to the entire foreground process group. Keeping
-    // the interactive agent in that group preserves its terminal access; do
-    // not forward the same SIGINT a second time. Noninteractive agents can be
-    // isolated in a new process group so a group interrupt reaches only this
-    // wrapper, which then forwards it exactly once.
-    // Windows console signal delivery is different and is not qualified here.
+    // A terminal sends SIGINT to its foreground group. Interactive agents
+    // remain in that group for terminal access, so never duplicate that SIGINT.
+    // Noninteractive agents get their own group, including their shell/tools;
+    // forward to the group, not just the direct child PID. A supervisor that
+    // signals only the wrapper of an interactive agent must explicitly opt in
+    // to dedicated-wrapper-group AND start the wrapper as its own group leader:
+    // signaling a shared foreground group would interrupt unrelated processes.
+    // Windows console signal delivery is not qualified for group forwarding.
     const interactive = process.platform !== "win32" && Boolean(process.stdin.isTTY);
     const child = spawn(launch.executable, [...launch.args, ...args], {
       env: agentEnvironment(process.env, overlay),
@@ -118,9 +138,33 @@ export async function runAgent(
       detached: process.platform !== "win32" && !interactive,
     });
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+    let forwardingGroup = false;
     const handlers = signals.map((signal) => {
       const handler = () => {
-        if (signal !== "SIGINT" || !interactive) child.kill(signal);
+        // Ignore our own notification when forwarding to a dedicated wrapper
+        // group. Only callers that own that group may opt in to this mode.
+        if (forwardingGroup && signal === "SIGINT") {
+          forwardingGroup = false;
+          return;
+        }
+        if (interactive && signal === "SIGINT") {
+          if (options.signalDelivery !== "dedicated-wrapper-group") return;
+          forwardingGroup = true;
+          try {
+            process.kill(-process.pid, signal);
+          } catch (error) {
+            forwardingGroup = false;
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+          }
+          return;
+        }
+        try {
+          if (process.platform !== "win32" && !interactive)
+            process.kill(-child.pid!, signal);
+          else child.kill(signal);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        }
       };
       process.on(signal, handler);
       return handler;
