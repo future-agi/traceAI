@@ -11,6 +11,11 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/esm/index.js",
       "require": "./dist/src/index.js"
+    },
+    "./tanstack": {
+      "types": "./dist/src/tanstack.d.ts",
+      "import": "./dist/esm/tanstack.js",
+      "require": "./dist/src/tanstack.js"
     }
   },
   "scripts": {
@@ -21,7 +26,8 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint . --ext .ts",
-    "prepare": "pnpm run build"
+    "prepare": "pnpm run build",
+    "test:tanstack": "node --test test/tanstack.test.mjs"
   },
   "files": [
     "dist",

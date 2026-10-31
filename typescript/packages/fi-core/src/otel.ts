@@ -8,6 +8,7 @@ import {
   SpanStatusCode,
 } from "@opentelemetry/api";
 import { ProjectType, EvalTag, prepareEvalTags } from "./fi_types";
+import { SpanTransform, TransformingSpanExporter } from "./spanTransform";
 import { ExportResult, ExportResultCode } from "@opentelemetry/core";
 import {
   ReadableSpan,
@@ -345,6 +346,7 @@ interface FITracerProviderOptions {
   endpoint?: string; // Custom endpoint (can be base or full, _constructFullEndpoint will handle)
   headers?: FIHeaders;
   transport?: Transport; // Transport type
+  spanTransform?: SpanTransform;
 }
 
 class FITracerProvider extends BasicTracerProvider {
@@ -382,6 +384,7 @@ class FITracerProvider extends BasicTracerProvider {
       exporter = new _OTLPHTTPTraceExporter({ url: endpoint, headers });
     }
     
+    if (config.spanTransform) exporter = new TransformingSpanExporter(exporter, config.spanTransform);
     const defaultProcessor = new OTelSimpleSpanProcessor(exporter);
     super({ resource: config.resource, idGenerator, spanProcessors: [defaultProcessor] });
     this.defaultProcessorAttached = true;
@@ -472,6 +475,8 @@ export interface RegisterOptions {
   endpoint?: string; // Can be a base URL or a full URL. _constructFullEndpoint will resolve.
   idGenerator?: IdGenerator;
   transport?: Transport; // Transport type: HTTP or GRPC
+  /** Transform the export view without mutating SDK spans. Failures drop the batch. */
+  spanTransform?: SpanTransform;
 }
 
 function register(options: RegisterOptions = {}): FITracerProvider {
@@ -578,6 +583,7 @@ if (!projectName) {
     endpoint: optEndpoint,
     headers: exporterHeaders,
     transport,
+    spanTransform: options.spanTransform,
   });
 
   if (batch) {
@@ -594,6 +600,7 @@ if (!projectName) {
         headers: exporterHeaders,
       });
     }
+    if (options.spanTransform) batchExporter = new TransformingSpanExporter(batchExporter, options.spanTransform);
     const batchProcessor = new OTelBatchSpanProcessor(batchExporter);
 
     (tracerProvider as any)._registeredSpanProcessors = [];
