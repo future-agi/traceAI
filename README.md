@@ -347,6 +347,7 @@ Agent orchestration, application frameworks, and agent-to-agent communication.
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> A2A | [SDK](python/frameworks/a2a/ "traceAI-a2a") | — | — | [SDK](go/a2a/ "github.com/future-agi/traceAI/go/a2a") | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> AG2 | [SDK](python/frameworks/ag2/ "traceAI-ag2") · [Classic](python/frameworks/ag2-classic/ "traceAI-ag2-classic") | — | — | — | — |
+| <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> AgentScope | [SDK](python/frameworks/agentscope/ "traceAI-agentscope") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> Agno | [SDK](python/frameworks/agno/ "traceai-agno") | — | — | — | — |
 | <img src=".github/assets/integrations/autogen-tile.png" width="24" height="24" alt=""> AutoGen | [SDK](python/frameworks/autogen/ "traceAI-autogen") | — | — | — | — |
 | <img src=".github/assets/integrations/package-tile.svg" width="24" height="24" alt=""> BeeAI | [SDK](python/frameworks/beeai/ "traceai-beeai") | [SDK](typescript/packages/traceai_beeai/ "@traceai/beeai") | — | — | — |

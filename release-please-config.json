@@ -41,6 +41,14 @@
         "traceai_agent_framework/version.py"
       ]
     },
+    "python/frameworks/agentscope": {
+      "release-type": "python",
+      "component": "traceai-agentscope",
+      "package-name": "traceAI-agentscope",
+      "extra-files": [
+        "traceai_agentscope/__init__.py"
+      ]
+    },
     "python/frameworks/agno": {
       "release-type": "python",
       "component": "traceai-agno",

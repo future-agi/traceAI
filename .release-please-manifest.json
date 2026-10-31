@@ -3,6 +3,7 @@
   "python/frameworks/ag2": "0.1.0",
   "python/frameworks/ag2-classic": "0.1.0",
   "python/frameworks/agent-framework": "0.1.0",
+  "python/frameworks/agentscope": "0.1.0",
   "python/frameworks/agno": "0.1.0",
   "python/frameworks/anthropic": "0.1.11",
   "python/frameworks/autogen": "0.2.1",
