@@ -1,377 +1,107 @@
 # @traceai/lancedb
 
-OpenTelemetry instrumentation for [LanceDB](https://lancedb.com/) vector database in Node.js/TypeScript applications.
+Trace LanceDB database operations and query execution with OpenTelemetry in Node.js.
 
-## Installation
+## Install
 
 ```bash
-npm install @traceai/lancedb
-# or
-pnpm add @traceai/lancedb
-# or
-yarn add @traceai/lancedb
+npm install @traceai/lancedb @traceai/fi-core @lancedb/lancedb@0.41.0 \
+  @opentelemetry/api @opentelemetry/context-async-hooks
 ```
 
-## Prerequisites
+Use Node.js 20 or later. This integration supports `@lancedb/lancedb` versions `>=0.4.20 <=0.41.0`; the example uses 0.41.0. Older SDK versions expose vector search as `table.vectorSearch(...)` rather than `table.search(...)`.
 
-- Node.js >= 18
-- LanceDB (`@lancedb/lancedb` >= 0.1.0)
-- OpenTelemetry SDK configured in your application
+## Send traces to Future AGI
 
-## Quick Start
+Set your Future AGI credentials before running the application:
 
-```typescript
+```bash
+export FI_API_KEY="YOUR_FI_API_KEY"
+export FI_SECRET_KEY="YOUR_FI_SECRET_KEY"
+```
+
+Save the following as `lancedb-tracing.mjs`. Use the **default import** for manual instrumentation, and instrument it before calling `connect`. An ESM namespace's named exports are immutable snapshots, so calling a previously imported named `connect` bypasses the manual hook.
+
+```javascript
+import { context } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { register, ProjectType } from "@traceai/fi-core";
 import { LanceDBInstrumentation } from "@traceai/lancedb";
-import * as lancedb from "@lancedb/lancedb";
+import lancedb from "@lancedb/lancedb";
 
-// Initialize instrumentation
+// Omit this line if your existing OpenTelemetry SDK already installs a context manager.
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+const provider = register({
+  projectName: "lancedb-search",
+  projectType: ProjectType.OBSERVE,
+});
 const instrumentation = new LanceDBInstrumentation({
-  traceConfig: {
-    maskInputs: false,
-    maskOutputs: false,
-  },
+  traceConfig: { hideErrorDetails: true },
 });
-
-// Enable instrumentation
-instrumentation.enable();
+instrumentation.setTracerProvider(provider);
 instrumentation.manuallyInstrument(lancedb);
 
-// Now all LanceDB operations will be traced
-const db = await lancedb.connect("./my-database");
-const table = await db.openTable("vectors");
-
-// This search will be automatically traced
-const results = await table.search([0.1, 0.2, 0.3]).limit(10).toArray();
-```
-
-## Configuration Options
-
-```typescript
-interface LanceDBInstrumentationConfig {
-  // Enable/disable the instrumentation
-  enabled?: boolean;
-
-  // Capture query vectors in span attributes
-  captureQueryVectors?: boolean;
-
-  // Capture result vectors in span attributes
-  captureResultVectors?: boolean;
-
-  // Capture document content
-  captureDocuments?: boolean;
-}
-
-interface TraceConfigOptions {
-  // Mask sensitive input data
-  maskInputs?: boolean;
-
-  // Mask sensitive output data
-  maskOutputs?: boolean;
+const db = await lancedb.connect("./lancedb-example");
+try {
+  const table = await db.createTable("documents", [
+    { id: 1, text: "Search documentation", vector: [1, 0] },
+    { id: 2, text: "Deployment guide", vector: [0, 1] },
+  ], { mode: "overwrite" });
+  const results = await table.search([1, 0]).limit(1).toArray();
+  console.log(results.map(row => row.id));
+} finally {
+  db.close();
+  instrumentation.disable();
+  await provider.shutdown();
+  context.disable();
 }
 ```
 
-## Traced Operations
-
-The instrumentation automatically traces the following LanceDB operations:
-
-### Table Operations
-
-- `search` - Vector similarity search
-- `add` - Add records to table
-- `update` - Update existing records
-- `delete` - Delete records
-
-### Database Operations
-
-- `createTable` - Create new table
-- `dropTable` - Drop table
-- `openTable` - Open existing table
-- `tableNames` - List all tables
-
-### Utility Operations
-
-- `countRows` - Count rows in table
-
-## Span Attributes
-
-Each traced operation includes relevant attributes:
-
-| Attribute            | Description                              |
-| -------------------- | ---------------------------------------- |
-| `db.system`          | Always "lancedb"                         |
-| `db.operation`       | Operation name (e.g., "search", "add")   |
-| `db.collection.name` | Table name                               |
-| `db.lancedb.limit`   | Query limit                              |
-| `db.lancedb.metric`  | Distance metric (L2, cosine, dot)        |
-| `db.lancedb.nprobes` | Number of probes for approximate search  |
-
-## Real-World Use Cases
-
-### 1. Local-First RAG Application
-
-```typescript
-import { LanceDBInstrumentation } from "@traceai/lancedb";
-import * as lancedb from "@lancedb/lancedb";
-import { pipeline } from "@xenova/transformers";
-
-const instrumentation = new LanceDBInstrumentation();
-instrumentation.enable();
-instrumentation.manuallyInstrument(lancedb);
-
-// Initialize embedding model
-const embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
-
-async function embedText(text: string): Promise<number[]> {
-  const output = await embedder(text, { pooling: "mean", normalize: true });
-  return Array.from(output.data);
-}
-
-// Setup local database
-const db = await lancedb.connect("./knowledge-base");
-
-async function ingestDocuments(documents: { id: string; content: string }[]) {
-  const records = await Promise.all(
-    documents.map(async (doc) => ({
-      id: doc.id,
-      content: doc.content,
-      vector: await embedText(doc.content),
-      timestamp: new Date().toISOString(),
-    }))
-  );
-
-  // Create or append to table (traced)
-  try {
-    const table = await db.openTable("documents");
-    await table.add(records);
-  } catch {
-    await db.createTable("documents", records);
-  }
-}
-
-async function searchDocuments(query: string, limit = 5) {
-  const queryVector = await embedText(query);
-  const table = await db.openTable("documents");
-
-  // Vector search (traced)
-  const results = await table
-    .search(queryVector)
-    .limit(limit)
-    .select(["id", "content"])
-    .toArray();
-
-  return results;
-}
+```bash
+node lancedb-tracing.mjs
 ```
 
-### 2. Embedded Vector Search for Desktop Apps
+The example overwrites only the `documents` table in `./lancedb-example`. In Future AGI, open **Observe**, select `lancedb-search`, and inspect the `lancedb createTable` and `lancedb search` spans.
 
-```typescript
-import * as lancedb from "@lancedb/lancedb";
-import { app } from "electron";
-import path from "path";
+If you already run an OpenTelemetry SDK, reuse its provider and context manager instead of registering a second provider. With CommonJS, register `new LanceDBInstrumentation()` with your SDK **before** requiring `@lancedb/lancedb` for automatic instrumentation; manual instrumentation remains available for a module you loaded earlier.
 
-// Store database in user's app data directory
-const dbPath = path.join(app.getPath("userData"), "vectors.lance");
-const db = await lancedb.connect(dbPath);
+## Operations and query lifecycle
 
-async function indexLocalFiles(files: FileMetadata[]) {
-  const records = files.map((file) => ({
-    path: file.path,
-    name: file.name,
-    vector: file.embedding,
-    size: file.size,
-    modified: file.modifiedTime,
-  }));
+Connections created through the instrumented `connect` trace `createTable`, `openTable`, `dropTable`, and `tableNames`. Their tables trace `add`, `update`, `delete`, and `countRows`.
 
-  const table = await db.createTable("files", records, { mode: "overwrite" });
-  return table.countRows();
-}
+`search`, `vectorSearch`, and `query` still return synchronous fluent builders. Building a query creates no span. Executing it with `toArray`, `toArrow`, `execute`, or `for await` creates one `lancedb search` span, including nested calls made by the SDK. Reusing a builder creates a new span for each execution.
 
-async function searchFiles(queryVector: number[], filters?: FileFilters) {
-  const table = await db.openTable("files");
+Iterator spans end on exhaustion, early `for await` exit, explicit `return()`, or an error. If you manually consume an iterator, exhaust it or call `return()` when finished. Abandoning it without closing it leaves its span open.
 
-  let query = table.search(queryVector).limit(20);
+The integration does not trace every LanceDB API. Index management, catalog/namespace connections, merge-insert builders, and branch operations are outside this coverage. LanceDB's `instrumentLanceDbMetrics` exports metrics, not these database traces.
 
-  if (filters?.minSize) {
-    query = query.where(`size >= ${filters.minSize}`);
-  }
+## Attributes and privacy
 
-  return query.toArray();
-}
-```
+| Attribute | Meaning |
+| --- | --- |
+| `db.system` | `lancedb` |
+| `db.operation.name` | Database operation, or `search` for query execution |
+| `fi.span.kind` | `VECTOR_DB` |
+| `db.collection.name` | Table name, when available |
+| `db.vector.query.dimensions` | Length of an explicitly supplied vector array |
+| `db.vector.query.top_k` | Explicit query limit |
+| `db.operation.batch_size` | Number of array records passed to `add` |
+| `db.response.returned_rows` | Array/Arrow result size or number of streamed rows |
 
-### 3. Multi-modal Search (Images + Text)
+Query vectors, record contents, filter expressions, connection URIs, and credentials are not captured. Table names and numeric metadata are exported. Errors normally include messages and stack traces; set `traceConfig.hideErrorDetails: true` to retain error status without those details.
 
-```typescript
-interface MediaRecord {
-  id: string;
-  type: "image" | "video" | "document";
-  path: string;
-  vector: number[];
-  thumbnail?: string;
-  metadata: Record<string, any>;
-}
+`captureQueryVectors` and `captureResultVectors` remain accepted for source compatibility, but are deprecated and do not enable content capture.
 
-async function createMediaIndex(media: MediaRecord[]) {
-  const table = await db.createTable("media", media, { mode: "overwrite" });
+## Enable and disable
 
-  // Create vector index for faster search
-  await table.createIndex("vector", {
-    type: "IVF_PQ",
-    num_partitions: 256,
-    num_sub_vectors: 96,
-  });
+`instrumentation.disable()` restores the original module and prototype methods, including hooks installed manually. `instrumentation.enable()` restores owned hooks for existing connections and builders. Operations already in flight finish their existing spans.
 
-  return table;
-}
+## Troubleshooting
 
-async function searchMedia(
-  queryVector: number[],
-  mediaType?: "image" | "video" | "document"
-) {
-  const table = await db.openTable("media");
-
-  let query = table.search(queryVector).limit(50).select(["id", "type", "path", "thumbnail"]);
-
-  if (mediaType) {
-    query = query.where(`type = '${mediaType}'`);
-  }
-
-  return query.toArray();
-}
-```
-
-### 4. Time-Series Anomaly Detection
-
-```typescript
-async function detectAnomalies(
-  currentMetricVector: number[],
-  windowHours = 24
-) {
-  const table = await db.openTable("metrics");
-  const cutoffTime = new Date(Date.now() - windowHours * 60 * 60 * 1000);
-
-  // Find similar historical patterns
-  const similar = await table
-    .search(currentMetricVector)
-    .where(`timestamp >= '${cutoffTime.toISOString()}'`)
-    .limit(100)
-    .toArray();
-
-  // Calculate anomaly score based on distance
-  const avgDistance =
-    similar.reduce((sum, r) => sum + r._distance, 0) / similar.length;
-  const isAnomaly = avgDistance > 0.5; // threshold
-
-  return {
-    isAnomaly,
-    score: avgDistance,
-    similarPatterns: similar.slice(0, 5),
-  };
-}
-```
-
-### 5. Semantic Code Search
-
-```typescript
-interface CodeSnippet {
-  id: string;
-  filepath: string;
-  content: string;
-  language: string;
-  vector: number[];
-  functions: string[];
-}
-
-async function indexCodebase(snippets: CodeSnippet[]) {
-  await db.createTable("code", snippets, { mode: "overwrite" });
-}
-
-async function searchCode(
-  query: string,
-  queryVector: number[],
-  language?: string
-) {
-  const table = await db.openTable("code");
-
-  let search = table
-    .search(queryVector)
-    .limit(20)
-    .select(["filepath", "content", "language", "functions"]);
-
-  if (language) {
-    search = search.where(`language = '${language}'`);
-  }
-
-  const results = await search.toArray();
-
-  return results.map((r) => ({
-    ...r,
-    preview: r.content.substring(0, 200) + "...",
-  }));
-}
-```
-
-### 6. Incremental Updates with Versioning
-
-```typescript
-async function updateWithVersioning(
-  tableName: string,
-  updates: { id: string; vector: number[]; data: any }[]
-) {
-  const table = await db.openTable(tableName);
-
-  // Get current version
-  const currentVersion = await table
-    .search(updates[0].vector)
-    .limit(1)
-    .select(["version"])
-    .toArray();
-
-  const newVersion = (currentVersion[0]?.version ?? 0) + 1;
-
-  // Add new records with version
-  const records = updates.map((u) => ({
-    ...u.data,
-    id: u.id,
-    vector: u.vector,
-    version: newVersion,
-    updatedAt: new Date().toISOString(),
-  }));
-
-  await table.add(records);
-
-  // Optionally clean up old versions
-  await table.delete(`version < ${newVersion - 5}`);
-
-  return newVersion;
-}
-```
-
-## Integration with OpenTelemetry
-
-```typescript
-import { NodeSDK } from "@opentelemetry/sdk-node";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { LanceDBInstrumentation } from "@traceai/lancedb";
-
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({
-    url: "http://localhost:4318/v1/traces",
-  }),
-  instrumentations: [new LanceDBInstrumentation()],
-});
-
-sdk.start();
-```
-
-## Why LanceDB?
-
-- **Embedded**: No server required, runs in-process
-- **Fast**: Written in Rust with zero-copy access
-- **Portable**: Works on desktop, mobile, and edge devices
-- **Versioned**: Built on Lance format with automatic versioning
-- **Cost-effective**: No infrastructure costs for development/testing
+- **No database spans:** instrument before connecting, supply a configured tracer provider, and use the mutable default import for ESM manual instrumentation.
+- **Duplicate query spans:** ensure your OpenTelemetry SDK has an active context manager, as shown above. Do not layer a second database instrumentor over the same calls.
+- **An iterator span never finishes:** exhaust the iterator or call `return()`; use `toArray()` for small results you want to collect completely.
+- **A Cloud connection fails on an old SDK:** upgrade LanceDB. The 0.4.20 native package does not include Cloud transport support; the integration does not add it.
 
 ## License
 

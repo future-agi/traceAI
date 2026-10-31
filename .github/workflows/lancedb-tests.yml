@@ -1,0 +1,58 @@
+name: LanceDB TypeScript tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_lancedb/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/lancedb-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/traceai_lancedb/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/lancedb-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lancedb:
+    name: LanceDB native and OTLP contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          corepack pnpm --filter @traceai/lancedb... install --frozen-lockfile --ignore-scripts
+      - name: Build packages
+        run: |
+          corepack pnpm run build:deps
+          corepack pnpm --filter @traceai/lancedb run build
+      - name: Test with loopback-only networking
+        working-directory: typescript/packages/traceai_lancedb
+        run: |
+          sudo unshare --net -- bash -eu -c '
+            ip link set lo up
+            "$1" node_modules/jest/bin/jest.js --runInBand
+            "$1" scripts/smoke.cjs
+            "$1" scripts/smoke.cjs esm
+          ' _ "$(command -v node)"
+      - name: Verify lockfile is unchanged
+        run: git diff --exit-code -- pnpm-lock.yaml
