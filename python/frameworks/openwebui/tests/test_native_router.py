@@ -1,5 +1,7 @@
 """Released OpenAI router and connection lookup with synthetic loopback transport."""
 
+import __future__
+
 import ast
 import asyncio
 import http.client
@@ -21,7 +23,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, StreamingRespon
 
 @pytest.fixture
 def model_server():
-    state = SimpleNamespace(result=None, requests=[])
+    state = SimpleNamespace(result=None, sse=None, requests=[])
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -34,9 +36,14 @@ def model_server():
                     json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
                 )
             )
-            payload = json.dumps(state.result).encode()
+            payload = (
+                json.dumps(state.result).encode() if state.sse is None else state.sse
+            )
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header(
+                "Content-Type",
+                "application/json" if state.sse is None else "text/event-stream",
+            )
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -107,11 +114,21 @@ def native_router(host, model_server):
         status, headers, payload = await asyncio.to_thread(
             exchange, method, url, data, headers
         )
-        return SimpleNamespace(
+
+        async def chunks():
+            for offset in range(0, len(payload), 7):
+                yield payload[offset : offset + 7], False
+
+        response = SimpleNamespace(
             headers=headers,
             status=status,
-            json=AsyncMock(return_value=json.loads(payload)),
+            json=AsyncMock(side_effect=lambda **kw: json.loads(payload)),
+            text=AsyncMock(return_value=payload.decode()),
+            content=SimpleNamespace(iter_chunks=chunks),
+            closed=False,
         )
+        response.close = lambda: setattr(response, "closed", True)
+        return response
 
     session = SimpleNamespace(request=AsyncMock(side_effect=http_request))
     native["get_session"] = AsyncMock(return_value=session)
@@ -180,7 +197,27 @@ async def test_native_responses_connection_is_rejected_before_dispatch(
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("tracing", [False, True])
 @pytest.mark.parametrize(
-    "provider_result", [None, [], "private-invalid-body", True, 42]
+    "provider_result",
+    [
+        None,
+        [],
+        "private-invalid-body",
+        True,
+        42,
+        {},
+        {"detail": "private-invalid-body"},
+        {"object": "list", "data": []},
+        {"choices": None},
+        {"choices": "private-invalid-body"},
+        {"choices": []},
+        {"choices": [None]},
+        {"choices": [{}]},
+        {"choices": [{"message": None}]},
+        {"choices": [{"message": "private-invalid-body"}]},
+        {"choices": [{"message": {}}]},
+        {"choices": [{"message": {"content": 42}}]},
+        {"choices": [{"message": {"content": "valid"}}, {}]},
+    ],
 )
 async def test_native_invalid_reply_is_an_error(
     native_router, provider_result, stream, tracing
@@ -208,6 +245,193 @@ async def test_native_invalid_reply_is_an_error(
         assert "private-invalid-body" not in repr(span.attributes) + repr(span.events)
     else:
         assert not spans
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "message,finish_reason",
+    [
+        ({"content": ""}, "stop"),
+        ({"content": "private-output"}, "length"),
+        ({"content": None}, "content_filter"),
+        ({"refusal": "private-refusal"}, "stop"),
+        (
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "example", "arguments": "{}"},
+                    }
+                ]
+            },
+            "tool_calls",
+        ),
+        ({"function_call": {"name": "example", "arguments": "{}"}}, "function_call"),
+        ({"audio": {"id": "audio_1", "data": "synthetic"}}, "stop"),
+    ],
+)
+async def test_native_minimal_completions_are_preserved(
+    native_router, stream, message, finish_reason
+):
+    n = native_router
+    # IDs, model, role, index, usage and timestamps are not universally supplied.
+    n.server.result = {
+        "choices": [{"message": message, "finish_reason": finish_reason}]
+    }
+    result = await n.ns["generate_chat_completion"](
+        n.s.request, {**n.s.body, "stream": stream}, n.s.user
+    )
+    if stream:
+        (chunk,) = [chunk async for chunk in result.body_iterator]
+        result = json.loads(chunk.removeprefix("data: "))
+    assert result == n.server.result
+    assert len(n.server.requests) == 1
+    (span,) = n.s.exporter.get_finished_spans()
+    assert span.attributes["openwebui.outcome"] == "completed"
+    assert span.status.status_code != StatusCode.ERROR
+    assert "private-" not in repr(span.attributes) + repr(span.events)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("tracing", [False, True])
+@pytest.mark.parametrize(
+    "error",
+    ["private-provider-error", {"message": "private-provider-error", "code": "busy"}],
+)
+async def test_native_error_envelopes_are_preserved(
+    native_router, stream, tracing, error
+):
+    n = native_router
+    n.server.result = {"error": error}
+    if not tracing:
+        n.s.pipe.valves.api_key = SecretStr("")
+    result = await n.ns["generate_chat_completion"](
+        n.s.request, {**n.s.body, "stream": stream}, n.s.user
+    )
+    if stream:
+        (chunk,) = [chunk async for chunk in result.body_iterator]
+        result = json.loads(chunk.removeprefix("data: "))
+    assert result == n.server.result
+    assert len(n.server.requests) == 1
+    spans = n.s.exporter.get_finished_spans()
+    if tracing:
+        (span,) = spans
+        assert span.attributes["openwebui.outcome"] == "error"
+        assert span.status.description == "model request failed"
+        assert "private-provider-error" not in repr(span.attributes) + repr(span.events)
+    else:
+        assert not spans
+
+
+@pytest.fixture
+def native_stream(native_router):
+    n = native_router
+    native = n.ns["generate_openai_chat_completion"].__globals__
+    stream_ns = {
+        "CHAT_STREAM_RESPONSE_CHUNK_MAX_BUFFER_SIZE": None,
+        "log": logging.getLogger("host_contract.native_stream"),
+    }
+    with ZipFile(os.environ["OPENWEBUI_WHEEL"]) as wheel:
+        for filename, names in (
+            ("open_webui/utils/misc.py", {"stream_chunks_handler"}),
+            (
+                "open_webui/utils/session_pool.py",
+                {"stream_wrapper", "cleanup_response"},
+            ),
+        ):
+            tree = ast.parse(wheel.read(filename).decode(), filename)
+            nodes = [
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in names
+            ]
+            assert len(nodes) == len(names)
+            exec(  # noqa: S102 - unchanged released SSE assembly and native wrapper
+                compile(
+                    ast.Module(body=nodes, type_ignores=[]),
+                    filename,
+                    "exec",
+                    flags=__future__.annotations.compiler_flag,
+                ),
+                stream_ns,
+            )
+        filename = "open_webui/routers/openai.py"
+        tree = ast.parse(wheel.read(filename).decode(), filename)
+        nodes = [
+            node
+            for node in tree.body
+            if (
+                isinstance(node, ast.FunctionDef)
+                and node.name == "_clean_proxy_headers"
+            )
+            or (
+                isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "_STRIP_PROXY_HEADERS"
+                    for target in node.targets
+                )
+            )
+        ]
+        exec(  # noqa: S102 - unchanged released proxy header handling
+            compile(ast.Module(body=nodes, type_ignores=[]), filename, "exec"), native
+        )
+    native["stream_wrapper"] = stream_ns["stream_wrapper"]
+    return n
+
+
+@pytest.mark.parametrize(
+    "count,frames,done,expected",
+    [
+        (1, [[(0, True)]], False, "completed"),
+        (1, [[(0, False)]], False, "incomplete"),
+        (2, [[(0, True), (1, False)]], False, "incomplete"),
+        (2, [[(0, False), (1, True)]], False, "incomplete"),
+        (2, [[(0, True)]], False, "incomplete"),
+        (2, [[(1, True)]], False, "incomplete"),
+        (2, [[(0, True)], [(1, False)]], False, "incomplete"),
+        (2, [[(0, True)], [(0, True)]], False, "incomplete"),
+        (2, [[(0, True), (1, True)]], False, "completed"),
+        (2, [[(1, True)], [(0, True)]], False, "completed"),
+        (2, [[(0, False), (1, False)]], True, "completed"),
+    ],
+)
+async def test_native_stream_completes_all_requested_choices(
+    native_stream, count, frames, done, expected
+):
+    n = native_stream
+    n.server.sse = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "choices": [
+                        {
+                            "index": index,
+                            "delta": {"content": "private-output"},
+                            "finish_reason": "stop" if finished else None,
+                        }
+                        for index, finished in choices
+                    ]
+                }
+            )
+            + "\n\n"
+            for choices in frames
+        )
+        + ("data: [DONE]\n\n" if done else "")
+    ).encode()
+    response = await n.ns["generate_chat_completion"](
+        n.s.request, {**n.s.body, "stream": True, "n": count}, n.s.user
+    )
+    assert b"".join([chunk async for chunk in response.body_iterator]) == n.server.sse
+    assert len(n.server.requests) == 1
+    assert n.server.requests[0][0] == "/v1/chat/completions"
+    assert n.server.requests[0][1]["n"] == count
+    (span,) = n.s.exporter.get_finished_spans()
+    assert span.attributes["openwebui.outcome"] == expected
+    assert (span.status.status_code == StatusCode.ERROR) == (expected == "incomplete")
+    assert "private-" not in repr(span.attributes) + repr(span.events)
 
 
 async def test_native_chat_completion_and_config_refresh(native_router):

@@ -394,7 +394,7 @@ async def test_abandoned_unconsumed_response_is_incomplete(setup_pipe):
 
 async def test_malformed_content_does_not_break_provider_response(setup_pipe):
     s = setup_pipe
-    s.delegate.return_value = {"output": [{"type": "message", "content": None}]}
+    s.delegate.return_value["output"] = [{"type": "message", "content": None}]
     assert await invoke(s) is s.delegate.return_value
 
 

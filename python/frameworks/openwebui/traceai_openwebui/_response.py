@@ -11,20 +11,73 @@ from opentelemetry.trace import Span
 _MAX_FRAME = 1_048_576
 
 
+def is_chat_completion(value: Any) -> bool:
+    """Require completed messages, not just a JSON object or streaming deltas.
+
+    Compatible providers can omit IDs, timestamps, usage, role and finish_reason.
+    Empty/filtered content, tool calls, refusals and audio are still completions.
+    """
+    if not isinstance(value, dict):
+        return False
+    choices = value.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict):
+            return False
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            return False
+        if "content" in message:
+            if message["content"] is not None and not isinstance(
+                message["content"], str
+            ):
+                return False
+        elif isinstance(message.get("refusal"), str):
+            continue
+        elif isinstance(message.get("tool_calls"), list) and message["tool_calls"]:
+            if not all(
+                isinstance(call, dict) and call for call in message["tool_calls"]
+            ):
+                return False
+        elif any(
+            isinstance(message.get(key), dict) and message[key]
+            for key in ("function_call", "audio")
+        ):
+            continue
+        else:
+            return False
+    return True
+
+
 class Observation:
-    def __init__(self, span: Span, capture_content: bool, max_chars: int) -> None:
+    def __init__(
+        self, span: Span, capture_content: bool, max_chars: int, choice_count: Any = 1
+    ) -> None:
         self.span = span
         self.capture_content = capture_content
         self.max_chars = max_chars
         self.usage: dict[str, int] = {}
         self.output = ""
-        self.terminal = False
+        self._terminal = False
+        self._choice_count = (
+            choice_count if type(choice_count) is int and choice_count > 0 else 0
+        )
+        self._finished_choices: set[int] = set()
+        self._ambiguous_choices = self._choice_count == 0
         self.failed = False
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._buffer = ""
         self._data: list[str] = []
         self._size = 0
         self._dropping = False
+
+    @property
+    def terminal(self) -> bool:
+        return self._terminal or (
+            not self._ambiguous_choices
+            and len(self._finished_choices) == self._choice_count
+        )
 
     def payload(self, value: Any) -> None:
         if not isinstance(value, dict):
@@ -46,7 +99,7 @@ class Observation:
             "response.failed",
             "response.incomplete",
         }:
-            self.terminal = True
+            self._terminal = True
             if value["type"] != "response.completed":
                 self.failed = True
         if value.get("type") == "response.output_text.delta":
@@ -55,9 +108,24 @@ class Observation:
         if isinstance(choices, list):
             for choice in choices:
                 if not isinstance(choice, dict):
+                    self._ambiguous_choices = True
                     continue
-                if choice.get("finish_reason") is not None:
-                    self.terminal = True
+                # A choice finishing is not a request-level terminator. Account
+                # for n even when a missing choice never appears on the wire.
+                index = choice.get(
+                    "index",
+                    0 if self._choice_count == 1 and len(choices) == 1 else None,
+                )
+                if type(index) is not int or not 0 <= index < self._choice_count:
+                    # Cannot correlate ambiguous choices; require [DONE] instead.
+                    self._ambiguous_choices = True
+                elif (
+                    isinstance(choice.get("finish_reason"), str)
+                    and choice["finish_reason"]
+                ):
+                    self._finished_choices.add(index)
+                else:
+                    self._finished_choices.discard(index)
                 message = choice.get("delta") or choice.get("message")
                 if isinstance(message, dict):
                     self._text(message.get("content"))
@@ -127,7 +195,7 @@ class Observation:
     def _frame(self) -> None:
         data = "\n".join(self._data).strip()
         if data == "[DONE]":
-            self.terminal = True
+            self._terminal = True
         elif data:
             try:
                 self.payload(json.loads(data))

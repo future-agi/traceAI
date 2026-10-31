@@ -99,6 +99,8 @@ async def test_released_host_access_failure_never_calls_provider(host):
         Response(b"synthetic unavailable", status_code=503),
         Response(b"not a completion", status_code=200),
         JSONResponse(["not a completion"], status_code=200),
+        JSONResponse({}, status_code=200),
+        JSONResponse({"choices": [{"delta": {"content": "not a completion"}}]}),
     ],
 )
 async def test_released_host_http_error_is_not_empty_success(host, stream, result):

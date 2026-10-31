@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, SecretStr, field_serializer
 from starlette.responses import Response, StreamingResponse
 
 from ._provider import Providers
-from ._response import Observation
+from ._response import Observation, is_chat_completion
 
 __version__ = "0.1.0"  # x-release-please-version
 log = logging.getLogger(__name__)
@@ -159,7 +159,9 @@ class Pipe:
             release = lambda: None
             log.warning("Open WebUI tracing unavailable; model execution continues")
         observation = (
-            Observation(span, capture, valves.max_chars) if span is not None else None
+            Observation(span, capture, valves.max_chars, payload.get("n", 1))
+            if span is not None
+            else None
         )
         if span is not None and capture:
             messages = [
@@ -265,7 +267,10 @@ class Pipe:
                     data = json.loads(response.body)
                 except (ValueError, TypeError):
                     data = None
-            invalid = not isinstance(data, dict)
+            invalid = not (
+                isinstance(data, dict)
+                and (data.get("error") or is_chat_completion(data))
+            )
             http_error = isinstance(response, Response) and response.status_code >= 400
             try:
                 observe("payload", data)
