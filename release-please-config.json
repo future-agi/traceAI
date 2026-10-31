@@ -364,6 +364,14 @@
         "traceai_ollama/version.py"
       ]
     },
+    "python/frameworks/openwebui": {
+      "release-type": "python",
+      "component": "traceai-openwebui",
+      "package-name": "traceAI-openwebui",
+      "extra-files": [
+        "traceai_openwebui/__init__.py"
+      ]
+    },
     "python/frameworks/openai": {
       "release-type": "python",
       "component": "traceai-openai",

@@ -43,6 +43,7 @@
   "python/frameworks/mistralai": "0.1.9",
   "python/frameworks/mongodb-vector": "0.1.1",
   "python/frameworks/ollama": "0.1.0",
+  "python/frameworks/openwebui": "0.1.0",
   "python/frameworks/openai": "0.1.11",
   "python/frameworks/openai-agents": "0.1.7",
   "python/frameworks/openai-realtime": "0.1.0",

@@ -1,0 +1,62 @@
+name: Open WebUI compatibility
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/openwebui/**'
+      - 'integrations/openwebui/**'
+      - '.github/workflows/openwebui-tests.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'python/frameworks/openwebui/**'
+      - '.github/workflows/openwebui-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+        openwebui: ['0.11.4', '0.12.5']
+        otel: ['1.27.0', '1.45.2']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the package and download the released host
+        env:
+          HOST_VERSION: ${{ matrix.openwebui }}
+          OTEL_VERSION: ${{ matrix.otel }}
+        run: |
+          pip install -e 'python/frameworks/openwebui[dev]' "opentelemetry-sdk==$OTEL_VERSION" "opentelemetry-exporter-otlp-proto-http==$OTEL_VERSION"
+          pip download --no-deps --dest "$RUNNER_TEMP/openwebui" "open-webui==$HOST_VERSION"
+          echo "OPENWEBUI_WHEEL=$(find "$RUNNER_TEMP/openwebui" -name '*.whl' -print -quit)" >> "$GITHUB_ENV"
+      - name: Build and install the distribution
+        run: |
+          python -m build --outdir "$RUNNER_TEMP/dist" python/frameworks/openwebui
+          pip install --force-reinstall --no-deps "$RUNNER_TEMP/dist/"*.whl
+      - name: Check package style and public boundaries
+        run: |
+          ruff check python/frameworks/openwebui
+          ruff format --check python/frameworks/openwebui
+          mypy --ignore-missing-imports --follow-imports=silent python/frameworks/openwebui/traceai_openwebui
+      - name: Test released dispatch functions, synthetic models, and loopback OTLP
+        # Installs are complete. A separate network namespace permits only
+        # loopback during tests, so no host/provider credentials can be used.
+        run: |
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            env -i PATH="$PATH" OPENWEBUI_WHEEL="$OPENWEBUI_WHEEL" \
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            "$(command -v python)" -I -m pytest -p pytest_asyncio.plugin \
+            python/frameworks/openwebui/tests -q
