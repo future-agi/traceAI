@@ -12,6 +12,13 @@ from enum import Enum
 
 import pytest
 from portkey_ai.api_resources.apis.chat_complete import Completions
+from portkey_ai.api_resources.apis import chat_complete, generation
+
+PATCH_COUNT = sum(
+    hasattr(module, name)
+    for module in (chat_complete, generation)
+    for name in ("Completions", "AsyncCompletions")
+)
 
 from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
@@ -41,7 +48,7 @@ class TestPortkeyInstrumentor:
         instrumentor = PortkeyInstrumentor()
         dependencies = instrumentor.instrumentation_dependencies()
         assert isinstance(dependencies, Collection)
-        assert "portkey_ai >= 0.1.0" in dependencies
+        assert "portkey_ai >= 1.1.2" in dependencies
 
     @patch('traceai_portkey.trace_api.get_tracer_provider')
     @patch('traceai_portkey.trace_api.get_tracer')
@@ -54,12 +61,12 @@ class TestPortkeyInstrumentor:
         mock_get_tracer.return_value = mock_tracer
 
         instrumentor = PortkeyInstrumentor()
-        instrumentor._original_completions_create = None
+        instrumentor._originals = []
         instrumentor._instrument()
 
         mock_get_provider.assert_called_once()
         mock_get_tracer.assert_called_once()
-        assert mock_wrap.call_count == 2  # Two wrap calls
+        assert mock_wrap.call_count == PATCH_COUNT  # Two wrap calls
 
     @patch('traceai_portkey.trace_api.get_tracer')
     @patch('traceai_portkey.wrap_function_wrapper')
@@ -70,11 +77,11 @@ class TestPortkeyInstrumentor:
         mock_get_tracer.return_value = mock_tracer
 
         instrumentor = PortkeyInstrumentor()
-        instrumentor._original_completions_create = None
+        instrumentor._originals = []
         instrumentor._instrument(tracer_provider=mock_provider)
 
         mock_get_tracer.assert_called_once()
-        assert mock_wrap.call_count == 2
+        assert mock_wrap.call_count == PATCH_COUNT
 
     @patch('traceai_portkey.trace_api.get_tracer_provider')
     @patch('traceai_portkey.trace_api.get_tracer')
@@ -88,10 +95,10 @@ class TestPortkeyInstrumentor:
         
         custom_config = TraceConfig()
         instrumentor = PortkeyInstrumentor()
-        instrumentor._original_completions_create = None
+        instrumentor._originals = []
         instrumentor._instrument(config=custom_config)
 
-        assert mock_wrap.call_count == 2
+        assert mock_wrap.call_count == PATCH_COUNT
 
     @patch('traceai_portkey.trace_api.get_tracer_provider')
     @patch('traceai_portkey.trace_api.get_tracer')
@@ -106,34 +113,21 @@ class TestPortkeyInstrumentor:
         with pytest.raises(AssertionError):
             instrumentor._instrument(config="invalid_config")
 
-    @patch('traceai_portkey.import_module')
-    def test_uninstrument(self, mock_import_module):
-        """Test uninstrumentation process."""
-        mock_module = Mock()
-        mock_import_module.return_value = mock_module
-        
+    def test_uninstrument(self):
+        """Restore every saved resource, not just synchronous chat."""
         instrumentor = PortkeyInstrumentor()
-        original_create = Mock()
-        instrumentor._original_completions_create = original_create
-        
+        resources = [Mock() for _ in range(PATCH_COUNT)]
+        originals = [Mock() for _ in resources]
+        instrumentor._originals = list(zip(resources, originals))
         instrumentor._uninstrument()
-        
-        mock_import_module.assert_called_once_with("portkey_ai.api_resources.apis.chat_complete")
-        assert mock_module.Completions.create == original_create
+        assert all(cls.create is original for cls, original in zip(resources, originals))
+        assert instrumentor._originals == []
 
-    @patch('traceai_portkey.import_module')
-    def test_uninstrument_with_none_original(self, mock_import_module):
-        """Test uninstrumentation when original function is None."""
-        mock_module = Mock()
-        mock_import_module.return_value = mock_module
-        
+    def test_uninstrument_with_none_original(self):
         instrumentor = PortkeyInstrumentor()
-        instrumentor._original_completions_create = None
-        
+        instrumentor._originals = []
         instrumentor._uninstrument()
-        
-        mock_import_module.assert_called_once()
-        # Should not set attribute when original is None
+        assert instrumentor._originals == []
 
 
 class TestCompletionsWrapper:
@@ -589,7 +583,10 @@ class TestUtilityFunctions:
         
         with patch('traceai_portkey._utils.logger') as mock_logger:
             _finish_tracing(mock_span, BadIterable(), [])
-            mock_logger.exception.assert_called()
+            mock_logger.warning.assert_called_once()
+            mock_span.finish_tracing.assert_called_once_with(
+                status=None, attributes={}, extra_attributes={}
+            )
 
 
 class TestWithSpan:
@@ -743,23 +740,18 @@ class TestIntegrationScenarios:
         mock_get_tracer.return_value = mock_tracer
 
         instrumentor = PortkeyInstrumentor()
-        instrumentor._original_completions_create = None
+        instrumentor._originals = []
         
         # Test instrumentation
         instrumentor._instrument()
         
-        assert mock_wrap.call_count == 2
+        assert mock_wrap.call_count == PATCH_COUNT
         
-        # Test uninstrumentation
-        with patch('traceai_portkey.import_module') as mock_import:
-            mock_module = Mock()
-            mock_import.return_value = mock_module
-            original_create = Mock()
-            instrumentor._original_completions_create = original_create
-            
-            instrumentor._uninstrument()
-            
-            mock_import.assert_called_once()
+        originals = list(instrumentor._originals)
+        assert len(originals) == PATCH_COUNT
+        instrumentor._uninstrument()
+        assert all(cls.create is original for cls, original in originals)
+        assert instrumentor._originals == []
 
     def test_wrapper_request_response_flow(self):
         """Test complete request-response flow through wrapper."""

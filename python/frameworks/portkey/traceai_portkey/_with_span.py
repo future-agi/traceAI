@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Optional
+from typing import ContextManager, Dict, Optional
 
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import Attributes, AttributeValue
@@ -35,7 +35,15 @@ class _WithSpan:
     def is_finished(self) -> bool:
         return self._is_finished
 
-    def record_exception(self, exception: Exception) -> None:
+    def use_span(self) -> ContextManager[trace_api.Span]:
+        return trace_api.use_span(
+            self._span,
+            end_on_exit=False,
+            record_exception=False,
+            set_status_on_exception=False,
+        )
+
+    def record_exception(self, exception: BaseException) -> None:
         if self._is_finished:
             return
         try:

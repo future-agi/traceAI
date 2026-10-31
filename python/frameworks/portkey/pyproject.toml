@@ -28,8 +28,8 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = ">3.9, <3.13"
-portkey-ai = ">0.1.0" 
-fi-instrumentation-otel = ">=0.1.11"
+portkey-ai = ">=1.1.2"
+fi-instrumentation-otel = ">=1.2.2"
 
 
 [tool.poetry.urls]

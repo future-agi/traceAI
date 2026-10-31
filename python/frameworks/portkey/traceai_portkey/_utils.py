@@ -1,6 +1,15 @@
 import logging
 import warnings
-from typing import Any, Iterable, Iterator, Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Iterable,
+    Iterator,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
@@ -65,15 +74,16 @@ def _finish_tracing(
     extra_attributes: Iterable[Tuple[str, AttributeValue]],
     status: Optional[trace_api.Status] = None,
 ) -> None:
+    attributes_dict = {}
+    extra_attributes_dict = {}
     try:
         attributes_dict = dict(attributes)
-    except Exception as e:
-        print(e)
-        logger.exception("Failed to get attributes")
+    except Exception:
+        logger.warning("Failed to get response attributes")
     try:
         extra_attributes_dict = dict(extra_attributes)
     except Exception:
-        logger.exception("Failed to get extra attributes")
+        logger.warning("Failed to get extra response attributes")
     try:
         with_span.finish_tracing(
             status=status,
