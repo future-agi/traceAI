@@ -11,8 +11,10 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">=3.10, <3.13"
-crewai = ">0.19.0"
-fi-instrumentation-otel = ">=0.1.11"
+crewai = ">=0.41.1"
+fi-instrumentation-otel = ">=1.2.2"
+# CrewAI 0.41.1 imports pkg_resources, removed in setuptools 81.
+setuptools = ">=78.1.1,<81"
 
 
 [build-system]

@@ -26,7 +26,36 @@ import os
 
 os.environ["FI_API_KEY"] = FI_API_KEY
 os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
+
+# Set these before importing CrewAI to opt out of its separate native telemetry.
+os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
+os.environ["CREWAI_DISABLE_TRACKING"] = "true"
 ```
+
+### Privacy and credentials
+
+Task, crew and tool spans project business content rather than serializing agent,
+LLM, client or tool configuration objects. Credential-named fields in structured
+inputs and outputs, including complete JSON object/array strings, are redacted
+by default. This includes nested `client.config.api_key`, API-key headers,
+authorization, access/refresh tokens, secrets and passwords. Model/provider
+identifiers, usage counts and unrelated business values remain visible. Tracing
+does not change your inputs, tool results or raised exceptions.
+
+This is not arbitrary free-text or unknown-encoding secret detection. If prose
+may contain secrets, set `FI_HIDE_INPUTS=true` and/or `FI_HIDE_OUTPUTS=true`
+before instrumentation, or pass the corresponding `TraceConfig` settings.
+Directional text/message hiding also covers CrewAI's content aliases. Automatic
+wrapper failures record an ERROR status without copying exception messages or
+stacktraces. For manually recorded error events, use `FI_HIDE_ERROR_DETAILS=true`.
+This integration does not filter your application's own console output or logs.
+
+Call `instrument()` before constructing agents, tools or crews. While
+instrumented, traceAI disables CrewAI's separate native telemetry, including the
+legacy exporter in CrewAI 0.41.1, which ignores the environment flags above.
+`uninstrument()` restores CrewAI's native behavior. This does not retract any
+telemetry already queued before instrumentation. Do not set
+`OTEL_SDK_DISABLED=true`: that also disables the traceAI spans you want to collect.
 
 ## Quickstart
 
