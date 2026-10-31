@@ -1,11 +1,10 @@
 import logging
 from abc import ABC
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, Mapping, Tuple
 
 import opentelemetry.context as context_api
-from fi_instrumentation import get_attributes_from_context, safe_json_dumps
-from fi_instrumentation.fi_types import SpanAttributes
+from fi_instrumentation import get_attributes_from_context
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
@@ -20,7 +19,8 @@ from traceai_huggingface._response_attributes_extractor import (
     _FeatureExtractionResponseAttributesExtractor,
     _TextGenerationResponseAttributesExtractor,
 )
-from traceai_huggingface._utils import _finish_tracing, _to_dict
+from traceai_huggingface._stream import _AsyncStream, _Stream, _StreamState
+from traceai_huggingface._utils import _finish_tracing
 from traceai_huggingface._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class _TextGenerationWrapper(_WithTracer):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -128,51 +128,10 @@ class _TextGenerationWrapper(_WithTracer):
     def _handle_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
     ):
-        """Handle streaming response."""
-        content_parts: List[str] = []
-
-        def streaming_wrapper():
-            try:
-                for chunk in response:
-                    if hasattr(chunk, "token") and chunk.token:
-                        text = chunk.token.text if hasattr(chunk.token, "text") else str(chunk.token)
-                        content_parts.append(text)
-                    elif isinstance(chunk, str):
-                        content_parts.append(chunk)
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    full_text = "".join(content_parts)
-                    span._span.set_attribute(SpanAttributes.OUTPUT_VALUE, full_text)
-                    span._span.set_attribute(
-                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.message.role", "assistant"
-                    )
-                    span._span.set_attribute(
-                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.message.content", full_text
-                    )
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=iter([]),
-                        extra_attributes=iter([]),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-            finally:
-                if span._span.is_recording():
-                    span.finish_tracing()
-
-        return streaming_wrapper()
+        return _Stream(
+            response,
+            _StreamState(span, self._response_extractor, request_parameters, chat=False),
+        )
 
 
 class _AsyncTextGenerationWrapper(_WithTracer):
@@ -210,7 +169,7 @@ class _AsyncTextGenerationWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -218,6 +177,12 @@ class _AsyncTextGenerationWrapper(_WithTracer):
                 )
                 span.finish_tracing(status=status)
                 raise
+
+            if kwargs.get("stream", False):
+                return _AsyncStream(
+                    response,
+                    _StreamState(span, self._response_extractor, request_parameters, chat=False),
+                )
 
             try:
                 _finish_tracing(
@@ -269,7 +234,7 @@ class _ChatCompletionWrapper(_WithTracer):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -299,59 +264,10 @@ class _ChatCompletionWrapper(_WithTracer):
     def _handle_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
     ):
-        """Handle streaming response."""
-        content_parts: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
-
-        def streaming_wrapper():
-            try:
-                for chunk in response:
-                    # Extract content from streaming chunk
-                    if hasattr(chunk, "choices") and chunk.choices:
-                        for choice in chunk.choices:
-                            delta = choice.delta if hasattr(choice, "delta") else None
-                            if delta:
-                                if hasattr(delta, "content") and delta.content:
-                                    content_parts.append(delta.content)
-                                if hasattr(delta, "tool_calls") and delta.tool_calls:
-                                    for tc in delta.tool_calls:
-                                        tool_calls.append(_to_dict(tc))
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    full_content = "".join(content_parts)
-                    span._span.set_attribute(SpanAttributes.OUTPUT_VALUE, full_content)
-                    span._span.set_attribute(
-                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.message.role", "assistant"
-                    )
-                    span._span.set_attribute(
-                        f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.message.content", full_content
-                    )
-                    if tool_calls:
-                        span._span.set_attribute("huggingface.tool_calls", safe_json_dumps(tool_calls))
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=iter([]),
-                        extra_attributes=iter([]),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-            finally:
-                if span._span.is_recording():
-                    span.finish_tracing()
-
-        return streaming_wrapper()
+        return _Stream(
+            response,
+            _StreamState(span, self._response_extractor, request_parameters, chat=True),
+        )
 
 
 class _AsyncChatCompletionWrapper(_WithTracer):
@@ -389,7 +305,7 @@ class _AsyncChatCompletionWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -397,6 +313,12 @@ class _AsyncChatCompletionWrapper(_WithTracer):
                 )
                 span.finish_tracing(status=status)
                 raise
+
+            if kwargs.get("stream", False):
+                return _AsyncStream(
+                    response,
+                    _StreamState(span, self._response_extractor, request_parameters, chat=True),
+                )
 
             try:
                 _finish_tracing(
@@ -448,7 +370,7 @@ class _FeatureExtractionWrapper(_WithTracer):
         ) as span:
             try:
                 response = wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,
@@ -507,7 +429,7 @@ class _AsyncFeatureExtractionWrapper(_WithTracer):
         ) as span:
             try:
                 response = await wrapped(*args, **kwargs)
-            except Exception as exception:
+            except BaseException as exception:
                 span.record_exception(exception)
                 status = trace_api.Status(
                     status_code=trace_api.StatusCode.ERROR,

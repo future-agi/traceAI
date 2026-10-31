@@ -18,7 +18,7 @@ class _WithSpan:
         self._context_attributes = context_attributes or {}
         self._extra_attributes = extra_attributes or {}
 
-    def record_exception(self, exception: Exception) -> None:
+    def record_exception(self, exception: BaseException) -> None:
         """Record an exception on the span."""
         if self._span.is_recording():
             self._span.record_exception(exception)
