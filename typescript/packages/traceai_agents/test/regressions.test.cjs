@@ -347,17 +347,30 @@ test("runtime restarts after SIGKILL without stealing a live owner's socket", as
   const exited = once(child, "exit");
   child.kill("SIGKILL");
   await exited;
-  const successors = [0, 1].map(
-    () => new Runtime(p, settings.storageEntry, "0.1.0", settings.registry),
-  );
-  const starts = await Promise.allSettled(successors.map((r) => r.start()));
-  assert.equal(
-    starts.filter((r) => r.status === "fulfilled").length,
-    1,
-    JSON.stringify(starts),
-  );
-  const winner = successors[starts.findIndex((r) => r.status === "fulfilled")];
-  cleanup(t, () => winner.stop());
+  // The killed parent's exit does not mean its storage child has handled
+  // disconnect and released SQLite ownership yet. Refuse that still-live
+  // owner, then retry contenders within a bound; never assume fsync/exit order.
+  const deadline = Date.now() + 5000;
+  let winner;
+  do {
+    const successors = [0, 1].map(
+      () => new Runtime(p, settings.storageEntry, "0.1.0", settings.registry),
+    );
+    const starts = await Promise.allSettled(successors.map((r) => r.start()));
+    const won = starts.flatMap((result, i) => {
+      if (result.status === "fulfilled") {
+        cleanup(t, () => successors[i].stop());
+        return [successors[i]];
+      }
+      assert.equal(result.reason.code, "RUNTIME_OWNERSHIP_CONFLICT");
+      return [];
+    });
+    assert.ok(won.length <= 1, "two runtimes acquired the same ownership");
+    winner = won[0];
+    if (winner) break;
+    await new Promise((r) => setTimeout(r, 20));
+  } while (Date.now() < deadline);
+  assert.ok(winner, "storage ownership was not released within five seconds");
   assert.equal((await submit(p, "before-crash")).reason_code, "DUPLICATE");
   assert.equal((await submit(p, "after-crash")).durable, true);
 });
