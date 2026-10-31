@@ -52,7 +52,7 @@ class TestGroqInstrumentor:
     def test_instrumentation_dependencies(self):
         """Test instrumentation dependencies."""
         deps = self.instrumentor.instrumentation_dependencies()
-        assert ("groq >= 0.9.0") == deps
+        assert deps == ("groq >= 0.9.0",)
 
     @patch("traceai_groq.wrap_function_wrapper")
     @patch("traceai_groq.trace_api.get_tracer")
@@ -327,7 +327,7 @@ class TestRequestAttributesExtractor:
         # Should contain some attributes (exact keys depend on implementation)
         assert len(attributes) > 0
         # Check for span kind
-        assert "fi.span.kind" in attr_dict
+        assert attr_dict["gen_ai.span.kind"] == "LLM"
 
     def test_get_extra_attributes_from_request(self):
         """Test extracting extra attributes from request."""
@@ -449,8 +449,8 @@ class TestUtilityFunctions:
         attributes = list(_extract_eval_input(messages))
         
         attr_dict = dict(attributes)
-        assert "eval.input" in attr_dict
-        assert "query" in attr_dict
+        assert attr_dict == {"input.value": "First message\nSecond message\nUser message"}
+        assert len(attributes) == len(attr_dict)  # No duplicate canonical keys.
 
     def test_process_response_dict(self):
         """Test _process_response with dict response."""
@@ -498,8 +498,8 @@ class TestUtilityFunctions:
         
         assert len(attributes) == 1
         key, value = attributes[0]
-        assert key.endswith("output")  
-        assert '"test": "value"' in value
+        assert key == "output.value"
+        assert json.loads(value) == {"test": "value"}
 
     def test_as_streaming_output(self):
         """Test _as_streaming_output function."""
@@ -530,8 +530,12 @@ class TestUtilityFunctions:
         attr_dict = dict(attributes)
         assert "output.value" in attr_dict
         assert attr_dict["output.value"] == "Hello world!"
-        assert "llm.model_name" in attr_dict
-        assert "llm.token_count.total" in attr_dict
+        assert attr_dict["gen_ai.response.model"] == "llama-3.1-70b-versatile"
+        assert attr_dict["gen_ai.usage.total_tokens"] == 50
+        assert attr_dict["gen_ai.usage.input_tokens"] == 10
+        assert attr_dict["gen_ai.usage.output_tokens"] == 40
+        assert len(attributes) == len(attr_dict)  # Text must not be overwritten by raw chunks.
+        assert "raw.output" not in attr_dict
 
     def test_to_dict_with_model_dump(self):
         """Test _to_dict with object that has __dict__."""
@@ -650,5 +654,268 @@ class TestWithSpan:
         assert hasattr(with_span, '_extra_attributes') or hasattr(with_span, 'extra_attributes')
 
 
+@pytest.mark.parametrize("hide_content", [False, True])
+def test_real_sdk_stream_output_and_privacy(hide_content):
+    """Use real SDK chunk models; export text once and retain token metadata."""
+    from fi_instrumentation import FITracer, TraceConfig
+    from groq.types.chat import ChatCompletionChunk
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    common = dict(id="local-stream", created=1, model="llama-3.1-70b-versatile",
+                  object="chat.completion.chunk")
+    chunks = [
+        ChatCompletionChunk(**common, choices=[{"index": 0, "delta": {"content": "private-"}}],
+                            x_groq={"id": "local-stream", "usage": None, "error": None}),
+        ChatCompletionChunk(**common, choices=[{"index": 0, "delta": {"content": "answer"}}],
+                            x_groq={"id": "local-stream", "error": None, "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}}),
+    ]
+    attributes = list(_as_streaming_output(chunks))
+    assert len(attributes) == len(dict(attributes))
+    assert dict(attributes)["output.value"] == "private-answer"
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = FITracer(provider.get_tracer(__name__), config=TraceConfig(hide_outputs=hide_content))
+    try:
+        with tracer.start_as_current_span("groq-stream") as span:
+            for key, value in attributes:
+                span.set_attribute(key, value)
+        finished, = exporter.get_finished_spans()
+        attrs = dict(finished.attributes)
+        assert attrs["gen_ai.usage.input_tokens"] == 2
+        assert attrs["gen_ai.usage.output_tokens"] == 3
+        assert attrs["gen_ai.usage.total_tokens"] == 5
+        assert attrs["gen_ai.response.model"] == common["model"]
+        assert "raw.output" not in attrs
+        if hide_content:
+            assert "private-answer" not in json.dumps(attrs)
+        else:
+            assert attrs["output.value"] == "private-answer"
+    finally:
+        provider.shutdown()
+
+
+@pytest.fixture
+def installed_groq():
+    from fi_instrumentation import TraceConfig
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    instrumentor = GroqInstrumentor()
+
+    def install(**privacy):
+        instrumentor.instrument(tracer_provider=provider, config=TraceConfig(**privacy))
+        return exporter
+
+    yield install
+    instrumentor.uninstrument()
+    provider.shutdown()
+
+
+def _sdk_chunk(delta=None, *, choices=None, model="resolved-model", usage=None, top_usage=False):
+    chunk = {
+        "id": "local-stream", "created": 1, "model": model,
+        "object": "chat.completion.chunk",
+        "choices": choices if choices is not None else [{"index": 0, "delta": delta}],
+        "x_groq": {"id": "local-stream", "error": None, "usage": None if top_usage else usage},
+    }
+    if top_usage:
+        chunk["usage"] = usage
+    return chunk
+
+
+def _local_groq_client(asynchronous, responses):
+    """Real SDK + real SSE parser; only the HTTP transport is replaced."""
+    import httpx
+    from groq import Groq, AsyncGroq
+
+    consumed = []
+    requests = []
+    responses = iter(responses)
+
+    class Body(httpx.SyncByteStream, httpx.AsyncByteStream):
+        def __init__(self, payloads):
+            self.payloads = payloads
+
+        def __iter__(self):
+            for payload in self.payloads:
+                consumed.append(payload)
+                yield ("data: " + json.dumps(payload) + "\n\n").encode()
+            yield b"data: [DONE]\n\n"
+
+        async def __aiter__(self):
+            for part in self:
+                yield part
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              stream=Body(next(responses)))
+
+    client_type = AsyncGroq if asynchronous else Groq
+    http_type = httpx.AsyncClient if asynchronous else httpx.Client
+    client = client_type(api_key="offline-placeholder", max_retries=0,
+                         http_client=http_type(transport=httpx.MockTransport(handle)))
+    return client, consumed, requests
+
+
+async def _create_sdk_stream(client, asynchronous):
+    stream = client.chat.completions.create(
+        model="request-model", messages=[{"role": "user", "content": "private-question"}], stream=True,
+    )
+    return await stream if asynchronous else stream
+
+
+async def _drain_sdk_stream(stream, asynchronous):
+    return [chunk async for chunk in stream] if asynchronous else list(stream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("top_usage", [False, True])
+async def test_installed_streams_isolate_consecutive_and_interleaved_requests(installed_groq, asynchronous, top_usage):
+    usage = {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
+    texts = ["first-response", "second-response", "third-response"]
+    payloads = [[
+        _sdk_chunk({"role": "assistant", "content": None}),
+        _sdk_chunk({"content": text}),
+        _sdk_chunk(choices=[], model="", usage=usage, top_usage=top_usage),
+    ] for text in texts]
+    exporter = installed_groq()
+    client, consumed, requests = _local_groq_client(asynchronous, payloads)
+    try:
+        first = await _create_sdk_stream(client, asynchronous)
+        assert consumed == []
+        assert exporter.get_finished_spans() == ()
+        first_chunks = await _drain_sdk_stream(first, asynchronous)
+        assert [chunk.to_dict() for chunk in first_chunks] == payloads[0]
+        assert len(exporter.get_finished_spans()) == 1
+        second = await _create_sdk_stream(client, asynchronous)
+        third = await _create_sdk_stream(client, asynchronous)
+        assert consumed == payloads[0]  # Creating a stream does not drain it.
+        if asynchronous:
+            head_second, head_third = await second.__anext__(), await third.__anext__()
+        else:
+            head_second, head_third = next(second), next(third)
+        third_chunks = [head_third] + await _drain_sdk_stream(third, asynchronous)
+        second_chunks = [head_second] + await _drain_sdk_stream(second, asynchronous)
+        assert [chunk.to_dict() for chunk in second_chunks] == payloads[1]
+        assert [chunk.to_dict() for chunk in third_chunks] == payloads[2]
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 3
+        assert [span.attributes["output.value"] for span in spans] == [texts[0], texts[2], texts[1]]
+        for span, text in zip(spans, (texts[0], texts[2], texts[1])):
+            assert span.status.status_code == StatusCode.OK
+            attrs = dict(span.attributes)
+            assert attrs["gen_ai.span.kind"] == "LLM"
+            assert attrs["gen_ai.request.model"] == "request-model"
+            assert attrs["gen_ai.response.model"] == "resolved-model"
+            assert attrs["gen_ai.usage.input_tokens"] == 2
+            assert attrs["gen_ai.usage.output_tokens"] == 3
+            assert attrs["gen_ai.usage.total_tokens"] == 5
+            assert attrs["gen_ai.output.messages.0.message.content"] == text
+            assert attrs["gen_ai.output.messages.0.message.role"] == "assistant"
+            for other in set(texts) - {text}:
+                assert other not in json.dumps(attrs)
+        assert len(requests) == 3
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("mixed", [False, True])
+@pytest.mark.parametrize("hide_content", [False, True])
+async def test_installed_stream_tool_deltas_and_privacy(installed_groq, asynchronous, mixed, hide_content):
+    usage = {"prompt_tokens": 0, "completion_tokens": 3, "total_tokens": 3}
+    payloads = [
+        _sdk_chunk({"role": "assistant", "content": "private-answer" if mixed else None,
+                    "tool_calls": [{"index": 0, "id": "call_private_1", "type": "function",
+                                    "function": {"name": "private_look", "arguments": '{"q":'}}]}),
+        _sdk_chunk({"content": None, "tool_calls": [
+            {"index": 0, "function": {"name": "up", "arguments": '"private-needle"}'}},
+            {"index": 1, "id": "call_private_2", "type": "function",
+             "function": {"name": "private_other", "arguments": '{"n":'}},
+        ]}),
+        _sdk_chunk(choices=[
+            {"index": 0, "delta": {"tool_calls": [{"index": 1, "function": {"arguments": '"two"}'}}]}},
+            {"index": 1, "delta": {"role": "assistant", "content": "private-alternative"}},
+        ]),
+        _sdk_chunk(choices=[], usage=usage),
+    ]
+    exporter = installed_groq(hide_inputs=hide_content, hide_outputs=hide_content)
+    client, consumed, requests = _local_groq_client(asynchronous, [payloads])
+    try:
+        stream = await _create_sdk_stream(client, asynchronous)
+        assert consumed == []
+        chunks = await _drain_sdk_stream(stream, asynchronous)
+        assert [chunk.to_dict() for chunk in chunks] == payloads
+        span, = exporter.get_finished_spans()
+        assert span.status.status_code == StatusCode.OK
+        attrs = dict(span.attributes)
+        assert attrs["gen_ai.usage.input_tokens"] == 0
+        assert attrs["gen_ai.usage.output_tokens"] == 3
+        assert attrs["gen_ai.usage.total_tokens"] == 3
+        assert attrs["gen_ai.response.model"] == "resolved-model"
+        assert not any(key.startswith("raw.") for key in attrs)
+        if hide_content:
+            assert "private" not in json.dumps(attrs)
+            assert not any(key.startswith("gen_ai.output.messages") for key in attrs)
+            assert attrs["output.value"] == "__REDACTED__"
+        else:
+            prefix = "gen_ai.output.messages.0.message.tool_calls."
+            assert attrs[prefix + "0.tool_call.id"] == "call_private_1"
+            assert attrs[prefix + "0.tool_call.function.name"] == "private_lookup"
+            assert json.loads(attrs[prefix + "0.tool_call.function.arguments"]) == {"q": "private-needle"}
+            assert attrs[prefix + "1.tool_call.id"] == "call_private_2"
+            assert attrs[prefix + "1.tool_call.function.name"] == "private_other"
+            assert json.loads(attrs[prefix + "1.tool_call.function.arguments"]) == {"n": "two"}
+            assert attrs["output.value"] == ("private-answer" if mixed else "")
+            assert attrs["gen_ai.output.messages.1.message.content"] == "private-alternative"
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("extractor_method", ["get_attributes", "get_extra_attributes"])
+async def test_installed_stream_finishes_when_attribute_extraction_fails(
+    installed_groq, monkeypatch, asynchronous, extractor_method, caplog,
+):
+    def fail_after_attribute(self, **kwargs):
+        yield "test.partial", "retained"
+        raise ValueError("synthetic extraction failure")
+
+    monkeypatch.setattr(_ResponseAttributesExtractor, extractor_method, fail_after_attribute)
+    exporter = installed_groq()
+    payloads = [_sdk_chunk({"content": "unchanged"})]
+    client, _, _ = _local_groq_client(asynchronous, [payloads])
+    try:
+        stream = await _create_sdk_stream(client, asynchronous)
+        chunks = await _drain_sdk_stream(stream, asynchronous)
+        assert [chunk.to_dict() for chunk in chunks] == payloads
+        span, = exporter.get_finished_spans()
+        assert span.status.status_code == StatusCode.OK
+        assert span.attributes["test.partial"] == "retained"
+        assert "UnboundLocalError" not in caplog.text
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
+
+
 if __name__ == "__main__":
-    pytest.main([__file__]) 
+    pytest.main([__file__])

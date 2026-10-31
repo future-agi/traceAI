@@ -13,14 +13,18 @@ same attribute names `traceai-openai` writes in Python (`gen_ai.span.kind=LLM`,
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/openai` (package `traceaiopenai`) |
-| OpenAI SDK | `github.com/openai/openai-go/v3` v3.71.1 or later (the `go.mod` minimum); tested on v3.78.0, the latest on 2026-10-16, and v3.71.1 |
-| Go | 1.26 or later (OpenTelemetry Go v1.47.0 and openai-go v3.78.0 require it); tested on 1.26.9 and 1.27.2 |
+| OpenAI SDK | `github.com/openai/openai-go/v3` v3.71.1 or later (the `go.mod` minimum) |
+| Go | 1.26.0 or later, the common minimum across traceAI Go modules |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and openai-go. No exporter is built in. |
 
-This is not `openinference-instrumentation-openai-go` from Arize. That module targets
-`github.com/openai/openai-go` v1 (a different import path) and writes OpenInference names.
+This module writes traceAI / GenAI attribute names, not the OpenInference attribute
+names used by Arize's separate instrumentor.
 
 ## Install
+
+**Release availability:** the command below is for tagged releases. Until the first
+`go/openai/v0.1.0` tag exists, use `@dev` instead of `@latest`. See the
+[Go SDK index](../README.md) for all modules and the release scheme.
 
 ```sh
 go get github.com/future-agi/traceAI/go/openai@latest
@@ -115,7 +119,10 @@ middleware adds no resource attributes.
 ## Test
 
 ```sh
+go mod tidy -diff
+go vet ./...
 go test -race ./...
+go build -o /tmp/traceai-openai-example ./example
 ```
 
 The tests use an `httptest` OpenAI server and the in-memory span recorder; no network and no key.

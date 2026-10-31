@@ -14,8 +14,8 @@ metadata on gRPC), so a remote agent that reads it continues the same trace.
 | | |
 |---|---|
 | Module | `github.com/future-agi/traceAI/go/a2a` (package `traceaia2a`) |
-| A2A SDK | `github.com/a2aproject/a2a-go/v2` v2.5.0 or later (the `go.mod` minimum); tested on v2.6.0, the latest on 2026-10-16, and v2.5.0 |
-| Go | 1.26 or later (OpenTelemetry Go v1.47.0 and a2a-go v2.6.0 require it); tested on 1.26.9 and 1.27.2 |
+| A2A SDK | `github.com/a2aproject/a2a-go/v2` v2.5.0 or later (the `go.mod` minimum) |
+| Go | 1.26.0 or later, the common minimum across traceAI Go modules |
 | Transports | JSON-RPC, HTTP+JSON (REST) and gRPC (`a2agrpc/v1`), each tested against a2a-go's own server |
 | Dependencies | the OpenTelemetry API (`go.opentelemetry.io/otel`, `.../trace`) and a2a-go. No exporter is built in. |
 
@@ -24,6 +24,10 @@ This is not the Python `traceai-a2a` package, which is unchanged. The Go module 
 differences.
 
 ## Install
+
+**Release availability:** the command below is for tagged releases. Until the first
+`go/a2a/v0.1.0` tag exists, use `@dev` instead of `@latest`. See the
+[Go SDK index](../README.md) for all modules and the release scheme.
 
 ```sh
 go get github.com/future-agi/traceAI/go/a2a@latest
@@ -163,7 +167,10 @@ recorded, values are cut at 32 000 bytes, and the module adds no resource attrib
 ## Test
 
 ```sh
+go mod tidy -diff
+go vet ./...
 go test -race ./...
+go build -o /tmp/traceai-a2a-example ./example
 ```
 
 The tests run a real a2a-go server (`a2asrv` behind its JSON-RPC, REST and gRPC handlers) on

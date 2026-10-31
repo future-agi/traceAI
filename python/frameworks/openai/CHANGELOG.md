@@ -1,5 +1,6 @@
 ## [Unreleased]
 ### Fixed
+- Attribute OpenAI-compatible calls to `api.together.ai` to `together`, including streamed and failed requests; unknown proxies and look-alike hosts still use `openai`.
 - Embeddings respect `hide_inputs` for indexed input text and `hide_outputs` for both raw and indexed vectors, including with older fi-core releases.
 - Chat streams used with `with` / `async with` retain the traced iterator and finish once on exhaustion or early context exit; context-body errors mark an unfinished span as ERROR.
 - Streamed and failed Chat Completions spans now carry `gen_ai.request.model` (the requested model); a successful non-streamed response still records the served model.
