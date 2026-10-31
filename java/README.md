@@ -51,7 +51,7 @@ Without the BOM, specify `<version>1.0.0</version>` on each traceAI dependency. 
 </dependency>
 ```
 
-The starter configures traceAI and Spring AI; it does not include the direct OpenAI SDK wrapper used in the quickstart. Keep both traceAI dependencies when calling `TracedOpenAIClient`.
+The starter only creates the `FITracer` bean from Spring Boot properties. It does not instrument Spring AI, the OpenAI SDK or any other library, and it does not bring in Spring AI. Keep both traceAI dependencies when calling `TracedOpenAIClient`.
 
 ### Gradle
 
@@ -232,6 +232,13 @@ traceai:
   hide-output-messages: false
 ```
 
+The starter chooses one pipeline for `FITracer` spans:
+
+- When `base-url` and `api-key` are set (directly or through `FI_BASE_URL` and `FI_API_KEY`), or `enable-console-exporter` is `true`, the starter owns a TraceAI provider that exports to Future AGI, as in earlier releases. Spans from Spring Boot's own tracing keep using Boot's exporter, and `FITracer` spans still join the current trace.
+- Otherwise, if your application exposes an `OpenTelemetry` or `TracerProvider` bean, such as the one Spring Boot creates when [native tracing](https://docs.spring.io/spring-boot/3.5/reference/actuator/tracing.html) is enabled, `FITracer` spans use that pipeline. Configure the Future AGI endpoint, authentication headers and `project_name` resource attribute on that exporter; the starter logs a warning if it ignores `traceai` export or resource settings in this mode.
+
+In both cases the starter does not register a global OpenTelemetry instance. Closing the Spring context flushes and closes only a starter-owned provider. If the application already called `TraceAI.init(...)`, or defines its own `FITracer` bean, the starter uses it and leaves its lifecycle to the application. The starter is tested with the Spring Boot 3.2, 3.5 and 4.1 dependency BOMs.
+
 ## Instrumentation modules
 
 Each name below is an artifact in the Maven reactor. Provider/framework dependency versions are pinned in the module POMs and parent properties; this list is not a claim of compatibility with every upstream SDK version.
@@ -260,7 +267,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Retrieval | Elasticsearch | `traceai-java-elasticsearch` |
 | Framework | LangChain4j | `traceai-langchain4j` |
 | Framework | Spring AI | `traceai-spring-ai` |
-| Framework | Spring Boot auto-configuration | `traceai-spring-boot-starter` |
+| Core | Spring Boot `FITracer` configuration (no instrumentation) | `traceai-spring-boot-starter` |
 | Framework | Microsoft Semantic Kernel | `traceai-java-semantic-kernel` |
 
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.

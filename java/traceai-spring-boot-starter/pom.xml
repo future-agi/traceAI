@@ -12,21 +12,13 @@
 
     <artifactId>traceai-spring-boot-starter</artifactId>
     <name>TraceAI Spring Boot Starter</name>
-    <description>Spring Boot auto-configuration for TraceAI Java SDK</description>
+    <description>Spring Boot FITracer configuration; no framework instrumentation</description>
 
     <dependencies>
-        <!-- TraceAI Modules -->
         <dependency>
             <groupId>com.futureagi</groupId>
             <artifactId>traceai-java-core</artifactId>
         </dependency>
-        <dependency>
-            <groupId>com.futureagi</groupId>
-            <artifactId>traceai-spring-ai</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <!-- Spring Boot -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
@@ -39,35 +31,32 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- Spring AI (optional - only for AI-specific auto-configuration) -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-core</artifactId>
-            <version>${spring-ai.version}</version>
-            <optional>true</optional>
-        </dependency>
-
-        <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
+            <artifactId>spring-boot-test</artifactId>
             <version>${spring-boot.version}</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.0.0-alpha</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>${spring-boot.version}</version>
-            </plugin>
-        </plugins>
-    </build>
 </project>

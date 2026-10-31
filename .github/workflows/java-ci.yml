@@ -49,6 +49,40 @@ jobs:
           path: java/traceai-java-core/target/surefire-reports/
           if-no-files-found: warn
 
+  spring-boot-starter:
+    name: Spring Boot starter (Boot ${{ matrix.boot }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - boot: '3.2.1'
+            profile: ''
+          - boot: '3.5.16'
+            profile: ''
+          - boot: '4.1.2'
+            profile: '-Dboot4'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Install core and starter
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-spring-boot-starter -am -DskipTests install
+      - name: Test the installed starter with Boot's BOM and native tracing
+        run: mvn -B -ntp -f java/compatibility/spring-boot/pom.xml -Dspring-boot.version=${{ matrix.boot }} ${{ matrix.profile }} test
+      - name: Upload starter reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spring-boot-starter-${{ matrix.boot }}
+          path: java/compatibility/spring-boot/target/surefire-reports/
+          if-no-files-found: warn
+
   verify:
     name: Build, test, and validate Central artifacts
     runs-on: ubuntu-latest
