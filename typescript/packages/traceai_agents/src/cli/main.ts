@@ -113,24 +113,36 @@ async function startRuntime(p: Paths, entry: string): Promise<void> {
     /* start outside hooks */
   }
   protectedDirectory(p.state, true);
-  const child = spawn(process.execPath, [entry, "__daemon"], {
-    detached: true,
-    stdio: "ignore",
-    env: {
-      PATH: "/usr/bin:/bin",
-      HOME: process.env.HOME ?? "/",
-      FI_AGENT_CONFIG_HOME: p.config,
-      FI_AGENT_STATE_HOME: p.state,
-    },
-  });
-  child.unref();
+  const launch = () => {
+    const child = spawn(process.execPath, [entry, "__daemon"], {
+      detached: true,
+      stdio: "ignore",
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: process.env.HOME ?? "/",
+        FI_AGENT_CONFIG_HOME: p.config,
+        FI_AGENT_STATE_HOME: p.state,
+      },
+    });
+    child.unref();
+    return child;
+  };
+  let child = launch(),
+    launches = 1;
   for (let attempt = 0; attempt < 50; attempt++) {
     await new Promise((r) => setTimeout(r, 50));
     try {
       await runtimeRequest(p.socket, { operation: "status" }, 100);
       return;
     } catch {
-      /* bounded readiness */
+      // A shutting-down owner closes ingress before releasing its SQLite child.
+      // A contender can legitimately lose that race. Retry only an exited
+      // ownership-conflict process, never launch alongside our live contender,
+      // and keep the original readiness budget and SQLite lock timeout.
+      if (child.exitCode === 6 && launches < 3) {
+        child = launch();
+        launches++;
+      }
     }
   }
   throw new AgentError("RUNTIME_UNAVAILABLE");
