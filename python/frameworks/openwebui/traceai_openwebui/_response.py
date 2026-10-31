@@ -75,12 +75,18 @@ class Observation:
         self._data: list[str] = []
         self._size = 0
         self._dropping = False
+        self._observation_lost = False
 
     @property
     def terminal(self) -> bool:
-        return self._terminal or (
-            not self._ambiguous_choices
-            and len(self._finished_choices) == self._choice_count
+        # A discarded event may contain a provider error. Even [DONE] or fully
+        # finished choices cannot establish success after losing that evidence.
+        return not self._observation_lost and (
+            self._terminal
+            or (
+                not self._ambiguous_choices
+                and len(self._finished_choices) == self._choice_count
+            )
         )
 
     def payload(self, value: Any) -> None:
@@ -172,6 +178,7 @@ class Observation:
         for piece in text.splitlines(keepends=True):
             self._size += len(piece)
             if self._size > _MAX_FRAME:
+                self._observation_lost = True
                 self._dropping = True
                 self._buffer = ""
                 self._data.clear()
@@ -213,6 +220,8 @@ class Observation:
                 self._data.append(self._buffer[5:].strip())
             self._frame()
         self._reset()
+        if self._observation_lost:
+            self.span.set_attribute("openwebui.observation_lost", True)
         for key, count in self.usage.items():
             self.span.set_attribute(f"gen_ai.usage.{key}_tokens", count)
             legacy = "prompt" if key == "input" else "completion"

@@ -18,26 +18,31 @@ from urllib.parse import urlsplit
 from zipfile import ZipFile
 
 import pytest
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 from opentelemetry.trace import StatusCode
 from pydantic import SecretStr
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from traceai_openwebui._provider import Providers
 
 
 @pytest.fixture
 def model_server():
-    state = SimpleNamespace(result=None, sse=None, requests=[])
+    state = SimpleNamespace(result=None, sse=None, requests=[], otlp=[])
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def do_POST(self):
-            state.requests.append(
-                (
-                    self.path,
-                    json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
-                )
-            )
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            if self.path == "/tracer/v1/traces":
+                state.otlp.append((dict(self.headers), body))
+                self.send_response(200)
+                self.end_headers()
+                return
+            state.requests.append((self.path, json.loads(body)))
             payload = (
                 json.dumps(state.result).encode() if state.sse is None else state.sse
             )
@@ -434,6 +439,85 @@ async def test_native_stream_completes_all_requested_choices(
     assert span.attributes["openwebui.outcome"] == expected
     assert (span.status.status_code == StatusCode.ERROR) == (expected == "incomplete")
     assert "private-" not in repr(span.attributes) + repr(span.events)
+
+
+@pytest.mark.parametrize(
+    "size,provider_error,visible_error,expected",
+    [
+        (64, True, False, "error"),
+        (64, False, False, "completed"),
+        (1_049_000, True, False, "incomplete"),
+        (1_049_000, False, False, "incomplete"),
+        (1_049_000, True, True, "error"),
+    ],
+)
+async def test_native_stream_observation_limit_on_otlp_wire(
+    native_stream, size, provider_error, visible_error, expected
+):
+    n = native_stream
+    content = "private-content-" + "x" * size
+    event = (
+        {"error": {"message": content}}
+        if provider_error
+        else {"choices": [{"delta": {"content": content}, "finish_reason": "stop"}]}
+    )
+    frames = [event]
+    if visible_error:
+        frames.append({"error": {"message": "private-visible-error"}})
+    # Retain visible usage after a dropped event without adding snapshots twice.
+    frames.extend([{"usage": {"prompt_tokens": 8, "completion_tokens": 2}}] * 2)
+    n.server.sse = (
+        "".join("data: " + json.dumps(value) + "\n\n" for value in frames)
+        + "data: [DONE]\n\n"
+    ).encode()
+    n.s.pipe._providers = Providers()
+    n.s.pipe.valves.endpoint = n.server.url.removesuffix("/v1")
+    try:
+        response = await n.ns["generate_chat_completion"](
+            n.s.request, {**n.s.body, "stream": True}, n.s.user
+        )
+        assert (
+            b"".join([chunk async for chunk in response.body_iterator]) == n.server.sse
+        )
+        assert len(n.server.requests) == 1
+        assert n.server.requests[0][0] == "/v1/chat/completions"
+        assert n.s.pipe.flush(2000)
+        (record,) = n.server.otlp
+        raw_headers, payload = record
+        headers = {key.lower(): value for key, value in raw_headers.items()}
+        assert headers["x-api-key"] == "synthetic-api"
+        assert headers["x-secret-key"] == "synthetic-secret"
+        decoded = ExportTraceServiceRequest.FromString(payload)
+        spans = [
+            span
+            for resource in decoded.resource_spans
+            for scope in resource.scope_spans
+            for span in scope.spans
+        ]
+        (span,) = spans
+        attrs = {attr.key: attr.value for attr in span.attributes}
+        assert attrs["openwebui.outcome"].string_value == expected
+        assert (span.status.code == 2) is (expected != "completed")
+        if expected != "completed":
+            assert span.status.message == (
+                "model request failed"
+                if expected == "error"
+                else "model stream ended without completion"
+            )
+        assert ("openwebui.observation_lost" in attrs) is (size > 1_048_576)
+        if size > 1_048_576:
+            assert attrs["openwebui.observation_lost"].bool_value
+        assert attrs["llm.token_count.total"].int_value == 10
+        assert span.start_time_unix_nano < span.end_time_unix_nano
+        for marker in (
+            "private-",
+            "synthetic-user",
+            "synthetic-api",
+            "synthetic-secret",
+        ):
+            assert marker not in str(decoded)
+    finally:
+        n.s.pipe.close()
 
 
 @pytest.fixture
