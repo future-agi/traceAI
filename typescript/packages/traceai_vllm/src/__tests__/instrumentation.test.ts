@@ -21,6 +21,7 @@ describe("VLLMInstrumentation", () => {
   });
 
   afterEach(async () => {
+    instrumentation.disable();
     memoryExporter.reset();
     await provider.shutdown();
   });
@@ -76,24 +77,10 @@ describe("VLLMInstrumentation", () => {
       });
 
       const mockModule = {
-        OpenAI: class OpenAI {
-          baseURL = "http://localhost:8000/v1";
-          chat = {
-            completions: {
-              create: mockCreate,
-            },
-          };
-          completions = {
-            create: jest.fn(),
-          };
+        OpenAI: {
+          Chat: { Completions: { prototype: { create: mockCreate } } },
+          Completions: { prototype: { create: jest.fn() } },
         },
-      };
-
-      (mockModule.OpenAI.prototype as unknown as Record<string, unknown>).chat = {
-        completions: { create: mockCreate },
-      };
-      (mockModule.OpenAI.prototype as unknown as Record<string, unknown>).completions = {
-        create: jest.fn(),
       };
 
       instrumentation.manuallyInstrument(mockModule as unknown as Record<string, unknown>);
