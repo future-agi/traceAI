@@ -887,6 +887,15 @@ test("package upgrades refuse a different running runtime before check or mutati
   ])
     assert.equal(await main(args, candidate), 3, args.join(" "));
   assert.deepEqual(loadConfig(p), before);
+  // Administrative holds must not change the launched agent's exit semantics.
+  assert.equal(
+    await main(
+      ["run", "reference", "--surface", "fixture", "--", "-e",
+        "require('node:assert/strict').equal(process.env.OTEL_TRACES_EXPORTER, undefined); process.exit(23)"],
+      candidate,
+    ),
+    23,
+  );
   await old.stop();
   const upgraded = new Runtime(
     p,

@@ -426,11 +426,16 @@ export async function main(
       try {
         await startRuntime(p, settings.entry, settings.version);
       } catch (e) {
-        if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE")
+        if (
+          !(e instanceof AgentError) ||
+          !["RUNTIME_UNAVAILABLE", "RUNTIME_RESTART_REQUIRED"].includes(e.code)
+        )
           throw e;
         tracing = false;
         process.stderr.write(
-          "fi-agent: tracing unavailable; launching without tracing\n",
+          e.code === "RUNTIME_RESTART_REQUIRED"
+            ? "fi-agent: runtime restart required; launching without tracing\n"
+            : "fi-agent: tracing unavailable; launching without tracing\n",
         );
       }
       const result = await runAgent(adapter, context, child, tracing);
