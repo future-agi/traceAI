@@ -10,8 +10,10 @@ class TestCerebrasInstrumentor:
     """Tests for CerebrasInstrumentor class."""
 
     def test_version_defined(self):
-        """Test that version is defined."""
-        assert __version__ == "0.1.0"
+        """The runtime version matches the installed package metadata."""
+        from importlib.metadata import version
+
+        assert __version__ == version("traceAI-cerebras")
 
     def test_instrumentation_dependencies(self):
         """Test instrumentation dependencies."""
