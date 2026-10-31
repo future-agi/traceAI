@@ -4,6 +4,7 @@ import shutil
 import uuid
 
 import pytest
+from fi_instrumentation import using_session
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from temporalio import activity
@@ -38,8 +39,8 @@ async def price_order() -> str:
     return "EUR 42"
 
 
-@pytest.mark.integration
-def test_native_workflow_retry_signal_and_replay(tracing):
+@pytest.fixture
+def temporal_binary():
     binary = os.getenv("TEMPORAL_CLI") or shutil.which("temporal")
     if not binary:
         if os.getenv("REQUIRE_TEMPORAL_INTEGRATION") == "1":
@@ -47,11 +48,16 @@ def test_native_workflow_retry_signal_and_replay(tracing):
         pytest.skip(
             "Install Temporal CLI or set TEMPORAL_CLI to run native integration"
         )
+    return binary
+
+
+@pytest.mark.integration
+def test_native_workflow_retry_signal_and_replay(tracing, temporal_binary):
     handle, exporter = tracing()
 
     async def run():
         async with await WorkflowEnvironment.start_local(
-            dev_server_existing_path=binary,
+            dev_server_existing_path=temporal_binary,
             dev_server_extra_args=["--ip", "127.0.0.1"],
             ui=False,
         ) as env:
@@ -116,5 +122,94 @@ def test_native_workflow_retry_signal_and_replay(tracing):
             ).replay_workflow(history)
             assert handle.force_flush()
             assert len(exporter.get_finished_spans()) == len(before)
+
+    asyncio.run(asyncio.wait_for(run(), timeout=60))
+
+
+@activity.defn(name="price_order")
+async def price_order_with_sessions() -> str:
+    tracer = trace.get_tracer("synthetic-activity")
+    with tracer.start_as_current_span(
+        "explicit-parent", attributes={"session.id": "application-session"}
+    ):
+        with tracer.start_as_current_span("inherited-child"):
+            with tracer.start_as_current_span("inherited-grandchild"):
+                pass
+        with using_session("context-session"):
+            with tracer.start_as_current_span("context-child"):
+                with tracer.start_as_current_span(
+                    "explicit-child", attributes={"session.id": "span-session"}
+                ):
+                    pass
+    with tracer.start_as_current_span("after-explicit-parent"):
+        pass
+    return "EUR 42"
+
+
+@pytest.mark.integration
+def test_native_activity_inherits_local_session_without_crossing_workflow_boundary(
+    tracing, temporal_binary
+):
+    handle, exporter = tracing()
+
+    async def run():
+        async with await WorkflowEnvironment.start_local(
+            dev_server_existing_path=temporal_binary,
+            dev_server_extra_args=["--ip", "127.0.0.1"],
+            ui=False,
+        ) as env:
+            client = await Client.connect(
+                env.client.service_client.config.target_host, plugins=[handle.plugin]
+            )
+            task_queue = "synthetic-" + uuid.uuid4().hex
+            workflow_id = "order-" + uuid.uuid4().hex
+            async with Worker(
+                client,
+                task_queue=task_queue,
+                workflows=[OrderWorkflow],
+                activities=[price_order_with_sessions],
+            ):
+                with trace.get_tracer("starter").start_as_current_span(
+                    "workflow-starter", attributes={"session.id": "starter-session"}
+                ):
+                    execution = await client.start_workflow(
+                        OrderWorkflow.run, id=workflow_id, task_queue=task_queue
+                    )
+                await env.client.get_workflow_handle(workflow_id).signal(
+                    OrderWorkflow.complete
+                )
+                assert await execution.result() == "EUR 42"
+            assert handle.force_flush()
+            spans = {s.name: s for s in exporter.get_finished_spans()}
+            expected_sessions = {
+                "workflow-starter": "starter-session",
+                "explicit-parent": "application-session",
+                "inherited-child": "application-session",
+                "inherited-grandchild": "application-session",
+                "context-child": "context-session",
+                "explicit-child": "span-session",
+                "after-explicit-parent": workflow_id,
+                "StartWorkflow:OrderWorkflow": workflow_id,
+                "RunWorkflow:OrderWorkflow": workflow_id,
+                "StartActivity:price_order": workflow_id,
+                "RunActivity:price_order": workflow_id,
+                "HandleSignal:complete": workflow_id,
+            }
+            assert {name: s.attributes["session.id"] for name, s in spans.items()} == (
+                expected_sessions
+            )
+            parentage = {
+                "StartWorkflow:OrderWorkflow": "workflow-starter",
+                "explicit-parent": "RunActivity:price_order",
+                "inherited-child": "explicit-parent",
+                "inherited-grandchild": "inherited-child",
+                "context-child": "explicit-parent",
+                "explicit-child": "context-child",
+                "after-explicit-parent": "RunActivity:price_order",
+            }
+            for child_name, parent_name in parentage.items():
+                child, parent = spans[child_name], spans[parent_name]
+                assert child.parent.span_id == parent.context.span_id
+                assert child.context.trace_id == parent.context.trace_id
 
     asyncio.run(asyncio.wait_for(run(), timeout=60))

@@ -34,13 +34,15 @@ class WorkflowIdAsSession(SpanProcessor):
             if not attrs.get("session.id"):
                 session = context.get_value("session.id", parent_context)
                 if not session:
+                    # Native workflow boundaries keep their own identity rather
+                    # than inheriting a caller's session implicitly.
                     session = attrs.get("temporalWorkflowID")
+                if not session:
+                    session = parent.get("session.id")
                 if not session and activity.in_activity():
                     session = activity.info().workflow_id
                 if not session and workflow.in_workflow():
                     session = workflow.info().workflow_id
-                if not session:
-                    session = parent.get("session.id")
                 if isinstance(session, str) and session:
                     span.set_attribute("session.id", session)
             if not attrs.get("user.id"):
