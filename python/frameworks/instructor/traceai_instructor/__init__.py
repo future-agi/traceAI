@@ -1,21 +1,20 @@
 from importlib import import_module
-from inspect import getattr_static
+from inspect import getattr_static, signature
 from typing import Any, Collection
-import logging
-logger = logging.getLogger(__name__)
-try:
-    from fi.evals import Protect
-except ImportError:
-    logger.warning("ai-evaluation is not installed, please install it to trace protect")
-    Protect = None
-    pass
+
 from fi_instrumentation import FITracer, TraceConfig
 from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
-from traceai_instructor._wrappers import _HandleResponseWrapper, _PatchWrapper
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from wrapt import FunctionWrapper
+
+from traceai_instructor._wrappers import _FactoryWrapper, _RequestWrapper, _remove_wrapper
 from traceai_instructor.version import __version__
-from wrapt import FunctionWrapper, wrap_function_wrapper
+
+try:
+    from fi.evals import Protect
+except ImportError:
+    Protect = None
 
 _instruments = ("instructor >= 1.0.0",)
 
@@ -33,91 +32,85 @@ class _OwnedProtectWrapper(GuardrailProtectWrapper):
         return super().__call__(wrapped, instance, args, kwargs)
 
 
-class InstructorInstrumentor(BaseInstrumentor):  # type: ignore
-    __slots__ = (
-        "_tracer",
-        "_original_create",
-        "_original_async_create",
-        "_original_patch",
-        "_instructor_class",
-        "_async_instructor_class",
-    )
-
+class InstructorInstrumentor(BaseInstrumentor):
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-        if not (config := kwargs.get("config")):
-            config = TraceConfig()
-        else:
-            assert isinstance(config, TraceConfig)
+        tracer_provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
+        config = kwargs.get("config") or TraceConfig()
+        assert isinstance(config, TraceConfig)
         self._tracer = FITracer(
-            trace_api.get_tracer(__name__, __version__, tracer_provider),
-            config=config,
+            trace_api.get_tracer(__name__, __version__, tracer_provider), config=config,
         )
+        self._hooks = []
+        self._callbacks = []
+        module = import_module("instructor")
+        sync_class = module.Instructor
+        async_class = getattr(module, "AsyncInstructor", None)
+        if async_class is None:
+            async_class = import_module("instructor.client").AsyncInstructor
+        hooks_class = None
+        for module_name in ("instructor.core.hooks", "instructor.hooks"):
+            try:
+                hooks_class = import_module(module_name).Hooks
+                break
+            except ImportError:
+                pass  # Instructor 1.0 has no public hook API.
 
-        self._original_patch = getattr(import_module("instructor"), "patch", None)
-        patch_wrapper = _PatchWrapper(tracer=self._tracer)
-        wrap_function_wrapper("instructor", "patch", patch_wrapper)
+        for cls in (sync_class, async_class):
+            for name in ("create", "create_with_completion", "create_partial", "create_iterable"):
+                if hasattr(cls, name):
+                    supports_hooks = "hooks" in signature(getattr(cls, name)).parameters
+                    callback = _RequestWrapper(
+                        self._tracer, hooks_class if supports_hooks else None,
+                        name=f"instructor.{name}",
+                    )
+                    self._callbacks.append(callback)
+                    self._wrap(cls, name, callback)
 
-        # Wrap Instructor.create and AsyncInstructor.create — these are the
-        # actual entry points for structured-output LLM calls in instructor 1.x+.
-        # (The old instructor.patch.handle_response_model was removed in 1.0.)
-        create_wrapper = _HandleResponseWrapper(tracer=self._tracer)
-        client_module = import_module("instructor")
-        self._instructor_class = client_module.Instructor
-        self._async_instructor_class = getattr(client_module, "AsyncInstructor", None)
-        if self._async_instructor_class is None:
-            # Instructor 1.0 exposes the async class only in instructor.client.
-            self._async_instructor_class = import_module("instructor.client").AsyncInstructor
-        self._original_create = self._instructor_class.create
-        self._original_async_create = self._async_instructor_class.create
-        wrap_function_wrapper(self._instructor_class, "create", create_wrapper)
-        wrap_function_wrapper(self._async_instructor_class, "create", create_wrapper)
+        generated = _RequestWrapper(self._tracer, hooks_class)
+        self._callbacks.append(generated)
+        # v2 factories also cover patch imports captured before instrumentation,
+        # from_provider(), and the provider adapters that bypass the root alias.
+        try:
+            patch_module = import_module("instructor.v2.core.patch")
+        except ImportError:
+            patch_module = None
+        if patch_module is not None and all(
+            hasattr(patch_module, name) for name in ("_create_sync_wrapper", "_create_async_wrapper")
+        ):
+            for name in ("_create_sync_wrapper", "_create_async_wrapper"):
+                self._wrap(patch_module, name, _FactoryWrapper(generated))
+        else:
+            # Older Instructor generates callables inside patch(). Keep its
+            # public entry point working, without a client-construction span.
+            patch = module.patch
+            canonical = import_module(patch.__module__)
+            for owner in (module, canonical):
+                self._wrap(owner, "patch", _FactoryWrapper(generated, legacy=True))
 
         self._protect_owner = Protect
         self._protect_hook = None
         if Protect is not None:
             self._protect_callback = _OwnedProtectWrapper(tracer=self._tracer)
-            self._protect_hook = FunctionWrapper(
-                getattr_static(Protect, "protect"),
-                self._protect_callback,
-            )
-            Protect.protect = self._protect_hook
+            self._callbacks.append(self._protect_callback)
+            self._protect_hook = self._wrap(Protect, "protect", self._protect_callback)
+
+    def _wrap(self, owner, name, callback):
+        hook = FunctionWrapper(getattr_static(owner, name), callback)
+        setattr(owner, name, hook)
+        self._hooks.append((owner, name, hook))
+        return hook
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        if self._original_patch is not None:
-            instructor_module = import_module("instructor")
-            instructor_module.patch = self._original_patch  # type: ignore[attr-defined]
-            self._original_patch = None
-
-        if self._original_create is not None:
-            self._instructor_class.create = self._original_create
-            self._original_create = None
-        if self._original_async_create is not None:
-            self._async_instructor_class.create = self._original_async_create
-            self._original_async_create = None
-
-        if self._protect_hook is not None:
-            # Disable first: ordinary decorators close over the callable, so
-            # mutating their __wrapped__ metadata cannot actually detach us.
-            self._protect_callback.enabled = False
-            # Protect is shared by several integrations. Splice just our exact
-            # wrapper where the parent is a mutable wrapt dispatch link.
-            owner, hook = self._protect_owner, self._protect_hook
-            current = getattr_static(owner, "protect")
-            if current is hook:
-                owner.protect = hook.__wrapped__
-            else:
-                seen = set()
-                while hasattr(current, "__wrapped__") and id(current) not in seen:
-                    seen.add(id(current))
-                    if current.__wrapped__ is hook:
-                        if isinstance(current, FunctionWrapper):
-                            current.__wrapped__ = hook.__wrapped__
-                        break
-                    current = current.__wrapped__
-            self._protect_hook = None
-            self._protect_owner = None
+        # Generated callables and ordinary decorators can outlive this setup.
+        # Disable their callback before detaching our owned dispatch links.
+        for callback in self._callbacks:
+            callback.enabled = False
+        for owner, name, hook in reversed(self._hooks):
+            _remove_wrapper(owner, name, hook)
+        self._hooks.clear()
+        self._callbacks.clear()
+        self._protect_hook = None
+        self._protect_owner = None

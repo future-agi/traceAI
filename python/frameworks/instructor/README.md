@@ -1,79 +1,60 @@
-# Instructor OpenTelemetry Integration
+# Instructor tracing
 
-## Overview
-This integration provides support for using OpenTelemetry with the Instructor framework. It enables tracing and monitoring of applications built with Instructor.
+Trace structured-output requests in Future AGI with `InstructorInstrumentor`.
 
-## Installation
+## Install
 
-1. **Install traceAI Instructor**
+Use Python 3.10–3.13. For per-call validation and usage hooks, use Instructor 1.17 or later.
 
 ```bash
-pip install traceAI-instructor
+pip install traceAI-instructor traceAI-openai 'instructor>=1.17' openai
 ```
 
+Set `FI_API_KEY`, `FI_SECRET_KEY`, and `OPENAI_API_KEY` in your application environment or secret manager.
 
-### Set Environment Variables
-Set up your environment variables to authenticate with FutureAGI
-
-```python
-import os
-
-os.environ["FI_API_KEY"] = FI_API_KEY
-os.environ["FI_SECRET_KEY"] = FI_SECRET_KEY
-```
-
-## Quickstart
-
-### Register Tracer Provider
-Set up the trace provider to establish the observability pipeline. The trace provider:
-
-```python
-from fi_instrumentation import register
-from fi_instrumentation.fi_types import ProjectType
-
-trace_provider = register(
-    project_type=ProjectType.OBSERVE,
-    project_name="instructor_app"
-)
-```
-
-### Configure Instructor Instrumentation
-Instrument the Instructor client to enable telemetry collection. This step ensures that all interactions with the Instructor SDK are tracked and monitored.
-
-```python
-from traceai_instructor import InstructorInstrumentor
-
-InstructorInstrumentor().instrument(tracer_provider=trace_provider)
-```
-
-### Create Instructor Components
-Set up your Instructor client with built-in observability.
+## Trace an extraction
 
 ```python
 import instructor
 from openai import OpenAI
 from pydantic import BaseModel
 
-# Define the output structure
-class UserInfo(BaseModel):
+from fi_instrumentation import TraceConfig, register
+from fi_instrumentation.fi_types import ProjectType
+from traceai_instructor import InstructorInstrumentor
+from traceai_openai import OpenAIInstrumentor
+
+provider = register(project_type=ProjectType.OBSERVE, project_name="Instructor")
+privacy = TraceConfig(hide_inputs=True, hide_outputs=True)
+OpenAIInstrumentor().instrument(tracer_provider=provider, config=privacy)
+InstructorInstrumentor().instrument(tracer_provider=provider, config=privacy)
+
+class Person(BaseModel):
     name: str
     age: int
 
-# Patch the OpenAI client
-client = instructor.patch(client=OpenAI())
+with OpenAI() as openai_client:
+    client = instructor.from_openai(openai_client)
+    person = client.create(
+        model="gpt-4o-mini",
+        response_model=Person,
+        messages=[{"role": "user", "content": "Ada is 37 years old."}],
+    )
+    print(person.model_dump())
 
-user_info = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    response_model=UserInfo,
-    messages=[
-        {
-            "role": "system",
-            "content": "Extract the name and age from the text and return them in a structured format.",
-        },
-        {"role": "user", "content": "John Doe is nine years old."},
-    ],
-)
-
-print(user_info, type(user_info))
+provider.force_flush()
 ```
 
+Open the **Instructor** project in Future AGI. Each extraction is a `CHAIN` span; the OpenAI integration supplies its model-call children. The example hides prompts, structured results, and error details. Use `TraceConfig()` on both instrumentors only when your data policy permits content capture.
+
+## Supported request paths
+
+- Synchronous and asynchronous `create`, `create_with_completion`, `create_partial`, and `create_iterable`.
+- Legacy `instructor.patch(client=...)` and `instructor.patch(create=...)`, including generated v2 callables. Instrument before constructing patched clients. Client construction does not emit spans or serialize SDK clients.
+- Cache hits still emit request spans without inventing provider usage. Provider spans and extraction usage describe the same tokens; do not sum both levels.
+- Where per-call hooks are supported, attempt and validation-error counts are recorded without registering listeners on shared clients. Existing application hooks keep running.
+- Lazy streams finish on exhaustion, error, or explicit `close()` / `aclose()`. Consume or close them before flushing. Their output is the last parsed item, with `instructor.stream.chunks` recording the item count; telemetry does not accumulate the stream.
+
+The SDK's own return values and exceptions are preserved. Instructor 1.0's partial-stream implementation is incompatible with the Pydantic versions required by this package; upgrade Instructor to use partial streaming. Eager SDK results remain eager.
+
+See the [Instructor integration guide](https://docs.futureagi.com/docs/integrations/traceai/instructor) for setup details.
