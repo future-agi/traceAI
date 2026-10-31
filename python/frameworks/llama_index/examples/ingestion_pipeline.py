@@ -56,7 +56,7 @@ with tempfile.NamedTemporaryFile() as tf:
     documents = SimpleDirectoryReader(input_files=[tf.name]).load_data()
 
 llm = OpenAI(model="gpt-3.5-turbo", temperature=0.1)
-pipline = IngestionPipeline(
+pipeline = IngestionPipeline(
     transformations=[
         SentenceSplitter(chunk_size=1024, chunk_overlap=20),
         TitleExtractor(llm=llm, metadata_mode=MetadataMode.EMBED, num_workers=8),
@@ -66,4 +66,4 @@ pipline = IngestionPipeline(
 )
 
 if __name__ == "__main__":
-    nodes = pipline.run(documents=documents)
+    nodes = pipeline.run(documents=documents)
