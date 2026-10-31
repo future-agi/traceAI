@@ -7,7 +7,6 @@ import {
   ResponseStreamEvent,
   Response as ResponseType,
 } from "openai/resources/responses/responses";
-import { Stream } from "openai/streaming";
 import { safelyJSONStringify } from "@traceai/fi-core";
 
 /**
@@ -131,7 +130,7 @@ export function getResponsesOutputMessagesAttributes(
 }
 
 export async function consumeResponseStreamEvents(
-  stream: Stream<ResponseStreamEvent>,
+  stream: AsyncIterable<ResponseStreamEvent> | Iterable<ResponseStreamEvent>,
 ): Promise<ResponseType | undefined> {
   let response: ResponseType | undefined;
 

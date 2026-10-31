@@ -93,6 +93,25 @@ try {
 }
 ```
 
+## OpenAI-compatible gateways
+
+Use the same `OpenAIInstrumentation` for a gateway's OpenAI-compatible API; do not install a second instrumentor for the same client. After configuring tracing as above, an Anannas client uses its own key and endpoint:
+
+```typescript
+const client = new OpenAI({
+  baseURL: "https://api.anannas.ai/v1",
+  apiKey: process.env.ANANNAS_API_KEY,
+});
+const response = await client.chat.completions.create({
+  model: process.env.ANANNAS_MODEL!,
+  messages: [{ role: "user", content: "Explain what a rainbow is in one sentence." }],
+});
+```
+
+Choose a model available to your gateway account. `gen_ai.provider.name` comes from the configured API hostname, not the model name: `api.anannas.ai` and `anannas.ai` produce `anannas`, including failed and streamed requests. The gateway's downstream routing is not inferred. Unknown proxies and local servers retain the historical `openai` fallback; this does not establish which provider they route to. URL credentials, paths and query strings are not added as provider attributes.
+
+Streaming spans finish when you consume the stream, encounter an iteration error or leave the loop early. Consume or close streams before shutting down the tracer provider. Request and response content is captured by default; use the instrumentation's `traceConfig` input/output and error-detail hiding options for sensitive data.
+
 ## Environment Variables
 
 The following environment variables are required:
@@ -121,7 +140,7 @@ FI_SECRET_KEY=your_secret_key
 ## Peer Dependencies
 
 This package requires the following peer dependency:
-- `openai`: ^4.0.0
+- `openai`: ^4.0.0 or ^5.0.0
 
 ## Development
 

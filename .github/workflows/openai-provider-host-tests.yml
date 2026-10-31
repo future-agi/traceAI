@@ -1,0 +1,69 @@
+name: OpenAI TypeScript attribution
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - typescript/packages/traceai_openai/**
+      - typescript/packages/fi-core/**
+      - typescript/packages/fi-semantic-conventions/**
+      - typescript/pnpm-lock.yaml
+      - .github/workflows/openai-provider-host-tests.yml
+  push:
+    branches: [dev]
+    paths:
+      - typescript/packages/traceai_openai/**
+      - typescript/packages/fi-core/**
+      - typescript/packages/fi-semantic-conventions/**
+      - typescript/pnpm-lock.yaml
+      - .github/workflows/openai-provider-host-tests.yml
+
+permissions:
+  contents: read
+
+jobs:
+  attribution:
+    name: OpenAI SDK ${{ matrix.openai }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7.x is a manual-instrumentation forward-compatibility probe, not a
+        # widening of the package's documented automatic-patching peer range.
+        openai: ['4.0.0', '4.98.0', '5.23.2', '7.47.0']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Install dependencies and matrix SDK without lifecycle scripts
+        run: |
+          pnpm --dir typescript --filter @traceai/openai... install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/openai-sdk" --ignore-scripts --no-audit --no-fund "openai@${{ matrix.openai }}"
+      - name: Build the package and workspace dependencies
+        run: |
+          pnpm --dir typescript run build:deps
+          pnpm --dir typescript --filter @traceai/openai run build
+      - name: Test actual SDK requests and OTLP export with loopback-only networking
+        env:
+          OPENAI_TEST_MODULE: ${{ runner.temp }}/openai-sdk/node_modules/openai
+        run: |
+          sudo --preserve-env=PATH,OPENAI_TEST_MODULE unshare --net -- bash -c '
+            ip link set lo up
+            exec "$@"
+          ' bash "$(command -v pnpm)" --dir "$GITHUB_WORKSPACE/typescript/packages/traceai_openai" exec jest --runInBand --runTestsByPath src/__tests__/providerHostsWire.test.ts src/__tests__/provider.test.ts
+      - name: Run the full package suite with loopback-only networking
+        if: matrix.openai == '4.98.0'
+        run: |
+          sudo --preserve-env=PATH unshare --net -- bash -c '
+            ip link set lo up
+            exec "$@"
+          ' bash "$(command -v pnpm)" --dir "$GITHUB_WORKSPACE/typescript/packages/traceai_openai" test --runInBand
