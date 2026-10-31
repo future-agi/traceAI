@@ -1,106 +1,92 @@
-import logging
-from typing import Any, Callable, Collection
-logger = logging.getLogger(__name__)
+"""Future AGI instrumentation through Haystack's public Tracer protocol."""
+
+from dataclasses import replace
+from typing import Any, Collection
+
 import haystack
-try:
-    from fi.evals import Protect
-except ImportError:
-    logger.warning("ai-evaluation is not installed, please install it to trace protect")
-    Protect = None
-    pass
 from fi_instrumentation import FITracer, TraceConfig
-from fi_instrumentation.instrumentation._protect_wrapper import GuardrailProtectWrapper
+from haystack import tracing
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import (
-    BaseInstrumentor,
-)  # type: ignore[attr-defined]
-from traceai_haystack._wrappers import (
-    _ComponentRunWrapper,
-    _PipelineRunComponentWrapper,
-    _PipelineWrapper,
-)
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from wrapt import FunctionWrapper
+
+from traceai_haystack._bindings import bind_pipeline
+from traceai_haystack._tracer import HaystackTracer
 from traceai_haystack.version import __version__
-from wrapt import wrap_function_wrapper
 
-logger = logging.getLogger(__name__)
-
-_instruments = ("haystack-ai >= 2.9.0",)
+_instruments = ("haystack-ai >= 2.10.0, < 4",)
 
 
-class HaystackInstrumentor(BaseInstrumentor):  # type: ignore[misc]
-    """An instrumentor for the Haystack framework."""
+class HaystackInstrumentor(BaseInstrumentor):
+    """Install one native Haystack span producer.
 
-    __slots__ = (
-        "_original_pipeline_run",
-        "_original_pipeline_run_component",
-        "_original_component_run_methods",
-        "_tracer",
-    )
+    ``instrument(tracer_provider=..., config=...)`` remains supported. Content
+    capture follows Haystack's opt-in setting unless ``capture_content`` is
+    supplied explicitly. TraceConfig privacy controls always take precedence.
+    """
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-        if not (config := kwargs.get("config")):
-            config = TraceConfig()
-        else:
-            assert isinstance(config, TraceConfig)
-        self._tracer = FITracer(
-            trace_api.get_tracer(__name__, __version__, tracer_provider),
-            config=config,
+        config = kwargs.get("config") or TraceConfig()
+        if not isinstance(config, TraceConfig):
+            raise TypeError("config must be a TraceConfig")
+        capture_content = kwargs.get(
+            "capture_content", tracing.tracer.is_content_tracing_enabled
         )
-
-        self._original_pipeline_run = haystack.Pipeline.run
-        wrap_function_wrapper(
-            module="haystack.core.pipeline.pipeline",
-            name="Pipeline.run",
-            wrapper=_PipelineWrapper(tracer=self._tracer),
-        )
-        self._original_pipeline_run_component = haystack.Pipeline._run_component
-        self._original_component_run_methods: dict[type[Any], Callable[..., Any]] = {}
-
-        def wrap_component_run_method(
-            component_cls: type[Any], run_method: Callable[..., Any]
-        ) -> None:
-            if component_cls not in self._original_component_run_methods:
-                self._original_component_run_methods[component_cls] = run_method
-                wrap_function_wrapper(
-                    module=component_cls.__module__,
-                    name=f"{component_cls.__name__}.run",
-                    wrapper=_ComponentRunWrapper(tracer=self._tracer),
-                )
-
-        wrap_function_wrapper(
-            module="haystack.core.pipeline.pipeline",
-            name="Pipeline._run_component",
-            wrapper=_PipelineRunComponentWrapper(
-                tracer=self._tracer, wrap_component_run_method=wrap_component_run_method
-            ),
-        )
-
-        if Protect is not None:
-            self._original_protect = Protect.protect
-            wrap_function_wrapper(
-                module="fi.evals",
-                name="Protect.protect",
-                wrapper=GuardrailProtectWrapper(tracer=self._tracer),
+        if not isinstance(capture_content, bool):
+            raise TypeError("capture_content must be a bool")
+        if not capture_content:
+            config = replace(
+                config,
+                hide_inputs=True,
+                hide_outputs=True,
+                hide_embedding_vectors=True,
+                _hide_error_details=True,
             )
-        else:
-            self._original_protect = None
+        provider = kwargs.get("tracer_provider") or trace_api.get_tracer_provider()
+        self._tracer = FITracer(
+            trace_api.get_tracer(__name__, __version__, provider), config=config
+        )
+        self._adapter = HaystackTracer(self._tracer, config)
+        self._previous_tracer = tracing.tracer.actual_tracer
+        self._bindings = []
+        # These wrappers only bind instance metadata absent from native tags.
+        # They do not trace, wrap components, or touch private execution hooks.
+        classes = [haystack.Pipeline]
+        if hasattr(haystack, "AsyncPipeline"):
+            classes.append(haystack.AsyncPipeline)
+        for cls in dict.fromkeys(classes):
+            for name in ("run", "run_async", "run_async_generator"):
+                original = cls.__dict__.get(name)
+                if original is not None:
+                    bound = bind_pipeline(original)
+                    setattr(cls, name, bound)
+                    self._bindings.append((cls, name, original, bound))
+        tracing.enable_tracing(self._adapter)
+        # Preserve optional guardrail instrumentation without requiring the
+        # evaluation package for Haystack tracing.
+        try:
+            from fi.evals import Protect
+        except ImportError:
+            Protect = None
+        if Protect is not None:
+            from fi_instrumentation.instrumentation._protect_wrapper import (
+                GuardrailProtectWrapper,
+            )
+
+            original = Protect.protect
+            bound = FunctionWrapper(
+                original, GuardrailProtectWrapper(tracer=self._tracer)
+            )
+            Protect.protect = bound
+            self._bindings.append((Protect, "protect", original, bound))
 
     def _uninstrument(self, **kwargs: Any) -> None:
-
-        if self._original_pipeline_run is not None:
-            haystack.Pipeline.run = self._original_pipeline_run
-
-        if self._original_pipeline_run_component is not None:
-            haystack.Pipeline._run_component = self._original_pipeline_run_component
-
-        for (
-            component_cls,
-            original_run_method,
-        ) in self._original_component_run_methods.items():
-            component_cls.run = original_run_method
+        if tracing.tracer.actual_tracer is self._adapter:
+            tracing.enable_tracing(self._previous_tracer)
+        for cls, name, original, bound in reversed(self._bindings):
+            if cls.__dict__.get(name) is bound:
+                setattr(cls, name, original)
+        self._bindings.clear()
