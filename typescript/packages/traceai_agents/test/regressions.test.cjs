@@ -409,6 +409,42 @@ test("startup stays bounded when a storage owner has no listening socket", async
   assert.equal((await owner.call("status")).logical_bytes, 0);
 });
 
+test("exclusive storage claims the OS lock before the first schema-reading query", (t) => {
+  const { root } = fixture(t);
+  const { Spool } = require("../dist/src/storage/store.js");
+  const Database = require("better-sqlite3");
+  const { spawnSync } = require("node:child_process");
+  const spoolRoot = path.join(root, "spool");
+  new Spool(spoolRoot, "0.1.0").close();
+  const prepare = Database.prototype.prepare;
+  let checked = false;
+  Database.prototype.prepare = function (source, ...args) {
+    if (!checked && source === "SELECT sqlite_version() v") {
+      checked = true;
+      const probe = spawnSync(
+        process.execPath,
+        [
+          path.join(__dirname, "fixtures/lock-probe.cjs"),
+          path.join(spoolRoot, "spool.db"),
+        ],
+        { timeout: 3000, env: { PATH: process.env.PATH, HOME: root } },
+      );
+      assert.equal(
+        probe.status,
+        2,
+        "another process acquired ownership before the version query",
+      );
+    }
+    return prepare.call(this, source, ...args);
+  };
+  try {
+    new Spool(spoolRoot, "0.1.0", true).close();
+    assert.equal(checked, true);
+  } finally {
+    Database.prototype.prepare = prepare;
+  }
+});
+
 test("stale socket cleanup refuses ordinary files", async (t) => {
   const { p } = fixture(t);
   fs.mkdirSync(p.state, { mode: 0o700 });
