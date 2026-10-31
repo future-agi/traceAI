@@ -53,6 +53,10 @@ jobs:
           mvn -B -ntp -DskipTests install
           python3 -I scripts/test_consumers.py
           mvn -B -ntp -f examples/openai-example/pom.xml test
+      - name: Test packaged LangChain4j listener on current framework APIs
+        run: |
+          mvn -B -ntp -f compat-tests/langchain4j/pom.xml test
+          mvn -B -ntp -f examples/langchain4j-example/pom.xml test
       - name: Validate self-contained JitPack POMs and external consumers
         run: |
           ./mvnw -B -ntp -P jitpack -DskipTests install
