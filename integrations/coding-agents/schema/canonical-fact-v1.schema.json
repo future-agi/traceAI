@@ -1,0 +1,329 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical fact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sourceWorkId",
+    "identityProfile",
+    "sessionId",
+    "turnId",
+    "traceId",
+    "spanId",
+    "agent",
+    "surface",
+    "source",
+    "sourceSchema",
+    "reconstructionVersion",
+    "policyRevision",
+    "unit",
+    "timing",
+    "startNs",
+    "endNs",
+    "outcome",
+    "inputCompleteness",
+    "outputCompleteness"
+  ],
+  "properties": {
+    "identityProfile": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "agent": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "surface": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "agentVersion": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "sourceSchema": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "reconstructionVersion": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "policyRevision": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "provider": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "tool": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "sourceWorkId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "turnId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "causedBy": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "traceId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "spanId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "parentSpanId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "source": {
+      "enum": [
+        "native",
+        "hook",
+        "extension",
+        "transcript"
+      ]
+    },
+    "unit": {
+      "enum": [
+        "turn",
+        "request",
+        "attempt",
+        "tool",
+        "activity",
+        "compaction"
+      ]
+    },
+    "timing": {
+      "enum": [
+        "observed_request",
+        "hook_interval",
+        "message_interval",
+        "estimated",
+        "unknown"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "success",
+        "error",
+        "cancelled",
+        "interrupted",
+        "permission_denied",
+        "incomplete"
+      ]
+    },
+    "inputCompleteness": {
+      "enum": [
+        "full_reported",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "outputCompleteness": {
+      "enum": [
+        "full_reported",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "startNs": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "endNs": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "incomplete": {
+      "type": "boolean"
+    },
+    "lateCapture": {
+      "type": "boolean"
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "contribution",
+        "planId",
+        "factIds",
+        "inclusions",
+        "complete"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "request",
+            "turn",
+            "session"
+          ]
+        },
+        "contribution": {
+          "enum": [
+            "request",
+            "attempt",
+            "turn",
+            "none"
+          ]
+        },
+        "planId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "factIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "inclusions": {
+          "enum": [
+            "inclusive",
+            "normalized"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "input": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cacheRead": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cacheWrite": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reasoning": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "costUsd": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompts": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "responses": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "model-context": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "tool-input": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "tool-output": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "system": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "tool-definitions": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "reasoning": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "error-text": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "workspace-identity": {
+          "type": "string",
+          "maxLength": 32768
+        }
+      }
+    },
+    "links": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "traceId",
+          "spanId"
+        ],
+        "properties": {
+          "traceId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "spanId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$"
+          }
+        }
+      }
+    }
+  }
+}
