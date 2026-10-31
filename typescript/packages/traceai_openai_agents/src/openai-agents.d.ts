@@ -5,12 +5,12 @@
 declare module "@openai/agents" {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export interface TracingProcessor {
-    onTraceStart(trace: any): void;
-    onTraceEnd(trace: any): void;
-    onSpanStart(span: any): void;
-    onSpanEnd(span: any): void;
-    forceFlush(): void;
-    shutdown(): void;
+    onTraceStart(trace: any): Promise<void>;
+    onTraceEnd(trace: any): Promise<void>;
+    onSpanStart(span: any): Promise<void>;
+    onSpanEnd(span: any): Promise<void>;
+    forceFlush(): Promise<void>;
+    shutdown(): Promise<void>;
   }
 
   export function setTraceProcessors(processors: TracingProcessor[]): void;
