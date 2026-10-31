@@ -862,7 +862,10 @@
       "changelog-path": "CHANGELOG.md",
       "exclude-paths": [
         "python/frameworks",
-        "python/traceai"
+        "python/traceai",
+        "python/tests",
+        "python/e2e_tests",
+        "python/examples"
       ],
       "changelog-sections": [
         {
