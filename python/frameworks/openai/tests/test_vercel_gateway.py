@@ -7,6 +7,7 @@ OpenAI 1.x, httpx2 on 3.x) rather than substituting a different HTTP client.
 import asyncio
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import version
 from threading import Thread
 
 import openai
@@ -16,6 +17,7 @@ from fi_instrumentation.fi_types import ProjectType
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
+from packaging.version import Version
 from traceai_openai import OpenAIInstrumentor
 from traceai_openai._providers import provider_from_host
 
@@ -142,7 +144,13 @@ def attributes(items):
 @pytest.mark.parametrize("outcome", ["success", "stream", "error"])
 @pytest.mark.parametrize("hide_content", [False, True], ids=["content", "private"])
 @pytest.mark.parametrize("with_usage", [False, True], ids=["no-usage", "usage"])
-def test_gateway_client_otlp(collector, use_async, outcome, hide_content, with_usage):
+def test_gateway_client_otlp(
+    collector, monkeypatch, use_async, outcome, hide_content, with_usage
+):
+    # The package lock still uses core 1.1.0. Exercise attribution there too,
+    # but require the strengthened metadata privacy only with the guide's core.
+    private_metadata = Version(version("fi-instrumentation-otel")) >= Version("1.2.2")
+    monkeypatch.setenv("FI_HIDE_ERROR_DETAILS", str(hide_content).lower())
     provider = register(
         project_name="vercel-gateway-contract",
         project_type=ProjectType.OBSERVE,
@@ -156,7 +164,6 @@ def test_gateway_client_otlp(collector, use_async, outcome, hide_content, with_u
             hide_inputs=hide_content,
             hide_outputs=hide_content,
             hide_llm_invocation_parameters=hide_content,
-            hide_error_details=hide_content,
         ),
     )
     gateway_requests = []
@@ -275,8 +282,11 @@ def test_gateway_client_otlp(collector, use_async, outcome, hide_content, with_u
     else:
         assert not any(key.startswith("gen_ai.usage.") for key in attrs)
     if hide_content:
-        for value in (PROMPT, ANSWER, ERROR, TOOL_DESCRIPTION):
+        for value in (PROMPT, ANSWER):
             assert value.encode() not in body
+        if private_metadata:
+            for value in (ERROR, TOOL_DESCRIPTION):
+                assert value.encode() not in body
         assert attrs["input.value"] == "__REDACTED__"
         assert "gen_ai.request.parameters" not in attrs
     else:
