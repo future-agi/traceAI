@@ -1,0 +1,69 @@
+name: Milvus TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_milvus/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/package.json'
+      - 'typescript/pnpm-workspace.yaml'
+      - '.github/workflows/milvus-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: milvus-typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Milvus SDK ${{ matrix.sdk }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['2.0.0', '3.0.6']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install locked workspace and isolated SDK
+        working-directory: typescript
+        env:
+          SDK_VERSION: ${{ matrix.sdk }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          corepack pnpm --filter '@traceai/milvus...' install --frozen-lockfile --ignore-scripts
+          # Match the locked workspace API in the isolated SDK installation.
+          npm install --prefix "$RUNNER_TEMP/milvus-sdk" --ignore-scripts --no-audit --no-fund \
+            "@zilliz/milvus2-sdk-node@$SDK_VERSION" @opentelemetry/api@1.9.0
+      - name: Build
+        working-directory: typescript
+        run: |
+          pnpm run build:deps
+          pnpm --filter @traceai/milvus run build
+      - name: Unit and SDK wire contracts with only loopback networking
+        working-directory: typescript/packages/traceai_milvus
+        run: |
+          # A fresh network namespace has no external interfaces or routes.
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            "$(command -v node)" ../../node_modules/jest/bin/jest.js --runInBand
+          sudo unshare --net bash -c 'ip link set lo up; exec "$@"' -- \
+            "$(command -v node)" contract/sdk.cjs \
+            "$RUNNER_TEMP/milvus-sdk/node_modules/@zilliz/milvus2-sdk-node/package.json"
+      - name: Pack
+        working-directory: typescript/packages/traceai_milvus
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP"
+          git diff --exit-code -- ../../pnpm-lock.yaml
