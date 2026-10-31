@@ -1,0 +1,46 @@
+name: Mirascope native tracing
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/mirascope/**'
+      - 'python/pyproject.toml'
+      - '.github/workflows/mirascope-tests.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/mirascope/**'
+      - 'python/pyproject.toml'
+      - '.github/workflows/mirascope-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Mirascope ${{ matrix.mirascope }} / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        mirascope: ['2.5.0', '2.8.2']
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install package and native framework
+        env:
+          MIRASCOPE_VERSION: ${{ matrix.mirascope }}
+        run: pip install ./python "mirascope[openai,anthropic,google,ops]==${MIRASCOPE_VERSION}" 'pytest==8.4.2'
+      - name: Run offline native and OTLP wire tests
+        # Test fixtures prohibit non-loopback socket connections. No credentials or model calls.
+        run: python -I -m pytest --confcutdir=python/tests/mirascope python/tests/mirascope -q

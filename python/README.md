@@ -75,6 +75,35 @@ Pass your own OpenTelemetry `TracerProvider` to `OpenAIInstrumentor().instrument
 
 [Provider setup](fi_instrumentation/otel.py) · [Examples](examples/)
 
+## Mirascope native tracing
+
+The current source includes a Mirascope destination in the existing core package; no separate Mirascope instrumentor is needed. It uses Mirascope's native spans rather than patching its model clients. Install Mirascope's `openai,anthropic,google,ops` extras alongside the core package. The adapter is exercised against Mirascope 2.5.0 and 2.8.2.
+
+```python
+from mirascope import llm, ops
+from fi_instrumentation.mirascope import configure
+
+tracing = configure(project_name="mirascope-app")
+ops.instrument_llm()
+
+@ops.trace
+def answer(question: str) -> str:
+    return llm.Model("openai/gpt-4o-mini:completions").call(question).text()
+
+try:
+    print(answer("What makes a good API error message?"))
+finally:
+    tracing.shutdown()
+```
+
+Set `FI_API_KEY`, `FI_SECRET_KEY` and your model provider's key before running. `FI_BASE_URL` selects a self-hosted origin; export uses `/tracer/v1/traces` over OTLP/HTTP without compression. Only traces are sent.
+
+Unlike the instrumentor default above, this native destination is **metadata-only by default**. `capture_content=True` (or `FI_CAPTURE_CONTENT=1`) includes native prompts, answers, function arguments/results, custom span attributes and error text. Content hide settings conservatively force metadata-only export; `FI_HIDE_ERROR_DETAILS=true` separately removes error text. Stack attributes, non-exception events, link attributes and arbitrary resource/scope attributes are never exported. Span/function/tool names and session IDs are metadata: do not put private data in them.
+
+`configure()` reuses the global SDK tracer provider, attaches one filtered destination and leaves other exporters unchanged. Do not combine it with `register()`'s automatic exporter or an OpenAI SDK instrumentor for the same calls. Repeating the same configuration returns the same handle; changing options or restarting after shutdown requires a new process. `tracing.force_flush()` flushes this destination; `tracing.shutdown()` closes it without shutting down an application's shared provider. Stop application work before shutting down.
+
+Native model and tool spans map to LLM and Tool; application/resume spans map to Chain. With content enabled, native messages and function values populate Input/Output attributes. A resume wrapper does not duplicate its child's token counts. The [adapter source](fi_instrumentation/mirascope.py) defines the metadata allowlist and configuration API.
+
 ## Packages
 
 Each package below links to its own installation instructions, supported SDK versions, and examples. Package availability and framework support are independent; do not assume every package supports the same upstream version.
