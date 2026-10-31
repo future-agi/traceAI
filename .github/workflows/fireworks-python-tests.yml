@@ -1,0 +1,66 @@
+name: Fireworks Python compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'python/frameworks/fireworks/**'
+      - 'python/frameworks/openai/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/fireworks-python-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'python/frameworks/fireworks/**'
+      - 'python/frameworks/openai/**'
+      - 'python/fi_instrumentation/**'
+      - 'python/tests/harness/**'
+      - '.github/workflows/fireworks-python-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Fireworks (openai ${{ matrix.sdk }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: '1.0.0'
+            python: '3.10'
+          - sdk: '1.69.0'
+            python: '3.10'
+          - sdk: '3.42.0'
+            python: '3.12'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install source integrations and the selected SDK
+        env:
+          SDK: ${{ matrix.sdk }}
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e python -e python/frameworks/fireworks "openai==$SDK" 'httpx<0.28' pytest pytest-asyncio
+          if [ "$SDK" != '1.0.0' ]; then
+            .venv/bin/pip install -e python/frameworks/openai
+          fi
+      - name: Run with outbound network disabled
+        env:
+          SDK: ${{ matrix.sdk }}
+        run: |
+          sudo unshare --net -- bash -e -c '
+            ip link set lo up
+            "$1" -I -m pytest "$2/python/frameworks/fireworks/tests" -q -o addopts=""
+            if [ "$3" = "1.0.0" ]; then
+              "$1" -I -m pytest "$2/python/frameworks/openai/tests/test_fireworks_route.py" -q -o addopts=""
+            else
+              "$1" -I -m pytest "$2/python/frameworks/openai/tests" -q -o addopts=""
+            fi
+          ' _ "$PWD/.venv/bin/python" "$PWD" "$SDK"
