@@ -197,11 +197,11 @@ class TestPatchPydanticAi:
         inst = PydanticAIInstrumentor()
         inst._tracer = MagicMock()
 
-        # This should raise or log warning since pydantic_ai is not installed
-        try:
-            inst._patch_pydantic_ai()
-        except ImportError:
-            pass  # Expected when Pydantic AI not installed
+        # Exercise the missing dependency path even when the SDK is installed.
+        import sys
+        with patch.dict(sys.modules, {"pydantic_ai": None}):
+            with pytest.raises(ImportError, match="Could not import pydantic_ai"):
+                inst._patch_pydantic_ai()
 
     @patch("traceai_pydantic_ai._instrumentor.wrap_agent_run")
     @patch("traceai_pydantic_ai._instrumentor.trace_api")
