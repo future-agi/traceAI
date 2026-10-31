@@ -22,6 +22,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  core-lifecycle:
+    name: Core lifecycle (Java ${{ matrix.java }}, OTel ${{ matrix.otel }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+        otel: ['1.35.0', '1.67.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Test core ownership and localhost OTLP export
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-java-core -am -Dopentelemetry.version=${{ matrix.otel }} test
+      - name: Upload core reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-lifecycle-java-${{ matrix.java }}-otel-${{ matrix.otel }}
+          path: java/traceai-java-core/target/surefire-reports/
+          if-no-files-found: warn
+
   verify:
     name: Build, test, and validate Central artifacts
     runs-on: ubuntu-latest
