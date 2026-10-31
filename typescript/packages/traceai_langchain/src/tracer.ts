@@ -157,7 +157,11 @@ export class LangChainTracer extends BaseTracer {
       // @ts-ignore
       await super._startTrace(run);
     }
-    await this.startTracing(run);
+    // Transitional cores expose both _startTrace and onRunCreate. The super
+    // call can already have created the span through onRunCreate.
+    if (this.runs[run.id] == null) {
+      await this.startTracing(run);
+    }
   }
 
   /**

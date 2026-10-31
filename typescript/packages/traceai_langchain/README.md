@@ -26,6 +26,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage } from "@langchain/core/messages";
 import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 import * as CallbackManagerModule from "@langchain/core/callbacks/manager";
+import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 
 // Enable OpenTelemetry internal diagnostics (optional, for debugging)
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
@@ -55,16 +56,20 @@ const chatModel = new ChatOpenAI({
   },
 });
 
-// Your LangChain code here...
-
-// 5. Don't forget to shutdown the tracer provider when done
 try {
+  const response = await chatModel.invoke([new HumanMessage("What is OpenTelemetry?")]);
+  console.log(response.content);
+} finally {
+  // LangChain runs tracing callbacks in the background. Finish them before
+  // shutting down the provider so the root span is not lost.
+  await awaitAllCallbacks();
   await tracerProvider.shutdown();
-  console.log("Tracer provider shut down successfully.");
-} catch (error) {
-  console.error("Error shutting down tracer provider:", error);
 }
 ```
+
+For a long-running service, leave the provider running between requests. When the
+service stops, finish in-flight chains, await `awaitAllCallbacks()`, then shut down
+the provider. Before an explicit `forceFlush()`, drain callbacks in the same order.
 
 ## Environment Variables
 
@@ -81,13 +86,19 @@ FI_SECRET_KEY=your_secret_key
 
 - Automatic tracing of LangChain operations
 - Support for both ESM and CommonJS modules
-- Compatible with LangChain.js v0.2.0 and v0.3.0
+- Compatible with `@langchain/core` 0.2.x, 0.3.x, and 1.x
 - Integration with TraceAI's observability platform
 
 ## Peer Dependencies
 
 This package requires the following peer dependencies:
-- `@langchain/core`: ^0.2.0 || ^0.3.0
+- `@langchain/core`: ^0.2.0 || ^0.3.0 || ^1.0.0
+
+Keep your LangChain adapters on a release compatible with your core version. For
+example, use `@langchain/openai` 1.x with core 1.x. On core 0.3.80 and 1.x,
+CommonJS applications can use the automatic require hook when instrumentation is
+initialized before importing LangChain. For ESM, an already-loaded module, core
+0.2.x, or earlier 0.3.x, use `manuallyInstrument()` as above.
 
 ## Development
 
