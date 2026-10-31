@@ -16,6 +16,7 @@ import {
   Span,
 } from "@opentelemetry/api";
 import { VERSION } from "./version";
+import { observeAPIPromise } from "./apiPromise";
 import {
   SemanticConventions,
   FISpanKind,
@@ -250,7 +251,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             },
           );
 
-          const wrappedPromise = execPromise.then((result) => {
+          const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+            if (!span.isRecording()) return result;
             if (isChatCompletionResponse(result)) {
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
@@ -274,12 +276,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               result = leftStream;
             }
             return result;
-          }).catch((error: Error) => {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-            throw error;
-          });
+          }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
           return context.bind(execContext, wrappedPromise);
         };
       },
@@ -339,7 +336,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               }
             },
           );
-          const wrappedPromise = execPromise.then((result) => {
+          const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+            if (!span.isRecording()) return result;
             if (isCompletionResponse(result)) {
               span.setAttributes({
                 [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
@@ -358,12 +356,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               span.end();
             }
             return result;
-          }).catch((error: Error) => {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-            throw error;
-          });
+          }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
           return context.bind(execContext, wrappedPromise);
         };
       },
@@ -422,7 +415,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               }
             },
           );
-          const wrappedPromise = execPromise.then((result) => {
+          const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+            if (!span.isRecording()) return result;
             if (result) {
               // Record the results
               span.setAttributes({
@@ -434,12 +428,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             return result;
-          }).catch((error: Error) => {
-            span.recordException(error);
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-            span.end();
-            throw error;
-          });
+          }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
           return context.bind(execContext, wrappedPromise);
         };
       },
@@ -502,7 +491,8 @@ export class OpenAIInstrumentation extends InstrumentationBase{
                 }
               },
             );
-            const wrappedPromise = execPromise.then((result) => {
+            const wrappedPromise = observeAPIPromise(execPromise, (result) => {
+              if (!span.isRecording()) return result;
               const recordSpan = (result?: ResponseType) => {
                 if (!result) {
                   span.setStatus({ code: SpanStatusCode.ERROR });
@@ -531,12 +521,7 @@ export class OpenAIInstrumentation extends InstrumentationBase{
               }
 
               return result;
-            }).catch((error: Error) => {
-              span.recordException(error);
-              span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-              span.end();
-              throw error;
-            });
+            }, (error) => endSpanWithError(span, error), (response) => endRawResponseSpan(span, response));
             return context.bind(execContext, wrappedPromise);
           };
         },
@@ -574,6 +559,26 @@ export class OpenAIInstrumentation extends InstrumentationBase{
       diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. This is usually not an issue. Error: ${e}`);
     }
   }
+}
+
+function endSpanWithError(span: Span, error: unknown): void {
+  if (!span.isRecording()) return;
+  const exception = error instanceof Error ? error : String(error);
+  span.recordException(exception);
+  span.setStatus({
+    code: SpanStatusCode.ERROR,
+    message: error instanceof Error ? error.message : String(error),
+  });
+  span.end();
+}
+
+function endRawResponseSpan(span: Span, response: { status: number }): void {
+  if (!span.isRecording()) return;
+  // Raw callers own the body. Record only HTTP metadata, never consume it to
+  // recover output/tokens. This also handles raw streaming responses lazily.
+  span.setAttribute("http.response.status_code", response.status);
+  span.setStatus({ code: SpanStatusCode.OK });
+  span.end();
 }
 
 function isResponseCreateResponse(

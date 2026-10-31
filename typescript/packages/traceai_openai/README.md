@@ -93,6 +93,25 @@ try {
 }
 ```
 
+## Response helpers
+
+Instrumentation preserves the OpenAI SDK's `APIPromise` helpers. Use
+`withResponse()` when you need both parsed data and HTTP metadata:
+
+```javascript
+const { data, response } = await openai.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Hello!" }],
+}).withResponse();
+console.log(data.choices[0].message.content, response.status);
+```
+
+Use `asResponse()` when you want to read the raw response body yourself.
+Instrumentation does not parse or consume that body. For raw-only calls, the
+span ends when HTTP headers arrive and records the status code, but not output
+content, token usage, or later body-read errors. This also applies to raw
+streaming responses.
+
 ## Environment Variables
 
 The following environment variables are required:
@@ -109,7 +128,7 @@ FI_SECRET_KEY=your_secret_key
 ## Features
 
 - Automatic tracing of OpenAI API calls
-- Support for all OpenAI API endpoints:
+- Tracing for these OpenAI API endpoints:
   - Chat Completions
   - Completions
   - Embeddings
@@ -121,7 +140,7 @@ FI_SECRET_KEY=your_secret_key
 ## Peer Dependencies
 
 This package requires the following peer dependency:
-- `openai`: ^4.0.0
+- `openai`: ^4.0.0 || ^5.0.0
 
 ## Development
 
