@@ -182,6 +182,7 @@ export class Spool {
         throw new AgentError("HELD_DESTINATION_CHANGED", 3);
       if (
         route.epoch < old.epoch ||
+        (route.enabled && !old.enabled && route.epoch === old.epoch) ||
         (route.epoch === old.epoch &&
           JSON.stringify(prior.policy) !== JSON.stringify(route.policy))
       )

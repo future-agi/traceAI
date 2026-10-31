@@ -99,6 +99,8 @@ test("profile isolation, destination immutability, policy fencing and bounded pu
   assert.equal(spool.status().logical_bytes, 0);
   const enabled = route();
   enabled.epoch = 2;
+  assert.throws(() => spool.route(enabled), /HELD_POLICY/);
+  enabled.epoch = 3;
   spool.route(enabled);
   assert.equal(spool.admit(route().id, fact()).duplicate, true);
   assert.throws(
