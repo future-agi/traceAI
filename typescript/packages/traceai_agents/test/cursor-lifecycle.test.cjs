@@ -1,0 +1,90 @@
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const base = path.resolve(__dirname, "../../../../../t");
+fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+const {
+  Spool,
+  OBSERVED_TURN_WINDOW_MS,
+} = require("../dist/src/storage/store.js");
+const { decodeTraces } = require("../dist/src/export/otlp.js");
+const {
+  normalizeCursorHook,
+  HOOK_SCHEMA,
+} = require("../dist/src/adapters/cursor/index.js");
+const { hook } = require("../contract/cursor-fixtures.cjs");
+const route = {
+  id: "cursor.ide",
+  binding: {
+    id: "00000000-0000-4000-8000-000000000001",
+    endpoint: "http://127.0.0.1:1/v1/traces",
+    approvedOrigin: "http://127.0.0.1:1",
+    project: "fixture",
+    loopbackTest: true,
+    backendContract: "immutable-agent-v1",
+  },
+  policy: { revision: "1", categories: [], ceiling: [] },
+  enabled: true,
+  epoch: 1,
+};
+function fixture(t) {
+  const dir = fs.mkdtempSync(path.join(base, "cursor-lifecycle-"));
+  const spool = new Spool(dir, "0.1.0");
+  spool.route(route);
+  t.after(() => {
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return spool;
+}
+function admit(spool, event, epoch = 1) {
+  const fact = normalizeCursorHook(event, "ide", {
+    identityKey: Buffer.alloc(32, 1),
+    policyRevision: "1",
+    sourceSchema: HOOK_SCHEMA,
+  })[0];
+  return spool.admit(route.id, fact, undefined, true, epoch, true);
+}
+function take(spool) {
+  const row = spool.next(route.id);
+  assert.ok(row, "exportable row exists");
+  const span = decodeTraces(row.bytes).resourceSpans[0].scopeSpans[0].spans[0];
+  spool.complete(row.id, row.epoch, { state: "accepted", code: "ACCEPTED" });
+  return span;
+}
+const outcome = (span) =>
+  span.attributes.find((a) => a.key === "fi.agent.outcome")?.value.stringValue;
+
+test("active turn across multiple fifteen-minute windows keeps root until real stop", (t) => {
+  const spool = fixture(t);
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  admit(spool, hook());
+  const first = take(spool);
+  clock += OBSERVED_TURN_WINDOW_MS - 1000;
+  admit(spool, { ...hook(), tool_use_id: "second-tool" });
+  const second = take(spool);
+  clock += OBSERVED_TURN_WINDOW_MS - 1000;
+  admit(spool, hook("stop"));
+  clock += 2000;
+  const parent = take(spool);
+  assert.equal(outcome(parent), "success");
+  assert.equal(first.parentSpanId, parent.spanId);
+  assert.equal(second.parentSpanId, parent.spanId);
+  assert.equal(spool.next(route.id), undefined);
+});
+
+test("re-enable releases retained old-epoch root and does not resurrect stale capture", (t) => {
+  const spool = fixture(t);
+  admit(spool, hook());
+  const child = take(spool);
+  spool.disable(route.id);
+  assert.equal(spool.next(route.id), undefined);
+  spool.route({ ...route, epoch: 3 });
+  assert.throws(() => admit(spool, hook("stop"), 1), /STALE_CAPTURE_EPOCH/);
+  const parent = take(spool);
+  assert.equal(parent.spanId, child.parentSpanId);
+  assert.equal(outcome(parent), "incomplete");
+  assert.equal(spool.next(route.id), undefined);
+});

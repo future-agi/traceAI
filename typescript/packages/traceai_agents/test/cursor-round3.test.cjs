@@ -165,6 +165,7 @@ test("runtime serializes source admission before asynchronous credential lookup"
     const chunks = [];
     for await (const b of req) chunks.push(b);
     received.push(...spans(Buffer.concat(chunks)));
+    res.setHeader("content-type", "application/x-protobuf");
     res.end(encodeResponse());
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -360,6 +361,10 @@ for (const condition of ["auth-removed", "runtime-stopped", "profile-absent"]) {
         before,
         "no unsafe replacement even during cleanup",
       );
+      // Offline cleanup owns only a temporary control runtime; after it exits,
+      // restart normally and verify the durable admission fence still applies.
+      if (condition === "runtime-stopped")
+        assert.equal(cli(root, ["runtime", "start"]).status, 0);
       await assert.rejects(
         runtimeRequest(path.join(root, "s/runtime.sock"), {
           operation: "observe-source",

@@ -153,6 +153,7 @@ async function startRuntime(p: Paths, entry: string): Promise<void> {
 async function ensureControlRuntime(
   p: Paths,
   settings: CLIOptions,
+  registry: AdapterRegistry,
 ): Promise<Runtime | undefined> {
   try {
     await runtimeRequest(p.socket, { operation: "status" }, 200);
@@ -160,14 +161,30 @@ async function ensureControlRuntime(
   } catch (e) {
     if (!(e instanceof AgentError) || e.code !== "RUNTIME_UNAVAILABLE") throw e;
   }
-  const runtime = new Runtime(
-    p,
-    settings.storageEntry,
-    settings.version,
-    settings.registry,
-  );
-  await runtime.start(true);
-  return runtime;
+  if (!settings.storageEntry) throw new AgentError("RUNTIME_UNAVAILABLE");
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const runtime = new Runtime(
+      p,
+      settings.storageEntry,
+      settings.version,
+      registry,
+    );
+    try {
+      await runtime.start(true);
+      return runtime;
+    } catch (e) {
+      // A prior owner may be finishing its crash-safe storage shutdown. Retry
+      // only this specific lock contention; Runtime.start never steals a live lock.
+      if (
+        !(e instanceof AgentError) ||
+        e.code !== "RUNTIME_OWNERSHIP_CONFLICT" ||
+        attempt === 4
+      )
+        throw e;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new AgentError("RUNTIME_UNAVAILABLE");
 }
 export async function main(
   args: string[],
@@ -317,7 +334,7 @@ export async function main(
           const profile = config.profiles[name];
           if (!profile) throw new AgentError("UNKNOWN_PROFILE", 2);
           if (Object.values(config.routes).some((r) => r.profile === name))
-            controlRuntime = await ensureControlRuntime(p, settings);
+            controlRuntime = await ensureControlRuntime(p, settings, registry);
           for (const [id, route] of Object.entries(config.routes))
             if (route.profile === name) {
               const fenced = await runtimeRequest(p.socket, {
@@ -405,7 +422,7 @@ export async function main(
         // Commit the restart fence BEFORE any daemon or host-config operation.
         // An action failure deliberately retains it; never roll a disable back.
         saveConfig(p, c);
-        await startRuntime(p, settings.entry);
+        controlRuntime = await ensureControlRuntime(p, settings, registry);
         await runtimeRequest(p.socket, { operation: "refresh" });
         await runtimeRequest(p.socket, {
           operation: "disable",

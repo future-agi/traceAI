@@ -206,6 +206,9 @@ export class Spool {
   route(route: Route): void {
     this.validateRoute(route);
     this.write(() => {
+      const previous = this.db
+        .prepare("SELECT enabled,epoch FROM routes WHERE id=?")
+        .get(route.id) as { enabled: number; epoch: number } | undefined;
       this.db
         .prepare(
           "INSERT INTO routes VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config,enabled=excluded.enabled,epoch=excluded.epoch",
@@ -216,6 +219,25 @@ export class Spool {
           Number(route.enabled),
           route.epoch,
         );
+      if (
+        previous?.enabled === 0 &&
+        route.enabled &&
+        route.epoch > previous.epoch
+      ) {
+        // Release retained immutable bytes only on explicit re-enable. A pre-disable
+        // lease still carries the previous epoch and cannot ACK after this fence.
+        // A missing stop remains incomplete; do not invent a terminal outcome.
+        this.db
+          .prepare(
+            "UPDATE records SET state='queued',epoch=?,next_at=0 WHERE route=? AND epoch<? AND state='pending-turn'",
+          )
+          .run(route.epoch, route.id, route.epoch);
+        this.db
+          .prepare(
+            "UPDATE records SET epoch=?,next_at=0 WHERE route=? AND epoch<? AND state IN ('queued','ambiguous')",
+          )
+          .run(route.epoch, route.id, route.epoch);
+      }
     });
   }
   getRoute(id: string): Route {
@@ -267,7 +289,7 @@ export class Spool {
       throw new AgentError("INVALID_OBSERVATION_CLOCK", 2);
     // Finalization precedes admission, so an overdue/finished turn cannot acquire
     // new children or change its already immutable root. Replays still dedupe.
-    if (observedTurns) this.finalizeTurns(routeId);
+    if (observedTurns) this.finalizeTurns(routeId, fact.turnId);
     return this.write(() => {
       const terminal = observedTurns
         ? this.observeTurn(route, fact, cursor)
@@ -315,7 +337,7 @@ export class Spool {
       throw new AgentError("INVALID_CURSOR", 2);
     const old = this.db
       .prepare(
-        "SELECT id,hash,work,state FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
+        "SELECT id,hash,work,state,bytes FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
       )
       .get(
         route.binding.id,
@@ -323,12 +345,30 @@ export class Spool {
         fact.traceId,
         fact.spanId,
       ) as any;
-    if (
-      old &&
-      (old.work !== fact.sourceWorkId ||
-        ((old.state !== "pending-turn" || !allowPending) && old.hash !== hash))
-    )
-      throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+    if (old) {
+      const equal =
+        old.hash === hash ||
+        (/^[a-f0-9]{64}$/.test(old.hash) &&
+          (old.bytes
+            ? semanticHash(old.bytes) === hash
+            : old.hash === digest(bytes) ||
+              old.hash ===
+                digest(encodeFacts([fact], route.binding, "0.1.0"))));
+      if (
+        old.work !== fact.sourceWorkId ||
+        ((old.state !== "pending-turn" || !allowPending) && !equal)
+      )
+        throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+      // Upgrade legacy wire-only receipts without altering already exportable bytes.
+      if (
+        equal &&
+        old.hash !== hash &&
+        !(old.state === "pending-turn" && allowPending)
+      )
+        this.db
+          .prepare("UPDATE records SET hash=? WHERE id=?")
+          .run(hash, old.id);
+    }
     let id = old?.id;
     if (!old || (old.state === "pending-turn" && allowPending)) {
       this.checkQuota(routeId, bytes.length, old?.id);
@@ -480,7 +520,7 @@ export class Spool {
       ? window.deadline
       : fact.unit === "turn"
         ? Date.now() + TERMINAL_GRACE_MS
-        : (window?.deadline ?? Date.now() + OBSERVED_TURN_WINDOW_MS);
+        : Date.now() + OBSERVED_TURN_WINDOW_MS;
     this.db
       .prepare(
         `INSERT INTO observed_turns VALUES (?,?,?,?,?,?,?,?)
@@ -501,16 +541,18 @@ export class Spool {
       return { ...receipt, duplicate: !!window?.terminal };
   }
   /** Bounded crash-recoverable sweep; no raw events or invented timeout duration. */
-  finalizeTurns(routeId: string): number {
+  finalizeTurns(routeId: string, observedWork?: string): number {
     const route = this.getRoute(routeId);
     if (!route.enabled) return 0;
     const due = this.db
       .prepare(
         `SELECT r.id FROM records r JOIN observed_turns t
       ON r.binding=t.binding AND r.work=t.work WHERE r.route=? AND r.epoch=?
-      AND r.state='pending-turn' AND t.deadline<=? LIMIT 128`,
+      AND r.state='pending-turn' AND t.deadline<=? AND r.work!=? LIMIT 128`,
       )
-      .all(routeId, route.epoch, Date.now()) as { id: number }[];
+      .all(routeId, route.epoch, Date.now(), observedWork ?? "") as {
+      id: number;
+    }[];
     if (!due.length) return 0;
     return this.write(() => {
       const update = this.db.prepare(
