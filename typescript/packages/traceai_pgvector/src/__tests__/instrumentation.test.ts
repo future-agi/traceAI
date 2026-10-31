@@ -1,533 +1,391 @@
-import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
+import { context, trace, SpanStatusCode } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { createServer } from "http";
+import { AddressInfo } from "net";
+import { PgVectorInstrumentation, isPatched } from "../instrumentation";
 
-type MockFn = jest.Mock<any>;
+// Real pg query normalization, return contracts, and Pool -> Client delegation.
+// Only transport is replaced: nothing connects to a database or vendor.
+const versions = [
+  ["8.0.0 (floor)", require("pg-floor")],
+  ["8.23.1 (current)", require("pg")],
+] as const;
+const sql = "SELECT id FROM documents ORDER BY embedding <=> $1::vector LIMIT $2";
+const result = { rows: [{ id: 1, embedding: "private-result-vector" }], rowCount: 1 };
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-const createMockSpan = () => ({
-  setStatus: jest.fn(),
-  setAttribute: jest.fn(),
-  recordException: jest.fn(),
-  setAttributes: jest.fn(),
-  addEvent: jest.fn(),
-  end: jest.fn(),
-  isRecording: jest.fn().mockReturnValue(true),
-});
+function controlledClient(pg: any) {
+  const client = new pg.Client({ host: "127.0.0.1", user: "synthetic", database: "synthetic" });
+  const submitted: any[] = [];
+  client._pulseQueryQueue = () => {
+    const queue = client._queryQueue ?? client.queryQueue;
+    if (queue.length) submitted.push(queue.shift());
+  };
+  return { client, submitted };
+}
 
-const mockSpan = createMockSpan();
-jest.mock("@traceai/fi-core", () => ({
-  FITracer: jest.fn().mockImplementation(() => ({
-    startSpan: jest.fn().mockReturnValue(mockSpan),
-  })),
-  TraceConfigOptions: {},
-}));
+for (const [version, pg] of versions) {
+  describe(`pg ${version}`, () => {
+    let instrumentation: PgVectorInstrumentation;
+    let exporter: InMemorySpanExporter;
+    let provider: BasicTracerProvider;
+    let manager: AsyncLocalStorageContextManager;
+    let originalQuery: Function;
+    let originalPoolQuery: Function;
 
-jest.mock("@traceai/fi-semantic-conventions", () => ({
-  SemanticConventions: {
-    DB_SYSTEM: "db.system",
-    DB_OPERATION: "db.operation",
-    DB_STATEMENT: "db.statement",
-  },
-}));
-
-jest.mock("@opentelemetry/api", () => ({
-  context: {
-    active: jest.fn().mockReturnValue({}),
-    with: jest.fn((_ctx: any, fn: () => any) => fn()),
-  },
-  trace: {
-    setSpan: jest.fn().mockReturnValue({}),
-    getTracer: jest.fn().mockReturnValue({
-      startSpan: jest.fn(),
-      startActiveSpan: jest.fn(),
-    }),
-  },
-  metrics: {
-    getMeter: jest.fn().mockReturnValue({
-      createCounter: jest.fn().mockReturnValue({ add: jest.fn() }),
-      createHistogram: jest.fn().mockReturnValue({ record: jest.fn() }),
-      createUpDownCounter: jest.fn().mockReturnValue({ add: jest.fn() }),
-    }),
-  },
-  diag: {
-    createComponentLogger: jest.fn().mockReturnValue({
-      debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(),
-    }),
-  },
-  SpanKind: { CLIENT: 2 },
-  SpanStatusCode: { OK: 1, ERROR: 2 },
-}));
-
-let PgVectorInstrumentation: any;
-let isPatched: any;
-
-describe("PgVector Instrumentation", () => {
-  let instrumentation: any;
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.resetModules();
-    const mod = require("../instrumentation");
-    PgVectorInstrumentation = mod.PgVectorInstrumentation;
-    isPatched = mod.isPatched;
-    instrumentation = new PgVectorInstrumentation({
-      instrumentationConfig: { enabled: true },
-    });
-    instrumentation.enable();
-  });
-
-  afterEach(() => {
-    instrumentation?.disable();
-  });
-
-  describe("Initialization", () => {
-    it("should create instrumentation instance", () => {
-      expect(instrumentation).toBeInstanceOf(PgVectorInstrumentation);
+    beforeEach(() => {
+      originalQuery = pg.Client.prototype.query;
+      originalPoolQuery = pg.Pool.prototype.query;
+      exporter = new InMemorySpanExporter();
+      provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+      manager = new AsyncLocalStorageContextManager().enable();
+      context.setGlobalContextManager(manager);
+      instrumentation = new PgVectorInstrumentation({ instrumentationConfig: { enabled: false } });
+      instrumentation.setTracerProvider(provider);
+      instrumentation.enable();
+      instrumentation.manuallyInstrument(pg);
     });
 
-    it("should initialize with default config", () => {
-      const inst = new PgVectorInstrumentation();
-      expect(inst).toBeInstanceOf(PgVectorInstrumentation);
+    afterEach(async () => {
+      instrumentation.disable();
+      // Also clean up the broken baseline so independent tests still diagnose it.
+      pg.Client.prototype.query = originalQuery;
+      pg.Pool.prototype.query = originalPoolQuery;
+      context.disable();
+      manager.disable();
+      await provider.shutdown();
     });
 
-    it("should have correct instrumentation name", () => {
-      expect(instrumentation.instrumentationName).toBe("@traceai/pgvector");
+    test.each(["argument", "config"])("callback %s retains return and ends on database error", async (form) => {
+      const { client, submitted } = controlledClient(pg);
+      const callback = jest.fn();
+      const returned = form === "argument"
+        ? client.query(sql, ["[0.1,0.2]", 5], callback)
+        : client.query({ text: sql, values: ["[0.1,0.2]", 5], callback });
+      await tick();
+      const earlySpans = exporter.getFinishedSpans().length;
+      const error = new Error("synthetic database failure");
+      submitted[0].callback(error);
+      await tick();
+      expect(returned).toBeUndefined();
+      expect(earlySpans).toBe(0);
+      expect(callback).toHaveBeenCalledWith(error);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
     });
 
-    it("should accept custom configuration", () => {
-      const inst = new PgVectorInstrumentation({
-        instrumentationConfig: { captureStatements: true },
-        traceConfig: { maskInputs: true },
+    test("Promise settles with the original result and vector metadata", async () => {
+      const { client, submitted } = controlledClient(pg);
+      const pending = client.query({ text: sql, values: ["[0.1,0.2,0.3]", 5] });
+      expect(pending).toBeInstanceOf(Promise);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      submitted[0].callback(null, result);
+      expect(await pending).toBe(result);
+      const [span] = exporter.getFinishedSpans();
+      expect(span.name).toBe("pgvector vectorSearch");
+      expect(span.attributes).toMatchObject({
+        "fi.span.kind": "VECTOR_DB",
+        "db.vector.distance_metric": "cosine",
+        "db.vector.query.dimensions": 3,
+        "db.vector.query.top_k": 5,
+        "db.response.returned_rows": 1,
+        "db.response.affected_rows": 1,
       });
-      expect(inst).toBeInstanceOf(PgVectorInstrumentation);
-    });
-  });
-
-  describe("Patching", () => {
-    it("should report not patched initially", () => {
-      expect(isPatched()).toBe(false);
+      expect(span.attributes["db.statement"]).toBeUndefined();
+      expect(JSON.stringify(span.attributes)).not.toContain("private-result-vector");
     });
 
-    it("should patch Client and Pool query methods", () => {
-      const mockModule = {
-        Client: {
-          prototype: { query: jest.fn() },
-        },
-        Pool: {
-          prototype: { query: jest.fn() },
-        },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-      expect(isPatched()).toBe(true);
-    });
-  });
-
-  describe("Basic Query Operations", () => {
-    it("should create span for SELECT query", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await mockModule.Client.prototype.query.call(mockClient, "SELECT * FROM items");
-
-      expect(mockSpan.setStatus).toHaveBeenCalledWith({ code: 1 });
-      expect(mockSpan.end).toHaveBeenCalled();
+    test("Promise rejection preserves the database error", async () => {
+      const { client, submitted } = controlledClient(pg);
+      const pending = client.query(sql);
+      const error = new Error("synthetic rejected query");
+      submitted[0].callback(error);
+      await expect(pending).rejects.toBe(error);
+      expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
     });
 
-    it("should handle INSERT query", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({ rowCount: 1 }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await mockModule.Client.prototype.query.call(
-        mockClient,
-        "INSERT INTO items (name, embedding) VALUES ($1, $2)",
-        ["Test Item", JSON.stringify([0.1, 0.2, 0.3])]
-      );
-
-      expect(mockSpan.end).toHaveBeenCalled();
+    test("synchronous validation errors stay synchronous", () => {
+      const { client } = controlledClient(pg);
+      let caught: unknown;
+      let returned: any;
+      try { returned = client.query(null); } catch (error) { caught = error; }
+      // Consume a rejection from the old async wrapper without changing the assertion.
+      returned?.catch(() => {});
+      expect(caught).toBeInstanceOf(TypeError);
     });
 
-    it("should handle UPDATE query", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({ rowCount: 5 }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await mockModule.Client.prototype.query.call(
-        mockClient,
-        "UPDATE items SET embedding = $1 WHERE category = $2",
-        [JSON.stringify([0.1, 0.2, 0.3]), "electronics"]
-      );
-
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-  });
-
-  describe("Vector Search Detection", () => {
-    it("should detect L2 distance operator", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await mockModule.Client.prototype.query.call(
-        mockClient,
-        "SELECT * FROM items ORDER BY embedding <-> $1 LIMIT 10",
-        [[0.1, 0.2, 0.3]]
-      );
-
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-
-    it("should detect cosine distance operator", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await mockModule.Client.prototype.query.call(
-        mockClient,
-        "SELECT * FROM items ORDER BY embedding <=> $1 LIMIT 5"
-      );
-
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-
-    it("should detect inner product operator", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({ rows: [], rowCount: 0 }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await mockModule.Client.prototype.query.call(
-        mockClient,
-        "SELECT * FROM items ORDER BY embedding <#> $1 LIMIT 10"
-      );
-
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-  });
-
-  describe("Error Handling", () => {
-    it("should record exception on error", async () => {
-      const error = new Error("Query failed");
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockRejectedValue(error),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await expect(
-        mockModule.Client.prototype.query.call(mockClient, "SELECT 1")
-      ).rejects.toThrow("Query failed");
-
-      expect(mockSpan.recordException).toHaveBeenCalledWith(error);
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-
-    it("should handle connection errors", async () => {
-      const connectionError = new Error("Connection refused");
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockRejectedValue(connectionError),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await expect(
-        mockModule.Client.prototype.query.call(mockClient, "SELECT 1")
-      ).rejects.toThrow("Connection refused");
-
-      expect(mockSpan.recordException).toHaveBeenCalled();
-    });
-
-    it("should handle syntax errors", async () => {
-      const syntaxError = new Error("syntax error at or near");
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockRejectedValue(syntaxError),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await expect(
-        mockModule.Client.prototype.query.call(mockClient, "SELEC * FROM items")
-      ).rejects.toThrow("syntax error");
-
-      expect(mockSpan.recordException).toHaveBeenCalled();
-    });
-  });
-
-  describe("Pool Operations", () => {
-    it("should trace Pool query", async () => {
-      const mockPool = {
-        query: (jest.fn() as MockFn).mockResolvedValue({
-          rows: [{ id: 1, name: "Test" }],
-          rowCount: 1,
-        }),
-      };
-      const mockModule = {
-        Pool: { prototype: { query: mockPool.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      const result = await mockModule.Pool.prototype.query.call(
-        mockPool,
-        "SELECT * FROM items WHERE id = $1",
-        [1]
-      );
-
-      expect(result.rows).toHaveLength(1);
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-  });
-
-  describe("Real-World Scenarios", () => {
-    it("should handle semantic search with similarity threshold", async () => {
-      const queryVector = new Array(1536).fill(0).map(() => Math.random());
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({
-          rows: [
-            { id: 1, title: "ML Basics", similarity: 0.92 },
-            { id: 2, title: "Deep Learning", similarity: 0.85 },
-          ],
-          rowCount: 2,
-        }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      const result = await mockModule.Client.prototype.query.call(
-        mockClient,
-        `SELECT id, title, 1 - (embedding <=> $1) AS similarity
-         FROM articles
-         WHERE 1 - (embedding <=> $1) > 0.7
-         ORDER BY embedding <=> $1
-         LIMIT $2`,
-        [JSON.stringify(queryVector), 10]
-      );
-
-      expect(result.rows).toHaveLength(2);
-      expect(result.rows[0].similarity).toBeGreaterThan(0.7);
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-
-    it("should handle hybrid search with full-text", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({
-          rows: [
-            { id: 1, name: "Laptop Pro", combined_score: 0.88 },
-            { id: 2, name: "Gaming Laptop", combined_score: 0.75 },
-          ],
-          rowCount: 2,
-        }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      const result = await mockModule.Client.prototype.query.call(
-        mockClient,
-        `WITH vector_results AS (
-           SELECT id, 1 - (embedding <=> $1) AS vector_score
-           FROM products ORDER BY embedding <=> $1 LIMIT 100
-         ),
-         text_results AS (
-           SELECT id, ts_rank(search_vector, plainto_tsquery($2)) AS text_score
-           FROM products WHERE search_vector @@ plainto_tsquery($2)
-         )
-         SELECT p.id, p.name,
-                COALESCE(v.vector_score, 0) * 0.7 + COALESCE(t.text_score, 0) * 0.3 AS combined_score
-         FROM products p
-         LEFT JOIN vector_results v ON p.id = v.id
-         LEFT JOIN text_results t ON p.id = t.id
-         ORDER BY combined_score DESC LIMIT 20`,
-        [JSON.stringify([0.1, 0.2]), "laptop"]
-      );
-
-      expect(result.rows).toHaveLength(2);
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-
-    it("should handle K-NN with filtering", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({
-          rows: [
-            { id: 10, name: "Similar Product 1", distance: 0.15 },
-            { id: 20, name: "Similar Product 2", distance: 0.23 },
-          ],
-          rowCount: 2,
-        }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      const result = await mockModule.Client.prototype.query.call(
-        mockClient,
-        `WITH source AS (SELECT embedding FROM products WHERE id = $1)
-         SELECT p.id, p.name, p.embedding <-> s.embedding AS distance
-         FROM products p, source s
-         WHERE p.id != $1 AND p.category = $2 AND p.price >= $3 AND p.price <= $4 AND p.in_stock = true
-         ORDER BY p.embedding <-> s.embedding
-         LIMIT $5`,
-        [1, "electronics", 100, 500, 10]
-      );
-
-      expect(result.rows).toHaveLength(2);
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-
-    it("should handle batch vector upsert", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({ rowCount: 50 }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      // Simulate batch upsert
-      for (let i = 0; i < 5; i++) {
-        await mockModule.Client.prototype.query.call(
-          mockClient,
-          `INSERT INTO documents (id, content, embedding)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (id) DO UPDATE
-           SET content = EXCLUDED.content, embedding = EXCLUDED.embedding, updated_at = NOW()`,
-          [i, `Content ${i}`, JSON.stringify(new Array(1536).fill(0))]
-        );
+    test.each([false, true])("real Pool delegation produces one execution span (callback=%s)", async (withCallback) => {
+      const { client, submitted } = controlledClient(pg);
+      const pool = new pg.Pool();
+      const release = jest.fn();
+      client.release = release;
+      pool.connect = (callback: Function) => process.nextTick(() => callback(null, client, release));
+      const callback = jest.fn();
+      const pending = withCallback ? pool.query(sql, callback) : pool.query(sql);
+      await tick();
+      submitted[0].callback(null, result);
+      if (!withCallback) expect(await pending).toBe(result);
+      await tick();
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      expect(release).toHaveBeenCalledTimes(1);
+      if (withCallback) {
+        expect(pending).toBeUndefined();
+        expect(callback).toHaveBeenCalledWith(undefined, result);
       }
-
-      expect(mockSpan.end).toHaveBeenCalledTimes(5);
+      await pool.end();
     });
 
-    it("should handle multi-tenant vector search", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({
-          rows: [
-            { id: 1, title: "Tenant Doc 1", distance: 0.12 },
-            { id: 2, title: "Tenant Doc 2", distance: 0.18 },
-          ],
-          rowCount: 2,
-        }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      const result = await mockModule.Client.prototype.query.call(
-        mockClient,
-        `SELECT id, title, embedding <=> $2 AS distance
-         FROM tenant_documents
-         WHERE tenant_id = $1
-         ORDER BY embedding <=> $2
-         LIMIT $3`,
-        ["tenant-123", JSON.stringify([0.1, 0.2, 0.3]), 20]
-      );
-
-      expect(result.rows).toHaveLength(2);
-      expect(mockSpan.end).toHaveBeenCalled();
+    test("Query Submittable retains identity and waits for end", () => {
+      const { client } = controlledClient(pg);
+      const query = new pg.Query(sql);
+      const originalEmit = query.emit;
+      const onEnd = jest.fn();
+      query.on("end", onEnd);
+      const returned = client.query(query);
+      expect(returned).toBe(query);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      query.emit("row", { id: 1 });
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      query.emit("end", result);
+      expect(query.emit).toBe(originalEmit);
+      expect(onEnd).toHaveBeenCalledWith(result);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
     });
 
-    it("should handle HNSW index with ef_search parameter", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn)
-          .mockResolvedValueOnce({ rows: [] }) // SET command
-          .mockResolvedValueOnce({
-            rows: [{ id: 1, content: "Result", similarity: 0.95 }],
-            rowCount: 1,
-          }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      // Set search parameter
-      await mockModule.Client.prototype.query.call(mockClient, "SET hnsw.ef_search = 100");
-
-      // Execute search
-      const result = await mockModule.Client.prototype.query.call(
-        mockClient,
-        `SELECT id, content, 1 - (embedding <=> $1) AS similarity
-         FROM documents
-         ORDER BY embedding <=> $1
-         LIMIT $2`,
-        [JSON.stringify([0.1, 0.2, 0.3]), 10]
-      );
-
-      expect(result.rows).toHaveLength(1);
-      expect(mockSpan.end).toHaveBeenCalledTimes(2);
+    test("Query error events retain EventEmitter's unhandled-error contract", () => {
+      const { client } = controlledClient(pg);
+      const query = new pg.Query(sql);
+      client.query(query);
+      const error = new Error("synthetic unhandled query error");
+      expect(() => new pg.Query(sql).emit("error", error)).toThrow(/synthetic unhandled query error/);
+      expect(() => query.emit("error", error)).toThrow(/synthetic unhandled query error/);
+      expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
     });
 
-    it("should handle vector clustering analytics", async () => {
-      const mockClient = {
-        query: (jest.fn() as MockFn).mockResolvedValue({
-          rows: [
-            { cluster_id: 1, document_count: 150, avg_distance: 0.25 },
-            { cluster_id: 2, document_count: 230, avg_distance: 0.31 },
-            { cluster_id: 3, document_count: 120, avg_distance: 0.22 },
-          ],
-          rowCount: 3,
-        }),
-      };
-      const mockModule = {
-        Client: { prototype: { query: mockClient.query } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
+    test("Query callback keeps this, arguments, and thrown application errors", () => {
+      const { client, submitted } = controlledClient(pg);
+      const applicationError = new Error("application callback failed");
+      const receiver = {};
+      const callback = jest.fn(function (this: any, ...args: any[]) {
+        expect(this).toBe(receiver);
+        expect(args).toEqual([null, result]);
+        throw applicationError;
+      });
+      const query = new pg.Query({ text: sql, callback });
+      client.query(query);
+      expect(() => submitted[0].callback.call(receiver, null, result)).toThrow(applicationError);
+      expect(query.callback).toBe(callback);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.OK);
+    });
 
-      const centroids = [
-        JSON.stringify([0.1, 0.2]),
-        JSON.stringify([0.5, 0.6]),
-        JSON.stringify([0.8, 0.9]),
-      ];
+    test("completion callbacks run under caller context, not the database span", () => {
+      const { client, submitted } = controlledClient(pg);
+      const parent = provider.getTracer("test").startSpan("caller");
+      const seen: string[] = [];
+      context.with(trace.setSpan(context.active(), parent), () => {
+        client.query(sql, () => seen.push(trace.getActiveSpan()!.spanContext().spanId));
+      });
+      submitted[0].callback(null, result);
+      expect(seen).toEqual([parent.spanContext().spanId]);
+      parent.end();
+    });
 
-      const result = await mockModule.Client.prototype.query.call(
-        mockClient,
-        `WITH centroids AS (
-           SELECT row_number() OVER () AS cluster_id, centroid::vector AS centroid
-           FROM unnest($1::text[]) AS centroid
-         )
-         SELECT c.cluster_id, COUNT(*) AS document_count, AVG(d.embedding <-> c.centroid) AS avg_distance
-         FROM documents d
-         CROSS JOIN LATERAL (
-           SELECT cluster_id, centroid FROM centroids ORDER BY d.embedding <-> centroid LIMIT 1
-         ) c
-         GROUP BY c.cluster_id ORDER BY c.cluster_id`,
-        [centroids]
-      );
+    test("ordinary SQL is not classified as VECTOR_DB", async () => {
+      const { client, submitted } = controlledClient(pg);
+      const pending = client.query("SELECT '<=>' AS operator /* <-> */ FROM documents");
+      submitted[0].callback(null, result);
+      await pending;
+      expect(exporter.getFinishedSpans()[0].attributes["fi.span.kind"]).toBeUndefined();
+    });
 
-      expect(result.rows).toHaveLength(3);
-      expect(mockSpan.end).toHaveBeenCalled();
+    test("disable restores originals and enable can instrument again", async () => {
+      expect(isPatched()).toBe(true);
+      instrumentation.disable();
+      expect(pg.Client.prototype.query).toBe(originalQuery);
+      expect(pg.Pool.prototype.query).toBe(originalPoolQuery);
+      expect(isPatched()).toBe(false);
+      instrumentation.enable();
+      instrumentation.manuallyInstrument(pg);
+      instrumentation.manuallyInstrument(pg);
+      const { client, submitted } = controlledClient(pg);
+      const pending = client.query(sql);
+      submitted[0].callback(null, result);
+      await pending;
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    });
+
+    test("config changes take effect without repatching", async () => {
+      const config = { enabled: true, captureQueries: true };
+      instrumentation.setConfig(config);
+      const { client, submitted } = controlledClient(pg);
+      const pending = client.query(sql);
+      submitted[0].callback(null, result);
+      await pending;
+      expect(exporter.getFinishedSpans()[0].attributes["db.statement"]).toBe(sql);
+    });
+
+    test("frozen callback configs are not mutated", () => {
+      const { client, submitted } = controlledClient(pg);
+      const callback = jest.fn();
+      const config = Object.freeze({ text: sql, values: ["[1,2]", 5], callback });
+      expect(client.query(config)).toBeUndefined();
+      submitted[0].callback(null, result);
+      expect(config.callback).toBe(callback);
+      expect(callback).toHaveBeenCalledWith(null, result);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    });
+
+    test("callback configs retain inherited and non-enumerable query fields", () => {
+      const { client, submitted } = controlledClient(pg);
+      const callback = jest.fn();
+      const config = Object.create({ text: sql });
+      Object.defineProperty(config, "values", { value: ["[1,2]", 5] });
+      config.callback = callback;
+      expect(client.query(config)).toBeUndefined();
+      expect(submitted[0].text).toBe(sql);
+      expect(submitted[0].values).toEqual(["[1,2]", 5]);
+      submitted[0].callback(null, result);
+      expect(config.callback).toBe(callback);
+    });
+
+    test("a second instrumentor cannot duplicate or remove the first one's patch", async () => {
+      const second = new PgVectorInstrumentation({ instrumentationConfig: { enabled: false } });
+      second.setTracerProvider(provider);
+      second.enable();
+      second.manuallyInstrument(pg);
+      second.disable();
+      const { client, submitted } = controlledClient(pg);
+      const pending = client.query(sql);
+      submitted[0].callback(null, result);
+      await pending;
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    });
+
+    test("in-flight callbacks still complete after disable", () => {
+      const { client, submitted } = controlledClient(pg);
+      const callback = jest.fn();
+      client.query(sql, callback);
+      instrumentation.disable();
+      submitted[0].callback(null, result);
+      expect(callback).toHaveBeenCalledWith(null, result);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    });
+
+    test("a callback passed alongside a Query preserves identity and precedence", () => {
+      const { client, submitted } = controlledClient(pg);
+      const callback = jest.fn();
+      const ignored = jest.fn();
+      const query = new pg.Query({ text: sql, callback });
+      expect(client.query(query, ignored)).toBe(query);
+      submitted[0].callback(null, result);
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(ignored).not.toHaveBeenCalled();
+      expect(query.callback).toBe(callback);
+    });
+
+    test("Query with callback argument completes without becoming a Promise", () => {
+      const { client, submitted } = controlledClient(pg);
+      const callback = jest.fn();
+      const query = new pg.Query(sql);
+      expect(client.query(query, callback)).toBe(query);
+      submitted[0].callback(null, result);
+      expect(query.callback).toBe(callback);
+      expect(callback).toHaveBeenCalledWith(null, result);
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    });
+
+    test("immutable custom Submittables pass through without inventing completion", () => {
+      const { client, submitted } = controlledClient(pg);
+      const callback = jest.fn();
+      const query = Object.freeze({ submit() {}, callback });
+      expect(client.query(query)).toBe(query);
+      submitted[0].callback(null, result);
+      expect(callback).toHaveBeenCalledWith(null, result);
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+    });
+
+    test("captureStatements alias works and explicit captureQueries false wins", async () => {
+      const { client, submitted } = controlledClient(pg);
+      instrumentation.setConfig({ captureStatements: true });
+      const first = client.query(sql);
+      submitted[0].callback(null, result);
+      await first;
+      expect(exporter.getFinishedSpans()[0].attributes["db.statement"]).toBe(sql);
+      instrumentation.setConfig({ captureStatements: true, captureQueries: false });
+      const second = client.query(sql);
+      submitted[1].callback(null, result);
+      await second;
+      expect(exporter.getFinishedSpans()[1].attributes["db.statement"]).toBeUndefined();
+    });
+
+    test("environment privacy settings suppress opt-in SQL and error text", async () => {
+      const prior = process.env.FI_HIDE_INPUTS;
+      process.env.FI_HIDE_INPUTS = "true";
+      try {
+        instrumentation.setConfig({ captureQueries: true });
+        const { client, submitted } = controlledClient(pg);
+        const pending = client.query(sql + " /* private-sql */");
+        submitted[0].callback(new Error("private-error"));
+        await expect(pending).rejects.toThrow("private-error");
+        const [span] = exporter.getFinishedSpans();
+        expect(span.attributes["db.statement"]).toBeUndefined();
+        expect(span.status.message).toBeUndefined();
+        expect(JSON.stringify(span.events)).not.toContain("private-error");
+      } finally {
+        if (prior === undefined) delete process.env.FI_HIDE_INPUTS;
+        else process.env.FI_HIDE_INPUTS = prior;
+      }
+    });
+
+    test("exports OTLP with one error span and no hidden SQL, vectors, or error text", async () => {
+      const bodies: any[] = [];
+      const server = createServer((request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk) => chunks.push(chunk));
+        request.on("end", () => {
+          bodies.push(JSON.parse(Buffer.concat(chunks).toString()));
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end("{}");
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as AddressInfo).port;
+      const wireExporter = new OTLPTraceExporter({ url: `http://127.0.0.1:${port}/v1/traces` });
+      const wireProvider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(wireExporter)] });
+      instrumentation.disable();
+      instrumentation = new PgVectorInstrumentation({
+        instrumentationConfig: { enabled: false, captureQueries: true, captureQueryVectors: true, captureResultVectors: true },
+        traceConfig: { hideInputs: true, hideOutputs: true },
+      });
+      instrumentation.setTracerProvider(wireProvider);
+      instrumentation.enable();
+      instrumentation.manuallyInstrument(pg);
+      try {
+        const { client, submitted } = controlledClient(pg);
+        const pending = client.query(sql + " /* private-sql-sentinel */", ["[0.12345,0.67890]", 5]);
+        submitted[0].callback(new Error("private-error-sentinel"));
+        await expect(pending).rejects.toThrow("private-error-sentinel");
+        await wireProvider.forceFlush();
+        const spans = bodies.flatMap((body) => body.resourceSpans.flatMap((resource: any) =>
+          resource.scopeSpans.flatMap((scope: any) => scope.spans)));
+        expect(spans).toHaveLength(1);
+        expect(spans[0].status.code).toBe(2);
+        expect(JSON.stringify(bodies)).not.toMatch(/private-sql-sentinel|private-error-sentinel|0\.12345|db.statement/);
+        expect(spans[0].attributes).toEqual(expect.arrayContaining([
+          { key: "db.vector.distance_metric", value: { stringValue: "cosine" } },
+        ]));
+      } finally {
+        instrumentation.disable();
+        await wireProvider.shutdown();
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      }
     });
   });
-});
+}
