@@ -1,74 +1,118 @@
-"""Pytest configuration and fixtures for ChromaDB instrumentation tests."""
+"""Offline fixtures: real Collection validation with an in-process transport."""
+
+import asyncio
+import inspect
+from copy import deepcopy
+from uuid import UUID
 
 import pytest
-from typing import Generator
-from unittest.mock import MagicMock, patch
-
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.resources import Resource
+from chromadb.api.models.Collection import Collection
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from traceai_chromadb import ChromaDBInstrumentor
+
+
+class Transport:
+    def __init__(self):
+        self.calls = []
+        self.error = None
+        self.response = None
+
+    def __getattr__(self, name):
+        if not name.startswith("_"):
+            raise AttributeError(name)
+
+        def call(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            if self.error is not None:
+                raise self.error
+            if self.response is not None:
+                return deepcopy(self.response)
+            if name == "_count":
+                return 2
+            if name in ("_add", "_update", "_upsert", "_delete"):
+                return None
+            nested = name in ("_query", "_search")
+            return {
+                "ids": [["a", "b"]] if nested else ["a", "b"],
+                "distances": [[0.0, 0.5]] if nested else None,
+                "scores": [[0.0, 0.5]] if nested else None,
+                "documents": [["private-document", "other"]] if nested else None,
+                "embeddings": None,
+                "metadatas": None,
+                "uris": None,
+                "data": None,
+                "included": ["documents", "distances"],
+            }
+
+        return call
+
+
+class AsyncTransport(Transport):
+    def __getattr__(self, name):
+        call = super().__getattr__(name)
+
+        async def async_call(*args, **kwargs):
+            await asyncio.sleep(0)
+            return call(*args, **kwargs)
+
+        return async_call
+
+
+def make_collection(collection_class, transport):
+    values = {
+        "id": UUID("00000000-0000-0000-0000-000000000001"),
+        "name": "test-collection",
+        "configuration_json": {},
+        "serialized_schema": None,
+        "metadata": None,
+        "dimension": 3,
+        "tenant": "default_tenant",
+        "database": "default_database",
+    }
+    if "model" in inspect.signature(collection_class).parameters:
+        from chromadb.types import Collection as Model
+
+        model = Model(
+            **{
+                key: value
+                for key, value in values.items()
+                if key in inspect.signature(Model).parameters
+            }
+        )
+        return collection_class(client=transport, model=model, embedding_function=None)
+    return collection_class(
+        client=transport, id=values["id"], name=values["name"], embedding_function=None
+    )
+
+
+@pytest.fixture(params=[False, True], ids=["sync", "async"])
+def collection(request):
+    if request.param:
+        module = pytest.importorskip("chromadb.api.models.AsyncCollection")
+        return make_collection(module.AsyncCollection, AsyncTransport())
+    return make_collection(Collection, Transport())
+
 
 @pytest.fixture
-def in_memory_span_exporter() -> InMemorySpanExporter:
-    """Create an in-memory span exporter for testing."""
+def in_memory_span_exporter():
     return InMemorySpanExporter()
 
 
 @pytest.fixture
-def tracer_provider(
-    in_memory_span_exporter: InMemorySpanExporter,
-) -> trace_api.TracerProvider:
-    """Create a tracer provider with in-memory exporter."""
-    resource = Resource(attributes={"service.name": "test-chromadb"})
-    tracer_provider = trace_sdk.TracerProvider(resource=resource)
-    span_processor = SimpleSpanProcessor(span_exporter=in_memory_span_exporter)
-    tracer_provider.add_span_processor(span_processor=span_processor)
-    return tracer_provider
+def tracer_provider(in_memory_span_exporter):
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
+    yield provider
+    provider.shutdown()
 
 
 @pytest.fixture
-def mock_chroma_collection():
-    """Create a mock ChromaDB collection."""
-    mock_collection = MagicMock()
-    mock_collection.name = "test-collection"
-
-    # Mock query response
-    mock_collection.query.return_value = {
-        "ids": [["id1", "id2"]],
-        "documents": [["doc1", "doc2"]],
-        "distances": [[0.1, 0.2]],
-        "metadatas": [[{"key": "val1"}, {"key": "val2"}]],
-    }
-
-    # Mock add response
-    mock_collection.add.return_value = None
-
-    # Mock get response
-    mock_collection.get.return_value = {
-        "ids": ["id1"],
-        "documents": ["doc1"],
-        "metadatas": [{"key": "val1"}],
-    }
-
-    # Mock count response
-    mock_collection.count.return_value = 100
-
-    return mock_collection
-
-
-@pytest.fixture
-def instrument_chromadb(
-    tracer_provider: trace_api.TracerProvider,
-    in_memory_span_exporter: InMemorySpanExporter,
-) -> Generator[None, None, None]:
-    """Instrument ChromaDB for testing."""
-    from traceai_chromadb import ChromaDBInstrumentor
-
+def instrument_chromadb(tracer_provider):
     instrumentor = ChromaDBInstrumentor()
     instrumentor.instrument(tracer_provider=tracer_provider)
-    yield
-    instrumentor.uninstrument()
-    in_memory_span_exporter.clear()
+    yield instrumentor
+    if instrumentor.is_instrumented_by_opentelemetry:
+        instrumentor.uninstrument()

@@ -1,23 +1,10 @@
-"""
-TraceAI ChromaDB Instrumentation
+"""OpenTelemetry tracing for ChromaDB's sync and async collection operations.
 
-Provides OpenTelemetry instrumentation for ChromaDB vector database operations.
-
-Usage:
-    from fi_instrumentation import register
-    from traceai_chromadb import ChromaDBInstrumentor
-
-    trace_provider = register(project_name="my-rag-app")
-    ChromaDBInstrumentor().instrument(tracer_provider=trace_provider)
-
-    # Now all ChromaDB operations are automatically traced
-    import chromadb
-    client = chromadb.Client()
-    collection = client.create_collection("my-collection")
-    collection.add(ids=["id1"], documents=["Hello world"])
-    results = collection.query(query_texts=["Hello"], n_results=5)
+Use ``ChromaDBInstrumentor().instrument(tracer_provider=provider)`` before
+calling collection methods. See the README for the supported operations.
 """
 
+import inspect
 import logging
 from importlib import import_module
 from typing import Any, Collection
@@ -37,137 +24,72 @@ from traceai_chromadb._wrappers import (
     DeleteWrapper,
     CountWrapper,
     PeekWrapper,
+    SearchWrapper,
 )
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-_MODULE = "chromadb"
+_WRAPPERS = {
+    "add": AddWrapper,
+    "query": QueryWrapper,
+    "get": GetWrapper,
+    "update": UpdateWrapper,
+    "upsert": UpsertWrapper,
+    "delete": DeleteWrapper,
+    "count": CountWrapper,
+    "peek": PeekWrapper,
+    "search": SearchWrapper,
+}
 
 
 class ChromaDBInstrumentor(BaseInstrumentor):
-    """
-    OpenTelemetry instrumentor for ChromaDB vector database.
-
-    Instruments the following Collection operations:
-    - add: Add documents/embeddings to collection
-    - query: Search for similar documents
-    - get: Retrieve documents by ID
-    - update: Update existing documents
-    - upsert: Insert or update documents
-    - delete: Delete documents
-    - count: Get collection count
-    - peek: Preview collection contents
-    """
-
-    __slots__ = (
-        "_original_add",
-        "_original_query",
-        "_original_get",
-        "_original_update",
-        "_original_upsert",
-        "_original_delete",
-        "_original_count",
-        "_original_peek",
-    )
+    """Trace Collection and, when available, AsyncCollection data operations."""
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
     def _instrument(self, **kwargs: Any) -> None:
-        if not (tracer_provider := kwargs.get("tracer_provider")):
-            tracer_provider = trace_api.get_tracer_provider()
-
         tracer = trace_api.get_tracer(
-            __name__,
-            __version__,
-            tracer_provider,
+            __name__, __version__, kwargs.get("tracer_provider")
         )
-
-        chromadb = import_module(_MODULE)
-
-        # Get the Collection class
+        self._originals = []
         try:
-            from chromadb.api.models.Collection import Collection
-        except ImportError:
-            try:
-                Collection = chromadb.Collection
-            except AttributeError:
-                logger.warning("Could not find ChromaDB Collection class")
-                return
-
-        # Store original methods
-        self._original_add = Collection.add
-        self._original_query = Collection.query
-        self._original_get = Collection.get
-        self._original_update = Collection.update
-        self._original_upsert = Collection.upsert
-        self._original_delete = Collection.delete
-        self._original_count = Collection.count
-        self._original_peek = Collection.peek
-
-        # Wrap Collection methods
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.add",
-            wrapper=AddWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.query",
-            wrapper=QueryWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.get",
-            wrapper=GetWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.update",
-            wrapper=UpdateWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.upsert",
-            wrapper=UpsertWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.delete",
-            wrapper=DeleteWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.count",
-            wrapper=CountWrapper(tracer=tracer),
-        )
-        wrap_function_wrapper(
-            module="chromadb.api.models.Collection",
-            name="Collection.peek",
-            wrapper=PeekWrapper(tracer=tracer),
-        )
-
-        logger.debug("ChromaDB instrumentation enabled")
+            for class_name in ("Collection", "AsyncCollection"):
+                module_name = f"chromadb.api.models.{class_name}"
+                try:
+                    collection_class = getattr(import_module(module_name), class_name)
+                except ModuleNotFoundError as exc:
+                    # AsyncCollection is absent at the supported Chroma 0.4.0 floor.
+                    if class_name == "AsyncCollection" and exc.name == module_name:
+                        continue
+                    raise
+                for method_name, wrapper_type in _WRAPPERS.items():
+                    original = getattr(collection_class, method_name, None)
+                    if original is None:
+                        continue
+                    signature = inspect.signature(original)
+                    # wrapt passes the bound method's arguments separately from self.
+                    signature = signature.replace(
+                        parameters=list(signature.parameters.values())[1:]
+                    )
+                    wrapper = wrapper_type(tracer, signature)
+                    callback = (
+                        wrapper.async_call
+                        if inspect.iscoroutinefunction(original)
+                        else wrapper
+                    )
+                    self._originals.append((collection_class, method_name, original))
+                    # Positional arguments work with both wrapt 1.x and 2.x.
+                    wrap_function_wrapper(collection_class, method_name, callback)
+        except Exception:
+            self._uninstrument()
+            raise
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        try:
-            from chromadb.api.models.Collection import Collection
-        except ImportError:
-            chromadb = import_module(_MODULE)
-            Collection = chromadb.Collection
-
-        # Restore original methods
-        Collection.add = self._original_add
-        Collection.query = self._original_query
-        Collection.get = self._original_get
-        Collection.update = self._original_update
-        Collection.upsert = self._original_upsert
-        Collection.delete = self._original_delete
-        Collection.count = self._original_count
-        Collection.peek = self._original_peek
-
-        logger.debug("ChromaDB instrumentation disabled")
+        for collection_class, method_name, original in reversed(self._originals):
+            setattr(collection_class, method_name, original)
+        self._originals.clear()
 
 
 __all__ = ["ChromaDBInstrumentor", "__version__"]
