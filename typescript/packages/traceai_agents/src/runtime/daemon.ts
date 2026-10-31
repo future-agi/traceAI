@@ -5,6 +5,7 @@ import {
   type Socket,
 } from "node:net";
 import { chmodSync, lstatSync, unlinkSync } from "node:fs";
+import { randomInt } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { frame } from "@traceai/agent-core/client";
@@ -104,7 +105,8 @@ export class Runtime {
           (await socketIsLive(this.paths.socket))
         )
           throw e;
-        await delay(50);
+        // Fixed sleeps let simultaneous SQLite contenders retry in lockstep.
+        await delay(randomInt(25, 125));
       }
     }
     throw new AgentError("RUNTIME_UNAVAILABLE");
