@@ -56,8 +56,12 @@ jobs:
       - name: Test native spans and packaged JVM shutdown with only loopback available
         run: |
           export MAVEN_USER_HOME="$HOME/.m2"
-          sudo --preserve-env=JAVA_HOME,PATH,JAVA_TOOL_OPTIONS,QLC4J_VERSION,QUARKUS_VERSION,MAVEN_USER_HOME unshare --net bash -euc '
+          sudo env JAVA_HOME="$JAVA_HOME" PATH="$JAVA_HOME/bin:$PATH" MAVEN_SKIP_RC=1 \
+            JAVA_TOOL_OPTIONS="$JAVA_TOOL_OPTIONS" MAVEN_USER_HOME="$MAVEN_USER_HOME" \
+            QLC4J_VERSION="$QLC4J_VERSION" QUARKUS_VERSION="$QUARKUS_VERSION" \
+            unshare --net bash -euc '
             ip link set lo up
+            java/mvnw --version
             args=(-o -B -ntp -Dmaven.repo.local="$MAVEN_USER_HOME/repository"
               -f java/examples/quarkus-langchain4j-example/pom.xml
               -Dquarkus-langchain4j.version="$QLC4J_VERSION" -Dquarkus.platform.version="$QUARKUS_VERSION"
