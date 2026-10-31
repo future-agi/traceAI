@@ -13,11 +13,12 @@ from fi_instrumentation import TraceConfig, safe_json_dumps
 from fi_instrumentation.fi_types import DocumentAttributes, SpanAttributes
 from opentelemetry.util.types import AttributeValue
 
+# Literal keys keep imports working with core releases predating cost constants.
 _COST_FIELDS = {
-    "total_cost": SpanAttributes.GEN_AI_COST_TOTAL,
-    "input_cost": SpanAttributes.GEN_AI_COST_INPUT,
-    "output_cost": SpanAttributes.GEN_AI_COST_OUTPUT,
-    "cache_creation_cost": SpanAttributes.GEN_AI_COST_CACHE_WRITE,
+    "total_cost": "gen_ai.cost.total",
+    "input_cost": "gen_ai.cost.input",
+    "output_cost": "gen_ai.cost.output",
+    "cache_creation_cost": "gen_ai.cost.cache_write",
     "cache_read_cost": "gen_ai.cost.cache_read",
     "tool_calls_cost": "gen_ai.cost.tool_calls",
 }

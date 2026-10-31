@@ -389,6 +389,24 @@ def test_extra_body_override_matches_the_sent_request(wire):
     assert "input" not in params
 
 
+def test_extension_import_without_new_core_cost_constants(monkeypatch):
+    import importlib
+
+    from fi_instrumentation.fi_types import SpanAttributes
+    from traceai_openai._attributes import _response_extensions
+
+    for name in (
+        "GEN_AI_COST_TOTAL",
+        "GEN_AI_COST_INPUT",
+        "GEN_AI_COST_OUTPUT",
+        "GEN_AI_COST_CACHE_WRITE",
+    ):
+        monkeypatch.delattr(SpanAttributes, name, raising=False)
+    module = importlib.reload(_response_extensions)
+    attrs = dict(module.response_extension_attributes(response_body(), TraceConfig()))
+    assert attrs["gen_ai.cost.total"] == 0.04
+
+
 def test_failed_requests_keep_sent_effort(wire):
     payloads = wire()
     with pytest.raises(openai.BadRequestError):
