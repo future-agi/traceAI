@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import ProxyTracerProvider
 from ._exporter import CogneeExporter
 
-__version__ = '0.1.0'
+__version__ = '0.1.0'  # x-release-please-version
 _lock = RLock()
 _slots = WeakKeyDictionary()
 _configuring = False

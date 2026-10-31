@@ -114,6 +114,14 @@
         "traceai_cohere/version.py"
       ]
     },
+    "python/frameworks/cognee": {
+      "release-type": "python",
+      "component": "traceai-cognee",
+      "package-name": "traceai-cognee",
+      "extra-files": [
+        "traceai_cognee/__init__.py"
+      ]
+    },
     "python/frameworks/crewai": {
       "release-type": "python",
       "component": "traceai-crewai",
