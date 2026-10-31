@@ -1,157 +1,167 @@
-import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
+import { context, trace, SpanStatusCode } from "@opentelemetry/api";
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { LanceDBInstrumentation, isPatched } from "../instrumentation";
 
-type MockFn = jest.Mock<any>;
+// This synthetic engine deliberately mirrors LanceDB's lazy public surface.
+// Native-engine compatibility is tested separately in execution.test.ts.
+describe("LanceDB instrumentation lifecycle", () => {
+  let exporter: InMemorySpanExporter;
+  let provider: BasicTracerProvider;
+  let instrumentation: LanceDBInstrumentation;
+  let module: any;
+  let table: any;
+  let query: any;
+  let iterator: any;
+  let activeSpans: (string | undefined)[];
 
-const createMockSpan = () => ({
-  setStatus: jest.fn(),
-  setAttribute: jest.fn(),
-  recordException: jest.fn(),
-  setAttributes: jest.fn(),
-  addEvent: jest.fn(),
-  end: jest.fn(),
-  isRecording: jest.fn().mockReturnValue(true),
-});
+  beforeAll(() => context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()));
+  afterAll(() => context.disable());
+  beforeEach(async () => {
+    exporter = new InMemorySpanExporter();
+    provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    instrumentation = new LanceDBInstrumentation();
+    instrumentation.setTracerProvider(provider);
+    activeSpans = [];
+    iterator = {
+      next: jest.fn(async () => {
+        activeSpans.push(trace.getActiveSpan()?.spanContext().spanId);
+        return { done: false, value: { numRows: 2 } };
+      }),
+      return: jest.fn(async (value) => ({ done: true, value })),
+      throw: jest.fn(async (error) => { throw error; }),
+    };
+    class Query {
+      limit() { return this; }
+      execute() { return iterator; }
+      [Symbol.asyncIterator]() { return this.execute(); }
+      async toArrow() { const it = this.execute(); return (await it.next()).value; }
+      async toArray() { await this.toArrow(); return [{ private: "payload" }]; }
+    }
+    class Table {
+      name = "vectors";
+      search() { return query = new Query(); }
+      async countRows() { return 2; }
+    }
+    table = new Table();
+    class Connection { async openTable() { return table; } }
+    module = { connect: async () => new Connection() };
+    instrumentation.manuallyInstrument(module);
+    const db = await module.connect("not-captured");
+    await db.openTable("vectors");
+    exporter.reset();
+  });
+  afterEach(async () => {
+    instrumentation.disable();
+    await provider.shutdown();
+  });
 
-const mockSpan = createMockSpan();
-jest.mock("@traceai/fi-core", () => ({
-  FITracer: jest.fn().mockImplementation(() => ({
-    startSpan: jest.fn().mockReturnValue(mockSpan),
-  })),
-  TraceConfigOptions: {},
-}));
+  it("emits one execution span rather than spans for nested terminal methods", async () => {
+    const parent = provider.getTracer("test").startSpan("parent");
+    await context.with(trace.setSpan(context.active(), parent), () => table.search([1, 2]).limit(1).toArray());
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
+    expect(activeSpans).toEqual([spans[0].spanContext().spanId]);
+    expect(spans[0].attributes["db.vector.query.top_k"]).toBe(1);
+    expect(JSON.stringify(spans.map(span => span.attributes))).not.toContain("payload");
+    parent.end();
+  });
 
-jest.mock("@traceai/fi-semantic-conventions", () => ({
-  SemanticConventions: {
-    DB_SYSTEM: "db.system",
-    DB_OPERATION: "db.operation",
-    DB_COLLECTION_NAME: "db.collection.name",
-  },
-}));
+  it("keeps iterator identity, context and lifecycle through completion", async () => {
+    const result = table.search([1, 2]).execute();
+    expect(result).toBe(iterator);
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+    await result.next();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+    await result.return("finished");
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0].attributes["db.response.returned_rows"]).toBe(2);
+    expect(activeSpans).toEqual([spans[0].spanContext().spanId]);
+    await result.return();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+  });
 
-jest.mock("@opentelemetry/api", () => ({
-  context: {
-    active: jest.fn().mockReturnValue({}),
-    with: jest.fn((_ctx: any, fn: () => any) => fn()),
-  },
-  trace: {
-    setSpan: jest.fn().mockReturnValue({}),
-    getTracer: jest.fn().mockReturnValue({
-      startSpan: jest.fn(),
-      startActiveSpan: jest.fn(),
-    }),
-  },
-  metrics: {
-    getMeter: jest.fn().mockReturnValue({
-      createCounter: jest.fn().mockReturnValue({ add: jest.fn() }),
-      createHistogram: jest.fn().mockReturnValue({ record: jest.fn() }),
-      createUpDownCounter: jest.fn().mockReturnValue({ add: jest.fn() }),
-    }),
-  },
-  diag: {
-    createComponentLogger: jest.fn().mockReturnValue({
-      debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(),
-    }),
-  },
-  SpanKind: { CLIENT: 2 },
-  SpanStatusCode: { OK: 1, ERROR: 2 },
-}));
+  it("closes spans on implicit return when an iterator has no cleanup method", async () => {
+    delete iterator.return;
+    for await (const batch of table.search([1, 2])) {
+      expect(batch.numRows).toBe(2);
+      break;
+    }
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+  });
 
-let LanceDBInstrumentation: any;
-let isPatched: any;
+  it("records asynchronous iterator failure and rethrows the original error", async () => {
+    const error = new Error("engine failure");
+    iterator.next.mockRejectedValueOnce(error);
+    const result = table.search([1, 2]).execute();
+    await expect(result.next()).rejects.toBe(error);
+    await result.return();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
+    expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
+  });
 
-describe("LanceDB Instrumentation", () => {
-  let instrumentation: any;
+  it("forwards throw and records cleanup failure", async () => {
+    const error = new Error("consumer failure");
+    const result = table.search([1, 2]).execute();
+    await expect(result.throw(error)).rejects.toBe(error);
+    expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
+    exporter.reset();
+    iterator.return = jest.fn().mockRejectedValueOnce(error);
+    await expect(table.search([1, 2]).execute().return()).rejects.toBe(error);
+    expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
+  });
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.resetModules();
-    const mod = require("../instrumentation");
-    LanceDBInstrumentation = mod.LanceDBInstrumentation;
-    isPatched = mod.isPatched;
-    instrumentation = new LanceDBInstrumentation({
-      instrumentationConfig: { enabled: true },
-    });
+  it("preserves synchronous errors at execution", () => {
+    const error = new Error("sync failure");
+    const q = table.search([1, 2]);
+    const prototype = Object.getPrototypeOf(q);
+    instrumentation.disable();
+    prototype.execute = () => { throw error; };
     instrumentation.enable();
+    table.search([1, 2]); // discover the replacement terminal
+    expect(() => q.execute()).toThrow(error);
+    expect(exporter.getFinishedSpans()[0].status.code).toBe(SpanStatusCode.ERROR);
   });
 
-  afterEach(() => {
-    instrumentation?.disable();
+  it("restores all owned methods and re-enables existing instances", async () => {
+    const wrappedCount = table.countRows;
+    const q = table.search([1, 2]);
+    const wrappedExecute = q.execute;
+    instrumentation.disable();
+    expect(isPatched()).toBe(false);
+    expect(table.countRows).not.toBe(wrappedCount);
+    expect(q.execute).not.toBe(wrappedExecute);
+    await table.countRows();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+    instrumentation.enable();
+    expect(table.countRows).toBe(wrappedCount);
+    expect(q.execute).toBe(wrappedExecute);
+    await table.countRows();
+    expect(exporter.getFinishedSpans()).toHaveLength(1);
   });
 
-  describe("Initialization", () => {
-    it("should create instrumentation instance", () => {
-      expect(instrumentation).toBeInstanceOf(LanceDBInstrumentation);
-    });
-
-    it("should initialize with default config", () => {
-      const inst = new LanceDBInstrumentation();
-      expect(inst).toBeInstanceOf(LanceDBInstrumentation);
-    });
-
-    it("should have correct instrumentation name", () => {
-      expect(instrumentation.instrumentationName).toBe("@traceai/lancedb");
-    });
+  it("does not double-wrap or let a second owner disable the first", async () => {
+    const second = new LanceDBInstrumentation();
+    second.setTracerProvider(provider);
+    try {
+      second.manuallyInstrument(module);
+      instrumentation.manuallyInstrument(module);
+      second.disable();
+      await table.countRows();
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+    } finally { second.disable(); }
   });
 
-  describe("Patching", () => {
-    it("should report not patched initially", () => {
+  it("warns instead of reporting successful instrumentation for unsupported exports", () => {
+    instrumentation.disable();
+    const fresh = new LanceDBInstrumentation();
+    const warn = jest.spyOn((fresh as any)._diag, "warn").mockImplementation(() => {});
+    try {
+      fresh.manuallyInstrument({ Connection: class {}, Table: class {} });
       expect(isPatched()).toBe(false);
-    });
-
-    it("should patch Table methods", () => {
-      const mockModule = {
-        Table: {
-          prototype: {
-            search: jest.fn(),
-            add: jest.fn(),
-          },
-        },
-        Connection: {
-          prototype: {
-            createTable: jest.fn(),
-          },
-        },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-      expect(isPatched()).toBe(true);
-    });
-  });
-
-  describe("Search Operation", () => {
-    it("should create span for search operation", async () => {
-      const mockTable = {
-        name: "test_table",
-        search: (jest.fn() as MockFn).mockResolvedValue([]),
-      };
-      const mockModule = {
-        Table: { prototype: { search: mockTable.search } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await mockModule.Table.prototype.search.call(mockTable, { limit: 10 });
-
-      expect(mockSpan.setStatus).toHaveBeenCalledWith({ code: 1 });
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
-  });
-
-  describe("Error Handling", () => {
-    it("should record exception on error", async () => {
-      const error = new Error("Search failed");
-      const mockTable = {
-        search: (jest.fn() as MockFn).mockRejectedValue(error),
-      };
-      const mockModule = {
-        Table: { prototype: { search: mockTable.search } },
-      };
-      instrumentation.manuallyInstrument(mockModule);
-
-      await expect(
-        mockModule.Table.prototype.search.call(mockTable, {})
-      ).rejects.toThrow("Search failed");
-
-      expect(mockSpan.recordException).toHaveBeenCalledWith(error);
-      expect(mockSpan.end).toHaveBeenCalled();
-    });
+      expect(warn).toHaveBeenCalled();
+    } finally { fresh.disable(); warn.mockRestore(); }
   });
 });
