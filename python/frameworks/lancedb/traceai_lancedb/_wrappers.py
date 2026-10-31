@@ -1,181 +1,200 @@
-"""LanceDB method wrappers for OpenTelemetry instrumentation."""
+"""Trace public executions, not the nested materialization steps they invoke."""
 
-import json
+from __future__ import annotations
+
 import logging
-from typing import Any, Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any
+from weakref import WeakKeyDictionary
 
-from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
+from opentelemetry import context
+from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
+from opentelemetry.trace import SpanKind, StatusCode, Tracer, use_span
+
+from traceai_lancedb._readers import AsyncReader, SyncReader
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE: ContextVar[Execution | None] = ContextVar("lancedb_execution", default=None)
+# Hybrid queries create their constituent builders before dispatching them to
+# worker threads (which do not copy ContextVars). Associate only those builders
+# with their execution, rather than suppressing unrelated queries globally.
+_PARENTS: WeakKeyDictionary = WeakKeyDictionary()
 
-def safe_json_dumps(obj: Any) -> str:
+
+def remember_parent(wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
+    result = wrapped(*args, **kwargs)
+    execution = _ACTIVE.get()
+    if execution is not None and not execution.finished:
+        _PARENTS[instance] = execution
+    return result
+
+
+def _parent(instance: Any) -> Execution | None:
+    execution = _ACTIVE.get() or _PARENTS.get(instance)
+    return execution if execution is not None and not execution.finished else None
+
+
+def _row_count(value: Any) -> int | None:
+    # Never iterate a generator or consume a reader to collect telemetry.
     try:
-        return json.dumps(obj)
-    except (TypeError, ValueError):
-        return str(obj)
+        count = getattr(value, "num_rows", None)
+        if isinstance(count, int):
+            return count
+        if isinstance(value, (list, tuple)) or type(value).__module__.split(".")[0] in (
+            "pandas",
+            "polars",
+        ):
+            return len(value)
+    except Exception as error:  # noqa: BLE001 - metadata is best-effort
+        # Only the type is safe to log: property errors may include user data.
+        logger.debug("LanceDB metadata unavailable (%s)", type(error).__name__)
+    return None
 
 
-class BaseWrapper:
-    def __init__(self, tracer: Tracer):
-        self._tracer = tracer
+def _attributes(
+    operation: str, method: str, instance: Any, args: tuple, kwargs: dict
+) -> dict:
+    attributes = {"db.system": "lancedb", "db.operation.name": operation}
+    # Metadata must not execute a query or prevent the application operation.
+    try:
+        if operation in ("create_table", "open_table", "drop_table"):
+            name = args[0] if args else kwargs.get("name")
+        else:
+            table = (
+                getattr(instance, "_table", None) if operation == "search" else instance
+            )
+            name = getattr(table, "name", None) or getattr(table, "_name", None)
+        if isinstance(name, str):
+            attributes["db.namespace"] = name
+            attributes["db.vector.collection.name"] = name
+        if operation == "search":
+            attributes["db.vector.search.output_format"] = method
+            limit = getattr(instance, "_limit", None)
+            if isinstance(limit, int) and limit >= 0:
+                attributes["db.vector.query.top_k"] = limit
+        elif operation == "add":
+            count = _row_count(args[0] if args else kwargs.get("data"))
+            if count is not None:
+                attributes["db.vector.upsert.count"] = count
+    except Exception as error:  # noqa: BLE001 - metadata is best-effort
+        # Only the type is safe to log: property errors may include user data.
+        logger.debug("LanceDB metadata unavailable (%s)", type(error).__name__)
+    return attributes
 
-    def _get_table_name(self, instance: Any) -> str:
+
+class Execution:
+    def __init__(self, tracer: Tracer, operation: str, attributes: dict) -> None:
+        self.span = tracer.start_span(
+            "lancedb " + operation, kind=SpanKind.CLIENT, attributes=attributes
+        )
+        self.finished = False
+        self.rows = 0
+
+    @contextmanager
+    def activate(self) -> Iterator[None]:
+        token = _ACTIVE.set(self)
         try:
-            if hasattr(instance, "name"):
-                return instance.name
-            if hasattr(instance, "_name"):
-                return instance._name
-        except Exception:
-            pass
-        return "unknown"
+            # Do not let OTel's context manager serialize exception messages,
+            # stack traces or locals (database errors can contain row contents).
+            with use_span(
+                self.span,
+                end_on_exit=False,
+                record_exception=False,
+                set_status_on_exception=False,
+            ):
+                yield
+        finally:
+            _ACTIVE.reset(token)
 
-    def _get_attributes(self, operation: str, table_name: str) -> dict:
-        return {
-            "db.system": "lancedb",
-            "db.operation.name": operation,
-            "db.namespace": table_name,
-            "db.vector.collection.name": table_name,
-        }
+    def count(self, rows: int) -> None:
+        if not self.finished:
+            self.rows += rows
+            self.span.set_attribute("db.vector.results.count", self.rows)
+
+    def finish(
+        self, *, complete: bool = False, error: BaseException | None = None
+    ) -> None:
+        if self.finished:
+            return
+        self.finished = True
+        if error is not None:
+            error_type = type(error).__module__ + "." + type(error).__qualname__
+            self.span.set_attribute("error.type", error_type)
+            self.span.set_status(StatusCode.ERROR)
+            self.span.add_event("exception", {"exception.type": error_type})
+        elif complete:
+            self.span.set_status(StatusCode.OK)
+        self.span.end()
 
 
-class SearchWrapper(BaseWrapper):
-    def __init__(self, tracer: Tracer, method: str = "to_list"):
-        super().__init__(tracer)
-        self._method = method
+class OperationWrapper:
+    def __init__(self, tracer: Tracer, operation: str, method: str) -> None:
+        self.tracer = tracer
+        self.operation = operation
+        self.method = method
 
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        table_name = self._get_table_name(instance)
+    def _execution(self, instance: Any, args: tuple, kwargs: dict) -> Execution:
+        return Execution(
+            self.tracer,
+            self.operation,
+            _attributes(self.operation, self.method, instance, args, kwargs),
+        )
 
-        # Try to get limit from query builder
-        limit = getattr(instance, "_limit", 10)
+    def _result(
+        self, result: Any, execution: Execution, *, asynchronous: bool = False
+    ) -> Any:
+        if self.method == "to_batches":
+            # Ownership transfers to the reader until exhaustion, explicit close,
+            # cancellation/failure, or garbage collection. No context is left
+            # attached between batches and no data is read ahead.
+            execution.count(0)
+            return (
+                AsyncReader(result, execution)
+                if asynchronous
+                else SyncReader(result, execution)
+            )
+        if self.operation == "search":
+            count = _row_count(result)
+            if count is not None:
+                execution.count(count)
+        execution.finish(complete=True)
+        return result
 
-        attributes = self._get_attributes("search", table_name)
-        attributes["db.vector.query.top_k"] = limit
-        attributes["db.vector.search.output_format"] = self._method
-
-        with self._tracer.start_as_current_span("lancedb search", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            try:
+    def __call__(
+        self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict
+    ) -> Any:
+        if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+        parent = _parent(instance)
+        if parent is not None:
+            with parent.activate():
+                return wrapped(*args, **kwargs)
+        execution = self._execution(instance, args, kwargs)
+        try:
+            with execution.activate():
                 result = wrapped(*args, **kwargs)
-                if result is not None:
-                    if self._method == "to_list":
-                        span.set_attribute("db.vector.results.count", len(result))
-                    elif hasattr(result, "num_rows"):
-                        span.set_attribute("db.vector.results.count", result.num_rows)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+            return self._result(result, execution)
+        except BaseException as error:
+            execution.finish(error=error)
+            raise
 
-
-class AddWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        table_name = self._get_table_name(instance)
-        data = args[0] if args else kwargs.get("data", [])
-
-        attributes = self._get_attributes("add", table_name)
-        if hasattr(data, "__len__"):
-            attributes["db.vector.upsert.count"] = len(data)
-
-        with self._tracer.start_as_current_span("lancedb add", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
-
-class UpdateWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        table_name = self._get_table_name(instance)
-        where = kwargs.get("where")
-
-        attributes = self._get_attributes("update", table_name)
-        if where:
-            attributes["db.vector.query.filter"] = str(where)
-
-        with self._tracer.start_as_current_span("lancedb update", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
-
-class DeleteWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        table_name = self._get_table_name(instance)
-        where = args[0] if args else kwargs.get("where")
-
-        attributes = self._get_attributes("delete", table_name)
-        if where:
-            attributes["db.vector.query.filter"] = str(where)
-
-        with self._tracer.start_as_current_span("lancedb delete", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
-
-class CreateTableWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        table_name = args[0] if args else kwargs.get("name", "unknown")
-
-        attributes = self._get_attributes("create_table", table_name)
-
-        with self._tracer.start_as_current_span("lancedb create_table", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
-
-class DropTableWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        table_name = args[0] if args else kwargs.get("name", "unknown")
-
-        attributes = self._get_attributes("drop_table", table_name)
-
-        with self._tracer.start_as_current_span("lancedb drop_table", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
-
-class OpenTableWrapper(BaseWrapper):
-    def __call__(self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict) -> Any:
-        table_name = args[0] if args else kwargs.get("name", "unknown")
-
-        attributes = self._get_attributes("open_table", table_name)
-
-        with self._tracer.start_as_current_span("lancedb open_table", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+    async def asynchronous(
+        self, wrapped: Callable, instance: Any, args: tuple, kwargs: dict
+    ) -> Any:
+        if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+            return await wrapped(*args, **kwargs)
+        parent = _parent(instance)
+        if parent is not None:
+            with parent.activate():
+                return await wrapped(*args, **kwargs)
+        execution = self._execution(instance, args, kwargs)
+        try:
+            with execution.activate():
+                result = await wrapped(*args, **kwargs)
+            return self._result(result, execution, asynchronous=True)
+        except BaseException as error:
+            execution.finish(error=error)
+            raise
