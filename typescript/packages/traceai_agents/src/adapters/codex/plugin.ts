@@ -83,7 +83,7 @@ export function preflightPlugin(
   hookEntry: string,
   version: string,
 ): OwnedChange {
-  if (!c.transcriptConsent)
+  if ((action === "enable" || action === "update") && !c.transcriptConsent)
     throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
   const file = registrationPath(c.socketPath),
     directory = dirname(file);
@@ -175,10 +175,16 @@ export function preflightPlugin(
       // is deliberately a separate official `codex plugin remove` action.
       atomicProtected(file, JSON.stringify(expected));
       committed = true;
-      try {
-        unlinkSync(join(directory, "activation.json"));
-      } catch {
-        /* absent */
+      if (
+        !expected.enabled ||
+        !old?.enabled ||
+        old.bundle !== expected.bundle
+      ) {
+        try {
+          unlinkSync(join(directory, "activation.json"));
+        } catch {
+          /* absent */
+        }
       }
       return activation(c.socketPath);
     },

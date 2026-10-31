@@ -355,9 +355,22 @@ test("installer is idempotent, immutable, consent-gated and does not edit host c
       ),
     );
     assert.ok(!hooks.hooks.PreModelRequest[0].hooks[0].command.includes("npx"));
+    fs.writeFileSync(
+      path.join(root, "codex/activation.json"),
+      JSON.stringify({ activated: true, contract: 1 }),
+      { mode: 0o600 },
+    );
     await preflightPlugin("enable", c, entry, "0.1.0").commit();
+    assert.equal(activation(c.socketPath).activated, true);
+    await preflightPlugin("update", c, entry, "0.1.0").commit();
+    assert.equal(activation(c.socketPath).activated, true);
     assert.deepEqual(fs.readFileSync(cfg), before);
-    await preflightPlugin("disable", c, entry, "0.1.0").commit();
+    await preflightPlugin(
+      "disable",
+      { ...c, transcriptConsent: false },
+      entry,
+      "0.1.0",
+    ).commit();
     assert.equal(activation(c.socketPath).installed, false);
     assert.deepEqual(fs.readFileSync(cfg), before);
   } finally {

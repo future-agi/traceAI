@@ -135,6 +135,69 @@ async function credentials(p) {
     }),
   );
 }
+test("import refuses a profile different from the installed route before reading a source or key", async (t) => {
+  const { p, config, env } = fixture(t);
+  config.profiles.other = {
+    ...config.profiles.work,
+    binding: {
+      ...config.profiles.work.binding,
+      id: "00000000-0000-4000-8000-000000000002",
+      project: "other",
+    },
+    credentialRef: "no-key",
+  };
+  saveConfig(p, config);
+  const result = await cli(env, [
+    "import",
+    "reference",
+    "--surface",
+    "fixture",
+    "--profile",
+    "other",
+    "--project",
+    "other",
+    "--path",
+    "/not-a-source",
+    "--dry-run",
+  ]);
+  assert.equal(result.code, 3);
+  assert.deepEqual(JSON.parse(result.stdout).reasons, [
+    "PROJECT_BINDING_MISMATCH",
+  ]);
+  assert.equal(fs.existsSync(path.join(p.state, "import")), false);
+});
+
+test("storage-child failure stops observer readers as well as admission", async (t) => {
+  const { p } = fixture(t);
+  await credentials(p);
+  let stops = 0;
+  const { AdapterRegistry } = require("../dist/src/adapters.js");
+  const registry = new AdapterRegistry([
+    {
+      ...reference,
+      createObserver() {
+        return {
+          accept() {},
+          status() {
+            return {};
+          },
+          async stop() {
+            stops++;
+          },
+        };
+      },
+    },
+  ]);
+  const runtime = new Runtime(p, settings.storageEntry, "0.1.0", registry);
+  cleanup(t, () => runtime.stop());
+  await runtime.start();
+  const child = runtime.storage.child;
+  child.kill("SIGKILL");
+  await once(child, "exit");
+  assert.equal(stops, 1);
+  assert.equal(runtime.observers.size, 0);
+});
+
 const submit = (p, id, route = routeId) =>
   runtimeRequest(p.socket, {
     operation: "observe",

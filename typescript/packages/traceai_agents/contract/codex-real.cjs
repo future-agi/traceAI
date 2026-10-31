@@ -12,7 +12,10 @@ const {
   CODEX_SCHEMA,
 } = require("../dist/src/adapters/codex/codec.js");
 const { decodeTraces } = require("../dist/src/export/otlp.js");
-async function qualify({ root, binary, sandbox }) {
+async function qualify({ root, binary, sandbox, scenario = "basic" }) {
+  assert.ok(
+    ["basic", "subagent", "interrupted", "compaction"].includes(scenario),
+  );
   assert.equal(process.platform, "darwin");
   for (const p of [root, binary, sandbox]) assert.ok(path.isAbsolute(p));
   assert.ok(!fs.existsSync(root), "qualification root must be new");
@@ -110,16 +113,32 @@ async function qualify({ root, binary, sandbox }) {
     }
     const body = JSON.parse(Buffer.concat(chunks));
     calls++;
-    const tool = calls === 1;
+    if (scenario === "interrupted") {
+      // Keep the synthetic request open until the real agent cancels it.
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(": fixture-waiting\n\n");
+      return;
+    }
+    const tool = calls === 1 && ["basic", "subagent"].includes(scenario);
     const item = tool
       ? {
           id: "fc_fixture",
           type: "function_call",
-          name: "update_plan",
+          name: scenario === "subagent" ? "spawn_agent" : "update_plan",
+          ...(scenario === "subagent" ? { namespace: "multi_agent_v1" } : {}),
           call_id: "call_fixture",
-          arguments: JSON.stringify({
-            plan: [{ step: "Synthetic observer fixture", status: "completed" }],
-          }),
+          arguments: JSON.stringify(
+            scenario === "subagent"
+              ? {
+                  message:
+                    "Synthetic child fixture. Reply fixture-ok without tools.",
+                }
+              : {
+                  plan: [
+                    { step: "Synthetic observer fixture", status: "completed" },
+                  ],
+                },
+          ),
           status: "completed",
         }
       : {
@@ -198,6 +217,18 @@ async function qualify({ root, binary, sandbox }) {
     `model="fixture-model"\nmodel_provider="fixture"\n[features]\nhooks=true\n[model_providers.fixture]\nname="Fixture"\nbase_url="${origin}/v1"\nwire_api="responses"\nrequires_openai_auth=false\n`,
     { mode: 0o600 },
   );
+  if (scenario === "subagent") {
+    // Test-only opt-in in the new synthetic home, never part of tracing enable.
+    fs.writeFileSync(
+      configFile,
+      fs
+        .readFileSync(configFile, "utf8")
+        .replace(
+          "hooks=true",
+          "hooks=true\nmulti_agent=true\nmulti_agent_v2=false",
+        ),
+    );
+  }
   let runtime = false;
   try {
     const version = (await codex(["--version"])).trim();
@@ -313,21 +344,37 @@ async function qualify({ root, binary, sandbox }) {
       app.kill("SIGTERM");
       await once(app, "exit");
     }
-    const output = await codex([
-      "exec",
-      "--skip-git-repo-check",
-      "--sandbox",
-      "read-only",
-      "--json",
-      "Use update_plan for one completed synthetic step, then say fixture-ok.",
-    ]);
+    const output =
+      scenario !== "basic"
+        ? await require("./codex-lifecycle.cjs").lifecycle({
+            binary,
+            sandbox,
+            home,
+            env,
+            scenario,
+            calls: () => calls,
+          })
+        : await codex([
+            "exec",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--json",
+            "Use update_plan for one completed synthetic step, then say fixture-ok.",
+          ]);
     assert.ok(output.includes("fixture-ok"));
     // Wait for the off-path two-second reconciliation and export, bounded.
     const deadline = Date.now() + 15000;
     let status;
     do {
       status = JSON.parse(await fi(["status"]));
-      if (status.agents[0]?.observer?.admitted >= 4 && uploads.length >= 4)
+      const expected = { basic: 4, interrupted: 1, compaction: 5, subagent: 6 }[
+        scenario
+      ];
+      if (
+        status.agents[0]?.observer?.admitted >= expected &&
+        uploads.length >= expected
+      )
         break;
       await new Promise((r) => setTimeout(r, 250));
     } while (Date.now() < deadline);
@@ -344,20 +391,36 @@ async function qualify({ root, binary, sandbox }) {
       }
     }
     walk(path.join(agent, "sessions"));
-    assert.equal(files.length, 1);
-    const facts = importCodex(fs.readFileSync(files[0]), {
-      identityKey: Buffer.alloc(32, 1),
-      policyRevision: "1",
-      sourceSchema: CODEX_SCHEMA,
-    });
+    assert.equal(files.length, scenario === "subagent" ? 2 : 1);
+    const facts = files.flatMap((file) =>
+      importCodex(fs.readFileSync(file), {
+        identityKey: Buffer.alloc(32, 1),
+        policyRevision: "1",
+        sourceSchema: CODEX_SCHEMA,
+      }),
+    );
     const requests = facts.filter((f) => f.unit === "request"),
       tools = facts.filter((f) => f.unit === "tool");
-    assert.equal(requests.length, calls);
-    assert.equal(calls, 2);
-    assert.equal(tools.length, 1);
+    assert.equal(requests.length, scenario === "interrupted" ? 0 : calls);
+    if (scenario === "basic") {
+      assert.equal(calls, 2);
+      assert.equal(tools.length, 1);
+    }
+    if (scenario === "interrupted")
+      assert.equal(facts[0].outcome, "interrupted");
+    if (scenario === "compaction")
+      assert.equal(facts.filter((f) => f.unit === "compaction").length, 1);
+    if (scenario === "subagent") {
+      assert.equal(facts.filter((f) => f.unit === "turn").length, 2);
+      assert.equal(new Set(facts.map((f) => f.sessionId)).size, 1);
+      assert.equal(
+        facts.filter((f) => f.unit === "turn" && f.links?.length).length,
+        1,
+      );
+    }
     assert.equal(
       requests.reduce((s, f) => s + f.usage.total, 0),
-      24,
+      requests.length * 12,
     );
     assert.ok(
       requests.every((f) => f.timing === "unknown" && f.startNs === f.endNs),
@@ -369,30 +432,36 @@ async function qualify({ root, binary, sandbox }) {
       ).length,
       facts.length,
     );
-    const plan = JSON.parse(
-      await fi([
-        "import",
-        "codex",
-        "--surface",
-        "cli",
-        "--path",
-        files[0],
-        "--dry-run",
-      ]),
-    );
-    const replay = JSON.parse(
-      await fi([
-        "import",
-        "codex",
-        "--surface",
-        "cli",
-        "--path",
-        files[0],
-        "--commit",
-        plan.plan_id,
-      ]),
-    );
+    const replay = { counts: { admitted: 0, pending: 0 } };
+    for (const file of files) {
+      const plan = JSON.parse(
+        await fi([
+          "import",
+          "codex",
+          "--surface",
+          "cli",
+          "--path",
+          file,
+          "--dry-run",
+        ]),
+      );
+      const committed = JSON.parse(
+        await fi([
+          "import",
+          "codex",
+          "--surface",
+          "cli",
+          "--path",
+          file,
+          "--commit",
+          plan.plan_id,
+        ]),
+      );
+      replay.counts.admitted += committed.counts.admitted;
+      replay.counts.pending += committed.counts.pending;
+    }
     assert.equal(replay.counts.pending, 0);
+    assert.equal(replay.counts.admitted, facts.length);
     await fi(["disable", "codex", "--surface", "cli"]);
     const disabled = JSON.parse(
       await fi(["doctor", "codex", "--surface", "cli"]),
@@ -400,11 +469,19 @@ async function qualify({ root, binary, sandbox }) {
     assert.equal(disabled.activation.activated, false);
     const result = {
       version,
+      scenario,
       model_calls: calls,
       request_spans: requests.length,
       tool_spans: tools.length,
       turn_spans: facts.filter((f) => f.unit === "turn").length,
-      total_tokens: 24,
+      total_tokens: requests.reduce((s, f) => s + f.usage.total, 0),
+      compaction_spans: facts.filter((f) => f.unit === "compaction").length,
+      interrupted_turns: facts.filter(
+        (f) => f.unit === "turn" && f.outcome === "interrupted",
+      ).length,
+      linked_child_turns: facts.filter(
+        (f) => f.unit === "turn" && f.links?.length,
+      ).length,
       hook_events_registered: hooks.length,
       live: status.agents[0].observer,
       import_replay: replay.counts,
@@ -429,6 +506,7 @@ if (require.main === module) {
     root: process.argv[2],
     binary: process.argv[3],
     sandbox: process.argv[4],
+    scenario: process.argv[5],
   }).then(
     (x) => console.log(JSON.stringify(x)),
     (e) => {

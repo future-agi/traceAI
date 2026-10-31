@@ -52,6 +52,11 @@ export class Runtime {
       this.server?.close();
       if (this.timer) clearInterval(this.timer);
       for (const socket of this.sockets) socket.destroy();
+      // Observer timers must also stop when the sole durable owner is lost.
+      // Admission is already fenced by stopped=true; do not keep parsing files.
+      for (const observer of this.observers.values())
+        void observer.stop().catch(() => undefined);
+      this.observers.clear();
     });
     try {
       await this.storage.call("init", {

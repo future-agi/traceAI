@@ -406,6 +406,11 @@ export async function main(
       return 0;
     }
     if (command === "import") {
+      // Admission always uses this installed route. Never derive identities with
+      // a different profile's key and then send them to the original binding.
+      if (!installed) throw new AgentError("ENABLE_REQUIRED", 3);
+      if (profileName !== installed.profile)
+        throw new AgentError("PROJECT_BINDING_MISMATCH", 3);
       if (!context.transcriptConsent)
         throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
       const secret = await store(p, profile).get(profile.credentialRef);
