@@ -22,6 +22,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  azure-search-compatibility:
+    name: Azure Search SDK ${{ matrix.azure-search-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        azure-search-version: ['11.6.2', '11.8.1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Verify lazy paging and OTLP export without vendor services
+        run: >-
+          mvn -B -ntp -f java/pom.xml -pl traceai-java-azure-search -am
+          -Dazure-search.version=${{ matrix.azure-search-version }} test
+
   verify:
     name: Build, test, and validate Central artifacts
     runs-on: ubuntu-latest

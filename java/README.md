@@ -230,7 +230,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Retrieval | ChromaDB | `traceai-java-chromadb` |
 | Retrieval | MongoDB Atlas | `traceai-java-mongodb` |
 | Retrieval | Redis | `traceai-java-redis` |
-| Retrieval | Azure AI Search | `traceai-java-azure-search` |
+| Retrieval | Azure AI Search (synchronous SDK 11.6.2–11.8.1) | `traceai-java-azure-search` |
 | Retrieval | PostgreSQL pgvector | `traceai-java-pgvector` |
 | Retrieval | Elasticsearch | `traceai-java-elasticsearch` |
 | Framework | LangChain4j | `traceai-langchain4j` |
@@ -241,6 +241,12 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.
 
 Additional examples are in [`examples/`](examples), including [LangChain4j](examples/langchain4j-example), [Spring AI](examples/spring-ai-example), [Semantic Kernel](examples/semantic-kernel-example), and [RAG](examples/rag-example). [Arconia](examples/arconia-example) and [Quarkus LangChain4j](examples/quarkus-langchain4j-example) use their frameworks' own OpenTelemetry export rather than an additional traceAI artifact.
+
+### Azure AI Search paging
+
+Use [Azure's native OpenTelemetry tracing](https://learn.microsoft.com/azure/developer/java/sdk/tracing) for SDK and HTTP spans. Add `TracedSearchClient` when you need Future AGI retrieval attributes such as index name, search mode, vector dimensions, result count, and top score. The wrapper supports the synchronous `SearchClient` in `azure-search-documents` 11.6.2 through 11.8.1, not SDK 12.x or `SearchAsyncClient`. Add the Azure SDK dependency explicitly; it is provided-scope in traceAI.
+
+Search methods return lazy `SearchPagedIterable` results. Consume the results to execute the search. Each requested page has a completed `RETRIEVER` span under the context active when you called the search method. `azure_search.result_scope=page` identifies page-level `db.vector.results.count` and `azure_search.top_score`; these are not totals for the query. Reading metadata or iterating again reuses the first page and its trace, matching Azure's first-page cache. Continuing or restarting iteration can request further pages just as it does with the Azure SDK. Stopping early does not fetch remaining pages or leave an unfinished retrieval span. Query text and filters respect `hideInputs`, and error details respect `hideErrorDetails`.
 
 ## Build and test
 
