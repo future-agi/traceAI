@@ -3,20 +3,26 @@ package ai.traceai.azure.search;
 import ai.traceai.*;
 import com.azure.core.util.Context;
 import com.azure.search.documents.SearchClient;
-import com.azure.search.documents.SearchDocument;
 import com.azure.search.documents.models.*;
 import com.azure.search.documents.util.SearchPagedIterable;
+import com.azure.search.documents.util.SearchPagedResponse;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Instrumentation wrapper for Azure AI Search (formerly Azure Cognitive Search) operations.
- * Wraps the Azure SearchClient to provide automatic tracing of all search and document operations.
+ * Wraps the synchronous Azure SearchClient from azure-search-documents 11.6.2 through 11.8.1.
+ * Azure SDK 12.x and SearchAsyncClient are not supported by this wrapper.
+ *
+ * <p>Searches stay lazy. Each requested page produces a RETRIEVER span, parented to the
+ * context at search creation. Result counts and top scores describe that page, not the
+ * whole query. No span or request is created for an unconsumed search. The first page
+ * is cached like the underlying SDK, including access through metadata getters.</p>
  *
  * <p>Usage:</p>
  * <pre>
@@ -76,34 +82,8 @@ public class TracedSearchClient {
      * @return the search results
      */
     public SearchPagedIterable searchWithVector(String searchText, List<Float> vector, String vectorField, int k) {
-        Span span = tracer.startSpan("Azure Search Vector Query", FISpanKind.RETRIEVER);
-
-        try (Scope scope = span.makeCurrent()) {
-            setCommonAttributes(span, k, vector.size(), "vector");
-
-            // Build vector query
-            VectorizedQuery vectorQuery = new VectorizedQuery(vector)
-                .setKNearestNeighborsCount(k)
-                .setFields(vectorField);
-
-            SearchOptions options = new SearchOptions()
-                .setVectorSearchOptions(new VectorSearchOptions()
-                    .setQueries(vectorQuery));
-
-            // Execute search
-            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
-
-            captureSearchResults(span, results);
-
-            span.setStatus(StatusCode.OK);
-            return results;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw new RuntimeException("Azure Search vector query failed", e);
-        } finally {
-            span.end();
-        }
+        return traceSearch("Azure Search Vector Query", searchText,
+            vectorOptions(vector, vectorField, k), k, vector.size(), "vector");
     }
 
     /**
@@ -122,37 +102,8 @@ public class TracedSearchClient {
             String vectorField,
             int k,
             String filter) {
-        Span span = tracer.startSpan("Azure Search Filtered Vector Query", FISpanKind.RETRIEVER);
-
-        try (Scope scope = span.makeCurrent()) {
-            setCommonAttributes(span, k, vector.size(), "vector");
-            span.setAttribute("azure_search.has_filter", true);
-            span.setAttribute("azure_search.filter", filter);
-
-            // Build vector query with filter
-            VectorizedQuery vectorQuery = new VectorizedQuery(vector)
-                .setKNearestNeighborsCount(k)
-                .setFields(vectorField);
-
-            SearchOptions options = new SearchOptions()
-                .setFilter(filter)
-                .setVectorSearchOptions(new VectorSearchOptions()
-                    .setQueries(vectorQuery));
-
-            // Execute search
-            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
-
-            captureSearchResults(span, results);
-
-            span.setStatus(StatusCode.OK);
-            return results;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw new RuntimeException("Azure Search filtered vector query failed", e);
-        } finally {
-            span.end();
-        }
+        return traceSearch("Azure Search Filtered Vector Query", searchText,
+            vectorOptions(vector, vectorField, k).setFilter(filter), k, vector.size(), "vector");
     }
 
     /**
@@ -165,38 +116,8 @@ public class TracedSearchClient {
      * @return the search results
      */
     public SearchPagedIterable hybridSearch(String searchText, List<Float> vector, String vectorField, int k) {
-        Span span = tracer.startSpan("Azure Search Hybrid Query", FISpanKind.RETRIEVER);
-
-        try (Scope scope = span.makeCurrent()) {
-            setCommonAttributes(span, k, vector.size(), "hybrid");
-
-            if (searchText != null) {
-                tracer.setInputValue(span, searchText);
-            }
-
-            // Build vector query for hybrid search
-            VectorizedQuery vectorQuery = new VectorizedQuery(vector)
-                .setKNearestNeighborsCount(k)
-                .setFields(vectorField);
-
-            SearchOptions options = new SearchOptions()
-                .setVectorSearchOptions(new VectorSearchOptions()
-                    .setQueries(vectorQuery));
-
-            // Execute search with both text and vector
-            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
-
-            captureSearchResults(span, results);
-
-            span.setStatus(StatusCode.OK);
-            return results;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw new RuntimeException("Azure Search hybrid query failed", e);
-        } finally {
-            span.end();
-        }
+        return traceSearch("Azure Search Hybrid Query", searchText,
+            vectorOptions(vector, vectorField, k), k, vector.size(), "hybrid");
     }
 
     /**
@@ -207,32 +128,8 @@ public class TracedSearchClient {
      * @return the search results
      */
     public SearchPagedIterable search(String searchText, int top) {
-        Span span = tracer.startSpan("Azure Search Text Query", FISpanKind.RETRIEVER);
-
-        try (Scope scope = span.makeCurrent()) {
-            setCommonAttributes(span, top, 0, "text");
-
-            if (searchText != null) {
-                tracer.setInputValue(span, searchText);
-            }
-
-            SearchOptions options = new SearchOptions()
-                .setTop(top);
-
-            // Execute search
-            SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
-
-            captureSearchResults(span, results);
-
-            span.setStatus(StatusCode.OK);
-            return results;
-
-        } catch (Exception e) {
-            tracer.setError(span, e);
-            throw new RuntimeException("Azure Search text query failed", e);
-        } finally {
-            span.end();
-        }
+        return traceSearch("Azure Search Text Query", searchText,
+            new SearchOptions().setTop(top), top, 0, "text");
     }
 
     /**
@@ -435,30 +332,63 @@ public class TracedSearchClient {
         }
     }
 
-    /**
-     * Captures search results metrics on the span.
-     */
-    private void captureSearchResults(Span span, SearchPagedIterable results) {
-        if (results == null) {
-            span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, 0L);
-            return;
-        }
+    private SearchOptions vectorOptions(List<Float> vector, String vectorField, int k) {
+        VectorizedQuery query = new VectorizedQuery(vector).setKNearestNeighborsCount(k).setFields(vectorField);
+        return new SearchOptions().setVectorSearchOptions(new VectorSearchOptions().setQueries(query));
+    }
 
-        AtomicInteger count = new AtomicInteger(0);
-        AtomicReference<Double> topScore = new AtomicReference<>(null);
+    private SearchPagedIterable traceSearch(String name, String searchText, SearchOptions options,
+                                           int topK, int dimensions, String mode) {
+        // SearchClient constructs a lazy iterable and owns its first-page cache.
+        // Do not enumerate it here, even to calculate telemetry attributes.
+        SearchPagedIterable results = searchClient.search(searchText, options, Context.NONE);
+        io.opentelemetry.context.Context parent = io.opentelemetry.context.Context.current();
+        Function<String, SearchPagedResponse> fetch = token -> {
+            Span span = tracer.startSpan(name, FISpanKind.RETRIEVER, parent);
+            try (Scope scope = span.makeCurrent()) {
+                setCommonAttributes(span, topK, dimensions, mode);
+                span.setAttribute("azure_search.result_scope", "page");
+                if (!"vector".equals(mode)) {
+                    tracer.setInputValue(span, searchText);
+                }
+                if (options.getFilter() != null) {
+                    span.setAttribute("azure_search.has_filter", true);
+                    if (!tracer.getConfig().isHideInputs()) {
+                        span.setAttribute("azure_search.filter", options.getFilter());
+                    }
+                }
 
-        // Iterate through results to get count and top score
-        results.forEach(result -> {
-            int currentCount = count.incrementAndGet();
-            if (currentCount == 1) {
-                topScore.set(result.getScore());
+                // Request exactly the page the caller asks for; return its metadata unchanged.
+                SearchPagedResponse page = results.iterableByPage(token).iterator().next();
+                List<SearchResult> values = page.getValue();
+                span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) values.size());
+                if (!values.isEmpty()) {
+                    span.setAttribute("azure_search.top_score", values.get(0).getScore());
+                }
+                span.setStatus(StatusCode.OK);
+                return page;
+            } catch (RuntimeException error) {
+                tracer.setError(span, error);
+                throw error;
+            } finally {
+                // A page span always ends, even if the caller abandons iteration.
+                span.end();
             }
-        });
+        };
+        // Metadata getters and repeated iteration share the first page in Azure's SDK.
+        // Share its trace too, rather than emitting extra spans for cache reads.
+        Supplier<SearchPagedResponse> firstPage = new Supplier<>() {
+            private SearchPagedResponse page;
 
-        span.setAttribute(SemanticConventions.DB_VECTOR_RESULTS_COUNT, (long) count.get());
-        if (topScore.get() != null) {
-            span.setAttribute("azure_search.top_score", topScore.get());
-        }
+            @Override
+            public synchronized SearchPagedResponse get() {
+                if (page == null) {
+                    page = fetch.apply(null);
+                }
+                return page;
+            }
+        };
+        return new SearchPagedIterable(firstPage, fetch);
     }
 
     /**
