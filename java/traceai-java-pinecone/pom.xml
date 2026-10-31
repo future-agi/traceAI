@@ -25,11 +25,25 @@
         <dependency>
             <groupId>io.pinecone</groupId>
             <artifactId>pinecone-client</artifactId>
-            <version>5.1.0</version>
+            <version>${pinecone.version}</version>
             <scope>provided</scope>
         </dependency>
 
         <!-- Testing -->
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.0.0-alpha</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- AssertJ's older transitive Byte Buddy otherwise wins over Mockito's
+             Java 21-compatible version. Keep this alignment test-only. -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>1.14.10</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
