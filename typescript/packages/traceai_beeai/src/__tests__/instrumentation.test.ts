@@ -1,120 +1,73 @@
-/**
- * Tests for BeeAI instrumentation.
- */
-
 import { BeeAIInstrumentation, isPatched, _resetPatchedStateForTesting } from "../instrumentation";
-import { VERSION } from "../version";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
-describe("BeeAIInstrumentation", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  const instrumentation = new BeeAIInstrumentation();
-  instrumentation.disable();
-  instrumentation.setTracerProvider(tracerProvider);
-
-  beforeEach(() => {
-    memoryExporter.reset();
-  });
-
-  afterAll(() => {
-    instrumentation.disable();
-  });
-
-  describe("VERSION", () => {
-    it("should export VERSION constant", () => {
-      expect(VERSION).toBe("0.1.0");
-    });
-  });
-
-  describe("BeeAIInstrumentation", () => {
-    it("should create instrumentation instance", () => {
-      const inst = new BeeAIInstrumentation();
-      expect(inst).toBeInstanceOf(BeeAIInstrumentation);
-    });
-
-    it("should accept configuration options", () => {
-      const inst = new BeeAIInstrumentation({
-        traceConfig: {
-          hideInputs: true,
-          hideOutputs: true,
-        },
-      });
-      expect(inst).toBeInstanceOf(BeeAIInstrumentation);
-    });
-  });
-
-  describe("isPatched", () => {
-    it("should return false when not patched", () => {
-      instrumentation.disable();
-      expect(isPatched()).toBe(false);
-    });
-  });
-
-  describe("manuallyInstrument", () => {
-    it("should handle manual instrumentation of mock module", () => {
-      instrumentation.enable();
-
-      // Create a mock BeeAgent class
-      const mockBeeModule = {
-        BeeAgent: class {
-          async run(input: string) {
-            return { output: `Processed: ${input}` };
-          }
-        },
-      };
-
-      // Should not throw
-      instrumentation.manuallyInstrument(mockBeeModule);
-      expect(isPatched()).toBe(true);
-    });
-  });
-});
-
-describe("BeeAI Agent Tracing", () => {
-  const memoryExporter = new InMemorySpanExporter();
-  const tracerProvider = new NodeTracerProvider({
-    spanProcessors: [new SimpleSpanProcessor(memoryExporter)]
-  });
-  tracerProvider.register();
-
-  const instrumentation = new BeeAIInstrumentation();
-  instrumentation.setTracerProvider(tracerProvider);
-
-  beforeEach(() => {
-    memoryExporter.reset();
-    instrumentation.enable();
-  });
-
+// The real SDK and OTLP contracts are in contract.test.cjs. These small tests
+// isolate patch ownership and the synchronous, identity-preserving return contract.
+describe("BeeAI patch lifecycle", () => {
+  const instances: BeeAIInstrumentation[] = [];
+  function instrument(module: object) {
+    const instance = new BeeAIInstrumentation();
+    instances.push(instance);
+    instance.manuallyInstrument(module);
+    return instance;
+  }
   afterEach(() => {
-    instrumentation.disable();
+    instances.splice(0).forEach(instance => instance.disable());
+    _resetPatchedStateForTesting();
   });
 
-  it("should trace agent run with mock", async () => {
-    // Create a mock BeeAgent class with instrumented behavior
-    class MockBeeAgent {
-      async run(input: string) {
-        return { output: `Response to: ${input}` };
-      }
-    }
+  it("does not mark unsupported exports as patched or mutate module namespaces", () => {
+    instrument(Object.freeze({}));
+    expect(isPatched()).toBe(false);
+  });
 
-    const mockModule = { BeeAgent: MockBeeAgent } as any;
-    // Reset global patched flag so manuallyInstrument can patch fresh module
-    _resetPatchedStateForTesting();
-    instrumentation.manuallyInstrument(mockModule);
+  it("keeps the same lazy Run and does not invoke then", () => {
+    const run = { middleware: jest.fn().mockReturnThis(), then: jest.fn() };
+    class BaseAgent { run() { return run; } }
+    instrument(Object.freeze({ BaseAgent }));
+    expect(new BaseAgent().run()).toBe(run);
+    expect(run.middleware).toHaveBeenCalledTimes(1);
+    expect(run.then).not.toHaveBeenCalled();
+  });
 
-    const agent = new mockModule.BeeAgent();
-    const result = await agent.run("Hello");
+  it("patches independent framework copies without a process-wide skip flag", () => {
+    class First { run() { return { middleware: jest.fn() }; } }
+    class Second { run() { return { middleware: jest.fn() }; } }
+    const first = First.prototype.run;
+    const second = Second.prototype.run;
+    const instrumentation = instrument({ BaseAgent: First });
+    instrumentation.manuallyInstrument({ BaseAgent: Second });
+    expect(First.prototype.run).not.toBe(first);
+    expect(Second.prototype.run).not.toBe(second);
+    instrumentation.disable();
+    expect(First.prototype.run).toBe(first);
+    expect(Second.prototype.run).toBe(second);
+    expect(isPatched()).toBe(false);
+    instrumentation.enable();
+    expect(First.prototype.run).not.toBe(first);
+    expect(Second.prototype.run).not.toBe(second);
+  });
 
-    expect(result).toEqual({ output: "Response to: Hello" });
+  it("does not wrap inherited methods twice or remove another instance's patch", () => {
+    class BaseAgent { run() { return { middleware: jest.fn() }; } }
+    class ReActAgent extends BaseAgent {}
+    const first = instrument({ BaseAgent, ReActAgent });
+    const wrapped = BaseAgent.prototype.run;
+    const second = instrument({ BaseAgent });
+    second.disable();
+    expect(BaseAgent.prototype.run).toBe(wrapped);
+    expect(Object.hasOwn(ReActAgent.prototype, "run")).toBe(false);
+    first.disable();
+    expect(BaseAgent.prototype.run).not.toBe(wrapped);
+  });
 
-    // Check spans were created
-    const spans = memoryExporter.getFinishedSpans();
-    expect(spans.length).toBeGreaterThanOrEqual(1);
+  it("preserves synchronous errors and non-Run return values", () => {
+    const error = new Error("application error");
+    class BaseAgent { run() { throw error; } }
+    instrument({ BaseAgent });
+    expect(() => new BaseAgent().run()).toThrow(error);
+    const promise = Promise.resolve("legacy");
+    class BeeAgent { run() { return promise; } }
+    instrument({ BeeAgent });
+    expect(new BeeAgent().run()).toBe(promise);
   });
 });
