@@ -61,6 +61,7 @@ function getExecContext(span: Span) {
 interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  thinking?: string;
   images?: string[];
   tool_calls?: OllamaToolCall[];
 }
@@ -128,6 +129,7 @@ interface OllamaGenerateResponse {
   model: string;
   created_at: string;
   response: string;
+  thinking?: string;
   done: boolean;
   done_reason?: string;
   context?: number[];
@@ -167,9 +169,9 @@ interface OllamaEmbeddingsResponse {
   embedding: number[];
 }
 
-interface OllamaAbortableAsyncIterator<T> {
-  [Symbol.asyncIterator](): AsyncIterator<T>;
-  abort(): void;
+interface OllamaAbortableAsyncIterator<T> extends AsyncIterable<T> {
+  // The supported 0.4.x SDK returns an async generator without abort().
+  abort?(): void;
 }
 
 /**
@@ -696,109 +698,179 @@ function isAsyncIterator<T>(
 }
 
 /**
- * Wraps a chat stream to capture the full response
+ * Observe the native iterator without replacing its abortable stream object.
+ * Explicit controls also finalize a stream closed before its first next(), when
+ * an async generator's finally block would never run. Cancellation aborts the
+ * transport before awaiting return/throw, so a pending read cannot block cleanup.
  */
-async function* wrapChatStream(
-  stream: OllamaAbortableAsyncIterator<OllamaChatResponse>,
+function wrapStream<T>(
+  stream: OllamaAbortableAsyncIterator<T>,
   span: Span,
-): AsyncGenerator<OllamaChatResponse, void, unknown> {
-  let fullContent = "";
-  let lastResponse: OllamaChatResponse | null = null;
-  const allChunks: OllamaChatResponse[] = [];
+  onChunk: (chunk: T) => void,
+  getAttributes: () => Attributes,
+): OllamaAbortableAsyncIterator<T> {
+  const iterator = stream[Symbol.asyncIterator]();
+  let ended = false;
+  type Outcome = { code: SpanStatusCode; error?: unknown };
+  let cancellation: Outcome | undefined;
+  let restoreAbort = () => {};
 
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      if (chunk.message?.content) {
-        fullContent += chunk.message.content;
+  function finish(outcome: Outcome) {
+    if (ended) return;
+    ended = true;
+    try {
+      span.setAttributes(getAttributes());
+      if (outcome.code === SpanStatusCode.ERROR) {
+        const error = outcome.error instanceof Error
+          ? outcome.error : new Error(String(outcome.error));
+        span.recordException(error);
+        span.setStatus({ code: outcome.code, message: error.message });
+      } else {
+        span.setStatus({ code: outcome.code });
       }
-      lastResponse = chunk;
-      yield chunk;
+    } catch {
+      // Telemetry must not replace the SDK's result or original exception.
+      diag.warn("Failed to record Ollama stream attributes");
+    } finally {
+      restoreAbort();
+      span.end();
     }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    throw error;
   }
 
-  const msg: Record<string, unknown> = { role: "assistant", content: fullContent };
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullContent,
-    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
-    [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]",
-    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
+  const tracked: AsyncIterableIterator<T> = {
+    [Symbol.asyncIterator]() { return this; },
+    async next(...args: [] | [unknown]) {
+      try {
+        const result = await iterator.next(...args);
+        if (result.done) {
+          finish(cancellation ?? { code: SpanStatusCode.OK });
+        } else if (!ended) {
+          onChunk(result.value);
+        }
+        return result;
+      } catch (error) {
+        finish(cancellation ?? { code: SpanStatusCode.ERROR, error });
+        throw error;
+      }
+    },
+    async return(value?: unknown) {
+      cancellation ??= { code: SpanStatusCode.UNSET };
+      try {
+        stream.abort?.();
+        return iterator.return
+          ? await iterator.return(value) : { done: true as const, value };
+      } catch (error) {
+        finish({ code: SpanStatusCode.ERROR, error });
+        throw error;
+      } finally {
+        finish(cancellation);
+      }
+    },
+    async throw(error?: unknown) {
+      cancellation ??= { code: SpanStatusCode.ERROR, error };
+      try {
+        stream.abort?.();
+        if (iterator.throw) return await iterator.throw(error);
+        if (iterator.return) await iterator.return();
+        throw error;
+      } finally {
+        finish(cancellation);
+      }
+    },
   };
 
-  if (lastResponse) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastResponse.model;
-    if (lastResponse.prompt_eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastResponse.prompt_eval_count;
-    }
-    if (lastResponse.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastResponse.eval_count;
-    }
-    if (lastResponse.prompt_eval_count !== undefined && lastResponse.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] =
-        lastResponse.prompt_eval_count + lastResponse.eval_count;
-    }
+  // The SDK client keeps the original stream in its active-request list. Observe
+  // that object's abort as well, so client.abort() closes even an unread span.
+  // Restore it on completion so the SDK cannot retain our captured output.
+  const originalAbort = stream.abort;
+  if (originalAbort) {
+    const ownAbort = Object.prototype.hasOwnProperty.call(stream, "abort");
+    const abort = () => {
+      cancellation ??= { code: SpanStatusCode.UNSET };
+      try {
+        return originalAbort.call(stream);
+      } finally {
+        finish(cancellation);
+      }
+    };
+    stream.abort = abort;
+    restoreAbort = () => {
+      if (stream.abort !== abort) return;
+      if (ownAbort) stream.abort = originalAbort;
+      else delete stream.abort;
+    };
   }
 
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+  return new Proxy(stream, {
+    get(target, property) {
+      if (property === Symbol.asyncIterator) return () => tracked;
+      // Keep the direct controls provided by earlier instrumentor releases, too.
+      if (property === "next") return tracked.next;
+      if (property === "return") return tracked.return;
+      if (property === "throw") return tracked.throw;
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
-/**
- * Wraps a generate stream to capture the full response
- */
-async function* wrapGenerateStream(
+/** Capture chat content, thinking and complete native tool calls across chunks. */
+function wrapChatStream(
+  stream: OllamaAbortableAsyncIterator<OllamaChatResponse>,
+  span: Span,
+): OllamaAbortableAsyncIterator<OllamaChatResponse> {
+  const message: OllamaMessage = { role: "assistant", content: "" };
+  let lastResponse: OllamaChatResponse | undefined;
+  const allChunks: OllamaChatResponse[] = [];
+
+  return wrapStream(stream, span, (chunk) => {
+    allChunks.push(chunk);
+    message.content += chunk.message?.content ?? "";
+    if (chunk.message?.thinking) {
+      message.thinking = (message.thinking ?? "") + chunk.message.thinking;
+    }
+    if (chunk.message?.tool_calls?.length) {
+      (message.tool_calls ??= []).push(...chunk.message.tool_calls);
+    }
+    lastResponse = chunk;
+  }, () => ({
+    [SemanticConventions.OUTPUT_VALUE]: message.content,
+    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+    ...getChatOutputMessagesAttributes({ message }),
+    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
+    ...(lastResponse ? {
+      [SemanticConventions.LLM_MODEL_NAME]: lastResponse.model,
+      ...getChatUsageAttributes(lastResponse),
+    } : {}),
+  }));
+}
+
+/** Capture generate content and thinking without changing yielded chunks. */
+function wrapGenerateStream(
   stream: OllamaAbortableAsyncIterator<OllamaGenerateResponse>,
   span: Span,
-): AsyncGenerator<OllamaGenerateResponse, void, unknown> {
-  let fullResponse = "";
-  let lastChunk: OllamaGenerateResponse | null = null;
+): OllamaAbortableAsyncIterator<OllamaGenerateResponse> {
+  const message: OllamaMessage = { role: "assistant", content: "" };
+  let lastChunk: OllamaGenerateResponse | undefined;
   const allChunks: OllamaGenerateResponse[] = [];
 
-  try {
-    for await (const chunk of stream) {
-      allChunks.push(chunk);
-      if (chunk.response) {
-        fullResponse += chunk.response;
-      }
-      lastChunk = chunk;
-      yield chunk;
+  return wrapStream(stream, span, (chunk) => {
+    allChunks.push(chunk);
+    message.content += chunk.response ?? "";
+    if (chunk.thinking) {
+      message.thinking = (message.thinking ?? "") + chunk.thinking;
     }
-  } catch (error) {
-    span.recordException(error as Error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: (error as Error).message });
-    span.end();
-    throw error;
-  }
-
-  const attributes: Attributes = {
-    [SemanticConventions.OUTPUT_VALUE]: fullResponse,
+    lastChunk = chunk;
+  }, () => ({
+    [SemanticConventions.OUTPUT_VALUE]: message.content,
     [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.TEXT,
+    ...getChatOutputMessagesAttributes({ message }),
     [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(allChunks) ?? "",
-  };
-
-  if (lastChunk) {
-    attributes[SemanticConventions.LLM_MODEL_NAME] = lastChunk.model;
-    if (lastChunk.prompt_eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_PROMPT] = lastChunk.prompt_eval_count;
-    }
-    if (lastChunk.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION] = lastChunk.eval_count;
-    }
-    if (lastChunk.prompt_eval_count !== undefined && lastChunk.eval_count !== undefined) {
-      attributes[SemanticConventions.LLM_TOKEN_COUNT_TOTAL] =
-        lastChunk.prompt_eval_count + lastChunk.eval_count;
-    }
-  }
-
-  span.setAttributes(attributes);
-  span.setStatus({ code: SpanStatusCode.OK });
-  span.end();
+    ...(lastChunk ? {
+      [SemanticConventions.LLM_MODEL_NAME]: lastChunk.model,
+      ...getGenerateUsageAttributes(lastChunk),
+    } : {}),
+  }));
 }
 
 /**
@@ -828,10 +900,13 @@ function getChatToolsJSONSchema(request: OllamaChatRequest): Attributes {
 /**
  * Gets output message attributes from chat response
  */
-function getChatOutputMessagesAttributes(response: OllamaChatResponse): Attributes {
+function getChatOutputMessagesAttributes(response: Pick<OllamaChatResponse, "message">): Attributes {
   const msg: Record<string, unknown> = { role: response.message.role };
   if (response.message.content) {
     msg.content = response.message.content;
+  }
+  if (response.message.thinking) {
+    msg.thinking = response.message.thinking;
   }
   if (response.message.tool_calls) {
     msg.tool_calls = response.message.tool_calls.map((tc) => ({
