@@ -313,6 +313,41 @@ provider.add_span_processor(BatchSpanProcessor(exporter))
 OpenAIInstrumentor().instrument(tracer_provider=provider)
 ```
 
+### Application-owned shutdown
+
+As of `fi-instrumentation-otel` 1.2.2, `register()` leaves SIGINT and SIGTERM
+handlers unchanged. It registers normal Python exit cleanup, but default
+SIGTERM does not run exit hooks. To export pending spans on container stop,
+call `shutdown()` on the provider you passed to your instrumentor from your
+application's shutdown lifecycle, before the process exits. Allow enough
+termination grace time for the exporter to finish; SIGKILL cannot flush spans.
+
+For a standalone script that owns its signal policy, opt in explicitly:
+
+```python
+import signal
+
+from fi_instrumentation import register
+
+provider = register(project_name="my_app")
+
+
+def stop(signum, frame):
+    provider.shutdown()
+    raise SystemExit(0)  # Your application chooses the exit status.
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+# Instrument your clients with tracer_provider=provider, then run your app.
+```
+
+In a web server, worker or async service, use the framework's shutdown hook
+instead of replacing its handlers: stop accepting work, finish or cancel active
+requests, then call `provider.shutdown()` before stopping the process. A
+`force_flush()` during a request exports ended spans without shutting down the
+provider; it is not a substitute for shutdown of still-running operations.
+
 ### More span processors
 
 A span processor added to the provider `register()` returns runs next to the Future AGI exporter, so spans go to both:

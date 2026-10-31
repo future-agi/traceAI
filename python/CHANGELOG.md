@@ -18,8 +18,9 @@
 
 ### Changed
 - Provider initialization leaves application SIGINT and SIGTERM handlers untouched.
-  Normal-exit cleanup is still registered; applications needing a flush on default
-  SIGTERM must arrange it through their own shutdown lifecycle.
+  Normal-exit cleanup is still registered; applications must call `provider.shutdown()`
+  through their own shutdown lifecycle to export pending spans on SIGTERM or SIGINT.
+  See [application-owned shutdown](README.md#application-owned-shutdown) for an example.
 
 ## [1.2.1] - 2026-10-26
 ### Fixed
