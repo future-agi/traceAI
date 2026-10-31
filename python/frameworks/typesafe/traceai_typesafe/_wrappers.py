@@ -95,7 +95,15 @@ _MISSING = object()
 
 
 def _argument(args: Sequence[Any], kwargs: Mapping[str, Any], name: str, index: int) -> Any:
-    """``state`` and ``questions`` may be positional; every other argument is keyword-only."""
+    """Effective ``state`` or ``questions``, after the SDK's shallow body override.
+
+    Key presence matters: even null or empty values replace the original input.
+    Read only these fields, without mutating the caller's arguments or capturing
+    unrelated ``extra_body`` fields.
+    """
+    extra_body = kwargs.get("extra_body")
+    if isinstance(extra_body, Mapping) and name in extra_body:
+        return extra_body[name]
     if name in kwargs:
         return kwargs[name]
     return args[index] if index < len(args) else _MISSING
@@ -129,15 +137,15 @@ def _request_model(instance: Any, kwargs: Mapping[str, Any]) -> Optional[str]:
     or the SDK default).
     """
     extra_body = kwargs.get("extra_body")
-    if isinstance(extra_body, Mapping):
-        override = extra_body.get("model")
-        if isinstance(override, str) and override:
-            return override
-    model = kwargs.get("model")
-    if isinstance(model, str) and model:
-        return model
-    default = _config_value(instance, "default_model")
-    return default if isinstance(default, str) and default else None
+    if isinstance(extra_body, Mapping) and "model" in extra_body:
+        model = extra_body["model"]
+    else:
+        model = kwargs.get("model")
+        if model is None:
+            model = _config_value(instance, "default_model")
+    # Invalid overrides may reach the API; do not attribute them to an unused
+    # model or client default when recording that call's error.
+    return model if isinstance(model, str) and model else None
 
 
 def _server_address(instance: Any) -> Optional[str]:
