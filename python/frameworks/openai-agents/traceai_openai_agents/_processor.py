@@ -56,6 +56,7 @@ from opentelemetry.trace import (
     Status,
     StatusCode,
     Tracer,
+    TracerProvider,
     set_span_in_context,
 )
 from opentelemetry.util.types import AttributeValue
@@ -67,13 +68,20 @@ logger = logging.getLogger(__name__)
 class FiTracingProcessor(TracingProcessor):
     _MAX_HANDOFFS_IN_FLIGHT = 1000
 
-    def __init__(self, tracer: Tracer) -> None:
+    def __init__(
+        self, tracer: Tracer, *, tracer_provider: Optional[TracerProvider] = None
+    ) -> None:
         self._tracer = tracer
+        # The provider is borrowed, not owned. Never shut down a shared provider.
+        self._tracer_provider = tracer_provider
         self._root_spans: dict[str, OtelSpan] = {}
         self._otel_spans: dict[str, OtelSpan] = {}
         self._tokens: dict[str, object] = {}
-        self._trace_inputs: dict[str, Any] = {}
-        self._trace_outputs: dict[str, Any] = {}
+        self._trace_inputs: dict[str, dict[str, AttributeValue]] = {}
+        self._trace_outputs: dict[str, dict[str, AttributeValue]] = {}
+        self._parents: dict[str, Optional[str]] = {}
+        self._span_inputs: dict[str, dict[str, AttributeValue]] = {}
+        self._span_outputs: dict[str, dict[str, AttributeValue]] = {}
         self._reverse_handoffs_dict: OrderedDict[str, str] = OrderedDict()
 
     def on_trace_start(self, trace: Trace) -> None:
@@ -82,12 +90,13 @@ class FiTracingProcessor(TracingProcessor):
         Args:
             trace: The trace that started.
         """
-        otel_span = self._tracer.start_span(
-            name=trace.name,
-            attributes={
-                GEN_AI_SPAN_KIND: FiSpanKindValues.AGENT.value,
-            },
-        )
+        trace_data = trace.export() or {}
+        attributes = {GEN_AI_SPAN_KIND: FiSpanKindValues.AGENT.value}
+        if (group_id := trace_data.get("group_id")) is not None:
+            attributes[SpanAttributes.SESSION_ID] = group_id
+        if (metadata := trace_data.get("metadata")) is not None:
+            attributes[METADATA] = safe_json_dumps(metadata)
+        otel_span = self._tracer.start_span(name=trace.name, attributes=attributes)
         self._root_spans[trace.trace_id] = otel_span
 
     def on_trace_end(self, trace: Trace) -> None:
@@ -97,23 +106,13 @@ class FiTracingProcessor(TracingProcessor):
             trace: The trace that started.
         """
         if root_span := self._root_spans.pop(trace.trace_id, None):
-            if initial_input := self._trace_inputs.pop(trace.trace_id, None):
-                if isinstance(initial_input, str):
-                    root_span.set_attribute(INPUT_VALUE, initial_input)
-                elif isinstance(initial_input, list):
-                    root_span.set_attribute(INPUT_MIME_TYPE, JSON)
-                    root_span.set_attribute(INPUT_VALUE, safe_json_dumps(initial_input))
-                    for k, v in _get_attributes_from_input(initial_input):
-                        root_span.set_attribute(k, v)
-            if final_output := self._trace_outputs.pop(trace.trace_id, None):
-                root_span.set_attribute(OUTPUT_VALUE, final_output.model_dump_json())
-                if text_output := _get_text_from_response(final_output):
-                    root_span.set_attribute(OUTPUT_VALUE, text_output)
-                for k, v in _get_attributes_from_response(final_output):
-                    root_span.set_attribute(k, v)
-
+            root_span.set_attributes(self._trace_inputs.pop(trace.trace_id, {}))
+            root_span.set_attributes(self._trace_outputs.pop(trace.trace_id, {}))
             root_span.set_status(Status(StatusCode.OK))
             root_span.end()
+        for key in list(self._reverse_handoffs_dict):
+            if key.endswith(f":{trace.trace_id}"):
+                del self._reverse_handoffs_dict[key]
 
     def on_span_start(self, span: Span[Any]) -> None:
         """Called when a span is started.
@@ -138,10 +137,13 @@ class FiTracingProcessor(TracingProcessor):
             attributes={
                 GEN_AI_SPAN_KIND: _get_span_kind(span.span_data),
                 GEN_AI_PROVIDER_NAME: FiLLMSystemValues.OPENAI.value,
-                INPUT_VALUE: safe_json_dumps(_to_dict(span.span_data)),
             },
         )
+        if isinstance(span.span_data, CustomSpanData):
+            otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(span.span_data.data))
+            otel_span.set_attribute(INPUT_MIME_TYPE, JSON)
         self._otel_spans[span.span_id] = otel_span
+        self._parents[span.span_id] = span.parent_id
         self._tokens[span.span_id] = attach(set_span_in_context(otel_span))
 
     def on_span_end(self, span: Span[Any]) -> None:
@@ -155,64 +157,96 @@ class FiTracingProcessor(TracingProcessor):
         if not (otel_span := self._otel_spans.pop(span.span_id, None)):
             return
         otel_span.update_name(_get_span_name(span))
-        # flatten_attributes: dict[str, AttributeValue] = dict(_flatten(span.export()))
-        # otel_span.set_attributes(flatten_attributes)
+        try:
+            otel_span.set_attributes(self._span_inputs.pop(span.span_id, {}))
+            otel_span.set_attributes(self._span_outputs.pop(span.span_id, {}))
+            self._set_end_attributes(span, otel_span)
+        except Exception:
+            # A malformed diagnostic field must not break the customer's run or
+            # leave an OTel span open. Do not log potentially sensitive payloads.
+            logger.warning("Could not map OpenAI Agents span attributes")
+        finally:
+            self._parents.pop(span.span_id, None)
+            end_time: Optional[int] = None
+            if span.ended_at:
+                try:
+                    end_time = _as_utc_nano(datetime.fromisoformat(span.ended_at))
+                except ValueError:
+                    pass
+            otel_span.set_status(status=_get_span_status(span))
+            otel_span.end(end_time)
+
+    def _set_end_attributes(self, span: Span[Any], otel_span: OtelSpan) -> None:
         data = span.span_data
         if isinstance(data, ResponseSpanData):
-            if span.trace_id not in self._trace_inputs:
-                if hasattr(data, "input") and (input_data := data.input):
-                    self._trace_inputs[span.trace_id] = input_data
-            if hasattr(data, "response") and isinstance(response := data.response, Response):
-                self._trace_outputs[span.trace_id] = response
-                otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
-                otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
-                if text_output := _get_text_from_response(response):
-                    otel_span.set_attribute(OUTPUT_VALUE, text_output)
-                for k, v in _get_attributes_from_response(response):
-                    otel_span.set_attribute(k, v)
-            if hasattr(data, "input") and (input := data.input):
-                otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(input))
-                if isinstance(input, str):
-                    otel_span.set_attribute(INPUT_VALUE, input)
-                elif isinstance(input, list):
-                    otel_span.set_attribute(INPUT_MIME_TYPE, JSON)
-                    otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(input))
-                    for k, v in _get_attributes_from_input(input):
-                        otel_span.set_attribute(k, v)
-                elif TYPE_CHECKING:
-                    assert_never(input)
-
-            if span.parent_id and (parent_otel_span := self._otel_spans.get(span.parent_id)):
-                if hasattr(data, "input") and (input := data.input):
-                    if isinstance(input, str):
-                        parent_otel_span.set_attribute(INPUT_VALUE, input)
-                    elif isinstance(input, list):
-                        parent_otel_span.set_attribute(INPUT_MIME_TYPE, JSON)
-                        parent_otel_span.set_attribute(
-                            INPUT_VALUE, safe_json_dumps(input)
-                        )
-                        for k, v in _get_attributes_from_input(input):
-                            parent_otel_span.set_attribute(k, v)
-                if hasattr(data, "response") and isinstance(
-                    response := data.response, Response
-                ):
-                    parent_otel_span.set_attribute(OUTPUT_VALUE, response.model_dump_json())
-                    if text_output := _get_text_from_response(response):
-                        parent_otel_span.set_attribute(OUTPUT_VALUE, text_output)
-                    for k, v in _get_attributes_from_response(response):
-                        parent_otel_span.set_attribute(k, v)
+            inputs: dict[str, AttributeValue] = {}
+            outputs: dict[str, AttributeValue] = {}
+            if data.input is not None:
+                inputs[INPUT_VALUE] = (
+                    data.input
+                    if isinstance(data.input, str)
+                    else safe_json_dumps(data.input)
+                )
+                if isinstance(data.input, list):
+                    inputs[INPUT_MIME_TYPE] = JSON
+                    inputs.update(_get_attributes_from_input(data.input))
+            if isinstance(response := data.response, Response):
+                outputs.update(_get_attributes_from_response(response))
+                # Instructions belong with the first input, not the last output.
+                for key in list(outputs):
+                    if key.startswith(GEN_AI_INPUT_MESSAGES + "."):
+                        inputs[key] = outputs.pop(key)
+                text = _get_text_from_response(response)
+                outputs[OUTPUT_VALUE] = (
+                    text if text is not None else response.model_dump_json()
+                )
+                outputs[OUTPUT_MIME_TYPE] = (
+                    FiMimeTypeValues.TEXT.value if text is not None else JSON
+                )
+            otel_span.set_attributes(inputs)
+            otel_span.set_attributes(outputs)
+            # Newer SDKs retain usage even when sensitive response data is disabled.
+            otel_span.set_attributes(
+                dict(
+                    _get_attributes_from_chat_completions_usage(
+                        getattr(data, "usage", None)
+                    )
+                )
+            )
+            self._propagate_model_io(span, inputs, outputs)
         elif isinstance(data, GenerationSpanData):
-            otel_span.set_attribute(INPUT_VALUE, safe_json_dumps(data.input))
-            otel_span.set_attribute(OUTPUT_VALUE, safe_json_dumps(data.output))
-            for k, v in _get_attributes_from_generation_span_data(data):
-                otel_span.set_attribute(k, v)
+            attributes = dict(_get_attributes_from_generation_span_data(data))
+            otel_span.set_attributes(attributes)
+            inputs = {
+                key: value
+                for key, value in attributes.items()
+                if key in (INPUT_VALUE, INPUT_MIME_TYPE)
+                or key.startswith(GEN_AI_INPUT_MESSAGES + ".")
+            }
+            outputs = {
+                key: value
+                for key, value in attributes.items()
+                if key in (OUTPUT_VALUE, OUTPUT_MIME_TYPE)
+                or key.startswith(GEN_AI_OUTPUT_MESSAGES + ".")
+            }
+            if outputs and data.model is not None:
+                outputs[GEN_AI_REQUEST_MODEL] = data.model
+            self._propagate_model_io(span, inputs, outputs)
         elif isinstance(data, FunctionSpanData):
             for k, v in _get_attributes_from_function_span_data(data):
                 otel_span.set_attribute(k, v)
         elif isinstance(data, MCPListToolsSpanData):
             for k, v in _get_attributes_from_mcp_list_tool_span_data(data):
                 otel_span.set_attribute(k, v)
+        elif isinstance(data, GuardrailSpanData):
+            otel_span.set_attribute("guardrail.triggered", data.triggered)
+        elif isinstance(data, CustomSpanData):
+            otel_span.set_attribute(OUTPUT_VALUE, safe_json_dumps(data.data))
+            otel_span.set_attribute(OUTPUT_MIME_TYPE, JSON)
         elif isinstance(data, HandoffSpanData):
+            for field in ("from_agent", "to_agent"):
+                if (value := getattr(data, field)) is not None:
+                    otel_span.set_attribute(f"openai.agents.handoff.{field}", value)
             # Set this dict to find the parent node when the agent span starts
             if data.to_agent and data.from_agent:
                 key = f"{data.to_agent}:{span.trace_id}"
@@ -227,24 +261,52 @@ class FiTracingProcessor(TracingProcessor):
             if parent_node := self._reverse_handoffs_dict.pop(key, None):
                 otel_span.set_attribute(GRAPH_NODE_PARENT_ID, parent_node)
 
-        end_time: Optional[int] = None
-        if span.ended_at:
-            try:
-                end_time = _as_utc_nano(datetime.fromisoformat(span.ended_at))
-            except ValueError:
-                pass
-        otel_span.set_status(status=_get_span_status(span))
-        otel_span.end(end_time)
+        elif data.type in ("task", "turn"):
+            # Feature detection keeps the declared 0.2.6 SDK floor working.
+            otel_span.set_attributes(
+                dict(
+                    _get_attributes_from_chat_completions_usage(
+                        getattr(data, "usage", None)
+                    )
+                )
+            )
+            if data.type == "turn":
+                otel_span.set_attribute("openai.agents.turn", data.turn)
+                otel_span.set_attribute("openai.agents.agent_name", data.agent_name)
+        elif data.type in ("transcription", "speech", "speech_group"):
+            otel_span.set_attributes(dict(_get_attributes_from_audio(data)))
+        if (metadata := getattr(data, "metadata", None)) is not None:
+            otel_span.set_attribute(METADATA, safe_json_dumps(metadata))
+
+    def _propagate_model_io(
+        self,
+        span: Span[Any],
+        inputs: dict[str, AttributeValue],
+        outputs: dict[str, AttributeValue],
+    ) -> None:
+        # Store detached attributes, not mutable SDK data objects. Across model
+        # turns, retain the first available input and last completed output.
+        if span.trace_id in self._root_spans:
+            if inputs:
+                self._trace_inputs.setdefault(span.trace_id, inputs)
+            if outputs:
+                self._trace_outputs[span.trace_id] = outputs
+        parent_id = span.parent_id
+        while parent_id and parent_id in self._otel_spans:
+            if inputs:
+                self._span_inputs.setdefault(parent_id, inputs)
+            if outputs:
+                self._span_outputs[parent_id] = outputs
+            parent_id = self._parents.get(parent_id)
 
     def force_flush(self) -> None:
-        """Forces an immediate flush of all queued spans/traces."""
-        # TODO
-        pass
+        """Flush the supplied OTel provider, if it supports flushing."""
+        if callable(flush := getattr(self._tracer_provider, "force_flush", None)):
+            flush()
 
     def shutdown(self) -> None:
-        """Called when the application stops."""
-        # TODO
-        pass
+        """Drain exports without taking ownership of a shared OTel provider."""
+        self.force_flush()
 
 
 def _as_utc_nano(dt: datetime) -> int:
@@ -421,6 +483,24 @@ def _get_attributes_from_generation_span_data(
     yield from _get_attributes_from_chat_completions_usage(obj.usage)
 
 
+def _get_attributes_from_audio(data: SpanData) -> Iterator[tuple[str, AttributeValue]]:
+    # Never export binary/base64 audio. Text follows the same directional
+    # privacy controls as other inputs/outputs, with no raw duplicate payload.
+    if data.type in ("speech", "speech_group") and data.input is not None:
+        yield INPUT_VALUE, data.input
+        yield INPUT_MIME_TYPE, FiMimeTypeValues.TEXT.value
+    if data.type == "transcription" and data.output is not None:
+        yield OUTPUT_VALUE, data.output
+        yield OUTPUT_MIME_TYPE, FiMimeTypeValues.TEXT.value
+    for name in ("input_format", "output_format", "first_content_at"):
+        if (value := getattr(data, name, None)) is not None:
+            yield f"openai.agents.audio.{name}", value
+    if (model := getattr(data, "model", None)) is not None:
+        yield GEN_AI_REQUEST_MODEL, model
+    if (config := getattr(data, "model_config", None)) is not None:
+        yield GEN_AI_REQUEST_PARAMETERS, safe_json_dumps(config)
+
+
 def _get_attributes_from_mcp_list_tool_span_data(
     obj: MCPListToolsSpanData,
 ) -> Iterator[tuple[str, AttributeValue]]:
@@ -431,7 +511,7 @@ def _get_attributes_from_mcp_list_tool_span_data(
 def _get_attributes_from_chat_completions_input(
     obj: Optional[Iterable[Mapping[str, Any]]],
 ) -> Iterator[tuple[str, AttributeValue]]:
-    if not obj:
+    if obj is None:
         return
     try:
         yield INPUT_VALUE, safe_json_dumps(obj)
@@ -447,17 +527,23 @@ def _get_attributes_from_chat_completions_input(
 def _get_attributes_from_chat_completions_output(
     obj: Optional[Iterable[Mapping[str, Any]]],
 ) -> Iterator[tuple[str, AttributeValue]]:
-    if not obj:
+    if obj is None:
         return
     try:
         yield OUTPUT_VALUE, safe_json_dumps(obj)
         yield OUTPUT_MIME_TYPE, JSON
     except Exception:
         pass
-    yield from _get_attributes_from_chat_completions_message_dicts(
-        obj,
-        f"{GEN_AI_OUTPUT_MESSAGES}.",
-    )
+    for index, message in enumerate(obj):
+        # The SDK's streaming Chat Completions path stores a completed Response
+        # envelope, whereas the non-streaming path stores chat messages.
+        if message.get("object") == "response":
+            response = Response.model_validate(message)
+            yield from _get_attributes_from_response_output(response.output, msg_idx=index)
+        else:
+            yield from _get_attributes_from_chat_completions_message_dicts(
+                [message], f"{GEN_AI_OUTPUT_MESSAGES}.", msg_idx=index,
+            )
 
 
 def _get_attributes_from_chat_completions_message_dicts(
@@ -532,10 +618,19 @@ def _get_attributes_from_chat_completions_usage(
 ) -> Iterator[tuple[str, AttributeValue]]:
     if not obj:
         return
-    if input_tokens := obj.get("input_tokens"):
-        yield GEN_AI_USAGE_INPUT_TOKENS, input_tokens
-    if output_tokens := obj.get("output_tokens"):
-        yield GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens
+    for field, attribute in (
+        ("input_tokens", GEN_AI_USAGE_INPUT_TOKENS),
+        ("output_tokens", GEN_AI_USAGE_OUTPUT_TOKENS),
+        ("total_tokens", GEN_AI_USAGE_TOTAL_TOKENS),
+    ):
+        if (value := obj.get(field)) is not None:
+            yield attribute, value
+    for field, detail, attribute in (
+        ("input_tokens_details", "cached_tokens", GEN_AI_USAGE_INPUT_TOKENS_CACHE_READ),
+        ("output_tokens_details", "reasoning_tokens", GEN_AI_USAGE_OUTPUT_TOKENS_REASONING),
+    ):
+        if isinstance(details := obj.get(field), Mapping) and (value := details.get(detail)) is not None:
+            yield attribute, value
 
 
 # convert dict, tuple, etc into one of these types ['bool', 'str', 'bytes', 'int', 'float']
@@ -661,11 +756,13 @@ def _get_attributes_from_response_output(
             yield from _get_attributes_from_function_tool_call(item, prefix)
             tool_call_idx += 1
         elif item.type == "custom_tool_call":
+            prefix = f"{GEN_AI_OUTPUT_MESSAGES}.{msg_idx}."
             yield f"{prefix}{MessageAttributes.MESSAGE_ROLE}", "assistant"
             yield from _get_attributes_from_response_custom_tool_call(
                 item,
-                f"{prefix}{MessageAttributes.MESSAGE_TOOL_CALLS}.0.",
+                f"{prefix}{MessageAttributes.MESSAGE_TOOL_CALLS}.{tool_call_idx}.",
             )
+            tool_call_idx += 1
         elif item.type == "file_search_call":
             ...  # TODO
         elif item.type == "web_search_call":
