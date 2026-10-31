@@ -1,4 +1,4 @@
 # OpenAI SDK and published traceAI package pins.
 openai==3.24.0
-traceAI-openai==0.1.10
+traceAI-openai==0.1.11
 fi-instrumentation-otel==1.1.0
