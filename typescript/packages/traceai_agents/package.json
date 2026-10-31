@@ -1,0 +1,56 @@
+{
+  "name": "@traceai/agents",
+  "version": "0.1.0",
+  "description": "Opt-in local coding-agent observability runtime",
+  "main": "./dist/src/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node build.cjs",
+    "test": "node --test --test-concurrency=1 test/*.test.cjs",
+    "prepare": "pnpm run build"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "schema",
+    "profiles",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.16.0 <23 || >=24.0.0 <25"
+  },
+  "dependencies": {
+    "@traceai/agent-core": "workspace:^",
+    "@traceai/fi-semantic-conventions": "workspace:^",
+    "better-sqlite3": "12.4.1",
+    "@napi-rs/keyring": "2.1.2",
+    "protobufjs": "7.6.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29",
+    "@types/better-sqlite3": "^7.6.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/future-agi/traceAI.git",
+    "directory": "typescript/packages/traceai_agents"
+  },
+  "license": "Apache-2.0",
+  "author": "Future AGI",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "fi-agent": "bin/fi-agent.cjs"
+  }
+}

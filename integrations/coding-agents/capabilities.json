@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "release_state": "foundation-preview",
+  "enabled_by_default": [],
+  "agents": [],
+  "holds": [
+    "backend-contract-qualification",
+    "per-agent-conformance",
+    "platform-storage-qualification"
+  ],
+  "reference_adapter": "test-only; never registered by the executable"
+}
