@@ -1,12 +1,12 @@
-"""
-Pinecone method wrappers for OpenTelemetry instrumentation.
-"""
+"""Shared operation attributes and sync/awaited Pinecone span lifecycles."""
 
-import json
+import inspect
 import logging
-from typing import Any, Callable, Optional
+from contextlib import contextmanager
+from typing import Any, Awaitable, Callable
 
-from opentelemetry import trace
+from opentelemetry import context
+from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
 
 from traceai_pinecone._attributes import (
@@ -16,368 +16,225 @@ from traceai_pinecone._attributes import (
 )
 
 logger = logging.getLogger(__name__)
+_ACTIVE = context.create_key("traceai-pinecone-active")
 
 
 class BaseWrapper:
-    """Base wrapper class for Pinecone operations."""
+    """Keep instrumentation failures separate from SDK failures."""
+
+    operation = ""
 
     def __init__(self, tracer: Tracer):
         self._tracer = tracer
 
-    def _get_index_name(self, instance: Any) -> Optional[str]:
-        """Extract index name from Pinecone Index instance."""
+    def _parameters(self, wrapped, args, kwargs):
+        if not args:
+            return kwargs
         try:
-            # Pinecone v3+ stores index name in _config or as attribute
-            if hasattr(instance, "_config"):
-                return getattr(instance._config, "index_name", None)
-            if hasattr(instance, "name"):
-                return instance.name
-            if hasattr(instance, "_index_name"):
-                return instance._index_name
-            # Try to get from host
-            if hasattr(instance, "_config") and hasattr(instance._config, "host"):
-                host = instance._config.host
-                # Extract index name from host like "index-name-xxx.svc.pinecone.io"
-                if host:
-                    return host.split(".")[0].rsplit("-", 1)[0]
-        except Exception:
-            pass
-        return "unknown"
+            # Legacy gRPC accepts positional parameters, including async_req.
+            bound = inspect.signature(wrapped).bind_partial(*args, **kwargs)
+            params = dict(bound.arguments)
+            params.update(params.pop("kwargs", {}))
+            return params
+        except (TypeError, ValueError):
+            return kwargs
 
-    def _get_index_host(self, instance: Any) -> Optional[str]:
-        """Extract index host from Pinecone Index instance."""
+    def _suppressed(self, params):
+        return (
+            context.get_value(_SUPPRESS_INSTRUMENTATION_KEY)
+            or context.get_value(_ACTIVE)
+            # Do not claim success for merely scheduling a legacy future.
+            # These SDK-specific future APIs are deliberately outside coverage.
+            or params.get("async_req")
+            or params.get("async_threadpool_executor")
+        )
+
+    def _attributes(self, instance, params):
+        # Read stored SDK state without invoking Index's plugin-loading
+        # __getattr__ for missing names. Never infer an index name from its host.
+        state = vars(instance)
+        config = state.get("_config") or state.get("config")
+        name = (
+            getattr(config, "index_name", None)
+            or state.get("name")
+            or state.get("_index_name")
+        )
+        attributes = get_common_attributes(
+            "pinecone", self.operation, name if isinstance(name, str) else None
+        )
+        host = state.get("_host") or getattr(config, "host", None)
+        if isinstance(host, str) and host:
+            attributes[Attrs.INDEX_HOST] = host
+        if self.operation != "describe_index_stats":
+            attributes[Attrs.NAMESPACE] = params.get("namespace") or ""
+        if params.get("filter"):
+            attributes[Attrs.QUERY_FILTER] = safe_json_dumps(params["filter"])
+        attributes.update(self._request_attributes(params))
+        return attributes
+
+    def _request_attributes(self, params):
+        return {}
+
+    def _response_attributes(self, result):
+        return {}
+
+    @contextmanager
+    def _span(self, instance, params):
+        attributes = get_common_attributes("pinecone", self.operation)
         try:
-            if hasattr(instance, "_config") and hasattr(instance._config, "host"):
-                return instance._config.host
-        except Exception:
-            pass
-        return None
+            attributes.update(self._attributes(instance, params))
+        except Exception as error:
+            # Diagnostics must not echo SDK payloads in exception messages.
+            logger.debug("Could not extract Pinecone request attributes (%s)", type(error).__name__)
+        with self._tracer.start_as_current_span(
+            f"pinecone {self.operation}", kind=SpanKind.CLIENT,
+            attributes=attributes, record_exception=False, set_status_on_exception=False,
+        ) as span:
+            token = context.attach(context.set_value(_ACTIVE, True))
+            try:
+                yield span
+            except BaseException as error:
+                # CancelledError is a BaseException. End the awaited operation,
+                # record one event, and propagate the exact exception unchanged.
+                span.set_status(Status(StatusCode.ERROR, str(error)))
+                span.record_exception(error)
+                raise
+            finally:
+                context.detach(token)
+
+    def _finish(self, span, result):
+        try:
+            span.set_attributes(self._response_attributes(result))
+        except Exception as error:
+            logger.debug("Could not extract Pinecone response attributes (%s)", type(error).__name__)
+        span.set_status(Status(StatusCode.OK))
+
+    def __call__(self, wrapped: Callable[..., Any], instance: Any, args: tuple, kwargs: dict) -> Any:
+        params = self._parameters(wrapped, args, kwargs)
+        if self._suppressed(params):
+            return wrapped(*args, **kwargs)
+        with self._span(instance, params) as span:
+            result = wrapped(*args, **kwargs)
+            self._finish(span, result)
+            return result
+
+
+class AsyncWrapper:
+    """Apply the same operation contract after awaiting, not coroutine creation."""
+
+    def __init__(self, operation: BaseWrapper):
+        self._operation = operation
+
+    async def __call__(
+        self, wrapped: Callable[..., Awaitable[Any]], instance: Any, args: tuple, kwargs: dict
+    ) -> Any:
+        operation = self._operation
+        params = operation._parameters(wrapped, args, kwargs)
+        if operation._suppressed(params):
+            return await wrapped(*args, **kwargs)
+        with operation._span(instance, params) as span:
+            result = await wrapped(*args, **kwargs)
+            operation._finish(span, result)
+            return result
 
 
 class QueryWrapper(BaseWrapper):
-    """Wrapper for Pinecone Index.query() method."""
+    operation = "query"
 
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: tuple,
-        kwargs: dict,
-    ) -> Any:
-        index_name = self._get_index_name(instance)
-        namespace = kwargs.get("namespace", "")
-        top_k = kwargs.get("top_k", 10)
-        include_metadata = kwargs.get("include_metadata", False)
-        include_values = kwargs.get("include_values", False)
-        filter_dict = kwargs.get("filter")
+    def _request_attributes(self, params):
+        return {
+            Attrs.QUERY_TOP_K: params.get("top_k", 10),
+            Attrs.QUERY_INCLUDE_METADATA: bool(params.get("include_metadata", False)),
+            Attrs.QUERY_INCLUDE_VECTORS: bool(params.get("include_values", False)),
+        }
 
-        span_name = "pinecone query"
-
-        attributes = get_common_attributes("pinecone", "query", index_name)
-        attributes.update({
-            Attrs.QUERY_TOP_K: top_k,
-            Attrs.QUERY_INCLUDE_METADATA: include_metadata,
-            Attrs.QUERY_INCLUDE_VECTORS: include_values,
-            Attrs.NAMESPACE: namespace or "",
-        })
-
-        if filter_dict:
-            attributes[Attrs.QUERY_FILTER] = safe_json_dumps(filter_dict)
-
-        host = self._get_index_host(instance)
-        if host:
-            attributes[Attrs.INDEX_HOST] = host
-
-        with self._tracer.start_as_current_span(
-            span_name,
-            kind=SpanKind.CLIENT,
-            attributes=attributes,
-        ) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-
-                # Extract results info
-                if result and hasattr(result, "matches"):
-                    matches = result.matches
-                    span.set_attribute(Attrs.RESULTS_COUNT, len(matches))
-
-                    # Get top scores
-                    if matches:
-                        scores = [m.score for m in matches[:10] if hasattr(m, "score")]
-                        if scores:
-                            span.set_attribute(Attrs.RESULTS_SCORES, safe_json_dumps(scores))
-
-                        # Get result IDs
-                        ids = [m.id for m in matches[:10] if hasattr(m, "id")]
-                        if ids:
-                            span.set_attribute(Attrs.RESULTS_IDS, safe_json_dumps(ids))
-
-                span.set_status(Status(StatusCode.OK))
-                return result
-
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+    def _response_attributes(self, result):
+        matches = getattr(result, "matches", None)
+        if matches is None:
+            return {}
+        attributes = {Attrs.RESULTS_COUNT: len(matches)}
+        scores = [m.score for m in matches[:10] if hasattr(m, "score")]
+        ids = [m.id for m in matches[:10] if hasattr(m, "id")]
+        if scores:
+            attributes[Attrs.RESULTS_SCORES] = safe_json_dumps(scores)
+        if ids:
+            attributes[Attrs.RESULTS_IDS] = safe_json_dumps(ids)
+        return attributes
 
 
 class UpsertWrapper(BaseWrapper):
-    """Wrapper for Pinecone Index.upsert() method."""
+    operation = "upsert"
 
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: tuple,
-        kwargs: dict,
-    ) -> Any:
-        index_name = self._get_index_name(instance)
-        namespace = kwargs.get("namespace", "")
+    def _request_attributes(self, params):
+        vectors = params.get("vectors", [])
+        attributes = {Attrs.UPSERT_COUNT: len(vectors)}
+        if len(vectors):
+            first = vectors[0]
+            if isinstance(first, dict):
+                values = first.get("values")
+            elif isinstance(first, tuple) and len(first) >= 2:
+                values = first[1]
+            else:
+                values = getattr(first, "values", None)
+            if values is not None:
+                attributes[Attrs.UPSERT_DIMENSIONS] = len(values)
+        return attributes
 
-        # Get vectors from args or kwargs
-        vectors = args[0] if args else kwargs.get("vectors", [])
-        vector_count = len(vectors) if vectors else 0
-
-        # Try to get vector dimensions
-        dimensions = None
-        if vectors and len(vectors) > 0:
-            first_vector = vectors[0]
-            if isinstance(first_vector, dict) and "values" in first_vector:
-                dimensions = len(first_vector["values"])
-            elif hasattr(first_vector, "values"):
-                dimensions = len(first_vector.values)
-
-        span_name = "pinecone upsert"
-
-        attributes = get_common_attributes("pinecone", "upsert", index_name)
-        attributes.update({
-            Attrs.UPSERT_COUNT: vector_count,
-            Attrs.NAMESPACE: namespace or "",
-        })
-
-        if dimensions:
-            attributes[Attrs.UPSERT_DIMENSIONS] = dimensions
-
-        host = self._get_index_host(instance)
-        if host:
-            attributes[Attrs.INDEX_HOST] = host
-
-        with self._tracer.start_as_current_span(
-            span_name,
-            kind=SpanKind.CLIENT,
-            attributes=attributes,
-        ) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-
-                # Extract upserted count from response
-                if result and hasattr(result, "upserted_count"):
-                    span.set_attribute("db.vector.upserted_count", result.upserted_count)
-
-                span.set_status(Status(StatusCode.OK))
-                return result
-
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+    def _response_attributes(self, result):
+        count = getattr(result, "upserted_count", None)
+        return {"db.vector.upserted_count": count} if count is not None else {}
 
 
 class DeleteWrapper(BaseWrapper):
-    """Wrapper for Pinecone Index.delete() method."""
+    operation = "delete"
 
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: tuple,
-        kwargs: dict,
-    ) -> Any:
-        index_name = self._get_index_name(instance)
-        namespace = kwargs.get("namespace", "")
-        ids = kwargs.get("ids", [])
-        delete_all = kwargs.get("delete_all", False)
-        filter_dict = kwargs.get("filter")
-
-        span_name = "pinecone delete"
-
-        attributes = get_common_attributes("pinecone", "delete", index_name)
-        attributes.update({
-            Attrs.NAMESPACE: namespace or "",
-            Attrs.DELETE_ALL: delete_all,
-        })
-
-        if ids:
+    def _request_attributes(self, params):
+        attributes = {Attrs.DELETE_ALL: bool(params.get("delete_all", False))}
+        ids = params.get("ids")
+        if ids is not None:
             attributes[Attrs.DELETE_COUNT] = len(ids)
-
-        if filter_dict:
-            attributes[Attrs.QUERY_FILTER] = safe_json_dumps(filter_dict)
-
-        host = self._get_index_host(instance)
-        if host:
-            attributes[Attrs.INDEX_HOST] = host
-
-        with self._tracer.start_as_current_span(
-            span_name,
-            kind=SpanKind.CLIENT,
-            attributes=attributes,
-        ) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+        return attributes
 
 
 class FetchWrapper(BaseWrapper):
-    """Wrapper for Pinecone Index.fetch() method."""
+    operation = "fetch"
 
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: tuple,
-        kwargs: dict,
-    ) -> Any:
-        index_name = self._get_index_name(instance)
-        namespace = kwargs.get("namespace", "")
-        ids = args[0] if args else kwargs.get("ids", [])
+    def _request_attributes(self, params):
+        ids = params.get("ids")
+        return {"db.vector.fetch.ids_count": len(ids)} if ids is not None else {}
 
-        span_name = "pinecone fetch"
-
-        attributes = get_common_attributes("pinecone", "fetch", index_name)
-        attributes.update({
-            Attrs.NAMESPACE: namespace or "",
-        })
-
-        if ids:
-            attributes["db.vector.fetch.ids_count"] = len(ids)
-
-        host = self._get_index_host(instance)
-        if host:
-            attributes[Attrs.INDEX_HOST] = host
-
-        with self._tracer.start_as_current_span(
-            span_name,
-            kind=SpanKind.CLIENT,
-            attributes=attributes,
-        ) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-
-                # Extract fetched count
-                if result and hasattr(result, "vectors"):
-                    span.set_attribute(Attrs.RESULTS_COUNT, len(result.vectors))
-
-                span.set_status(Status(StatusCode.OK))
-                return result
-
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+    def _response_attributes(self, result):
+        vectors = getattr(result, "vectors", None)
+        return {Attrs.RESULTS_COUNT: len(vectors)} if vectors is not None else {}
 
 
 class UpdateWrapper(BaseWrapper):
-    """Wrapper for Pinecone Index.update() method."""
+    operation = "update"
 
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: tuple,
-        kwargs: dict,
-    ) -> Any:
-        index_name = self._get_index_name(instance)
-        namespace = kwargs.get("namespace", "")
-        vector_id = args[0] if args else kwargs.get("id", "")
-        set_metadata = kwargs.get("set_metadata")
-        values = kwargs.get("values")
-
-        span_name = "pinecone update"
-
-        attributes = get_common_attributes("pinecone", "update", index_name)
-        attributes.update({
-            Attrs.NAMESPACE: namespace or "",
-            "db.vector.update.id": str(vector_id),
-        })
-
-        if set_metadata:
+    def _request_attributes(self, params):
+        attributes = {"db.vector.update.id": str(params.get("id", ""))}
+        if params.get("set_metadata"):
             attributes["db.vector.update.has_metadata"] = True
-
-        if values:
+        values = params.get("values")
+        if values is not None:
             attributes["db.vector.update.has_values"] = True
             attributes[Attrs.UPSERT_DIMENSIONS] = len(values)
-
-        host = self._get_index_host(instance)
-        if host:
-            attributes[Attrs.INDEX_HOST] = host
-
-        with self._tracer.start_as_current_span(
-            span_name,
-            kind=SpanKind.CLIENT,
-            attributes=attributes,
-        ) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-                span.set_status(Status(StatusCode.OK))
-                return result
-
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+        return attributes
 
 
 class DescribeIndexStatsWrapper(BaseWrapper):
-    """Wrapper for Pinecone Index.describe_index_stats() method."""
+    operation = "describe_index_stats"
 
-    def __call__(
-        self,
-        wrapped: Callable[..., Any],
-        instance: Any,
-        args: tuple,
-        kwargs: dict,
-    ) -> Any:
-        index_name = self._get_index_name(instance)
-        filter_dict = kwargs.get("filter")
-
-        span_name = "pinecone describe_index_stats"
-
-        attributes = get_common_attributes("pinecone", "describe_index_stats", index_name)
-
-        if filter_dict:
-            attributes[Attrs.QUERY_FILTER] = safe_json_dumps(filter_dict)
-
-        host = self._get_index_host(instance)
-        if host:
-            attributes[Attrs.INDEX_HOST] = host
-
-        with self._tracer.start_as_current_span(
-            span_name,
-            kind=SpanKind.CLIENT,
-            attributes=attributes,
-        ) as span:
-            try:
-                result = wrapped(*args, **kwargs)
-
-                # Extract stats
-                if result:
-                    if hasattr(result, "total_vector_count"):
-                        span.set_attribute("db.vector.stats.total_count", result.total_vector_count)
-                    if hasattr(result, "dimension"):
-                        span.set_attribute(Attrs.INDEX_DIMENSIONS, result.dimension)
-                    if hasattr(result, "namespaces"):
-                        span.set_attribute("db.vector.stats.namespace_count", len(result.namespaces))
-
-                span.set_status(Status(StatusCode.OK))
-                return result
-
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
+    def _response_attributes(self, result):
+        attributes = {}
+        for attr, field in (
+            ("db.vector.stats.total_count", "total_vector_count"),
+            (Attrs.INDEX_DIMENSIONS, "dimension"),
+        ):
+            value = getattr(result, field, None)
+            if value is not None:
+                attributes[attr] = value
+        namespaces = getattr(result, "namespaces", None)
+        if namespaces is not None:
+            attributes["db.vector.stats.namespace_count"] = len(namespaces)
+        return attributes

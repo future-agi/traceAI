@@ -30,9 +30,10 @@ trace_provider = register(
 # Instrument Pinecone
 PineconeInstrumentor().instrument(tracer_provider=trace_provider)
 
-# Use Pinecone as normal - all operations are traced!
-pc = pinecone.Pinecone(api_key="your-pinecone-api-key")
-index = pc.Index("my-index")
+# Trace the supported vector operations on your existing index.
+# Set PINECONE_API_KEY and PINECONE_INDEX_HOST in your environment.
+pc = pinecone.Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+index = pc.Index(host=os.environ["PINECONE_INDEX_HOST"])
 
 # Query vectors
 results = index.query(
@@ -50,7 +51,19 @@ index.upsert(
 )
 ```
 
+Open your `my-rag-app` project in Future AGI to find the `pinecone query` and
+`pinecone upsert` spans. Use vectors with the dimension configured on your index.
+
 ## Instrumented Operations
+
+The same six operations are instrumented on synchronous REST `Index`, asynchronous
+REST `AsyncIndex` (or legacy `IndexAsyncio`), and synchronous gRPC `GrpcIndex`
+(or legacy `GRPCIndex`). Your installed Pinecone SDK determines which classes are
+available; older SDKs may require their `asyncio` or `grpc` extra. Synchronous REST
+retains the `pinecone>=3.0.0` dependency floor. For legacy async or gRPC clients,
+use `pinecone[asyncio,grpc]>=7.3.0,<8`, or use SDK 10 with the client names below.
+The SDK 3 gRPC extra pins a protobuf version incompatible with this package's
+OpenTelemetry dependency; upgrade Pinecone before enabling gRPC.
 
 | Operation | Span Name | Description |
 |-----------|-----------|-------------|
@@ -61,7 +74,56 @@ index.upsert(
 | `update` | `pinecone update` | Update vector metadata |
 | `describe_index_stats` | `pinecone describe_index_stats` | Get index statistics |
 
+Async spans stay open until the awaited operation completes, fails, or is
+cancelled. `PineconeInstrumentor().uninstrument()` restores the original methods
+on all instrumented classes. Enable only one Pinecone instrumentor in your process
+to avoid duplicate operation spans.
+
+Coverage is limited to the operations above. Document, record/search, inference,
+assistant, index-management, namespace-management, and import APIs are not
+instrumented. Multi-namespace helpers have no aggregate span; any supported query
+they invoke may produce its own span. Legacy `async_req=True` and
+`async_threadpool_executor=True` calls pass through without a span. Dedicated gRPC
+`*_async` future APIs have no future-lifecycle coverage; use awaited REST methods
+or synchronous gRPC methods when you need end-to-end operation spans.
+
+### Async REST and gRPC
+
+For Pinecone SDK 10, keep the tracer setup above and use either of these clients.
+Both use the existing `PineconeInstrumentor` entry point; no separate async
+instrumentor is needed.
+
+```python
+import asyncio
+from pinecone import AsyncIndex
+
+async def query_async():
+    async with AsyncIndex(
+        api_key=os.environ["PINECONE_API_KEY"],
+        host=os.environ["PINECONE_INDEX_HOST"],
+    ) as index:
+        return await index.query(vector=[0.1] * 1536, top_k=5)
+
+results = asyncio.run(query_async())
+```
+
+```python
+from pinecone.grpc import GrpcIndex
+
+with GrpcIndex(
+    api_key=os.environ["PINECONE_API_KEY"],
+    host=os.environ["PINECONE_INDEX_HOST"],
+) as index:
+    results = index.query(vector=[0.1] * 1536, top_k=5)
+```
+
 ## Span Attributes
+
+The instrumentor records operation metadata, counts, filters, up to ten query
+result IDs and scores, update IDs, and exception details. It does not record
+vector values or document metadata. Treat filters, IDs, and errors as potentially
+sensitive when configuring access to your telemetry. Index names are included
+only when exposed by the SDK; the instrumentor does not infer names from hosts.
 
 ### Common Attributes
 
@@ -163,17 +225,8 @@ answer = rag_query("What is retrieval augmented generation?")
 
 ```bash
 cd python/frameworks/pinecone
-pip install pytest
+pip install pytest pytest-asyncio
 pytest tests/ -v
-```
-
-### Integration Tests
-
-Requires a Pinecone account and API key:
-
-```bash
-export PINECONE_API_KEY=your-api-key
-pytest tests/ -v -m integration
 ```
 
 ### Example
