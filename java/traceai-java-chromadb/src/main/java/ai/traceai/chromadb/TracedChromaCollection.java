@@ -1,27 +1,31 @@
 package ai.traceai.chromadb;
 
-import ai.traceai.*;
+import ai.traceai.FISpanKind;
+import ai.traceai.FITracer;
+import ai.traceai.SemanticConventions;
+import ai.traceai.TraceAI;
 import tech.amikos.chromadb.Collection;
-import tech.amikos.chromadb.Client;
 import tech.amikos.chromadb.Embedding;
-import tech.amikos.chromadb.embeddings.EmbeddingFunction;
 import tech.amikos.chromadb.model.QueryEmbedding.IncludeEnum;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Instrumentation wrapper for ChromaDB Collection.
- * Wraps the ChromaDB Collection to provide automatic tracing of all vector operations.
+ * Traces supported operations on a ChromaDB Java client 0.1.7 Collection.
  *
- * <p>Usage:</p>
+ * <p>This client uses Chroma's legacy {@code /api/v1} routes. It requires an
+ * existing API-v1-compatible server and cannot connect to servers that reject
+ * v1, including Chroma 1.5.9. This wrapper does not translate requests to API v2.
+ * Do not downgrade a database to use it.</p>
+ *
+ * <p>Usage with an existing collection and its configured embedding function:</p>
  * <pre>
  * Client client = new Client("http://localhost:8000");
- * Collection collection = client.getOrCreateCollection("my_collection", null, null, null);
+ * Collection collection = client.getCollection("my_collection", embeddingFunction);
  * TracedChromaCollection traced = new TracedChromaCollection(collection, "my_collection");
  *
  * Collection.QueryResponse results = traced.query(queryTexts, 10, null, null, null);
@@ -196,6 +200,42 @@ public class TracedChromaCollection {
 
             span.setStatus(StatusCode.OK);
 
+        } catch (Exception e) {
+            tracer.setError(span, e);
+            throw e;
+        } finally {
+            span.end();
+        }
+    }
+
+    /**
+     * Updates existing embeddings and documents with tracing.
+     * Delegates to the client's update operation, not upsert; it does not create missing IDs.
+     *
+     * @param embeddings the embeddings (optional if using the collection's embedding function)
+     * @param metadatas  the metadata for each document (optional)
+     * @param documents  the documents (optional when embeddings are supplied)
+     * @param ids        the IDs to update
+     * @return the underlying client's response
+     * @throws Exception if update fails
+     */
+    public Object updateEmbeddings(
+            List<Embedding> embeddings,
+            List<Map<String, String>> metadatas,
+            List<String> documents,
+            List<String> ids) throws Exception {
+        Span span = tracer.startSpan("ChromaDB Update", FISpanKind.VECTOR_DB);
+
+        try (Scope scope = span.makeCurrent()) {
+            span.setAttribute(SemanticConventions.DB_SYSTEM, "chromadb");
+            span.setAttribute(SemanticConventions.DB_VECTOR_COLLECTION_NAME, collectionName);
+            if (ids != null) {
+                span.setAttribute("chromadb.update_count", (long) ids.size());
+            }
+
+            Object response = collection.updateEmbeddings(embeddings, metadatas, documents, ids);
+            span.setStatus(StatusCode.OK);
+            return response;
         } catch (Exception e) {
             tracer.setError(span, e);
             throw e;
