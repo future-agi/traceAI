@@ -41,7 +41,8 @@ _STREAM_OPERATIONS = {
 class ExaInstrumentor(BaseInstrumentor):
     """Instrument Exa's search, contents, answer, and streaming APIs.
 
-    ``instrument()`` accepts ``tracer_provider``, ``capture_urls`` and
+    ``instrument()`` accepts ``tracer_provider``, ``capture_urls``,
+    ``capture_outputs`` (bounded response previews, off by default) and
     ``config`` (a ``fi_instrumentation.TraceConfig``; by default one built
     from the ``FI_*`` environment variables, such as ``FI_HIDE_INPUTS``).
     Spans come from an ``FITracer``, so the config's masking and PII
@@ -74,30 +75,32 @@ class ExaInstrumentor(BaseInstrumentor):
         capture_urls = bool(kwargs.get("capture_urls", False))
         hide_inputs = bool(config.hide_inputs)
         pii = bool(config.pii_redaction)
+        capture_outputs = bool(kwargs.get("capture_outputs", False)) and not (
+            config.hide_outputs or config.hide_output_text
+        )
+        options = {
+            "capture_urls": capture_urls,
+            "capture_outputs": capture_outputs,
+            "hide_inputs": hide_inputs,
+            "pii": pii,
+        }
         api_module = import_module(_MODULE)
         self._original_methods: Dict[Tuple[str, str], Any] = {}
 
         for client_name in ("Exa", "AsyncExa"):
             is_async = client_name == "AsyncExa"
             for method_name, span_name in _OPERATIONS.items():
-                options = {
-                    "contents": method_name == "get_contents",
-                    "capture_urls": capture_urls,
-                    "hide_inputs": hide_inputs,
-                    "pii": pii,
-                }
-                wrapper = (
-                    AsyncOperationWrapper(tracer, span_name, **options)
-                    if is_async
-                    else OperationWrapper(tracer, span_name, **options)
+                wrapper_type = AsyncOperationWrapper if is_async else OperationWrapper
+                wrapper = wrapper_type(
+                    tracer, span_name, contents=method_name == "get_contents", **options
                 )
                 self._wrap_method(api_module, client_name, method_name, wrapper)
 
             for method_name, span_name in _STREAM_OPERATIONS.items():
                 wrapper = (
-                    AsyncStreamWrapper(tracer, span_name, hide_inputs=hide_inputs, pii=pii)
+                    AsyncStreamWrapper(tracer, span_name, **options)
                     if is_async
-                    else StreamWrapper(tracer, span_name, hide_inputs=hide_inputs, pii=pii)
+                    else StreamWrapper(tracer, span_name, **options)
                 )
                 self._wrap_method(api_module, client_name, method_name, wrapper)
 
