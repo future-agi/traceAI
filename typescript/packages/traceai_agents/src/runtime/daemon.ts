@@ -62,10 +62,29 @@ export class Runtime {
       this.observers.clear();
     });
     try {
-      await this.storage.call("init", {
-        root: join(this.paths.state, "spool"),
-        version: this.version,
-      });
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.storage.call("init", {
+            root: join(this.paths.state, "spool"),
+            version: this.version,
+          });
+          break;
+        } catch (e) {
+          if (
+            !(e instanceof AgentError) ||
+            e.code !== "RUNTIME_OWNERSHIP_CONFLICT" ||
+            attempt === 2
+          )
+            throw e;
+          // A failed Spool constructor closes its connection, releasing SHARED
+          // locks before retry. SQLite busy_timeout cannot resolve upgrade
+          // deadlocks or a dying owner's brief disconnect tail by itself.
+          // Bound retries and jitter contenders; never steal or unlink a lock.
+          await new Promise((resolve) =>
+            setTimeout(resolve, 20 + Math.random() * 60),
+          );
+        }
+      }
       // Only the exclusive SQLite owner may remove a socket left by a crash.
       // Never remove a regular file, symlink, or another user's socket.
       try {

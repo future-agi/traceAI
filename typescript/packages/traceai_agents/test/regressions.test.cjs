@@ -1014,6 +1014,29 @@ test("update check validates the prospective destination, not the installed rout
   assert.equal(loadConfig(p).routes[routeId].route.binding.project, "fixture");
 });
 
+test("startup retries a released transient SQLite owner with a fresh connection", async (t) => {
+  const { p } = fixture(t);
+  const { Spool } = require("../dist/src/storage/store.js");
+  const root = path.join(p.state, "spool");
+  const initial = new Spool(root, "0.1.0");
+  initial.close();
+  const reader = new (require("better-sqlite3"))(path.join(root, "spool.db"));
+  cleanup(t, () => { if (reader.open) reader.close(); });
+  reader.pragma("journal_mode=DELETE");
+  reader.exec("BEGIN; SELECT count(*) FROM meta;");
+  const runtime = new Runtime(p, path.resolve(__dirname, "fixtures/ownership-retry.cjs"), "0.1.0", settings.registry);
+  cleanup(t, () => runtime.stop());
+  const started = runtime.start();
+  // Hold the real reader until the first actual lock acquisition fails. No
+  // weakened assertion or arbitrary delay: restart must recover after release.
+  const busy = new Promise((resolve) => runtime.storage.child.on("message", (message) => {
+    if (message.probe === "busy") { reader.close(); resolve(); }
+  }));
+  await busy;
+  await started;
+  assert.equal((await submit(p, "after-contention")).durable, true);
+});
+
 test("storage ownership precedes header inspection, preventing two-reader upgrade deadlock", async (t) => {
   const { root, p, env } = fixture(t);
   const { Spool } = require("../dist/src/storage/store.js");

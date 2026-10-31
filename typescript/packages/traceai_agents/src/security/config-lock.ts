@@ -46,7 +46,9 @@ export function configurationLock(path: string): () => void {
     const current = lstatSync(path);
     if (stat.ino !== current.ino || stat.dev !== current.dev)
       throw new AgentError("CONFIGURATION_CONFLICT", 6);
-    lock.exec("BEGIN EXCLUSIVE");
+    // RESERVED ownership is sufficient for this no-write mutex. EXCLUSIVE can
+    // deadlock competing SHARED-to-EXCLUSIVE upgrades even on an empty file.
+    lock.exec("BEGIN IMMEDIATE");
     owned.add(path);
     return () => {
       try {
