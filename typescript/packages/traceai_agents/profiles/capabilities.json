@@ -2,11 +2,58 @@
   "schema_version": 1,
   "release_state": "foundation-preview",
   "enabled_by_default": [],
-  "agents": [],
+  "agents": [
+    {
+      "agent": "cursor",
+      "surface": "ide",
+      "versions": ["3.24.18"],
+      "schemas": ["cursor-hooks-2026-10-31-v1"],
+      "qualification": "documented-payload-fixtures-only",
+      "grade": "Activity tracing",
+      "enable_requires": ["preview", "structure", "transcript-off"],
+      "events": ["postToolUse", "postToolUseFailure", "stop"],
+      "platforms": ["darwin", "linux"],
+      "content": false,
+      "model_requests": false,
+      "usage": "unavailable",
+      "timing": "callback-receipt; tool duration estimate; no turn duration",
+      "transcripts": "held-unknown-persisted-schema",
+      "subagents": "Task tool only; ancestry unavailable"
+    },
+    {
+      "agent": "cursor",
+      "surface": "cli",
+      "versions": ["2026.10.17"],
+      "schemas": [
+        "cursor-hooks-2026-10-31-v1",
+        "cursor-cli-stream-2026-10-31-v1"
+      ],
+      "qualification": "documented-payload-fixtures-only",
+      "grade": "Activity tracing; stream reconstruction is qualification-only (dry-run)",
+      "enable_requires": ["preview", "structure"],
+      "events": ["postToolUse", "postToolUseFailure", "stop"],
+      "platforms": ["darwin", "linux"],
+      "content": false,
+      "usage": "unavailable; no allocation of turn totals to requests",
+      "timing": "callback-receipt or partial stream message timestamps",
+      "transcripts": "explicit stream-json import only; persisted JSONL schema held",
+      "import_requires": [
+        "import-only-mode",
+        "structural-read-consent",
+        "explicit-schema",
+        "single-turn",
+        "terminal-request-id",
+        "source-timestamps"
+      ],
+      "source_join": "hook generation_id to stream request_id unproven; stream commit/export held, including after mode changes"
+    }
+  ],
   "holds": [
     "backend-contract-qualification",
-    "per-agent-conformance",
-    "platform-storage-qualification"
+    "real-cursor-binary-activation-and-version-qualification",
+    "persisted-transcript-schema-and-incremental-reader-qualification",
+    "platform-storage-qualification",
+    "subagent-ancestry-and-source-usage-qualification"
   ],
   "reference_adapter": "test-only; never registered by the executable"
 }

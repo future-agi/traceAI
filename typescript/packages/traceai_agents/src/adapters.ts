@@ -15,6 +15,8 @@ export interface Capability {
   transcript: boolean;
   native: boolean;
   neutralResponse: string;
+  /** Opt-in schema for a minimized credentialless observer envelope. */
+  observerSchema?: string;
 }
 export interface Activation {
   installed: boolean;
@@ -52,6 +54,8 @@ export interface AdapterContext {
   profile: string;
   binding: Binding;
   transcriptConsent: boolean;
+  preview?: boolean;
+  captureMode?: "hooks" | "import-only";
 }
 export interface NormalizeContext {
   identityKey: Uint8Array;

@@ -26,6 +26,7 @@ export class Runtime {
   private sockets = new Set<Socket>();
   private ingressBytes = 0;
   private lastDurableAck: number | null = null;
+  private sourceReceipts = new Set<string>();
   private statusCache: unknown = { state: "unknown", persistence: "unknown" };
   constructor(
     private readonly paths: Paths,
@@ -143,6 +144,52 @@ export class Runtime {
       throw new AgentError("INVALID_FRAME", 2);
     }
     if (m.protocol_version !== 1) throw new AgentError("INVALID_PROTOCOL", 2);
+    if (m.operation === "observe-source") {
+      const route = this.config.routes[m.route_ref];
+      if (
+        !route ||
+        !route.route.enabled ||
+        route.captureMode === "import-only" ||
+        this.stopped ||
+        this.admissionPaused
+      )
+        throw new AgentError("HELD_DISABLED", 3);
+      const adapter = this.registry.get(route.agent, route.surface);
+      if (
+        !adapter.capability.observerSchema ||
+        adapter.capability.observerSchema !== m.source_schema
+      )
+        throw new AgentError("UNKNOWN_SOURCE_SCHEMA", 5);
+      const profile = this.config.profiles[route.profile];
+      if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
+      const secrets =
+        profile.storage === "file"
+          ? new FileSecretStore(this.paths.credentials)
+          : new OSSecretStore();
+      const secret = await secrets.get(profile.credentialRef);
+      if (!secret) throw new AgentError("HELD_IDENTITY_KEY", 3);
+      const facts = adapter.normalize(m.event, {
+        identityKey: Buffer.from(secret.identity_key, "hex"),
+        policyRevision: route.route.policy.revision,
+        sourceSchema: m.source_schema,
+      });
+      // One terminal observation per envelope. No partial multi-fact ACK or raw journal.
+      if (facts.length !== 1) throw new AgentError("INVALID_OBSERVER_FACTS", 2);
+      enforceCapability(facts[0], adapter.capability);
+      const result = await this.storage.call("admit", {
+        route: m.route_ref,
+        fact: minimize(facts[0], route.route.policy),
+        observed: true,
+      });
+      this.sourceReceipts.add(m.route_ref);
+      this.lastDurableAck = Date.now();
+      return {
+        protocol_version: 1,
+        durable: true,
+        reason_code: result.duplicate ? "DUPLICATE" : "COMMITTED",
+        receipt_id: result.receipt_id,
+      };
+    }
     if (m.operation === "observe") {
       const route = this.config.routes[m.route_ref];
       if (
@@ -152,6 +199,8 @@ export class Runtime {
         this.admissionPaused
       )
         throw new AgentError("HELD_DISABLED", 3);
+      if (route.agent === "cursor")
+        throw new AgentError("HELD_UNPROVEN_SOURCE_ALIAS", 3);
       enforceCapability(
         m.fact,
         this.registry.get(route.agent, route.surface).capability,
@@ -181,7 +230,10 @@ export class Runtime {
           agent: r.agent,
           surface: r.surface,
           enabled: r.route.enabled,
-          activation: r.activation,
+          activation:
+            this.sourceReceipts.has(r.route.id) && r.route.enabled
+              ? { ...r.activation, activated: true, restartRequired: false }
+              : r.activation,
           policy: r.route.policy.revision,
           export:
             r.route.binding.backendContract === "immutable-agent-v1"
@@ -221,6 +273,7 @@ export class Runtime {
       const r = this.config.routes[m.route];
       if (!r) throw new AgentError("UNKNOWN_ROUTE", 3);
       r.route.enabled = false;
+      this.sourceReceipts.delete(m.route);
       await this.fence();
       await this.storage.call("disable", m.route);
       if (m.purge) {

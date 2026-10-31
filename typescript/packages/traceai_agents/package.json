@@ -29,16 +29,17 @@
     "node": ">=22.16.0 <23 || >=24.0.0 <25"
   },
   "dependencies": {
+    "@napi-rs/keyring": "2.1.2",
     "@traceai/agent-core": "workspace:^",
     "@traceai/fi-semantic-conventions": "workspace:^",
     "better-sqlite3": "12.4.1",
-    "@napi-rs/keyring": "2.1.2",
+    "jsonc-parser": "3.3.1",
     "protobufjs": "7.6.5"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.29",
-    "@types/better-sqlite3": "^7.6.13"
+    "typescript": "^5.8.3"
   },
   "repository": {
     "type": "git",

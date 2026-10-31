@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { cursorAdapters } from "../adapters/cursor/index.js";
 import { STRUCTURE_POLICY, token } from "@traceai/agent-core";
 import { observe } from "@traceai/agent-core/client";
 import { AdapterRegistry, type AdapterContext } from "../adapters.js";
@@ -29,6 +30,7 @@ import { authInput } from "./input.js";
 import { runAgent } from "./run.js";
 const flags = new Set([
   "json",
+  "preview",
   "stdin",
   "tty",
   "loopback-test",
@@ -51,6 +53,8 @@ const valued = new Set([
   "path",
   "commit",
   "deadline",
+  "mode",
+  "schema",
 ]);
 function parse(args: string[]): {
   pos: string[];
@@ -165,12 +169,19 @@ export async function main(
           "runtime start|stop|status",
         ],
         enabled_by_default: [],
-        reasons: ["NO_QUALIFIED_ADAPTERS_BUNDLED"],
+        reasons: ["CURSOR_REQUIRES_EXPLICIT_PREVIEW"],
       });
       return 0;
     }
     const p = paths(),
-      registry = settings.registry ?? new AdapterRegistry();
+      registry =
+        settings.registry ??
+        new AdapterRegistry(
+          cursorAdapters({
+            node: process.execPath,
+            hookEntry: join(dirname(settings.entry), "fi-cursor-hook.cjs"),
+          }),
+        );
     if (args[0] === "__daemon") {
       const runtime = new Runtime(
         p,
@@ -355,6 +366,14 @@ export async function main(
       !["off", "structure"].includes(String(options.transcript))
     )
       throw new AgentError("HELD_CONTENT_QUALIFICATION", 3);
+    const captureMode = options.mode ?? installed?.captureMode ?? "hooks";
+    if (
+      !["hooks", "import-only"].includes(String(captureMode)) ||
+      (options.mode && agent !== "cursor")
+    )
+      throw new AgentError("INVALID_CAPTURE_MODE", 2);
+    if (installed && options.mode && installed.captureMode !== captureMode)
+      throw new AgentError("UNINSTALL_BEFORE_MODE_CHANGE", 6);
     const context: AdapterContext = {
       routeRef: routeId,
       socketPath: p.socket,
@@ -362,8 +381,11 @@ export async function main(
       profile: profileName,
       binding: profile.binding,
       transcriptConsent:
-        options.transcript === "structure" ||
-        installed?.transcriptConsent === true,
+        options.transcript === undefined
+          ? installed?.transcriptConsent === true
+          : options.transcript === "structure",
+      preview: options.preview === true,
+      captureMode: captureMode as "hooks" | "import-only",
     };
     if (command === "run") {
       if (!installed?.route.enabled) throw new AgentError("ENABLE_REQUIRED", 3);
@@ -385,10 +407,38 @@ export async function main(
       if (options["ingest-check"] || options.loopback)
         throw new AgentError("UNQUALIFIED_DIAGNOSTIC", 5);
       const activation = await adapter.probe(context);
+      let runtime = "unknown";
+      try {
+        const status = await runtimeRequest(
+          p.socket,
+          { operation: "status" },
+          200,
+        );
+        const receipt = status.agents?.find(
+          (r: { agent: string; surface: string }) =>
+            r.agent === agent && r.surface === surface,
+        );
+        runtime = "running";
+        if (
+          activation.installed &&
+          receipt?.enabled &&
+          receipt.activation?.activated
+        ) {
+          activation.activated = true;
+          activation.restartRequired = false;
+        }
+      } catch {
+        /* unavailable is unknown, never success */
+      }
       output({
         state: activation.activated ? "activated" : "waiting-for-activation",
         code: 0,
         activation,
+        runtime,
+        reasons:
+          agent === "cursor"
+            ? ["FIXTURE_QUALIFIED_PREVIEW", "PERSISTED_TRANSCRIPT_SCHEMA_HELD"]
+            : [],
         acceptance: "unknown",
         persistence: "unknown",
       });
@@ -399,13 +449,23 @@ export async function main(
         throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
       const secret = await store(p, profile).get(profile.credentialRef);
       if (!secret) throw new AgentError("HELD_IDENTITY_KEY", 3);
-      if (adapter.capability.schemas.length !== 1)
+      if (agent === "cursor" && installed?.captureMode !== "import-only")
+        throw new AgentError("HELD_UNPROVEN_SOURCE_ALIAS", 3);
+      const schema =
+        options.schema ??
+        (adapter.capability.schemas.length === 1
+          ? adapter.capability.schemas[0]
+          : undefined);
+      if (
+        typeof schema !== "string" ||
+        !adapter.capability.schemas.includes(schema)
+      )
         throw new AgentError("EXPLICIT_SCHEMA_REQUIRED", 5);
       const planner = new ImportPlanner(join(p.state, "import"));
       const normalization = {
         identityKey: Buffer.from(secret.identity_key, "hex"),
         policyRevision: "1",
-        sourceSchema: adapter.capability.schemas[0],
+        sourceSchema: schema,
       };
       const source = required(options, "path");
       if (!options.commit) {
@@ -419,6 +479,8 @@ export async function main(
         });
         return 0;
       }
+      if (agent === "cursor")
+        throw new AgentError("HELD_UNPROVEN_SOURCE_ALIAS", 3);
       await startRuntime(p, settings.entry);
       const counts = await planner.commit(
         required(options, "commit"),
@@ -490,6 +552,7 @@ export async function main(
           surface,
           profile: profileName,
           transcriptConsent: context.transcriptConsent,
+          captureMode: context.captureMode,
           activation,
         };
       });

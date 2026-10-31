@@ -27,7 +27,13 @@ class AgentPackages(unittest.TestCase):
         self.assertEqual(package['bin'], {'fi-agent': 'bin/fi-agent.cjs'})
         self.assertIn('bin', package['files'])
         self.assertNotIn('contract', package['files'])
-        self.assertEqual(json.loads((runtime / 'profiles/capabilities.json').read_text())['enabled_by_default'], [])
+        capabilities = json.loads((runtime / 'profiles/capabilities.json').read_text())
+        self.assertEqual(capabilities['enabled_by_default'], [])
+        cursor = [a for a in capabilities['agents'] if a['agent'] == 'cursor']
+        self.assertEqual([a['surface'] for a in cursor], ['ide', 'cli'])
+        self.assertTrue(all(a['qualification'] == 'documented-payload-fixtures-only' for a in cursor))
+        self.assertTrue((runtime / 'bin/fi-cursor-hook.cjs').stat().st_mode & 0o111)
+        self.assertEqual(package['dependencies']['jsonc-parser'], '3.3.1')
         for schema in (root / 'integrations/coding-agents/schema').glob('*.schema.json'):
             self.assertEqual(json.loads(schema.read_text()), json.loads((runtime / 'schema' / schema.name).read_text()))
             self.assertEqual(json.loads(schema.read_text()), json.loads((root / 'typescript/packages/traceai_agent_core/schema' / schema.name).read_text()))

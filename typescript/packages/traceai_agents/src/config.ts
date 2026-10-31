@@ -22,6 +22,7 @@ export interface InstalledRoute {
   surface: string;
   profile: string;
   transcriptConsent: boolean;
+  captureMode?: "hooks" | "import-only";
   activation: {
     installed: boolean;
     trusted: boolean | "unknown";

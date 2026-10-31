@@ -173,10 +173,32 @@ export class Spool {
     routeId: string,
     input: CanonicalFact,
     cursor?: { stream: string; coordinate: string },
+    observed = false,
   ): { receipt_id: string; duplicate: boolean } {
     const route = this.getRoute(routeId);
     if (!route.enabled) throw new AgentError("HELD_DISABLED", 3);
     const fact = minimize(input, route.policy);
+    if (observed) {
+      // Hooks without wall timestamps have an estimated callback interval. Freeze its
+      // first receipt clock with the fact in the SAME transaction, so duplicate hooks
+      // do not become changed immutable spans merely because they arrived later.
+      if (
+        cursor ||
+        fact.source !== "hook" ||
+        !["unknown", "estimated"].includes(fact.timing) ||
+        fact.startNs !== "0" ||
+        BigInt(fact.endNs) > 86_400_000_000_000n
+      )
+        throw new AgentError("INVALID_OBSERVATION_CLOCK", 2);
+      const old = this.db
+        .prepare("SELECT coordinate FROM cursors WHERE route=? AND stream=?")
+        .get(routeId, fact.sourceWorkId) as { coordinate: string } | undefined;
+      const end =
+        old?.coordinate ?? (BigInt(Date.now()) * 1_000_000n).toString();
+      fact.startNs = (BigInt(end) - BigInt(fact.endNs)).toString();
+      fact.endNs = end;
+      cursor = { stream: fact.sourceWorkId, coordinate: end };
+    }
     const bytes = encodeFacts([fact], route.binding, this.runtimeVersion);
     if (bytes.length > 262_144) throw new AgentError("OVERSIZE_SPAN", 2);
     const hash = digest(bytes);

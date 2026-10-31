@@ -25,7 +25,7 @@ process.on("message", (message: any) => {
           result = store.getRoute(a);
           break;
         case "admit":
-          result = store.admit(a.route, a.fact, a.cursor);
+          result = store.admit(a.route, a.fact, a.cursor, a.observed === true);
           break;
         case "next":
           result = store.next(a.route, a.includeDisabled);

@@ -299,6 +299,9 @@ importers:
       better-sqlite3:
         specifier: 12.4.1
         version: 12.4.1
+      jsonc-parser:
+        specifier: 3.3.1
+        version: 3.3.1
       protobufjs:
         specifier: 7.6.5
         version: 7.6.5

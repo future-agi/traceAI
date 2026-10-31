@@ -2,7 +2,7 @@
 
 `fi-agent` is a local observability runtime for explicitly enabled coding-agent integrations. It is not a coding agent, model proxy, or agent orchestrator.
 
-The executable includes no enabled or installable agent adapters. Installing the runtime does not enable tracing. Agent SDK instrumentation remains a separate integration surface.
+Installing the runtime does not enable tracing. Cursor has separate, opt-in IDE and CLI observer previews; other agent adapters remain unregistered. Agent SDK instrumentation remains a separate integration surface.
 
 ## Authentication
 
@@ -33,6 +33,22 @@ Only structure-only capture is admitted by this foundation. Content persistence 
 A dedicated child process owns the single SQLite connection. The owned spool has a 256 MiB physical cap, including its database, WAL, shared-memory file and maintenance reserve. Capture pauses when checkpoint, filesystem headroom or quota checks fail. This cap does not include installed packages, original agent transcripts, filesystem snapshots or external files. Local receipt retention never authorizes inventing new IDs for previously observed work.
 
 Authenticated exports use the approved complete endpoint, verify TLS and never follow redirects, including same-origin redirects. A partial OTLP rejection is ambiguous, not wholesale success. Disabling a route stops admission and holds queued records instead of silently draining them.
+
+## Cursor observer preview
+
+The Cursor adapters currently qualify **documented payload fixtures, not real host activation**. They require explicit `--preview`; the capability manifest lists the exact accepted payload versions (IDE `3.24.18`, CLI `2026.10.17`). Unknown versions are ignored by the neutral hook and never become captured data. Do not interpret this preview as a released full-request integration.
+
+```sh
+fi-agent enable cursor --surface ide --profile work --preview --capture structure --transcript off
+fi-agent doctor cursor --surface ide
+fi-agent disable cursor --surface ide
+```
+
+Use `--surface cli` independently for the CLI observer. Enable adds only `postToolUse`, `postToolUseFailure` and `stop` to the official user-level `hooks.json`, preserving unrelated configuration and comments. The directory and file must be owner-only and nonsymlink. Existing legacy `fi-hook-to-otlp` registrations are a conflict: remove those registrations before enabling this integration. No credential, permission, model, or provider setting is changed. Host trust remains the user's action.
+
+Turns are terminal activity markers grouped by conversation; tools use `tool_use_id`. Reported tool durations are callback-anchored estimates, not model latency. Thought and final-answer hooks never become LLM requests. Prompts, responses, tool payloads, error text, model labels, workspace paths, and transcript paths do not leave the hook. Doctor distinguishes installed hooks from an observed durable event, and never equates activation with server persistence.
+
+The bounded stream-json reader can plan explicit CLI imports in `--mode import-only --transcript structure`, with `--schema cursor-cli-stream-2026-10-31-v1`. It requires one terminal result with `request_id` and source timestamps; only `model_call_id` flushes identify reconstructed inference units. Anonymous messages and aggregate durations do not. Import commit/export is **held** until the hook/stream source-work alias is proven, even after uninstall/reinstall. Persisted IDE/CLI transcripts, live incremental tailing, usage, subagent ancestry, and automatic bundle updates remain held. No real agent home is scanned.
 
 ## Native telemetry coexistence
 
