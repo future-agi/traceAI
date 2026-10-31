@@ -30,8 +30,8 @@ classifiers = [
 # fi-instrumentation-otel declares python <3.14.
 python = ">=3.10,<3.14"
 # Gemini Live is preview. AsyncLive.connect and the send_client_content /
-# send_realtime_input / send_tool_response / receive methods were confirmed at 2.28.0
-# and 2.31.0. The vendor removes Live.send and Live.start_stream before 3.0: pin below 3.
+# send_realtime_input / send_tool_response / receive methods work at the 2.28 floor.
+# send_context_update is optional on older SDKs, covered at 2.34. Keep the preview API below 3.
 google-genai = ">=2.28,<3"
 fi-instrumentation-otel = ">=0.1.11"
 opentelemetry-api = ">=1.29.0"
@@ -42,6 +42,7 @@ wrapt = ">=1.15.0"
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
 pytest-asyncio = ">=0.23.0"
+opentelemetry-exporter-otlp-proto-http = ">=1.29.0"
 
 [tool.poetry.urls]
 Homepage = "https://futureagi.com"
