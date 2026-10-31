@@ -47,6 +47,8 @@ jobs:
           mvn -B -ntp -f java/compatibility/google-adk/pom.xml -Dtraceai.version="$TRACEAI_VERSION" -Dadk.version=${{ matrix.adk }} -DskipTests test dependency:go-offline
           mvn -B -ntp -f java/compatibility/google-adk/pom.xml dependency:get -Dartifact=org.apache.maven.surefire:surefire-junit-platform:3.5.2
           mvn -B -ntp -f java/compatibility/google-adk/pom.xml dependency:get -Dartifact=org.junit.platform:junit-platform-launcher:1.11.4
+          # Surefire resolves its provider's older commons artifact dynamically, even with JUnit 5.11.
+          mvn -B -ntp -f java/compatibility/google-adk/pom.xml dependency:get -Dartifact=org.junit.platform:junit-platform-commons:1.9.3
       - name: Test native tracing with only loopback networking
         run: |
           sudo unshare --net bash -c '
