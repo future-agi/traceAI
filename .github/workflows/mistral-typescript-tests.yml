@@ -1,0 +1,53 @@
+name: Mistral TypeScript tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'typescript/packages/traceai_mistral/**'
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/tsconfig*.json'
+      - 'typescript/pnpm-lock.yaml'
+      - 'typescript/pnpm-workspace.yaml'
+      - 'typescript/package.json'
+      - '.github/workflows/mistral-typescript-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-sdk:
+    name: Mistral native SDK / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node: ['22', '24']
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: typescript/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Install package and workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter '@traceai/mistral...'
+      - name: Build CommonJS and ESM packages
+        run: pnpm --filter '@traceai/mistral...' --workspace-concurrency=1 run build
+      - name: Check native client type preservation and example
+        run: pnpm --filter '@traceai/mistral' run test:types
+      - name: Native SDK regressions with outbound network disabled
+        run: |
+          sudo unshare --net bash -c 'set -e; ip link set lo up; "$1" node_modules/jest/bin/jest.js --config packages/traceai_mistral/jest.config.js --runInBand; exec "$1" --test packages/traceai_mistral/test/native.test.cjs' _ "$(command -v node)"
+      - name: Pack the release artifact
+        run: pnpm --filter '@traceai/mistral' pack --pack-destination "$RUNNER_TEMP/mistral-package"
