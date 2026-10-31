@@ -74,6 +74,16 @@ class PlanTests(unittest.TestCase):
         packages = release_plan.typescript_packages(self.repo.root)
         self.assertEqual(release_plan.consistency_problems(packages), ["typescript/packages/traceai_openai/src/version.ts: VERSION is 0.1.0 but package.json says 0.1.13"])
 
+    def test_npm_version_constants_are_found_in_any_source_file(self):
+        # A second constant in another module is what the instrumentor may really use.
+        pkg = self.repo.root / "typescript/packages/traceai_openai"
+        write(pkg / "src/version.ts", 'export const VERSION = "0.1.13"; // x-release-please-version\n')
+        write(pkg / "src/mcp/patch.ts", 'import x from "y";\n\nconst VERSION = "0.1.0";\n')
+        write(pkg / "src/__tests__/fixture.test.ts", 'const VERSION = "9.9.9";\n')
+        by = {p["name"]: p for p in release_plan.typescript_packages(self.repo.root)}
+        self.assertEqual(by["@traceai/openai"]["declared"], {"src/mcp/patch.ts": "0.1.0", "src/version.ts": "0.1.13"})
+        self.assertEqual(release_plan.consistency_problems([by["@traceai/openai"]]), ["typescript/packages/traceai_openai/src/mcp/patch.ts: VERSION is 0.1.0 but package.json says 0.1.13"])
+
     def test_npm_runtime_version_needs_marker_and_extra_file(self):
         pkg = self.repo.root / "typescript/packages/traceai_openai"
         write(pkg / "src/version.ts", 'export const VERSION = "0.1.13";\n')
