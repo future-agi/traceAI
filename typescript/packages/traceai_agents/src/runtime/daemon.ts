@@ -8,12 +8,9 @@ import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { frame } from "@traceai/agent-core/client";
 import { minimize } from "@traceai/agent-core";
-import {
-  AdapterRegistry,
-  enforceCapability,
-  type LocalObserver,
-} from "../adapters.js";
-import { loadConfig, type Paths, type Config } from "../config.js";
+import { AdapterRegistry, enforceCapability, type LocalObserver } from "../adapters.js";
+import { configTransaction, loadConfig, type Paths, type Config } from "../config.js";
+
 import { AgentError, protectedDirectory } from "../security/files.js";
 import {
   FileSecretStore,
@@ -128,10 +125,11 @@ export class Runtime {
     }
   }
   private async refresh(): Promise<void> {
+
     for (const observer of this.observers.values()) await observer.stop();
     this.observers.clear();
     this.observerHolds.clear();
-    const config = loadConfig(this.paths);
+    let config = loadConfig(this.paths);
     for (const [id, fence] of Object.entries(config.fences ?? {})) {
       await this.storage.call("disable", id);
       try {
@@ -143,6 +141,28 @@ export class Runtime {
           }
       } catch (e) {
         if (!(e instanceof AgentError) || e.code !== "UNKNOWN_ROUTE") throw e;
+      }
+    }
+    // A crash between the durable disable fence and config commit must never
+    // revive admission, nor prevent the runtime from starting for other routes.
+    for (const [id, installed] of Object.entries(config.routes)) {
+      let durable;
+      try {
+        durable = await this.storage.call("getRoute", id);
+      } catch (e) {
+        if (e instanceof AgentError && e.code === "UNKNOWN_ROUTE") continue;
+        throw e;
+      }
+      if (!durable.enabled && durable.epoch > installed.route.epoch) {
+        await configTransaction(this.paths, async (current) => {
+          const route = current.routes[id];
+          if (route && route.route.epoch < durable.epoch) {
+            route.route.enabled = false;
+            route.route.epoch = durable.epoch;
+          }
+        });
+        config = loadConfig(this.paths);
+
       }
     }
     for (const route of Object.values(config.routes)) {

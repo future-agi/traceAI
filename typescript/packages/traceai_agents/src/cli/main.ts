@@ -296,6 +296,19 @@ export async function main(
             )
               throw new AgentError("HELD_BACKEND_CONTRACT", 3);
             profile.binding.backendContract = "immutable-agent-v1";
+            // Approval may follow installation. Upgrade the installed route with
+            // the same immutable destination and epoch, or refuse atomically.
+            for (const route of Object.values(config.routes)) {
+              if (route.profile !== name) continue;
+              if (!sameDestination(route.route.binding, profile.binding))
+                throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
+              controlRuntime ??= await ensureControlRuntime(p, settings);
+              await runtimeRequest(p.socket, {
+                operation: "validate-route",
+                route: { ...route.route, binding: profile.binding },
+              });
+              route.route.binding = profile.binding;
+            }
           }
           // Contract qualification changes delivery eligibility, not the approved
           // destination, identity key, route epoch, capture consent or activation.
@@ -317,10 +330,12 @@ export async function main(
           );
           profile.removed = false;
           config.profiles[name] = profile;
+
         });
         // Qualification persists offline; startup migrates matching route metadata.
         // Authentication retry holds still need this explicit action while running.
         let reconciled = false;
+
         try {
           await compatibleRuntime(p, settings.version);
           await runtimeRequest(p.socket, {
@@ -500,14 +515,13 @@ export async function main(
       try {
         await startRuntime(p, settings.entry, settings.version, 500);
       } catch (e) {
-        if (
-          !(e instanceof AgentError) ||
-          !["RUNTIME_UNAVAILABLE", "RUNTIME_RESTART_REQUIRED"].includes(e.code)
-        )
-          throw e;
+
+        // Only local telemetry startup is inside this try. Failure must not
+        // change the child process decision or exit status.
+        if (e instanceof AgentError && e.code === "NATIVE_DESTINATION_CONFLICT") throw e;
         tracing = false;
         process.stderr.write(
-          e.code === "RUNTIME_RESTART_REQUIRED"
+          e instanceof AgentError && e.code === "RUNTIME_RESTART_REQUIRED"
             ? "fi-agent: runtime restart required; launching without tracing\n"
             : "fi-agent: tracing unavailable; launching without tracing\n",
         );
@@ -611,6 +625,7 @@ export async function main(
       command as "enable" | "disable" | "update" | "uninstall",
       context,
     );
+
     const prospectiveRoute = (retainedEpoch = 0) => ({
       id: routeId,
       binding: profile.binding,
@@ -644,25 +659,26 @@ export async function main(
       await configTransaction(p, async (c) => {
         if (JSON.stringify(c.routes[routeId]) !== JSON.stringify(installed))
           throw new AgentError("CONFIGURATION_CONFLICT", 6);
-        const activation = await change.commit();
         c.fences ??= {};
         c.fences[routeId] = {
-          purge:
-            options["purge-capture"] === true ||
-            c.fences[routeId]?.purge === true,
+          purge: options["purge-capture"] === true || c.fences[routeId]?.purge === true,
         };
+        c.routes[routeId] = {
+          ...installed,
+          transcriptConsent: context.transcriptConsent,
+          route: {
+            ...installed.route,
+            enabled: false,
+            epoch: installed.route.epoch + Number(installed.route.enabled),
+          },
+        };
+      });
+      // The fence survives a failed host-owned commit or rollback. A later
+      // uninstall may still finish cleanup while capture remains disabled.
+      const activation = await change.commit();
+      await configTransaction(p, async (c) => {
         if (command === "uninstall") delete c.routes[routeId];
-        else
-          c.routes[routeId] = {
-            ...installed,
-            transcriptConsent: context.transcriptConsent,
-            activation,
-            route: {
-              ...installed.route,
-              enabled: false,
-              epoch: installed.route.epoch + Number(installed.route.enabled),
-            },
-          };
+        else if (c.routes[routeId]) c.routes[routeId].activation = activation;
       });
       let reconciled = false;
       try {
@@ -682,6 +698,7 @@ export async function main(
     }
     if (command === "enable" || command === "update")
       await startRuntime(p, settings.entry, settings.version);
+
     try {
       await configTransaction(
         p,

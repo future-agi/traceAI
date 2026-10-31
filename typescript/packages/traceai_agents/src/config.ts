@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+
 import { configurationLock } from "./security/config-lock.js";
+
 import { token } from "@traceai/agent-core";
 import {
   AgentError,

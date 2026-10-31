@@ -34,6 +34,8 @@ export function validateBinding(binding: Binding): URL {
     !/^[a-f0-9-]{36}$/.test(binding.id) ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(binding.project) ||
     url.origin !== binding.approvedOrigin ||
+    (binding.backendContract !== undefined &&
+      binding.backendContract !== "immutable-agent-v1") ||
     url.username ||
     url.password ||
     url.search ||
@@ -50,3 +52,4 @@ export function validateBinding(binding: Binding): URL {
     throw new AgentError("TLS_REQUIRED", 3);
   return url;
 }
+

@@ -1319,3 +1319,97 @@ test("runtime start reports a too-long socket path before detaching", async (t) 
   assert.deepEqual(JSON.parse(result.stdout).reasons, ["SOCKET_PATH_TOO_LONG"]);
   assert.equal(fs.existsSync(longState), false);
 });
+
+test("backend approval updates an installed route without losing its identity", async (t) => {
+  const { root, p } = fixture(t);
+  await credentials(p);
+  await start(t, p);
+  const before = loadConfig(p).routes[routeId].route;
+  const auth = path.join(root, "auth.json"), manifest = path.join(root, "manifest.json");
+  fs.writeFileSync(auth, JSON.stringify({api_key:"synthetic-api",secret_key:"synthetic-secret"}), {mode:0o600});
+  fs.writeFileSync(manifest, JSON.stringify({contract:"immutable-agent-v1",endpoint:before.binding.endpoint,project:before.binding.project,immutableAdmission:true,uniqueReads:true,usagePlans:true}), {mode:0o600});
+  assert.equal(await main(["auth","add","--profile","work","--project","fixture","--credential-file",auth,"--contract-manifest",manifest],settings), 0);
+  const after = loadConfig(p).routes[routeId].route;
+  assert.equal(after.binding.backendContract, "immutable-agent-v1");
+  assert.equal(after.epoch, before.epoch);
+  assert.equal((await runtimeRequest(p.socket,{operation:"route-state",route:routeId})).route.binding.backendContract,"immutable-agent-v1");
+  assert.equal(await command("update"),0);
+  assert.equal(await command("disable"),0);
+  assert.equal(await command("uninstall"),0);
+});
+
+test("failed owned cleanup keeps durable fence restartable and removable", async (t) => {
+  const {p}=fixture(t);
+  let runtime=await start(t,p);
+  const {AdapterRegistry}=require("../dist/src/adapters.js");
+  let fail=true;
+  const registry=new AdapterRegistry([{...reference,preflight:async()=>({commit:async()=>{if(fail) throw Error("synthetic commit failure"); return loadConfig(p).routes[routeId].activation;},rollback:async()=>{}})}]);
+  assert.equal(await main(["disable","reference","--surface","fixture"],{...settings,registry}),7);
+  assert.equal(loadConfig(p).routes[routeId].route.enabled,false);
+  await runtime.stop();
+  runtime=await start(t,p);
+  assert.equal((await runtimeRequest(p.socket,{operation:"route-state",route:routeId})).route.enabled,false);
+  fail=false;
+  assert.equal(await main(["uninstall","reference","--surface","fixture"],{...settings,registry}),0);
+});
+
+test("inaccessible telemetry state still launches the child without tracing", async (t) => {
+  const {root,env}=fixture(t);
+  const marker=path.join(root,"launched");
+  const bad=path.join(root,"not-a-directory");
+  fs.writeFileSync(bad,"blocked");
+  const result=await cli({...env,FI_AGENT_STATE_HOME:path.join(bad,"state")},["run","reference","--surface","fixture","--","-e",`require('node:fs').writeFileSync(${JSON.stringify(marker)},'yes'); process.exit(23)`]);
+  assert.equal(result.code,23,JSON.stringify(result));
+  assert.equal(fs.readFileSync(marker,"utf8"),"yes");
+});
+
+test("configuration lock survives live contention but releases on process death", async (t) => {
+  const {p}=fixture(t);
+  const modulePath=path.resolve(__dirname,"../dist/src/config.js");
+  const script=`const {configTransaction}=require(${JSON.stringify(modulePath)}); globalThis.pending=configTransaction(${JSON.stringify(p)},async()=>{process.send('locked'); await new Promise(resolve=>process.on('message',resolve))})`;
+  const worker=fork("-e",[script],{execArgv:[],execPath:process.execPath,stdio:["ignore","ignore","pipe","ipc"]});
+  let workerError="";
+  worker.stderr.on("data",chunk=>{workerError+=chunk});
+  cleanup(t,()=>{if(worker.exitCode===null) worker.kill("SIGKILL")});
+  await once(worker,"message");
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(worker.exitCode,null,"lock owner exited before the contention check: "+workerError);
+  await assert.rejects(configTransaction(p,async()=>{}),/CONFIGURATION_CONFLICT/);
+  const exit=once(worker,"exit"); worker.kill("SIGKILL"); await exit;
+  await configTransaction(p,async(c)=>{c.profiles.work.removed=true});
+  assert.equal(loadConfig(p).profiles.work.removed,true);
+});
+
+test("runtime reconciles a crash after the storage fence but before config save", async (t) => {
+  const {p}=fixture(t);
+  const runtime=await start(t,p);
+  await runtimeRequest(p.socket,{operation:"disable",route:routeId});
+  assert.equal(loadConfig(p).routes[routeId].route.enabled,true);
+  await runtime.stop();
+  await start(t,p);
+  assert.equal(loadConfig(p).routes[routeId].route.enabled,false);
+  assert.equal(loadConfig(p).routes[routeId].route.epoch,2);
+  assert.equal(await command("uninstall"),0);
+});
+
+test("failed uninstall and failed rollback keep durable cleanup fence", async (t) => {
+  const {p}=fixture(t);
+  const runtime=await start(t,p);
+  const {AdapterRegistry}=require("../dist/src/adapters.js");
+  const registry=new AdapterRegistry([{...reference,preflight:async()=>({commit:async()=>{throw Error("owned change failed")},rollback:async()=>{throw Error("rollback failed")}})}]);
+  assert.equal(await main(["uninstall","reference","--surface","fixture"],{...settings,registry}),7);
+  assert.equal(loadConfig(p).routes[routeId].route.enabled,false);
+  assert.equal(loadConfig(p).routes[routeId].route.epoch,2);
+  await runtime.stop();
+  await start(t,p);
+  assert.equal((await runtimeRequest(p.socket,{operation:"route-state",route:routeId})).route.enabled,false);
+});
+
+test("offline credential rotation without contract approval leaves routes usable", async (t) => {
+  const {root,p}=fixture(t);
+  await credentials(p);
+  const auth=path.join(root,"rotation.json");
+  fs.writeFileSync(auth,JSON.stringify({api_key:"synthetic-rotated",secret_key:"synthetic-secret"}),{mode:0o600});
+  assert.equal(await main(["auth","add","--profile","work","--project","fixture","--credential-file",auth],settings),0);
+  assert.equal(loadConfig(p).routes[routeId].route.enabled,true);
+});
