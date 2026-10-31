@@ -142,7 +142,10 @@ generated (inline) images are never copied; the transport adds no resource attri
 - `POST .../models/{model}:embedContent` and `:batchEmbedContents`: one `EMBEDDING` span
   with operation `embeddings`, request model, `embedding.model_name`, text inputs using the
   same input attributes as generation, and allow-listed task type/output dimensionality in
-  `gen_ai.request.parameters`. `embedding.count` records returned vectors;
+  `gen_ai.request.parameters`. The flattened `gen_ai.input.messages.*` preview contains at most
+  the first 32 documents, leaving room for context and response/error metadata under the default
+  OpenTelemetry attribute limit. `input.value` retains the full batch, subject to privacy settings.
+  `embedding.count` records returned vectors;
   `gen_ai.embeddings.dimension.count` records their dimension when uniform. Vector values,
   titles, media and opaque fields are never captured. `FI_HIDE_INPUTS` redacts the input
   summary and drops messages; `FI_HIDE_INPUT_TEXT` redacts text in both. Gemini Developer

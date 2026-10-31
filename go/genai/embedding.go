@@ -7,6 +7,12 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+// Text-only documents use at most two flattened attributes each. Keep this
+// preview within half of OTel's default 128-attribute span budget, leaving room
+// for aggregate input, parameters, context and response/error metadata. The
+// privacy-filtered input.value still contains every document in the batch.
+const maxEmbeddingMessages = 32
+
 // embeddingRequest covers embedContent and each item of batchEmbedContents.
 // Title, file bytes and unknown fields are deliberately not retained.
 type embeddingRequest struct {
@@ -50,7 +56,9 @@ func parseEmbeddingRequest(body []byte, tc TraceConfig, batch bool) parsedReques
 			}
 		}
 		messages = append(messages, message)
-		p.attrs = append(p.attrs, messageAttributes(GenAIInputMessages+"."+strconv.Itoa(i)+".", message, "user", false)...)
+		if i < maxEmbeddingMessages {
+			p.attrs = append(p.attrs, messageAttributes(GenAIInputMessages+"."+strconv.Itoa(i)+".", message, "user", false)...)
+		}
 		param := map[string]any{}
 		// Task types are an API enum. Never export an arbitrary user string.
 		switch r.TaskType {

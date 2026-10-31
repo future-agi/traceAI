@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,12 +73,26 @@ func (c embeddingJSONClient) UploadTraces(ctx context.Context, spans []*tracepb.
 }
 
 func TestEmbeddingOTLPWire(t *testing.T) {
+	testEmbeddingOTLPWire(t, 1, false)
+}
+
+func TestEmbeddingFullBatchOTLPWire(t *testing.T) {
+	t.Run("success", func(t *testing.T) { testEmbeddingOTLPWire(t, 100, false) })
+	t.Run("error", func(t *testing.T) { testEmbeddingOTLPWire(t, 100, true) })
+}
+
+func testEmbeddingOTLPWire(t *testing.T, batchSize int, apiError bool) {
+	t.Helper()
+	// Exercise the documented provider's default limits, not a raised test limit.
+	t.Setenv("OTEL_ATTRIBUTE_COUNT_LIMIT", "")
+	t.Setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "")
 	for _, jsonWire := range []bool{false, true} {
 		for _, compressed := range []bool{false, true} {
-			for name, tc := range map[string]traceaigenai.TraceConfig{"capture": {}, "inputs": {HideInputs: true}, "text": {HideInputText: true}, "parameters": {HideLLMInvocationParameters: true}} {
+			for name, tc := range map[string]traceaigenai.TraceConfig{"capture": {}, "inputs": {HideInputs: true}, "messages": {HideInputMessages: true}, "text": {HideInputText: true}, "parameters": {HideLLMInvocationParameters: true}} {
 				t.Run(fmt.Sprintf("json=%t/gzip=%t/%s", jsonWire, compressed, name), func(t *testing.T) {
 					clearHideEnv(t)
-					ctx := context.Background()
+					ctx := traceaigenai.ContextWithSessionID(context.Background(), "batch-session")
+					ctx = traceaigenai.ContextWithUserID(ctx, "batch-user")
 					received := make(chan *collectortrace.ExportTraceServiceRequest, 1)
 					collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if r.Method != http.MethodPost || r.URL.Path != "/tracer/v1/traces" || r.Header.Get("X-Api-Key") != "synthetic-fi-key" || r.Header.Get("X-Secret-Key") != "synthetic-fi-secret" {
@@ -143,17 +158,55 @@ func TestEmbeddingOTLPWire(t *testing.T) {
 						if r.Header.Get("X-Api-Key") != "" || r.Header.Get("X-Secret-Key") != "" {
 							t.Error("collector credentials sent to Gemini")
 						}
+						if r.URL.Path != "/v1beta/models/gemini-embedding-001:batchEmbedContents" || r.Header.Get("x-goog-api-key") != testGeminiKey {
+							t.Error("wrong SDK endpoint or credentials")
+						}
+						var request struct {
+							Requests []json.RawMessage `json:"requests"`
+						}
+						if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Requests) != batchSize {
+							t.Errorf("SDK batch changed: count=%d err=%v", len(request.Requests), err)
+						}
 						w.Header().Set("Content-Type", "application/json")
-						_, _ = io.WriteString(w, `{"embeddings":[{"values":[0.125,0.875]}]}`)
+						if apiError {
+							w.WriteHeader(http.StatusBadRequest)
+							_, _ = io.WriteString(w, `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"invalid embedding input"}}`)
+							return
+						}
+						embeddings := make([]map[string]any, batchSize)
+						for i := range embeddings {
+							embeddings[i] = map[string]any{"values": []float64{0.125, 0.875}}
+						}
+						if err := json.NewEncoder(w).Encode(map[string]any{"embeddings": embeddings}); err != nil {
+							t.Error(err)
+						}
 					}))
 					defer model.Close()
 					client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: testGeminiKey, Backend: genai.BackendGeminiAPI, HTTPClient: traceaigenai.NewHTTPClient(traceaigenai.WithTracerProvider(tp), traceaigenai.WithTraceConfig(tc)), HTTPOptions: genai.HTTPOptions{BaseURL: model.URL + "/"}})
 					if err != nil {
 						t.Fatal(err)
 					}
-					_, err = client.Models.EmbedContent(ctx, "gemini-embedding-001", genai.Text("private-wire-input"), &genai.EmbedContentConfig{Title: "private-wire-title", TaskType: "RETRIEVAL_DOCUMENT", OutputDimensionality: genai.Ptr[int32](2)})
-					if err != nil {
-						t.Fatal(err)
+					inputs := make([]*genai.Content, batchSize)
+					for i := range inputs {
+						inputs[i] = genai.NewContentFromText(fmt.Sprintf("private-wire-input-%03d", i), genai.RoleUser)
+					}
+					response, err := client.Models.EmbedContent(ctx, "gemini-embedding-001", inputs, &genai.EmbedContentConfig{Title: "private-wire-title", TaskType: "RETRIEVAL_DOCUMENT", OutputDimensionality: genai.Ptr[int32](2)})
+					if apiError {
+						if err == nil {
+							t.Fatal("SDK error lost")
+						}
+					} else {
+						if err != nil {
+							t.Fatal(err)
+						}
+						if len(response.Embeddings) != batchSize {
+							t.Fatal("SDK response count changed")
+						}
+						for _, embedding := range response.Embeddings {
+							if len(embedding.Values) != 2 || embedding.Values[0] != 0.125 || embedding.Values[1] != 0.875 {
+								t.Fatal("SDK vector changed")
+							}
+						}
 					}
 					if err = tp.Shutdown(ctx); err != nil {
 						t.Fatal(err)
@@ -176,9 +229,72 @@ func TestEmbeddingOTLPWire(t *testing.T) {
 					a := map[string]string{}
 					for _, kv := range s.Attributes {
 						a[kv.Key] = kv.Value.GetStringValue()
+						if a[kv.Key] == "" {
+							a[kv.Key] = fmt.Sprint(kv.Value.GetIntValue())
+						}
 					}
-					if a["gen_ai.span.kind"] != "EMBEDDING" || a["gen_ai.operation.name"] != "embeddings" {
-						t.Error("embedding semantics missing")
+					if s.DroppedAttributesCount != 0 {
+						t.Errorf("default provider dropped %d attributes", s.DroppedAttributesCount)
+					}
+					want := map[string]string{
+						"gen_ai.span.kind": "EMBEDDING", "gen_ai.operation.name": "embeddings",
+						"gen_ai.provider.name": "google", "gen_ai.request.model": "gemini-embedding-001",
+						"embedding.model_name": "gemini-embedding-001", "session.id": "batch-session", "user.id": "batch-user",
+					}
+					if apiError {
+						want["http.response.status_code"] = "400"
+						want["error.type"] = "INVALID_ARGUMENT"
+						if !tc.HideInputs {
+							want["error.message"] = "invalid embedding input"
+						}
+						if s.Status.GetCode() != tracepb.Status_STATUS_CODE_ERROR || a["embedding.count"] != "" {
+							t.Error("wrong error semantics")
+						}
+					} else {
+						want["http.response.status_code"] = "200"
+						want["embedding.count"] = fmt.Sprint(batchSize)
+						want["gen_ai.embeddings.dimension.count"] = "2"
+					}
+					for key, value := range want {
+						if a[key] != value {
+							t.Errorf("%s=%q want=%q", key, a[key], value)
+						}
+					}
+					if tc.HideInputs {
+						if a["input.value"] != traceaigenai.RedactedValue || a["error.message"] != "" {
+							t.Error("input or error privacy changed")
+						}
+					} else {
+						var messages []struct{ Role, Content string }
+						if err := json.Unmarshal([]byte(a["input.value"]), &messages); err != nil || len(messages) != batchSize {
+							t.Errorf("aggregate input lost: count=%d err=%v", len(messages), err)
+						}
+						for i, message := range messages {
+							text := fmt.Sprintf("private-wire-input-%03d", i)
+							if tc.HideInputText {
+								text = traceaigenai.RedactedValue
+							}
+							if message.Role != "user" || message.Content != text {
+								t.Errorf("aggregate document %d changed", i)
+							}
+						}
+					}
+					if !tc.HideLLMInvocationParameters {
+						var params struct{ Requests []map[string]any }
+						if err := json.Unmarshal([]byte(a["gen_ai.request.parameters"]), &params); err != nil || len(params.Requests) != batchSize {
+							t.Errorf("batch parameters lost: count=%d err=%v", len(params.Requests), err)
+						}
+					}
+					if tc.HideInputs || tc.HideInputMessages {
+						for key := range a {
+							if strings.HasPrefix(key, "gen_ai.input.messages.") {
+								t.Error("hidden flattened input on wire")
+							}
+						}
+					} else if batchSize > 32 {
+						if a["gen_ai.input.messages.31.message.role"] != "user" || a["gen_ai.input.messages.32.message.role"] != "" {
+							t.Error("flattened document preview is not bounded to 32 messages")
+						}
 					}
 					project := ""
 					for _, kv := range rs.Resource.Attributes {
