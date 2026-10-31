@@ -11,7 +11,6 @@ import io.opentelemetry.sdk.trace.SdkTracerProviderBuilder;
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.exporter.logging.LoggingSpanExporter;
-import io.opentelemetry.semconv.ResourceAttributes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,7 +85,7 @@ public final class TraceAI {
                     : "traceai-java-app";
 
             var resourceAttrsBuilder = Attributes.builder()
-                .put(ResourceAttributes.SERVICE_NAME, serviceName);
+                .put(AttributeKey.stringKey("service.name"), serviceName);
 
             if (config.getProjectName() != null) {
                 resourceAttrsBuilder.put(AttributeKey.stringKey("project_name"), config.getProjectName());
