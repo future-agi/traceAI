@@ -33,12 +33,15 @@ const VectorDBConventions = {
   DB_VECTOR_NAMESPACE: "db.vector.namespace",
 } as const;
 
-const MODULE_NAME = "@pinecone-database/pinecone";
+type IndexMethod = (...args: unknown[]) => Promise<unknown>;
+type IndexPrototype = Record<string, IndexMethod>;
+interface PineconeModule {
+  Index?: { prototype: IndexPrototype };
+}
+const patchedPrototypes = new Set<IndexPrototype>();
 
-let _isPatched = false;
-
-export function isPatched() {
-  return _isPatched;
+export function isPatched(): boolean {
+  return patchedPrototypes.size > 0;
 }
 
 /**
@@ -62,6 +65,9 @@ export class PineconeInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
   private _traceConfig?: TraceConfigOptions;
   private _pineconeConfig: PineconeInstrumentationConfig;
+  // Lazily initialized: InstrumentationBase calls enable() during construction.
+  private _knownModules?: Set<PineconeModule>;
+  private _wrappedMethods?: Map<IndexPrototype, Map<string, IndexMethod>>;
 
   constructor({
     instrumentationConfig,
@@ -85,6 +91,18 @@ export class PineconeInstrumentation extends InstrumentationBase {
       tracer: this.tracer,
       traceConfig: this._traceConfig,
     });
+    for (const module of this._knownModules ?? []) {
+      this.patch(module);
+    }
+  }
+
+  public override disable(): void {
+    super.disable();
+    // The base class only knows modules loaded through its require/import hooks.
+    // Explicit registrations and additional SDK copies need the same cleanup.
+    for (const module of this._knownModules ?? []) {
+      this.unpatch(module);
+    }
   }
 
   protected init() {
@@ -103,118 +121,77 @@ export class PineconeInstrumentation extends InstrumentationBase {
     this.patch(module);
   }
 
-  private patch(moduleExports: any, moduleVersion?: string) {
-    if (_isPatched) {
-      return moduleExports;
-    }
+  private patch(moduleExports: PineconeModule) {
+    const prototype = moduleExports?.Index?.prototype;
+    if (!prototype) return moduleExports;
 
-    const instrumentation = this;
+    (this._knownModules ??= new Set()).add(moduleExports);
+    if (patchedPrototypes.has(prototype)) return moduleExports;
 
-    // Ensure fiTracer is properly initialized
-    if (!instrumentation.fiTracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig,
+    if (!this.fiTracer) {
+      this.fiTracer = new FITracer({
+        tracer: this.tracer,
+        traceConfig: this._traceConfig,
       });
     }
 
-    // Pinecone has an Index class with namespace() method that returns operations
-    // We need to patch the Index operations: query, upsert, update, deleteOne, deleteMany, fetch
-
-    if (moduleExports.Index) {
-      const IndexPrototype = moduleExports.Index.prototype;
-
-      // Patch query
-      if (IndexPrototype.query) {
-        const originalQuery = IndexPrototype.query;
-        IndexPrototype.query = function (this: any, params: any) {
-          return instrumentation.wrapQuery(originalQuery, this, params);
+    const instrumentation = this;
+    const wrappers = {
+      query: this.wrapQuery,
+      upsert: this.wrapUpsert,
+      fetch: this.wrapFetch,
+      update: this.wrapUpdate,
+      deleteOne: this.wrapDeleteOne,
+      deleteMany: this.wrapDeleteMany,
+      deleteAll: this.wrapDeleteAll,
+      listPaginated: this.wrapList,
+      describeIndexStats: this.wrapDescribeStats,
+    };
+    const wrappedMethods = new Map<string, IndexMethod>();
+    for (const [method, wrapper] of Object.entries(wrappers)) {
+      if (typeof prototype[method] !== "function") continue;
+      this._wrap(prototype, method, original => {
+        const wrapped: IndexMethod = function (this: unknown, ...args: unknown[]) {
+          // Cached references or later wrappers may outlive unpatch(). Only
+          // this registration may emit, including after a subsequent re-enable.
+          if (instrumentation._wrappedMethods?.get(prototype)?.get(method) !== wrapped) {
+            return original.apply(this, args);
+          }
+          return wrapper.call(instrumentation, original, this, args[0]);
         };
-      }
-
-      // Patch upsert
-      if (IndexPrototype.upsert) {
-        const originalUpsert = IndexPrototype.upsert;
-        IndexPrototype.upsert = function (this: any, vectors: any) {
-          return instrumentation.wrapUpsert(originalUpsert, this, vectors);
-        };
-      }
-
-      // Patch fetch
-      if (IndexPrototype.fetch) {
-        const originalFetch = IndexPrototype.fetch;
-        IndexPrototype.fetch = function (this: any, ids: any) {
-          return instrumentation.wrapFetch(originalFetch, this, ids);
-        };
-      }
-
-      // Patch update
-      if (IndexPrototype.update) {
-        const originalUpdate = IndexPrototype.update;
-        IndexPrototype.update = function (this: any, params: any) {
-          return instrumentation.wrapUpdate(originalUpdate, this, params);
-        };
-      }
-
-      // Patch deleteOne
-      if (IndexPrototype.deleteOne) {
-        const originalDeleteOne = IndexPrototype.deleteOne;
-        IndexPrototype.deleteOne = function (this: any, id: any) {
-          return instrumentation.wrapDeleteOne(originalDeleteOne, this, id);
-        };
-      }
-
-      // Patch deleteMany
-      if (IndexPrototype.deleteMany) {
-        const originalDeleteMany = IndexPrototype.deleteMany;
-        IndexPrototype.deleteMany = function (this: any, params: any) {
-          return instrumentation.wrapDeleteMany(
-            originalDeleteMany,
-            this,
-            params
-          );
-        };
-      }
-
-      // Patch deleteAll
-      if (IndexPrototype.deleteAll) {
-        const originalDeleteAll = IndexPrototype.deleteAll;
-        IndexPrototype.deleteAll = function (this: any) {
-          return instrumentation.wrapDeleteAll(originalDeleteAll, this);
-        };
-      }
-
-      // Patch listPaginated
-      if (IndexPrototype.listPaginated) {
-        const originalList = IndexPrototype.listPaginated;
-        IndexPrototype.listPaginated = function (this: any, params?: any) {
-          return instrumentation.wrapList(originalList, this, params);
-        };
-      }
-
-      // Patch describeIndexStats
-      if (IndexPrototype.describeIndexStats) {
-        const originalDescribe = IndexPrototype.describeIndexStats;
-        IndexPrototype.describeIndexStats = function (this: any) {
-          return instrumentation.wrapDescribeStats(originalDescribe, this);
-        };
-      }
+        return wrapped;
+      });
+      wrappedMethods.set(method, prototype[method]);
     }
-
-    _isPatched = true;
+    if (wrappedMethods.size > 0) {
+      (this._wrappedMethods ??= new Map()).set(prototype, wrappedMethods);
+      patchedPrototypes.add(prototype);
+    }
     return moduleExports;
   }
 
-  private unpatch(moduleExports: any, moduleVersion?: string) {
-    _isPatched = false;
+  private unpatch(moduleExports: PineconeModule) {
+    const prototype = moduleExports?.Index?.prototype;
+    if (!prototype) return;
+    const wrappedMethods = this._wrappedMethods?.get(prototype);
+    if (!wrappedMethods) return;
+
+    for (const [method, wrapped] of wrappedMethods) {
+      // Do not remove a replacement installed by somebody else after us.
+      if (prototype[method] === wrapped) this._unwrap(prototype, method);
+    }
+    this._wrappedMethods!.delete(prototype);
+    patchedPrototypes.delete(prototype);
   }
 
   private getIndexName(instance: any): string {
-    return instance?.indexName || instance?._indexName || "unknown";
+    return instance?.target?.index ?? instance?.indexName ?? instance?._indexName ?? "unknown";
   }
 
   private getNamespace(instance: any): string {
-    return instance?.namespace || instance?._namespace || "";
+    // In supported SDKs namespace() is a method, not the namespace value.
+    return instance?.target?.namespace ?? instance?._namespace ??
+      (typeof instance?.namespace === "string" ? instance.namespace : "");
   }
 
   private getCommonAttributes(

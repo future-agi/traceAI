@@ -1,77 +1,60 @@
 # @traceai/pinecone
 
-OpenTelemetry instrumentation for [Pinecone](https://www.pinecone.io/) - the serverless vector database for high-performance AI applications.
+Trace [Pinecone](https://www.pinecone.io/) index operations in Node.js with OpenTelemetry and send them to Future AGI.
 
-## Overview
-
-This package provides automatic tracing for Pinecone operations in Node.js applications, enabling full observability of your vector database interactions in production AI systems, RAG pipelines, and semantic search applications.
+Supports `@pinecone-database/pinecone` majors **2–4**. Install a supported SDK version; SDK 5 and later are outside this package's compatibility range. The traced operations are listed below; control-plane, inference, and assistant APIs are not instrumented.
 
 ## Installation
 
 ```bash
-npm install @traceai/pinecone
-# or
-yarn add @traceai/pinecone
-# or
-pnpm add @traceai/pinecone
+npm install @traceai/pinecone @traceai/fi-core @pinecone-database/pinecone@^4
 ```
 
 ## Quick Start
 
-### Basic Setup
+### Basic setup
+
+Set `FI_API_KEY`, `FI_SECRET_KEY`, and `PINECONE_API_KEY` in your environment. Use an existing Pinecone index and a record ID in that index for the query below.
 
 ```typescript
-import { PineconeInstrumentation } from "@traceai/pinecone";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-
-// Set up OpenTelemetry
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(
-  new SimpleSpanProcessor(
-    new OTLPTraceExporter({
-      url: "https://api.futureagi.com/v1/traces",
-      headers: {
-        "Authorization": `Bearer ${process.env.FI_API_KEY}`,
-        "FI-Project-Name": process.env.FI_PROJECT_NAME,
-      },
-    })
-  )
-);
-provider.register();
-
-// Register Pinecone instrumentation
-registerInstrumentations({
-  instrumentations: [
-    new PineconeInstrumentation(),
-  ],
-});
-
-// Now use Pinecone as normal - all operations are traced
-import { Pinecone } from "@pinecone-database/pinecone";
-
-const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
-const index = pinecone.index("my-index");
-
-// This operation will be automatically traced
-const results = await index.query({
-  vector: [0.1, 0.2, 0.3, /* ... */],
-  topK: 10,
-  includeMetadata: true,
-});
-```
-
-### Manual Instrumentation
-
-```typescript
+import { register, ProjectType } from "@traceai/fi-core";
 import { PineconeInstrumentation } from "@traceai/pinecone";
 import * as pinecone from "@pinecone-database/pinecone";
 
+const provider = register({
+  projectName: "pinecone-search",
+  projectType: ProjectType.OBSERVE,
+});
 const instrumentation = new PineconeInstrumentation();
+// Explicit registration also works when your SDK import has already loaded.
 instrumentation.manuallyInstrument(pinecone);
+
+const client = new pinecone.Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
+const index = client.index("my-index");
+
+async function main() {
+  try {
+    const results = await index.query({ id: "existing-record-id", topK: 5 });
+    console.log(results.matches);
+  } finally {
+    instrumentation.disable();
+    await provider.shutdown();
+  }
+}
+
+main().catch(console.error);
 ```
+
+Open the `pinecone-search` project in Future AGI to inspect the `pinecone query` span. For a long-running application, shut down the provider when the application exits, rather than after each request.
+
+### Pause and resume tracing
+
+```typescript
+instrumentation.disable(); // Restore the original SDK methods.
+instrumentation.enable();  // Resume tracing previously registered modules.
+```
+
+Register each SDK module once. Repeated manual registration is safe, but use one instrumentation instance for each module.
 
 ## Configuration Options
 
@@ -586,7 +569,8 @@ const tenantIndex = index.namespace(`tenant_${tenantId}`);
 |----------|-------------|
 | `PINECONE_API_KEY` | Your Pinecone API key |
 | `FI_API_KEY` | Your Future AGI API key |
-| `FI_PROJECT_NAME` | Your project name |
+| `FI_SECRET_KEY` | Your Future AGI secret key |
+| `FI_PROJECT_NAME` | Project name when not passed to `register()` |
 
 ## Troubleshooting
 
