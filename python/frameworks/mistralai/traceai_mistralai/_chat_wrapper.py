@@ -22,7 +22,7 @@ from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     SpanAttributes,
 )
-from mistralai.utils.eventstreaming import EventStream, EventStreamAsync
+from collections.abc import AsyncIterator
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
@@ -148,6 +148,9 @@ class _WithMistralAI(ABC):
         bound_arguments = bound_signature.arguments
         request_data: Dict[str, Any] = {}
         for key, value in bound_arguments.items():
+            if key in {"http_headers", "server_url", "retries", "timeout_ms"} or isinstance(value, (Iterator, AsyncIterator)):
+                # Telemetry must not consume a one-shot message/tool iterable.
+                continue
             try:
                 if value is not None:
                     try:
@@ -177,14 +180,8 @@ class _WithMistralAI(ABC):
                 chat_completion_type=CompletionEvent,
             )
 
-            if isinstance(response, EventStreamAsync):
+            if isinstance(response, AsyncIterator):
                 return _AsyncStream(
-                    stream=response,
-                    with_span=with_span,
-                    response_accumulator=response_accumulator,
-                )
-            elif isinstance(response, EventStream):
-                return _Stream(
                     stream=response,
                     with_span=with_span,
                     response_accumulator=response_accumulator,

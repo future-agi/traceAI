@@ -4,11 +4,9 @@ from typing import Any, Collection
 from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor  # type: ignore
-from traceai_mistralai._chat_wrapper import (
-    _AsyncChatWrapper,
-    _AsyncStreamChatWrapper,
-    _SyncChatWrapper,
-)
+from importlib.metadata import version as distribution_version
+
+from packaging.version import Version
 from traceai_mistralai.package import _instruments
 from traceai_mistralai.version import __version__
 from wrapt import wrap_function_wrapper
@@ -26,6 +24,8 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
 
     __slots__ = (
         "_tracer",
+        "_native",
+        "_embedding_methods",
         "_original_sync_chat_method",
         "_original_sync_stream_chat_method",
         "_original_async_chat_method",
@@ -50,6 +50,23 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
             trace_api.get_tracer(__name__, __version__, tracer_provider),
             config=config,
         )
+
+        sdk_version = Version(distribution_version("mistralai"))
+        if not (Version("1.1.0") <= sdk_version < Version("2") or Version("3.6.0") <= sdk_version < Version("4")):
+            raise ValueError("traceAI-mistralai supports mistralai >=1.1,<2 or >=3.6,<4")
+        self._native = None
+        if sdk_version >= Version("3.6.0"):
+            from traceai_mistralai._native import _NativeInstrumentation
+
+            self._native = _NativeInstrumentation(tracer_provider, config)
+            return
+
+        from traceai_mistralai._chat_wrapper import (
+            _AsyncChatWrapper,
+            _AsyncStreamChatWrapper,
+            _SyncChatWrapper,
+        )
+        from traceai_mistralai._embeddings import _AsyncEmbeddingWrapper, _EmbeddingWrapper
 
         try:
             import mistralai
@@ -124,7 +141,23 @@ class MistralAIInstrumentor(BaseInstrumentor):  # type: ignore
             ),
         )
 
+        from mistralai.embeddings import Embeddings
+
+        self._embedding_methods = (Embeddings.create, Embeddings.create_async)
+        wrap_function_wrapper(module="mistralai.embeddings", name="Embeddings.create", wrapper=_EmbeddingWrapper(
+            "MistralClient.embeddings", self._tracer, mistralai
+        ))
+        wrap_function_wrapper(module="mistralai.embeddings", name="Embeddings.create_async", wrapper=_AsyncEmbeddingWrapper(
+            "MistralAsyncClient.embeddings", self._tracer, mistralai
+        ))
+
     def _uninstrument(self, **kwargs: Any) -> None:
+        if self._native is not None:
+            self._native.uninstrument()
+            self._native = None
+            return
+        from mistralai.embeddings import Embeddings
+        Embeddings.create, Embeddings.create_async = self._embedding_methods
         from mistralai.agents import Agents
         from mistralai.chat import Chat
 

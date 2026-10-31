@@ -1,5 +1,6 @@
 import asyncio
 import json
+from importlib.metadata import version
 from typing import Any, Dict, Iterator, List, Optional
 from unittest.mock import MagicMock, Mock, patch, AsyncMock, call, ANY
 from uuid import uuid4
@@ -127,6 +128,8 @@ def sample_response():
     return mock_response
 
 
+@pytest.mark.skipif(int(version("mistralai").split(".")[0]) >= 3,
+                    reason="Legacy method mocks; native lifecycle is tested with the real SDK")
 class TestMistralAIInstrumentor:
     """⚡ Test MistralAIInstrumentor lifecycle and basic functionality."""
 
@@ -153,7 +156,7 @@ class TestMistralAIInstrumentor:
                     assert isinstance(instrumentor._tracer, FITracer)
                     
                     # Verify all methods were wrapped
-                    assert mock_wrap.call_count == 8  # 4 chat + 4 agents methods
+                    assert mock_wrap.call_count == 10  # chat + agents + embeddings
                     
                     # Verify original methods were stored
                     assert hasattr(instrumentor, '_original_sync_chat_method')
@@ -231,7 +234,7 @@ class TestMistralAIInstrumentor:
                     instrumentor._instrument(tracer_provider=tracer_provider)
                     
                     # Check that all expected calls were made
-                    assert len(mock_wrap.call_args_list) == 8
+                    assert len(mock_wrap.call_args_list) == 10
                     
                     # Check that both chat and agent modules are instrumented
                     modules_called = []
@@ -339,7 +342,8 @@ class TestAsyncChatWrapper:
         
         async def test_call():
             # Mock the wrapped function to return a non-stream response
-            mock_wrapped = AsyncMock(return_value=sample_response)
+            async def mock_wrapped(**kwargs):
+                return sample_response
             
             with patch.object(wrapper, '_start_as_current_span') as mock_span_ctx:
                 mock_with_span = MagicMock()
@@ -679,6 +683,8 @@ class TestErrorHandling:
             assert result == "success"
 
 
+@pytest.mark.skipif(int(version("mistralai").split(".")[0]) >= 3,
+                    reason="Legacy method mocks; native lifecycle is tested with the real SDK")
 class TestIntegrationScenarios:
     """🎭 Test integration scenarios and real-world usage patterns."""
 

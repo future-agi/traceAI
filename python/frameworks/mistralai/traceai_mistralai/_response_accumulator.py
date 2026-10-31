@@ -16,7 +16,6 @@ from typing import (
     Type,
 )
 
-from fi_instrumentation import safe_json_dumps
 from fi_instrumentation.fi_types import FiMimeTypeValues, SpanAttributes
 from opentelemetry.util.types import AttributeValue
 from traceai_mistralai._utils import _to_dict
@@ -44,7 +43,6 @@ class _ChatCompletionAccumulator:
         "_response_attributes_extractor",
         "_chat_completion_type",
         "_content",
-        "_raw_data",
     )
 
     def __init__(
@@ -59,7 +57,6 @@ class _ChatCompletionAccumulator:
         self._is_null = True
         self._cached_result: Optional[Dict[str, Any]] = None
         self._content: List[str] = []
-        self._raw_data: List[Dict[str, Any]] = []
         self._values = _ValuesAccumulator(
             data=_ValuesAccumulator(
                 choices=_IndexedAccumulator(
@@ -81,7 +78,13 @@ class _ChatCompletionAccumulator:
 
     def process_chunk(self, chunk: Any) -> None:
         raw_chunk = _to_dict(chunk)
-        self._raw_data.append(raw_chunk)
+        self._is_null = False
+        self._cached_result = None
+        accumulated = deepcopy(raw_chunk)
+        for choice in accumulated.get("data", {}).get("choices", []):
+            if "delta" in choice:
+                choice["message"] = choice.pop("delta")
+        self._values += accumulated
 
         if "choices" in raw_chunk.get("data", {}):
             choices = raw_chunk["data"]["choices"]
@@ -99,12 +102,8 @@ class _ChatCompletionAccumulator:
         return self._cached_result
 
     def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
-        # Combine the accumulated content and raw data
-        output_value = "".join(self._content)
-        raw_output = safe_json_dumps(self._raw_data)
-        yield SpanAttributes.OUTPUT_VALUE, output_value
-        yield SpanAttributes.OUTPUT_VALUE, raw_output
-        yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.JSON.value
+        yield SpanAttributes.OUTPUT_VALUE, "".join(self._content)
+        yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.TEXT.value
 
     def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
         if not (result := self._result()):
