@@ -285,6 +285,21 @@ class TracingHttpClientTest {
         assertThat(spans().get(0).toString()).doesNotContain("input-secret", "output-secret");
     }
 
+    @Test void contextViewsCaptureTheCallerAndDoNotOwnTheSharedTransport() throws Exception {
+        var fake = new FakeTransport(new FakeResponse("application/json", "{}"));
+        var owner = TracingHttpClient.wrap(fake, tracer);
+        var parent = provider.get("test").spanBuilder("parent").startSpan();
+        HttpClient view;
+        try (var scope = parent.makeCurrent()) { view = TracingHttpClient.inCurrentContext(owner); }
+        try (var response = view.execute(request("responses", "{}"))) { response.body().readAllBytes(); }
+        view.close();
+        assertThat(fake.closed).isFalse();
+        assertThat(spans().get(0).getParentSpanId()).isEqualTo(parent.getSpanContext().getSpanId());
+        owner.close();
+        assertThat(fake.closed).isTrue();
+        parent.end();
+    }
+
     @Test void clientShutdownCancelsPendingAndClosesAbandonedResponses() throws Exception {
         var raw = new FakeResponse("application/json", "{}");
         var upstream = new CompletableFuture<HttpResponse>();

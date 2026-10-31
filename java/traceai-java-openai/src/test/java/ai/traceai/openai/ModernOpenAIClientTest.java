@@ -24,7 +24,7 @@ import java.util.concurrent.*;
 import static ai.traceai.openai.TracingHttpClientTest.*;
 import static org.assertj.core.api.Assertions.*;
 
-/** Loads the released adapter binary, not recompiled legacy model imports, with OpenAI Java 4.x. */
+/** Loads the packaged adapter binary, not recompiled legacy model imports, with OpenAI Java 4.x. */
 class ModernOpenAIClientTest {
     private static final String CHAT = "{\"id\":\"c1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}}";
     private static final String RESPONSE = "{\"id\":\"r1\",\"object\":\"response\",\"created_at\":1,\"model\":\"model\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"m1\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}";
@@ -40,6 +40,19 @@ class ModernOpenAIClientTest {
     }
     ChatCompletionCreateParams chat() { return ChatCompletionCreateParams.builder().model("model").addUserMessage("hello").build(); }
     ResponseCreateParams response() { return ResponseCreateParams.builder().model("model").input("hello").build(); }
+
+    @Test void nativeAsyncRetainsTheCallingSpanAcrossTheSdkExecutor() throws Exception {
+        var transport = TracingHttpClient.wrap(new FakeTransport(new FakeResponse("application/json", RESPONSE)), tracer);
+        var client = new OpenAIClientImpl(ClientOptions.builder().httpClient(transport)
+            .apiKey("offline-not-a-key").maxRetries(0).build());
+        var parent = provider.get("modern").spanBuilder("parent").startSpan();
+        try (AutoCloseable close = client::close; var scope = parent.makeCurrent()) {
+            var requestClient = client.withOptions(options -> options.httpClient(TracingHttpClient.inCurrentContext(transport)));
+            requestClient.async().responses().create(response()).get(5, TimeUnit.SECONDS);
+            assertThat(exporter.getFinishedSpanItems()).hasSize(1);
+            assertThat(exporter.getFinishedSpanItems().get(0).getParentSpanId()).isEqualTo(parent.getSpanContext().getSpanId());
+        } finally { parent.end(); }
+    }
 
     @Test void nativeChatSyncAndAsyncPreserveTypedResults() throws Exception {
         for (boolean async : new boolean[] {false, true}) {

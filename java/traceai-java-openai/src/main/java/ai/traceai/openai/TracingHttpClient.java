@@ -53,6 +53,36 @@ public final class TracingHttpClient implements HttpClient {
     /** Uses the configured TraceAI tracer. */
     public static HttpClient wrap(HttpClient client) { return wrap(client, TraceAI.getTracer()); }
 
+    /**
+     * Captures the calling context for a per-request SDK view. Use with the SDK's withOptions
+     * method when it dispatches HTTP work on an executor without OpenTelemetry propagation.
+     * This view borrows the transport: closing it does not close the shared client. Close the
+     * original client at application shutdown, and do not reuse this view for another context.
+     * @param transport the shared, already traced transport
+     * @return a borrowed transport view bound to the current context
+     */
+    public static HttpClient inCurrentContext(HttpClient transport) {
+        HttpClient delegate = transport instanceof ContextClient ? ((ContextClient) transport).delegate : transport;
+        return new ContextClient(Objects.requireNonNull(delegate, "transport"), Context.current());
+    }
+
+    private static final class ContextClient implements HttpClient {
+        private final HttpClient delegate;
+        private final Context context;
+        ContextClient(HttpClient delegate, Context context) { this.delegate = delegate; this.context = context; }
+        @Override public HttpResponse execute(HttpRequest request) { return execute(request, RequestOptions.none()); }
+        @Override public HttpResponse execute(HttpRequest request, RequestOptions options) {
+            try (Scope scope = context.makeCurrent()) { return delegate.execute(request, options); }
+        }
+        @Override public CompletableFuture<HttpResponse> executeAsync(HttpRequest request) {
+            return executeAsync(request, RequestOptions.none());
+        }
+        @Override public CompletableFuture<HttpResponse> executeAsync(HttpRequest request, RequestOptions options) {
+            try (Scope scope = context.makeCurrent()) { return delegate.executeAsync(request, options); }
+        }
+        @Override public void close() { /* Borrowed: only the original client owns the shared transport. */ }
+    }
+
     @Override public HttpResponse execute(HttpRequest request) { return execute(request, RequestOptions.none()); }
 
     @Override public HttpResponse execute(HttpRequest request, RequestOptions options) {

@@ -16,11 +16,13 @@ import com.openai.client.OpenAIClient;
 import com.openai.client.OpenAIClientImpl;
 import com.openai.client.okhttp.OkHttpClient;
 import com.openai.core.ClientOptions;
+import com.openai.core.http.HttpClient;
 import com.openai.models.responses.ResponseCreateParams;
 
 TraceAI.initFromEnvironment();
+HttpClient transport = TracingHttpClient.wrap(OkHttpClient.builder().build());
 OpenAIClient client = new OpenAIClientImpl(ClientOptions.builder()
-    .httpClient(TracingHttpClient.wrap(OkHttpClient.builder().build()))
+    .httpClient(transport)
     .apiKey(System.getenv("OPENAI_API_KEY"))
     .build());
 
@@ -49,6 +51,19 @@ Use `client.chat().completions().createStreaming(params)` or
 `client.responses().createStreaming(params)` in try-with-resources. Close a stream
 when stopping early; neither acquisition nor tracing drains it. Async service calls
 remain available through `client.async()`, including async streaming.
+
+For async calls, capture the current parent context in a per-request SDK view:
+
+```java
+var requestClient = client.withOptions(options ->
+    options.httpClient(TracingHttpClient.inCurrentContext(transport)));
+var pending = requestClient.async().responses().create(params);
+```
+
+The view borrows the shared transport. Do not share it across different parent
+contexts or close it independently; close the original client at shutdown. Without
+this view or OpenTelemetry executor instrumentation, the SDK's own async dispatch
+can lose the calling context and produce a root span.
 
 Spans follow the HTTP response lifecycle and end on EOF, read failure, or close.
 A stream that closes without a completion marker has
