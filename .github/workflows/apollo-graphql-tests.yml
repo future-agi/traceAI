@@ -1,0 +1,69 @@
+name: Apollo GraphQL tests
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/traceai_apollo_graphql/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/apollo-graphql-tests.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/traceai_apollo_graphql/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/apollo-graphql-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Apollo ${{ matrix.apollo }} / Node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { apollo: '5.0.0', graphql: '16.11.0', node: '20.6.0', major: '5' }
+          - { apollo: '5.5.1', graphql: '16.14.2', node: '22.23.4', major: '5' }
+          - { apollo: '5.5.1', graphql: '16.14.2', node: '26.8.1', major: '5' }
+          - { apollo: '4.13.0', graphql: '16.14.2', node: '22.23.4', major: '4' }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.4'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          package_json_file: typescript/package.json
+      - name: Build and pack from the frozen workspace lock
+        working-directory: typescript
+        run: |
+          pnpm --filter @traceai/apollo-graphql install --frozen-lockfile --ignore-scripts
+          pnpm --filter @traceai/apollo-graphql run build
+          mkdir -p "$RUNNER_TEMP/apollo-dist"
+          pnpm --dir packages/traceai_apollo_graphql pack --pack-destination "$RUNNER_TEMP/apollo-dist"
+      - name: Install the exact tarball and upstream compatibility target
+        env:
+          APOLLO: ${{ matrix.apollo }}
+          GRAPHQL: ${{ matrix.graphql }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/apollo-consumer"
+          npm install --prefix "$RUNNER_TEMP/apollo-consumer" --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP"/apollo-dist/*.tgz "@apollo/server@$APOLLO" "graphql@$GRAPHQL"
+          cp -R typescript/packages/traceai_apollo_graphql/test "$RUNNER_TEMP/apollo-consumer/test"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ matrix.node }}
+      - name: OTLP wire contracts with only loopback networking
+        env:
+          APOLLO_MAJOR: ${{ matrix.major }}
+        run: |
+          sudo --preserve-env=APOLLO_MAJOR unshare --net -- bash -c \
+            'ip link set lo up; exec "$1" --test "$2"/test/*.test.cjs' \
+            _ "$(command -v node)" "$RUNNER_TEMP/apollo-consumer"
