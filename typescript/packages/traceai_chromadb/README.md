@@ -23,7 +23,7 @@ import { context } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import * as chromadb from "chromadb";
 
-// Omit this line if your existing OpenTelemetry SDK already manages context.
+// Set up context propagation for this standalone example.
 const contextManager = new AsyncLocalStorageContextManager().enable();
 context.setGlobalContextManager(contextManager);
 const provider = register({
