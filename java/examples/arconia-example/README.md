@@ -33,6 +33,6 @@ ARCONIA_VERSION=0.30.0 ./run_e2e.sh       # another BOM version
 - Resource carries `project_name` and `project_type=observe`; one request is one trace with one root server span.
 - `/fail` exports an ERROR span; context close flushes (the batch delay is 5 s, the test closes sooner).
 - `arconia.otel.traces.enabled=false` and `arconia.otel.traces.exporter.type=none` export nothing.
-- Arconia's default compression is gzip (so `compression: none` is required).
+- Arconia's default compression is gzip. The recipe sets `compression: none` so it also works with self-hosted collectors older than v1.56.0; Future AGI Cloud and self-hosted v1.56.0 and later accept gzip, so you can drop the setting there.
 - The documented protocol value `http-protobuf` silently disables the exporter on 0.30.0 and 0.31.0; leave `protocol` unset.
 - With defaults, query strings, exception messages and stack traces are not on the wire; no host name, user name or local path either.
