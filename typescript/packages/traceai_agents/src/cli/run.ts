@@ -109,7 +109,8 @@ export async function runAgent(
     // not forward the same SIGINT a second time. Noninteractive agents can be
     // isolated in a new process group so a group interrupt reaches only this
     // wrapper, which then forwards it exactly once.
-    const interactive = Boolean(process.stdin.isTTY);
+    // Windows console signal delivery is different and is not qualified here.
+    const interactive = process.platform !== "win32" && Boolean(process.stdin.isTTY);
     const child = spawn(launch.executable, [...launch.args, ...args], {
       env: agentEnvironment(process.env, overlay),
       stdio: "inherit",
