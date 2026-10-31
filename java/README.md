@@ -51,7 +51,7 @@ Without the BOM, specify `<version>1.0.0</version>` on each traceAI dependency. 
 </dependency>
 ```
 
-The starter configures traceAI and Spring AI; it does not include the direct OpenAI SDK wrapper used in the quickstart. Keep both traceAI dependencies when calling `TracedOpenAIClient`.
+The starter only creates the `FITracer` bean from Spring Boot properties. It does not instrument Spring AI, the OpenAI SDK or any other library, and it does not bring in Spring AI. Keep both traceAI dependencies when calling `TracedOpenAIClient`.
 
 ### Gradle
 
@@ -170,6 +170,31 @@ TraceAI.init(TraceConfig.builder()
 
 Unset connection fields fall back to the `FI_*` environment variables. The SDK appends `/tracer/v1/traces` to `FI_BASE_URL` for OTLP/HTTP export. Console export can include request and response content; enable it only when that is appropriate.
 
+### Provider ownership and shutdown
+
+`TraceAI.init(config)` and `TraceAI.initFromEnvironment()` create a provider used by `TraceAI.getTracer()` and the TraceAI wrappers. They do **not** register, replace or read global OpenTelemetry. Global tracers do not send spans through this local provider. This lets a Java agent or application SDK coexist without registration errors, including when the application registers its SDK after TraceAI starts.
+
+If your application already owns OpenTelemetry, share its pipeline instead:
+
+```java
+import ai.traceai.TraceAI;
+import ai.traceai.TraceConfig;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+
+// Run after the application SDK or Java agent is initialized.
+TraceAI.init(TraceConfig.builder()
+    .hideInputs(true)
+    .hideOutputs(true)
+    .hideErrorDetails(true)
+    .build(), GlobalOpenTelemetry.get());
+```
+
+You can pass a non-global `OpenTelemetry` instance in place of `GlobalOpenTelemetry.get()`. This overload uses only the `FITracer` privacy options in `TraceConfig`: it does not create a provider, exporter, processor or shutdown hook, and it does not apply the config's connection or resource settings. Configure the application-owned exporter with the Future AGI trace endpoint, authentication headers and project resource attributes; retain the application's existing propagation configuration. Do not enable another instrumentor for the same client operations you wrap with TraceAI.
+
+The first initialization wins until `TraceAI.shutdown()`. Shutdown flushes and closes only a TraceAI-owned provider, with a ten-second wait each for flush and shutdown. In borrowed mode it only detaches TraceAI; the application remains responsible for flushing and closing its SDK. Reinitialization is supported in either mode. Obtain a new `FITracer` and rebuild wrappers after restarting a TraceAI-owned provider; existing wrappers retain their previous tracer.
+
+**Migrating from global registration:** older versions implicitly installed their provider globally. If you relied on that behavior for spans created outside TraceAI, configure an application-owned SDK for all those spans and pass it to the overload above. TraceAI no longer claims ownership of the process-wide SDK.
+
 ### Privacy controls
 
 To suppress input/output content and exception details recorded by `FITracer`, configure all three controls:
@@ -207,6 +232,13 @@ traceai:
   hide-output-messages: false
 ```
 
+The starter chooses one pipeline for `FITracer` spans:
+
+- When `base-url` and `api-key` are set (directly or through `FI_BASE_URL` and `FI_API_KEY`), or `enable-console-exporter` is `true`, the starter owns a TraceAI provider that exports to Future AGI, as in earlier releases. Spans from Spring Boot's own tracing keep using Boot's exporter, and `FITracer` spans still join the current trace.
+- Otherwise, if your application exposes an `OpenTelemetry` or `TracerProvider` bean, such as the one Spring Boot creates when [native tracing](https://docs.spring.io/spring-boot/3.5/reference/actuator/tracing.html) is enabled, `FITracer` spans use that pipeline. Configure the Future AGI endpoint, authentication headers and `project_name` resource attribute on that exporter; the starter logs a warning if it ignores `traceai` export or resource settings in this mode.
+
+In both cases the starter does not register a global OpenTelemetry instance. Closing the Spring context flushes and closes only a starter-owned provider. If the application already called `TraceAI.init(...)`, or defines its own `FITracer` bean, the starter uses it and leaves its lifecycle to the application. The starter is tested with the Spring Boot 3.2, 3.5 and 4.1 dependency BOMs.
+
 ## Instrumentation modules
 
 Each name below is an artifact in the Maven reactor. Provider/framework dependency versions are pinned in the module POMs and parent properties; this list is not a claim of compatibility with every upstream SDK version.
@@ -235,7 +267,7 @@ Each name below is an artifact in the Maven reactor. Provider/framework dependen
 | Retrieval | Elasticsearch | `traceai-java-elasticsearch` |
 | Framework | LangChain4j | `traceai-langchain4j` |
 | Framework | Spring AI | `traceai-spring-ai` |
-| Framework | Spring Boot auto-configuration | `traceai-spring-boot-starter` |
+| Core | Spring Boot `FITracer` configuration (no instrumentation) | `traceai-spring-boot-starter` |
 | Framework | Microsoft Semantic Kernel | `traceai-java-semantic-kernel` |
 
 Spring AI currently targets the `1.0.0-M4` dependency in the parent POM. The separate [Spring AI 1.1 compatibility PR #204](https://github.com/future-agi/traceAI/pull/204) is not included in this publishing change.

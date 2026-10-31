@@ -41,11 +41,6 @@
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-logging</artifactId>
         </dependency>
-        <dependency>
-            <groupId>io.opentelemetry.semconv</groupId>
-            <artifactId>opentelemetry-semconv</artifactId>
-            <version>1.23.1-alpha</version>
-        </dependency>
 
         <!-- Utilities -->
         <dependency>
@@ -58,6 +53,12 @@
         </dependency>
 
         <!-- Testing -->
+        <dependency>
+            <groupId>io.opentelemetry.proto</groupId>
+            <artifactId>opentelemetry-proto</artifactId>
+            <version>1.11.1-alpha</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
