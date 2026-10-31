@@ -341,12 +341,12 @@ func (r *record) converseInput(ms []types.Message, sys []types.SystemContentBloc
 			}
 			if t, ok := t.(*types.ToolMemberToolSpec); ok {
 				v := struct {
-					Name        string `json:"name"`
-					Description string `json:"description,omitempty"`
-					Schema      string `json:"schema,omitempty"`
+					Name        string          `json:"name"`
+					Description string          `json:"description,omitempty"`
+					Schema      json.RawMessage `json:"input_schema,omitempty"`
 				}{Name: r.take(str(t.Value.Name)), Description: r.take(str(t.Value.Description))}
 				if s, ok := t.Value.InputSchema.(*types.ToolInputSchemaMemberJson); ok {
-					v.Schema = r.doc(s.Value)
+					v.Schema = json.RawMessage(r.doc(s.Value))
 				}
 				b, _ := json.Marshal(v)
 				r.contentAttrs(attribute.String("gen_ai.tool.definitions."+strconv.Itoa(i)+".tool.json_schema", bounded(string(b), maxCapture)))

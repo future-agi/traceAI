@@ -61,7 +61,19 @@ func llms(e *tracetest.InMemoryExporter) []tracetest.SpanStub {
 }
 func rawClient(t *testing.T, h http.HandlerFunc, options ...func(*bedrockruntime.Options)) *bedrockruntime.Client {
 	t.Helper()
-	server := httptest.NewServer(h)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Bedrock parses the request before streaming its response. Finish reading
+		// HTTP/1 request bytes before Flush, rather than exercising half-duplex
+		// server connection cleanup while the SDK is still writing the request.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		h(w, r)
+	}))
 	t.Cleanup(server.Close)
 	return bedrockruntime.New(bedrockruntime.Options{Region: "us-east-1", BaseEndpoint: aws.String(server.URL), Credentials: credentials.NewStaticCredentialsProvider("synthetic-access", "synthetic-secret", ""), Retryer: retry.NewStandard(func(o *retry.StandardOptions) {
 		o.MaxAttempts = 2
@@ -119,6 +131,14 @@ func TestConverseNativeAndSemantic(t *testing.T) {
 	}
 	if !strings.Contains(a["output.value"].AsString(), "weather") || hooks.Load() != 2 {
 		t.Fatal(a)
+	}
+	var definition struct {
+		InputSchema struct {
+			Type string `json:"type"`
+		} `json:"input_schema"`
+	}
+	if err := json.Unmarshal([]byte(a["gen_ai.tool.definitions.0.tool.json_schema"].AsString()), &definition); err != nil || definition.InputSchema.Type != "object" {
+		t.Fatal("tool schema must stay structured", err)
 	}
 	if spans[0].Parent.SpanID() != parent.SpanContext().SpanID() {
 		t.Fatal("parent lost")
@@ -181,7 +201,7 @@ func TestConverseStreamLifetimeAndIdentity(t *testing.T) {
 		}
 	}
 	if err := out.GetStream().Err(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("stream error after %d events (%q), context=%v: %v", count, text, ctx.Err(), err)
 	}
 	_ = out.GetStream().Close()
 	if text != "hello" || count != 9 {
