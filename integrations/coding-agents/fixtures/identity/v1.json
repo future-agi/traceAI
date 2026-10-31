@@ -1,0 +1,70 @@
+{
+  "test_key_hex_SYNTHETIC_ONLY": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "namespace": "openai.codex/cli-conversation",
+  "session_anchor": [
+    "session-S"
+  ],
+  "turn_anchor": [
+    "thread-T",
+    "turn-7"
+  ],
+  "turn_work_id": "7e60bf31966859d1be30580b0bd1b7da237863e4da4eb40158682efc9df8f408",
+  "trace_id": "12766c1a0d3d49a9de5c323300c170b3",
+  "vectors": [
+    {
+      "case": "request-response-R",
+      "canonical_preimage": "[\"fi-work-v1\",\"openai.codex/cli-conversation\",\"request\",[\"session-S\"],[\"thread-T\",\"turn-7\"],[\"thread-T\",\"turn-7\",\"response-R\"]]",
+      "source_work_id": "02893f50a67228a40b18c4f6b1188db05ad818ad071781a57bbff6bf9dbfcf5d",
+      "trace_id": "12766c1a0d3d49a9de5c323300c170b3",
+      "span_id": "e28d2114c69b4275"
+    },
+    {
+      "case": "request-response-R2",
+      "canonical_preimage": "[\"fi-work-v1\",\"openai.codex/cli-conversation\",\"request\",[\"session-S\"],[\"thread-T\",\"turn-7\"],[\"thread-T\",\"turn-7\",\"response-R2\"]]",
+      "source_work_id": "0f2b7a739edf2a21498c8c9e4ce24a5faa69b614a58d9bf03eccfdf7cfdcddff",
+      "trace_id": "12766c1a0d3d49a9de5c323300c170b3",
+      "span_id": "f47f90ca0b706cf2"
+    },
+    {
+      "case": "tool-call-C",
+      "canonical_preimage": "[\"fi-work-v1\",\"openai.codex/cli-conversation\",\"tool\",[\"session-S\"],[\"thread-T\",\"turn-7\"],[\"thread-T\",\"turn-7\",\"call-C\"]]",
+      "source_work_id": "d745815b6cdd8582f04a164e04d15833c4dbb1b9f250a6e9b22cfc0ac50626ed",
+      "trace_id": "12766c1a0d3d49a9de5c323300c170b3",
+      "span_id": "69910c555a538c85"
+    },
+    {
+      "case": "portable-coordinate",
+      "coordinate": [
+        "session-S",
+        "stream-A",
+        "42",
+        "0"
+      ],
+      "source_work_id": "9c9ae4ab883237bedd43ac963401b2eb135d5131262d7a1b4833955572dcb13c",
+      "trace_id": "12766c1a0d3d49a9de5c323300c170b3",
+      "span_id": "1d4c4a918e978605"
+    }
+  ],
+  "equal_under": [
+    "reconstruction 1 -> 2 -> rollback 1",
+    "live -> import -> live",
+    "route A -> route B with same approved binding and proven same source profile",
+    "content off -> prompts only -> off",
+    "auth rotation/profile rename",
+    "local DB/index wiped or >7d cache expired with K and native anchors/portable receipt retained",
+    "same decoded original source stream compressed/rotated with original numbering preserved"
+  ],
+  "not_equal": [
+    "response-R versus response-R2, even if token values are equal",
+    "distinct tool call IDs with identical name/args",
+    "fork new originating work; inherited work keeps original origin IDs"
+  ],
+  "held": [
+    "missing original numbering after rewrite and no identity manifest",
+    "identity key lost on previously used binding",
+    "native/source overlap without proven aliases",
+    "segmentation split/merge or anchor-profile replacement",
+    "truncated-ID collision"
+  ],
+  "claim": "These are specification vectors computed with Python standard library only, not tests of an implemented fi-agent."
+}
