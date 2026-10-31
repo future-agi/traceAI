@@ -1,0 +1,68 @@
+name: Core GenAI privacy
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/fi-core-genai-privacy.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/fi-core-genai-privacy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy:
+    name: GenAI privacy (OTel ${{ matrix.sdk }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: '2.0.1'
+            exporter: '0.202.0'
+          - sdk: '2.12.0'
+            exporter: '0.223.0'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install and build packed core
+        working-directory: typescript
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin" "$RUNNER_TEMP/packages"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          export PATH="$RUNNER_TEMP/corepack-bin:$PATH"
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          corepack pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+          corepack pnpm --filter @traceai/fi-core... run build
+          corepack pnpm --dir packages/fi-semantic-conventions pack --pack-destination "$RUNNER_TEMP/packages"
+          corepack pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/packages"
+          node packages/fi-core/test/install-genai-fixture.cjs "$RUNNER_TEMP/fixture" \
+            '${{ matrix.sdk }}' '${{ matrix.exporter }}' \
+            "$RUNNER_TEMP"/packages/traceai-fi-core-*.tgz \
+            "$RUNNER_TEMP"/packages/traceai-fi-semantic-conventions-*.tgz
+      - name: Runtime tests with loopback-only networking
+        working-directory: typescript
+        run: |
+          sudo unshare --net bash -c '
+            set -euo pipefail
+            ip link set lo up
+            export FI_CORE_FIXTURE="$1"
+            node --test packages/fi-core/test/genai-privacy.test.cjs
+            node node_modules/jest/bin/jest.js --config packages/fi-core/jest.config.js --runInBand
+          ' bash "$RUNNER_TEMP/fixture"

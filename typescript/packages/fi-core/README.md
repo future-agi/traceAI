@@ -137,6 +137,72 @@ The evaluation system provides comprehensive AI model assessment capabilities:
 - `EXPERIMENT`: For experimental AI development and testing
 - `OBSERVE`: For production monitoring and observability
 
+## Message privacy
+
+Wrap your application's existing OpenTelemetry tracer with `FITracer` to mask
+message attributes before they reach the sampler or exporter. Keep your existing
+SDK and exporter configuration; the wrapper does not create another provider or
+duplicate spans.
+
+```typescript
+import { trace } from '@opentelemetry/api';
+import { FITracer } from '@traceai/fi-core';
+
+// Run after your application's OpenTelemetry SDK has been initialized.
+const tracer = new FITracer({
+  tracer: trace.getTracer('my-app'),
+  traceConfig: {
+    hideInputText: true,
+    hideOutputText: true,
+    hideInputImages: true,
+  },
+});
+
+const span = tracer.startSpan('chat', {
+  attributes: {
+    'gen_ai.request.model': 'my-model',
+    'gen_ai.input.messages': JSON.stringify([
+      { role: 'user', parts: [{ type: 'text', content: 'Explain distributed tracing.' }] },
+    ]),
+  },
+});
+span.end();
+```
+
+The message retains its `role` and part `type`, but the text `content` becomes
+`__REDACTED__`. The same settings apply to message attributes passed to
+`startActiveSpan`, set later on an `FISpan`, or attached to span links.
+
+- `hideInputText` / `hideOutputText` support legacy `content` messages and native
+  [OpenTelemetry GenAI `parts` messages](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/).
+  They redact payloads, including tool arguments/results, reasoning, compaction,
+  opaque media and extension fields. Scalar role, type, ID, name, finish reason,
+  modality and MIME metadata can remain. Legacy `content` arrays are redacted as
+  a whole, as are malformed message blobs.
+- `hideInputImages` removes image parts, including native `blob`, `uri` and `file`
+  parts identified by image modality or MIME type. Known text and explicitly
+  non-image media remain. Unknown parts, unclassified media and opaque tool
+  payloads are redacted conservatively. Combining this flag with text hiding
+  applies both restrictions; `piiRedaction` still applies to retained text.
+- `hideInputs` / `hideOutputs`, or `hideInputMessages` / `hideOutputMessages`,
+  remove the corresponding messages attribute entirely. Prefer these broader
+  settings when you do not need message metadata.
+
+You can also set `FI_HIDE_INPUT_TEXT`, `FI_HIDE_OUTPUT_TEXT`,
+`FI_HIDE_INPUT_IMAGES`, `FI_HIDE_INPUTS`, `FI_HIDE_OUTPUTS`,
+`FI_HIDE_INPUT_MESSAGES` and `FI_HIDE_OUTPUT_MESSAGES` to `true` before creating
+an `FITracer`. Explicit `traceConfig` options override environment settings.
+
+**Privacy boundary:** these controls protect attributes processed by `FITracer`
+and `FISpan`, not every span exported by the SDK. A framework emitting through
+its own raw OpenTelemetry tracer bypasses this wrapper, even if you registered
+an FI exporter. Configure that framework's content capture or use a trusted
+collector policy before sending its native telemetry. Text flags target the
+message attributes, not arbitrary copies in `input.value`, `raw.input`, event
+payloads, span names or other custom fields. Use the broader flags for supported
+raw input/output attributes and avoid recording sensitive content in custom
+fields. Exporting or normalizing native GenAI attributes alone is not redaction.
+
 ## API Reference
 
 
