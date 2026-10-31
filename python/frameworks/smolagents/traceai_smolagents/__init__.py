@@ -5,6 +5,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from traceai_smolagents._wrappers import (
     _ModelWrapper,
+    _ModelStreamWrapper,
     _RunWrapper,
     _StepWrapper,
     _ToolCallWrapper,
@@ -67,12 +68,17 @@ class SmolagentsInstrumentor(BaseInstrumentor):
         }
         for model_subclass in exported_model_subclasses:
             method = "generate" if hasattr(model_subclass, "generate") else "__call__"
-            # Wrapping inherited methods stacks spans and leaves wrapped aliases
-            # behind on uninstrument. The defining class is already in this set.
-            if method not in vars(model_subclass):
-                continue
-            self._original_model_call_methods[(model_subclass, method)] = vars(model_subclass)[method]
-            wrap_function_wrapper(model_subclass, method, _ModelWrapper(tracer=self._tracer, method_name=method))
+            wrappers = {
+                method: _ModelWrapper(tracer=self._tracer, method_name=method),
+                "generate_stream": _ModelStreamWrapper(tracer=self._tracer),
+            }
+            for method_name, wrapper in wrappers.items():
+                # Only wrap defining classes. Inherited aliases otherwise stack
+                # spans and remain patched after uninstrumentation.
+                if method_name not in vars(model_subclass):
+                    continue
+                self._original_model_call_methods[(model_subclass, method_name)] = vars(model_subclass)[method_name]
+                wrap_function_wrapper(model_subclass, method_name, wrapper)
 
         tool_call_wrapper = _ToolCallWrapper(tracer=self._tracer)
         self._original_tool_call_method = getattr(Tool, "__call__", None)

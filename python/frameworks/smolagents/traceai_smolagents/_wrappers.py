@@ -1,7 +1,7 @@
-import sys
 from enum import Enum
 from functools import wraps
 from inspect import signature, isgeneratorfunction, unwrap
+from types import SimpleNamespace
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -26,6 +26,7 @@ from fi_instrumentation.fi_types import (
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.util.types import AttributeValue
+from traceai_smolagents._stream import _trace_stream
 
 if TYPE_CHECKING:
     from smolagents.tools import Tool
@@ -222,91 +223,10 @@ class _StepWrapper:
         # functools.wraps preserves generator identity in __wrapped__, not in
         # the outer function's flags. Invoke the outer callable, never bypass it.
         if isgeneratorfunction(unwrap(wrapped)):
-            def stream():
-                span = self._tracer.start_span(span_name, attributes=attributes)
-                producer_context = trace_api.set_span_in_context(span)
-                iterator = advance = close = None
-                advance_args = ()
-                try:
-                    # An outer decorator executes eagerly while constructing
-                    # the iterator. It belongs to the producer's Step too.
-                    token = context_api.attach(producer_context)
-                    try:
-                        iterator = iter(wrapped(*args, **kwargs))
-                    finally:
-                        producer_context = context_api.get_current()
-                        context_api.detach(token)
-                    value, thrown = None, None
-                    while True:
-                        # Resume the producer's latest context, including any
-                        # still-open child span or attached values at its yield.
-                        # Protocol lookups belong to the producer as well.
-                        token = context_api.attach(producer_context)
-                        try:
-                            if thrown is not None:
-                                try:
-                                    advance = iterator.throw
-                                except AttributeError:
-                                    # Like yield from, an iterator without throw
-                                    # propagates the consumer's original error.
-                                    raise thrown[1]
-                                advance_args = thrown
-                            elif value is None:
-                                # Unwrapping the callable does not prove that its
-                                # decorator returned a generator. next/send(None)
-                                # must work for ordinary iterators such as map.
-                                advance, advance_args = next, (iterator,)
-                            else:
-                                advance, advance_args = iterator.send, (value,)
-                            try:
-                                item = advance(*advance_args)
-                            except StopIteration as stopped:
-                                finish(span, stopped.value)
-                                return stopped.value
-                        finally:
-                            producer_context = context_api.get_current()
-                            context_api.detach(token)
-
-                        try:
-                            value = yield item
-                        except GeneratorExit:
-                            token = context_api.attach(producer_context)
-                            try:
-                                try:
-                                    close = iterator.close
-                                except AttributeError:
-                                    pass
-                                else:
-                                    close()
-                            finally:
-                                producer_context = context_api.get_current()
-                                context_api.detach(token)
-                            raise
-                        except BaseException:
-                            thrown = sys.exc_info()
-                        else:
-                            thrown = None
-                except GeneratorExit:
-                    span.set_status(trace_api.StatusCode.OK)
-                    raise
-                except BaseException as exc:
-                    span.record_exception(exc)
-                    span.set_status(trace_api.Status(trace_api.StatusCode.ERROR, str(exc)))
-                    raise
-                finally:
-                    # Dropping an iterator (e.g. map) with no close method can
-                    # finalize its suspended generator. Release every owned
-                    # protocol reference under the producer's latest context,
-                    # not later when this proxy frame unwinds in the consumer.
-                    token = context_api.attach(producer_context)
-                    try:
-                        close = advance = None
-                        advance_args = ()
-                        iterator = None
-                    finally:
-                        context_api.detach(token)
-                        span.end()
-            return stream()
+            return _trace_stream(
+                self._tracer, span_name, attributes,
+                lambda: wrapped(*args, **kwargs), finish,
+            )
         with self._tracer.start_as_current_span(span_name, attributes=attributes) as span:
             result = wrapped(*args, **kwargs)
             finish(span, result)
@@ -470,6 +390,99 @@ class _ModelWrapper:
             )
             span.set_attributes(dict(_output_value_and_mime_type(output_message)))
         return output_message
+
+
+class _ModelStreamAccumulator:
+    """Keep output fragments, not SDK response objects or transport handles."""
+
+    def __init__(self) -> None:
+        self._content: list[str] = []
+        self._tools: dict[int, dict[str, Any]] = {}
+        self._input_tokens: Optional[int] = None
+        self._output_tokens: Optional[int] = None
+
+    def add(self, chunk: Any) -> None:
+        if isinstance(content := getattr(chunk, "content", None), str):
+            self._content.append(content)
+        # smolagents exposes incremental usage (including per-token local
+        # models), not running totals. Absence must not become a zero count.
+        usage = getattr(chunk, "token_usage", None)
+        if isinstance(count := getattr(usage, "input_tokens", None), int):
+            self._input_tokens = (self._input_tokens or 0) + count
+        if isinstance(count := getattr(usage, "output_tokens", None), int):
+            self._output_tokens = (self._output_tokens or 0) + count
+        for delta in getattr(chunk, "tool_calls", None) or []:
+            index = getattr(delta, "index", None)
+            if not isinstance(index, int):
+                continue
+            tool = self._tools.setdefault(index, {
+                "id": "", "type": "function", "function": {"name": "", "arguments": ""},
+            })
+            for field in ("id", "type"):
+                if isinstance(value := getattr(delta, field, None), str) and value:
+                    tool[field] = value
+            function = getattr(delta, "function", None)
+            # The framework treats a function name as a replacement and
+            # arguments as fragments, grouped by the provider's tool index.
+            if isinstance(name := getattr(function, "name", None), str) and name:
+                tool["function"]["name"] = name
+            if isinstance(arguments := getattr(function, "arguments", None), str):
+                tool["function"]["arguments"] += arguments
+
+    def finish(self, span: trace_api.Span) -> None:
+        output = {
+            "role": "assistant", "content": "".join(self._content),
+            "tool_calls": list(self._tools.values()),
+        }
+        message = SimpleNamespace(
+            role=output["role"], content=output["content"],
+            tool_calls=[SimpleNamespace(
+                id=tool["id"], function=SimpleNamespace(**tool["function"]),
+            ) for tool in self._tools.values()],
+        )
+        span.set_attribute(OUTPUT_VALUE, safe_json_dumps(output))
+        span.set_attribute(OUTPUT_MIME_TYPE, JSON)
+        span.set_attributes(dict(_llm_output_messages(message)))
+        if self._input_tokens is not None:
+            span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, self._input_tokens)
+        if self._output_tokens is not None:
+            span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, self._output_tokens)
+        if self._input_tokens is not None and self._output_tokens is not None:
+            span.set_attribute(GEN_AI_USAGE_TOTAL_TOKENS, self._input_tokens + self._output_tokens)
+
+
+class _ModelStreamWrapper:
+    def __init__(self, tracer: trace_api.Tracer) -> None:
+        self._tracer = tracer
+
+    def __call__(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: Tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+            return wrapped(*args, **kwargs)
+        arguments = _bind_arguments(wrapped, *args, **kwargs)
+        attributes = {
+            GEN_AI_SPAN_KIND: LLM,
+            **dict(_input_value_and_mime_type(arguments)),
+            **dict(_llm_invocation_parameters(instance, arguments)),
+            **dict(_llm_input_messages(arguments.get("messages", []))),
+            **dict(_llm_tools(arguments.get("tools_to_call_from", []))),
+            **dict(get_attributes_from_context()),
+            **dict(_get_raw_input(args, **kwargs)),
+        }
+        if (model_id := getattr(instance, "model_id", None)) is not None:
+            attributes[GEN_AI_REQUEST_MODEL] = model_id
+        accumulator = _ModelStreamAccumulator()
+        return _trace_stream(
+            self._tracer, f"{instance.__class__.__name__}.generate_stream", attributes,
+            lambda: wrapped(*args, **kwargs),
+            lambda span, result: span.set_status(trace_api.StatusCode.OK),
+            on_chunk=accumulator.add, on_end=accumulator.finish,
+        )
 
 
 class _ToolCallWrapper:
