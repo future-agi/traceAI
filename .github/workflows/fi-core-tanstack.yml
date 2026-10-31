@@ -1,0 +1,64 @@
+name: Core TanStack AI tracing
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/fi-core-tanstack.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'typescript/packages/fi-core/**'
+      - 'typescript/packages/fi-semantic-conventions/**'
+      - 'typescript/pnpm-lock.yaml'
+      - '.github/workflows/fi-core-tanstack.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tanstack:
+    # floor: @tanstack/ai 0.69.0 + OTel SDK 2.0.1; current: 1.0.1 + 2.12.0
+    name: TanStack AI native tracing (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [floor, current]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.23.4'
+      - name: Install, build and pack core; install the packed fixture
+        working-directory: typescript
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-bin" "$RUNNER_TEMP/packages"
+          corepack enable --install-directory "$RUNNER_TEMP/corepack-bin" pnpm
+          export PATH="$RUNNER_TEMP/corepack-bin:$PATH"
+          echo "$RUNNER_TEMP/corepack-bin" >> "$GITHUB_PATH"
+          corepack pnpm --filter @traceai/fi-core... install --frozen-lockfile --ignore-scripts
+          corepack pnpm --filter @traceai/fi-core... run build
+          corepack pnpm --dir packages/fi-semantic-conventions pack --pack-destination "$RUNNER_TEMP/packages"
+          corepack pnpm --dir packages/fi-core pack --pack-destination "$RUNNER_TEMP/packages"
+          node packages/fi-core/test/install-tanstack-fixture.cjs "$RUNNER_TEMP/fixture" '${{ matrix.mode }}' \
+            "$RUNNER_TEMP"/packages/traceai-fi-core-*.tgz \
+            "$RUNNER_TEMP"/packages/traceai-fi-semantic-conventions-*.tgz
+      - name: Runtime and OTLP wire tests with loopback-only networking
+        working-directory: typescript
+        run: |
+          sudo unshare --net bash -c '
+            set -euo pipefail
+            ip link set lo up
+            export TANSTACK_FIXTURE="$1"
+            node --test packages/fi-core/test/tanstack.test.mjs
+            node node_modules/jest/bin/jest.js --config packages/fi-core/jest.config.js --runInBand
+          ' bash "$RUNNER_TEMP/fixture"

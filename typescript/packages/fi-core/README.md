@@ -187,6 +187,34 @@ span.setAttributes({
 span.end();
 ```
 
+## TanStack AI
+
+TanStack AI creates the spans with its own `otelMiddleware`. The `@traceai/fi-core/tanstack` subpath supplies the options for that middleware and an isolated Future AGI provider, so you don't add a second instrumentation:
+
+```ts
+import { chat } from "@tanstack/ai";
+import { otelMiddleware } from "@tanstack/ai/middlewares/otel";
+import { flushTraces, registerTanStackTracing, tanStackOtelOptions } from "@traceai/fi-core/tanstack";
+
+const provider = registerTanStackTracing({ projectName: "my-chatbot" });
+const tracer = provider.getTracer("tanstack-ai");
+
+const stream = chat({
+  adapter,
+  messages,
+  threadId, // optional: an opaque conversation id
+  middleware: [otelMiddleware(tanStackOtelOptions(tracer, { threadIdAsSession: Boolean(threadId) }))],
+});
+```
+
+- **Privacy.** Messages, tool arguments and results, error text and stack traces are not exported by default. `captureContent: true` exports content and error text through your `redact` function; a redactor that throws yields `[redaction_failed]`. Stack traces are never exported.
+- **Tokens are counted once.** TanStack also writes the sum of every model call's usage onto the chat span. In the Future AGI export only, that sum moves to `tanstack.ai.root_usage.*` when the model-call spans carry usage. Other exporters still receive TanStack's original spans.
+- **Sessions.** `threadIdAsSession: true` exports the `threadId` you pass to `chat()` as `session.id`. Use an opaque id, never an email address or user name.
+- **Existing OpenTelemetry apps.** `registerTanStackTracing()` never replaces the global provider, and each chat starts a new trace unless you pass `joinActiveTrace: true`. To export through a provider you already own instead, wrap your exporter: `new TransformingSpanExporter(exporter, normalizeTanStackSpan)`.
+- **Serverless.** `await flushTraces(provider)` waits at most 2 seconds and never throws. In a long-lived server, call `shutdownTraces(provider)` when the process stops.
+
+To test against packed builds (floor `@tanstack/ai` 0.69.0 with OpenTelemetry SDK 2.0.1, and current 1.0.1 with SDK 2.12.0), prepare a fixture with `node test/install-tanstack-fixture.cjs DIR floor|current CORE_TGZ SEMCONV_TGZ`, then run `TANSTACK_FIXTURE=DIR pnpm test:tanstack`.
+
 ## Development
 
 ### Building

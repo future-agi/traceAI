@@ -3,3 +3,4 @@ export * from "./utils";
 export type * from "./utils/types";
 export * from "./otel";
 export * from "./fi_types";
+export * from "./spanTransform";
