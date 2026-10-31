@@ -1,7 +1,8 @@
 """Export Cognee's native OpenTelemetry spans to Future AGI."""
+import atexit
 from collections import OrderedDict
 from collections.abc import Mapping
-from threading import RLock, Thread
+from threading import Event, RLock, Thread
 from weakref import WeakKeyDictionary
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider, SpanProcessor
@@ -58,6 +59,11 @@ class _Generation:
         self._delegate = delegate
         self._inflight = 0
         self._closed = False
+        self._exiting = False
+        self._shutdown_complete = Event()
+        # Registered after the SDK provider's hook: drain this generation before
+        # provider teardown, when Python's normal thread-join phase is already over.
+        atexit.register(self._shutdown_at_exit)
 
     def call(self, method, *args):
         with self._lock:
@@ -76,12 +82,31 @@ class _Generation:
             if closing:
                 self._shutdown_delegate(delegate)
 
-    @staticmethod
-    def _shutdown_delegate(delegate):
-        # BatchSpanProcessor can be exporting on its own worker even when no
-        # processor callback is leased. Joining that worker here can deadlock
-        # if the exporter waits for the thread calling Handle.shutdown().
-        Thread(target=delegate.shutdown, name='traceai-cognee-close', daemon=False).start()
+    def _shutdown_delegate(self, delegate):
+        with self._lock:
+            if not self._exiting:
+                # BatchSpanProcessor can be exporting on its own worker even when
+                # no callback is leased. Normal shutdown must not join that worker:
+                # its exporter may be waiting for the caller of Handle.shutdown().
+                Thread(target=self._finish_shutdown, args=(delegate,),
+                       name='traceai-cognee-close', daemon=False).start()
+                return
+        self._finish_shutdown(delegate)
+
+    def _finish_shutdown(self, delegate):
+        try:
+            delegate.shutdown()
+        finally:
+            atexit.unregister(self._shutdown_at_exit)
+            self._shutdown_complete.set()
+
+    def _shutdown_at_exit(self):
+        with self._lock:
+            self._exiting = True
+        self.close()
+        # An earlier exit callback may already have initiated asynchronous close.
+        # Waiting here also covers an outstanding leased callback finishing it.
+        self._shutdown_complete.wait()
 
     def close(self):
         with self._lock:
