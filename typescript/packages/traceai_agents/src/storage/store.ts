@@ -11,7 +11,11 @@ import {
   type Policy,
 } from "@traceai/agent-core";
 import { AgentError } from "../security/files.js";
-import { encodeFacts } from "../export/otlp.js";
+import {
+  decodeTraces,
+  encodeFacts,
+  encodeTraceObject,
+} from "../export/otlp.js";
 import { validateBinding, type Binding } from "../export/endpoint.js";
 import { measure, preflight, reserve, STORAGE_LIMITS } from "./budget.js";
 export interface Route {
@@ -45,6 +49,19 @@ interface TurnWindow {
 }
 const digest = (bytes: Buffer): string =>
   createHash("sha256").update(bytes).digest("hex");
+/** Frozen comparison v1: runtime packaging is not source semantics. Keep all
+ * source timing, topology, usage, content and reconstruction fields comparable.
+ * This representation is only a receipt; the first wire bytes are never changed. */
+function semanticHash(bytes: Buffer): string {
+  const request = decodeTraces(bytes);
+  for (const resource of request.resourceSpans ?? []) {
+    resource.resource.attributes = resource.resource.attributes.filter(
+      (a: { key: string }) => a.key !== "service.version",
+    );
+    for (const scope of resource.scopeSpans ?? []) delete scope.scope.version;
+  }
+  return "semantic-v1:" + digest(encodeTraceObject(request));
+}
 /** Internal storage-child class. Runtime clients only use RPC; never share this connection. */
 export class Spool {
   private db: Database.Database;
@@ -65,7 +82,12 @@ export class Spool {
       // In WAL mode EXCLUSIVE retains the OS lock between transactions. The
       // storage child is the sole connection and process death releases ownership;
       // no PID files, leases, stale-directory deletion, or second lock database.
-      if (exclusiveOwner) this.db.pragma("locking_mode=EXCLUSIVE");
+      if (exclusiveOwner) {
+        this.db.pragma("locking_mode=EXCLUSIVE");
+        // Acquire ownership before reading schema/header pragmas. Competing
+        // connections must not retain shared locks then race to upgrade them.
+        this.db.exec("BEGIN EXCLUSIVE; COMMIT;");
+      }
       if (
         this.db.prepare("SELECT sqlite_version() v").get() &&
         (this.db.prepare("SELECT sqlite_version() v").get() as any).v !==
@@ -284,7 +306,7 @@ export class Spool {
     const routeId = route.id;
     const bytes = encodeFacts([fact], route.binding, this.runtimeVersion);
     if (bytes.length > 262_144) throw new AgentError("OVERSIZE_SPAN", 2);
-    const hash = digest(bytes);
+    const hash = semanticHash(bytes);
     if (
       cursor &&
       (!/^[a-f0-9]{64}$/.test(cursor.stream) ||
@@ -328,6 +350,7 @@ export class Spool {
             .get(route.binding.id, usage) as any;
           if (existing && existing.work !== fact.sourceWorkId)
             throw new AgentError("HELD_USAGE_CONFLICT", 3);
+
           this.db
             .prepare("INSERT OR IGNORE INTO usage VALUES (?,?,?)")
             .run(route.binding.id, usage, fact.sourceWorkId);
@@ -509,11 +532,11 @@ export class Spool {
       return undefined;
     return this.db
       .prepare(
-        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND state=? AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
+        "SELECT id,route,work,bytes,encrypted,epoch,attempts,created,state FROM records WHERE route=? AND (state='queued' OR (state='ambiguous' AND ?)) AND epoch=? AND next_at<=? AND created>? ORDER BY id LIMIT 1",
       )
       .get(
         routeId,
-        "queued",
+        Number(route.binding.backendContract === "immutable-agent-v1"),
         route.epoch,
         Date.now(),
         Date.now() - 86_400_000,
@@ -530,7 +553,7 @@ export class Spool {
   ): void {
     this.write(() => {
       const row = this.db
-        .prepare("SELECT route,epoch FROM records WHERE id=?")
+        .prepare("SELECT route,epoch,state FROM records WHERE id=?")
         .get(id) as any;
       if (
         !row ||
@@ -546,7 +569,9 @@ export class Spool {
           result.code === "HELD_AUTH"
             ? "held-auth"
             : result.state === "retry"
-              ? "queued"
+              ? row.state === "ambiguous"
+                ? "ambiguous"
+                : "queued"
               : result.state,
           result.state === "accepted" ? 1 : 0,
           result.nextAt ?? 0,
