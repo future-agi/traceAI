@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Removes exception messages, stack traces and status descriptions before handing spans to an exporter.
@@ -23,9 +24,14 @@ import java.util.Objects;
  */
 public final class ErrorDetailRedactingSpanExporter implements SpanExporter {
     private final SpanExporter delegate;
+    private final Set<String> additionalMessageKeys;
+    private final boolean keepErrorText;
 
-    private ErrorDetailRedactingSpanExporter(SpanExporter delegate) {
+    private ErrorDetailRedactingSpanExporter(SpanExporter delegate, Set<String> additionalMessageKeys,
+            boolean keepErrorText) {
         this.delegate = delegate;
+        this.additionalMessageKeys = additionalMessageKeys;
+        this.keepErrorText = keepErrorText;
     }
 
     /**
@@ -34,9 +40,29 @@ public final class ErrorDetailRedactingSpanExporter implements SpanExporter {
      * @return the filtered exporter
      */
     public static SpanExporter wrap(SpanExporter delegate) {
+        return wrap(delegate, Set.of(), false);
+    }
+
+    /**
+     * Adds a framework's error-message keys to the standard exception policy.
+     * Stack traces are always removed. When {@code keepErrorText} is true, messages and status
+     * descriptions are retained. Otherwise, both span and event attributes are filtered.
+     * Wrapping an existing filter never weakens its policy and does not create another export path.
+     *
+     * @param delegate exporter that receives sanitized spans
+     * @param additionalMessageKeys framework-specific keys that can contain error text
+     * @param keepErrorText explicit opt-in to error messages and status descriptions
+     * @return the filtered exporter
+     */
+    public static SpanExporter wrap(SpanExporter delegate, Set<String> additionalMessageKeys,
+            boolean keepErrorText) {
         Objects.requireNonNull(delegate, "delegate");
-        return delegate instanceof ErrorDetailRedactingSpanExporter
-                ? delegate : new ErrorDetailRedactingSpanExporter(delegate);
+        Set<String> keys = Set.copyOf(additionalMessageKeys);
+        if (delegate instanceof ErrorDetailRedactingSpanExporter existing
+                && existing.additionalMessageKeys.equals(keys) && existing.keepErrorText == keepErrorText) {
+            return delegate;
+        }
+        return new ErrorDetailRedactingSpanExporter(delegate, keys, keepErrorText);
     }
 
     @Override
@@ -58,15 +84,17 @@ public final class ErrorDetailRedactingSpanExporter implements SpanExporter {
         return delegate.shutdown();
     }
 
-    private static Attributes redactAttributes(Attributes attributes) {
-        return attributes.toBuilder().removeIf(key ->
-                key.getKey().equals("exception.message") || key.getKey().equals("exception.stacktrace")).build();
+    private Attributes redactAttributes(Attributes attributes) {
+        return attributes.toBuilder().removeIf(key -> key.getKey().equals("exception.stacktrace")
+                || (!keepErrorText && (key.getKey().equals("exception.message")
+                || additionalMessageKeys.contains(key.getKey())))).build();
     }
 
-    private static SpanData redact(SpanData span) {
+    private SpanData redact(SpanData span) {
         Attributes attributes = redactAttributes(span.getAttributes());
         List<EventData> events = new ArrayList<>(span.getEvents().size());
-        boolean changed = !attributes.equals(span.getAttributes()) || !span.getStatus().getDescription().isEmpty();
+        boolean changed = !attributes.equals(span.getAttributes())
+                || (!keepErrorText && !span.getStatus().getDescription().isEmpty());
         for (EventData event : span.getEvents()) {
             Attributes filtered = redactAttributes(event.getAttributes());
             if (filtered.equals(event.getAttributes())) {
@@ -82,7 +110,7 @@ public final class ErrorDetailRedactingSpanExporter implements SpanExporter {
             return span;
         }
         List<EventData> immutableEvents = List.copyOf(events);
-        StatusData status = StatusData.create(span.getStatus().getStatusCode(), "");
+        StatusData status = keepErrorText ? span.getStatus() : StatusData.create(span.getStatus().getStatusCode(), "");
         return new DelegatingSpanData(span) {
             @Override
             public Attributes getAttributes() {

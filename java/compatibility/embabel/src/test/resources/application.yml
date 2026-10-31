@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: embabel-weather-agent
+  main:
+    web-application-type: none
+
+fi:
+  project-name: ${FI_PROJECT_NAME}
+
+embabel:
+  agent:
+    platform:
+      observability:
+        enabled: true
+        service-name: ${spring.application.name}
+        capture-message-content: ${EMBABEL_CAPTURE_CONTENT:false}
+        trace-http-details: false
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${FI_BASE_URL}/tracer/v1/traces
+          transport: http
+          compression: none
+          headers:
+            X-Api-Key: ${FI_API_KEY}
+            X-Secret-Key: ${FI_SECRET_KEY}

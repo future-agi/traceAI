@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -95,6 +97,60 @@ class ErrorDetailRedactingSpanExporterTest {
                 .setStatus(StatusData.unset()).build();
         ErrorDetailRedactingSpanExporter.wrap(sink).export(List.of(original));
         assertTrue(sink.spans.get(0).getEvents().get(0).getAttributes().isEmpty());
+    }
+
+    @Test
+    void frameworkKeysAreCopiedAndRemovedFromSpansAndEventsRegardlessOfValueType() {
+        RecordingExporter sink = new RecordingExporter();
+        Set<String> keys = new HashSet<>(Set.of("embabel.tool.error.message"));
+        SpanExporter exporter = ErrorDetailRedactingSpanExporter.wrap(sink, keys, false);
+        keys.clear();
+        Attributes raw = Attributes.of(AttributeKey.longKey("embabel.tool.error.message"), 42L, TYPE, "Failure");
+        SpanData original = span().setAttributes(raw).setTotalAttributeCount(3)
+                .setEvents(List.of(EventData.create(15, "custom", raw, 4))).setStatus(StatusData.unset()).build();
+        exporter.export(List.of(original));
+        SpanData filtered = sink.spans.get(0);
+        assertEquals(Attributes.of(TYPE, "Failure"), filtered.getAttributes());
+        assertEquals(2, filtered.getTotalAttributeCount());
+        assertEquals(3, filtered.getEvents().get(0).getTotalAttributeCount());
+        assertEquals(Attributes.of(TYPE, "Failure"), filtered.getEvents().get(0).getAttributes());
+        assertEquals(raw, original.getAttributes());
+    }
+
+    @Test
+    void explicitContentOptInKeepsMessagesAndStatusButNotStackTraces() {
+        RecordingExporter sink = new RecordingExporter();
+        Attributes raw = Attributes.builder().put(MESSAGE, "private-message").put(STACK, "private-stack")
+                .put("embabel.llm.error.message", "model-message").build();
+        SpanData original = span().setAttributes(raw).setTotalAttributeCount(3)
+                .setEvents(List.of(EventData.create(15, "exception", raw)))
+                .setStatus(StatusData.create(StatusCode.ERROR, "private-status")).build();
+        SpanExporter exporter = ErrorDetailRedactingSpanExporter.wrap(sink, Set.of("embabel.llm.error.message"), true);
+        assertSame(exporter, ErrorDetailRedactingSpanExporter.wrap(exporter, Set.of("embabel.llm.error.message"), true));
+        exporter.export(List.of(original));
+        SpanData filtered = sink.spans.get(0);
+        assertEquals("private-status", filtered.getStatus().getDescription());
+        assertEquals("model-message", filtered.getAttributes().get(AttributeKey.stringKey("embabel.llm.error.message")));
+        assertEquals("private-message", filtered.getEvents().get(0).getAttributes().get(MESSAGE));
+        assertNull(filtered.getAttributes().get(STACK));
+        assertNull(filtered.getEvents().get(0).getAttributes().get(STACK));
+        assertEquals("private-stack", original.getAttributes().get(STACK));
+    }
+
+    @Test
+    void wrappingCannotWeakenAnExistingPolicyOrDuplicateExports() {
+        RecordingExporter sink = new RecordingExporter();
+        SpanExporter privateExporter = ErrorDetailRedactingSpanExporter.wrap(sink);
+        SpanExporter optedIn = ErrorDetailRedactingSpanExporter.wrap(privateExporter, Set.of(), true);
+        optedIn.export(List.of(span().setAttributes(Attributes.of(MESSAGE, "private"))
+                .setStatus(StatusData.create(StatusCode.ERROR, "private")).build()));
+        assertNull(sink.spans.get(0).getAttributes().get(MESSAGE));
+        assertEquals("", sink.spans.get(0).getStatus().getDescription());
+        optedIn.flush();
+        optedIn.shutdown();
+        assertEquals(1, sink.exports);
+        assertEquals(1, sink.flushes);
+        assertEquals(1, sink.shutdowns);
     }
 
     @Test

@@ -22,6 +22,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  embabel-native:
+    name: Native Embabel routing and privacy (${{ matrix.embabel }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        embabel: ['1.5.3', '1.5.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: 'java/**/pom.xml'
+      - name: Install shared core and test its API floor
+        run: mvn -B -ntp -f java/pom.xml -pl traceai-java-core -am install
+      - name: Test native export, routing, privacy and shutdown
+        run: >-
+          mvn -B -ntp -f java/compatibility/embabel/pom.xml
+          -Dembabel.version=${{ matrix.embabel }} test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: embabel-${{ matrix.embabel }}-test-reports
+          path: java/compatibility/embabel/target/surefire-reports/
+
   arconia-privacy:
     name: Native Arconia privacy (${{ matrix.arconia }})
     runs-on: ubuntu-latest
