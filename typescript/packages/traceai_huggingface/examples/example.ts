@@ -7,7 +7,6 @@
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { SimpleSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 import { HuggingFaceInstrumentation } from "@traceai/huggingface";
-import { HfInference } from "@huggingface/inference";
 
 async function main() {
   // Step 1: Set up the tracer provider
@@ -28,7 +27,7 @@ async function main() {
 
   // Step 3: Import and patch the HuggingFace module
   const hfModule = await import("@huggingface/inference");
-  instrumentation.manuallyInstrument(hfModule);
+  const { HfInference } = instrumentation.manuallyInstrument(hfModule);
 
   // Step 4: Create the HuggingFace client
   const client = new HfInference(process.env.HF_TOKEN);

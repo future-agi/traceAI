@@ -1,183 +1,117 @@
 # @traceai/huggingface
 
-OpenTelemetry instrumentation for the [HuggingFace Inference](https://huggingface.co/docs/huggingface.js/inference/README) TypeScript SDK.
+Trace text generation, chat, embeddings, summarization, translation, and question answering from the [Hugging Face Inference SDK](https://huggingface.co/docs/huggingface.js/inference/README) with OpenTelemetry.
 
-## Installation
+## Install
+
+The instrumentor supports Node.js 18+ and `@huggingface/inference` 2.0.0+. Methods are available only when your SDK version supports them. The following example uses the current `InferenceClient` API and OpenTelemetry SDK 2.x:
 
 ```bash
-npm install @traceai/huggingface
-# or
-pnpm add @traceai/huggingface
+npm install @traceai/huggingface @huggingface/inference@^4.13.32 \
+  @opentelemetry/sdk-trace-node@^2 @opentelemetry/sdk-trace-base@^2
 ```
 
-## Requirements
+## Trace a request
 
-- Node.js 18+
-- `@huggingface/inference` SDK version >= 2.0.0
-
-## Quick Start
+Set `HF_TOKEN` to your Hugging Face token and `HF_MODEL` to a text-generation model available to your account. Configure the tracer provider before creating the wrapped client:
 
 ```typescript
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { SimpleSpanProcessor, ConsoleSpanExporter } from "@opentelemetry/sdk-trace-base";
 import { HuggingFaceInstrumentation } from "@traceai/huggingface";
-import { HfInference } from "@huggingface/inference";
+import * as huggingface from "@huggingface/inference";
 
-// Set up the tracer provider
-const provider = new NodeTracerProvider();
-provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+const provider = new NodeTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(new ConsoleSpanExporter())],
+});
 provider.register();
 
-// Create and enable the instrumentation
 const instrumentation = new HuggingFaceInstrumentation();
 instrumentation.setTracerProvider(provider);
-instrumentation.enable();
+const { InferenceClient } = instrumentation.manuallyInstrument(huggingface);
+const client = new InferenceClient(process.env.HF_TOKEN);
 
-// Import and patch the HuggingFace module
-const hfModule = await import("@huggingface/inference");
-instrumentation.manuallyInstrument(hfModule);
-
-// Use HuggingFace as normal - all calls will be traced
-const client = new HfInference(process.env.HF_TOKEN);
-
-const response = await client.textGeneration({
-  model: "gpt2",
-  inputs: "The quick brown fox",
-});
+try {
+  const response = await client.textGeneration({
+    model: process.env.HF_MODEL!,
+    inputs: "The quick brown fox",
+    parameters: { max_new_tokens: 30 },
+  });
+  console.log(response.generated_text);
+} finally {
+  instrumentation.disable();
+  await provider.shutdown();
+}
 ```
 
-## Instrumented Methods
+Use the module **returned by `manuallyInstrument()`**. ESM namespaces and some older CommonJS SDK exports are read-only; a previously imported constructor cannot be replaced in place. The instrumentor returns a typed module wrapper instead of modifying SDK task methods. Mutable CommonJS exports are also patched in place for compatibility.
 
-This instrumentation automatically traces the following HuggingFace Inference SDK methods:
+With CommonJS, you can alternatively enable instrumentation before the first `require("@huggingface/inference")` to use OpenTelemetry's automatic require hook. Do not combine multiple Hugging Face instrumentor instances on the same client.
 
-### Text Generation
-- `client.textGeneration()` - Text generation/completion
+### Wrap an existing client
 
-### Chat Completion
-- `client.chatCompletion()` - Chat-style completions
-- `client.chatCompletionStream()` - Streaming chat completions
-
-### Embeddings
-- `client.featureExtraction()` - Feature extraction (embeddings)
-
-### NLP Tasks
-- `client.summarization()` - Text summarization
-- `client.translation()` - Language translation
-- `client.questionAnswering()` - Extractive question answering
-
-## Trace Attributes
-
-The instrumentation captures the following semantic attributes:
-
-### Common Attributes
-- `fi.span_kind` - Type of span (LLM, EMBEDDING)
-- `llm.system` - "huggingface"
-- `llm.provider` - "huggingface"
-- `llm.model_name` - Model name used
-- `input.value` - Input content
-- `input.mime_type` - Input content type
-- `output.value` - Output content
-- `output.mime_type` - Output content type
-- `raw.input` - Raw request JSON
-- `raw.output` - Raw response JSON
-
-### Text Generation Attributes
-- `llm.prompts.{index}` - Input prompts
-- `llm.invocation_parameters` - Model parameters (temperature, max_new_tokens, etc.)
-
-### Chat Completion Attributes
-- `llm.input_messages.{index}.role` - Message role
-- `llm.input_messages.{index}.content` - Message content
-- `llm.output_messages.{index}.role` - Response message role
-- `llm.output_messages.{index}.content` - Response message content
-
-### Token Usage Attributes
-- `llm.token_count.prompt` - Input token count
-- `llm.token_count.completion` - Output token count
-- `llm.token_count.total` - Total token count
-
-### Embedding Attributes
-- `embedding.model_name` - Embedding model name
-- `embedding.embeddings.{index}.text` - Input text
-- `embedding.embeddings.{index}.vector` - Embedding vector
-
-## Configuration
-
-### Instrumentation Options
+If another part of your application creates the client, use its returned wrapper:
 
 ```typescript
-const instrumentation = new HuggingFaceInstrumentation({
-  instrumentationConfig: {
-    enabled: true, // Enable/disable instrumentation
-  },
-  traceConfig: {
-    hideInputs: false,  // Hide input content in traces
-    hideOutputs: false, // Hide output content in traces
-  },
-});
+const client = instrumentation.instrumentClient(existingClient);
 ```
 
-## Streaming Support
+`HfInference`, `InferenceClient`, their endpoint constructor aliases, and clients returned by `client.endpoint(url)` are supported. Per-request options such as custom fetch functions and cancellation signals are passed through unchanged. Calling `disable()` stops tracing for already-wrapped clients; `enable()` resumes it.
 
-The instrumentation fully supports streaming responses with `chatCompletionStream`:
+## Supported tasks
+
+| SDK method | Span kind |
+| --- | --- |
+| `textGeneration`, `textGenerationStream` | LLM |
+| `chatCompletion`, `chatCompletionStream` | LLM |
+| `featureExtraction` | EMBEDDING |
+| `summarization`, `translation`, `questionAnswering` | LLM |
+
+The same task functions on the returned module are instrumented. Other SDK methods pass through without a task span.
+
+## Stream responses
+
+Both streaming methods return async iterators immediately, just like the SDK:
 
 ```typescript
 const stream = client.chatCompletionStream({
-  model: "meta-llama/Llama-2-7b-chat-hf",
-  messages: [{ role: "user", content: "Hello!" }],
-  max_tokens: 100,
+  model: process.env.HF_CHAT_MODEL!,
+  messages: [{ role: "user", content: "Count to three." }],
+  max_tokens: 32,
 });
 
 for await (const chunk of stream) {
-  // Process chunks as they arrive
-  console.log(chunk.choices[0]?.delta?.content);
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
 }
-// Span is ended with full content captured
 ```
 
-## Supported Models
+The span ends when iteration finishes, fails, or exits early with `break`. A stream you never iterate does not start a span. Chat token counts are recorded when the SDK response includes usage; they are not estimated.
 
-HuggingFace hosts thousands of models. Some popular ones for inference include:
+## Privacy
 
-**Text Generation:**
-- `gpt2`
-- `bigscience/bloom`
-- `EleutherAI/gpt-neo-2.7B`
+Inputs and outputs are captured by default. Set privacy controls when creating the instrumentor:
 
-**Chat Models:**
-- `meta-llama/Llama-2-7b-chat-hf`
-- `meta-llama/Llama-2-13b-chat-hf`
-- `HuggingFaceH4/zephyr-7b-beta`
+```typescript
+const instrumentation = new HuggingFaceInstrumentation({
+  traceConfig: {
+    hideInputs: true,
+    hideOutputs: true,
+  },
+});
+```
 
-**Embedding Models:**
-- `sentence-transformers/all-MiniLM-L6-v2`
-- `sentence-transformers/all-mpnet-base-v2`
-- `BAAI/bge-base-en-v1.5`
+These controls apply to exported input/output content, text prompts, embedding input text, and embedding output vectors. Transport options and access tokens are not included in request attributes. Your application still sends its original input to Hugging Face.
 
-**Summarization:**
-- `facebook/bart-large-cnn`
-- `google/pegasus-xsum`
+## Trace attributes
 
-**Translation:**
-- `Helsinki-NLP/opus-mt-en-fr`
-- `Helsinki-NLP/opus-mt-en-de`
-- `t5-base`
+Spans include `fi.span_kind`, `gen_ai.provider.name`, the request model when supplied, and task inputs/outputs unless hidden. Chat spans include `gen_ai.input.messages`, `gen_ai.output.messages`, response metadata and `gen_ai.usage.*` counts when returned by the SDK. Embedding spans include the embedding model, input texts, and vectors unless hidden.
 
-**Question Answering:**
-- `deepset/roberta-base-squad2`
-- `distilbert-base-cased-distilled-squad`
+## Troubleshooting
 
-See the [HuggingFace Model Hub](https://huggingface.co/models) for a complete list.
-
-## Patched Classes
-
-This instrumentation patches both:
-- `HfInference` - The main inference client
-- `InferenceClient` - Alternative inference client (if present)
-
-## Examples
-
-See the [examples](./examples) directory for complete working examples.
+- **Requests succeed but no spans appear:** use the returned module or client wrapper, set the tracer provider, and check that instrumentation is enabled.
+- **ESM imports or previously imported clients are untraced:** create the client from the returned module, or pass the existing client to `instrumentClient()`.
+- **A streaming span is missing:** consume the iterator or close it after starting iteration. Flush or shut down the tracer provider before exiting the process.
+- **A model rejects a task:** choose a model and inference provider that support that task. Instrumentation does not change model routing or account access.
 
 ## License
 
