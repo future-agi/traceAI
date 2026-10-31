@@ -65,7 +65,7 @@ Structure-only is the only enabled capture policy. Transcripts and an enrichment
 
 ## Native telemetry coexistence
 
-An unowned native destination is a conflict by default. Do not replace a generic logs/metrics/traces endpoint with a traces-only receiver. External collector fan-out requires an independently validated configuration; this runtime does not relay another vendor's credentials or claim delivery to that vendor.
+An unowned native trace destination is a conflict by default. Do not replace a generic logs/metrics/traces endpoint with a traces-only receiver. Explicit independent `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` destinations remain in the Claude child environment even when their respective `OTEL_LOGS_EXPORTER` or `OTEL_METRICS_EXPORTER` variables are unset; only signals without an independent exporter or endpoint are disabled by the tracing overlay. A generic OTLP endpoint or headers remain a conflict, not an implicit fan-out. External collector fan-out requires an independently validated configuration; this runtime does not relay another vendor's credentials or claim delivery to that vendor.
 
 ## Compatibility
 

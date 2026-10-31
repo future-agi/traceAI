@@ -268,11 +268,14 @@ export const claudeCodeAdapter: Adapter = {
         OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: receiver.endpoint,
         OTEL_EXPORTER_OTLP_TRACES_HEADERS:
           "Authorization=Bearer " + receiver.token,
-        // These settings affect only newly enabled signals, never existing exporters.
-        ...(!process.env.OTEL_LOGS_EXPORTER
+        // Only disable newly enabled signals. An endpoint-only per-signal OTLP
+        // route is independently configured even when its exporter is implicit.
+        ...(process.env.OTEL_LOGS_EXPORTER === undefined &&
+        process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT === undefined
           ? { OTEL_LOGS_EXPORTER: "none" }
           : {}),
-        ...(!process.env.OTEL_METRICS_EXPORTER
+        ...(process.env.OTEL_METRICS_EXPORTER === undefined &&
+        process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT === undefined
           ? { OTEL_METRICS_EXPORTER: "none" }
           : {}),
       },

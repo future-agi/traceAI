@@ -480,3 +480,81 @@ test("disable on stopped daemon persists its fence; later start never re-enables
     false,
   );
 });
+
+test("independent endpoint-only logs and metrics reach their own receivers without changing trace routing", async (t) => {
+  const http = require("node:http");
+  const f = fixture(t);
+  await install(f);
+  const received = { logs: [], metrics: [] };
+  const servers = await Promise.all(["logs", "metrics"].map(async (signal) => {
+    const server = http.createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      received[signal].push({ path: req.url, type: req.headers["content-type"], canary: req.headers["x-test-signal"], body: Buffer.concat(chunks) });
+      res.writeHead(200);
+      res.end();
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return server;
+  }));
+  t.after(async () => {
+    await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  });
+  for (const [i, signal] of ["logs", "metrics"].entries())
+    f.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_ENDPOINT`] =
+      `http://127.0.0.1:${servers[i].address().port}/v1/${signal}`;
+  // A synthetic Claude binary emits OTLP-framed traffic to independently configured receivers.
+  // It follows the OTel default (otlp) when the per-signal exporter is unset.
+  const exported = path.join(f.root, "signal-exporters.json");
+  fs.writeFileSync(f.binary, "#!" + process.execPath + "\n" + `
+    if (process.argv[2] === '--version') { console.log('2.1.316 (Claude Code)'); process.exit(0); }
+    const http = require('node:http');
+    require('node:fs').writeFileSync(${JSON.stringify(exported)}, JSON.stringify({
+      logs: process.env.OTEL_LOGS_EXPORTER ?? null,
+      metrics: process.env.OTEL_METRICS_EXPORTER ?? null,
+      traces: process.env.OTEL_TRACES_EXPORTER ?? null
+    }));
+    Promise.all(['logs', 'metrics'].map(signal => new Promise((resolve, reject) => {
+      const suffix = signal.toUpperCase();
+      const endpoint = process.env['OTEL_EXPORTER_OTLP_' + suffix + '_ENDPOINT'];
+      const exporter = process.env['OTEL_' + suffix + '_EXPORTER'];
+      if (!endpoint || (exporter && exporter !== 'otlp')) return resolve();
+      const req = http.request(endpoint, {method:'POST', headers:{'content-type':'application/x-protobuf', 'x-test-signal':signal + '-canary'}}, res => {
+        res.resume(); res.on('end', resolve);
+      });
+      req.on('error', reject);
+      req.end(Buffer.from([10, 0]));
+    }))).then(() => process.exit(0), () => process.exit(21));
+  `, { mode: 0o700 });
+  for (const explicit of [false, true]) {
+    if (explicit) {
+      f.env.OTEL_LOGS_EXPORTER = "otlp";
+      f.env.OTEL_METRICS_EXPORTER = "otlp";
+    }
+    const result = await f.cli(f.action("run", "--", "--print", "fixture"));
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(exported, "utf8")), {
+      logs: explicit ? "otlp" : null,
+      metrics: explicit ? "otlp" : null,
+      traces: "otlp",
+    });
+    for (const signal of ["logs", "metrics"]) {
+      assert.equal(received[signal].length, explicit ? 2 : 1, `${signal} delivery`);
+      assert.equal(received[signal].at(-1).path, `/v1/${signal}`);
+      assert.equal(received[signal].at(-1).type, "application/x-protobuf");
+      assert.equal(received[signal].at(-1).canary, `${signal}-canary`);
+      assert.deepEqual(received[signal].at(-1).body, Buffer.from([10, 0]));
+    }
+  }
+  for (const signal of ["logs", "metrics"]) {
+    delete f.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_ENDPOINT`];
+    delete f.env[`OTEL_${signal.toUpperCase()}_EXPORTER`];
+  }
+  const noOtherSignals = await f.cli(f.action("run", "--", "--print", "fixture"));
+  assert.equal(noOtherSignals.code, 0, noOtherSignals.stdout + noOtherSignals.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(exported, "utf8")), {
+    logs: "none", metrics: "none", traces: "otlp",
+  });
+  assert.equal(received.logs.length, 2);
+  assert.equal(received.metrics.length, 2);
+});
