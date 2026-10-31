@@ -1,0 +1,169 @@
+name: Compatibility report
+
+on:
+  workflow_run:
+    workflows: [Compatibility canary]
+    types: [completed]
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      self_test:
+        description: Synthetic fixture dry-run only (writes are main-only and opt-in)
+        type: boolean
+        default: true
+      run_id:
+        description: Optional trusted canary run ID; blank checks recent history/heartbeat
+        type: string
+        default: ''
+  schedule:
+    - cron: '11 9 * * *'
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - '.github/compat/**'
+      - '.github/workflows/compatibility-report.yml'
+      - 'docs/compatibility.md'
+  push:
+    branches: ['ci/compat-*']
+    paths:
+      - '.github/compat/**'
+      - '.github/workflows/compatibility-report.yml'
+      - 'docs/compatibility.md'
+
+permissions:
+  contents: read
+
+# Serial issue reconciliation is essential to the one-incident-per-key guard.
+# Never cancel the only active heartbeat or an in-flight issue update.
+concurrency:
+  group: compatibility-report-${{ github.event_name == 'pull_request' && github.event.pull_request.number || (startsWith(github.ref, 'refs/heads/ci/') && github.ref) || 'trusted' }}
+  cancel-in-progress: false
+
+jobs:
+  selftest:
+    name: Compatibility reporter dry-run
+    if: >-
+      github.event_name == 'pull_request' || github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.self_test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Install reporter schema validator (no vendor SDKs or write token)
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0' 'packaging==24.2'
+      - name: Test incident lifecycle, provenance and hostile artifact boundaries
+        run: |
+          python -I -m unittest discover -s .github/compat -p test_report.py -v
+          python -I -m unittest discover -s .github/compat -p test_incidents.py -v
+          python -I -m unittest discover -s .github/compat -p test_publish.py -v
+      - name: Render synthetic evidence and check generated-document drift
+        run: |
+          python -I .github/compat/report.py --fixtures --output "$RUNNER_TEMP/report"
+          cmp "$RUNNER_TEMP/report/compatibility.md" .github/compat/fixtures/expected-compatibility.md
+          python -I .github/compat/report.py --baseline --output "$RUNNER_TEMP/baseline"
+          cmp "$RUNNER_TEMP/baseline/compatibility.md" docs/compatibility.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-report
+          path: ${{ runner.temp }}/report/
+          if-no-files-found: error
+          retention-days: 30
+
+  render:
+    name: Validate trusted canary evidence
+    outputs:
+      production: ${{ steps.evidence.outputs.production }}
+    if: >-
+      github.repository == 'future-agi/traceAI' && github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && github.ref_name == github.event.repository.default_branch) ||
+       (github.event_name == 'workflow_dispatch' && !inputs.self_test) ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository &&
+        (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'dev') &&
+        github.event.workflow_run.event != 'pull_request'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    steps:
+      # Never check out workflow_run.head_sha, a source_ref, or artifact code.
+      # This intentionally blocks production until trusted code is promoted to main.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: future-agi/traceAI
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0' 'packaging==24.2'
+      - name: Validate provenance, locks, plan bytes and all planned cases; render dry-run
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANARY_TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          CANARY_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          args=()
+          if [ -n "$CANARY_TRIGGER_RUN_ID" ]; then args+=(--trigger-run-id "$CANARY_TRIGGER_RUN_ID");
+          elif [ -n "$CANARY_RUN_ID" ]; then args+=(--run-id "$CANARY_RUN_ID"); fi
+          python -I .github/compat/report.py --github "${args[@]}" --output "$RUNNER_TEMP/report"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-report
+          path: ${{ runner.temp }}/report/
+          if-no-files-found: error
+          retention-days: 90
+
+  incidents:
+    name: Reconcile compatibility incidents
+    needs: render
+    if: >-
+      needs.render.result == 'success' && needs.render.outputs.production == 'true' &&
+      github.repository == 'future-agi/traceAI' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_dispatch' || !inputs.self_test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: future-agi/traceAI
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Install trusted reporter dependency (no canary package install or contract execution)
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0' 'packaging==24.2'
+      - name: Revalidate provenance and reconcile one issue per key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPAT_REPORT_ALLOW_WRITES: 'true'
+          CANARY_TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          CANARY_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          args=()
+          if [ -n "$CANARY_TRIGGER_RUN_ID" ]; then args+=(--trigger-run-id "$CANARY_TRIGGER_RUN_ID");
+          elif [ -n "$CANARY_RUN_ID" ]; then args+=(--run-id "$CANARY_RUN_ID"); fi
+          python -I .github/compat/report.py --github --apply "${args[@]}" --output "$RUNNER_TEMP/incidents"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-incident-changes
+          path: ${{ runner.temp }}/incidents/
+          if-no-files-found: error
+          retention-days: 90
