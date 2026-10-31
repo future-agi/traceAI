@@ -6,7 +6,7 @@ Trace Gemini requests on Vertex AI in Future AGI using the Google Gen AI SDK.
 
 For new applications, use [`traceAI-google-genai`](../google-genai/README.md) with `google-genai`. Its `GoogleGenAIInstrumentor` wraps the SDK's synchronous and asynchronous generation and streaming methods, including clients configured with `vertexai=True`.
 
-`traceAI-vertexai` is the **legacy** integration for `google-cloud-aiplatform`. Google deprecated its generative AI modules, including `vertexai.generative_models`, and [announced their removal after June 24, 2026](https://cloud.google.com/vertex-ai/generative-ai/docs/deprecations/genai-vertexai-sdk). This package supports `google-cloud-aiplatform>=1.49.0,<=1.101.0`; the upper bound retains a release containing those modules. It does not instrument `google-genai`. Do not install the separate `vertexai` distribution to set up either route.
+`traceAI-vertexai` is the **legacy** integration for `google-cloud-aiplatform`. Google deprecated its generative AI modules, including `vertexai.generative_models`, and [announced their removal after June 24, 2026](https://cloud.google.com/vertex-ai/generative-ai/docs/deprecations/genai-vertexai-sdk). This package supports `google-cloud-aiplatform>=1.61.0,<=1.101.0`; the lower bound allows the protobuf version required by the tracing dependencies, and the upper bound retains a release containing those modules. It does not instrument `google-genai`. Do not install the separate `vertexai` distribution to set up either route.
 
 ## Set up Google Gen AI (recommended)
 
@@ -75,7 +75,13 @@ For applications that still import `vertexai.generative_models`, install the bou
 pip install traceAI-vertexai 'google-cloud-aiplatform==1.101.0'
 ```
 
-Use the same Google Cloud and Future AGI environment variables above. Instrument **before importing `vertexai`** so the legacy SDK's GAPIC clients are wrapped when they are created:
+Use the same Google Cloud and Future AGI credentials above, but select a **region** where your model is available. Older supported legacy SDKs reject `global`; if you set it for the recommended route, override it before running the legacy example:
+
+```bash
+export GOOGLE_CLOUD_LOCATION="us-central1"
+```
+
+The legacy example defaults to `us-central1` when the variable is unset. Instrument **before importing `vertexai`** so the legacy SDK's GAPIC clients are wrapped when they are created:
 
 ```python
 import os
@@ -95,7 +101,7 @@ from vertexai.generative_models import GenerativeModel
 
 vertexai.init(
     project=os.environ["GOOGLE_CLOUD_PROJECT"],
-    location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+    location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
 )
 try:
     response = GenerativeModel(os.environ["GOOGLE_GENAI_MODEL"]).generate_content(

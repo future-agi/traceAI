@@ -17,7 +17,7 @@ from vertexai.generative_models import GenerativeModel
 
 vertexai.init(
     project=os.environ["GOOGLE_CLOUD_PROJECT"],
-    location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+    location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"),
 )
 try:
     response = GenerativeModel(os.environ["GOOGLE_GENAI_MODEL"]).generate_content(
