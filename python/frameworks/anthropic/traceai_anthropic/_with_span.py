@@ -22,7 +22,7 @@ class _WithSpan:
         try:
             self._is_finished = not self._span.is_recording()
         except Exception:
-            logger.exception("Failed to check if span is recording")
+            logger.warning("Failed to check if span is recording")
             print("Error checking span recording status, defaulting to finished")
             self._is_finished = True
 
@@ -42,7 +42,7 @@ class _WithSpan:
         try:
             self._span.record_exception(exception)
         except Exception:
-            logger.exception("Failed to record exception on span")
+            logger.warning("Failed to record exception on span")
             print("Error recording exception on span")
 
     def set_status(self, status: Union[trace_api.Status, trace_api.StatusCode]) -> None:
@@ -51,7 +51,7 @@ class _WithSpan:
         try:
             self._span.set_status(status=status)
         except Exception:
-            logger.exception("Failed to set status on span")
+            logger.warning("Failed to set status on span")
             print("Error setting status on span")
 
     def add_event(self, name: str) -> None:
@@ -60,7 +60,7 @@ class _WithSpan:
         try:
             self._span.add_event(name)
         except Exception:
-            logger.exception("Failed to add event to span")
+            logger.warning("Failed to add event to span")
             print("Error adding event to span")
 
     def finish_tracing(
@@ -81,20 +81,20 @@ class _WithSpan:
                 try:
                     self._span.set_attribute(key, value)
                 except Exception:
-                    logger.exception("Failed to set attribute on span")
+                    logger.warning("Failed to set attribute on span")
                     print(f"Error setting attribute: {key}")
 
         if status is not None:
             try:
                 self._span.set_status(status=status)
             except Exception:
-                logger.exception("Failed to set status code on span")
+                logger.warning("Failed to set status code on span")
                 print("Error setting final status")
 
         try:
             self._span.end()
         except Exception:
-            logger.exception("Failed to end span")
+            logger.warning("Failed to end span")
             print("Error ending span")
 
         self._is_finished = True
