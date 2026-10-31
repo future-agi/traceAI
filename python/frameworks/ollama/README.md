@@ -81,9 +81,22 @@ stream = ollama.chat(
     stream=True
 )
 
-for chunk in stream:
-    print(chunk["message"]["content"], end="", flush=True)
+try:
+    for chunk in stream:
+        print(chunk["message"]["content"], end="", flush=True)
+finally:
+    stream.close()
 ```
+
+Streams keep their span open until exhaustion, an error, or explicit `close()`
+(`await stream.aclose()` for async streams). Close streams when stopping early;
+final usage is available only when Ollama returns its final usage chunk.
+
+Streaming telemetry combines content, thinking, and tool calls without retaining
+raw chunks. It keeps up to 65,536 characters across those fields and at most 32
+tool calls; `ollama.output_truncated=true` marks a bounded preview. These limits
+never truncate the response delivered to your application. `TraceConfig` output
+privacy settings apply to both normalized attributes and serialized output.
 
 ### Text Generation
 
@@ -115,12 +128,12 @@ response = ollama.embed(
     model="nomic-embed-text",
     input="Hello, world!"
 )
-print(f"Embedding dimensions: {len(response['embedding'])}")
+print(f"Embedding dimensions: {len(response['embeddings'][0])}")
 
 # Multiple embeddings (batch)
-response = ollama.embeddings(
+response = ollama.embed(
     model="nomic-embed-text",
-    prompt=["Hello", "World"]
+    input=["Hello", "World"]
 )
 ```
 

@@ -44,6 +44,7 @@ class OllamaInstrumentor(BaseInstrumentor):
         "_original_async_embed",
         "_original_embeddings",
         "_original_async_embeddings",
+        "_original_module_functions",
         "_tracer",
     )
 
@@ -80,7 +81,7 @@ class OllamaInstrumentor(BaseInstrumentor):
             wrapper=_GenerateWrapper(tracer=self._tracer),
         )
 
-        # Ollama uses 'embed' for single and 'embeddings' for batch
+        # 'embed' accepts one or many inputs; 'embeddings' is the legacy endpoint.
         if hasattr(ollama_module.Client, "embed"):
             self._original_embed = ollama_module.Client.embed
             wrap_function_wrapper(
@@ -128,7 +129,12 @@ class OllamaInstrumentor(BaseInstrumentor):
                 wrapper=_AsyncEmbedWrapper(tracer=self._tracer),
             )
 
-        # Wrap module-level functions
+        # Module helpers are bound aliases, not lookups of Client methods.
+        self._original_module_functions = {
+            name: getattr(ollama_module, name)
+            for name in ("chat", "generate", "embed", "embeddings")
+            if hasattr(ollama_module, name)
+        }
         if hasattr(ollama_module, "chat"):
             wrap_function_wrapper(
                 module="ollama",
@@ -187,3 +193,8 @@ class OllamaInstrumentor(BaseInstrumentor):
             ollama_module.AsyncClient.embed = self._original_async_embed
         if hasattr(self, "_original_async_embeddings"):
             ollama_module.AsyncClient.embeddings = self._original_async_embeddings
+        for name, original in self._original_module_functions.items():
+            setattr(ollama_module, name, original)
+        self._original_module_functions.clear()
+        if Protect is not None and self._original_protect is not None:
+            Protect.protect = self._original_protect
