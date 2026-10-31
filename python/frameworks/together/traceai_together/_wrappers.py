@@ -22,6 +22,7 @@ from traceai_together._response_attributes_extractor import (
     _StreamingChatResponseAccumulator,
     _StreamingCompletionsResponseAccumulator,
 )
+from traceai_together._stream import _AsyncStream, _Stream, _StreamState, _wrap_stream
 from traceai_together._utils import _finish_tracing, _to_dict
 from traceai_together._with_span import _WithSpan
 
@@ -131,49 +132,12 @@ class _ChatCompletionsWrapper(_WithTracer):
 
     def _handle_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
-    ):
-        """Handle streaming response."""
-        accumulator = _StreamingChatResponseAccumulator()
-        first_chunk = True
-
-        def streaming_wrapper():
-            nonlocal first_chunk
-            try:
-                for chunk in response:
-                    if first_chunk:
-                        span.add_event("First Token Stream Event")
-                        first_chunk = False
-
-                    accumulator.process_chunk(chunk)
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    final_response = accumulator.get_accumulated_response()
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(accumulator.get_raw_chunks()))
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, accumulator.get_content())
-
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=self._response_extractor.get_attributes(final_response, is_streaming=True),
-                        extra_attributes=self._response_extractor.get_extra_attributes(
-                            final_response, request_parameters, is_streaming=True
-                        ),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-
-        return streaming_wrapper()
+    ) -> Any:
+        return _wrap_stream(
+            response,
+            _StreamState(span, _StreamingChatResponseAccumulator(), self._response_extractor, request_parameters),
+            _Stream,
+        )
 
 
 class _AsyncChatCompletionsWrapper(_WithTracer):
@@ -236,51 +200,14 @@ class _AsyncChatCompletionsWrapper(_WithTracer):
                     span.finish_tracing()
                 return response
 
-    async def _handle_async_streaming_response(
+    def _handle_async_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
-    ):
-        """Handle async streaming response."""
-        accumulator = _StreamingChatResponseAccumulator()
-        first_chunk = True
-
-        async def async_streaming_wrapper():
-            nonlocal first_chunk
-            try:
-                async for chunk in response:
-                    if first_chunk:
-                        span.add_event("First Token Stream Event")
-                        first_chunk = False
-
-                    accumulator.process_chunk(chunk)
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    final_response = accumulator.get_accumulated_response()
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(accumulator.get_raw_chunks()))
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, accumulator.get_content())
-
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=self._response_extractor.get_attributes(final_response, is_streaming=True),
-                        extra_attributes=self._response_extractor.get_extra_attributes(
-                            final_response, request_parameters, is_streaming=True
-                        ),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-
-        return async_streaming_wrapper()
+    ) -> Any:
+        return _wrap_stream(
+            response,
+            _StreamState(span, _StreamingChatResponseAccumulator(), self._response_extractor, request_parameters),
+            _AsyncStream,
+        )
 
 
 # ============================================================================
@@ -350,49 +277,12 @@ class _CompletionsWrapper(_WithTracer):
 
     def _handle_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
-    ):
-        """Handle streaming response."""
-        accumulator = _StreamingCompletionsResponseAccumulator()
-        first_chunk = True
-
-        def streaming_wrapper():
-            nonlocal first_chunk
-            try:
-                for chunk in response:
-                    if first_chunk:
-                        span.add_event("First Token Stream Event")
-                        first_chunk = False
-
-                    accumulator.process_chunk(chunk)
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    final_response = accumulator.get_accumulated_response()
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(accumulator.get_raw_chunks()))
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, accumulator.get_text())
-
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=self._response_extractor.get_attributes(final_response, is_streaming=True),
-                        extra_attributes=self._response_extractor.get_extra_attributes(
-                            final_response, request_parameters, is_streaming=True
-                        ),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-
-        return streaming_wrapper()
+    ) -> Any:
+        return _wrap_stream(
+            response,
+            _StreamState(span, _StreamingCompletionsResponseAccumulator(), self._response_extractor, request_parameters),
+            _Stream,
+        )
 
 
 class _AsyncCompletionsWrapper(_WithTracer):
@@ -455,51 +345,14 @@ class _AsyncCompletionsWrapper(_WithTracer):
                     span.finish_tracing()
                 return response
 
-    async def _handle_async_streaming_response(
+    def _handle_async_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
-    ):
-        """Handle async streaming response."""
-        accumulator = _StreamingCompletionsResponseAccumulator()
-        first_chunk = True
-
-        async def async_streaming_wrapper():
-            nonlocal first_chunk
-            try:
-                async for chunk in response:
-                    if first_chunk:
-                        span.add_event("First Token Stream Event")
-                        first_chunk = False
-
-                    accumulator.process_chunk(chunk)
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    final_response = accumulator.get_accumulated_response()
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, safe_json_dumps(accumulator.get_raw_chunks()))
-                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, accumulator.get_text())
-
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=self._response_extractor.get_attributes(final_response, is_streaming=True),
-                        extra_attributes=self._response_extractor.get_extra_attributes(
-                            final_response, request_parameters, is_streaming=True
-                        ),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-
-        return async_streaming_wrapper()
+    ) -> Any:
+        return _wrap_stream(
+            response,
+            _StreamState(span, _StreamingCompletionsResponseAccumulator(), self._response_extractor, request_parameters),
+            _AsyncStream,
+        )
 
 
 # ============================================================================
