@@ -199,6 +199,19 @@ for (const kind of ['throw', 'reject', 'stall', 'delay']) test(`bounded provider
   m.provider.forceFlush = original;
 });
 
+for (const [name, options, remaining] of [
+  ['configured maximum', { maxFlushWaitMillis: 20 }, 10000],
+  ['remaining time minus explicit reserve', { maxFlushWaitMillis: 1000, remainingTimeReserveMillis: 1000 }, 1020],
+]) test(`stalled flush respects ${name}`, async () => {
+  const m = memory(); let calls = 0;
+  m.provider.forceFlush = () => { calls++; return new Promise(() => {}); };
+  const start = performance.now();
+  assert.equal(await traceLambdaHandler(async () => 42, { provider: m.provider, ...options })({}, invocation(remaining)), 42);
+  const elapsed = performance.now() - start;
+  assert.equal(calls, 1);
+  assert.ok(elapsed >= 10 && elapsed < 400, `expected a ~20 ms budget, observed ${elapsed} ms`);
+});
+
 for (const remaining of [0, 249, -1, NaN, Infinity, undefined, '1000']) test(`skip invalid or exhausted remaining-time budget ${remaining}`, async () => {
   const m = memory(); let calls = 0;
   m.provider.forceFlush = async () => { calls++; };
