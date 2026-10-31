@@ -29,19 +29,20 @@ Example usage:
 """
 
 import logging
+from collections.abc import Collection
 from importlib import import_module
-from typing import Any, Collection
+from typing import Any
 
 from fi_instrumentation import FITracer, TraceConfig
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
 
-from traceai_cerebras.version import __version__
 from traceai_cerebras._wrappers import (
-    _CompletionsWrapper,
     _AsyncCompletionsWrapper,
+    _CompletionsWrapper,
 )
+from traceai_cerebras.version import __version__
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -58,8 +59,10 @@ class CerebrasInstrumentor(BaseInstrumentor):
     """An instrumentor for the Cerebras Cloud SDK."""
 
     __slots__ = (
-        "_original_completions_create",
         "_original_async_completions_create",
+        "_original_async_text_completions_create",
+        "_original_completions_create",
+        "_original_text_completions_create",
         "_tracer",
     )
 
@@ -82,8 +85,8 @@ class CerebrasInstrumentor(BaseInstrumentor):
         # Import Cerebras SDK modules
         try:
             from cerebras.cloud.sdk.resources.chat.completions import (
-                CompletionsResource,
                 AsyncCompletionsResource,
+                CompletionsResource,
             )
         except ImportError:
             logger.warning(
@@ -108,12 +111,62 @@ class CerebrasInstrumentor(BaseInstrumentor):
             wrapper=_AsyncCompletionsWrapper(tracer=self._tracer),
         )
 
+        # Text completions are absent from the minimum supported SDK (1.0.0).
+        # Their absence must not prevent chat instrumentation.
+        self._original_text_completions_create = None
+        self._original_async_text_completions_create = None
+        try:
+            text_module = import_module("cerebras.cloud.sdk.resources.completions")
+        except ImportError:
+            return
+        self._original_text_completions_create = text_module.CompletionsResource.create
+        self._original_async_text_completions_create = (
+            text_module.AsyncCompletionsResource.create
+        )
+        wrap_function_wrapper(
+            module="cerebras.cloud.sdk.resources.completions",
+            name="CompletionsResource.create",
+            wrapper=_CompletionsWrapper(tracer=self._tracer, text=True),
+        )
+        wrap_function_wrapper(
+            module="cerebras.cloud.sdk.resources.completions",
+            name="AsyncCompletionsResource.create",
+            wrapper=_AsyncCompletionsWrapper(tracer=self._tracer, text=True),
+        )
+
     def _uninstrument(self, **kwargs: Any) -> None:
         try:
-            cerebras_module = import_module("cerebras.cloud.sdk.resources.chat.completions")
-            if hasattr(self, "_original_completions_create") and self._original_completions_create is not None:
-                cerebras_module.CompletionsResource.create = self._original_completions_create
-            if hasattr(self, "_original_async_completions_create") and self._original_async_completions_create is not None:
-                cerebras_module.AsyncCompletionsResource.create = self._original_async_completions_create
+            cerebras_module = import_module(
+                "cerebras.cloud.sdk.resources.chat.completions"
+            )
+            if (
+                hasattr(self, "_original_completions_create")
+                and self._original_completions_create is not None
+            ):
+                cerebras_module.CompletionsResource.create = (
+                    self._original_completions_create
+                )
+            if (
+                hasattr(self, "_original_async_completions_create")
+                and self._original_async_completions_create is not None
+            ):
+                cerebras_module.AsyncCompletionsResource.create = (
+                    self._original_async_completions_create
+                )
+        except ImportError:
+            pass
+        try:
+            text_module = import_module("cerebras.cloud.sdk.resources.completions")
+            if getattr(self, "_original_text_completions_create", None) is not None:
+                text_module.CompletionsResource.create = (
+                    self._original_text_completions_create
+                )
+            if (
+                getattr(self, "_original_async_text_completions_create", None)
+                is not None
+            ):
+                text_module.AsyncCompletionsResource.create = (
+                    self._original_async_text_completions_create
+                )
         except ImportError:
             pass

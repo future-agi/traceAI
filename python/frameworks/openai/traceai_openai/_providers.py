@@ -19,6 +19,7 @@ _HOSTS = {
     "api.anthropic.com": FiLLMProviderValues.ANTHROPIC.value,
     "api.mistral.ai": FiLLMProviderValues.MISTRALAI.value,
     "api.deepseek.com": FiLLMProviderValues.DEEPSEEK.value,
+    "api.cerebras.ai": "cerebras",
     "api.x.ai": FiLLMProviderValues.XAI.value,
     "api.together.ai": "together",
     "inference.baseten.co": "baseten",
