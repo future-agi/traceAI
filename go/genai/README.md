@@ -10,7 +10,9 @@ The SDK has no middleware option. Its hook is `ClientConfig.HTTPClient`, so this
 them) becomes one client span named `generate_content <model>` with the same attribute names
 `traceai-google-genai` writes in Python (`gen_ai.span.kind=LLM`, `gen_ai.provider.name=google`,
 `gen_ai.request.model`, `gen_ai.usage.*`, `gen_ai.input.messages.*`, `gen_ai.output.messages.*`,
-`input.value`, `output.value`, `session.id`, `user.id`).
+`input.value`, `output.value`, `session.id`, `user.id`). `Models.EmbedContent` uses the same
+client and creates an `embeddings <model>` span with `gen_ai.span.kind=EMBEDDING`, text inputs,
+embedding count and vector dimensions. Vector values are never captured.
 
 | | |
 |---|---|
@@ -81,6 +83,26 @@ export FI_API_KEY=... FI_SECRET_KEY=... FI_PROJECT_NAME=my-service GEMINI_API_KE
 go run ./example -stream -fail
 ```
 
+## Trace embeddings
+
+Use the same traced client for one or more input documents:
+
+```go
+embeddings, err := client.Models.EmbedContent(ctx, "gemini-embedding-001", []*genai.Content{
+	genai.NewContentFromText("How do I reset my password?", genai.RoleUser),
+	genai.NewContentFromText("Open Settings and choose Reset password.", genai.RoleUser),
+}, &genai.EmbedContentConfig{TaskType: "RETRIEVAL_DOCUMENT"})
+if err != nil {
+	return err
+}
+fmt.Printf("Embedded %d documents\n", len(embeddings.Embeddings))
+```
+
+The SDK sends this call to `batchEmbedContents`, including when there is only one input.
+Direct `embedContent` requests through the wrapped transport are also traced. This is
+synchronous embedding, not the asynchronous Batch API. In Future AGI, open your project
+and look for `embeddings gemini-embedding-001`.
+
 ## Privacy
 
 Content is captured by default, as in every traceAI instrumentor. The traceAI `TraceConfig`
@@ -117,6 +139,14 @@ generated (inline) images are never copied; the transport adds no resource attri
   `thoughtsTokenCount` (as in Python), `total_tokens`, `output_tokens.reasoning`,
   `cache_read_tokens`. Usage is never written as zero; a stream takes the last chunk's running
   total.
+- `POST .../models/{model}:embedContent` and `:batchEmbedContents`: one `EMBEDDING` span
+  with operation `embeddings`, request model, `embedding.model_name`, text inputs using the
+  same input attributes as generation, and allow-listed task type/output dimensionality in
+  `gen_ai.request.parameters`. `embedding.count` records returned vectors;
+  `gen_ai.embeddings.dimension.count` records their dimension when uniform. Vector values,
+  titles, media and opaque fields are never captured. `FI_HIDE_INPUTS` redacts the input
+  summary and drops messages; `FI_HIDE_INPUT_TEXT` redacts text in both. Gemini Developer
+  API embedding responses do not include token usage, so no token counts are invented.
 - A stream is one span: it ends when the body is read to the end, on a read error, or when the SDK
   closes the body (your `range` loop finished or broke).
 - HTTP 4xx/5xx: status ERROR, `http.response.status_code`, `error.type` (the Google status such as
@@ -124,7 +154,7 @@ generated (inline) images are never copied; the transport adds no resource attri
   ends the span with ERROR.
 - Cancellation: a context cancelled before the response completes ends the span with ERROR and
   `error.type=canceled`.
-- Other requests (countTokens, embeddings, files, caches, batches, models, interactions, live)
+- Other requests (countTokens, files, caches, asynchronous batches, models, interactions, live)
   pass through without a span.
 
 ## Limitations
@@ -135,7 +165,7 @@ generated (inline) images are never copied; the transport adds no resource attri
   Start a span around your call, as the example does, so they share one trace.
 - Vertex AI (`genai.BackendVertexAI`) is not tested. A Vertex call made through a wrapped client
   may still produce a span; that is not a support claim.
-- Live API (websocket), video generation and embeddings are not traced.
+- Live API (websocket) and video generation are not traced.
 - Cost is not computed here; Future AGI prices the model from the token counts.
 
 ## Test
