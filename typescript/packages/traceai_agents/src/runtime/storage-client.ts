@@ -93,6 +93,19 @@ export class StorageClient {
     } finally {
       if (this.child.connected) this.child.disconnect();
       this.closed = true;
+      // The close RPC releases SQLite in the child, but a successor must not
+      // race its process exit while it still owns the exclusive connection.
+      if (this.child.exitCode === null && this.child.signalCode === null)
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            this.child.kill("SIGKILL");
+            resolve();
+          }, 1000);
+          this.child.once("exit", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
     }
   }
 }

@@ -170,6 +170,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
               "HELD_USAGE_CONFLICT",
             ].includes(e.code)
           ) {
+            options.rejected?.("NATIVE_ADMISSION_UNAVAILABLE");
             res.writeHead(503, { "Retry-After": "1" }).end();
             return;
           }

@@ -40,6 +40,9 @@ export function preflightClaude(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
 ): void {
+  // A process-scoped traces opt-out outranks an enabled route; never replace it with otlp.
+  if (env.OTEL_TRACES_EXPORTER === "none")
+    throw new AgentError("NATIVE_POLICY_CONFLICT", 6);
   if (
     conflictKeys.some((k) => env[k] !== undefined) ||
     (env.OTEL_TRACES_EXPORTER && env.OTEL_TRACES_EXPORTER !== "none")

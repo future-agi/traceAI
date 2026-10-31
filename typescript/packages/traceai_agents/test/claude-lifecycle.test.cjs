@@ -13,7 +13,8 @@ const {
   CLAUDE_SCHEMA,
 } = require("../dist/src/adapters/claude-code/native.js");
 const source = require("../contract/claude-fixture.cjs");
-const base = path.resolve(__dirname, "../../../../../");
+// Keep Unix socket paths below the platform limit even in deeply nested clones.
+const base = path.resolve(__dirname, "../../../../../../../");
 const route = "claude-code.cli";
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(base, "rc-"));
@@ -232,6 +233,22 @@ test("version probe is bounded and never echoes executable output", async (t) =>
   }
 });
 
+test("process-level OTEL_TRACES_EXPORTER=none holds an enabled route without launching or overriding the child", async (t) => {
+  const f = fixture(t);
+  await install(f);
+  f.env.OTEL_TRACES_EXPORTER = "none";
+  const result = await f.cli(f.action("run", "--", "--print", "fixture"));
+  assert.equal(result.code, 6, result.stdout + result.stderr);
+  assert.match(result.stdout, /NATIVE_POLICY_CONFLICT/);
+  assert.equal(fs.existsSync(path.join(f.root, "ran")), false);
+  assert.equal(f.env.OTEL_TRACES_EXPORTER, "none");
+  assert.equal(
+    require("../dist/src/cli/run.js").agentEnvironment(f.env, {})
+      .OTEL_TRACES_EXPORTER,
+    "none",
+  );
+});
+
 test("listener exhaustion launches the synthetic child untraced with its own exit status", async (t) => {
   const f = fixture(t);
   await install(f);
@@ -415,9 +432,9 @@ test("auth removal with stopped runtime fences routes and owned uninstall needs 
   await f.stop();
   await f.ok(["auth", "remove", "--profile", "fixture"]);
   assert.equal(loadConfig(f.p).routes[route].route.enabled, false);
-  assert.equal(
-    (await runtimeRequest(f.p.socket, { operation: "status" })).control_only,
-    true,
+  await assert.rejects(
+    runtimeRequest(f.p.socket, { operation: "status" }),
+    /RUNTIME_UNAVAILABLE/,
   );
   await f.stop();
   fs.unlinkSync(f.binary);
@@ -439,13 +456,13 @@ test("disable on stopped daemon persists its fence; later start never re-enables
   await f.stop();
   await f.ok(f.action("disable"));
   assert.equal(loadConfig(f.p).routes[route].route.enabled, false);
-  assert.equal(
-    (await runtimeRequest(f.p.socket, { operation: "status" })).control_only,
-    true,
+  await assert.rejects(
+    runtimeRequest(f.p.socket, { operation: "status" }),
+    /RUNTIME_UNAVAILABLE/,
   );
   await assert.rejects(
     runtimeRequest(f.p.socket, { operation: "native-open", route }),
-    /HELD_DISABLED/,
+    /RUNTIME_UNAVAILABLE/,
   );
   await f.stop();
   await f.ok(["runtime", "start"]);

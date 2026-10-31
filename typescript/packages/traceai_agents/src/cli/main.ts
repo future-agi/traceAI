@@ -313,9 +313,6 @@ export async function main(
         return 0;
       }
       if (pos[1] === "remove") {
-        const current = loadConfig(p);
-        if (Object.values(current.routes).some((r) => r.profile === name))
-          await startRuntime(p, settings.entry, true);
         await configTransaction(p, async (config) => {
           const profile = config.profiles[name];
           if (!profile) throw new AgentError("UNKNOWN_PROFILE", 2);
@@ -437,6 +434,12 @@ export async function main(
       !adapter.capability.transcript
     )
       throw new AgentError("HELD_NATIVE_TRANSCRIPT_JOIN", 3);
+    if (
+      (command === "enable" || command === "run") &&
+      adapter.capability.transcript &&
+      !context.transcriptConsent
+    )
+      throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
     if (command === "run") {
       if (!installed?.route.enabled) throw new AgentError("ENABLE_REQUIRED", 3);
       // Generic destinations are never overwritten. Agent-specific effective state is adapter preflight's job.
@@ -540,15 +543,9 @@ export async function main(
       });
       return 0;
     }
-    if (
-      command === "enable" &&
-      adapter.capability.transcript &&
-      !context.transcriptConsent
-    )
-      throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
-    if (command === "enable" || cleanup)
-      await startRuntime(p, settings.entry, cleanup);
-    if (command === "disable" || command === "uninstall")
+    if (command === "enable") await startRuntime(p, settings.entry);
+    if (cleanup) controlRuntime = await ensureControlRuntime(p, settings);
+    if (cleanup)
       await runtimeRequest(p.socket, {
         operation: "disable",
         route: routeId,
