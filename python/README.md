@@ -193,6 +193,7 @@ Package names and links refer to the source in this repository.
 | [`traceAI-autogen`](../python/frameworks/autogen/) | AutoGen |
 | [`traceai-strands`](../python/frameworks/strands/) | AWS Strands Agents |
 | [`traceai-claude-agent-sdk`](../python/frameworks/claude-agent-sdk/) | Claude Agent SDK |
+| [`traceai-cognee`](../python/frameworks/cognee/) | Cognee native tracing |
 | [`traceAI-crewai`](../python/frameworks/crewai/) | CrewAI |
 | [`traceAI-elevenlabs-agents`](../python/frameworks/elevenlabs-agents/) | ElevenLabs Agents |
 | [`traceAI-google-adk`](../python/frameworks/google-adk/) | Google ADK |
@@ -249,7 +250,6 @@ These examples reuse existing instrumentation or configure tracing adapters.
 | Anannas AI | [Setup](examples/anannas-ai/) |
 | Azure AI Foundry | [Setup](examples/azure-ai-foundry/) |
 | Baseten Model APIs | [Setup](examples/baseten/) |
-| Cognee | [Setup](examples/cognee/) |
 | Databricks | [Setup](examples/databricks/) |
 | Doubleword | [Setup](examples/doubleword/) |
 | EverOS | [Setup](examples/everos/) |
