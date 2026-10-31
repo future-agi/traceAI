@@ -83,6 +83,21 @@ export class AnthropicInstrumentation extends InstrumentationBase{
   }
 
   private patch(moduleExports: typeof Anthropic, moduleVersion?: string) {
+    // Native SDK tracing owns the APIPromise, stream lifecycle and privacy options.
+    // Do not wrap it, even when the client explicitly disables native telemetry.
+    // Check the public capability, not just the automatic loader's version gate:
+    // manuallyInstrument() bypasses that gate, and subclasses inherit this getter.
+    const sdkPrototype = moduleExports.prototype ?? moduleExports.Anthropic?.prototype;
+    if (sdkPrototype && "openTelemetry" in sdkPrototype) {
+      diag.warn(
+        "@traceai/anthropic: this SDK has native OpenTelemetry support; " +
+        "leaving it unpatched. Configure the SDK's openTelemetry option and " +
+        "tracer provider directly. traceConfig on this legacy instrumentor " +
+        "does not apply to native SDK spans.",
+      );
+      return moduleExports;
+    }
+
     if ((moduleExports as any).fiPatched || _isFIPatched) {
       return moduleExports;
     }
