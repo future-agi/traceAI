@@ -63,6 +63,22 @@ class ModernListenerTest {
         });
     }
 
+    @Test void optInReadsModernMessageAndToolPayloadTypesFromTheLegacyCompiledJar() {
+        LangChain4jListener capturing = new LangChain4jListener(new FITracer(sdk.get("test")), "synthetic", true);
+        ChatModel model = new ChatModel() {
+            @Override public List<ChatModelListener> listeners() { return List.of(capturing); }
+            @Override public ChatResponse doChat(ChatRequest actual) {
+                return ChatResponse.builder().aiMessage(AiMessage.from(ToolExecutionRequest.builder()
+                        .name("lookup").arguments("PRIVATE_ARGUMENTS").build())).build();
+            }
+        };
+        model.chat(request);
+        assertThat(exporter.getFinishedSpanItems()).singleElement().satisfies(span -> {
+            assertThat(span.getAttributes().toString()).contains("PRIVATE_PROMPT", "PRIVATE_ARGUMENTS");
+            assertThat(span.getAttributes().get(AttributeKey.stringKey("traceai.instrumentation.error"))).isNull();
+        });
+    }
+
     @Test void streamingWaitsForTerminalCallbackAndKeepsTheOriginalParentAcrossThreads() {
         AtomicReference<StreamingChatResponseHandler> pending = new AtomicReference<>();
         StreamingChatModel model = new StreamingChatModel() {
