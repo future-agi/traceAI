@@ -156,26 +156,32 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
       for (const fact of facts) {
         try {
           await options.admit(fact);
-        } catch {
+        } catch (error) {
+          // OTLP partial success is final: native exporters do not retry it.
+          // Temporary local failures must retry the entire immutable batch;
+          // already committed spans are deduplicated at the shared spool.
+          if (!(error instanceof AgentError) || error.exitCode === 7) {
+            options.rejected?.("NATIVE_ADMISSION_UNAVAILABLE");
+            res.writeHead(503, { "Retry-After": "1" }).end();
+            return;
+          }
           rejected++;
           options.rejected?.("NATIVE_ADMISSION_REJECTED");
         }
       }
       if (type === "application/json") {
-        res
-          .writeHead(200, { "Content-Type": "application/json" })
-          .end(
-            JSON.stringify(
-              rejected
-                ? {
-                    partialSuccess: {
-                      rejectedSpans: String(rejected),
-                      errorMessage: "NATIVE_ADMISSION_REJECTED",
-                    },
-                  }
-                : {},
-            ),
-          );
+        res.writeHead(200, { "Content-Type": "application/json" }).end(
+          JSON.stringify(
+            rejected
+              ? {
+                  partialSuccess: {
+                    rejectedSpans: String(rejected),
+                    errorMessage: "NATIVE_ADMISSION_REJECTED",
+                  },
+                }
+              : {},
+          ),
+        );
       } else {
         res
           .writeHead(200, { "Content-Type": "application/x-protobuf" })

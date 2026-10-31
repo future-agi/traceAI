@@ -185,9 +185,12 @@ export const claudeCodeAdapter: Adapter = {
   normalize() {
     throw new AgentError("NATIVE_OTLP_REQUIRED", 5);
   },
-  async launch(context: AdapterContext) {
+  async launch(context: AdapterContext, { tracing }) {
     preflightClaude();
     const binary = executable();
+    // Runtime loss must not prevent the agent running, and must not open a
+    // receiver or inject telemetry settings on the untraced fallback path.
+    if (!tracing) return { executable: binary, args: [], env: {} };
     const receiver = await runtimeRequest(context.socketPath, {
       operation: "native-open",
       route: context.routeRef,

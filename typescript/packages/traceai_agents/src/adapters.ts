@@ -45,7 +45,12 @@ export interface Adapter {
     context: NormalizeContext,
   ): CanonicalFact;
   validateArgs?(args: readonly string[]): void;
-  launch?(context: AdapterContext): Promise<{
+  /** Always preflight security/destinations; tracing=false must not start collectors
+   * or add telemetry arguments. The CLI also omits tracing environment overlays. */
+  launch?(
+    context: AdapterContext,
+    options: { tracing: boolean },
+  ): Promise<{
     executable: string;
     env: Record<string, string>;
     args: readonly string[];

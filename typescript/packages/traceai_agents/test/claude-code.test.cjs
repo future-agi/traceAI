@@ -381,7 +381,11 @@ test("failed admission is rejected, not an activation receipt", async () => {
       },
     );
     const r = await post(e.endpoint, e.token, fixture.envelope());
-    assert.equal(JSON.parse(r.body).partialSuccess.rejectedSpans, "1");
+    assert.equal(r.status, 503);
+    assert.equal(
+      ingress.status("claude-code.cli").last_reason,
+      "NATIVE_ADMISSION_UNAVAILABLE",
+    );
     assert.equal(ingress.activated.size, 0);
   } finally {
     ingress.stop();
@@ -441,6 +445,100 @@ test("coexistence preflight refuses existing destinations, managed settings and 
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+test("transient native admission retries immutable batches without duplicate usage", async () => {
+  const dir = temp();
+  const spool = new Spool(dir, "0.1.0");
+  const ingress = new NativeIngress();
+  const route = "claude-code.cli";
+  spool.route({
+    id: route,
+    binding: {
+      id: "00000000-0000-4000-8000-000000000001",
+      endpoint: "https://api.futureagi.com/tracer/v1/traces",
+      approvedOrigin: "https://api.futureagi.com",
+      project: "fixture",
+      backendContract: "immutable-agent-v1",
+    },
+    policy: { revision: "1", categories: [], ceiling: [] },
+    enabled: true,
+    epoch: 1,
+  });
+  let unavailable = true;
+  const admissions = [];
+  try {
+    const e = await ingress.open(
+      route,
+      claudeCodeAdapter,
+      context,
+      () => true,
+      async (fact) => {
+        if (fact.spanId === "d".repeat(16) && unavailable) {
+          unavailable = false;
+          throw new (require("../dist/src/security/files.js").AgentError)(
+            "STORAGE_UNAVAILABLE",
+            7,
+          );
+        }
+        const result = spool.admit(route, fact);
+        admissions.push(result.duplicate);
+        return result;
+      },
+    );
+    const batch = fixture.envelope();
+    batch.resourceSpans[0].scopeSpans[0].spans.push(
+      fixture.span(undefined, { spanId: "d".repeat(16) }),
+    );
+    assert.equal((await post(e.endpoint, e.token, batch, true)).status, 503);
+    assert.deepEqual(admissions, [false]);
+    assert.equal((await post(e.endpoint, e.token, batch, true)).status, 200);
+    assert.deepEqual(admissions, [false, true, false]);
+    assert.equal((await post(e.endpoint, e.token, batch, false)).status, 200);
+    assert.deepEqual(admissions, [false, true, false, true, true]);
+  } finally {
+    ingress.stop();
+    spool.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Claude untraced fallback retains preflight and never opens native ingress", async () => {
+  const home = temp();
+  const previous = { ...process.env };
+  const cwd = process.cwd();
+  try {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    fs.symlinkSync(process.execPath, path.join(home, "claude"));
+    Object.assign(process.env, {
+      HOME: home,
+      CLAUDE_CONFIG_DIR: path.join(home, "agent"),
+      PATH: home,
+    });
+    process.chdir(home);
+    const launch = await claudeCodeAdapter.launch(
+      { socketPath: path.join(home, "missing.sock") },
+      { tracing: false },
+    );
+    assert.equal(launch.executable, path.join(home, "claude"));
+    assert.deepEqual(launch.env, {});
+    assert.deepEqual(launch.args, []);
+    assert.equal(launch.close, undefined);
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT =
+      "https://example.invalid/v1/traces";
+    await assert.rejects(
+      claudeCodeAdapter.launch(
+        { socketPath: path.join(home, "missing.sock") },
+        { tracing: false },
+      ),
+      /NATIVE_DESTINATION_CONFLICT/,
+    );
+  } finally {
+    process.chdir(cwd);
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, previous);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("launch overlays preserve provider/permissions; failing telemetry close cannot change child status", async () => {
   const env = {
     ANTHROPIC_API_KEY: "fixture-provider",
