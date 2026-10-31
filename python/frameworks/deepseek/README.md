@@ -1,327 +1,96 @@
-# TraceAI DeepSeek Instrumentation
+# Trace DeepSeek with the OpenAI integration
 
-OpenTelemetry instrumentation for [DeepSeek](https://www.deepseek.com/) - chat completions, reasoning models, and function calling.
+Use `traceAI-openai` to trace DeepSeek Chat Completions and Responses in Future AGI. The shared integration preserves OpenAI's synchronous and asynchronous streaming interfaces and records DeepSeek reasoning and cache fields when the API returns them.
 
-## Installation
+## Install
+
+Use Python 3.10–3.13 and OpenAI SDK 1.69 or newer.
 
 ```bash
-pip install traceai-deepseek
+pip install --upgrade traceAI-openai fi-instrumentation-otel openai
 ```
 
-## Features
+## Configure and run
 
-- Automatic tracing of DeepSeek API calls via OpenAI SDK
-- Support for DeepSeek Chat, Coder, and Reasoner (R1) models
-- Streaming response support
-- Token usage tracking including prompt cache metrics
-- Reasoning content extraction for R1 models
-- Function/tool calling support
-- Full OpenTelemetry semantic conventions compliance
-
-## Usage
-
-### Basic Setup
+Set `DEEPSEEK_API_KEY`, `FI_API_KEY`, and `FI_SECRET_KEY` in your environment. Set `DEEPSEEK_MODEL` to a model available to your DeepSeek account. Obtain a DeepSeek key from the [DeepSeek platform](https://platform.deepseek.com/).
 
 ```python
+import os
+
+from fi_instrumentation import TraceConfig, register
+from fi_instrumentation.fi_types import ProjectType
 from openai import OpenAI
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+from traceai_openai import OpenAIInstrumentor
 
-from traceai_deepseek import DeepSeekInstrumentor
-
-# Set up tracing
-provider = TracerProvider()
-provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
-trace.set_tracer_provider(provider)
-
-# Instrument DeepSeek
-DeepSeekInstrumentor().instrument(tracer_provider=provider)
-
-# Use DeepSeek via OpenAI SDK
-client = OpenAI(
-    api_key="your-deepseek-api-key",
-    base_url="https://api.deepseek.com/v1"
-)
-
-response = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-print(response.choices[0].message.content)
-```
-
-### DeepSeek Chat
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-deepseek-api-key",
-    base_url="https://api.deepseek.com/v1"
-)
-
-# Simple chat
-response = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "What is machine learning?"}
-    ],
-    temperature=0.7,
-    max_tokens=1024
-)
-print(response.choices[0].message.content)
-```
-
-### DeepSeek Reasoner (R1 Models)
-
-DeepSeek R1 models provide reasoning capabilities with detailed thought processes.
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-deepseek-api-key",
-    base_url="https://api.deepseek.com/v1"
-)
-
-# Using DeepSeek Reasoner
-response = client.chat.completions.create(
-    model="deepseek-reasoner",
-    messages=[
-        {"role": "user", "content": "Solve this step by step: If a train travels 120 km in 2 hours, what is its average speed?"}
-    ]
-)
-
-# Access the reasoning content (thought process)
-message = response.choices[0].message
-print("Reasoning:", message.reasoning_content)
-print("Answer:", message.content)
-
-# Token usage includes reasoning tokens
-print(f"Reasoning tokens: {response.usage.completion_tokens_details.reasoning_tokens}")
-```
-
-### Streaming Responses
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-deepseek-api-key",
-    base_url="https://api.deepseek.com/v1"
-)
-
-# Streaming chat
-stream = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[{"role": "user", "content": "Tell me a story"}],
-    stream=True
-)
-
-for chunk in stream:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="", flush=True)
-print()
-
-# Streaming with R1 (includes reasoning)
-stream = client.chat.completions.create(
-    model="deepseek-reasoner",
-    messages=[{"role": "user", "content": "What is 15% of 240?"}],
-    stream=True
-)
-
-reasoning_content = ""
-content = ""
-for chunk in stream:
-    delta = chunk.choices[0].delta
-    if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-        reasoning_content += delta.reasoning_content
-    if delta.content:
-        content += delta.content
-
-print("Reasoning:", reasoning_content)
-print("Answer:", content)
-```
-
-### Function Calling / Tools
-
-```python
-from openai import OpenAI
-import json
-
-client = OpenAI(
-    api_key="your-deepseek-api-key",
-    base_url="https://api.deepseek.com/v1"
-)
-
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get the current weather for a location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city name"
-                    },
-                    "unit": {
-                        "type": "string",
-                        "enum": ["celsius", "fahrenheit"],
-                        "description": "Temperature unit"
-                    }
-                },
-                "required": ["location"]
-            }
-        }
-    }
-]
-
-response = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[{"role": "user", "content": "What's the weather in Paris?"}],
-    tools=tools,
-    tool_choice="auto"
-)
-
-message = response.choices[0].message
-if message.tool_calls:
-    for tool_call in message.tool_calls:
-        print(f"Function: {tool_call.function.name}")
-        print(f"Arguments: {tool_call.function.arguments}")
-```
-
-### Async Usage
-
-```python
-import asyncio
-from openai import AsyncOpenAI
-
-async def main():
-    client = AsyncOpenAI(
-        api_key="your-deepseek-api-key",
-        base_url="https://api.deepseek.com/v1"
-    )
-
-    response = await client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[{"role": "user", "content": "Hello!"}]
-    )
-    print(response.choices[0].message.content)
-
-asyncio.run(main())
-```
-
-### JSON Mode
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-deepseek-api-key",
-    base_url="https://api.deepseek.com/v1"
-)
-
-response = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[
-        {"role": "system", "content": "Output valid JSON only."},
-        {"role": "user", "content": "List 3 programming languages with their main use cases"}
-    ],
-    response_format={"type": "json_object"}
-)
-
-import json
-data = json.loads(response.choices[0].message.content)
-print(data)
-```
-
-## Configuration Options
-
-### TraceConfig
-
-```python
-from fi_instrumentation import TraceConfig
-from traceai_deepseek import DeepSeekInstrumentor
-
-config = TraceConfig(
-    hide_inputs=False,
-    hide_outputs=False,
-)
-
-DeepSeekInstrumentor().instrument(
+provider = register(project_type=ProjectType.OBSERVE, project_name="deepseek-app")
+OpenAIInstrumentor().instrument(
     tracer_provider=provider,
-    config=config
+    config=TraceConfig(hide_inputs=True, hide_outputs=True),
 )
+
+try:
+    with OpenAI(
+        api_key=os.environ["DEEPSEEK_API_KEY"],
+        base_url="https://api.deepseek.com",
+    ) as client:
+        response = client.chat.completions.create(
+            model=os.environ["DEEPSEEK_MODEL"],
+            messages=[{"role": "user", "content": "What is 15% of 240?"}],
+        )
+        print(response.choices[0].message.content)
+finally:
+    provider.force_flush()
+    provider.shutdown()
 ```
 
-## Captured Attributes
+Open **Observe** and select `deepseek-app`. The model span has provider `deepseek`, the model name, and token counts when returned by the API. Prompt and output text are hidden with the configuration above; set the corresponding options to `False` only when you intend to capture that content. Reasoning and tool-argument aliases follow the output privacy policy. To also hide invocation parameters and exception details, use `hide_llm_invocation_parameters=True` and `hide_error_details=True`. Tool definitions remain visible; do not put secrets in tool names, descriptions, or schemas.
 
-### Common Attributes
+The instrumentor wraps OpenAI SDK requests process-wide, including clients configured for other providers. Provider attribution uses the API host, not the requested model name; custom proxies retain the `openai` fallback.
 
-| Attribute | Description |
-|-----------|-------------|
-| `gen_ai.span.kind` | "LLM" |
-| `gen_ai.provider.name` | "deepseek" |
-| `gen_ai.request.model` | Model name (deepseek-chat, deepseek-reasoner, etc.) |
-| `gen_ai.usage.input_tokens` | Input token count |
-| `gen_ai.usage.output_tokens` | Output token count |
-| `gen_ai.usage.total_tokens` | Total token count |
+## Streaming and Responses
 
-### DeepSeek-Specific Attributes
-
-| Attribute | Description |
-|-----------|-------------|
-| `deepseek.response_id` | Unique response ID |
-| `deepseek.finish_reason` | Response finish reason (stop, tool_calls, length) |
-| `deepseek.prompt_cache_hit_tokens` | Tokens served from cache |
-| `deepseek.prompt_cache_miss_tokens` | Tokens not in cache |
-| `deepseek.reasoning_tokens` | Tokens used for reasoning (R1 models) |
-| `deepseek.reasoning_content` | Full reasoning text (R1 models) |
-| `deepseek.tool_calls_count` | Number of tool calls |
-| `deepseek.tools_count` | Number of tools provided |
-
-## Available Models
-
-| Model | Description |
-|-------|-------------|
-| `deepseek-chat` | General chat model |
-| `deepseek-coder` | Code-focused model |
-| `deepseek-reasoner` | Reasoning model (R1) with chain-of-thought |
-
-## Prompt Caching
-
-DeepSeek supports prompt caching to reduce costs and latency for repeated prompts. The instrumentation tracks cache hit/miss metrics:
+Use the same instrumented client for Chat Completions streaming. Keep the stream in a context manager so early exits also close the HTTP response and finish its span.
 
 ```python
-response = client.chat.completions.create(
-    model="deepseek-chat",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},  # Cached
-        {"role": "user", "content": "Hello!"}
-    ]
-)
-
-# Access cache metrics from usage
-print(f"Cache hits: {response.usage.prompt_cache_hit_tokens}")
-print(f"Cache misses: {response.usage.prompt_cache_miss_tokens}")
+with client.chat.completions.create(
+    model=os.environ["DEEPSEEK_MODEL"],
+    messages=[{"role": "user", "content": "Explain prompt caching in one sentence."}],
+    stream=True,
+    stream_options={"include_usage": True},
+) as stream:
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            print(chunk.choices[0].delta.content, end="")
 ```
 
-## Important Notes
+Run this block inside the client's `with` block above. For async code, use `AsyncOpenAI`, await `create()`, and use `async with` / `async for`.
 
-1. **OpenAI SDK Required**: DeepSeek uses the OpenAI-compatible API, so you need the `openai` package installed.
+DeepSeek's [Responses API](https://api-docs.deepseek.com/guides/responses_api) uses the same base URL and shared instrumentor:
 
-2. **Base URL**: Always set `base_url="https://api.deepseek.com/v1"` when creating the client.
+```python
+response = client.responses.create(
+    model=os.environ["DEEPSEEK_MODEL"],
+    input="Explain prompt caching in one sentence.",
+)
+print(response.output_text)
+```
 
-3. **API Key**: Get your API key from the [DeepSeek Platform](https://platform.deepseek.com/).
+## Migrate from `DeepSeekInstrumentor`
 
-4. **Selective Instrumentation**: The instrumentor only traces calls to DeepSeek's API. Regular OpenAI API calls are not affected.
+`DeepSeekInstrumentor` remains available for existing Chat Completions applications, including OpenAI SDK 1.0–1.68. It is deprecated, not removed. It does not instrument the Responses API; upgrade the SDK and switch to `OpenAIInstrumentor` for that API.
 
-5. **R1 Models**: When using `deepseek-reasoner`, the `reasoning_content` field contains the model's thought process before the final answer.
+Replace the `traceai_deepseek` import and `DeepSeekInstrumentor().instrument(...)` call with the shared setup above. Upgrade both tracing packages before enabling both entry points during migration. With the updated packages, the shared instrumentor owns the request and its tracer provider and privacy configuration apply. An older shared package without DeepSeek extraction keeps the legacy behavior (including duplicate spans) rather than silently losing reasoning and cache fields. Removing either instrumentor leaves the other operational.
+
+The shared route preserves the Chat Completions `deepseek.reasoning_content`, `deepseek.output_reasoning`, `deepseek.prompt_cache_hit_tokens`, `deepseek.prompt_cache_miss_tokens`, `deepseek.reasoning_tokens`, response ID, finish reason, and tool-call aliases when present. Token/cache counters are span attributes, not a separate metrics stream. Span names become `ChatCompletion` / `Response`; `output.value` contains the shared integration's text/tool summary rather than the legacy raw response JSON. Request tools use the shared semantic attributes rather than `deepseek.tools_count`.
+
+Do not uninstall the legacy package until every application has switched its imports and no longer needs the older SDK floor.
+
+## Troubleshooting
+
+- **No spans:** instrument before creating the client, check your Future AGI keys, and flush the provider before a short-lived process exits.
+- **Provider is `openai`:** use the exact `api.deepseek.com` API host. A custom proxy is not automatically attributed to DeepSeek.
+- **Missing streaming token counts:** request `stream_options={"include_usage": True}` and consume the stream through its final usage chunk.
+- **401 or model error:** check your DeepSeek key and the model's availability. See the [DeepSeek API documentation](https://api-docs.deepseek.com/).
 
 ## License
 

@@ -1,0 +1,67 @@
+name: DeepSeek Python contracts
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'python/frameworks/deepseek/**'
+      - 'python/frameworks/openai/**'
+      - 'python/fi_instrumentation/**'
+      - '.github/workflows/deepseek-python-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: DeepSeek SDK ${{ matrix.openai }} / core ${{ matrix.core }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {python: '3.10', openai: '1.0.0', core: source, shared: false}
+          - {python: '3.10', openai: '1.69.0', core: source, shared: true}
+          - {python: '3.12', openai: '3.42.0', core: source, shared: true}
+          - {python: '3.12', openai: '3.42.0', core: '1.2.2', shared: true}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install isolated contract dependencies
+        env:
+          SDK_VERSION: ${{ matrix.openai }}
+          CORE_VERSION: ${{ matrix.core }}
+          SHARED: ${{ matrix.shared }}
+        run: |
+          python -m venv "$RUNNER_TEMP/deepseek-venv"
+          PYTHON="$RUNNER_TEMP/deepseek-venv/bin/python"
+          if [ "$CORE_VERSION" = source ]; then
+            "$PYTHON" -m pip install -e python
+          else
+            "$PYTHON" -m pip install "fi-instrumentation-otel==$CORE_VERSION"
+          fi
+          "$PYTHON" -m pip install -e python/frameworks/deepseek "openai==$SDK_VERSION" 'httpx==0.27.2' pytest pytest-asyncio
+          if [ "$SHARED" = true ]; then
+            "$PYTHON" -m pip install -e python/frameworks/openai "openai==$SDK_VERSION"
+          fi
+      - name: Run with only loopback networking
+        env:
+          SHARED: ${{ matrix.shared }}
+          FI_BASE_URL: http://127.0.0.1:9
+          FI_GRPC_URL: http://127.0.0.1:9
+        run: |
+          sudo -E unshare --net bash -euo pipefail -c '
+            ip link set lo up
+            PYTHON="$RUNNER_TEMP/deepseek-venv/bin/python"
+            "$PYTHON" -I -m pytest -q --import-mode=importlib python/frameworks/openai/tests/test_deepseek_route.py
+            "$PYTHON" -I -m pytest -q python/frameworks/deepseek/tests
+            if [ "$SHARED" = true ]; then
+              "$PYTHON" -I -m pytest -q python/frameworks/openai/tests
+            fi
+          '

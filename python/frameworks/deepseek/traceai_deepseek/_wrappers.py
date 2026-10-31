@@ -17,7 +17,10 @@ from traceai_deepseek._response_attributes_extractor import (
     _ChatCompletionResponseAttributesExtractor,
     _StreamingChatCompletionResponseExtractor,
 )
-from traceai_deepseek._utils import _finish_tracing, _to_dict, is_deepseek_client
+from traceai_deepseek._stream import _AsyncStream, _Stream, _StreamState
+from traceai_deepseek._utils import (
+    _finish_tracing, _to_dict, is_deepseek_client, shared_openai_is_active,
+)
 from traceai_deepseek._with_span import _WithSpan
 
 logger = logging.getLogger(__name__)
@@ -76,7 +79,7 @@ class _ChatCompletionWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if shared_openai_is_active() or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return wrapped(*args, **kwargs)
 
         # Check if this is a DeepSeek client
@@ -134,40 +137,10 @@ class _ChatCompletionWrapper(_WithTracer):
     def _handle_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
     ):
-        """Handle streaming response."""
-        stream_extractor = _StreamingChatCompletionResponseExtractor(config=self._config)
-
-        def streaming_wrapper():
-            try:
-                for chunk in response:
-                    chunk_dict = _to_dict(chunk)
-                    stream_extractor.process_chunk(chunk_dict)
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=stream_extractor.get_attributes(),
-                        extra_attributes=stream_extractor.get_extra_attributes(request_parameters),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize streaming response")
-                    span.finish_tracing()
-            finally:
-                if span._span.is_recording():
-                    span.finish_tracing()
-
-        return streaming_wrapper()
+        return _Stream(response, _StreamState(
+            span, _StreamingChatCompletionResponseExtractor(config=self._config),
+            request_parameters,
+        ))
 
 
 class _AsyncChatCompletionWrapper(_WithTracer):
@@ -185,7 +158,7 @@ class _AsyncChatCompletionWrapper(_WithTracer):
         args: Tuple[Any, ...],
         kwargs: Mapping[str, Any],
     ) -> Any:
-        if context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
+        if shared_openai_is_active() or context_api.get_value(context_api._SUPPRESS_INSTRUMENTATION_KEY):
             return await wrapped(*args, **kwargs)
 
         # Check if this is a DeepSeek client
@@ -241,37 +214,7 @@ class _AsyncChatCompletionWrapper(_WithTracer):
     def _handle_async_streaming_response(
         self, span: _WithSpan, response: Any, request_parameters: Dict[str, Any]
     ):
-        """Handle async streaming response."""
-        stream_extractor = _StreamingChatCompletionResponseExtractor(config=self._config)
-
-        async def async_streaming_wrapper():
-            try:
-                async for chunk in response:
-                    chunk_dict = _to_dict(chunk)
-                    stream_extractor.process_chunk(chunk_dict)
-                    yield chunk
-
-            except Exception as exception:
-                span.record_exception(exception)
-                status = trace_api.Status(
-                    status_code=trace_api.StatusCode.ERROR,
-                    description=f"{type(exception).__name__}: {exception}",
-                )
-                span.finish_tracing(status=status)
-                raise
-            else:
-                try:
-                    _finish_tracing(
-                        status=trace_api.Status(status_code=trace_api.StatusCode.OK),
-                        with_span=span,
-                        attributes=stream_extractor.get_attributes(),
-                        extra_attributes=stream_extractor.get_extra_attributes(request_parameters),
-                    )
-                except Exception:
-                    logger.exception("Failed to finalize async streaming response")
-                    span.finish_tracing()
-            finally:
-                if span._span.is_recording():
-                    span.finish_tracing()
-
-        return async_streaming_wrapper()
+        return _AsyncStream(response, _StreamState(
+            span, _StreamingChatCompletionResponseExtractor(config=self._config),
+            request_parameters,
+        ))

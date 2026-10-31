@@ -16,6 +16,7 @@ from opentelemetry import trace as trace_api
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.trace import INVALID_SPAN
 from opentelemetry.util.types import AttributeValue
+from traceai_openai._deepseek import _DeepSeekChatAccumulator
 from traceai_openai._providers import provider_from_host
 from traceai_openai._request_attributes_extractor import _RequestAttributesExtractor
 from traceai_openai._response_accumulator import (
@@ -198,6 +199,7 @@ class _WithOpenAI(ABC):
         with_span: _WithSpan,
         cast_to: type,
         request_parameters: Mapping[str, Any],
+        instance: Any = None,
     ) -> Any:
         """
         Monkey-patch the response object to trace the stream, or finish tracing if the response is
@@ -208,6 +210,13 @@ class _WithOpenAI(ABC):
                 response.parse()
             except Exception:
                 logger.exception(f"Failed to parse response of type {type(response)}")
+
+        provider = provider_from_host(getattr(getattr(instance, "base_url", None), "host", None))
+        extractor = self._response_attributes_extractor
+        if provider == "deepseek":
+            # Keep host-specific extraction local to this request: concurrent
+            # requests through another provider must not inherit DeepSeek aliases.
+            extractor = _ResponseAttributesExtractor(self._openai, self._config, provider=provider)
 
         if self._is_streaming(response):
             # Determine if the response is asynchronous
@@ -226,6 +235,20 @@ class _WithOpenAI(ABC):
                 else None
             )
 
+            if provider == "deepseek":
+                if cast_to is self._openai.types.chat.ChatCompletion:
+                    response_accumulator = _DeepSeekChatAccumulator(
+                        request_parameters=request_parameters,
+                        chat_completion_type=cast_to,
+                        response_attributes_extractor=extractor,
+                    )
+                elif cast_to is self._openai.types.responses.response.Response:
+                    response_accumulator = _ResponsesAccumulator(
+                        request_parameters=request_parameters,
+                        chat_completion_type=cast_to,
+                        response_attributes_extractor=extractor,
+                    )
+
             # Wrap the response with the appropriate stream wrapper
             wrapped_stream = stream_wrapper(
                 stream=response,
@@ -242,7 +265,7 @@ class _WithOpenAI(ABC):
                 has_attributes=_ResponseAttributes(
                     request_parameters=request_parameters,
                     response=response,
-                    response_attributes_extractor=self._response_attributes_extractor,
+                    response_attributes_extractor=extractor,
                 ),
             )
             return response
@@ -336,6 +359,7 @@ class _Request(_WithTracer, _WithOpenAI):
                     with_span=with_span,
                     cast_to=cast_to,
                     request_parameters=request_parameters,
+                    instance=instance,
                 )
             except Exception as e:
                 status = trace_api.Status(
@@ -419,6 +443,7 @@ class _AsyncRequest(_WithTracer, _WithOpenAI):
                     with_span=with_span,
                     cast_to=cast_to,
                     request_parameters=request_parameters,
+                    instance=instance,
                 )
             except Exception:
                 logger.exception(
