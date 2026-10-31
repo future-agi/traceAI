@@ -173,6 +173,38 @@ test("an older ACK cannot erase a newer epoch's activation receipt", async (t) =
   assert.equal(r.sourceReceipts.get("cursor.ide"), 3);
 });
 
+test("source serialization is bounded independently of disconnected sockets and fences queued epochs", async (t) => {
+  let release;
+  const r = runtime(
+    t,
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    () => assert.fail("revoked queued event reached storage"),
+  );
+  const pending = Array.from({ length: 64 }, () =>
+    r.dispatch(envelope, socket),
+  );
+  const settled = Promise.allSettled(pending);
+  await assert.rejects(r.dispatch(envelope, socket), /SOURCE_QUEUE_FULL/);
+  assert.equal(r.sourcePending, 64);
+  assert.equal(r.sourceBytes, envelope.length * 64);
+  r.config.routes["cursor.ide"].route.epoch = 3;
+  release(secret);
+  const results = await settled;
+  assert.ok(
+    results.every(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason.code === "STALE_CAPTURE_EPOCH",
+    ),
+  );
+  assert.equal(r.sourcePending, 0);
+  assert.equal(r.sourceBytes, 0);
+  assert.equal(r.sourceQueues.size, 0);
+});
+
 test("storage rejects queued old-epoch observations before persisting facts or receipt clocks", (t) => {
   const base = path.resolve(__dirname, "../../../../../t");
   fs.mkdirSync(base, { recursive: true, mode: 0o700 });

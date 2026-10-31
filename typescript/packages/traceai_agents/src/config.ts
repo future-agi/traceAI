@@ -104,7 +104,7 @@ export function loadConfig(p: Paths): Config {
         !token(key) ||
         !token(value.agent) ||
         !token(value.surface) ||
-        !c.profiles[value.profile] ||
+        !token(value.profile) ||
         value.route.id !== key
       )
         throw new Error();

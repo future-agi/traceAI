@@ -35,11 +35,13 @@ interface Row {
 // A turn can be silent indefinitely; finalize after a fixed, bounded observation
 // window, never treating this timeout as a successful stop or an execution end.
 export const OBSERVED_TURN_WINDOW_MS = 15 * 60_000;
+export const TERMINAL_GRACE_MS = 2_000;
 interface TurnWindow {
   start_ns: string;
   end_ns: string;
   deadline: number;
   epoch: number;
+  terminal: string | null;
 }
 const digest = (bytes: Buffer): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -88,7 +90,7 @@ export class Spool {
       this.db.pragma("temp_store=MEMORY");
       this.db.pragma("busy_timeout=10");
       const existingVersion = this.db.pragma("user_version", { simple: true });
-      if (![0, 1, 2].includes(Number(existingVersion)))
+      if (![0, 1, 2, 3].includes(Number(existingVersion)))
         throw new AgentError("HELD_STORAGE_SCHEMA");
       this.write(() =>
         this.db.exec(`
@@ -109,14 +111,15 @@ export class Spool {
       const version = this.db
         .prepare("SELECT value FROM meta WHERE key=?")
         .get("schema") as any;
-      if (version && !["1", "2"].includes(version.value))
+      if (version && !["1", "2", "3"].includes(version.value))
         throw new AgentError("HELD_STORAGE_SCHEMA");
-      if (version?.value !== "2")
+      if (version?.value !== "3")
         this.write(() => {
+          this.db.exec("ALTER TABLE observed_turns ADD COLUMN terminal TEXT");
           this.db
             .prepare("INSERT OR REPLACE INTO meta VALUES (?,?)")
-            .run("schema", "2");
-          this.db.pragma("user_version=2");
+            .run("schema", "3");
+          this.db.pragma("user_version=3");
         });
     } catch (e) {
       this.db.close();
@@ -244,8 +247,10 @@ export class Spool {
     // new children or change its already immutable root. Replays still dedupe.
     if (observedTurns) this.finalizeTurns(routeId);
     return this.write(() => {
-      if (observedTurns) this.observeTurn(route, fact);
-      return this.insertFact(route, fact, cursor, "queued", observedTurns);
+      const terminal = observedTurns
+        ? this.observeTurn(route, fact, cursor)
+        : undefined;
+      return terminal ?? this.insertFact(route, fact, cursor);
     });
   }
   private checkQuota(routeId: string, size: number, replacing?: number): void {
@@ -363,7 +368,11 @@ export class Spool {
     };
   }
   /** Pending parents are never leased. Their bytes and the child commit together. */
-  private observeTurn(route: Route, fact: CanonicalFact): void {
+  private observeTurn(
+    route: Route,
+    fact: CanonicalFact,
+    cursor?: { stream: string; coordinate: string },
+  ): { receipt_id: string; duplicate: boolean } | undefined {
     if (
       !["turn", "tool"].includes(fact.unit) ||
       fact.source !== "hook" ||
@@ -402,41 +411,58 @@ export class Spool {
       window && BigInt(window.end_ns) > BigInt(fact.endNs)
         ? window.end_ns
         : fact.endNs;
-    if (fact.unit === "tool") {
-      const root = minimize(
-        {
-          ...fact,
-          sourceWorkId: fact.turnId,
-          spanId: spanId(fact.turnId),
-          parentSpanId: undefined,
-          unit: "turn",
-          tool: undefined,
-          outcome: "incomplete",
-          model: undefined,
-          provider: undefined,
-          usage: undefined,
-          content: undefined,
-          causedBy: undefined,
-          links: undefined,
-          inputCompleteness: "unavailable",
-          outputCompleteness: "unavailable",
-          incomplete: true,
-          startNs: start,
-          endNs: end,
-          timing: start === end ? "unknown" : "estimated",
-        },
-        route.policy,
-      );
-      this.insertFact(route, root, undefined, "pending-turn", true);
-    } else {
-      fact.startNs = start;
-      fact.endNs = end;
-      fact.timing = start === end ? "unknown" : "estimated";
-    }
+    const terminal =
+      fact.unit === "turn" ? JSON.stringify(fact) : (window?.terminal ?? null);
+    if (
+      fact.unit === "turn" &&
+      window?.terminal &&
+      window.terminal !== terminal
+    )
+      throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+    // Keep the first terminal observation independently of the mutable local
+    // interval. Later tools may widen the root, but cannot replace its outcome.
+    const source = terminal ? (JSON.parse(terminal) as CanonicalFact) : fact;
+    const root = minimize(
+      {
+        ...source,
+        sourceWorkId: fact.turnId,
+        spanId: spanId(fact.turnId),
+        parentSpanId: undefined,
+        unit: "turn",
+        tool: undefined,
+        outcome: terminal ? source.outcome : "incomplete",
+        model: undefined,
+        provider: undefined,
+        usage: undefined,
+        content: undefined,
+        causedBy: undefined,
+        links: undefined,
+        inputCompleteness: "unavailable",
+        outputCompleteness: "unavailable",
+        incomplete: true,
+        startNs: start,
+        endNs: end,
+        timing: start === end ? "unknown" : "estimated",
+      },
+      route.policy,
+    );
+    const receipt = this.insertFact(
+      route,
+      root,
+      fact.unit === "turn" ? cursor : undefined,
+      "pending-turn",
+      true,
+    );
+    const deadline = window?.terminal
+      ? window.deadline
+      : fact.unit === "turn"
+        ? Date.now() + TERMINAL_GRACE_MS
+        : (window?.deadline ?? Date.now() + OBSERVED_TURN_WINDOW_MS);
     this.db
       .prepare(
-        `INSERT INTO observed_turns VALUES (?,?,?,?,?,?,?)
-      ON CONFLICT(binding,work) DO UPDATE SET start_ns=excluded.start_ns,end_ns=excluded.end_ns`,
+        `INSERT INTO observed_turns VALUES (?,?,?,?,?,?,?,?)
+      ON CONFLICT(binding,work) DO UPDATE SET start_ns=excluded.start_ns,end_ns=excluded.end_ns,
+      deadline=excluded.deadline,terminal=excluded.terminal`,
       )
       .run(
         route.binding.id,
@@ -445,8 +471,11 @@ export class Spool {
         route.epoch,
         start,
         end,
-        Date.now() + OBSERVED_TURN_WINDOW_MS,
+        deadline,
+        terminal,
       );
+    if (fact.unit === "turn")
+      return { ...receipt, duplicate: !!window?.terminal };
   }
   /** Bounded crash-recoverable sweep; no raw events or invented timeout duration. */
   finalizeTurns(routeId: string): number {

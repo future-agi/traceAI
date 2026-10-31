@@ -27,6 +27,9 @@ export class Runtime {
   private stopping: Promise<void> | undefined;
   private sockets = new Set<Socket>();
   private ingressBytes = 0;
+  private sourceQueues = new Map<string, Promise<unknown>>();
+  private sourcePending = 0;
+  private sourceBytes = 0;
   private lastDurableAck: number | null = null;
   private sourceReceipts = new Map<string, number>();
   private statusCache: unknown = { state: "unknown", persistence: "unknown" };
@@ -92,6 +95,16 @@ export class Runtime {
     const config = loadConfig(this.paths);
     for (const route of Object.values(config.routes)) {
       this.registry.get(route.agent, route.surface);
+      // A durable offline disable may follow an RPC whose reply/config save was
+      // lost. Never let a stale config epoch undo the retained storage fence.
+      if (!route.route.enabled) {
+        try {
+          const retained = await this.storage.call("getRoute", route.route.id);
+          route.route.epoch = Math.max(route.route.epoch, retained.epoch);
+        } catch (e) {
+          if (!(e instanceof AgentError) || e.code !== "UNKNOWN_ROUTE") throw e;
+        }
+      }
       await this.storage.call("validateRoute", route.route);
     }
     for (const route of Object.values(config.routes))
@@ -145,6 +158,27 @@ export class Runtime {
         );
     });
   }
+  private serialSource<T>(
+    key: string,
+    size: number,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    // Charge complete requests independently of sockets: timed-out clients must
+    // not free the budget while credential lookups still retain their envelopes.
+    if (this.sourcePending >= 64 || this.sourceBytes + size > 16_777_216)
+      throw new AgentError("SOURCE_QUEUE_FULL", 7);
+    this.sourcePending++;
+    this.sourceBytes += size;
+    const previous = this.sourceQueues.get(key);
+    const task = previous ? previous.catch(() => undefined).then(run) : run();
+    const tracked = task.finally(() => {
+      this.sourcePending--;
+      this.sourceBytes -= size;
+      if (this.sourceQueues.get(key) === tracked) this.sourceQueues.delete(key);
+    });
+    this.sourceQueues.set(key, tracked);
+    return tracked;
+  }
   private async fence(): Promise<void> {
     this.controller?.abort();
     await this.exporting;
@@ -179,50 +213,69 @@ export class Runtime {
       const epoch = route.route.epoch;
       const profile = this.config.profiles[route.profile];
       if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
-      const secrets =
-        profile.storage === "file"
-          ? new FileSecretStore(this.paths.credentials)
-          : new OSSecretStore();
-      const secret = await secrets.get(profile.credentialRef);
-      if (!secret) throw new AgentError("HELD_IDENTITY_KEY", 3);
-      // Secret-store access yields. Disable/purge, auth removal or a route refresh
-      // must fence this in-flight source event before it can enter a later epoch.
-      if (
-        this.stopped ||
-        this.admissionPaused ||
-        this.config.routes[m.route_ref] !== route ||
-        this.config.profiles[route.profile] !== profile ||
-        profile.removed ||
-        !route.route.enabled ||
-        route.route.epoch !== epoch
-      )
-        throw new AgentError("STALE_CAPTURE_EPOCH", 3);
-      const facts = adapter.normalize(m.event, {
-        identityKey: Buffer.from(secret.identity_key, "hex"),
-        policyRevision: route.route.policy.revision,
-        sourceSchema: m.source_schema,
-      });
-      // One terminal observation per envelope. No partial multi-fact ACK or raw journal.
-      if (facts.length !== 1) throw new AgentError("INVALID_OBSERVER_FACTS", 2);
-      enforceCapability(facts[0], adapter.capability);
-      const result = await this.storage.call("admit", {
-        route: m.route_ref,
-        fact: minimize(facts[0], route.route.policy),
-        observed: true,
-        observedTurns: adapter.capability.observedTurns === true,
-        expectedEpoch: epoch,
-      });
-      // A durable ACK belongs to the admitted epoch, not whichever epoch is active
-      // when its reply arrives. Status compares this frozen receipt to the route.
-      if (epoch > (this.sourceReceipts.get(m.route_ref) ?? -1))
-        this.sourceReceipts.set(m.route_ref, epoch);
-      this.lastDurableAck = Date.now();
-      return {
-        protocol_version: 1,
-        durable: true,
-        reason_code: result.duplicate ? "DUPLICATE" : "COMMITTED",
-        receipt_id: result.receipt_id,
-      };
+      // Serialize before the first yielding lookup, not just the SQLite RPC.
+      // A new capture epoch is independent; queued old-epoch work stays fenced.
+      return this.serialSource(
+        `${m.route_ref}:${epoch}`,
+        bytes.length,
+        async () => {
+          if (
+            this.stopped ||
+            this.admissionPaused ||
+            this.config.routes[m.route_ref] !== route ||
+            this.config.profiles[route.profile] !== profile ||
+            profile.removed ||
+            !route.route.enabled ||
+            route.route.epoch !== epoch
+          )
+            throw new AgentError("STALE_CAPTURE_EPOCH", 3);
+          const secrets =
+            profile.storage === "file"
+              ? new FileSecretStore(this.paths.credentials)
+              : new OSSecretStore();
+          const secret = await secrets.get(profile.credentialRef);
+          if (!secret) throw new AgentError("HELD_IDENTITY_KEY", 3);
+          // Secret-store access yields. Disable/purge, auth removal or a route refresh
+          // must fence this in-flight source event before it can enter a later epoch.
+          if (
+            this.stopped ||
+            this.admissionPaused ||
+            this.config.routes[m.route_ref] !== route ||
+            this.config.profiles[route.profile] !== profile ||
+            profile.removed ||
+            !route.route.enabled ||
+            route.route.epoch !== epoch
+          )
+            throw new AgentError("STALE_CAPTURE_EPOCH", 3);
+          const facts = adapter.normalize(m.event, {
+            identityKey: Buffer.from(secret.identity_key, "hex"),
+            policyRevision: route.route.policy.revision,
+            sourceSchema: m.source_schema,
+          });
+          // One terminal observation per envelope. No partial multi-fact ACK or raw journal.
+          if (facts.length !== 1)
+            throw new AgentError("INVALID_OBSERVER_FACTS", 2);
+          enforceCapability(facts[0], adapter.capability);
+          const result = await this.storage.call("admit", {
+            route: m.route_ref,
+            fact: minimize(facts[0], route.route.policy),
+            observed: true,
+            observedTurns: adapter.capability.observedTurns === true,
+            expectedEpoch: epoch,
+          });
+          // A durable ACK belongs to the admitted epoch, not whichever epoch is active
+          // when its reply arrives. Status compares this frozen receipt to the route.
+          if (epoch > (this.sourceReceipts.get(m.route_ref) ?? -1))
+            this.sourceReceipts.set(m.route_ref, epoch);
+          this.lastDurableAck = Date.now();
+          return {
+            protocol_version: 1,
+            durable: true,
+            reason_code: result.duplicate ? "DUPLICATE" : "COMMITTED",
+            receipt_id: result.receipt_id,
+          };
+        },
+      );
     }
     if (m.operation === "observe") {
       const route = this.config.routes[m.route_ref];

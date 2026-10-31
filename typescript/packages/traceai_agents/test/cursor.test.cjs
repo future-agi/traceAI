@@ -350,35 +350,38 @@ test("explicit protected import plans contain no content and reject symlinks/sou
   );
 });
 
-test("owned observer install/disable preserve unrelated config, comments, and the other surface", async (t) => {
+test("observer install preserves existing config and refuses replacement or a second surface", async (t) => {
   const root = fixture(t),
     o = installOptions(root),
     c = installContext(root);
   fs.mkdirSync(path.dirname(o.hooksFile), { mode: 0o700 });
-  fs.writeFileSync(
-    o.hooksFile,
-    '{\n // preserve this comment\n "version": 1, "unrelated": "private-setting", "hooks": {"sessionStart":[{"command":"keep-me"}]}\n}',
-    { mode: 0o600 },
+  const existing =
+    '{\n // preserve this comment\n "version": 1, "unrelated": "private-setting", "hooks": {"sessionStart":[{"command":"keep-me"}]}\n}';
+  fs.writeFileSync(o.hooksFile, existing, { mode: 0o600 });
+  await assert.rejects(
+    cursorChange("enable", "ide", c, o),
+    /CURSOR_CONFIG_MANUAL_CLEANUP/,
   );
+  assert.equal(fs.readFileSync(o.hooksFile, "utf8"), existing);
+  // Only a fresh config can be created automatically. This deletion is fixture setup.
+  fs.unlinkSync(o.hooksFile);
   await (await cursorChange("enable", "ide", c, o)).commit();
   assert.equal((await cursorProbe("ide", c, o)).installed, true);
   assert.equal((await cursorProbe("ide", c, o)).activated, false);
   const text = fs.readFileSync(o.hooksFile, "utf8");
-  assert.match(text, /preserve this comment/);
-  assert.match(text, /keep-me/);
   assert.ok(!text.includes(canary));
   assert.ok(!text.includes("preToolUse"));
   await (await cursorChange("enable", "ide", c, o)).commit();
   assert.equal(fs.readFileSync(o.hooksFile, "utf8"), text);
-  await (
-    await cursorChange("enable", "cli", installContext(root, "cli"), o)
-  ).commit();
-  await (await cursorChange("disable", "ide", c, o)).commit();
-  const d = parse(fs.readFileSync(o.hooksFile, "utf8"));
-  assert.equal(d.hooks.stop.length, 1);
-  assert.match(d.hooks.stop[0].command, /cursor.cli/);
-  assert.equal(d.unrelated, "private-setting");
-  assert.deepEqual(d.hooks.sessionStart, [{ command: "keep-me" }]);
+  await assert.rejects(
+    cursorChange("enable", "cli", installContext(root, "cli"), o),
+    /CURSOR_CONFIG_MANUAL_CLEANUP/,
+  );
+  await assert.rejects(
+    cursorChange("disable", "ide", c, o),
+    /CURSOR_CONFIG_MANUAL_CLEANUP/,
+  );
+  assert.equal(fs.readFileSync(o.hooksFile, "utf8"), text);
 });
 
 test("installation refuses preview omission, consented unknown schemas, unsafe paths, and concurrent edits", async (t) => {
@@ -430,7 +433,7 @@ test("duplicate config keys, modified owned hooks, and legacy emitters fail clos
     cursorChange("enable", "ide", c, o),
     /CURSOR_LEGACY_EMITTER_CONFLICT/,
   );
-  fs.writeFileSync(o.hooksFile, '{"version":1,"hooks":{}}');
+  fs.unlinkSync(o.hooksFile);
   await (await cursorChange("enable", "ide", c, o)).commit();
   const doc = parse(fs.readFileSync(o.hooksFile, "utf8"));
   doc.hooks.stop[0].command += " --changed";
@@ -441,7 +444,7 @@ test("duplicate config keys, modified owned hooks, and legacy emitters fail clos
   );
 });
 
-test("rollback changes only owned registrations, never restores a whole secret-bearing config", async (t) => {
+test("rollback refuses unsafe host replacement and never restores a secret-bearing backup", async (t) => {
   const root = fixture(t),
     o = installOptions(root),
     c = installContext(root);
@@ -450,10 +453,8 @@ test("rollback changes only owned registrations, never restores a whole secret-b
   const d = parse(fs.readFileSync(o.hooksFile, "utf8"));
   d.concurrent = "keep";
   fs.writeFileSync(o.hooksFile, JSON.stringify(d));
-  await change.rollback();
-  const after = parse(fs.readFileSync(o.hooksFile, "utf8"));
-  assert.equal(after.concurrent, "keep");
-  assert.deepEqual(after.hooks, {});
+  await assert.rejects(change.rollback(), /CURSOR_CONFIG_MANUAL_CLEANUP/);
+  assert.deepEqual(parse(fs.readFileSync(o.hooksFile, "utf8")), d);
 });
 
 test("packaged hook is neutral on malformed input, unsupported versions/events, missing runtime and oversize input", async (t) => {
@@ -562,10 +563,14 @@ test("actual CLI enable/doctor/hook/status/disable works with synthetic auth in 
   );
   assert.equal(JSON.parse(doctor.stdout).persistence, "unknown");
   const disabled = cli(root, ["disable", "cursor", "--surface", "ide"]);
-  assert.equal(disabled.status, 0, disabled.stdout);
-  assert.deepEqual(
-    parse(fs.readFileSync(path.join(root, ".cursor/hooks.json"), "utf8")).hooks,
-    {},
+  assert.equal(disabled.status, 4, disabled.stdout);
+  assert.match(disabled.stdout, /CURSOR_CONFIG_MANUAL_CLEANUP/);
+  assert.equal(
+    Object.keys(
+      parse(fs.readFileSync(path.join(root, ".cursor/hooks.json"), "utf8"))
+        .hooks,
+    ).length,
+    3,
   );
   assert.equal(
     JSON.parse(cli(root, ["doctor", "cursor", "--surface", "ide"]).stdout)

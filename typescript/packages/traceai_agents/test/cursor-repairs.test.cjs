@@ -76,56 +76,40 @@ const spans = (bytes) =>
 const attr = (s, key) => s.attributes.find((a) => a.key === key)?.value;
 
 for (const action of ["enable", "disable", "rollback"]) {
-  test(`${action} refuses an editor save during final temporary-file fsync`, async (t) => {
+  test(`${action} never stages a replacement for existing host configuration`, async (t) => {
     const root = fixture(t),
       o = options(root),
       c = context(root);
-    fs.writeFileSync(o.hooksFile, '{"version":1,"hooks":{}}', { mode: 0o600 });
-    const enable = await cursorChange("enable", "ide", c, o);
-    if (action !== "enable") await enable.commit();
-    const change =
-      action === "disable"
-        ? await cursorChange("disable", "ide", c, o)
-        : enable;
-    const saved = JSON.stringify({
-      ...parse(fs.readFileSync(o.hooksFile, "utf8")),
-      hooks: { sessionStart: [{ command: "editor-new-hook" }] },
-      unrelated: canary,
-    });
+    let enable;
+    if (action === "enable")
+      fs.writeFileSync(o.hooksFile, '{"version":1,"hooks":{}}', {
+        mode: 0o600,
+      });
+    else {
+      enable = await cursorChange("enable", "ide", c, o);
+      await enable.commit();
+    }
+    const before = fs.readFileSync(o.hooksFile, "utf8");
+    let hostStaged = false;
     const original = fs.fsyncSync;
-    let edited = false;
-    fs.fsyncSync = (fd) => {
-      // Ownership writes have a different shape; target the staged host config.
+    t.mock.method(fs, "fsyncSync", (fd) => {
       for (const name of fs
         .readdirSync(root)
-        .filter((n) => n.startsWith(".pending-"))) {
-        if (
-          !edited &&
-          fs.readFileSync(path.join(root, name), "utf8").includes('"hooks"')
-        ) {
-          fs.writeFileSync(o.hooksFile, saved, { mode: 0o600 });
-          edited = true;
-        }
-      }
+        .filter((n) => n.startsWith(".pending-")))
+        if (fs.readFileSync(path.join(root, name), "utf8").includes('"hooks"'))
+          hostStaged = true;
       return original(fd);
-    };
-    try {
-      await assert.rejects(
-        action === "rollback" ? change.rollback() : change.commit(),
-        /CURSOR_CONFIG_CONFLICT/,
-      );
-    } finally {
-      fs.fsyncSync = original;
-    }
-    assert.equal(edited, true);
-    assert.equal(fs.readFileSync(o.hooksFile, "utf8"), saved);
-    assert.ok(!fs.readdirSync(root).some((n) => n.startsWith(".pending-")));
-    const metadata = fs.readFileSync(
-      o.hooksFile + ".fi-agent-owned.json",
-      "utf8",
+    });
+    await assert.rejects(
+      async () =>
+        action === "rollback"
+          ? enable.rollback()
+          : (await cursorChange(action, "ide", c, o)).commit(),
+      /CURSOR_CONFIG_MANUAL_CLEANUP/,
     );
-    assert.ok(!metadata.includes(canary));
-    assert.ok(!metadata.includes("editor-new-hook"));
+    assert.equal(hostStaged, false);
+    assert.equal(fs.readFileSync(o.hooksFile, "utf8"), before);
+    assert.ok(!fs.readdirSync(root).some((n) => n.startsWith(".pending-")));
   });
 }
 
@@ -133,9 +117,9 @@ test("same-text inode replacement and a newly created config are conflicts", asy
   const root = fixture(t),
     o = options(root),
     c = context(root);
-  const text = '{"version":1,"hooks":{}}';
-  fs.writeFileSync(o.hooksFile, text, { mode: 0o600 });
-  const change = await cursorChange("enable", "ide", c, o);
+  await (await cursorChange("enable", "ide", c, o)).commit();
+  const text = fs.readFileSync(o.hooksFile, "utf8");
+  const change = await cursorChange("enable", "ide", c, o); // qualified no-op
   const replacement = path.join(root, "editor-save");
   fs.writeFileSync(replacement, text, { mode: 0o600 });
   fs.renameSync(replacement, o.hooksFile);
@@ -144,19 +128,15 @@ test("same-text inode replacement and a newly created config are conflicts", asy
   fs.unlinkSync(o.hooksFile);
   const absent = await cursorChange("enable", "ide", c, o);
   const link = fs.linkSync;
-  fs.linkSync = (from, to) => {
+  t.mock.method(fs, "linkSync", (from, to) => {
     if (to === o.hooksFile) fs.writeFileSync(to, text, { mode: 0o600 });
     return link(from, to);
-  };
-  try {
-    await assert.rejects(absent.commit(), /CURSOR_CONFIG_CONFLICT/);
-  } finally {
-    fs.linkSync = link;
-  }
+  });
+  await assert.rejects(absent.commit(), /CURSOR_CONFIG_CONFLICT/);
   assert.equal(fs.readFileSync(o.hooksFile, "utf8"), text);
 });
 
-test("doctor and cleanup use installed Node/package/socket paths across upgrades", async (t) => {
+test("doctor and cleanup retain installed Node/package/socket ownership across upgrades", async (t) => {
   const root = fixture(t),
     o = options(root),
     c = context(root);
@@ -186,30 +166,31 @@ test("doctor and cleanup use installed Node/package/socket paths across upgrades
   const d = parse(fs.readFileSync(o.hooksFile, "utf8"));
   d.hooks.sessionStart = [{ command: "unrelated" }];
   fs.writeFileSync(o.hooksFile, JSON.stringify(d));
-  const disabled = await cursorChange("disable", "ide", newContext, upgraded);
-  await disabled.commit();
-  assert.deepEqual(parse(fs.readFileSync(o.hooksFile, "utf8")).hooks, {
-    sessionStart: [{ command: "unrelated" }],
-  });
-  await disabled.rollback();
-  assert.equal(
-    (await cursorProbe("ide", newContext, upgraded)).installed,
-    true,
+  const before = fs.readFileSync(o.hooksFile, "utf8");
+  for (const action of ["disable", "uninstall"])
+    await assert.rejects(
+      cursorChange(action, "ide", newContext, upgraded),
+      /CURSOR_CONFIG_MANUAL_CLEANUP/,
+    );
+  assert.equal(fs.readFileSync(o.hooksFile, "utf8"), before);
+  // A manual edit removes just the owned hooks. Cleanup then becomes a no-op.
+  fs.writeFileSync(
+    o.hooksFile,
+    JSON.stringify({ ...d, hooks: { sessionStart: d.hooks.sessionStart } }),
   );
   await (await cursorChange("uninstall", "ide", newContext, upgraded)).commit();
   assert.equal(
     (await cursorProbe("ide", newContext, upgraded)).installed,
     false,
   );
-  await (await cursorChange("enable", "ide", newContext, upgraded)).commit();
-  assert.match(fs.readFileSync(o.hooksFile, "utf8"), /node24/);
-  assert.ok(!fs.readFileSync(o.hooksFile, "utf8").includes("node22"));
-  // A modified registration is not removed using stale ownership evidence.
-  const changed = parse(fs.readFileSync(o.hooksFile, "utf8"));
-  changed.hooks.stop[0].timeout = 9;
-  fs.writeFileSync(o.hooksFile, JSON.stringify(changed));
+  assert.deepEqual(parse(fs.readFileSync(o.hooksFile, "utf8")).hooks, {
+    sessionStart: [{ command: "unrelated" }],
+  });
+  // Modified registrations remain ownership conflicts, not broad substring deletion.
+  d.hooks.stop[0].timeout = 9;
+  fs.writeFileSync(o.hooksFile, JSON.stringify(d));
   await assert.rejects(
-    cursorChange("disable", "ide", c, old),
+    cursorChange("disable", "ide", newContext, upgraded),
     /CURSOR_CONFIG_CONFLICT/,
   );
 });
@@ -301,6 +282,8 @@ test("normal stop bounds all observed tools and replays the same root without in
     const tool2 = accept(f.spool);
     clock += 100;
     const receipt = admit(f.spool, hook("stop"));
+    assert.equal(f.spool.next(route.id), undefined);
+    clock += 2000;
     const root = accept(f.spool);
     assert.equal(root.startTimeUnixNano, tool2.startTimeUnixNano);
     assert.ok(

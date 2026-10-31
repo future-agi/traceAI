@@ -273,6 +273,12 @@ export async function cursorChange(
   )
     throw new AgentError("CURSOR_CONFIG_CONFLICT", 6);
   const after = patch(before, owned, enable);
+  // Ordinary editors do not participate in our lock. POSIX rename is not CAS:
+  // no preceding comparison can make replacing an existing host file safe.
+  // Only exclusive creation and byte-for-byte no-ops are qualified. Cleanup
+  // callers must fence capture BEFORE asking the user to edit registrations.
+  if (snapshot.identity !== null && after !== before)
+    throw new AgentError("CURSOR_CONFIG_MANUAL_CLEANUP", 6);
   const ownerAfter = JSON.stringify({
     version: 1,
     owners: {
@@ -294,6 +300,8 @@ export async function cursorChange(
     next: string,
     persistOwner = false,
   ): void {
+    if (expected.identity !== null && next !== expected.bytes.toString())
+      throw new AgentError("CURSOR_CONFIG_MANUAL_CLEANUP", 6);
     protectedDirectory(dirname(path), true);
     const lock = join(dirname(path), ".fi-agent-cursor.lock");
     try {

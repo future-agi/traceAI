@@ -8,6 +8,7 @@ import { AdapterRegistry, type AdapterContext } from "../adapters.js";
 import {
   configTransaction,
   loadConfig,
+  saveConfig,
   paths,
   type Paths,
   type Profile,
@@ -351,6 +352,73 @@ export async function main(
     const routeId = agent + "." + surface,
       config = loadConfig(p),
       installed = config.routes[routeId];
+    if (command === "disable" || command === "uninstall") {
+      if (!installed) throw new AgentError("NOT_INSTALLED", 5);
+      // Cleanup is an ownership operation, not an authenticated upstream action.
+      // Resolve only the installed route; flags cannot redirect it to a profile.
+      if (
+        options.profile !== undefined &&
+        options.profile !== installed.profile
+      )
+        throw new AgentError("CONFIGURATION_CONFLICT", 6);
+      const cleanup = await configTransaction(p, async (c) => {
+        const current = c.routes[routeId];
+        if (JSON.stringify(current) !== JSON.stringify(installed))
+          throw new AgentError("CONFIGURATION_CONFLICT", 6);
+        current.route.enabled = false;
+        current.route.epoch++;
+        current.activation.activated = false;
+        // Commit the restart fence BEFORE any daemon or host-config operation.
+        // An action failure deliberately retains it; never roll a disable back.
+        saveConfig(p, c);
+        await startRuntime(p, settings.entry);
+        await runtimeRequest(p.socket, { operation: "refresh" });
+        await runtimeRequest(p.socket, {
+          operation: "disable",
+          route: routeId,
+          purge: options["purge-capture"] === true,
+        });
+        current.route = (
+          await runtimeRequest(p.socket, {
+            operation: "route-state",
+            route: routeId,
+          })
+        ).route;
+        saveConfig(p, c);
+        const cleanupContext: AdapterContext = {
+          routeRef: routeId,
+          socketPath: p.socket,
+          surface,
+          profile: current.profile,
+          binding: current.route.binding,
+          transcriptConsent: current.transcriptConsent,
+          captureMode: current.captureMode,
+        };
+        try {
+          const change = await adapter.preflight(command, cleanupContext);
+          current.activation = await change.commit();
+        } catch (e) {
+          // The runtime is fenced even when host files require manual cleanup.
+          // Retain ownership and the disabled route so cleanup can be retried.
+          if (!(e instanceof AgentError)) throw e;
+          return {
+            state: "capture-disabled-cleanup-pending",
+            code: 4,
+            reasons: [e.code],
+            capture: "disabled",
+            registrations: "retained",
+          };
+        }
+        if (command === "uninstall") delete c.routes[routeId];
+        return {
+          state: command === "disable" ? "held" : "uninstall-complete",
+          code: 0,
+        };
+      });
+      await runtimeRequest(p.socket, { operation: "refresh" });
+      output(cleanup);
+      return cleanup.code;
+    }
     const profileName = String(options.profile ?? installed?.profile ?? "");
     const profile = config.profiles[profileName];
     if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
@@ -535,12 +603,6 @@ export async function main(
       context,
     );
     if (command === "enable") await startRuntime(p, settings.entry);
-    if (command === "disable" || command === "uninstall")
-      await runtimeRequest(p.socket, {
-        operation: "disable",
-        route: routeId,
-        purge: options["purge-capture"] === true,
-      });
     try {
       await configTransaction(
         p,
@@ -550,11 +612,6 @@ export async function main(
             JSON.stringify(c.profiles[profileName]) !== JSON.stringify(profile)
           )
             throw new AgentError("CONFIGURATION_CONFLICT", 6);
-          if (command === "uninstall") {
-            await change.commit();
-            delete c.routes[routeId];
-            return;
-          }
           // Uninstall intentionally retains storage identity and its capture fence.
           // Recover that generation rather than resetting a fresh registration to 1.
           const retained = (
@@ -580,12 +637,8 @@ export async function main(
             epoch:
               command === "update"
                 ? installed.route.epoch
-                : command === "disable"
-                  ? retained.epoch
-                  : Math.max(
-                      retained?.epoch ?? 0,
-                      installed?.route.epoch ?? 0,
-                    ) + 1,
+                : Math.max(retained?.epoch ?? 0, installed?.route.epoch ?? 0) +
+                  1,
           };
           // Reject destination/policy/storage conflicts BEFORE changing the adapter
           // registration or committing its enabled config.
@@ -614,11 +667,7 @@ export async function main(
     }
     output({
       state:
-        command === "enable"
-          ? "waiting-for-activation"
-          : command === "disable"
-            ? "held"
-            : command + "-complete",
+        command === "enable" ? "waiting-for-activation" : command + "-complete",
       code: 0,
     });
     return 0;
