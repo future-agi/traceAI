@@ -23,6 +23,14 @@ yarn add @traceai/groq
 
 ## Quick Start
 
+For a local OTLP collector, install the SDK and OpenTelemetry packages used below:
+
+```bash
+npm install groq-sdk @opentelemetry/sdk-trace-node@^2 @opentelemetry/sdk-trace-base@^2 @opentelemetry/exporter-trace-otlp-proto@^0.201.1
+```
+
+To send traces to Future AGI instead, use [With TraceAI Core](#with-traceai-core).
+
 ```typescript
 import { GroqInstrumentation } from "@traceai/groq";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
@@ -30,17 +38,19 @@ import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import Groq from "groq-sdk";
 
-// Initialize OpenTelemetry
-const provider = new NodeTracerProvider();
+// Initialize OpenTelemetry 2.x with your OTLP collector.
 const exporter = new OTLPTraceExporter({
   url: "http://localhost:4318/v1/traces",
 });
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
+const provider = new NodeTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(exporter)],
+});
 provider.register();
 
-// Initialize Groq instrumentation
+// Initialize Groq instrumentation.
 const groqInstrumentation = new GroqInstrumentation();
-groqInstrumentation.manuallyInstrument(require("groq-sdk"));
+groqInstrumentation.setTracerProvider(provider);
+groqInstrumentation.manuallyInstrument({ Groq });
 
 // Use Groq as normal - all calls are automatically traced
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -83,10 +93,16 @@ const instrumentation = new GroqInstrumentation({
 
 ### With TraceAI Core
 
+```bash
+npm install @traceai/fi-core groq-sdk
+```
+
+Set `FI_API_KEY`, `FI_SECRET_KEY`, and `GROQ_API_KEY` in your application's environment.
+
 ```typescript
 import { register, ProjectType } from "@traceai/fi-core";
 import { GroqInstrumentation } from "@traceai/groq";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import Groq from "groq-sdk";
 
 // 1. Register TraceAI Core TracerProvider
 const tracerProvider = register({
@@ -95,14 +111,12 @@ const tracerProvider = register({
   sessionName: "groq-session-" + Date.now(),
 });
 
-// 2. Register instrumentation BEFORE importing Groq SDK
-registerInstrumentations({
-  tracerProvider: tracerProvider,
-  instrumentations: [new GroqInstrumentation()],
-});
+// 2. Attach instrumentation to this provider and SDK instance.
+const instrumentation = new GroqInstrumentation();
+instrumentation.setTracerProvider(tracerProvider);
+instrumentation.manuallyInstrument({ Groq });
 
-// 3. NOW import and use Groq
-const Groq = (await import("groq-sdk")).default;
+// 3. Create the client.
 const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // 4. Use normally - all calls are traced
@@ -291,6 +305,10 @@ async function streamChat(prompt: string) {
 await streamChat("Write a short poem about artificial intelligence");
 ```
 
+Streaming is consumed only as your application reads it; tracing does not run a second reader in the background. A stream's span finishes when you finish reading or cancel it. Breaking out of `for await` preserves the SDK's cancellation behavior. Token counts are recorded when Groq supplies usage, usually in the final chunk, so a cancelled stream may not have token counts.
+
+SDK helpers remain available: `.withResponse()` gives you the parsed result and response headers, and streams retain `.tee()`, `.toReadableStream()`, and `.controller`. Use `.withResponse()` when you want both the headers and a traced response body. Calling only `.asResponse()` leaves the body untouched and finishes a metadata-only span; it does not record generated text or usage.
+
 ### 5. Document Summarization
 
 ```typescript
@@ -366,37 +384,9 @@ The instrumentation captures the following attributes:
 | `llm.tools` | Tool definitions if provided |
 | `message.tool_calls` | Tool calls made by the model |
 
-## Integration with TraceAI Platform
+## Send traces to Future AGI
 
-```typescript
-import { GroqInstrumentation } from "@traceai/groq";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { Resource } from "@opentelemetry/resources";
-
-// Configure for TraceAI platform
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    "service.name": "my-groq-app",
-    "deployment.environment": "production",
-  }),
-});
-
-const exporter = new OTLPTraceExporter({
-  url: "https://api.traceai.com/v1/traces",
-  headers: {
-    Authorization: `Bearer ${process.env.TRACEAI_API_KEY}`,
-  },
-});
-
-provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-provider.register();
-
-// Initialize instrumentation
-const instrumentation = new GroqInstrumentation();
-instrumentation.manuallyInstrument(require("groq-sdk"));
-```
+Use the maintained `@traceai/fi-core` setup in [With TraceAI Core](#with-traceai-core). Set `FI_API_KEY` and `FI_SECRET_KEY` in your application's environment. The core package configures the Future AGI exporter and project resource attributes; you do not need a custom exporter or a second tracer provider.
 
 ## Why Groq?
 
