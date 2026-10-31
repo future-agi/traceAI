@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "traceAI-grafi"
+version = "0.1.0"
+description = "Future AGI adapter for Graphite native OpenTelemetry tracing"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "Future AGI", email = "no-reply@futureagi.com"}]
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "grafi>=0.0.36,<0.0.37",
+    "opentelemetry-sdk>=1.42.1,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.42.1,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.urls]
+Repository = "https://github.com/future-agi/traceAI"
+Documentation = "https://docs.futureagi.com/docs/integrations/frameworks/graphite"
+
+[tool.hatch.build.targets.wheel]
+packages = ["traceai_grafi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
