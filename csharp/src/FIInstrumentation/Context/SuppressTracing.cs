@@ -1,36 +1,16 @@
-using System.Diagnostics;
+using OpenTelemetry;
 
 namespace FIInstrumentation.Context;
 
 /// <summary>
-/// Suppresses tracing within a scope. All spans created while this is active will be dropped.
-/// Uses the OpenTelemetry SuppressInstrumentationScope.
+/// Suppresses new FI spans and OpenTelemetry instrumentation within the current async scope.
+/// Nested scopes restore the previous suppression state when disposed.
 /// </summary>
 public sealed class SuppressTracing : IDisposable
 {
-    private readonly ActivityListener _listener;
-    private static readonly AsyncLocal<bool> s_suppressed = new();
+    private readonly IDisposable _scope = SuppressInstrumentationScope.Begin();
 
-    public SuppressTracing()
-    {
-        s_suppressed.Value = true;
+    internal static bool IsSuppressed => Sdk.SuppressInstrumentation;
 
-        // Register a listener that prevents sampling when suppressed
-        _listener = new ActivityListener
-        {
-            ShouldListenTo = _ => true,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                s_suppressed.Value
-                    ? ActivitySamplingResult.None
-                    : ActivitySamplingResult.AllDataAndRecorded,
-        };
-    }
-
-    internal static bool IsSuppressed => s_suppressed.Value;
-
-    public void Dispose()
-    {
-        s_suppressed.Value = false;
-        _listener.Dispose();
-    }
+    public void Dispose() => _scope.Dispose();
 }

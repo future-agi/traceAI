@@ -19,16 +19,19 @@ public class FISpan : IDisposable
 
     private readonly Activity _activity;
     private readonly TraceConfig _config;
+    private readonly bool _recording;
     private bool _disposed;
 
-    internal FISpan(Activity activity, TraceConfig config)
+    internal FISpan(Activity activity, TraceConfig config, bool recording = true)
     {
         _activity = activity ?? throw new ArgumentNullException(nameof(activity));
         _config = config;
+        _recording = recording;
     }
 
     /// <summary>
-    /// The underlying Activity (OTel span).
+    /// The underlying Activity (OTel span). For a suppressed span, this is an unstarted
+    /// placeholder that does not become Activity.Current and must not be started.
     /// </summary>
     public Activity Activity => _activity;
 
@@ -46,6 +49,8 @@ public class FISpan : IDisposable
 
     public void SetInput(object value, FIMimeType mimeType = FIMimeType.Text)
     {
+        if (!_recording) return;
+
         var serialized = SerializeValue(value);
         var masked = _config.Mask(SemanticConventions.InputValue, serialized);
         if (masked != null)
@@ -57,6 +62,8 @@ public class FISpan : IDisposable
 
     public void SetOutput(object value, FIMimeType mimeType = FIMimeType.Text)
     {
+        if (!_recording) return;
+
         var serialized = SerializeValue(value);
         var masked = _config.Mask(SemanticConventions.OutputValue, serialized);
         if (masked != null)
@@ -68,6 +75,8 @@ public class FISpan : IDisposable
 
     public void SetInputMessages(List<Dictionary<string, string>> messages)
     {
+        if (!_recording) return;
+
         var json = SafeJsonSerialize(messages);
         var masked = _config.Mask(SemanticConventions.GenAiInputMessages, json);
         if (masked != null)
@@ -76,6 +85,8 @@ public class FISpan : IDisposable
 
     public void SetOutputMessages(List<Dictionary<string, string>> messages)
     {
+        if (!_recording) return;
+
         var json = SafeJsonSerialize(messages);
         var masked = _config.Mask(SemanticConventions.GenAiOutputMessages, json);
         if (masked != null)
@@ -91,6 +102,8 @@ public class FISpan : IDisposable
 
     public void SetTool(string name, string? description = null, object? parameters = null)
     {
+        if (!_recording) return;
+
         SetAttribute(SemanticConventions.GenAiToolName, name);
         if (description != null)
             SetAttribute(SemanticConventions.GenAiToolDescription, description);
@@ -100,6 +113,8 @@ public class FISpan : IDisposable
 
     public void SetError(Exception ex)
     {
+        if (!_recording) return;
+
         _activity.SetStatus(ActivityStatusCode.Error, ex.Message);
         SetAttribute(SemanticConventions.ErrorType, ex.GetType().FullName ?? ex.GetType().Name);
         SetAttribute(SemanticConventions.ErrorMessage, ex.Message);
@@ -114,20 +129,30 @@ public class FISpan : IDisposable
 
     // ── Generic attribute setters ───────────────────────────────
 
-    public void SetAttribute(string key, string value) =>
-        _activity.SetTag(key, value);
+    public void SetAttribute(string key, string value)
+    {
+        if (_recording) _activity.SetTag(key, value);
+    }
 
-    public void SetAttribute(string key, long value) =>
-        _activity.SetTag(key, value);
+    public void SetAttribute(string key, long value)
+    {
+        if (_recording) _activity.SetTag(key, value);
+    }
 
-    public void SetAttribute(string key, double value) =>
-        _activity.SetTag(key, value);
+    public void SetAttribute(string key, double value)
+    {
+        if (_recording) _activity.SetTag(key, value);
+    }
 
-    public void SetAttribute(string key, bool value) =>
-        _activity.SetTag(key, value);
+    public void SetAttribute(string key, bool value)
+    {
+        if (_recording) _activity.SetTag(key, value);
+    }
 
-    public void SetAttribute(string key, string[] values) =>
-        _activity.SetTag(key, values);
+    public void SetAttribute(string key, string[] values)
+    {
+        if (_recording) _activity.SetTag(key, values);
+    }
 
     // ── IDisposable ─────────────────────────────────────────────
 
@@ -135,6 +160,7 @@ public class FISpan : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (!_recording) return;
 
         // Auto-set OK status if unset
         if (_activity.Status == ActivityStatusCode.Unset)
