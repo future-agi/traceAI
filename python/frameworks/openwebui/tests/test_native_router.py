@@ -4,6 +4,8 @@ import __future__
 
 import ast
 import asyncio
+import collections.abc
+import copy
 import http.client
 import json
 import logging
@@ -431,6 +433,121 @@ async def test_native_stream_completes_all_requested_choices(
     (span,) = n.s.exporter.get_finished_spans()
     assert span.attributes["openwebui.outcome"] == expected
     assert (span.status.status_code == StatusCode.ERROR) == (expected == "incomplete")
+    assert "private-" not in repr(span.attributes) + repr(span.events)
+
+
+@pytest.fixture
+def native_model_params(native_stream):
+    n = native_stream
+    native = n.ns["generate_openai_chat_completion"].__globals__
+    scope = {
+        "Callable": collections.abc.Callable,
+        "collections": collections,
+        "JSONCodec": native["JSONCodec"],
+    }
+    with ZipFile(os.environ["OPENWEBUI_WHEEL"]) as wheel:
+        for filename, names in (
+            ("open_webui/utils/misc.py", {"deep_update"}),
+            (
+                "open_webui/utils/payload.py",
+                {
+                    "apply_model_params_to_body",
+                    "remove_open_webui_params",
+                    "apply_model_params_to_body_openai",
+                },
+            ),
+        ):
+            tree = ast.parse(wheel.read(filename).decode(), filename)
+            nodes = [
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name in names
+            ]
+            assert len(nodes) == len(names)
+            exec(  # noqa: S102 - unchanged released native parameter precedence
+                compile(ast.Module(body=nodes, type_ignores=[]), filename, "exec"),
+                scope,
+            )
+    native["apply_model_params_to_body_openai"] = scope[
+        "apply_model_params_to_body_openai"
+    ]
+    native["apply_system_prompt_to_body"] = AsyncMock(
+        side_effect=lambda system, body, *args: body
+    )
+    return n
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"n": 2}, {"n": 1, "custom_params": {"n": "2"}}],
+    ids=["stored-n", "custom-n"],
+)
+@pytest.mark.parametrize(
+    "requested_n,finished,done,expected",
+    [
+        (None, [0], False, "incomplete"),
+        (None, [0], True, "completed"),
+        # Without explicit n the count is unknown, even if every visible choice
+        # finishes. Do not rely on the host's possibly stale model cache either.
+        (None, [0, 1], False, "incomplete"),
+        (None, [0, 1], True, "completed"),
+        (1, [0], False, "completed"),
+        (2, [0], False, "incomplete"),
+        (2, [0, 1], False, "completed"),
+        (3, [0, 1], False, "incomplete"),
+    ],
+)
+async def test_native_stream_choice_count_with_model_defaults(
+    native_model_params, params, requested_n, finished, done, expected
+):
+    n = native_model_params
+    model_info = SimpleNamespace(
+        base_model_id=None,
+        params=SimpleNamespace(model_dump=lambda: copy.deepcopy(params)),
+    )
+    n.ns["Models"].get_model_by_id = AsyncMock(
+        side_effect=lambda model_id: model_info if model_id == "synthetic" else None
+    )
+    # A directly customized native base model is supported. This cache need not
+    # match the stored defaults that the router reads at dispatch time.
+    n.s.request.app.state.MODELS["synthetic"]["info"] = {
+        "base_model_id": None,
+        "params": {"n": 1},
+    }
+    n.server.sse = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "choices": [
+                        {
+                            "index": index,
+                            "delta": {"content": "private-output"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            )
+            + "\n\n"
+            for index in finished
+        )
+        + ("data: [DONE]\n\n" if done else "")
+    ).encode()
+    body = {**n.s.body, "stream": True}
+    if requested_n is not None:
+        body["n"] = requested_n
+    original = copy.deepcopy(body)
+    response = await n.ns["generate_chat_completion"](n.s.request, body, n.s.user)
+    assert b"".join([chunk async for chunk in response.body_iterator]) == n.server.sse
+    assert body == original
+    assert len(n.server.requests) == 1
+    assert n.server.requests[0][0] == "/v1/chat/completions"
+    assert n.server.requests[0][1]["n"] == (2 if requested_n is None else requested_n)
+    (span,) = n.s.exporter.get_finished_spans()
+    assert span.attributes["openwebui.outcome"] == expected
+    assert (span.status.status_code == StatusCode.ERROR) == (expected == "incomplete")
+    if expected == "incomplete":
+        assert span.status.description == "model stream ended without completion"
     assert "private-" not in repr(span.attributes) + repr(span.events)
 
 

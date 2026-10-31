@@ -35,7 +35,7 @@ def test_ambiguous_or_unfinished_choices_need_request_terminator(
 
 def test_additional_unfinished_choice_does_not_latch_completion(setup_pipe):
     with setup_pipe.provider.get_tracer("test").start_as_current_span("test") as span:
-        observation = Observation(span, False, 10)
+        observation = Observation(span, False, 10, choice_count=1)
         observation.payload({"choices": [{"index": 0, "finish_reason": "stop"}]})
         assert observation.terminal
         # A provider sent more choices than requested. EOF is not proof the
@@ -47,9 +47,21 @@ def test_additional_unfinished_choice_does_not_latch_completion(setup_pipe):
         assert not observation.terminal
 
 
-def test_single_choice_without_index_can_finish(setup_pipe):
+@pytest.mark.parametrize("choice", [{"index": 0}, {}])
+def test_unknown_choice_count_defaults_to_requiring_done(setup_pipe, choice):
     with setup_pipe.provider.get_tracer("test").start_as_current_span("test") as span:
         observation = Observation(span, False, 10)
+        observation.payload({"choices": [{**choice, "finish_reason": "stop"}]})
+        observation.finish()
+        assert not observation.terminal
+        observation.chunk("data: [DONE]\n\n")
+        observation.finish()
+        assert observation.terminal
+
+
+def test_single_choice_without_index_can_finish(setup_pipe):
+    with setup_pipe.provider.get_tracer("test").start_as_current_span("test") as span:
+        observation = Observation(span, False, 10, choice_count=1)
         observation.payload({"choices": [{"finish_reason": "stop"}]})
         observation.finish()
         assert observation.terminal

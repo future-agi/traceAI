@@ -52,7 +52,11 @@ def is_chat_completion(value: Any) -> bool:
 
 class Observation:
     def __init__(
-        self, span: Span, capture_content: bool, max_chars: int, choice_count: Any = 1
+        self,
+        span: Span,
+        capture_content: bool,
+        max_chars: int,
+        choice_count: Any = None,
     ) -> None:
         self.span = span
         self.capture_content = capture_content

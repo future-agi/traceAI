@@ -59,7 +59,7 @@ Existing Function copies in Open WebUI's database do not change when this reposi
 
 **No token counts:** Enable Usage on the wrapper model and check that the provider returns usage. Cancelled calls may never receive a final usage snapshot.
 
-**Incomplete stream:** The provider ended its stream without a completion marker, or the consumer closed it early. The span is not marked successful. An abrupt process kill cannot export pending spans.
+**Incomplete stream:** The provider ended its stream without confirmed completion, or the consumer closed it early. The span is not marked successful. When the request explicitly supplies a positive integer `n`, every requested choice must finish unless the provider sends `[DONE]`. Without explicit `n`, the Pipe requires `[DONE]`: native model defaults can change the choice count after dispatch, so a single finished choice does not prove the request completed. If your provider omits `[DONE]`, supply the intended `n` in the wrapper request rather than relying on target-model defaults. This does not change the response sent to your chat. An abrupt process kill cannot export pending spans.
 
 **Self-hosted collector:** Remote endpoints must use HTTPS; HTTP is accepted only for loopback testing. Redirects, host proxy settings, `.netrc`, and unrelated native OTLP client certificates are not used. Use a directly reachable collector endpoint.
 

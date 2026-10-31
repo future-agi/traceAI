@@ -158,8 +158,11 @@ class Pipe:
             release()
             release = lambda: None
             log.warning("Open WebUI tracing unavailable; model execution continues")
+        # Native routing applies stored model defaults after this point, including
+        # custom n parameters. Only an explicit n has authoritative precedence;
+        # otherwise require [DONE] rather than guessing from the model cache.
         observation = (
-            Observation(span, capture, valves.max_chars, payload.get("n", 1))
+            Observation(span, capture, valves.max_chars, payload.get("n"))
             if span is not None
             else None
         )
