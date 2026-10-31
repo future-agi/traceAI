@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>ai.traceai</groupId>
+        <groupId>com.futureagi</groupId>
         <artifactId>traceai-java-parent</artifactId>
         <version>1.0.0</version>
         <relativePath>../../pom.xml</relativePath>
@@ -18,16 +18,16 @@
     <dependencies>
         <!-- TraceAI modules -->
         <dependency>
-            <groupId>ai.traceai</groupId>
+            <groupId>com.futureagi</groupId>
             <artifactId>traceai-java-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>ai.traceai</groupId>
+            <groupId>com.futureagi</groupId>
             <artifactId>traceai-java-openai</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>ai.traceai</groupId>
+            <groupId>com.futureagi</groupId>
             <artifactId>traceai-java-pgvector</artifactId>
             <version>${project.version}</version>
         </dependency>

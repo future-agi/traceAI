@@ -1,5 +1,7 @@
 """Tests for xAI wrapper functions."""
 
+import json
+
 import pytest
 from unittest.mock import MagicMock, PropertyMock
 
@@ -120,7 +122,7 @@ class TestGetOutputAttributes:
 
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}"] == "assistant"
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"] == "Hello! How can I help you?"
-        assert attrs[SpanAttributes.OUTPUT_VALUE] == "Hello! How can I help you?"
+        assert json.loads(attrs[SpanAttributes.OUTPUT_VALUE]) == mock_openai_response.model_dump()
 
     def test_usage_metrics(self, mock_openai_response):
         """Should extract usage metrics."""
@@ -145,7 +147,9 @@ class TestGetStreamOutputAttributes:
         full_content = "Hello! How can I help?"
         attrs = _get_stream_output_attributes(mock_stream_chunks, full_content)
 
-        assert attrs[SpanAttributes.OUTPUT_VALUE] == full_content
+        assert json.loads(attrs[SpanAttributes.OUTPUT_VALUE]) == [
+            chunk.model_dump() for chunk in mock_stream_chunks
+        ]
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"] == full_content
         assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}"] == "assistant"
 
@@ -167,5 +171,6 @@ class TestGetStreamOutputAttributes:
         """Should handle empty chunks list."""
         attrs = _get_stream_output_attributes([], "")
 
-        assert attrs[SpanAttributes.OUTPUT_VALUE] == ""
+        assert json.loads(attrs[SpanAttributes.OUTPUT_VALUE]) == []
+        assert attrs[f"{SpanAttributes.GEN_AI_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}"] == ""
         assert SpanAttributes.GEN_AI_REQUEST_MODEL not in attrs

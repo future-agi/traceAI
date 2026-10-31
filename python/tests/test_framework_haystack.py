@@ -64,7 +64,7 @@ class TestHaystackInstrumentor:
     def test_instrumentation_dependencies(self):
         """Test instrumentation dependencies."""
         deps = self.instrumentor.instrumentation_dependencies()
-        assert deps == ("haystack-ai >= 2.9.0")
+        assert deps == ("haystack-ai >= 2.9.0",)
 
     @patch("traceai_haystack.wrap_function_wrapper")
     @patch("traceai_haystack.trace_api.get_tracer")
@@ -473,7 +473,7 @@ class TestUtilityFunctions:
         
         assert len(attributes) == 1
         key, value = attributes[0]
-        assert key == "fi.span.kind"
+        assert key == "gen_ai.span.kind"
         assert value == "LLM"
 
     def test_get_input_attributes(self):
@@ -523,7 +523,10 @@ class TestUtilityFunctions:
         
         # Should extract reply attributes
         attr_dict = dict(attributes)
-        assert any("llm.output_messages" in key for key in attr_dict.keys())
+        assert attr_dict == {
+            "gen_ai.output.messages.0.message.content": "Hello! How can I help you?",
+            "gen_ai.output.messages.0.message.role": "assistant",
+        }
 
     def test_get_llm_model_attributes(self):
         """Test _get_llm_model_attributes function."""
@@ -535,8 +538,8 @@ class TestUtilityFunctions:
         
         # Should extract model name
         attr_dict = dict(attributes)
-        assert "llm.model_name" in attr_dict
-        assert attr_dict["llm.model_name"] == "gpt-4"
+        assert "gen_ai.request.model" in attr_dict
+        assert attr_dict["gen_ai.request.model"] == "gpt-4"
 
     def test_get_llm_token_count_attributes(self):
         """Test _get_llm_token_count_attributes function."""
@@ -554,10 +557,11 @@ class TestUtilityFunctions:
         
         # Should extract token counts
         attr_dict = dict(attributes)
-        assert "llm.token_count.prompt" in attr_dict
-        assert attr_dict["llm.token_count.prompt"] == 10
-        assert "llm.token_count.completion" in attr_dict
-        assert attr_dict["llm.token_count.completion"] == 20
+        assert "gen_ai.usage.input_tokens" in attr_dict
+        assert attr_dict["gen_ai.usage.input_tokens"] == 10
+        assert "gen_ai.usage.output_tokens" in attr_dict
+        assert attr_dict["gen_ai.usage.output_tokens"] == 20
+        assert attr_dict["gen_ai.usage.total_tokens"] == 30
 
     def test_get_embedding_model_attributes(self):
         """Test _get_embedding_model_attributes function."""
