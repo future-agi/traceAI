@@ -780,3 +780,31 @@ test("closed observer drains all 70 turns, encrypts recovery path, and revocatio
     if(old===undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME=old;
   }
 });
+
+test("multi-megabyte long rollout rotates decode windows without oversized tails", () => {
+  const root=fs.mkdtempSync(path.join(base,"large-rollout-"));
+  const dir=path.join(root,"sessions/2026/10/31");
+  fs.mkdirSync(dir,{recursive:true,mode:0o755});
+  const file=path.join(dir,"rollout-large.jsonl");
+  const rows=[meta()];
+  const padding="x".repeat(12500);
+  for(let n=0;n<240;n++) {
+    const turn_id=`t${n}`;
+    rows.push(event("task_started",{turn_id},n*4+1));
+    rows.push(line("response_item",{type:"message",content:padding},n*4+2));
+    rows.push(event("task_complete",{turn_id},n*4+3));
+  }
+  fs.writeFileSync(file,bytes(rows),{mode:0o644});
+  const codec=new CodexCodec(context,"thread"),reader=new RolloutReader(path.join(root,"sessions"),file,codec);
+  const seen=[];
+  let complete=false;
+  for(let n=0;n<100;n++) {
+    const result=reader.read();
+    if(result.batchFull || result.caughtUp) {seen.push(...codec.facts());codec.release();}
+    if(result.caughtUp) {complete=true;break;}
+  }
+  assert.equal(complete,true);
+  assert.equal(seen.length,240);
+  assert.equal(new Set(seen.map(f=>f.sourceWorkId)).size,240);
+  assert.ok(!JSON.stringify(seen).includes(padding));
+});

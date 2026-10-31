@@ -185,7 +185,9 @@ export class RolloutReader {
         lstatSync(this.path).ino !== s.ino
       )
         throw new AgentError("SOURCE_CHANGED", 6);
-      const buffer = Buffer.alloc(Math.min(1_048_576, s.size - this.offset));
+      const buffer = Buffer.alloc(
+        Math.min(1_048_576, 2_097_152 - this.tail.length, s.size - this.offset),
+      );
       const count = buffer.length
         ? readSync(fd, buffer, 0, buffer.length, this.offset)
         : 0;
@@ -220,7 +222,10 @@ export class RolloutReader {
         if (this.codec.needsDrain) { batchFull = true; break; }
       }
       this.tail = Buffer.from(pending.subarray(start));
-      if (this.tail.length > 2_097_152)
+      if (
+        this.tail.length > 2_097_152 ||
+        (this.tail.length === 2_097_152 && this.tail.indexOf(10) < 0)
+      )
         throw new AgentError("OVERSIZE_SOURCE_RECORD", 4);
       return {
         changed: count > 0,
