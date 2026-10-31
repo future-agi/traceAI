@@ -5,7 +5,7 @@ from itertools import chain
 from types import ModuleType
 from typing import Any, Awaitable, Callable, Iterable, Iterator, Mapping, Optional, Tuple
 
-from fi_instrumentation import TraceConfig, get_attributes_from_context
+from fi_instrumentation import REDACTED_VALUE, TraceConfig, get_attributes_from_context
 from fi_instrumentation.fi_types import (
     FiSpanKindValues,
     SpanAttributes,
@@ -175,10 +175,15 @@ class _WithOpenAI(ABC):
         # Secondary attributes should be added after input and output to ensure
         # that input and output are not dropped if there are too many attributes.
         try:
-            yield from self._request_attributes_extractor.get_attributes_from_request(
+            for key, value in self._request_attributes_extractor.get_attributes_from_request(
                 cast_to=cast_to,
                 request_parameters=request_parameters,
-            )
+            ):
+                # Older supported core releases do not mask invocation parameters
+                # with hide_inputs. extra_body may carry arbitrary private values.
+                if self._config.hide_inputs and key == SpanAttributes.GEN_AI_REQUEST_PARAMETERS:
+                    value = REDACTED_VALUE
+                yield key, value
         except Exception:
             logger.exception(
                 f"Failed to get extra attributes from request options of "
@@ -441,6 +446,18 @@ def _parse_request_args(args: Tuple[type, Any]) -> Tuple[type, Mapping[str, Any]
         and isinstance(json_data := args[1].json_data, Mapping)
         else {}
     )
+    extra_json = getattr(args[1], "extra_json", None)
+    if isinstance(extra_json, Mapping):
+        from openai._types import Omit
+
+        # The SDK shallow-merges extra_body over json_data and drops Omit values
+        # at request construction. Observe that body without mutating either map;
+        # headers, query parameters and other transport options are not inputs.
+        request_parameters = {
+            key: value
+            for key, value in {**request_parameters, **extra_json}.items()
+            if not isinstance(value, Omit)
+        }
     # FIXME: Because request parameters is just a Mapping, it can contain any value as long as it
     # serializes correctly in an HTTP request body. For example, Enum values may be present if a
     # third-party library puts them there. Enums can turn into their intended string values via
