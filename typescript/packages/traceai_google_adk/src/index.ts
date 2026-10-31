@@ -7,3 +7,4 @@
 export { GoogleADKInstrumentation, GoogleADKInstrumentationConfig } from "./instrumentation";
 export { isPatched } from "./instrumentation";
 export { VERSION } from "./version";
+export { configure, GoogleADKSpanExporter, GoogleADKNativeOptions, GoogleADKConfigureOptions } from "./native";
