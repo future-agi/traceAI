@@ -357,3 +357,57 @@ test("native launches are bounded and runtime stop revokes listeners", async (t)
   for (const lease of [...leases, replacement])
     await assert.rejects(send(lease));
 });
+
+test("a transient renewal failure keeps renewing; a policy hold stops renewal", async (t) => {
+  const net = require("node:net");
+  const { frame } = require("@traceai/agent-core/client");
+  const { runAgent } = require("../dist/src/cli/run.js");
+  for (const [failure, expectMore] of [
+    [{ durable: false, code: 7, reason_code: "RUNTIME_UNAVAILABLE" }, true],
+    [{ durable: false, code: 3, reason_code: "HELD_NATIVE_SESSION" }, false],
+  ]) {
+    const root = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "fi-renew-")),
+    );
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const socket = path.join(root, "r.sock");
+    let renewals = 0;
+    const server = net.createServer((c) => {
+      let data = Buffer.alloc(0);
+      c.on("data", (chunk) => {
+        data = Buffer.concat([data, chunk]);
+        if (data.length < 4 || data.length < data.readUInt32BE(0) + 4) return;
+        const m = JSON.parse(data.subarray(4).toString());
+        let reply = { code: 0 };
+        if (m.operation === "native-open")
+          reply = {
+            id: "l",
+            token: "t",
+            endpoint: "http://127.0.0.1:1/v1/traces",
+            renewAfterMs: 40,
+          };
+        if (m.operation === "native-renew" && renewals++ === 0) reply = failure;
+        c.end(frame(reply));
+      });
+    });
+    await new Promise((r) => server.listen(socket, r));
+    const adapter = {
+      launch: async () => ({
+        executable: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 400)"],
+        env: {},
+        native: true,
+      }),
+    };
+    const result = await runAgent(
+      adapter,
+      { routeRef: "copilot.cli", socketPath: socket },
+      [],
+    );
+    await new Promise((r) => server.close(r));
+    assert.equal(result.code, 0);
+    if (expectMore)
+      assert.ok(renewals > 2, "retried after transient failure: " + renewals);
+    else assert.equal(renewals, 1);
+  }
+});

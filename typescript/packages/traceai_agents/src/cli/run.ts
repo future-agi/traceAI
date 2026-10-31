@@ -75,10 +75,14 @@ export async function runAgent(
           { operation: "native-renew", id: current.id },
           500,
         )
-          .catch(() => {
-            if (heartbeat) clearInterval(heartbeat);
-            if (!closed) unavailable();
-            // Never restart capture after a policy fence or silently switch bindings.
+          .catch((e) => {
+            // A slow/unavailable runtime is retried within the lease lifetime;
+            // the runtime expires the lease if it really is gone. Never reopen
+            // capture after a policy fence or silently switch bindings.
+            if (e instanceof AgentError && e.exitCode === 3) {
+              if (heartbeat) clearInterval(heartbeat);
+              if (!closed) unavailable();
+            }
           })
           .finally(() => {
             renewing = false;
