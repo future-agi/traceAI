@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "release_state": "codex-preview",
+  "enabled_by_default": [],
+  "agents": [
+    {
+      "agent": "codex",
+      "surface": "cli",
+      "versions": [
+        "0.165.0",
+        "0.166.0"
+      ],
+      "platforms": [
+        "darwin"
+      ],
+      "grade": "Reconstructed requests",
+      "schema": "codex-rollout-0165-0166-v1",
+      "identity_profile": "codex-response-v1",
+      "transcript_consent": "explicit-structure",
+      "content": false,
+      "request_evidence": "token_usage_record.response_id",
+      "request_timing": "unknown; completion record only",
+      "model_hooks": "activation/wakeup only; never paired",
+      "subagent_ancestry": "explicit spawn-call and receiver-thread join; detached links to spawning tool; contained foreground child spans (fixture-qualified); missing context held",
+      "history_modes": [
+        "paginated"
+      ],
+      "unsupported": [
+        "unknown versions",
+        "legacy history",
+        "forks",
+        "rollback",
+        "rotation",
+        "compression",
+        "ephemeral transcripts",
+        "desktop",
+        "cloud",
+        "windows",
+        "linux"
+      ],
+      "limits": {
+        "active_sources": 16,
+        "turns_per_source": 64,
+        "facts_per_turn_per_kind": 128,
+        "read_slice_bytes": 1048576,
+        "source_record_bytes": 2097152,
+        "import_bytes": 1048576,
+        "import_spans": 128,
+        "facts_per_source": 1024,
+        "import_files": 16,
+        "import_directory_entries": 64,
+        "causal_graph_turns": 1024,
+        "causal_graph_spawns": 1024,
+        "causal_graph_depth": 16
+      },
+      "import_unfinished_turns": "not finalized; explicit terminal evidence required"
+    }
+  ],
+  "holds": [
+    "backend-contract-qualification",
+    "expanded-lifecycle-qualification",
+    "platform-storage-qualification"
+  ],
+  "reference_adapter": "test-only; never registered by the executable"
+}

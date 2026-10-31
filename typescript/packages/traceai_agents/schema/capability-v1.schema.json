@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Adapter capability v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "agent",
+    "surface",
+    "versions",
+    "schemas",
+    "identityProfiles",
+    "models",
+    "providers",
+    "tools",
+    "platforms",
+    "transcript",
+    "native",
+    "neutralResponse"
+  ],
+  "properties": {
+    "contract": {
+      "const": 1
+    },
+    "agent": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "surface": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "maxLength": 128
+    },
+    "versions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+        "maxLength": 128
+      }
+    },
+    "schemas": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+        "maxLength": 128
+      }
+    },
+    "identityProfiles": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+        "maxLength": 128
+      }
+    },
+    "models": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+        "maxLength": 128
+      }
+    },
+    "providers": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+        "maxLength": 128
+      }
+    },
+    "tools": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+        "maxLength": 128
+      }
+    },
+    "platforms": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+        "maxLength": 128
+      }
+    },
+    "transcript": {
+      "type": "boolean"
+    },
+    "native": {
+      "type": "boolean"
+    },
+    "neutralResponse": {
+      "type": "string",
+      "maxLength": 4096
+    }
+  }
+}

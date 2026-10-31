@@ -1,0 +1,1033 @@
+{
+  "raw": [
+    {
+      "schema": "fixture-v1",
+      "session": "s",
+      "turn": "t",
+      "id": "t",
+      "unit": "turn",
+      "prompt": "PRIVACY_CANARY",
+      "response": "PRIVACY_CANARY"
+    },
+    {
+      "schema": "fixture-v1",
+      "session": "s",
+      "turn": "t",
+      "id": "r",
+      "unit": "request",
+      "prompt": "PRIVACY_CANARY",
+      "response": "PRIVACY_CANARY"
+    },
+    {
+      "schema": "fixture-v1",
+      "session": "s",
+      "turn": "t",
+      "id": "c",
+      "unit": "tool",
+      "prompt": "PRIVACY_CANARY",
+      "response": "PRIVACY_CANARY"
+    },
+    {
+      "schema": "fixture-v1",
+      "session": "s",
+      "turn": "t",
+      "id": "r2",
+      "unit": "request",
+      "prompt": "PRIVACY_CANARY",
+      "response": "PRIVACY_CANARY"
+    }
+  ],
+  "canonical": [
+    {
+      "schemaVersion": 1,
+      "sourceWorkId": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121",
+      "identityProfile": "reference-v1",
+      "sessionId": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8",
+      "turnId": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121",
+      "traceId": "4a14ee66bbecc3e10f60e6d345c52d1e",
+      "spanId": "1d128f3a267c3e27",
+      "agent": "reference",
+      "surface": "fixture",
+      "source": "transcript",
+      "sourceSchema": "fixture-v1",
+      "reconstructionVersion": "1",
+      "policyRevision": "1",
+      "unit": "turn",
+      "timing": "message_interval",
+      "startNs": "1000000000",
+      "endNs": "2000000000",
+      "outcome": "success",
+      "inputCompleteness": "unavailable",
+      "outputCompleteness": "unavailable",
+      "agentVersion": "1"
+    },
+    {
+      "schemaVersion": 1,
+      "sourceWorkId": "b61db14096428f30ba74d27b1c797eea18218a8491313874cb357b93a6d8d5c4",
+      "identityProfile": "reference-v1",
+      "sessionId": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8",
+      "turnId": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121",
+      "traceId": "4a14ee66bbecc3e10f60e6d345c52d1e",
+      "spanId": "d92427b3f03bb153",
+      "agent": "reference",
+      "surface": "fixture",
+      "source": "transcript",
+      "sourceSchema": "fixture-v1",
+      "reconstructionVersion": "1",
+      "policyRevision": "1",
+      "unit": "request",
+      "timing": "message_interval",
+      "startNs": "1000000000",
+      "endNs": "2000000000",
+      "outcome": "success",
+      "inputCompleteness": "unavailable",
+      "outputCompleteness": "unavailable",
+      "parentSpanId": "1d128f3a267c3e27",
+      "agentVersion": "1",
+      "model": "fixture-model",
+      "provider": "fixture",
+      "usage": {
+        "scope": "request",
+        "contribution": "request",
+        "planId": "ff6db029a0853d863ff3c90452613accc50de08c54ec26975cbf968b9edbf513",
+        "factIds": [
+          "65700d3fd5bb9a0e9965b7ffda39d403460db74e02d268fac778e212fdd2e306"
+        ],
+        "inclusions": "inclusive",
+        "complete": true,
+        "input": 100,
+        "output": 20,
+        "cacheRead": 40,
+        "reasoning": 8,
+        "total": 120
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "sourceWorkId": "f65a76e134313b1329a0289ff0bcc93cb6bffb30e5791a33ccfaacce3cdd04da",
+      "identityProfile": "reference-v1",
+      "sessionId": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8",
+      "turnId": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121",
+      "traceId": "4a14ee66bbecc3e10f60e6d345c52d1e",
+      "spanId": "6b4c2ed1f443e31d",
+      "agent": "reference",
+      "surface": "fixture",
+      "source": "transcript",
+      "sourceSchema": "fixture-v1",
+      "reconstructionVersion": "1",
+      "policyRevision": "1",
+      "unit": "tool",
+      "timing": "message_interval",
+      "startNs": "1000000000",
+      "endNs": "2000000000",
+      "outcome": "success",
+      "inputCompleteness": "unavailable",
+      "outputCompleteness": "unavailable",
+      "parentSpanId": "1d128f3a267c3e27",
+      "agentVersion": "1",
+      "tool": "read_file"
+    },
+    {
+      "schemaVersion": 1,
+      "sourceWorkId": "d4a947ca6ff05389d9c243d0f40650d0e69cce962633b8c3f27864030a268f27",
+      "identityProfile": "reference-v1",
+      "sessionId": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8",
+      "turnId": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121",
+      "traceId": "4a14ee66bbecc3e10f60e6d345c52d1e",
+      "spanId": "86ea12eaa04b5591",
+      "agent": "reference",
+      "surface": "fixture",
+      "source": "transcript",
+      "sourceSchema": "fixture-v1",
+      "reconstructionVersion": "1",
+      "policyRevision": "1",
+      "unit": "request",
+      "timing": "message_interval",
+      "startNs": "1000000000",
+      "endNs": "2000000000",
+      "outcome": "success",
+      "inputCompleteness": "unavailable",
+      "outputCompleteness": "unavailable",
+      "parentSpanId": "1d128f3a267c3e27",
+      "agentVersion": "1",
+      "model": "fixture-model",
+      "provider": "fixture",
+      "usage": {
+        "scope": "request",
+        "contribution": "request",
+        "planId": "ff6db029a0853d863ff3c90452613accc50de08c54ec26975cbf968b9edbf513",
+        "factIds": [
+          "61600aa479e8d9da23358e648d3b1289fc29262974a4cb24d540830558f7194a"
+        ],
+        "inclusions": "inclusive",
+        "complete": true,
+        "input": 100,
+        "output": 20,
+        "cacheRead": 40,
+        "reasoning": 8,
+        "total": 120
+      }
+    }
+  ],
+  "otlp": {
+    "resourceSpans": [
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "project_name",
+              "value": {
+                "stringValue": "fixture"
+              }
+            },
+            {
+              "key": "project_type",
+              "value": {
+                "stringValue": "observe"
+              }
+            },
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "fi-agent/reference"
+              }
+            },
+            {
+              "key": "service.version",
+              "value": {
+                "stringValue": "0.1.0"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "@traceai/agents",
+              "version": "0.1.0"
+            },
+            "spans": [
+              {
+                "traceId": "ShTuZrvsw+EPYObTRcUtHg==",
+                "spanId": "HRKPOiZ8Pic=",
+                "name": "agent.turn",
+                "kind": 1,
+                "startTimeUnixNano": "1000000000",
+                "endTimeUnixNano": "2000000000",
+                "attributes": [
+                  {
+                    "key": "session.id",
+                    "value": {
+                      "stringValue": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8"
+                    }
+                  },
+                  {
+                    "key": "fi.span.kind",
+                    "value": {
+                      "stringValue": "AGENT"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.name",
+                    "value": {
+                      "stringValue": "reference"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.surface",
+                    "value": {
+                      "stringValue": "fixture"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.turn.id",
+                    "value": {
+                      "stringValue": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.outcome",
+                    "value": {
+                      "stringValue": "success"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source",
+                    "value": {
+                      "stringValue": "transcript"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.schema.version",
+                    "value": {
+                      "stringValue": "fixture-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.reconstruction.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.timing",
+                    "value": {
+                      "stringValue": "message_interval"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.input_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.output_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.content_policy.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source_work.id",
+                    "value": {
+                      "stringValue": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.identity.profile",
+                    "value": {
+                      "stringValue": "reference-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.observation_unit",
+                    "value": {
+                      "stringValue": "turn"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.contribution",
+                    "value": {
+                      "stringValue": "none"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.operation.name",
+                    "value": {
+                      "stringValue": "invoke_agent"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.missing_reason",
+                    "value": {
+                      "stringValue": "disabled_by_policy"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "project_name",
+              "value": {
+                "stringValue": "fixture"
+              }
+            },
+            {
+              "key": "project_type",
+              "value": {
+                "stringValue": "observe"
+              }
+            },
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "fi-agent/reference"
+              }
+            },
+            {
+              "key": "service.version",
+              "value": {
+                "stringValue": "0.1.0"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "@traceai/agents",
+              "version": "0.1.0"
+            },
+            "spans": [
+              {
+                "traceId": "ShTuZrvsw+EPYObTRcUtHg==",
+                "spanId": "2SQns/A7sVM=",
+                "parentSpanId": "HRKPOiZ8Pic=",
+                "name": "model.request",
+                "kind": 1,
+                "startTimeUnixNano": "1000000000",
+                "endTimeUnixNano": "2000000000",
+                "attributes": [
+                  {
+                    "key": "session.id",
+                    "value": {
+                      "stringValue": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8"
+                    }
+                  },
+                  {
+                    "key": "fi.span.kind",
+                    "value": {
+                      "stringValue": "LLM"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.name",
+                    "value": {
+                      "stringValue": "reference"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.surface",
+                    "value": {
+                      "stringValue": "fixture"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.turn.id",
+                    "value": {
+                      "stringValue": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.outcome",
+                    "value": {
+                      "stringValue": "success"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source",
+                    "value": {
+                      "stringValue": "transcript"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.schema.version",
+                    "value": {
+                      "stringValue": "fixture-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.reconstruction.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.timing",
+                    "value": {
+                      "stringValue": "message_interval"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.input_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.output_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.content_policy.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source_work.id",
+                    "value": {
+                      "stringValue": "b61db14096428f30ba74d27b1c797eea18218a8491313874cb357b93a6d8d5c4"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.identity.profile",
+                    "value": {
+                      "stringValue": "reference-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.observation_unit",
+                    "value": {
+                      "stringValue": "request"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.contribution",
+                    "value": {
+                      "stringValue": "request"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.operation.name",
+                    "value": {
+                      "stringValue": "chat"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.request.model",
+                    "value": {
+                      "stringValue": "fixture-model"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.provider.name",
+                    "value": {
+                      "stringValue": "fixture"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.missing_reason",
+                    "value": {
+                      "stringValue": "disabled_by_policy"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.scope",
+                    "value": {
+                      "stringValue": "request"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.plan.id",
+                    "value": {
+                      "stringValue": "ff6db029a0853d863ff3c90452613accc50de08c54ec26975cbf968b9edbf513"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.fact.id",
+                    "value": {
+                      "stringValue": "[\"65700d3fd5bb9a0e9965b7ffda39d403460db74e02d268fac778e212fdd2e306\"]"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.inclusions",
+                    "value": {
+                      "stringValue": "inclusive"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.complete",
+                    "value": {
+                      "boolValue": true
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.input_tokens",
+                    "value": {
+                      "doubleValue": 100
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.output_tokens",
+                    "value": {
+                      "doubleValue": 20
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.total_tokens",
+                    "value": {
+                      "doubleValue": 120
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.cache_read_tokens",
+                    "value": {
+                      "doubleValue": 40
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.output_tokens.reasoning",
+                    "value": {
+                      "doubleValue": 8
+                    }
+                  },
+                  {
+                    "key": "fi.cost.kind",
+                    "value": {
+                      "stringValue": "unknown"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "project_name",
+              "value": {
+                "stringValue": "fixture"
+              }
+            },
+            {
+              "key": "project_type",
+              "value": {
+                "stringValue": "observe"
+              }
+            },
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "fi-agent/reference"
+              }
+            },
+            {
+              "key": "service.version",
+              "value": {
+                "stringValue": "0.1.0"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "@traceai/agents",
+              "version": "0.1.0"
+            },
+            "spans": [
+              {
+                "traceId": "ShTuZrvsw+EPYObTRcUtHg==",
+                "spanId": "a0wu0fRD4x0=",
+                "parentSpanId": "HRKPOiZ8Pic=",
+                "name": "tool.read_file",
+                "kind": 1,
+                "startTimeUnixNano": "1000000000",
+                "endTimeUnixNano": "2000000000",
+                "attributes": [
+                  {
+                    "key": "session.id",
+                    "value": {
+                      "stringValue": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8"
+                    }
+                  },
+                  {
+                    "key": "fi.span.kind",
+                    "value": {
+                      "stringValue": "TOOL"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.name",
+                    "value": {
+                      "stringValue": "reference"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.surface",
+                    "value": {
+                      "stringValue": "fixture"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.turn.id",
+                    "value": {
+                      "stringValue": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.outcome",
+                    "value": {
+                      "stringValue": "success"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source",
+                    "value": {
+                      "stringValue": "transcript"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.schema.version",
+                    "value": {
+                      "stringValue": "fixture-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.reconstruction.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.timing",
+                    "value": {
+                      "stringValue": "message_interval"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.input_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.output_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.content_policy.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source_work.id",
+                    "value": {
+                      "stringValue": "f65a76e134313b1329a0289ff0bcc93cb6bffb30e5791a33ccfaacce3cdd04da"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.identity.profile",
+                    "value": {
+                      "stringValue": "reference-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.observation_unit",
+                    "value": {
+                      "stringValue": "tool"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.contribution",
+                    "value": {
+                      "stringValue": "none"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.operation.name",
+                    "value": {
+                      "stringValue": "execute_tool"
+                    }
+                  },
+                  {
+                    "key": "tool.name",
+                    "value": {
+                      "stringValue": "read_file"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.missing_reason",
+                    "value": {
+                      "stringValue": "disabled_by_policy"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "project_name",
+              "value": {
+                "stringValue": "fixture"
+              }
+            },
+            {
+              "key": "project_type",
+              "value": {
+                "stringValue": "observe"
+              }
+            },
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "fi-agent/reference"
+              }
+            },
+            {
+              "key": "service.version",
+              "value": {
+                "stringValue": "0.1.0"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "@traceai/agents",
+              "version": "0.1.0"
+            },
+            "spans": [
+              {
+                "traceId": "ShTuZrvsw+EPYObTRcUtHg==",
+                "spanId": "huoS6qBLVZE=",
+                "parentSpanId": "HRKPOiZ8Pic=",
+                "name": "model.request",
+                "kind": 1,
+                "startTimeUnixNano": "1000000000",
+                "endTimeUnixNano": "2000000000",
+                "attributes": [
+                  {
+                    "key": "session.id",
+                    "value": {
+                      "stringValue": "aa733ff233241ff970556886d75f1c237611e176432b5fcaa449f58ac497d8b8"
+                    }
+                  },
+                  {
+                    "key": "fi.span.kind",
+                    "value": {
+                      "stringValue": "LLM"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.name",
+                    "value": {
+                      "stringValue": "reference"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.surface",
+                    "value": {
+                      "stringValue": "fixture"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.turn.id",
+                    "value": {
+                      "stringValue": "1d78dff173c95b3a60cdd9d97e800ea1c222c642e3e905cbedc5fc761c133121"
+                    }
+                  },
+                  {
+                    "key": "fi.agent.outcome",
+                    "value": {
+                      "stringValue": "success"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source",
+                    "value": {
+                      "stringValue": "transcript"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.schema.version",
+                    "value": {
+                      "stringValue": "fixture-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.reconstruction.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.timing",
+                    "value": {
+                      "stringValue": "message_interval"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.input_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.output_completeness",
+                    "value": {
+                      "stringValue": "unavailable"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.content_policy.version",
+                    "value": {
+                      "stringValue": "1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.source_work.id",
+                    "value": {
+                      "stringValue": "d4a947ca6ff05389d9c243d0f40650d0e69cce962633b8c3f27864030a268f27"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.identity.profile",
+                    "value": {
+                      "stringValue": "reference-v1"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.observation_unit",
+                    "value": {
+                      "stringValue": "request"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.contribution",
+                    "value": {
+                      "stringValue": "request"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.operation.name",
+                    "value": {
+                      "stringValue": "chat"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.request.model",
+                    "value": {
+                      "stringValue": "fixture-model"
+                    }
+                  },
+                  {
+                    "key": "gen_ai.provider.name",
+                    "value": {
+                      "stringValue": "fixture"
+                    }
+                  },
+                  {
+                    "key": "fi.capture.missing_reason",
+                    "value": {
+                      "stringValue": "disabled_by_policy"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.scope",
+                    "value": {
+                      "stringValue": "request"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.plan.id",
+                    "value": {
+                      "stringValue": "ff6db029a0853d863ff3c90452613accc50de08c54ec26975cbf968b9edbf513"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.fact.id",
+                    "value": {
+                      "stringValue": "[\"61600aa479e8d9da23358e648d3b1289fc29262974a4cb24d540830558f7194a\"]"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.inclusions",
+                    "value": {
+                      "stringValue": "inclusive"
+                    }
+                  },
+                  {
+                    "key": "fi.usage.complete",
+                    "value": {
+                      "boolValue": true
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.input_tokens",
+                    "value": {
+                      "doubleValue": 100
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.output_tokens",
+                    "value": {
+                      "doubleValue": 20
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.total_tokens",
+                    "value": {
+                      "doubleValue": 120
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.cache_read_tokens",
+                    "value": {
+                      "doubleValue": 40
+                    }
+                  },
+                  {
+                    "key": "gen_ai.usage.output_tokens.reasoning",
+                    "value": {
+                      "doubleValue": 8
+                    }
+                  },
+                  {
+                    "key": "fi.cost.kind",
+                    "value": {
+                      "stringValue": "unknown"
+                    }
+                  }
+                ],
+                "status": {
+                  "code": 0
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
