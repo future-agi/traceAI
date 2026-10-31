@@ -269,6 +269,13 @@ describe.each(drivers)("mongodb %s command monitoring", (_version, mongo) => {
     expect(client.listenerCount("commandStarted")).toBe(1);
   });
 
+  test("closing while disabled does not reattach a closed client on enable", async () => {
+    instrumentation.disable();
+    await client.close();
+    instrumentation.enable();
+    expect(client.listenerCount("commandStarted")).toBe(0);
+  });
+
   test("a second instrumentor cannot double-instrument the same module/client", async () => {
     const other = new MongoDBInstrumentation();
     try {

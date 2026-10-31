@@ -46,7 +46,6 @@ interface ClientState {
   started: (event: CommandStartedEvent) => void;
   succeeded: (event: CommandSucceededEvent) => void;
   failed: (event: CommandFailedEvent) => void;
-  closed: () => void;
 }
 
 type PoolPrototype = { checkOut: (callback: (...args: unknown[]) => void) => void };
@@ -72,6 +71,7 @@ export class MongoDBInstrumentation extends InstrumentationBase {
   private readonly modules = new Set<MongoModule>();
   private readonly clients = new Map<MongoClient, ClientState>();
   private readonly knownClients = new Set<WeakRef<MongoClient>>();
+  private readonly closeListeners = new WeakMap<MongoClient, () => void>();
   private readonly clientRefs = new WeakMap<MongoClient, WeakRef<MongoClient>>();
 
   constructor({
@@ -200,7 +200,6 @@ export class MongoDBInstrumentation extends InstrumentationBase {
       started: (event) => this.safe(() => this.startCommand(state, event)),
       succeeded: (event) => this.safe(() => this.endCommand(state, event)),
       failed: (event) => this.safe(() => this.endCommand(state, event)),
-      closed: () => this.forgetClient(client),
     };
     // MongoClient's APM setter affects connections created after this point.
     // Already-connected clients must have opted in at construction time.
@@ -208,7 +207,11 @@ export class MongoDBInstrumentation extends InstrumentationBase {
     client.on("commandStarted", state.started);
     client.on("commandSucceeded", state.succeeded);
     client.on("commandFailed", state.failed);
-    client.on("topologyClosed", state.closed);
+    if (!this.closeListeners.has(client)) {
+      const closed = () => this.safe(() => this.forgetClient(client));
+      this.closeListeners.set(client, closed);
+      client.on("topologyClosed", closed);
+    }
     this.clients.set(client, state);
     this.knownClients.add(state.ref);
     this.clientRefs.set(client, state.ref);
@@ -219,7 +222,8 @@ export class MongoDBInstrumentation extends InstrumentationBase {
     client.off("commandStarted", state.started);
     client.off("commandSucceeded", state.succeeded);
     client.off("commandFailed", state.failed);
-    client.off("topologyClosed", state.closed);
+    // Keep only the cleanup listener while disabled. Otherwise a client closed
+    // in that interval would be reattached and retained on the next enable().
     const monitored = client as MonitoredClient;
     if (monitored.monitorCommands) monitored.monitorCommands = state.monitorCommands;
     // Disabling/closing is not a successful database response.
@@ -231,9 +235,13 @@ export class MongoDBInstrumentation extends InstrumentationBase {
 
   private forgetClient(client: MongoClient): void {
     const state = this.clients.get(client);
-    if (!state) return;
-    this.detachClient(client, state);
-    this.knownClients.delete(state.ref);
+    if (state) this.detachClient(client, state);
+    const ref = this.clientRefs.get(client);
+    if (ref) this.knownClients.delete(ref);
+    this.clientRefs.delete(client);
+    const closed = this.closeListeners.get(client);
+    if (closed) client.off("topologyClosed", closed);
+    this.closeListeners.delete(client);
   }
 
   private startCommand(state: ClientState, event: CommandStartedEvent): void {
