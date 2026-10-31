@@ -2,540 +2,229 @@ import {
   InstrumentationBase,
   InstrumentationConfig,
   InstrumentationNodeModuleDefinition,
-  safeExecuteInTheMiddle,
 } from "@opentelemetry/instrumentation";
-import {
-  diag,
-  context,
-  trace,
-  SpanKind,
-  Attributes,
-  SpanStatusCode,
-  Span,
-} from "@opentelemetry/api";
-import { VERSION } from "./version";
-import {
-  SemanticConventions,
-  FISpanKind,
-  MimeType,
-  LLMSystem,
-  LLMProvider,
-} from "@traceai/fi-semantic-conventions";
+import { context, diag, trace, SpanKind, SpanStatusCode, TracerProvider } from "@opentelemetry/api";
 import { isTracingSuppressed } from "@opentelemetry/core";
-import {
-  FITracer,
-  safelyJSONStringify,
-  TraceConfigOptions,
-} from "@traceai/fi-core";
-import { isString } from "./typeUtils";
+import { FITracer, TraceConfigOptions, TraceConfig, generateTraceConfig, withSafety } from "@traceai/fi-core";
+import { VERSION } from "./version";
+import { inputAttributes, outputAttributes, record, StreamOutput } from "./attributes";
+import { observeStream } from "./stream";
 
 const MODULE_NAME = "@mistralai/mistralai";
+// Telemetry is best effort. Do not put request content from an exception into logs.
+function telemetry<T>(work: () => T): T | null {
+  return withSafety({ fn: work, onError: () => diag.warn("Mistral instrumentation could not record telemetry.") })();
+}
+type Method = (this: unknown, ...args: unknown[]) => unknown;
+type Target = Record<string, unknown>;
+type Operation = "chat" | "embeddings" | "conversation";
+interface Patch {
+  target: Target;
+  key: string;
+  descriptor?: PropertyDescriptor;
+  original: Method;
+  wrapped: Method;
+  attached: boolean;
+}
+// Share the marker across CommonJS/ESM copies to avoid double instrumentation.
+const WRAPPED = Symbol.for("@traceai/mistral/wrapped");
+let activePatches = 0;
 
-/**
- * Flag to check if the Mistral module has been patched
- */
-let _isFIPatched = false;
-
-/**
- * Function to check if instrumentation is enabled / disabled
- */
-export function isPatched() {
-  return _isFIPatched;
+/** Whether any Mistral methods are currently instrumented. */
+export function isPatched(): boolean {
+  return activePatches > 0;
 }
 
-/**
- * Resolves the execution context for the current span
- */
-function getExecContext(span: Span) {
-  const activeContext = context.active();
-  const suppressTracing = isTracingSuppressed(activeContext);
-  const execContext = suppressTracing
-    ? trace.setSpan(context.active(), span)
-    : activeContext;
-  if (suppressTracing) {
-    trace.deleteSpan(activeContext);
-  }
-  return execContext;
-}
+const RESOURCES: ReadonlyArray<readonly [readonly string[], readonly string[], Operation]> = [
+  [["chat"], ["complete", "stream", "parse", "parseStream"], "chat"],
+  [["fim"], ["complete", "stream"], "chat"],
+  [["agents"], ["complete", "stream"], "chat"],
+  [["embeddings"], ["create"], "embeddings"],
+  [["beta", "conversations"], ["start", "append", "restart", "startStream", "appendStream", "restartStream"], "conversation"],
+];
 
-// Type definitions for Mistral SDK
-interface MistralChatMessage {
-  role: string;
-  content: string | null;
-  tool_calls?: Array<{
-    id: string;
-    type: string;
-    function: {
-      name: string;
-      arguments: string;
-    };
-  }>;
-}
-
-interface MistralChatCompletionChoice {
-  index: number;
-  message: MistralChatMessage;
-  finish_reason: string;
-  delta?: {
-    content?: string;
-    tool_calls?: Array<{
-      id?: string;
-      function?: {
-        name?: string;
-        arguments?: string;
-      };
-    }>;
-  };
-}
-
-interface MistralChatCompletion {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: MistralChatCompletionChoice[];
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-interface MistralChatCompletionChunk {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: MistralChatCompletionChoice[];
-}
-
-interface MistralChatCompletionCreateParams {
-  model: string;
-  messages: Array<{
-    role: string;
-    content: string;
-    tool_call_id?: string;
-    name?: string;
-  }>;
-  temperature?: number;
-  max_tokens?: number;
-  top_p?: number;
-  stream?: boolean;
-  safe_prompt?: boolean;
-  random_seed?: number;
-  tools?: Array<{
-    type: string;
-    function: {
-      name: string;
-      description?: string;
-      parameters?: Record<string, unknown>;
-    };
-  }>;
-  tool_choice?: string | { type: string; function: { name: string } };
-  [key: string]: unknown;
-}
-
-interface MistralEmbeddingParams {
-  model: string;
-  inputs: string | string[];
-  encoding_format?: string;
-}
-
-interface MistralEmbeddingResponse {
-  id: string;
-  object: string;
-  model: string;
-  data: Array<{
-    object: string;
-    embedding: number[];
-    index: number;
-  }>;
-  usage: {
-    prompt_tokens: number;
-    total_tokens: number;
-  };
-}
-
-interface MistralStream<T> {
-  [Symbol.asyncIterator](): AsyncIterator<T>;
-}
-
-/**
- * @param instrumentationConfig The config for the instrumentation
- * @param traceConfig The FI trace configuration for masking sensitive information
- */
 export class MistralInstrumentation extends InstrumentationBase {
   private fiTracer!: FITracer;
-  private _traceConfig?: TraceConfigOptions;
+  private traceConfig?: TraceConfigOptions;
+  private resolvedConfig!: TraceConfig;
+  // InstrumentationBase can call enable()/patch() before the derived constructor runs.
+  private patches?: Patch[];
   public readonly instrumentationName = "@traceai/mistral";
 
-  constructor({
-    instrumentationConfig,
-    traceConfig,
-  }: {
+  constructor({ instrumentationConfig, traceConfig }: {
     instrumentationConfig?: InstrumentationConfig;
     traceConfig?: TraceConfigOptions;
   } = {}) {
-    super(
-      "@traceai/mistral",
-      VERSION,
-      Object.assign({}, instrumentationConfig),
-    );
-    this._traceConfig = traceConfig;
+    super("@traceai/mistral", VERSION, { ...instrumentationConfig });
+    this.traceConfig = traceConfig;
+    this.refreshTracer();
+  }
+
+  private refreshTracer(): void {
+    this.resolvedConfig = generateTraceConfig(this.traceConfig);
+    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this.resolvedConfig });
+  }
+
+  public override setTracerProvider(provider: TracerProvider): void {
+    super.setTracerProvider(provider);
+    this.refreshTracer();
   }
 
   public override enable(): void {
     super.enable();
-    this.fiTracer = new FITracer({ tracer: this.tracer, traceConfig: this._traceConfig });
+    this.refreshTracer();
+    for (const patch of this.patches ?? []) this.attach(patch);
+  }
+
+  public override disable(): void {
+    this.unpatch();
+    super.disable();
   }
 
   protected init() {
-    const module = new InstrumentationNodeModuleDefinition(
-      "@mistralai/mistralai",
-      [">=0.1.0"],
-      this.patch.bind(this),
-      this.unpatch.bind(this),
+    return new InstrumentationNodeModuleDefinition(
+      MODULE_NAME, [">=0.1.0"], this.patch.bind(this), this.unpatch.bind(this),
     );
-    return module;
   }
 
-  /**
-   * Manually instruments the Mistral module
-   */
-  manuallyInstrument(module: Record<string, unknown>) {
+  /** Register an imported SDK module, including a read-only ESM namespace. */
+  public manuallyInstrument(module: Record<string, unknown>): void {
     this.patch(module);
   }
 
   /**
-   * Patches the Mistral module
+   * Instrument a real client without replacing it or its options. Also supports
+   * legacy default-export SDKs with instance methods (including 0.x and 1.0.0).
    */
-  private patch(
-    module: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    if (module?.fiPatched || _isFIPatched) {
-      return module;
+  public instrumentClient<T extends object>(client: T): T {
+    this.instrumentResources(client as Target, false);
+    for (const [key, operation] of [
+      ["chat", "chat"], ["chatStream", "chat"], ["embeddings", "embeddings"],
+    ] as const) {
+      this.register(client as Target, key, operation, `Mistral ${key}`);
     }
+    return client;
+  }
 
-    const instrumentation: MistralInstrumentation = this;
-
-    // Ensure fiTracer uses the most up-to-date tracer
-    if (!(instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer ||
-        (instrumentation.fiTracer as unknown as Record<string, unknown>)?.tracer !== instrumentation.tracer) {
-      instrumentation.fiTracer = new FITracer({
-        tracer: instrumentation.tracer,
-        traceConfig: instrumentation._traceConfig
-      });
+  private patch(module: Record<string, unknown>) {
+    const Mistral = module.Mistral;
+    if (typeof Mistral === "function") {
+      // Discover shared resource *classes*, not resources cached by getters on
+      // Mistral.prototype. No API call is made and no environment key is read.
+      const probe = new (Mistral as new (options: { apiKey: string }) => Target)({ apiKey: "" });
+      this.instrumentResources(probe, true);
+    } else if (typeof module.default === "function") {
+      diag.warn("Legacy default-export Mistral SDKs require instrumentClient(client).");
     }
-
-    // Try to patch Mistral client
-    // The Mistral SDK uses a class-based approach
-    const Mistral = module.Mistral as {
-      prototype?: Record<string, unknown>;
-    } | undefined;
-
-    if (Mistral?.prototype) {
-      // Patch chat method
-      if (typeof Mistral.prototype.chat === 'object' && Mistral.prototype.chat !== null) {
-        const chatModule = Mistral.prototype.chat as { complete?: unknown; stream?: unknown };
-
-        if (typeof chatModule.complete === 'function') {
-          this._wrap(
-            chatModule as Record<string, unknown>,
-            "complete",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (original: any): any => {
-              return function patchedComplete(
-                this: unknown,
-                ...args: [MistralChatCompletionCreateParams]
-              ) {
-                const body = args[0];
-                const { messages: _messages, ...invocationParameters } = body;
-
-                const span = instrumentation.fiTracer.startSpan(
-                  `Mistral Chat Completions`,
-                  {
-                    kind: SpanKind.INTERNAL,
-                    attributes: {
-                      [SemanticConventions.FI_SPAN_KIND]: FISpanKind.LLM,
-                      [SemanticConventions.LLM_MODEL_NAME]: body.model,
-                      [SemanticConventions.INPUT_VALUE]: JSON.stringify(body),
-                      [SemanticConventions.INPUT_MIME_TYPE]: MimeType.JSON,
-                      [SemanticConventions.LLM_INVOCATION_PARAMETERS]:
-                        JSON.stringify(invocationParameters),
-                      [SemanticConventions.LLM_PROVIDER]: LLMProvider.MISTRALAI,
-                      [SemanticConventions.GEN_AI_OPERATION_NAME]: "chat",
-                      ...getLLMInputMessagesAttributes(body),
-                      ...getLLMToolsJSONSchema(body),
-                      [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
-                    },
-                  },
-                );
-
-                const execContext = getExecContext(span);
-                const execPromise = safeExecuteInTheMiddle(
-                  () => {
-                    return context.with(trace.setSpan(execContext, span), () => {
-                      return original.apply(this, args);
-                    });
-                  },
-                  (error) => {
-                    if (error) {
-                      span.recordException(error);
-                      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                      span.end();
-                    }
-                  },
-                );
-
-                const wrappedPromise = (execPromise as Promise<MistralChatCompletion>).then((result) => {
-                  span.setAttributes({
-                    [SemanticConventions.OUTPUT_VALUE]: JSON.stringify(result),
-                    [SemanticConventions.OUTPUT_MIME_TYPE]: MimeType.JSON,
-                    [SemanticConventions.LLM_MODEL_NAME]: result.model,
-                    [SemanticConventions.GEN_AI_RESPONSE_MODEL]: result.model,
-                    [SemanticConventions.GEN_AI_RESPONSE_ID]: result.id,
-                    [SemanticConventions.GEN_AI_RESPONSE_FINISH_REASONS]: safelyJSONStringify(result.choices.map(c => c.finish_reason)) ?? "[]",
-                    ...getChatCompletionLLMOutputMessagesAttributes(result),
-                    ...getUsageAttributes(result),
-                    [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                  });
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  span.end();
-                  return result;
-                }).catch((error: Error) => {
-                  span.recordException(error);
-                  span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                  span.end();
-                  throw error;
-                });
-
-                return context.bind(execContext, wrappedPromise);
-              };
-            },
-          );
-        }
-      }
-
-      // Patch embeddings method
-      if (typeof Mistral.prototype.embeddings === 'object' && Mistral.prototype.embeddings !== null) {
-        const embeddingsModule = Mistral.prototype.embeddings as { create?: unknown };
-
-        if (typeof embeddingsModule.create === 'function') {
-          this._wrap(
-            embeddingsModule as Record<string, unknown>,
-            "create",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (original: any): any => {
-              return function patchedCreate(
-                this: unknown,
-                ...args: [MistralEmbeddingParams]
-              ) {
-                const body = args[0];
-                const isStringInput = typeof body.inputs === "string";
-
-                const span = instrumentation.fiTracer.startSpan(`Mistral Embeddings`, {
-                  kind: SpanKind.INTERNAL,
-                  attributes: {
-                    [SemanticConventions.FI_SPAN_KIND]: FISpanKind.EMBEDDING,
-                    [SemanticConventions.EMBEDDING_MODEL_NAME]: body.model,
-                    [SemanticConventions.INPUT_VALUE]: isStringInput
-                      ? body.inputs as string
-                      : JSON.stringify(body.inputs),
-                    [SemanticConventions.INPUT_MIME_TYPE]: isStringInput
-                      ? MimeType.TEXT
-                      : MimeType.JSON,
-                    [SemanticConventions.LLM_PROVIDER]: LLMProvider.MISTRALAI,
-                    [SemanticConventions.GEN_AI_OPERATION_NAME]: "embeddings",
-                    ...getEmbeddingTextAttributes(body),
-                    [SemanticConventions.RAW_INPUT]: safelyJSONStringify(body) ?? "",
-                  },
-                });
-
-                const execContext = getExecContext(span);
-                const execPromise = safeExecuteInTheMiddle(
-                  () => {
-                    return context.with(trace.setSpan(execContext, span), () => {
-                      return original.apply(this, args);
-                    });
-                  },
-                  (error) => {
-                    if (error) {
-                      span.recordException(error);
-                      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                      span.end();
-                    }
-                  },
-                );
-
-                const wrappedPromise = (execPromise as Promise<MistralEmbeddingResponse>).then((result) => {
-                  if (result) {
-                    span.setAttributes({
-                      ...getEmbeddingEmbeddingsAttributes(result),
-                      [SemanticConventions.RAW_OUTPUT]: safelyJSONStringify(result) ?? "",
-                    });
-                  }
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  span.end();
-                  return result;
-                }).catch((error: Error) => {
-                  span.recordException(error);
-                  span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-                  span.end();
-                  throw error;
-                });
-
-                return context.bind(execContext, wrappedPromise);
-              };
-            },
-          );
-        }
-      }
-    }
-
-    _isFIPatched = true;
-    try {
-      module.fiPatched = true;
-    } catch (e) {
-      diag.warn(`Failed to set fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
-
     return module;
   }
 
-  /**
-   * Un-patches the Mistral module
-   */
-  private unpatch(
-    moduleExports: Record<string, unknown> & { fiPatched?: boolean },
-    moduleVersion?: string,
-  ) {
-    const Mistral = moduleExports.Mistral as {
-      prototype?: Record<string, unknown>;
-    } | undefined;
-
-    if (Mistral?.prototype) {
-      const chatModule = Mistral.prototype.chat as Record<string, unknown> | undefined;
-      if (chatModule?.complete) {
-        this._unwrap(chatModule, "complete");
-      }
-
-      const embeddingsModule = Mistral.prototype.embeddings as Record<string, unknown> | undefined;
-      if (embeddingsModule?.create) {
-        this._unwrap(embeddingsModule, "create");
+  private instrumentResources(client: Target, prototypes: boolean): void {
+    for (const [path, methods, operation] of RESOURCES) {
+      let resource: unknown = client;
+      for (const key of path) resource = record(resource)[key];
+      if (resource == null || typeof resource !== "object") continue;
+      for (const method of methods) {
+        let target = resource as Target;
+        if (prototypes) {
+          // Find the class defining the method; do not mutate the probe itself.
+          target = Object.getPrototypeOf(target) as Target;
+          while (target && !Object.prototype.hasOwnProperty.call(target, method)) {
+            target = Object.getPrototypeOf(target) as Target;
+          }
+        }
+        if (target) this.register(target, method, operation, `Mistral ${path.join(".")}.${method}`);
       }
     }
-
-    _isFIPatched = false;
-    try {
-      moduleExports.fiPatched = false;
-    } catch (e) {
-      diag.warn(`Failed to unset fiPatched flag on module '${MODULE_NAME}'. Error: ${e}`);
-    }
   }
-}
 
-/**
- * Converts the body of a chat completions request to LLM input messages
- */
-function getLLMInputMessagesAttributes(
-  body: MistralChatCompletionCreateParams,
-): Attributes {
-  const serialized = body.messages.map((message) => {
-    const obj: Record<string, unknown> = { role: message.role };
-    if (message.content) {
-      obj.content = message.content;
-    }
-    if (message.tool_call_id) {
-      obj.tool_call_id = message.tool_call_id;
-    }
-    return obj;
-  });
-  return { [SemanticConventions.LLM_INPUT_MESSAGES]: safelyJSONStringify(serialized) ?? "[]" };
-}
-
-/**
- * Converts each tool definition into a json schema
- */
-function getLLMToolsJSONSchema(
-  body: MistralChatCompletionCreateParams,
-): Attributes {
-  if (!body.tools) {
-    return {};
-  }
-  return { [SemanticConventions.LLM_TOOLS]: safelyJSONStringify(body.tools) ?? "[]" };
-}
-
-/**
- * Get usage attributes from completion response
- */
-function getUsageAttributes(completion: MistralChatCompletion): Attributes {
-  if (completion.usage) {
-    return {
-      [SemanticConventions.LLM_TOKEN_COUNT_COMPLETION]:
-        completion.usage.completion_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_PROMPT]:
-        completion.usage.prompt_tokens,
-      [SemanticConventions.LLM_TOKEN_COUNT_TOTAL]:
-        completion.usage.total_tokens,
+  private register(target: Target, key: string, operation: Operation, name: string): void {
+    const original = target[key];
+    if (typeof original !== "function" || Reflect.get(original, WRAPPED)) return;
+    this.patches ??= [];
+    if (this.patches.some(p => p.target === target && p.key === key)) return;
+    const instrumentation = this;
+    const wrapped: Method = function (...args) {
+      if (!instrumentation.isEnabled() || isTracingSuppressed(context.active())) {
+        return original.apply(this, args);
+      }
+      const input = typeof args[0] === "string"
+        ? { model: args[0], [operation === "embeddings" ? "inputs" : "messages"]: args[1] }
+        : args[0];
+      const span = telemetry(() => instrumentation.fiTracer.startSpan(name, {
+        kind: SpanKind.INTERNAL,
+        attributes: inputAttributes(input, operation, instrumentation.resolvedConfig),
+      }));
+      if (!span) return original.apply(this, args);
+      const spanContext = trace.setSpan(context.active(), span);
+      let ended = false;
+      const finish = (error?: unknown) => {
+        if (ended) return;
+        ended = true;
+        telemetry(() => {
+          if (error !== undefined) {
+            span.recordException(error instanceof Error ? error : String(error));
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
+          } else {
+            span.setStatus({ code: SpanStatusCode.OK });
+          }
+        });
+        telemetry(() => span.end());
+      };
+      const onResult = (result: unknown): unknown => {
+        if (result && typeof Reflect.get(Object(result), Symbol.asyncIterator) === "function") {
+          const output = new StreamOutput(instrumentation.resolvedConfig);
+          return observeStream(result as AsyncIterable<unknown>, spanContext,
+            chunk => { telemetry(() => output.add(chunk)); },
+            error => {
+              telemetry(() => span.setAttributes(output.attributes()));
+              finish(error ?? output.error);
+            });
+        }
+        telemetry(() => span.setAttributes(outputAttributes(result, operation, instrumentation.resolvedConfig)));
+        finish();
+        return result;
+      };
+      try {
+        const result = context.with(spanContext, () => original.apply(this, args));
+        if (result && typeof record(result).then === "function") {
+          return Promise.resolve(result).then(onResult, error => { finish(error); throw error; });
+        }
+        return onResult(result);
+      } catch (error) {
+        finish(error);
+        throw error;
+      }
     };
-  }
-  return {};
-}
-
-/**
- * Converts the chat completion result to LLM output attributes
- */
-function getChatCompletionLLMOutputMessagesAttributes(
-  chatCompletion: MistralChatCompletion,
-): Attributes {
-  const choice = chatCompletion.choices[0];
-  if (!choice) {
-    return {};
-  }
-
-  const msg: Record<string, unknown> = { role: choice.message.role };
-  if (choice.message.content) {
-    msg.content = choice.message.content;
-  }
-  if (choice.message.tool_calls) {
-    msg.tool_calls = choice.message.tool_calls.map((tc) => ({
-      id: tc.id,
-      function: { name: tc.function.name, arguments: tc.function.arguments },
-    }));
-  }
-  return { [SemanticConventions.LLM_OUTPUT_MESSAGES]: safelyJSONStringify([msg]) ?? "[]" };
-}
-
-/**
- * Converts the embedding request payload to embedding attributes
- */
-function getEmbeddingTextAttributes(request: MistralEmbeddingParams): Attributes {
-  if (typeof request.inputs === "string") {
-    return {
-      [`${SemanticConventions.EMBEDDING_EMBEDDINGS}.0.${SemanticConventions.EMBEDDING_TEXT}`]:
-        request.inputs,
+    Object.defineProperty(wrapped, WRAPPED, { value: true });
+    const patch: Patch = {
+      target, key, original: original as Method, wrapped,
+      descriptor: Object.getOwnPropertyDescriptor(target, key), attached: false,
     };
-  } else if (Array.isArray(request.inputs)) {
-    return request.inputs.reduce((acc, input, index) => {
-      const indexPrefix = `${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.`;
-      acc[`${indexPrefix}${SemanticConventions.EMBEDDING_TEXT}`] = input;
-      return acc;
-    }, {} as Attributes);
+    this.patches.push(patch);
+    if (this.isEnabled()) this.attach(patch);
   }
-  return {};
-}
 
-/**
- * Converts the embedding result payload to embedding attributes
- */
-function getEmbeddingEmbeddingsAttributes(
-  response: MistralEmbeddingResponse,
-): Attributes {
-  return response.data.reduce((acc, embedding, index) => {
-    const indexPrefix = `${SemanticConventions.EMBEDDING_EMBEDDINGS}.${index}.`;
-    acc[`${indexPrefix}${SemanticConventions.EMBEDDING_VECTOR}`] =
-      embedding.embedding;
-    return acc;
-  }, {} as Attributes);
+  private attach(patch: Patch): void {
+    if (patch.attached || patch.target[patch.key] !== patch.original) return;
+    Object.defineProperty(patch.target, patch.key, {
+      configurable: true, writable: true, enumerable: patch.descriptor?.enumerable ?? false,
+      value: patch.wrapped,
+    });
+    patch.attached = true;
+    activePatches++;
+  }
+
+  private unpatch(): void {
+    for (const patch of this.patches ?? []) {
+      if (!patch.attached) continue;
+      // Never remove a wrapper installed by another instrumentor afterwards.
+      if (patch.target[patch.key] === patch.wrapped) {
+        if (patch.descriptor) Object.defineProperty(patch.target, patch.key, patch.descriptor);
+        else delete patch.target[patch.key];
+      }
+      patch.attached = false;
+      activePatches--;
+    }
+  }
 }
