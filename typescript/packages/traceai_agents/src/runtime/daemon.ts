@@ -229,6 +229,7 @@ export class Runtime {
         !route.route.enabled ||
         route.captureMode === "import-only" ||
         this.stopped ||
+        this.controlOnly ||
         this.admissionPaused
       )
         throw new AgentError("HELD_DISABLED", 3);

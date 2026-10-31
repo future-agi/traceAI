@@ -308,7 +308,7 @@ export async function main(
               if (route.profile !== name) continue;
               if (!sameDestination(route.route.binding, profile.binding))
                 throw new AgentError("PROFILE_BINDING_MISMATCH", 3);
-              controlRuntime ??= await ensureControlRuntime(p, settings);
+              controlRuntime ??= await ensureControlRuntime(p, settings, registry);
               await runtimeRequest(p.socket, {
                 operation: "validate-route",
                 route: { ...route.route, binding: profile.binding },
@@ -695,7 +695,7 @@ export async function main(
       context,
     );
     if (command === "enable") await startRuntime(p, settings.entry);
-    if (cleanup) controlRuntime = await ensureControlRuntime(p, settings);
+    if (cleanup) controlRuntime = await ensureControlRuntime(p, settings, registry);
     if (cleanup) {
       const fenced = await runtimeRequest(p.socket, {
         operation: "disable",

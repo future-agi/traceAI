@@ -491,3 +491,82 @@ test("v2 pending parents migrate without losing work and v3 finalization keeps t
   while (spool.purge(route.id)) {}
   assert.equal(spool.status().logical_bytes, 0);
 });
+
+test("offline auth removal cannot capture a Cursor hook before its disable fence", async (t) => {
+  const root = fixture(t);
+  const p = paths({
+    FI_AGENT_CONFIG_HOME: path.join(root, "c"),
+    FI_AGENT_STATE_HOME: path.join(root, "s"),
+  });
+  saveConfig(p, {
+    schema_version: 1,
+    profiles: {
+      fixture: { binding, storage: "file", credentialRef: "fixture" },
+    },
+    routes: {
+      [route.id]: {
+        route: { ...route },
+        agent: "cursor",
+        surface: "ide",
+        profile: "fixture",
+        transcriptConsent: false,
+        captureMode: "hooks",
+        activation: {
+          installed: true,
+          trusted: "unknown",
+          activated: false,
+          restartRequired: true,
+        },
+      },
+    },
+  });
+  await new FileSecretStore(p.credentials).set("fixture", secret);
+  const previous = { ...process.env };
+  Object.assign(process.env, {
+    HOME: root,
+    FI_AGENT_CONFIG_HOME: p.config,
+    FI_AGENT_STATE_HOME: p.state,
+  });
+  t.after(() => {
+    for (const key of Object.keys(process.env))
+      if (!(key in previous)) delete process.env[key];
+    Object.assign(process.env, previous);
+  });
+  const { main } = require("../dist/src/cli/main.js");
+  const originalStart = Runtime.prototype.start;
+  let betweenStartAndFence;
+  t.mock.method(Runtime.prototype, "start", async function (...args) {
+    await originalStart.apply(this, args);
+    if (args[0] === true) {
+      const status = await runtimeRequest(p.socket, { operation: "status" });
+      let capture;
+      try {
+        capture = await runtimeRequest(p.socket, {
+          operation: "observe-source",
+          route_ref: route.id,
+          source_schema: HOOK_SCHEMA,
+          event: hook(),
+        });
+      } catch (error) {
+        capture = { durable: false, reason_code: error.code };
+      }
+      const after = await runtimeRequest(p.socket, { operation: "status" });
+      betweenStartAndFence = { status, capture, after };
+    }
+  });
+  const result = await main(["auth", "remove", "--profile", "fixture"], {
+    version: "0.1.0",
+    entry: bin,
+    storageEntry: path.resolve(__dirname, "../dist/src/runtime/storage-child.js"),
+    registry: new AdapterRegistry(cursorAdapters(options(root))),
+  });
+  assert.equal(result, 0);
+  assert.equal(betweenStartAndFence.status.control_only, true);
+  assert.equal(betweenStartAndFence.capture.durable, false);
+  assert.equal(betweenStartAndFence.capture.reason_code, "HELD_DISABLED");
+  assert.deepEqual(
+    betweenStartAndFence.after.storage.counts,
+    betweenStartAndFence.status.storage.counts,
+    "a control runtime must not write a pending receipt",
+  );
+});
