@@ -1,3 +1,27 @@
+## [1.2.2] - 2026-10-30
+### Fixed
+- Apply content privacy to creation attributes and links before OpenTelemetry SDK
+  sampling, and to sampler-produced attributes before span processors run. Preserve
+  the sampler's decision, trace state, attribute selection and ordinary retention
+  limits; keep FI's priority only for a caller-declared span kind.
+- Extend input/output hiding to known tool, image, retrieval, reranking, audio,
+  voice and computer-use content fields and their descendants, including event,
+  exception and link attributes. Keep non-content metadata available. Mixed-direction
+  content is hidden when either input or output hiding is enabled. These controls
+  cover known semantic keys, not arbitrary custom attributes or free-text secrets.
+- `FI_HIDE_EMBEDDING_VECTORS` now also hides `gen_ai.embeddings.vectors` and its
+  descendants without evaluating hidden lazy values.
+- Restore nested and concurrent `suppress_tracing` contexts correctly, including
+  asynchronous use and exception exits.
+- Honor explicit positional and keyword HTTP/gRPC exporter endpoints and headers
+  instead of overwriting them with environment defaults.
+
+### Changed
+- Provider initialization leaves application SIGINT and SIGTERM handlers untouched.
+  Normal-exit cleanup is still registered; applications must call `provider.shutdown()`
+  through their own shutdown lifecycle to export pending spans on SIGTERM or SIGINT.
+  See [application-owned shutdown](README.md#application-owned-shutdown) for an example.
+
 ## [1.2.1] - 2026-10-26
 ### Fixed
 - `register()` no longer marks its own exporter as a default that the next

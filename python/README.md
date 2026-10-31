@@ -42,6 +42,25 @@ finally:
 
 Open the `traceai-quickstart` project in **Observe** in [Future AGI](https://app.futureagi.com). `provider.shutdown()` flushes pending spans before exit.
 
+## Shutdown on termination
+
+From `fi-instrumentation-otel` 1.2.2, `register()` leaves your SIGINT and SIGTERM handlers unchanged. Default SIGTERM does not run Python exit hooks, so call `provider.shutdown()` from your application's shutdown path to export pending spans on container stop, and allow enough termination grace time. SIGKILL cannot flush spans.
+
+A standalone script that owns its signal policy can opt in:
+
+```python
+import signal
+
+def stop(signum, frame):
+    provider.shutdown()
+    raise SystemExit(0)  # Your application chooses the exit status.
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+```
+
+In a web server, worker or async service, use the framework's shutdown hook instead of replacing its handlers: stop accepting work, finish or cancel active requests, then call `provider.shutdown()`. `force_flush()` exports ended spans without shutting down the provider; it does not replace shutdown for operations still running.
+
 ## Context and privacy
 
 Use `using_attributes(session_id=..., user_id=..., metadata=...)` to attach application context. The core also provides `using_session`, `using_user`, `using_tags`, and `suppress_tracing`.

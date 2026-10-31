@@ -8,18 +8,22 @@ readme = "README.md"
 packages = [
     { include = "traceai_google_genai_live" },
 ]
-keywords = ["opentelemetry", "gemini", "gemini-live", "google-genai", "voice", "realtime", "tracing", "observability"]
+keywords = ["opentelemetry", "gemini", "gemini-live", "google-genai", "voice", "realtime", "tracing", "observability", "traceai", "futureagi", "llm", "google-genai-live"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: System :: Monitoring",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
 ]
 
 [tool.poetry.dependencies]
@@ -39,6 +43,12 @@ wrapt = ">=1.15.0"
 pytest = ">=7.0.0"
 pytest-asyncio = ">=0.23.0"
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/google-genai-live"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/google-genai-live/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

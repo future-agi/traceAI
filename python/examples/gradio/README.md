@@ -99,10 +99,10 @@ if __name__ == "__main__":
   headers, and stamps every batch with the resource attributes
   `project_name` and `project_type=observe`. fi-collector rejects a batch
   whose resource has no `project_name` (source reading). Spans are batched;
-  `register()` flushes the batch on normal exit (tested: with a 10-minute
-  batch delay every span still arrived) and on SIGINT/SIGTERM, so Ctrl+C on
-  `python src/app.py` flushes too (checked in a live run: every turn was
-  exported after SIGINT).
+  `register()` registers a flush on normal Python exit. With core 1.2.2,
+  it leaves signal handlers unchanged: arrange `provider.shutdown()` in your
+  application's shutdown lifecycle for SIGTERM or SIGINT. See
+  [application-owned shutdown](../../README.md#application-owned-shutdown).
 - **Content off.** traceAI records prompts and answers by default
   (`TraceConfig`'s `hide_inputs` and `hide_outputs` default to `False`). The
   recipe passes `hide_inputs=True, hide_outputs=True`. See [Privacy](#privacy).
@@ -254,11 +254,10 @@ again after each save. So `init_tracing()` runs twice per launch even if you
 never save, and once more per save:
 
 - Each of those runs' `register()` builds another provider with its own
-  batch queue and logs `Failed to register signal handlers: ... This is
-  expected when running in non-main threads.` Its
-  `OpenAIInstrumentor().instrument()` is ignored with the warning
-  `Attempting to instrument while already instrumented`. So both warnings
-  appear once at startup and once per save. Spans keep going to the first
+  batch queue. Its `OpenAIInstrumentor().instrument()` is ignored with the
+  warning `Attempting to instrument while already instrumented`. The warning
+  can appear at startup and once per save. Core 1.2.2 no longer attempts to
+  install signal handlers from the watcher thread. Spans keep going to the first
   provider, with the first `TraceConfig`; the other providers export
   nothing.
 - **Edits to the tracing setup do not take effect until you restart.** In
@@ -269,10 +268,11 @@ never save, and once more per save:
 - The session key survives the re-runs, so an open session keeps its id
   (tested).
 
-A batch is lost only if the process ends without the exit flush.
-`register()` flushes on normal exit, SIGINT and SIGTERM. SIGKILL, or the
-SIGHUP a closed terminal sends, skips it (source reading of
-`fi_instrumentation/otel.py`, `setup_signal_handlers`; not tested). The
+Pending spans can be lost if the process ends without cleanup.
+`register()` registers normal Python exit cleanup, not signal handlers.
+Default SIGTERM, SIGHUP and SIGKILL skip exit hooks. Use your application's
+shutdown lifecycle to call `provider.shutdown()` before exiting; SIGKILL
+cannot be handled. The
 startup run leaves one idle provider from the start, and each save one
 more, until the process exits (that they stay until exit is source
 reading).
@@ -294,10 +294,10 @@ the tests open no server port.
   so no session id was set.
 - **`session.id` is not Gradio's session hash.** By design: it is a keyed
   digest of the hash (see Session above).
-- **Startup warnings in reload mode.** `Failed to register signal handlers`
-  and `Attempting to instrument while already instrumented` come from
-  Gradio's startup re-run of the file. In the tested replay the spans still
-  went to the first provider; see [Gradio reload mode](#gradio-reload-mode).
+- **Startup warnings in reload mode.** `Attempting to instrument while
+  already instrumented` comes from Gradio's startup re-run of the file.
+  Spans keep going to the first provider; see
+  [Gradio reload mode](#gradio-reload-mode).
 - **A tracing change did nothing after a save.** Reload mode keeps the
   first instrumentation. Restart the process.
 

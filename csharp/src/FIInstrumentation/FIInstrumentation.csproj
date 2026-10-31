@@ -6,8 +6,16 @@
     <AssemblyName>FIInstrumentation</AssemblyName>
     <PackageId>fi-instrumentation-otel</PackageId>
     <Version>1.0.0</Version>
-    <Authors>FutureAGI</Authors>
-    <Description>traceAI C# instrumentation SDK for OpenTelemetry-based LLM observability</Description>
+    <Authors>Future AGI</Authors>
+    <Company>Future AGI</Company>
+    <Description>OpenTelemetry tracing for .NET AI applications: typed spans, context propagation, privacy controls, and OTLP export to Future AGI.</Description>
+    <PackageProjectUrl>https://docs.futureagi.com/docs/tracing</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/future-agi/traceAI</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageTags>traceai;futureagi;opentelemetry;tracing;observability;llm;ai;dotnet</PackageTags>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -15,6 +23,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="FIInstrumentation.Tests" />
+    <None Update="README.md" Pack="true" PackagePath="/" />
+    <None Update="icon.png" Pack="true" PackagePath="/" />
   </ItemGroup>
 
   <ItemGroup>

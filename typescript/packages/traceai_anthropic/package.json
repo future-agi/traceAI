@@ -35,7 +35,7 @@
   "bugs": {
     "url": "https://github.com/future-agi/traceAI/issues"
   },
-  "homepage": "https://github.com/future-agi/traceAI/tree/main/typescript/packages/traceai_anthropic#readme",
+  "homepage": "https://docs.futureagi.com/docs/integrations/traceai/anthropic",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/instrumentation": "^0.202.0",
@@ -59,10 +59,16 @@
     "opentelemetry",
     "instrumentation",
     "typescript",
-    "anthropic"
+    "anthropic",
+    "traceai",
+    "futureagi",
+    "observability",
+    "tracing",
+    "llm"
   ],
-  "author": "Future AGI <no-reply@futureagi.com>",
+  "author": "Future AGI",
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "Apache-2.0"
 }

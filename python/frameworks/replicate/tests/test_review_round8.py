@@ -5,9 +5,9 @@
   ``replicate.cancelled``) and with what it knows, so it is exported before
   the processors stop: ``run()`` / ``async_run()`` while the client polls, a
   create in flight, a ``wait()`` (which before ended OK, with the last polled
-  status). Under the SIGTERM/SIGINT handler ``register()`` installs, the span
-  of an in-flight ``run()`` / ``async_run()`` used to be lost, while a stream
-  at the same moment was exported as cancelled.
+  status). The application owns SIGTERM/SIGINT handling and calls
+  ``provider.shutdown()`` before exiting, so in-flight calls export as
+  cancelled before the processors stop.
 * Ctrl-C (``KeyboardInterrupt``) while ``run()``, ``async_run()``,
   ``create()`` or ``wait()`` runs is the caller stopping the call
   (``replicate.cancelled``, no exception event), as it is inside a stream's
@@ -263,6 +263,7 @@ FI_ROOT = Path(fi_instrumentation.__file__).resolve().parents[1]
 SCRIPT = """
 import asyncio
 import os
+import signal
 import threading
 import time
 
@@ -271,12 +272,22 @@ from fi_instrumentation import register
 from fi_instrumentation.fi_types import ProjectType
 from traceai_replicate import ReplicateInstrumentor
 
+def stop(signum, frame):
+    # End in-flight spans before SystemExit unwinds the active client call.
+    provider.shutdown()
+    raise SystemExit(0)
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
 provider = register(
     project_name="replicate-round8",
     project_type=ProjectType.OBSERVE,
     batch=os.environ["BATCH"] == "1",
     verbose=False,
 )
+assert signal.getsignal(signal.SIGTERM) is stop
+assert signal.getsignal(signal.SIGINT) is stop
 ReplicateInstrumentor().instrument(tracer_provider=provider)
 client = replicate.Client(base_url=os.environ["REPLICATE_BASE_URL"])
 client.poll_interval = 0.01
@@ -409,7 +420,7 @@ def test_a_call_in_flight_at_sigterm_sigint_or_exit_under_register_is_exported_a
         returncode, stderr, in_flight = _drive(tmp_path, fake, receiver, mode, where, batch)
         spans = receiver.spans()
 
-    assert returncode == 0, stderr  # register()'s handler exits with 0
+    assert returncode == 0, stderr  # the application handler exits with 0
     assert [span["name"] for span in spans] == [EXPECTED[mode]], stderr
     (span,) = spans
     values = _flatten_attributes(span["attributes"])

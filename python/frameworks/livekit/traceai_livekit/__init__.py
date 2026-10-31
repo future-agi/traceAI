@@ -19,7 +19,7 @@ from .integration import (
     flush_on_job_shutdown,
 )
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"  # x-release-please-version
 
 __all__ = [
     "enable_fi_attribute_mapping",

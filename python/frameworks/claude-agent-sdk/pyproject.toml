@@ -11,18 +11,22 @@ license = "Apache-2.0"
 readme = "README.md"
 homepage = "https://github.com/futureagi/traceai"
 repository = "https://github.com/futureagi/traceai"
-keywords = ["opentelemetry", "claude", "agent", "tracing", "observability", "anthropic"]
+keywords = ["opentelemetry", "claude", "agent", "tracing", "observability", "anthropic", "traceai", "futureagi", "llm", "claude-agent-sdk"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
     "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: System :: Monitoring",
+    "Framework :: OpenTelemetry",
+    "Framework :: OpenTelemetry :: Instrumentations",
 ]
 packages = [{ include = "traceai_claude_agent_sdk" }]
 
@@ -41,6 +45,12 @@ claude-agent-sdk = { version = ">=0.1.0", optional = true }
 [tool.poetry.extras]
 test = ["claude-agent-sdk"]
 
+[tool.poetry.urls]
+Homepage = "https://futureagi.com"
+Documentation = "https://docs.futureagi.com/docs/tracing"
+Repository = "https://github.com/future-agi/traceAI/tree/dev/python/frameworks/claude-agent-sdk"
+Changelog = "https://github.com/future-agi/traceAI/blob/dev/python/frameworks/claude-agent-sdk/CHANGELOG.md"
+Issues = "https://github.com/future-agi/traceAI/issues"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
