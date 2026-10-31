@@ -43,6 +43,35 @@ class _CanGetAttributesFromResponse(Protocol):
     ) -> Iterator[Tuple[str, AttributeValue]]: ...
 
 
+class _TranscriptionAccumulator:
+    """Keep only the terminal transcript, never uploaded audio or every delta."""
+
+    def __init__(
+        self,
+        request_parameters: Mapping[str, Any],
+        response_attributes_extractor: _CanGetAttributesFromResponse,
+    ) -> None:
+        self._request_parameters = request_parameters
+        self._response_attributes_extractor = response_attributes_extractor
+        self._done: Any = None
+
+    def process_chunk(self, chunk: Any) -> None:
+        if getattr(chunk, "type", None) == "transcript.text.done":
+            self._done = chunk
+
+    def get_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
+        if isinstance(text := getattr(self._done, "text", None), str):
+            yield SpanAttributes.OUTPUT_VALUE, text
+            yield SpanAttributes.OUTPUT_MIME_TYPE, FiMimeTypeValues.TEXT.value
+
+    def get_extra_attributes(self) -> Iterator[Tuple[str, AttributeValue]]:
+        if self._done is not None:
+            yield from self._response_attributes_extractor.get_attributes_from_response(
+                response=self._done,
+                request_parameters=self._request_parameters,
+            )
+
+
 class _ResponsesAccumulator:
     __slots__ = (
         "_is_null",

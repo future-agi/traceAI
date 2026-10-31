@@ -22,6 +22,7 @@ from traceai_openai._response_accumulator import (
     _ChatCompletionAccumulator,
     _CompletionAccumulator,
     _ResponsesAccumulator,
+    _TranscriptionAccumulator,
 )
 from traceai_openai._response_attributes_extractor import _ResponseAttributesExtractor
 from traceai_openai._span_io_handler import add_io_to_span_attributes
@@ -153,6 +154,8 @@ class _WithOpenAI(ABC):
         request_parameters: Mapping[str, Any],
     ) -> Iterator[Tuple[str, AttributeValue]]:
         yield SpanAttributes.GEN_AI_SPAN_KIND, self._get_span_kind(cast_to=cast_to)
+        if self._response_attributes_extractor.is_transcription_type(cast_to):
+            yield SpanAttributes.GEN_AI_OPERATION_NAME, "transcription"
         # Record the requested model up front so streamed and failed calls carry it;
         # a successful non-streamed response overwrites it with the served model.
         if isinstance(model := request_parameters.get("model"), str) and model:
@@ -174,6 +177,13 @@ class _WithOpenAI(ABC):
     ) -> Iterator[Tuple[str, AttributeValue]]:
         # Secondary attributes should be added after input and output to ensure
         # that input and output are not dropped if there are too many attributes.
+        if self._response_attributes_extractor.is_transcription_type(cast_to):
+            # The prompt is already input.value. Older fi-core releases do not
+            # mask invocation parameters with hide_inputs, so do not duplicate it.
+            request_parameters = {
+                key: value for key, value in request_parameters.items()
+                if key not in ("prompt", "file")
+            }
         try:
             yield from self._request_attributes_extractor.get_attributes_from_request(
                 cast_to=cast_to,
@@ -225,6 +235,12 @@ class _WithOpenAI(ABC):
                 if response_accumulator_factory
                 else None
             )
+
+            if self._response_attributes_extractor.is_transcription_type(cast_to):
+                response_accumulator = _TranscriptionAccumulator(
+                    request_parameters=request_parameters,
+                    response_attributes_extractor=self._response_attributes_extractor,
+                )
 
             # Wrap the response with the appropriate stream wrapper
             wrapped_stream = stream_wrapper(

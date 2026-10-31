@@ -56,6 +56,8 @@ class _ResponseAttributesExtractor:
         "_create_embedding_response_type",
         "_images_response_type",
         "_responses_type",
+        "_transcription_types",
+        "_transcription_done_type",
     )
 
     def __init__(self, openai: ModuleType, config: Optional[TraceConfig] = None) -> None:
@@ -72,6 +74,17 @@ class _ResponseAttributesExtractor:
         self._images_response_type: Type["ImagesResponse"] = (
             openai.types.images_response.ImagesResponse
         )
+        # Newer SDKs load audio lazily; diarized responses are absent at the floor.
+        audio = import_module("openai.types.audio")
+        self._transcription_types = tuple(
+            response_type
+            for name in ("Transcription", "TranscriptionVerbose", "TranscriptionDiarized")
+            if isinstance(response_type := getattr(audio, name, None), type)
+        )
+        self._transcription_done_type = audio.TranscriptionTextDoneEvent
+
+    def is_transcription_type(self, cast_to: type) -> bool:
+        return cast_to in self._transcription_types
 
     def get_attributes_from_response(
         self,
@@ -103,8 +116,31 @@ class _ResponseAttributesExtractor:
                 data=response.data,
                 request_parameters=request_parameters,
             )
+        elif isinstance(response, (*self._transcription_types, self._transcription_done_type)):
+            yield from self._get_attributes_from_transcription(response)
         else:
             yield from ()
+
+    def _get_attributes_from_transcription(
+        self, response: Any,
+    ) -> Iterator[Tuple[str, AttributeValue]]:
+        usage = getattr(response, "usage", None)
+        # The floor SDK preserves new usage fields as dict extras, whereas newer
+        # SDKs deserialize them into typed models. Duration-based billing is not
+        # token usage; do not estimate tokens from seconds or transcript text.
+        def field(name: str) -> Any:
+            return usage.get(name) if isinstance(usage, Mapping) else getattr(usage, name, None)
+
+        if field("type") != "tokens":
+            return
+        for name, attribute in (
+            ("input_tokens", SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS),
+            ("output_tokens", SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS),
+            ("total_tokens", SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS),
+        ):
+            value = field(name)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                yield attribute, value
 
     def _get_attributes_from_responses_response(
         self,
