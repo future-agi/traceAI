@@ -6,7 +6,7 @@ import type {
   ObserverServices,
 } from "../../adapters.js";
 import { AgentError, atomicProtected } from "../../security/files.js";
-import { CodexCodec } from "./codec.js";
+import { CodexCodec, CodexGraph } from "./codec.js";
 import { RolloutReader } from "./reader.js";
 import { EVENTS, registration } from "./plugin.js";
 interface Active {
@@ -21,6 +21,7 @@ interface Active {
  * Restart rereads source anchors; deterministic admission makes replay safe. */
 export class CodexObserver implements LocalObserver {
   private active = new Map<string, Active>();
+  private graph = new CodexGraph();
   private timer: NodeJS.Timeout;
   private running?: Promise<void>;
   private stopped = false;
@@ -50,6 +51,7 @@ export class CodexObserver implements LocalObserver {
     const i = input as any;
     if (
       !i ||
+      i.bundle !== r.fingerprint ||
       !EVENTS.includes(i.event) ||
       typeof i.session !== "string" ||
       !/^[a-zA-Z0-9_-]{1,256}$/.test(i.session)
@@ -60,7 +62,11 @@ export class CodexObserver implements LocalObserver {
     if (this.callbacks === 1)
       atomicProtected(
         join(dirname(this.context.socketPath), "codex", "activation.json"),
-        JSON.stringify({ activated: true, contract: 1 }),
+        JSON.stringify({
+          activated: true,
+          contract: 1,
+          fingerprint: r.fingerprint,
+        }),
       );
     if (i.path === null) {
       this.held.add("EPHEMERAL_TRANSCRIPT_UNAVAILABLE");
@@ -83,7 +89,7 @@ export class CodexObserver implements LocalObserver {
         reader: new RolloutReader(
           join(r.home, "sessions"),
           i.path,
-          new CodexCodec(this.services.normalize, i.session),
+          new CodexCodec(this.services.normalize, i.session, this.graph),
         ),
         quietSince: Date.now(),
         touched: Date.now(),
@@ -98,6 +104,10 @@ export class CodexObserver implements LocalObserver {
     if (i.event === "SessionEnd") a.closed = true;
   }
   private async tick(): Promise<void> {
+    if (!registration(this.context.socketPath).enabled) {
+      this.active.clear();
+      return;
+    }
     for (const [key, a] of [...this.active].slice(0, 4)) {
       if (this.stopped) break;
       this.active.delete(key);
@@ -110,22 +120,40 @@ export class CodexObserver implements LocalObserver {
         for (const fact of a.reader.codec.facts()) {
           if (this.stopped) break;
           if (a.sent.has(fact.sourceWorkId)) continue;
-          await this.services.admit(fact, {
-            stream: key,
-            coordinate: a.coordinate,
-          });
+          try {
+            await this.services.admit(fact, {
+              stream: key,
+              coordinate: a.coordinate,
+            });
+          } catch (e) {
+            // A previously accepted immutable snapshot cannot be revised, but
+            // must not censor later independently proven requests or turns.
+            if (
+              !(e instanceof AgentError) ||
+              e.code !== "HELD_IMMUTABLE_CONFLICT"
+            )
+              throw e;
+            this.held.add(e.code);
+            a.sent.add(fact.sourceWorkId);
+            continue;
+          }
           a.sent.add(fact.sourceWorkId);
           this.admitted++;
-        }
-        if (a.closed) {
-          if (a.reader.codec.pendingTurns > 0)
-            this.held.add("SOURCE_ENDED_WITHOUT_TERMINAL");
-          this.active.delete(key);
         }
         // No process-liveness inference. Quiet unfinished turns remain unavailable;
         // readers expire without emitting a made-up successful terminal span.
         if (Date.now() - a.touched > 86_400_000) {
           this.held.add("SOURCE_EXPIRED_UNKNOWN_GAP");
+          this.active.delete(key);
+          continue;
+        }
+        if (a.reader.codec.pendingAncestry) {
+          this.held.add("HELD_SPAWN_CONTEXT");
+          continue;
+        }
+        if (a.closed) {
+          if (a.reader.codec.pendingTurns > 0)
+            this.held.add("SOURCE_ENDED_WITHOUT_TERMINAL");
           this.active.delete(key);
         }
       } catch (e) {

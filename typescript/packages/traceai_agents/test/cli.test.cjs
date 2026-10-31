@@ -207,3 +207,48 @@ test("import dry-run is sanitized, bounded, stable, and commit refuses changed s
     /SOURCE_CHANGED/,
   );
 });
+
+test("import keeps conflicts pending without censoring independent source work", async (t) => {
+  const { AgentError } = require("../dist/src/security/files.js");
+  const root = fixture(t),
+    source = path.join(root, "fixture.json");
+  fs.writeFileSync(
+    source,
+    JSON.stringify(
+      ["old", "later"].map((id) => ({
+        schema: "fixture-v1",
+        session: "s",
+        turn: "t",
+        id,
+        unit: "request",
+      })),
+    ),
+    { mode: 0o600 },
+  );
+  const planner = new ImportPlanner(path.join(root, "plans"));
+  const context = {
+    identityKey: Buffer.alloc(32, 1),
+    policyRevision: "1",
+    sourceSchema: "fixture-v1",
+  };
+  const plan = planner.plan(reference, source, context);
+  for (const code of ["HELD_IMMUTABLE_CONFLICT", "PAUSED_STORAGE"]) {
+    let calls = 0;
+    const result = await planner.commit(
+      plan.id,
+      reference,
+      source,
+      context,
+      async () => {
+        if (++calls === 1) throw new AgentError(code);
+      },
+    );
+    assert.deepEqual(
+      result,
+      code === "HELD_IMMUTABLE_CONFLICT"
+        ? { admitted: 1, pending: 1 }
+        : { admitted: 0, pending: 2 },
+    );
+    assert.equal(calls, code === "HELD_IMMUTABLE_CONFLICT" ? 2 : 1);
+  }
+});

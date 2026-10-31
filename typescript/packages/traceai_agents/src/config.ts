@@ -33,6 +33,8 @@ export interface Config {
   schema_version: 1;
   profiles: Record<string, Profile>;
   routes: Record<string, InstalledRoute>;
+  /** Durable privacy tombstones survive daemon absence and uninstall. */
+  fences?: Record<string, { purge: boolean }>;
 }
 export interface Paths {
   config: string;
@@ -107,6 +109,20 @@ export function loadConfig(p: Paths): Config {
         value.route.id !== key
       )
         throw new Error();
+    }
+    if (c.fences !== undefined) {
+      if (!c.fences || Object.keys(c.fences).length > 64) throw new Error();
+      for (const [key, fence] of Object.entries(c.fences) as [
+        string,
+        { purge: boolean },
+      ][]) {
+        if (
+          !token(key) ||
+          typeof fence?.purge !== "boolean" ||
+          c.routes[key]?.route.enabled
+        )
+          throw new Error();
+      }
     }
     return c;
   } catch {

@@ -6,6 +6,7 @@ import {
   openSync,
   readSync,
   realpathSync,
+  opendirSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { AgentError } from "../../security/files.js";
@@ -14,6 +15,54 @@ import { CodexCodec } from "./codec.js";
 /** A user-selected immutable import source may use Codex's native 0644/0755
  * permissions. It must still be owner-controlled, regular and symlink-free. */
 export function readImportSnapshot(path: string): Buffer {
+  if (!isAbsolute(path) || resolve(path) !== path)
+    throw new AgentError("UNSAFE_SOURCE_PATH", 3);
+  const st = lstatSync(path);
+  if (!st.isDirectory()) return readImportFile(path);
+  // Only this explicitly selected directory, no recursive discovery. This lets
+  // a bounded parent/child slice carry its own causal evidence during replay.
+  if (
+    st.isSymbolicLink() ||
+    st.uid !== process.getuid?.() ||
+    st.mode & 0o022 ||
+    realpathSync(path) !== path
+  )
+    throw new AgentError("UNSAFE_SOURCE_OWNER", 3);
+  const names: string[] = [],
+    dir = opendirSync(path);
+  try {
+    let entries = 0;
+    for (let entry = dir.readSync(); entry; entry = dir.readSync()) {
+      if (++entries > 64) throw new AgentError("IMPORT_SLICE_REQUIRED", 4);
+      if (/^rollout-[a-zA-Z0-9T_.:-]+\.jsonl$/.test(entry.name))
+        names.push(entry.name);
+    }
+  } finally {
+    dir.closeSync();
+  }
+  names.sort();
+  if (!names.length || names.length > 16)
+    throw new AgentError("IMPORT_SLICE_REQUIRED", 4);
+  const parts: Buffer[] = [];
+  let size = 0;
+  for (const name of names) {
+    const part = readImportFile(join(path, name));
+    if (part[part.length - 1] !== 10)
+      throw new AgentError("PARTIAL_SOURCE_TAIL", 4);
+    size += part.length;
+    if (size > 1_048_576) throw new AgentError("IMPORT_SLICE_REQUIRED", 4);
+    parts.push(part);
+  }
+  const after = lstatSync(path);
+  if (
+    after.ino !== st.ino ||
+    after.dev !== st.dev ||
+    after.mtimeMs !== st.mtimeMs
+  )
+    throw new AgentError("SOURCE_CHANGED", 6);
+  return Buffer.concat(parts);
+}
+function readImportFile(path: string): Buffer {
   if (!isAbsolute(path) || resolve(path) !== path)
     throw new AgentError("UNSAFE_SOURCE_PATH", 3);
   const chain = (): string => {

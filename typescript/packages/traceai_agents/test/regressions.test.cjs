@@ -572,3 +572,149 @@ test("an existing live listener is never reclaimed even without a storage owner"
   await assert.rejects(runtime.start(), /RUNTIME_OWNERSHIP_CONFLICT/);
   assert.equal(fs.statSync(p.socket).ino, before);
 });
+
+for (const command of ["disable", "uninstall"])
+  test(`${command} persists an offline fence and startup cannot resume capture`, async (t) => {
+    const { p } = fixture(t);
+    let runtime = await start(t, p);
+    await runtime.stop();
+    assert.equal(
+      await main(
+        [command, "reference", "--surface", "fixture", "--transcript", "off"],
+        settings,
+      ),
+      0,
+    );
+    const config = loadConfig(p);
+    assert.ok(config.fences[routeId]);
+    if (command === "disable") {
+      assert.equal(config.routes[routeId].route.enabled, false);
+      assert.equal(config.routes[routeId].transcriptConsent, false);
+    } else assert.equal(config.routes[routeId], undefined);
+    runtime = await start(t, p);
+    const stored = (
+      await runtimeRequest(p.socket, {
+        operation: "route-state",
+        route: routeId,
+      })
+    ).route;
+    assert.equal(stored.enabled, false);
+    assert.equal(stored.epoch, 2);
+    const ack = await require("@traceai/agent-core/client").observe(
+      p.socket,
+      routeId,
+      fact("after"),
+    );
+    assert.equal(ack.durable, false);
+    assert.equal(ack.reason_code, "HELD_DISABLED");
+  });
+
+test("offline purge is explicitly pending and reconciles before startup ingress", async (t) => {
+  const { p } = fixture(t);
+  let runtime = await start(t, p);
+  await require("@traceai/agent-core/client").observe(
+    p.socket,
+    routeId,
+    fact("queued"),
+  );
+  await runtime.stop();
+  assert.equal(
+    await main(
+      ["disable", "reference", "--surface", "fixture", "--purge-capture"],
+      settings,
+    ),
+    4,
+  );
+  runtime = await start(t, p);
+  const route = (
+    await runtimeRequest(p.socket, { operation: "route-state", route: routeId })
+  ).route;
+  assert.equal(route.enabled, false);
+  // Explicit enable removes the tombstone but retains the durable generation.
+  assert.equal(
+    await main(["enable", "reference", "--surface", "fixture"], settings),
+    0,
+  );
+  assert.equal(loadConfig(p).fences[routeId], undefined);
+  assert.ok(
+    (
+      await runtimeRequest(p.socket, {
+        operation: "route-state",
+        route: routeId,
+      })
+    ).route.epoch > 2,
+  );
+});
+
+test("Codex CLI check validates the same replacement as update; offline revocation persists registration too", async (t) => {
+  const { root, p, config } = fixture(t);
+  process.env.CODEX_HOME = path.join(root, "agent");
+  const { codexAdapter } = require("../dist/src/adapters/codex/index.js");
+  const {
+    preflightPlugin,
+    registration,
+  } = require("../dist/src/adapters/codex/plugin.js");
+  const { AdapterRegistry } = require("../dist/src/adapters.js");
+  const hook = path.resolve(__dirname, "../bin/fi-agent-codex-hook.cjs");
+  const id = "codex.cli",
+    installed = config.routes[routeId];
+  delete config.routes[routeId];
+  config.routes[id] = {
+    ...installed,
+    agent: "codex",
+    surface: "cli",
+    route: { ...installed.route, id },
+  };
+  saveConfig(p, config);
+  const context = {
+    routeRef: id,
+    socketPath: p.socket,
+    surface: "cli",
+    profile: "work",
+    binding: installed.route.binding,
+    transcriptConsent: true,
+  };
+  await preflightPlugin("enable", context, hook, "0.1.0").commit();
+  const original = registration(p.socket);
+  const adapter = codexAdapter(hook, "0.1.1");
+  adapter.capability.platforms = [process.platform]; // fixture CLI contract on both CI hosts
+  const registry = new AdapterRegistry([adapter]);
+  const opts = { ...settings, registry, version: "0.1.1" };
+  let runtime = new Runtime(p, settings.storageEntry, "0.1.1", registry);
+  cleanup(t, () => runtime.stop());
+  await runtime.start();
+  const update = ["update", "codex", "--surface", "cli"];
+  assert.equal(await main([...update, "--check"], opts), 0);
+  assert.deepEqual(registration(p.socket), original);
+  assert.equal(await main(update, opts), 0);
+  const replacement = registration(p.socket);
+  assert.notEqual(replacement.bundle, original.bundle);
+  assert.equal(await main([...update, "--rollback", "--check"], opts), 0);
+  assert.equal(await main([...update, "--rollback"], opts), 0);
+  assert.equal(registration(p.socket).bundle, original.bundle);
+  fs.appendFileSync(
+    path.join(replacement.bundle, "codex/bin/observer.cjs"),
+    "\n// conflicting immutable candidate\n",
+  );
+  assert.equal(await main([...update, "--check"], opts), 6);
+  assert.equal(await main(update, opts), 6);
+  assert.equal(registration(p.socket).bundle, original.bundle);
+  await runtime.stop();
+  assert.equal(
+    await main(
+      ["disable", "codex", "--surface", "cli", "--transcript", "off"],
+      opts,
+    ),
+    0,
+  );
+  assert.equal(loadConfig(p).routes[id].transcriptConsent, false);
+  assert.equal(loadConfig(p).routes[id].route.enabled, false);
+  assert.equal(registration(p.socket).enabled, false);
+  runtime = new Runtime(p, settings.storageEntry, "0.1.1", registry);
+  await runtime.start();
+  assert.equal(
+    (await runtimeRequest(p.socket, { operation: "route-state", route: id }))
+      .route.enabled,
+    false,
+  );
+});

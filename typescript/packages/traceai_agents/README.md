@@ -20,11 +20,13 @@ fi-agent status
 fi-agent disable codex --surface cli
 ```
 
-Capture reconstructs requests from durable response identities and exact per-response usage, not anonymous pre/post-hook pairs or token summaries. Request timing is unknown, not claimed wire latency. Tools are siblings of model requests; explicit child-thread ancestry links separate run traces. No source content is stored. Unknown source versions, inherited/fork histories without proven ownership, rotation and compression hold rather than mint new work IDs.
+Capture reconstructs requests from durable response identities and exact per-response usage, not anonymous pre/post-hook pairs or token summaries. Request timing is unknown, not claimed wire latency. Tools are siblings of model requests; explicit spawn-call identities link detached child traces to their spawning tool. Proven foreground intervals can nest under that tool; missing spawn context is held. No source content is stored. Unknown source versions, inherited/fork histories without proven ownership, rotation and compression hold rather than mint new work IDs.
 
-`fi-agent import codex --surface cli --transcript structure --path /absolute/path/rollout.jsonl --dry-run` selects one file. Commit the returned plan with `--commit PLAN_ID`; no historical-home scan is performed. The initial importer is bounded to 1 MiB and 128 spans. See `profiles/capabilities.json` for all limits and release holds.
+`fi-agent import codex --surface cli --transcript structure --path /absolute/path/rollout.jsonl --dry-run` selects one file. Commit the returned plan with `--commit PLAN_ID`; no historical-home scan is performed. Unfinished turns remain unfinalized. For child runs, select the directory containing the parent and child `rollout-*.jsonl` files; selection is nonrecursive and limited to 16 matching files and 64 entries. The importer is bounded to 1 MiB total and 128 spans. See `profiles/capabilities.json` for all limits and release holds.
 
-Disable revokes runtime admission and holds queued data. Remove the host's installed copy separately with `codex plugin remove traceai-codex@traceai-observers`. The runtime never removes original Codex history or another plugin's configuration.
+`fi-agent update codex --surface cli --check` validates the actual candidate without changing it. `update` stages the immutable replacement and prints official plugin replacement commands; review the new hooks in Codex. `update --rollback` stages the previous compatible observer bundle, without rolling back the runtime or storage schema. Neither operation grants trust or enables a disabled route.
+
+Disable revokes runtime admission and holds queued data, even while the runtime is stopped. Add `--transcript off` to persistently revoke structural-read consent. An offline `--purge-capture` reports pending work until runtime startup reconciles the fence. Remove the host's installed copy separately with `codex plugin remove traceai-codex@traceai-observers`. The runtime never removes original Codex history or another plugin's configuration.
 
 ## Authentication
 

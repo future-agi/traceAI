@@ -35,10 +35,12 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", () => {
   try {
     if (
-      args.length !== 4 ||
+      args.length !== 6 ||
       args[0] !== "--socket" ||
       args[2] !== "--route" ||
       args[3] !== "codex.cli" ||
+      args[4] !== "--bundle" ||
+      !/^[a-f0-9]{64}$/.test(args[5]) ||
       !args[1].startsWith("/")
     )
       return end();
@@ -65,6 +67,7 @@ process.stdin.on("end", () => {
         operation: "adapter-observe",
         route_ref: "codex.cli",
         input: {
+          bundle: args[5],
           event: raw.hook_event_name,
           session: raw.session_id,
           path: raw.transcript_path,

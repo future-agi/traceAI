@@ -44,6 +44,12 @@ export function codexAdapter(hookEntry: string, version = "0.1.0"): Adapter {
       const r = registration(context.socketPath);
       const quote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
       return [
+        ...(r.previousBundle
+          ? [
+              "codex plugin remove traceai-codex@traceai-observers",
+              "codex plugin marketplace remove traceai-observers",
+            ]
+          : []),
         "codex plugin marketplace add " + quote(r.bundle),
         "codex plugin add traceai-codex@traceai-observers",
         "In Codex, use /hooks to review and approve the observer hooks; restart the session.",

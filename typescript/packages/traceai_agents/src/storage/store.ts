@@ -78,7 +78,7 @@ export class Spool {
       this.db.pragma("temp_store=MEMORY");
       this.db.pragma("busy_timeout=10");
       const existingVersion = this.db.pragma("user_version", { simple: true });
-      if (existingVersion !== 0 && existingVersion !== 1)
+      if (![0, 1, 2].includes(Number(existingVersion)))
         throw new AgentError("HELD_STORAGE_SCHEMA");
       this.write(() =>
         this.db.exec(`
@@ -97,12 +97,15 @@ export class Spool {
       const version = this.db
         .prepare("SELECT value FROM meta WHERE key=?")
         .get("schema") as any;
-      if (version && version.value !== "1")
+      if (version && !["1", "2"].includes(version.value))
         throw new AgentError("HELD_STORAGE_SCHEMA");
-      if (!version)
+      if (!version || version.value === "1")
         this.write(() => {
-          this.db.prepare("INSERT INTO meta VALUES (?,?)").run("schema", "1");
-          this.db.pragma("user_version=1");
+          this.db.exec("ALTER TABLE records ADD COLUMN semantic_hash TEXT");
+          this.db
+            .prepare("INSERT OR REPLACE INTO meta VALUES (?,?)")
+            .run("schema", "2");
+          this.db.pragma("user_version=2");
         });
     } catch (e) {
       this.db.close();
@@ -201,6 +204,9 @@ export class Spool {
     const bytes = encodeFacts([fact], route.binding, this.runtimeVersion);
     if (bytes.length > 262_144) throw new AgentError("OVERSIZE_SPAN", 2);
     const hash = digest(bytes);
+    // Sender metadata is not source evidence. Keep the first envelope byte-for-byte
+    // for retries; compare a version-neutral encoding for all subsequent senders.
+    const semanticHash = digest(encodeFacts([fact], route.binding, ""));
     if (
       cursor &&
       (!/^[a-f0-9]{64}$/.test(cursor.stream) ||
@@ -210,7 +216,7 @@ export class Spool {
     return this.write(() => {
       const old = this.db
         .prepare(
-          "SELECT id,hash,work FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
+          "SELECT id,hash,work,semantic_hash FROM records WHERE binding=? AND (work=? OR (trace=? AND span=?))",
         )
         .get(
           route.binding.id,
@@ -218,8 +224,20 @@ export class Spool {
           fact.traceId,
           fact.spanId,
         ) as any;
-      if (old && (old.hash !== hash || old.work !== fact.sourceWorkId))
-        throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+      if (old) {
+        // Schema 1 shipped only in the 0.1.0 preview. Its accepted/purged rows
+        // have no bytes left, but their exact original envelope hash still proves
+        // equality. Never replace the old hash, payload, state or receipt.
+        const matches = old.semantic_hash
+          ? old.semantic_hash === semanticHash
+          : old.hash === digest(encodeFacts([fact], route.binding, "0.1.0"));
+        if (!matches || old.work !== fact.sourceWorkId)
+          throw new AgentError("HELD_IMMUTABLE_CONFLICT", 3);
+        if (!old.semantic_hash)
+          this.db
+            .prepare("UPDATE records SET semantic_hash=? WHERE id=?")
+            .run(semanticHash, old.id);
+      }
       let id = old?.id;
       if (!old) {
         const global = (
@@ -264,7 +282,7 @@ export class Spool {
         }
         id = this.db
           .prepare(
-            "INSERT INTO records(route,binding,work,trace,span,hash,bytes,encrypted,epoch,state,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO records(route,binding,work,trace,span,hash,bytes,encrypted,epoch,state,created,semantic_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
           )
           .run(
             routeId,
@@ -278,6 +296,7 @@ export class Spool {
             route.epoch,
             "queued",
             Date.now(),
+            semanticHash,
           ).lastInsertRowid;
       }
       if (cursor)

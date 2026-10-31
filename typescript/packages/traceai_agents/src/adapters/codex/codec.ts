@@ -64,8 +64,64 @@ interface Turn {
   facts: Map<string, CanonicalFact>;
   tools: Map<string, CanonicalFact>;
   terminal: boolean;
-  emitted: boolean;
+  parent?: Origin;
   last: string;
+}
+interface Origin {
+  session: string;
+  thread: string;
+  turn: string;
+}
+const originKey = (o: Origin) => JSON.stringify([o.session, o.thread, o.turn]);
+/** Bounded, in-memory join of explicitly observed files. Never searches for parents
+ * by time/path. Imports must explicitly select the parent and child rollouts. */
+export class CodexGraph {
+  private turns = new Map<string, { root: CanonicalFact; parent?: Origin }>();
+  private spawns = new Map<string, CanonicalFact>();
+  terminal(origin: Origin, root: CanonicalFact, parent?: Origin): void {
+    if (this.turns.size >= 1024 && !this.turns.has(originKey(origin)))
+      throw new AgentError("SOURCE_GRAPH_LIMIT", 4);
+    this.turns.set(originKey(origin), { root, parent });
+  }
+  spawn(origin: Origin, child: string, fact: CanonicalFact): void {
+    const key = originKey(origin) + JSON.stringify(child);
+    const old = this.spawns.get(key);
+    if (old && old.sourceWorkId !== fact.sourceWorkId)
+      throw new AgentError("HELD_SPAWN_CONFLICT", 3);
+    if (!old && this.spawns.size >= 1024)
+      throw new AgentError("SOURCE_GRAPH_LIMIT", 4);
+    this.spawns.set(key, fact);
+  }
+  topology(
+    origin: Origin,
+    seen = new Set<string>(),
+  ): Pick<CanonicalFact, "traceId" | "parentSpanId" | "links"> | undefined {
+    const key = originKey(origin),
+      node = this.turns.get(key);
+    if (!node || seen.has(key) || seen.size >= 16) return undefined;
+    if (!node.parent) return { traceId: node.root.traceId };
+    const spawn = this.spawns.get(
+      originKey(node.parent) + JSON.stringify(origin.thread),
+    );
+    if (!spawn) return undefined;
+    seen.add(key);
+    const parent = this.topology(node.parent, seen);
+    if (!parent) return undefined;
+    // Foreground containment needs the proven spawning interval, not merely an
+    // overlapping parent turn. Async spawn_agent usually returns before its child.
+    const contained =
+      spawn.timing === "message_interval" &&
+      node.root.timing === "message_interval" &&
+      BigInt(spawn.startNs) < BigInt(spawn.endNs) &&
+      BigInt(spawn.startNs) <= BigInt(node.root.startNs) &&
+      BigInt(spawn.endNs) >= BigInt(node.root.endNs);
+    return contained
+      ? { traceId: parent.traceId, parentSpanId: spawn.spanId }
+      : {
+          traceId: node.root.traceId,
+          links: [{ traceId: parent.traceId, spanId: spawn.spanId }],
+        };
+  }
 }
 /** Pinned durable rollout schema. No callback FIFO pairing, token_count deltas,
  * message-to-request guessing, content hashes or file coordinates in identity. */
@@ -83,6 +139,7 @@ export class CodexCodec {
   constructor(
     private readonly context: NormalizeContext,
     private readonly expectedSession?: string,
+    private readonly graph = new CodexGraph(),
   ) {
     if (context.sourceSchema !== CODEX_SCHEMA)
       throw new AgentError("UNKNOWN_SOURCE_SCHEMA", 5);
@@ -148,7 +205,6 @@ export class CodexCodec {
         facts: new Map(),
         tools: new Map(),
         terminal: false,
-        emitted: false,
         last: at,
       };
       t.root.incomplete = true;
@@ -321,19 +377,14 @@ export class CodexCodec {
       t.root.startNs = at;
       delete t.root.incomplete;
       t.root.timing = "message_interval";
-      // Explicit upstream parent thread + originating parent turn, never a
-      // filesystem/timestamp guess. Keep an independent child run with a link.
       const parentTurn = p.turn_attribution?.parent_turn_id;
-      if (this.meta.parent && id(parentTurn)) {
-        const parent = workId(
-          this.context.identityKey,
-          NAMESPACE,
-          "turn",
-          [this.meta.session],
-          [this.meta.parent, parentTurn],
-        );
-        t.root.links = [{ traceId: traceId(parent), spanId: spanId(parent) }];
-      }
+      if (this.meta.parent && id(parentTurn))
+        t.parent = {
+          session: this.meta.session,
+          thread: this.meta.parent,
+          turn: parentTurn,
+        };
+      else if (this.meta.parent) throw new AgentError("HELD_SPAWN_CONTEXT", 3);
       return;
     }
     if (p.type === "task_complete" || p.type === "turn_aborted") {
@@ -348,7 +399,18 @@ export class CodexCodec {
           : "success";
       if (BigInt(t.root.startNs) > BigInt(at))
         throw new AgentError("INVALID_SOURCE_TIME", 5);
+      if (this.meta.parent && !t.parent)
+        throw new AgentError("HELD_SPAWN_CONTEXT", 3);
       t.terminal = true;
+      this.graph.terminal(
+        {
+          session: this.meta.session,
+          thread: this.meta.thread,
+          turn: t.native,
+        },
+        t.root,
+        t.parent,
+      );
       return;
     }
     if (p.type !== "item_completed") return;
@@ -393,24 +455,59 @@ export class CodexCodec {
             : "error"
           : "success";
     this.add(t, f);
+    if (i.type === "CollabAgentToolCall" && i.tool === "spawn_agent") {
+      if (
+        i.sender_thread_id !== this.meta.thread ||
+        !Array.isArray(i.receiver_thread_ids) ||
+        i.receiver_thread_ids.length > 64 ||
+        !i.receiver_thread_ids.every(id)
+      )
+        throw new AgentError("HELD_SPAWN_CONTEXT", 3);
+      for (const child of i.receiver_thread_ids)
+        this.graph.spawn(
+          {
+            session: this.meta.session,
+            thread: this.meta.thread,
+            turn: t.native,
+          },
+          child,
+          f,
+        );
+    }
   }
-  /** Terminal snapshots only, after the caller's reconciliation grace. Source death
-   * is not inferred from a quiet hook; explicit imports may request incomplete work. */
-  facts(includeIncomplete = false): CanonicalFact[] {
+  get pendingAncestry(): number {
+    return [...this.turns.values()].filter(
+      (t) =>
+        t.terminal &&
+        !this.graph.topology({
+          session: this.meta!.session,
+          thread: this.meta!.thread,
+          turn: t.native,
+        }),
+    ).length;
+  }
+  /** Only explicit terminal evidence finalizes a root. EOF, an import snapshot,
+   * and a quiet callback do not prove that a source can no longer append. */
+  facts(): CanonicalFact[] {
     const out: CanonicalFact[] = [];
     for (const t of this.turns.values()) {
-      if (!t.terminal && !includeIncomplete) continue;
-      const root = { ...t.root };
-      if (!t.terminal) {
-        root.endNs = t.last;
-        root.incomplete = true;
-      }
-      out.push(
-        minimize(root),
+      if (!t.terminal) continue;
+      const topology = this.graph.topology({
+        session: this.meta!.session,
+        thread: this.meta!.thread,
+        turn: t.native,
+      });
+      if (!topology) continue;
+      const root = { ...t.root, ...topology };
+      const children = [
         ...t.facts.values(),
         ...[...t.tools]
           .filter(([id]) => !t.facts.has(id))
           .map(([, f]) => minimize(f)),
+      ];
+      out.push(
+        minimize(root),
+        ...children.map((f) => minimize({ ...f, traceId: root.traceId })),
       );
     }
     return out;
@@ -428,15 +525,27 @@ export function importCodex(
 ): readonly CanonicalFact[] {
   if (!bytes.length || bytes[bytes.length - 1] !== 10)
     throw new AgentError("PARTIAL_SOURCE_TAIL", 4);
-  const codec = new CodexCodec(context);
+  const graph = new CodexGraph(),
+    codecs: CodexCodec[] = [];
+  let codec: CodexCodec | undefined;
   for (const line of bytes.toString("utf8").split("\n")) {
     if (!line.trim()) continue;
     try {
-      codec.push(JSON.parse(line));
+      const record = JSON.parse(line);
+      if (record.type === "session_meta") {
+        if (codecs.length >= 16)
+          throw new AgentError("IMPORT_SLICE_REQUIRED", 4);
+        codec = new CodexCodec(context, undefined, graph);
+        codecs.push(codec);
+      }
+      if (!codec) throw new AgentError("HELD_IDENTITY", 3);
+      codec.push(record);
     } catch (e) {
       if (e instanceof AgentError) throw e;
       throw new AgentError("UNKNOWN_SOURCE_SCHEMA", 5);
     }
   }
-  return codec.facts(true);
+  if (codecs.some((c) => c.pendingAncestry))
+    throw new AgentError("HELD_SPAWN_CONTEXT", 3);
+  return codecs.flatMap((c) => c.facts());
 }

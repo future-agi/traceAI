@@ -103,6 +103,19 @@ export class Runtime {
     this.observers.clear();
     this.observerHolds.clear();
     const config = loadConfig(this.paths);
+    for (const [id, fence] of Object.entries(config.fences ?? {})) {
+      await this.storage.call("disable", id);
+      try {
+        const retained = await this.storage.call("getRoute", id);
+        if (config.routes[id]) config.routes[id].route.epoch = retained.epoch;
+        if (fence.purge)
+          while ((await this.storage.call("purge", id)) > 0) {
+            /* bounded */
+          }
+      } catch (e) {
+        if (!(e instanceof AgentError) || e.code !== "UNKNOWN_ROUTE") throw e;
+      }
+    }
     for (const route of Object.values(config.routes)) {
       this.registry.get(route.agent, route.surface);
       await this.storage.call("validateRoute", route.route);
@@ -147,6 +160,7 @@ export class Runtime {
           },
           admit: async (fact, cursor) => {
             if (
+              !this.allowed(id) ||
               !installed.route.enabled ||
               this.stopped ||
               this.admissionPaused
@@ -163,6 +177,15 @@ export class Runtime {
         },
       );
       this.observers.set(id, observer);
+    }
+  }
+  private allowed(id: string): boolean {
+    // Re-read the small protected fence even if an administrative ACK was lost.
+    // Failure to read policy is not permission to keep capturing or exporting.
+    try {
+      return !loadConfig(this.paths).fences?.[id];
+    } catch {
+      return false;
     }
   }
   private connection(socket: Socket): void {
@@ -230,6 +253,7 @@ export class Runtime {
       if (
         this.stopped ||
         this.admissionPaused ||
+        !this.allowed(m.route_ref) ||
         !this.config.routes[m.route_ref]?.route.enabled
       )
         throw new AgentError("HELD_DISABLED", 3);
@@ -244,6 +268,7 @@ export class Runtime {
       const route = this.config.routes[m.route_ref];
       if (
         !route ||
+        !this.allowed(m.route_ref) ||
         !route.route.enabled ||
         this.stopped ||
         this.admissionPaused
@@ -415,7 +440,8 @@ export class Runtime {
         const [id, route] = routes[this.nextRoute++ % routes.length];
         this.nextRoute %= routes.length;
         idle++;
-        if (!route.route.enabled || deferred.has(id)) continue;
+        if (!this.allowed(id) || !route.route.enabled || deferred.has(id))
+          continue;
         const profile = this.config.profiles[route.profile];
         if (
           !profile ||
@@ -441,7 +467,13 @@ export class Runtime {
           deferred.add(id);
           continue;
         }
-        if (!credentials || !active() || !route.route.enabled) continue;
+        if (
+          !credentials ||
+          !active() ||
+          !this.allowed(id) ||
+          !route.route.enabled
+        )
+          continue;
         const result = await exportBytes(
           profile.binding,
           Buffer.from(row.bytes),

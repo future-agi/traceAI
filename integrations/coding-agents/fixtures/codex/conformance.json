@@ -1,145 +1,9 @@
 {
-  "scope": "Synthetic-only localhost conformance; not backend persistence, recovery, foreground spawn containment, or full resource certification",
+  "scope": "Synthetic-only localhost conformance; not backend persistence, recovery, real foreground spawn containment, or full resource certification",
   "runtime": "Node 24.11.0, macOS arm64",
-  "harness": "typescript/packages/traceai_agents/contract/codex-real.cjs ROOT ABSOLUTE_CODEX_BINARY ABSOLUTE_SANDBOX [basic|interrupted|compaction|subagent]",
+  "harness": "typescript/packages/traceai_agents/contract/codex-real.cjs ROOT ABSOLUTE_CODEX_BINARY ABSOLUTE_SANDBOX [basic|interrupted|compaction|subagent|upgrade]",
   "runs": [
     {
-      "version": "codex-cli 0.166.0",
-      "scenario": "basic",
-      "model_calls": 2,
-      "request_spans": 2,
-      "tool_spans": 1,
-      "turn_spans": 1,
-      "total_tokens": 24,
-      "compaction_spans": 0,
-      "interrupted_turns": 0,
-      "linked_child_turns": 0,
-      "hook_events_registered": 10,
-      "live": {
-        "callbacks": 8,
-        "admitted": 4,
-        "active": 0,
-        "reasons": [],
-        "timing": "reconstructed-not-hook-paired",
-        "persistence": "unknown"
-      },
-      "import_replay": {
-        "admitted": 4,
-        "pending": 0
-      },
-      "activation": {
-        "installed": true,
-        "trusted": true,
-        "activated": true,
-        "restartRequired": false
-      },
-      "disabled": true,
-      "outbound": "sandbox-denied-except-localhost",
-      "remote_persistence": "not-tested-synthetic-loopback-only"
-    },
-    {
-      "version": "codex-cli 0.166.0",
-      "scenario": "interrupted",
-      "model_calls": 1,
-      "request_spans": 0,
-      "tool_spans": 0,
-      "turn_spans": 1,
-      "total_tokens": 0,
-      "compaction_spans": 0,
-      "interrupted_turns": 1,
-      "linked_child_turns": 0,
-      "hook_events_registered": 10,
-      "live": {
-        "callbacks": 6,
-        "admitted": 1,
-        "active": 0,
-        "reasons": [],
-        "timing": "reconstructed-not-hook-paired",
-        "persistence": "unknown"
-      },
-      "import_replay": {
-        "admitted": 1,
-        "pending": 0
-      },
-      "activation": {
-        "installed": true,
-        "trusted": true,
-        "activated": true,
-        "restartRequired": false
-      },
-      "disabled": true,
-      "outbound": "sandbox-denied-except-localhost",
-      "remote_persistence": "not-tested-synthetic-loopback-only"
-    },
-    {
-      "version": "codex-cli 0.166.0",
-      "scenario": "compaction",
-      "model_calls": 2,
-      "request_spans": 2,
-      "tool_spans": 0,
-      "turn_spans": 2,
-      "total_tokens": 24,
-      "compaction_spans": 1,
-      "interrupted_turns": 0,
-      "linked_child_turns": 0,
-      "hook_events_registered": 10,
-      "live": {
-        "callbacks": 7,
-        "admitted": 5,
-        "active": 0,
-        "reasons": [],
-        "timing": "reconstructed-not-hook-paired",
-        "persistence": "unknown"
-      },
-      "import_replay": {
-        "admitted": 5,
-        "pending": 0
-      },
-      "activation": {
-        "installed": true,
-        "trusted": true,
-        "activated": true,
-        "restartRequired": false
-      },
-      "disabled": true,
-      "outbound": "sandbox-denied-except-localhost",
-      "remote_persistence": "not-tested-synthetic-loopback-only"
-    },
-    {
-      "version": "codex-cli 0.166.0",
-      "scenario": "subagent",
-      "model_calls": 3,
-      "request_spans": 3,
-      "tool_spans": 1,
-      "turn_spans": 2,
-      "total_tokens": 36,
-      "compaction_spans": 0,
-      "interrupted_turns": 0,
-      "linked_child_turns": 1,
-      "hook_events_registered": 10,
-      "live": {
-        "callbacks": 13,
-        "admitted": 6,
-        "active": 1,
-        "reasons": [],
-        "timing": "reconstructed-not-hook-paired",
-        "persistence": "unknown"
-      },
-      "import_replay": {
-        "admitted": 6,
-        "pending": 0
-      },
-      "activation": {
-        "installed": true,
-        "trusted": true,
-        "activated": true,
-        "restartRequired": false
-      },
-      "disabled": true,
-      "outbound": "sandbox-denied-except-localhost",
-      "remote_persistence": "not-tested-synthetic-loopback-only"
-    },
-    {
       "version": "codex-cli 0.165.0",
       "scenario": "basic",
       "model_calls": 2,
@@ -170,6 +34,7 @@
         "restartRequired": false
       },
       "disabled": true,
+      "offline_revocation_survives_restart": true,
       "outbound": "sandbox-denied-except-localhost",
       "remote_persistence": "not-tested-synthetic-loopback-only"
     },
@@ -204,6 +69,7 @@
         "restartRequired": false
       },
       "disabled": true,
+      "offline_revocation_survives_restart": true,
       "outbound": "sandbox-denied-except-localhost",
       "remote_persistence": "not-tested-synthetic-loopback-only"
     },
@@ -238,6 +104,7 @@
         "restartRequired": false
       },
       "disabled": true,
+      "offline_revocation_survives_restart": true,
       "outbound": "sandbox-denied-except-localhost",
       "remote_persistence": "not-tested-synthetic-loopback-only"
     },
@@ -272,6 +139,219 @@
         "restartRequired": false
       },
       "disabled": true,
+      "offline_revocation_survives_restart": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    },
+    {
+      "version": "codex-cli 0.165.0",
+      "scenario": "upgrade",
+      "model_calls": 2,
+      "request_spans": 2,
+      "tool_spans": 1,
+      "turn_spans": 1,
+      "total_tokens": 24,
+      "compaction_spans": 0,
+      "interrupted_turns": 0,
+      "linked_child_turns": 0,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 8,
+        "admitted": 4,
+        "active": 0,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 4,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "offline_revocation_survives_restart": true,
+      "official_plugin_replace_and_rollback": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    },
+    {
+      "version": "codex-cli 0.166.0",
+      "scenario": "basic",
+      "model_calls": 2,
+      "request_spans": 2,
+      "tool_spans": 1,
+      "turn_spans": 1,
+      "total_tokens": 24,
+      "compaction_spans": 0,
+      "interrupted_turns": 0,
+      "linked_child_turns": 0,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 8,
+        "admitted": 4,
+        "active": 0,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 4,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "offline_revocation_survives_restart": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    },
+    {
+      "version": "codex-cli 0.166.0",
+      "scenario": "interrupted",
+      "model_calls": 1,
+      "request_spans": 0,
+      "tool_spans": 0,
+      "turn_spans": 1,
+      "total_tokens": 0,
+      "compaction_spans": 0,
+      "interrupted_turns": 1,
+      "linked_child_turns": 0,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 6,
+        "admitted": 1,
+        "active": 0,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 1,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "offline_revocation_survives_restart": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    },
+    {
+      "version": "codex-cli 0.166.0",
+      "scenario": "compaction",
+      "model_calls": 2,
+      "request_spans": 2,
+      "tool_spans": 0,
+      "turn_spans": 2,
+      "total_tokens": 24,
+      "compaction_spans": 1,
+      "interrupted_turns": 0,
+      "linked_child_turns": 0,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 7,
+        "admitted": 5,
+        "active": 0,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 5,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "offline_revocation_survives_restart": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    },
+    {
+      "version": "codex-cli 0.166.0",
+      "scenario": "subagent",
+      "model_calls": 3,
+      "request_spans": 3,
+      "tool_spans": 1,
+      "turn_spans": 2,
+      "total_tokens": 36,
+      "compaction_spans": 0,
+      "interrupted_turns": 0,
+      "linked_child_turns": 1,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 12,
+        "admitted": 6,
+        "active": 1,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 6,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "offline_revocation_survives_restart": true,
+      "outbound": "sandbox-denied-except-localhost",
+      "remote_persistence": "not-tested-synthetic-loopback-only"
+    },
+    {
+      "version": "codex-cli 0.166.0",
+      "scenario": "upgrade",
+      "model_calls": 2,
+      "request_spans": 2,
+      "tool_spans": 1,
+      "turn_spans": 1,
+      "total_tokens": 24,
+      "compaction_spans": 0,
+      "interrupted_turns": 0,
+      "linked_child_turns": 0,
+      "hook_events_registered": 10,
+      "live": {
+        "callbacks": 8,
+        "admitted": 4,
+        "active": 0,
+        "reasons": [],
+        "timing": "reconstructed-not-hook-paired",
+        "persistence": "unknown"
+      },
+      "import_replay": {
+        "admitted": 4,
+        "pending": 0
+      },
+      "activation": {
+        "installed": true,
+        "trusted": true,
+        "activated": true,
+        "restartRequired": false
+      },
+      "disabled": true,
+      "offline_revocation_survives_restart": true,
+      "official_plugin_replace_and_rollback": true,
       "outbound": "sandbox-denied-except-localhost",
       "remote_persistence": "not-tested-synthetic-loopback-only"
     }

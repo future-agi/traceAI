@@ -33,6 +33,7 @@ const flags = new Set([
   "tty",
   "loopback-test",
   "check",
+  "rollback",
   "dry-run",
   "purge-capture",
   "loopback",
@@ -185,6 +186,8 @@ export async function main(
     }
     const { pos, options, child } = parse(args),
       command = pos[0];
+    if (options.rollback && command !== "update")
+      throw new AgentError("INVALID_ARGUMENT", 2);
     if (command === "auth") {
       const name = required(options, "profile");
       if (!token(name)) throw new AgentError("INVALID_PROFILE", 2);
@@ -342,7 +345,11 @@ export async function main(
       installed = config.routes[routeId];
     const profileName = String(options.profile ?? installed?.profile ?? "");
     const profile = config.profiles[profileName];
-    if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
+    if (
+      !profile ||
+      (profile.removed && command !== "disable" && command !== "uninstall")
+    )
+      throw new AgentError("HELD_AUTH", 3);
     if (
       options.project !== undefined &&
       options.project !== profile.binding.project
@@ -361,6 +368,7 @@ export async function main(
       surface,
       profile: profileName,
       binding: profile.binding,
+      rollback: options.rollback === true,
       transcriptConsent:
         options.transcript === "structure" ||
         (options.transcript === undefined &&
@@ -452,14 +460,6 @@ export async function main(
     }
     if (command !== "enable" && !installed)
       throw new AgentError("NOT_INSTALLED", 5);
-    if (command === "update" && options.check) {
-      output({
-        state: "compatibility-checked",
-        code: 0,
-        enabled: installed.route.enabled,
-      });
-      return 0;
-    }
     if (
       command === "enable" &&
       installed?.route.enabled &&
@@ -480,17 +480,73 @@ export async function main(
       !context.transcriptConsent
     )
       throw new AgentError("TRANSCRIPT_CONSENT_REQUIRED", 3);
+    if (
+      command === "update" &&
+      (profileName !== installed.profile ||
+        context.transcriptConsent !== installed.transcriptConsent)
+    )
+      throw new AgentError("UPDATE_POLICY_CHANGE_REQUIRED", 3);
     const change = await adapter.preflight(
       command as "enable" | "disable" | "update" | "uninstall",
       context,
     );
-    if (command === "enable") await startRuntime(p, settings.entry);
-    if (command === "disable" || command === "uninstall")
+    if (command === "update" && options.check) {
       await runtimeRequest(p.socket, {
-        operation: "disable",
-        route: routeId,
-        purge: options["purge-capture"] === true,
+        operation: "validate-route",
+        route: installed.route,
       });
+      output({
+        state: "compatibility-checked",
+        code: 0,
+        enabled: installed.route.enabled,
+        ...(change.preview ? { preview: change.preview } : {}),
+      });
+      return 0;
+    }
+    if (command === "disable" || command === "uninstall") {
+      // Persist the privacy fence FIRST. An absent/unresponsive daemon must never
+      // turn revocation into a rollback to consent. Startup reconciles the spool.
+      await configTransaction(p, async (c) => {
+        if (JSON.stringify(c.routes[routeId]) !== JSON.stringify(installed))
+          throw new AgentError("CONFIGURATION_CONFLICT", 6);
+        const activation = await change.commit();
+        c.fences ??= {};
+        c.fences[routeId] = {
+          purge:
+            options["purge-capture"] === true ||
+            c.fences[routeId]?.purge === true,
+        };
+        if (command === "uninstall") delete c.routes[routeId];
+        else
+          c.routes[routeId] = {
+            ...installed,
+            transcriptConsent: context.transcriptConsent,
+            activation,
+            route: {
+              ...installed.route,
+              enabled: false,
+              epoch: installed.route.epoch + Number(installed.route.enabled),
+            },
+          };
+      });
+      let reconciled = false;
+      try {
+        await runtimeRequest(p.socket, { operation: "refresh" });
+        reconciled = true;
+      } catch {
+        /* Fence remains authoritative, including after restart. */
+      }
+      const pendingPurge = options["purge-capture"] === true && !reconciled;
+      output({
+        state: reconciled ? "held" : "fenced-offline",
+        code: pendingPurge ? 4 : 0,
+        reasons: reconciled ? [] : ["STARTUP_RECONCILIATION_PENDING"],
+        ...(pendingPurge ? { counts: { purge_pending: 1 } } : {}),
+      });
+      return pendingPurge ? 4 : 0;
+    }
+    if (command === "enable" || command === "update")
+      await startRuntime(p, settings.entry);
     try {
       await configTransaction(
         p,
@@ -500,11 +556,6 @@ export async function main(
             JSON.stringify(c.profiles[profileName]) !== JSON.stringify(profile)
           )
             throw new AgentError("CONFIGURATION_CONFLICT", 6);
-          if (command === "uninstall") {
-            await change.commit();
-            delete c.routes[routeId];
-            return;
-          }
           // Uninstall intentionally retains storage identity and its capture fence.
           // Recover that generation rather than resetting a fresh registration to 1.
           const retained = (
@@ -530,12 +581,8 @@ export async function main(
             epoch:
               command === "update"
                 ? installed.route.epoch
-                : command === "disable"
-                  ? retained.epoch
-                  : Math.max(
-                      retained?.epoch ?? 0,
-                      installed?.route.epoch ?? 0,
-                    ) + 1,
+                : Math.max(retained?.epoch ?? 0, installed?.route.epoch ?? 0) +
+                  1,
           };
           // Reject destination/policy/storage conflicts BEFORE changing the adapter
           // registration or committing its enabled config.
@@ -544,6 +591,7 @@ export async function main(
             route,
           });
           const activation = await change.commit();
+          if (command === "enable" && c.fences) delete c.fences[routeId];
           c.routes[routeId] = {
             route,
             agent,
@@ -569,7 +617,7 @@ export async function main(
             ? "held"
             : command + "-complete",
       code: 0,
-      ...(command === "enable" && adapter.instructions
+      ...((command === "enable" || command === "update") && adapter.instructions
         ? { next: adapter.instructions(context) }
         : {}),
     });

@@ -14,7 +14,9 @@ const {
 const { decodeTraces } = require("../dist/src/export/otlp.js");
 async function qualify({ root, binary, sandbox, scenario = "basic" }) {
   assert.ok(
-    ["basic", "subagent", "interrupted", "compaction"].includes(scenario),
+    ["basic", "subagent", "interrupted", "compaction", "upgrade"].includes(
+      scenario,
+    ),
   );
   assert.equal(process.platform, "darwin");
   for (const p of [root, binary, sandbox]) assert.ok(path.isAbsolute(p));
@@ -34,7 +36,7 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
     FI_AGENT_STATE_HOME: state,
     NO_PROXY: "127.0.0.1,localhost",
   };
-  const cli = path.resolve(__dirname, "../bin/fi-agent.cjs");
+  let cli = path.resolve(__dirname, "../bin/fi-agent.cjs");
   async function command(exe, args, input, code = 0) {
     return new Promise((resolve, reject) => {
       const child = spawn(exe, args, {
@@ -119,7 +121,8 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
       res.write(": fixture-waiting\n\n");
       return;
     }
-    const tool = calls === 1 && ["basic", "subagent"].includes(scenario);
+    const tool =
+      calls === 1 && ["basic", "subagent", "upgrade"].includes(scenario);
     const item = tool
       ? {
           id: "fc_fixture",
@@ -278,6 +281,56 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
       await fi(["doctor", "codex", "--surface", "cli"]),
     );
     assert.equal(before.activation.activated, false);
+    if (scenario === "upgrade") {
+      // Exercise versioned package metadata through the shipped CLI/adapter code;
+      // only the synthetic wrapper supplies the candidate package version.
+      const packageRoot = path.resolve(__dirname, "..");
+      cli = path.join(root, "candidate.cjs");
+      fs.writeFileSync(
+        cli,
+        `
+const root = ${JSON.stringify(packageRoot)};
+const {main} = require(root + "/dist/src/cli/main.js");
+const {AdapterRegistry} = require(root + "/dist/src/adapters.js");
+const {codexAdapter} = require(root + "/dist/src/adapters/codex/index.js");
+main(process.argv.slice(2), {version:"0.1.1", entry:__filename,
+ storageEntry:root+"/dist/src/runtime/storage-child.js",
+ registry:new AdapterRegistry([codexAdapter(root+"/bin/fi-agent-codex-hook.cjs", "0.1.1")])
+}).then(code => {process.exitCode=code;});
+`,
+        { mode: 0o600 },
+      );
+      const update = ["update", "codex", "--surface", "cli"];
+      assert.equal(
+        JSON.parse(await fi([...update, "--check"])).preview.replacement,
+        true,
+      );
+      for (const extra of [[], ["--rollback"], []]) {
+        await fi([...update, ...extra]);
+        const selected = JSON.parse(
+          fs.readFileSync(path.join(state, "codex/registration.json")),
+        );
+        await codex(["plugin", "remove", "traceai-codex@traceai-observers"]);
+        await codex(["plugin", "marketplace", "remove", "traceai-observers"]);
+        await codex(["plugin", "marketplace", "add", selected.bundle]);
+        await codex(["plugin", "add", "traceai-codex@traceai-observers"]);
+        assert.equal(
+          JSON.parse(await fi(["doctor", "codex", "--surface", "cli"]))
+            .activation.activated,
+          false,
+        );
+      }
+      await fi(["runtime", "stop"]);
+      // Stop has a bounded asynchronous shutdown; let the next explicit start
+      // own the completed transition, never remove a live socket.
+      for (
+        let i = 0;
+        i < 100 && fs.existsSync(path.join(state, "runtime.sock"));
+        i++
+      )
+        await new Promise((r) => setTimeout(r, 20));
+      await fi(["runtime", "start"]);
+    }
     // Obtain upstream-computed trust hashes, exclusively in this new synthetic
     // HOME. Production enable never grants trust or changes feature settings.
     const app = spawn(
@@ -344,33 +397,36 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
       app.kill("SIGTERM");
       await once(app, "exit");
     }
-    const output =
-      scenario !== "basic"
-        ? await require("./codex-lifecycle.cjs").lifecycle({
-            binary,
-            sandbox,
-            home,
-            env,
-            scenario,
-            calls: () => calls,
-          })
-        : await codex([
-            "exec",
-            "--skip-git-repo-check",
-            "--sandbox",
-            "read-only",
-            "--json",
-            "Use update_plan for one completed synthetic step, then say fixture-ok.",
-          ]);
+    const output = !["basic", "upgrade"].includes(scenario)
+      ? await require("./codex-lifecycle.cjs").lifecycle({
+          binary,
+          sandbox,
+          home,
+          env,
+          scenario,
+          calls: () => calls,
+        })
+      : await codex([
+          "exec",
+          "--skip-git-repo-check",
+          "--sandbox",
+          "read-only",
+          "--json",
+          "Use update_plan for one completed synthetic step, then say fixture-ok.",
+        ]);
     assert.ok(output.includes("fixture-ok"));
     // Wait for the off-path two-second reconciliation and export, bounded.
     const deadline = Date.now() + 15000;
     let status;
     do {
       status = JSON.parse(await fi(["status"]));
-      const expected = { basic: 4, interrupted: 1, compaction: 5, subagent: 6 }[
-        scenario
-      ];
+      const expected = {
+        basic: 4,
+        upgrade: 4,
+        interrupted: 1,
+        compaction: 5,
+        subagent: 6,
+      }[scenario];
       if (
         status.agents[0]?.observer?.admitted >= expected &&
         uploads.length >= expected
@@ -392,17 +448,18 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
     }
     walk(path.join(agent, "sessions"));
     assert.equal(files.length, scenario === "subagent" ? 2 : 1);
-    const facts = files.flatMap((file) =>
-      importCodex(fs.readFileSync(file), {
+    const facts = importCodex(
+      Buffer.concat(files.map((file) => fs.readFileSync(file))),
+      {
         identityKey: Buffer.alloc(32, 1),
         policyRevision: "1",
         sourceSchema: CODEX_SCHEMA,
-      }),
+      },
     );
     const requests = facts.filter((f) => f.unit === "request"),
       tools = facts.filter((f) => f.unit === "tool");
     assert.equal(requests.length, scenario === "interrupted" ? 0 : calls);
-    if (scenario === "basic") {
+    if (["basic", "upgrade"].includes(scenario)) {
       assert.equal(calls, 2);
       assert.equal(tools.length, 1);
     }
@@ -413,6 +470,10 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
     if (scenario === "subagent") {
       assert.equal(facts.filter((f) => f.unit === "turn").length, 2);
       assert.equal(new Set(facts.map((f) => f.sessionId)).size, 1);
+      const child = facts.find((f) => f.unit === "turn" && f.links?.length);
+      assert.deepEqual(child.links, [
+        { traceId: tools[0].traceId, spanId: tools[0].spanId },
+      ]);
       assert.equal(
         facts.filter((f) => f.unit === "turn" && f.links?.length).length,
         1,
@@ -433,7 +494,9 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
       facts.length,
     );
     const replay = { counts: { admitted: 0, pending: 0 } };
-    for (const file of files) {
+    for (const file of scenario === "subagent"
+      ? [path.dirname(files[0])]
+      : files) {
       const plan = JSON.parse(
         await fi([
           "import",
@@ -462,7 +525,16 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
     }
     assert.equal(replay.counts.pending, 0);
     assert.equal(replay.counts.admitted, facts.length);
-    await fi(["disable", "codex", "--surface", "cli"]);
+    await fi(["runtime", "stop"]);
+    for (
+      let i = 0;
+      i < 100 && fs.existsSync(path.join(state, "runtime.sock"));
+      i++
+    )
+      await new Promise((r) => setTimeout(r, 20));
+    await fi(["disable", "codex", "--surface", "cli", "--transcript", "off"]);
+    await fi(["runtime", "start"]);
+    assert.equal(JSON.parse(await fi(["status"])).agents[0].enabled, false);
     const disabled = JSON.parse(
       await fi(["doctor", "codex", "--surface", "cli"]),
     );
@@ -487,6 +559,10 @@ async function qualify({ root, binary, sandbox, scenario = "basic" }) {
       import_replay: replay.counts,
       activation: doctor.activation,
       disabled: true,
+      offline_revocation_survives_restart: true,
+      ...(scenario === "upgrade"
+        ? { official_plugin_replace_and_rollback: true }
+        : {}),
       outbound: "sandbox-denied-except-localhost",
       remote_persistence: "not-tested-synthetic-loopback-only",
     };

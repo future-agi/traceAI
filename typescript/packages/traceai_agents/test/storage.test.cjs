@@ -170,18 +170,81 @@ test("unexpected side files and symlinks stop admission before cursor movement",
   );
 });
 
-test('authentication holds persist without disabling capture or another binding', t => {
-  const {spool} = fixture(t);
+test("authentication holds persist without disabling capture or another binding", (t) => {
+  const { spool } = fixture(t);
   spool.admit(route().id, fact());
   const row = spool.next(route().id);
-  spool.complete(row.id, row.epoch, {state:'held', code:'HELD_AUTH'});
+  spool.complete(row.id, row.epoch, { state: "held", code: "HELD_AUTH" });
   assert.equal(spool.getRoute(route().id).enabled, true);
   spool.route(route()); // Startup re-registration must not fail or clear the hold.
   assert.equal(spool.next(route().id), undefined);
-  const other = route(); other.id = 'other.fixture';
-  other.binding.id = '00000000-0000-4000-8000-000000000002';
-  spool.route(other); spool.admit(other.id, fact('other'));
+  const other = route();
+  other.id = "other.fixture";
+  other.binding.id = "00000000-0000-4000-8000-000000000002";
+  spool.route(other);
+  spool.admit(other.id, fact("other"));
   assert.ok(spool.next(other.id));
   assert.equal(spool.releaseAuth(route().id), 1);
   assert.equal(spool.next(route().id).id, row.id);
 });
+
+for (const legacy of [false, true])
+  test(`sender upgrades preserve immutable receipts and admit new work (legacy=${legacy})`, () => {
+    const dir = fs.mkdtempSync(path.join(base, "upgrade-"));
+    let spool = new Spool(dir, "0.1.0");
+    try {
+      spool.route(route());
+      const accepted = spool.admit(route().id, fact("accepted"));
+      let row = spool.next(route().id);
+      spool.complete(row.id, row.epoch, {
+        state: "accepted",
+        code: "HTTP_ACCEPTED",
+      });
+      const queued = spool.admit(route().id, fact("queued"));
+      const original = spool.next(route().id).bytes;
+      spool.close();
+      let db = new Database(path.join(dir, "spool.db"));
+      if (legacy) {
+        db.exec(
+          "ALTER TABLE records DROP COLUMN semantic_hash; PRAGMA user_version=1; UPDATE meta SET value='1' WHERE key='schema'",
+        );
+      }
+      const before = db
+        .prepare("SELECT id,hash,state,bytes FROM records ORDER BY id")
+        .all();
+      db.close();
+      spool = new Spool(dir, "0.1.1");
+      assert.deepEqual(spool.admit(route().id, fact("accepted")), {
+        ...accepted,
+        duplicate: true,
+      });
+      assert.deepEqual(spool.admit(route().id, fact("queued")), {
+        ...queued,
+        duplicate: true,
+      });
+      assert.deepEqual(spool.next(route().id).bytes, original);
+      assert.throws(
+        () =>
+          spool.admit(route().id, { ...fact("accepted"), outcome: "error" }),
+        /HELD_IMMUTABLE_CONFLICT/,
+      );
+      assert.equal(spool.admit(route().id, fact("new-turn")).duplicate, false);
+      spool.close();
+      db = new Database(path.join(dir, "spool.db"));
+      assert.deepEqual(
+        db
+          .prepare(
+            "SELECT id,hash,state,bytes FROM records WHERE id<=2 ORDER BY id",
+          )
+          .all(),
+        before,
+      );
+      db.close();
+      spool = new Spool(dir, "0.2.0");
+      assert.equal(spool.admit(route().id, fact("accepted")).duplicate, true);
+      assert.equal(spool.admit(route().id, fact("new-turn")).duplicate, true);
+    } finally {
+      spool.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });

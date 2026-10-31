@@ -23,6 +23,7 @@ export interface Activation {
   restartRequired: boolean;
 }
 export interface OwnedChange {
+  preview?: { replacement: boolean; trustRequired: boolean };
   /** Adapter preflights all effective fields; commit compares exact owned nonsecret values. */
   commit(): Promise<Activation>;
   rollback(): Promise<void>;
@@ -76,6 +77,7 @@ export interface AdapterContext {
   profile: string;
   binding: Binding;
   transcriptConsent: boolean;
+  rollback?: boolean;
 }
 export interface NormalizeContext {
   identityKey: Uint8Array;

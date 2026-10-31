@@ -88,8 +88,11 @@ export class ImportPlanner {
       try {
         await admit(fact);
         admitted++;
-      } catch {
-        break;
+      } catch (e) {
+        // A legacy accepted snapshot can conflict without invalidating other
+        // source-work anchors. Keep it pending, but still admit independent work.
+        if (!(e instanceof AgentError) || e.code !== "HELD_IMMUTABLE_CONFLICT")
+          break;
       }
     }
     return { admitted, pending: source.facts.length - admitted };
