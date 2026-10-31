@@ -88,7 +88,10 @@ def _attributes(span):
     }
 
 
-def _assert_export(receiver, provider, project, error=False, requested_model=fake.REQUEST_MODEL):
+def _assert_export(
+    receiver, provider, project, error=False, requested_model=fake.REQUEST_MODEL,
+    hide_inputs=False,
+):
     assert provider.force_flush()
     [span] = receiver.spans()
     [export] = receiver.requests()
@@ -98,11 +101,14 @@ def _assert_export(receiver, provider, project, error=False, requested_model=fak
     assert attrs["gen_ai.provider.name"] in PROVIDER_NAMES
     # A successful response overrides the request model, including on streams.
     assert attrs["gen_ai.request.model"] == (requested_model if error else fake.RESPONSE_MODEL)
-    parameters = json.loads(attrs["gen_ai.request.parameters"])
-    if requested_model is None:
-        assert "model" not in parameters
+    if hide_inputs:
+        assert attrs["gen_ai.request.parameters"] == "__REDACTED__"
     else:
-        assert parameters["model"] == requested_model
+        parameters = json.loads(attrs["gen_ai.request.parameters"])
+        if requested_model is None:
+            assert "model" not in parameters
+        else:
+            assert parameters["model"] == requested_model
     assert span["status"]["code"] == ("STATUS_CODE_ERROR" if error else "STATUS_CODE_OK")
     assert export["path"] == "/tracer/v1/traces"
     assert export["headers"]["x-api-key"] == FI_KEY
@@ -325,7 +331,7 @@ def test_hide_inputs_with_control(tracing, monkeypatch):
 
         with tracing() as (receiver, provider, project):
             assert _call(handler, prompt=marker) == fake.ANSWER
-            span, _ = _assert_export(receiver, provider, project)
+            span, _ = _assert_export(receiver, provider, project, hide_inputs=hidden)
             assert (marker in json.dumps(span)) is (not hidden)
             # Output echoes remain visible even when the input itself is hidden.
             for output_marker in (fake.QUERY_MARKER, fake.INSTRUCTIONS_MARKER):

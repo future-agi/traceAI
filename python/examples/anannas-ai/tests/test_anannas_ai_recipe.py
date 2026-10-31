@@ -145,10 +145,13 @@ def assert_export(receiver, project):
     return span, attrs
 
 
-def assert_parameters(attrs, *, stream=False):
-    params = json.loads(attrs["gen_ai.request.parameters"])
-    assert params["model"] == REQUEST_MODEL
-    assert params.get("stream", False) is stream
+def assert_parameters(attrs, *, stream=False, hide_inputs=False):
+    if hide_inputs:
+        assert attrs["gen_ai.request.parameters"] == "__REDACTED__"
+    else:
+        params = json.loads(attrs["gen_ai.request.parameters"])
+        assert params["model"] == REQUEST_MODEL
+        assert params.get("stream", False) is stream
 
 
 def assert_usage(attrs, expected):
@@ -410,7 +413,7 @@ def test_privacy_flags_have_unmasked_controls(receiver, monkeypatch, stream, hid
         else:
             assert answer in exported
             assert attrs["output.value"] == answer
-        assert_parameters(attrs, stream=stream)
+        assert_parameters(attrs, stream=stream, hide_inputs=hide_inputs)
 
 
 def allowed_urls():
