@@ -60,6 +60,21 @@ export interface Usage {
   inclusions: "inclusive" | "normalized";
   complete: boolean;
 }
+export interface SourceCounters {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  reasoning?: number;
+}
+/** Numeric non-additive source facts only; never a raw attribute escape hatch. */
+export interface NativeMetadata {
+  kind: 1 | 2 | 3 | 4 | 5;
+  statusCode: 0 | 1 | 2;
+  operation: "invoke_agent" | "chat" | "execute_tool" | "execute_hook";
+  summary?: SourceCounters;
+  billing?: { multiplier?: number; nanoAiu?: number };
+}
 /** No arbitrary attribute map. All identifiers here are opaque; native OTLP IDs pass through. */
 export interface CanonicalFact {
   schemaVersion: 1;
@@ -91,6 +106,7 @@ export interface CanonicalFact {
   incomplete?: boolean;
   lateCapture?: boolean;
   usage?: Usage;
+  native?: NativeMetadata;
   content?: Partial<Record<Category, string>>;
   links?: { traceId: string; spanId: string }[];
 }
@@ -193,6 +209,42 @@ export function validateFact(f: CanonicalFact): void {
       ))
   )
     fail();
+  if (f.native) {
+    const n = f.native;
+    if (
+      f.source !== "native" ||
+      ![1, 2, 3, 4, 5].includes(n.kind) ||
+      ![0, 1, 2].includes(n.statusCode) ||
+      !["invoke_agent", "chat", "execute_tool", "execute_hook"].includes(
+        n.operation,
+      )
+    )
+      fail();
+    for (const key of [
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "reasoning",
+    ] as const) {
+      const v = n.summary?.[key];
+      if (v !== undefined && (!Number.isSafeInteger(v) || v < 0)) fail();
+    }
+    const multiplier = n.billing?.multiplier,
+      nanoAiu = n.billing?.nanoAiu;
+    if (
+      multiplier !== undefined &&
+      (!Number.isFinite(multiplier) ||
+        multiplier < 0 ||
+        multiplier > Number.MAX_SAFE_INTEGER)
+    )
+      fail();
+    if (
+      nanoAiu !== undefined &&
+      (!Number.isSafeInteger(nanoAiu) || nanoAiu < 0)
+    )
+      fail();
+  }
   if (f.usage) {
     const u = f.usage;
     if (

@@ -1,0 +1,77 @@
+{
+  "provenance": "Synthetic documented topology examples, NOT captures or released version qualification. Source: https://code.visualstudio.com/docs/agents/guides/monitoring-agents.md, inspected 2026-10-31.",
+  "qualified": false,
+  "required_result": "COPILOT_VSCODE_HARNESS_UNQUALIFIED",
+  "harnesses": [
+    {
+      "surface": "local",
+      "resource": {
+        "service.name": "copilot-chat",
+        "session.id": "synthetic-window"
+      },
+      "spans": [
+        {
+          "traceId": "22222222222222222222222222222222",
+          "spanId": "2222222222222221",
+          "operation": "invoke_agent",
+          "conversation": "synthetic-conversation"
+        },
+        {
+          "traceId": "22222222222222222222222222222222",
+          "spanId": "2222222222222222",
+          "parentSpanId": "2222222222222221",
+          "operation": "chat"
+        },
+        {
+          "traceId": "22222222222222222222222222222222",
+          "spanId": "2222222222222223",
+          "parentSpanId": "2222222222222221",
+          "operation": "execute_tool"
+        },
+        {
+          "traceId": "22222222222222222222222222222222",
+          "spanId": "2222222222222224",
+          "parentSpanId": "2222222222222221",
+          "operation": "execute_hook"
+        }
+      ]
+    },
+    {
+      "surface": "copilot",
+      "spans": [
+        {
+          "traceId": "33333333333333333333333333333333",
+          "spanId": "3333333333333331",
+          "service": "copilot-chat",
+          "operation": "invoke_agent",
+          "agent": "copilotcli"
+        },
+        {
+          "traceId": "33333333333333333333333333333333",
+          "spanId": "3333333333333332",
+          "parentSpanId": "3333333333333331",
+          "service": "github-copilot",
+          "operation": "invoke_agent"
+        },
+        {
+          "traceId": "33333333333333333333333333333333",
+          "spanId": "3333333333333333",
+          "parentSpanId": "3333333333333332",
+          "service": "github-copilot",
+          "operation": "chat"
+        }
+      ]
+    },
+    {
+      "surface": "terminal",
+      "spans": [
+        {
+          "traceId": "44444444444444444444444444444444",
+          "spanId": "4444444444444441",
+          "service": "github-copilot",
+          "operation": "invoke_agent"
+        }
+      ]
+    }
+  ]
+}

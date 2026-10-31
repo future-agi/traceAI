@@ -43,5 +43,13 @@
   "FI_COST_PRICING_VERSION": "fi.cost.pricing_version",
   "FI_COST_SCOPE": "fi.cost.scope",
   "FI_COST_INCLUDES_CACHE": "fi.cost.includes_cache",
-  "FI_COST_INCLUDES_REASONING": "fi.cost.includes_reasoning"
+  "FI_COST_INCLUDES_REASONING": "fi.cost.includes_reasoning",
+  "FI_SOURCE_OPERATION": "fi.source.operation",
+  "FI_SOURCE_SUMMARY_INPUT_TOKENS": "fi.source.summary.input_tokens",
+  "FI_SOURCE_SUMMARY_OUTPUT_TOKENS": "fi.source.summary.output_tokens",
+  "FI_SOURCE_SUMMARY_CACHE_READ_TOKENS": "fi.source.summary.cache_read_tokens",
+  "FI_SOURCE_SUMMARY_CACHE_WRITE_TOKENS": "fi.source.summary.cache_write_tokens",
+  "FI_SOURCE_SUMMARY_REASONING_TOKENS": "fi.source.summary.reasoning_tokens",
+  "FI_SOURCE_BILLING_MULTIPLIER": "fi.source.billing.multiplier",
+  "FI_SOURCE_BILLING_NANO_AIU": "fi.source.billing.nano_aiu"
 }

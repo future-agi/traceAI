@@ -29,6 +29,8 @@ export interface OwnedChange {
 }
 export interface Adapter {
   capability: Capability;
+  /** Shipped profile with qualification outstanding; capture commands fail before mutation. */
+  activationHolds?: readonly string[];
   preflight(
     action: "enable" | "disable" | "update" | "uninstall",
     context: AdapterContext,

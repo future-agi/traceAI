@@ -91,6 +91,31 @@ export function minimize(
       spanId: l.spanId,
     }));
   if (f.usage) result.usage = usage(f.usage);
+  if (f.native) {
+    result.native = {
+      kind: f.native.kind,
+      statusCode: f.native.statusCode,
+      operation: f.native.operation,
+    };
+    if (f.native.summary) {
+      result.native.summary = {};
+      for (const key of [
+        "input",
+        "output",
+        "cacheRead",
+        "cacheWrite",
+        "reasoning",
+      ] as const)
+        if (f.native.summary[key] !== undefined)
+          result.native.summary[key] = f.native.summary[key];
+    }
+    if (f.native.billing) {
+      result.native.billing = {};
+      for (const key of ["multiplier", "nanoAiu"] as const)
+        if (f.native.billing[key] !== undefined)
+          result.native.billing[key] = f.native.billing[key];
+    }
+  }
   for (const category of CATEGORIES) {
     if (
       !policy.categories.includes(category) ||

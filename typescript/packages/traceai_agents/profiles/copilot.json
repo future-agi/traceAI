@@ -1,0 +1,65 @@
+{
+  "profile": "copilot-native-ids-v1",
+  "release_state": "qualification-only",
+  "capture": "structure",
+  "source": "native",
+  "duplicate_hook_emitter": false,
+  "cli": {
+    "normalization_schema": "copilot-cli-1.0.98-otel",
+    "fixture_version": "1.0.98",
+    "live_activation_qualified": false,
+    "holds": [
+      "COPILOT_SIGNAL_ISOLATION_UNQUALIFIED",
+      "COPILOT_EFFECTIVE_MANAGED_SETTINGS_UNQUALIFIED"
+    ],
+    "transport": "Native file-exporter fixture converted to OTLP JSON; HTTP JSON and protobuf tested with synthetic sends, not a real CLI run",
+    "service_name": "github-copilot",
+    "scope_name": "github.copilot",
+    "summary_operations": ["invoke_agent"],
+    "request_operations": ["chat"],
+    "cache_in_input": true,
+    "reasoning_in_output": true,
+    "fixture": "integrations/coding-agents/fixtures/source/copilot-cli-1.0.98.json",
+    "fixture_provenance": "Derived from the existing docs fixture copilot-cli-1.0.98-default.jsonl. All native IDs, conversation IDs, names and times replaced with synthetic values; only reviewed operation/provider/model/tool labels and numeric token/multiplier values retained. SDK kind 0/2 converted to OTLP kind 1/3.",
+    "expected_input_tokens": 42925,
+    "expected_output_tokens": 146,
+    "expected_model_calls": 3,
+    "identity": "HMAC of native trace/span IDs; no cross-source aliases or transcript imports. Per-trace plan, common to all native descendants.",
+    "missing_session": "hold; do not infer conversation from names, times or resources",
+    "unregistered_labels": "omitted; never infer provider from model name",
+    "billing": "github.copilot.cost retained as non-additive multiplier; github.copilot.nano_aiu retained as non-additive source billing units, never USD"
+  },
+  "vscode": {
+    "live_activation_qualified": false,
+    "normalization_qualified": false,
+    "holds": [
+      "COPILOT_VSCODE_HARNESS_UNQUALIFIED",
+      "COPILOT_VSCODE_SETTINGS_TRANSACTION_UNQUALIFIED"
+    ],
+    "harnesses": {
+      "local": "copilot-chat extension spans; requires exact released extension/VS Code versions and effective managed/environment/user-setting preflight",
+      "copilot": "copilot-chat wrapper parents github-copilot runtime in one trace; must qualify each producer separately",
+      "terminal": "independent github-copilot process; never infer editor parentage"
+    },
+    "resource_session_id": "VS Code window identity is not the conversation; do not substitute it for span gen_ai.conversation.id",
+    "fixture": "integrations/coding-agents/fixtures/source/copilot-vscode-documented-shapes.json"
+  },
+  "backend": {
+    "required_contract": "immutable-agent-v1",
+    "related_pr": "https://github.com/future-agi/future-agi/pull/3689",
+    "inspected_head": "9fa711f1bd80acea8bdf4c02089031bdfcf88d9e",
+    "compatible_aggregation_rules": [
+      "Only native chat spans own additive request usage",
+      "invoke_agent including subagents/wrappers has contribution=none, no standard usage or cost and no request count",
+      "Equal-value independent calls remain distinct; native replay keeps stable work/fact/plan IDs",
+      "Summary and multiplier fields never feed fallback pricing or usage reducers",
+      "Unknown cost is absent, never explicit zero"
+    ],
+    "release_hold": "PR 3689 intentionally rejects reserved immutable identity/plan fields with FI_IMMUTABLE_ADMISSION_UNAVAILABLE. The new runtime profile cannot be exported to that backend yet. Do not remove identity fields or approve a fabricated capability manifest to bypass the hold.",
+    "remaining_acceptance": "Immutable admission, immediate unique reads across all reducers/exports, cache-aware pricing, real staging persistence and UI verification"
+  },
+  "sources": [
+    "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring",
+    "https://code.visualstudio.com/docs/agents/guides/monitoring-agents.md"
+  ]
+}

@@ -9,3 +9,4 @@ export * from "./runtime/daemon.js";
 export * from "./runtime/storage-client.js";
 export * from "./security/credentials.js";
 export { main } from "./cli/main.js";
+export * from "./profiles/copilot.js";

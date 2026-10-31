@@ -24,11 +24,27 @@ export function preflightNative(mode: Coexistence): void {
     return;
   throw new AgentError("NATIVE_DESTINATION_CONFLICT", 6);
 }
+/** In-memory source envelope. Raw resource/scope attributes must never enter storage. */
+export interface NativeSpanEnvelope {
+  span: {
+    traceId: unknown;
+    spanId: unknown;
+    parentSpanId?: unknown;
+    attributes?: unknown;
+    kind?: number;
+    status?: { code?: number };
+    links?: { traceId: unknown; spanId: unknown }[];
+    startTimeUnixNano: string;
+    endTimeUnixNano: string;
+  };
+  resource?: { attributes?: unknown };
+  scope?: { name?: string; version?: string };
+}
 export interface ReceiverOptions {
   coexistence: Coexistence;
   token?: string;
   singleUserApproved?: boolean;
-  normalize: (span: unknown) => CanonicalFact;
+  normalize: (span: unknown, envelope: NativeSpanEnvelope) => CanonicalFact;
   admit: (fact: CanonicalFact) => Promise<unknown>;
 }
 /** No FI keys; only traces. Existing vendor signals must remain in their original collector. */
@@ -106,7 +122,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
         data.resourceSpans.length > 256
       )
         throw new Error();
-      const spans: unknown[] = [];
+      const spans: NativeSpanEnvelope[] = [];
       for (const resource of data.resourceSpans) {
         if (
           !Array.isArray(resource.scopeSpans) ||
@@ -115,13 +131,19 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
           throw new Error();
         for (const scope of resource.scopeSpans) {
           if (!Array.isArray(scope.spans)) throw new Error();
-          spans.push(...scope.spans);
-          if (spans.length > 256) throw new Error();
+          if (spans.length + scope.spans.length > 256) throw new Error();
+          for (const span of scope.spans)
+            spans.push({
+              span,
+              resource: resource.resource,
+              scope: scope.scope,
+            });
         }
       }
       // Normalize every span before admitting any; raw resources/events/status text never persist.
-      const facts = spans.map((span: any) => {
-        const fact = minimize(options.normalize(span));
+      const facts = spans.map((envelope) => {
+        const { span } = envelope;
+        const fact = minimize(options.normalize(span, envelope));
         const id = (value: unknown, length: number): string => {
           if (typeof value !== "string") throw new Error("INVALID_NATIVE_ID");
           const decoded = new RegExp(`^[a-fA-F0-9]{${length * 2}}$`).test(value)
@@ -150,6 +172,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Server> {
           rejected++;
         }
       }
+      // OTLP/HTTP replies use the request encoding.
       const response =
         type === "application/json"
           ? JSON.stringify(

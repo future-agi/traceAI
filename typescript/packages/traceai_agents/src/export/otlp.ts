@@ -87,14 +87,23 @@ export function spanObject(f: CanonicalFact): object {
     [A.FI_CAPTURE_LATE_CAPTURE]: f.lateCapture,
     [A.FI_AGENT_CAUSED_BY_WORK_ID]: f.causedBy,
     [A.FI_USAGE_CONTRIBUTION]: f.usage?.contribution ?? "none",
+    [A.FI_SOURCE_OPERATION]: f.native?.operation,
+    [A.FI_SOURCE_SUMMARY_INPUT_TOKENS]: f.native?.summary?.input,
+    [A.FI_SOURCE_SUMMARY_OUTPUT_TOKENS]: f.native?.summary?.output,
+    [A.FI_SOURCE_SUMMARY_CACHE_READ_TOKENS]: f.native?.summary?.cacheRead,
+    [A.FI_SOURCE_SUMMARY_CACHE_WRITE_TOKENS]: f.native?.summary?.cacheWrite,
+    [A.FI_SOURCE_SUMMARY_REASONING_TOKENS]: f.native?.summary?.reasoning,
+    [A.FI_SOURCE_BILLING_MULTIPLIER]: f.native?.billing?.multiplier,
+    [A.FI_SOURCE_BILLING_NANO_AIU]: f.native?.billing?.nanoAiu,
     "gen_ai.operation.name":
-      kind === "LLM"
+      f.native?.operation ??
+      (kind === "LLM"
         ? "chat"
         : kind === "TOOL"
           ? "execute_tool"
           : kind === "AGENT"
             ? "invoke_agent"
-            : undefined,
+            : undefined),
     "gen_ai.request.model": f.model,
     "gen_ai.provider.name": f.provider,
     "tool.name": f.tool,
@@ -137,11 +146,11 @@ export function spanObject(f: CanonicalFact): object {
         : f.unit === "request" || f.unit === "attempt"
           ? "model.request"
           : "agent." + f.unit,
-    kind: 1,
+    kind: f.native?.kind ?? 1,
     startTimeUnixNano: f.startNs,
     endTimeUnixNano: f.endNs,
     attributes: attrs(values),
-    status: { code: f.outcome === "error" ? 2 : 0 },
+    status: { code: f.native?.statusCode ?? (f.outcome === "error" ? 2 : 0) },
     links: (f.links ?? []).map((l) => ({
       traceId: Buffer.from(l.traceId, "hex"),
       spanId: Buffer.from(l.spanId, "hex"),

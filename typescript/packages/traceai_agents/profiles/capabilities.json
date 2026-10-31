@@ -2,7 +2,22 @@
   "schema_version": 1,
   "release_state": "foundation-preview",
   "enabled_by_default": [],
-  "agents": [],
+  "agents": [
+    {
+      "agent": "copilot",
+      "surface": "cli",
+      "state": "qualification-only",
+      "profile": "copilot.json",
+      "native": true
+    },
+    {
+      "agent": "copilot",
+      "surface": "vscode",
+      "state": "qualification-only",
+      "profile": "copilot.json",
+      "native": true
+    }
+  ],
   "holds": [
     "backend-contract-qualification",
     "per-agent-conformance",

@@ -27,6 +27,10 @@ import { runtimeRequest, Runtime } from "../runtime/daemon.js";
 import { ImportPlanner } from "../import.js";
 import { authInput } from "./input.js";
 import { runAgent } from "./run.js";
+import {
+  copilotCliAdapter,
+  copilotVSCodeAdapter,
+} from "../profiles/copilot.js";
 const flags = new Set([
   "json",
   "stdin",
@@ -170,7 +174,9 @@ export async function main(
       return 0;
     }
     const p = paths(),
-      registry = settings.registry ?? new AdapterRegistry();
+      registry =
+        settings.registry ??
+        new AdapterRegistry([copilotCliAdapter, copilotVSCodeAdapter]);
     if (args[0] === "__daemon") {
       const runtime = new Runtime(
         p,
@@ -337,9 +343,46 @@ export async function main(
     if (!agent) throw new AgentError("MISSING_AGENT", 2);
     const surface = required(options, "surface");
     const adapter = registry.get(agent, surface);
+    if (
+      adapter.activationHolds?.length &&
+      !["disable", "uninstall"].includes(command)
+    ) {
+      // Static qualification does not need FI auth, secret-store access, agent
+      // homes, a running daemon, or mutation of effective telemetry settings.
+      output({
+        state: "qualification-only",
+        code: 5,
+        agent,
+        surface,
+        native: adapter.capability.native,
+        schemas: adapter.capability.schemas,
+        reasons: adapter.activationHolds,
+        activation: {
+          installed: "unknown",
+          trusted: "unknown",
+          activated: "unknown",
+          restartRequired: "unknown",
+        },
+        acceptance: "unknown",
+        persistence: "unknown",
+      });
+      return 5;
+    }
     const routeId = agent + "." + surface,
       config = loadConfig(p),
       installed = config.routes[routeId];
+    if (
+      !installed &&
+      adapter.activationHolds?.length &&
+      ["disable", "uninstall"].includes(command)
+    ) {
+      output({
+        state: "not-installed",
+        code: 0,
+        reasons: ["NO_OWNED_REGISTRATION"],
+      });
+      return 0;
+    }
     const profileName = String(options.profile ?? installed?.profile ?? "");
     const profile = config.profiles[profileName];
     if (!profile || profile.removed) throw new AgentError("HELD_AUTH", 3);
