@@ -79,6 +79,10 @@ def stage(root: Path, packages: list[dict], dist: Path) -> None:
 def verify(root: Path, packages: list[dict], dist: Path, smoke: Path, *, offline: bool = False) -> None:
     inventory = typescript_packages(root)
     for package in packages:
+        if package.get("registry_published"):
+            # Already on npm, so publish never uploads it: there is nothing to gate.
+            print(f"{package['name']}@{package['version']}: already on npm, not uploaded; skipping the clean-install check", flush=True)
+            continue
         closure = dependency_closure([package], inventory)
         directory = tarball_dir(smoke, package)
         directory.mkdir(parents=True, exist_ok=False)
